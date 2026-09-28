@@ -1,0 +1,374 @@
+{
+  "from": "2026-09-28T00:00:00Z",
+  "to": "2026-09-28T12:00:00Z",
+  "from_text": "28.09.2026 00:00",
+  "to_text": "28.09.2026 12:00",
+  "total": {
+    "usdt": 50,
+    "text": "+50.00",
+    "orders": 100,
+    "unknown_orders": 1
+  },
+  "by_exchange": [
+    {
+      "key": "binance_futures",
+      "name": "Binance Futures",
+      "money": {
+        "usdt": 35,
+        "text": "+35.00",
+        "orders": 9,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "hyperliquid_spot",
+      "name": "Hyperliquid Spot",
+      "money": {
+        "usdt": 15,
+        "text": "+15.00",
+        "orders": 19,
+        "unknown_orders": 0
+      }
+    }
+  ],
+  "by_core": [
+    {
+      "key": "1001",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1002",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -10,
+        "text": "-10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1003",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1004",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1005",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1006",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1007",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": null,
+        "text": null,
+        "orders": 0,
+        "unknown_orders": 3
+      }
+    },
+    {
+      "key": "1008",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1009",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1010",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1011",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1012",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -10,
+        "text": "-10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1013",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1014",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1015",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1016",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1017",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (17)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -10,
+        "text": "-10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1018",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1019",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1020",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1021",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1022",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -10,
+        "text": "-10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1023",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (23)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1024",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1025",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1026",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -20,
+        "text": "-20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1027",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": -10,
+        "text": "-10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1028",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 0,
+        "text": "0.00",
+        "orders": 4,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1029",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 10,
+        "text": "+10.00",
+        "orders": 14,
+        "unknown_orders": 0
+      }
+    },
+    {
+      "key": "1030",
+      "name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "section": "Binance Futures",
+      "money": {
+        "usdt": 20,
+        "text": "+20.00",
+        "orders": 24,
+        "unknown_orders": 0
+      }
+    }
+  ],
+  "days": [
+    {
+      "start": "28.09",
+      "usdt": 50,
+      "text": "+50.00",
+      "trades": 10
+    }
+  ]
+}

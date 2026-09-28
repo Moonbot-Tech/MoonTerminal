@@ -1,0 +1,11 @@
+{
+  "name": "miniapp-preview",
+  "private": true,
+  "description": "Headless preview and interaction check of the Telegram Mini App",
+  "type": "module",
+  "scripts": { "preview": "node preview.mjs" },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "playwright-core": "^1.55.0"
+  }
+}

@@ -1,0 +1,2709 @@
+{
+  "can_control": true,
+  "cores": [
+    {
+      "core": 1001,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (01)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "18446744073709551615",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372036865775841",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372036866775844",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372036867775847",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372036868775850",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1002,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (02)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037864778838",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037865778841",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037866778844",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041864790838",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041865790841",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1003,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (03)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037874778868",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037875778871",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037876778874",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041874790868",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": false,
+              "pending": "pending"
+            },
+            {
+              "id": "9223372041875790871",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1004,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (04)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037884778898",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037885778901",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037886778904",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041884790898",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041885790901",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": "timed_out"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1005,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (05)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037894778928",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037895778931",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037896778934",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041894790928",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041895790931",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1006,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (06)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037904778958",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037905778961",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037906778964",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041904790958",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041905790961",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1007,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (07)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037914778988",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037915778991",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037916778994",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041914790988",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041915790991",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1008,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (08)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037924779018",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037925779021",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037926779024",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041924791018",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041925791021",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1009,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (09)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037934779048",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037935779051",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037936779054",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041934791048",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041935791051",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1010,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (10)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037944779078",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037945779081",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037946779084",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041944791078",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041945791081",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1011,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (11)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037954779108",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037955779111",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037956779114",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041954791108",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041955791111",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1012,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (12)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037964779138",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037965779141",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037966779144",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041964791138",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041965791141",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1013,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (13)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037974779168",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037975779171",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037976779174",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041974791168",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041975791171",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1014,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (14)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037984779198",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037985779201",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037986779204",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041984791198",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041985791201",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1015,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (15)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372037994779228",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037995779231",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372037996779234",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372041994791228",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372041995791231",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1016,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (16)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038004779258",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038005779261",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038006779264",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042004791258",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042005791261",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1018,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (18)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038014779288",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038015779291",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038016779294",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042014791288",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042015791291",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1019,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (19)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038024779318",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038025779321",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038026779324",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042024791318",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042025791321",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1020,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (20)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038034779348",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038035779351",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038036779354",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042034791348",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042035791351",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1021,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (21)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038044779378",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038045779381",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038046779384",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042044791378",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042045791381",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1022,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (22)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038054779408",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038055779411",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038056779414",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042054791408",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042055791411",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1024,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (24)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038064779438",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038065779441",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038066779444",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042064791438",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042065791441",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1025,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (25)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038074779468",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038075779471",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038076779474",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042074791468",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042075791471",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1026,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (26)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038084779498",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038085779501",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038086779504",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042084791498",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042085791501",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1027,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (27)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038094779528",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038095779531",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038096779534",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042094791528",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042095791531",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1028,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (28)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038104779558",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038105779561",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038106779564",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042104791558",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042105791561",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1029,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (29)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038114779588",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038115779591",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038116779594",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042114791588",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042115791591",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1030,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (30)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038124779618",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038125779621",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038126779624",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042124791618",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042125791621",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1032,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (32)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038134779648",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038135779651",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038136779654",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042134791648",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042135791651",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1033,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (33)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038144779678",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038145779681",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038146779684",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042144791678",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042145791681",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1035,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (35)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038154779708",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038155779711",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038156779714",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042154791708",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042155791711",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1036,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (36)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038164779738",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038165779741",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038166779744",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042164791738",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042165791741",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1037,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (37)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038174779768",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038175779771",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038176779774",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042174791768",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042175791771",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1038,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (38)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038184779798",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038185779801",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038186779804",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042184791798",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042185791801",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1039,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (39)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038194779828",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038195779831",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038196779834",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042194791828",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042195791831",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1040,
+      "core_name": "Demo Fund ~ F-BN / SUBACCOUNT (40)",
+      "exchange": "Binance Futures",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038204779858",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038205779861",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038206779864",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042204791858",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042205791861",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1041,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 01",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038214779888",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038215779891",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038216779894",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042214791888",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042215791891",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1042,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 02",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038224779918",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038225779921",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038226779924",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042224791918",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042225791921",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1043,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 03",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038234779948",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038235779951",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038236779954",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042234791948",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042235791951",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1044,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 04",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038244779978",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038245779981",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038246779984",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042244791978",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042245791981",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1045,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 05",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038254780008",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038255780011",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038256780014",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042254792008",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042255792011",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1047,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 07",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038264780038",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038265780041",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038266780044",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042264792038",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042265792041",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1048,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 08",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038274780068",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038275780071",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038276780074",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042274792068",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042275792071",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1049,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 09",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038284780098",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038285780101",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038286780104",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042284792098",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042285792101",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1050,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 10",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038294780128",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038295780131",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038296780134",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042294792128",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042295792131",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1052,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 12",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038304780158",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038305780161",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038306780164",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042304792158",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042305792161",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1053,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 13",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038314780188",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038315780191",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038316780194",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042314792188",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042315792191",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1054,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 14",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038324780218",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038325780221",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038326780224",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042324792218",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042325792221",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1055,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 15",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038334780248",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038335780251",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038336780254",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042334792248",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042335792251",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1056,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 16",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038344780278",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038345780281",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038346780284",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042344792278",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042345792281",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1057,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 17",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038354780308",
+              "name": "Demo Strategy 01",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038355780311",
+              "name": "Demo Strategy 02",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038356780314",
+              "name": "Demo Strategy 03",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042354792308",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042355792311",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "core": 1058,
+      "core_name": "Sample Desk ~ S-HL / ACCOUNT No 18",
+      "exchange": "Hyperliquid Spot",
+      "folders": [
+        {
+          "path": "",
+          "strategies": [
+            {
+              "id": "9223372038364780338",
+              "name": "Demo Strategy 01",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038365780341",
+              "name": "Demo Strategy 02",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372038366780344",
+              "name": "Demo Strategy 03",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        },
+        {
+          "path": "Demo/Folder",
+          "strategies": [
+            {
+              "id": "9223372042364792338",
+              "name": "Demo Strategy 04",
+              "checked": true,
+              "wanted": null,
+              "pending": null
+            },
+            {
+              "id": "9223372042365792341",
+              "name": "Demo Strategy 05",
+              "checked": false,
+              "wanted": null,
+              "pending": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
