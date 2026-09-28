@@ -571,11 +571,21 @@ main {
     background: var(--page);
 }
 
+/* Entry -> current and the quantity: each figure stays whole; the line wraps between them. */
 .order-flow {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 12px;
+    row-gap: 2px;
     margin: 2px 0 0;
+}
+
+.order-bit {
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+}
+
+.order-mark {
+    color: var(--ink);
 }
 
 .order-pnl {
@@ -1140,6 +1150,12 @@ input:focus-visible {
 
 .order-row .order-top {
     gap: 6px;
+    justify-content: flex-start;
+}
+
+/* Word labels inside the mono figures read in the UI face, without the mono's wide tracking. */
+.order-row .k {
+    font-family: var(--font-ui);
 }
 
 .order-row .order-top .name {
@@ -1185,7 +1201,7 @@ input:focus-visible {
 }
 
 .order-row .order-flow {
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .order-row .order-actions {

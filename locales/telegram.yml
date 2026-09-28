@@ -337,10 +337,6 @@ telegram.mini_orders_entry:
   ru: "Вход"
   en: "Entry"
   es: "Entrada"
-telegram.mini_orders_mark:
-  ru: "Текущая"
-  en: "Mark"
-  es: "Precio actual"
 telegram.mini_orders_to_entry:
   ru: "до входа"
   en: "to entry"

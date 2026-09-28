@@ -802,14 +802,6 @@
         return "hint";
     }
 
-    function mutedBits(label, text) {
-        var span = el("span", "");
-        span.appendChild(el("span", "k", label));
-        var shown = text == null || text === "" ? "\u2014" : text;
-        span.appendChild(el("span", "num", shown));
-        return span;
-    }
-
     // Directional move of a held position; for a resting entry, how far the mark is from it.
     // Nothing at all when neither is known: a dash reads as a broken figure.
     function orderChange(order) {
@@ -900,12 +892,25 @@
         var result = orderResult(order);
         if (result) top.appendChild(result);
         main.appendChild(top);
+        // Entry -> current price, then the quantity. Each figure is one unbreakable unit and the
+        // line wraps between them, so no price is ever cut to an ellipsis.
         var flow = el("div", "sub order-flow");
-        flow.appendChild(mutedBits(tr("mini_orders_qty"), order.qty_text));
-        flow.appendChild(document.createTextNode(" · "));
-        flow.appendChild(mutedBits(tr("mini_orders_entry"), order.entry_text));
-        flow.appendChild(document.createTextNode(" → "));
-        flow.appendChild(mutedBits(tr("mini_orders_mark"), order.mark_text));
+        if (order.entry_text || order.mark_text) {
+            var prices = el("span", "order-bit");
+            prices.appendChild(el("span", "k", tr("mini_orders_entry")));
+            prices.appendChild(el("span", "num", order.entry_text || "?"));
+            if (order.mark_text) {
+                prices.appendChild(el("span", "order-arrow", " → "));
+                prices.appendChild(el("span", "num order-mark", order.mark_text));
+            }
+            flow.appendChild(prices);
+        }
+        if (order.qty_text) {
+            var qty = el("span", "order-bit");
+            qty.appendChild(el("span", "k", tr("mini_orders_qty")));
+            qty.appendChild(el("span", "num", order.qty_text));
+            flow.appendChild(qty);
+        }
         main.appendChild(flow);
         row.appendChild(main);
         if (data.can_control) orderActions(row, order);
