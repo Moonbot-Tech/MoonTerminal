@@ -163,6 +163,13 @@ const openFirstGroup = async (page, tab) => {
     await settle(page);
 };
 
+const openTrade = async (page, nth) => {
+    await nav(page, "deals"); await page.click('[data-seg="trades"]');
+    const head = await page.$('section[data-tab="trades"] .group-head');
+    if (head) { await head.click(); await settle(page); }
+    await page.locator('section[data-tab="trades"] .trade-row').nth(nth).click(); await settle(page);
+};
+
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
 const SCREENS = [
     { name: "report-today", run: async () => {} },
@@ -187,6 +194,9 @@ const SCREENS = [
         if (head) { await head.click(); await settle(p); }
         await p.click('section[data-tab="trades"] .trade-row'); await settle(p);
     } },
+    // Row 2 names its strategy, row 6 carries none and is not marked manual (row 1 is manual).
+    { name: "trade-sheet-strategy", run: async (p) => { await openTrade(p, 1); } },
+    { name: "trade-sheet-unknown", run: async (p) => { await openTrade(p, 5); } },
     { name: "strategies-open", run: async (p) => { await nav(p, "strategies"); await openFirstGroup(p, "strategies"); } },
     { name: "balances-masked", run: async (p) => { await nav(p, "balances"); await openFirstGroup(p, "balances"); } },
     { name: "balances-unmasked", run: async (p) => {
