@@ -1,6 +1,11 @@
-//! Unit regressions for Mini App mass-action targeting.
+//! Unit regressions for Mini App mass-action targeting and per-core list order.
 
-use super::scope_targets;
+use std::cmp::Ordering;
+use std::collections::HashMap;
+
+use moon_core::venue::CoreVenue;
+
+use super::{by_section, natural_cmp, scope_targets};
 
 /// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
@@ -11,4 +16,57 @@ use super::scope_targets;
 fn scope_targets_drops_unknown_and_duplicate_cores() {
     assert_eq!(scope_targets(&[3, 99, 1, 3], &[1, 2, 3]), vec![1, 3]);
     assert_eq!(scope_targets(&[99], &[1, 2, 3]), Vec::<u64>::new());
+}
+
+/// `mini_app.rs:natural_cmp` reads digit runs as numbers and ignores letter case.
+///
+/// Mutation: compare the raw strings. "SUB ACC № 10" then sorts before "№ 9".
+#[test]
+fn natural_cmp_orders_numbers_by_value() {
+    assert_eq!(natural_cmp("SUB ACC № 9", "SUB ACC № 10"), Ordering::Less);
+    assert_eq!(natural_cmp("core 21", "core 3"), Ordering::Greater);
+    assert_eq!(natural_cmp("alpha", "Beta"), Ordering::Less);
+    assert_eq!(natural_cmp("core 007", "core 7"), Ordering::Less);
+    assert_eq!(natural_cmp("core", "core 1"), Ordering::Less);
+    assert_eq!(natural_cmp("x", "x"), Ordering::Equal);
+}
+
+/// `mini_app.rs:by_section` groups by the terminal's exchange sections and natural-sorts names.
+///
+/// Mutation: skip the in-section sort, or keep the input order across sections. Oracle: the
+/// unidentified core leads (the terminal's unknown-first rule), each venue's cores stay together,
+/// and "№ 9" precedes "№ 10" inside its section.
+#[test]
+fn by_section_groups_by_exchange_then_natural_name() {
+    let venues = HashMap::from([
+        (1, CoreVenue::identify(6, "", None)),
+        (2, CoreVenue::identify(2, "", None)),
+        (3, CoreVenue::identify(6, "", None)),
+        (4, CoreVenue::identify(2, "", None)),
+    ]);
+    let rows = vec![
+        (1u64, "№ 10".to_string()),
+        (2, "b".to_string()),
+        (3, "№ 9".to_string()),
+        (5, "lost".to_string()),
+        (4, "A".to_string()),
+    ];
+    let ordered = by_section(rows, &venues, |(id, _)| *id, |(_, name)| name);
+    let ids: Vec<u64> = ordered.iter().map(|(_, (id, _))| *id).collect();
+    assert_eq!(ids[0], 5, "the unidentified core leads, as in the terminal");
+    // Section order oracle: the terminal's own partition of the two venues.
+    let terminal = crate::core_order::exchange_sections([(2, venues.get(&2)), (6, venues.get(&1))]);
+    let first_is_code_2 = terminal[0].1 == [2];
+    let expected: [u64; 4] = if first_is_code_2 {
+        [4, 2, 3, 1]
+    } else {
+        [3, 1, 4, 2]
+    };
+    assert_eq!(
+        &ids[1..],
+        &expected,
+        "terminal section order, natural names inside"
+    );
+    assert_eq!(ordered[1].0, ordered[2].0);
+    assert_ne!(ordered[2].0, ordered[3].0);
 }

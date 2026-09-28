@@ -1026,18 +1026,28 @@ input:focus-visible {
     padding-left: 16px;
 }
 
+/* All-cores bar: one tight row of two segmented START/STOP pairs; wraps to two rows on
+   the narrowest popups. */
 .mass-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 16px;
-    margin-top: 8px;
-    padding: 0 16px 12px;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 6px 12px;
+}
+
+.mass-title {
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
 }
 
 .mass-group {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
 }
@@ -1045,7 +1055,56 @@ input:focus-visible {
 .mass-label {
     color: var(--sub);
     font-size: var(--fs-meta);
-    margin-right: 2px;
+    white-space: nowrap;
+}
+
+.mass-pair {
+    display: inline-flex;
+}
+
+/* The caption only fits beside both pairs on a wide popup; aria-label names the bar below. */
+@media (max-width: 439px) {
+    .mass-title {
+        display: none;
+    }
+}
+
+.mass-pair .mass-btn {
+    min-height: 32px;
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 10px;
+}
+
+.mass-pair .mass-btn:first-child {
+    border-radius: var(--r-ctl) 0 0 var(--r-ctl);
+}
+
+.mass-pair .mass-btn + .mass-btn {
+    margin-left: -1px;
+    border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
+}
+
+/* Exchange section caption inside a per-core list (report, orders). */
+.section-row {
+    min-height: 0;
+    padding-top: 8px;
+    padding-bottom: 2px;
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.section-label {
+    margin: 12px 16px 4px;
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .chip {

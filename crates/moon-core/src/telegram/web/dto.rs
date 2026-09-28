@@ -26,6 +26,9 @@ pub struct MoneyDto {
 pub struct RowDto {
     pub key: String,
     pub name: String,
+    /// Exchange section caption of a per-core row; absent on a per-exchange row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub money: MoneyDto,
 }
 
@@ -162,6 +165,8 @@ pub struct BalancesDto {
 pub struct OrderDto {
     pub core: u64,
     pub core_name: String,
+    /// Exchange section caption of the order's core.
+    pub exchange: String,
     pub uid: u64,
     pub coin: String,
     pub market: String,

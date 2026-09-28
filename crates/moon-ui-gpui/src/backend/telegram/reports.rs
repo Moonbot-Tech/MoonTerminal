@@ -293,8 +293,8 @@ pub(super) struct MiniReport {
     pub total: QuoteBreakdown,
     /// Active exchanges: stable key, caption, money.
     pub by_exchange: Vec<(String, String, QuoteBreakdown)>,
-    /// Active cores: id key, caption, money.
-    pub by_core: Vec<(String, String, QuoteBreakdown)>,
+    /// Active cores in Mini App order: id key, caption, exchange section caption, money.
+    pub by_core: Vec<(String, String, String, QuoteBreakdown)>,
     /// Every calendar day in the window, including days with no trades.
     pub days: Vec<(String, QuoteBreakdown)>,
 }
@@ -366,12 +366,14 @@ pub(super) fn read_mini_report(
         }
     }
     let mut by_core = Vec::new();
-    for (id, name) in &cores {
+    for (section, (id, name)) in
+        super::mini_app::by_section(cores.clone(), &venues, |(id, _)| *id, |(_, name)| name)
+    {
         let mut core = filter.clone();
-        core.core_uids = vec![*id];
+        core.core_uids = vec![id];
         let quotes = db::query_totals(&snap, &core)?.quotes;
         if quotes.orders > 0 {
-            by_core.push((id.to_string(), name.clone(), quotes));
+            by_core.push((id.to_string(), name, section, quotes));
         }
     }
     let mut days = Vec::new();

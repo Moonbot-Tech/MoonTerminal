@@ -530,17 +530,6 @@
         return groups;
     }
 
-    function problemsFirst(items, isProblem) {
-        var bad = [];
-        var good = [];
-        var i;
-        for (i = 0; i < items.length; i++) {
-            if (isProblem(items[i])) bad.push(items[i]);
-            else good.push(items[i]);
-        }
-        return bad.concat(good);
-    }
-
     function coreProblem(core) {
         return !core || core.conn !== "ready" || !!core.fault;
     }
@@ -643,7 +632,8 @@
         var g;
         for (g = 0; g < groups.length; g++) {
             var group = groups[g];
-            var ordered = problemsFirst(group.items, isProblem);
+            // The server already sends rows by exchange section, then by name.
+            var ordered = group.items;
             var problems = 0;
             var j;
             for (j = 0; j < ordered.length; j++) {
@@ -1068,8 +1058,14 @@
         var card = el("div", "card");
         card.appendChild(el("h2", "card-title", label));
         var i;
+        var lastSection = null;
         for (i = 0; i < cut; i++) {
             var row = list[i];
+            // Per-core rows carry their exchange section and arrive grouped by it.
+            if (typeof row.section === "string" && row.section !== lastSection) {
+                lastSection = row.section;
+                card.appendChild(el("div", "row section-row", row.section));
+            }
             var line = el("div", "row spread");
             var left = el("div", "grow");
             var name = el("div", opts.nameClass || "name", row.name || row.key || "");
@@ -1219,7 +1215,6 @@
         appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
             nameClass: "name core-name",
-            sort: true,
             limit: MONEY_LIST_LIMIT,
             meta: coreOrdersMeta
         });
@@ -1231,16 +1226,19 @@
         var ids = [];
         var i;
         for (i = 0; i < cores.length; i++) ids.push(cores[i].id);
-        var card = el("div", "card");
-        card.appendChild(el("h2", "card-title", tr("mini_all_cores")));
-        var line = el("div", "mass-actions");
+        var card = el("div", "card mass-actions");
+        card.setAttribute("role", "group");
+        card.setAttribute("aria-label", tr("mini_all_cores"));
+        card.appendChild(el("span", "mass-title", tr("mini_all_cores")));
         function addPair(label, key, onConfirm, offConfirm) {
             var group = el("div", "mass-group");
             group.appendChild(el("span", "mass-label", label));
+            var pair = el("span", "mass-pair");
+            group.appendChild(pair);
             [true, false].forEach(function (on) {
                 var btn = document.createElement("button");
                 btn.type = "button";
-                btn.className = "cmd chip" + (on ? "" : " cmd-danger");
+                btn.className = "cmd chip mass-btn" + (on ? "" : " cmd-danger");
                 btn.textContent = tr(on ? "mini_start" : "mini_stop");
                 btn.setAttribute("aria-label", label + " " + btn.textContent);
                 btn.disabled = commandBusy || !ids.length;
@@ -1249,13 +1247,12 @@
                     var ask = trf(on ? onConfirm : offConfirm, { n: ids.length });
                     runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: on });
                 });
-                group.appendChild(btn);
+                pair.appendChild(btn);
             });
-            line.appendChild(group);
+            card.appendChild(group);
         }
         addPair(tr("mini_trading"), "trading", "mini_cores_trading_on_confirm", "mini_cores_trading_off_confirm");
         addPair(tr("mini_autodetect"), "auto_detect", "mini_cores_auto_on_confirm", "mini_cores_auto_off_confirm");
-        card.appendChild(line);
         return card;
     }
 
@@ -1433,19 +1430,25 @@
         }
         ensureCollapse("orders", orders, orderCoreKey);
         appendToggleAll(host, "orders", orders, orderCoreKey, orderQuery, paintOrders);
-        appendGroups(
-            host,
-            "orders",
-            filtered,
-            orderIsProblem,
-            function (order) { return orderRow(order, data); },
-            orderQuery,
-            paintOrders,
-            orderCoreKey,
-            orderCoreLabel,
-            "name grow core-name",
-            orderGroupSummary
-        );
+        // Core groups arrive in exchange sections; each section gets the terminal's caption.
+        var sectionsOf = groupBy(filtered, function (order) { return String(order.exchange || ""); });
+        var s;
+        for (s = 0; s < sectionsOf.length; s++) {
+            if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
+            appendGroups(
+                host,
+                "orders",
+                sectionsOf[s].items,
+                orderIsProblem,
+                function (order) { return orderRow(order, data); },
+                orderQuery,
+                paintOrders,
+                orderCoreKey,
+                orderCoreLabel,
+                "name grow core-name",
+                orderGroupSummary
+            );
+        }
         restoreSnap(snap, y);
     }
 

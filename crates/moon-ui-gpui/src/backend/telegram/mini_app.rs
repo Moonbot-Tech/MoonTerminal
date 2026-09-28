@@ -345,7 +345,7 @@ impl Backend {
     fn mini_owner_core_ids(&self) -> Vec<CoreId> {
         visible_cores(self, &TelegramReportAccess::Owner)
             .into_iter()
-            .map(|(id, _)| id)
+            .map(|(id, _, _)| id)
             .collect()
     }
 
@@ -443,9 +443,8 @@ impl Backend {
         let can_control = matches!(access, TelegramReportAccess::Owner);
         let listed = visible_cores(self, &access);
         let store = self.session.store();
-        let venues = self.session.core_venues();
         let mut cores = Vec::with_capacity(listed.len());
-        for (id, name) in listed {
+        for (id, name, exchange) in listed {
             let core = store.core(id);
             let run = core.map(CoreRunState::from_core).unwrap_or_default();
             let (status, sys, fault) = match core {
@@ -455,7 +454,7 @@ impl Backend {
             cores.push(CoreStatusDto {
                 id,
                 name,
-                exchange: crate::controls::venue_section_label(venues.get(&id)),
+                exchange,
                 conn: conn_of(&status),
                 ping_ms: sys.round_trip_ms,
                 exch_ping_ms: sys.order_api_latency_ms.map(u32::from),
@@ -479,7 +478,7 @@ impl Backend {
         let venues = self.session.core_venues();
         let mut per_core = Vec::with_capacity(cores.len());
         let mut figures = Vec::with_capacity(cores.len());
-        for (id, name) in &cores {
+        for (id, name, exchange) in &cores {
             let (state, free, total) = match store.core(*id) {
                 Some(data) => (
                     data.balance_state(),
@@ -492,7 +491,7 @@ impl Backend {
             per_core.push(CoreBalanceDto {
                 id: *id,
                 name: name.clone(),
-                exchange: crate::controls::venue_section_label(venues.get(id)),
+                exchange: exchange.clone(),
                 state: balance_state_dto(state),
                 free: show.then_some(free),
                 total: show.then_some(total),
@@ -507,7 +506,7 @@ impl Backend {
             cores
                 .iter()
                 .enumerate()
-                .map(|(index, (id, _))| (index, venues.get(id))),
+                .map(|(index, (id, _, _))| (index, venues.get(id))),
         ) {
             let rows: Vec<BalanceFigures> = members.iter().map(|&index| figures[index]).collect();
             let summed = aggregate_balance_figures(&rows);
@@ -539,18 +538,18 @@ impl Backend {
         let staged = {
             let store = self.session.store();
             let mut staged = Vec::new();
-            for (id, name) in &cores {
+            for (id, name, exchange) in &cores {
                 if let Some(data) = store.core(*id) {
                     for order in &data.orders {
-                        staged.push((*id, name.clone(), order.clone()));
+                        staged.push((*id, name.clone(), exchange.clone(), order.clone()));
                     }
                 }
             }
             staged
         };
         let mut orders = Vec::with_capacity(staged.len());
-        for (id, name, order) in staged {
-            orders.push(order_dto(self, id, name, &order));
+        for (id, name, exchange, order) in staged {
+            orders.push(order_dto(self, id, name, exchange, &order));
         }
         Ok(OrdersDto {
             orders,
@@ -559,16 +558,120 @@ impl Backend {
     }
 }
 
-/// Sessions in canonical order that this grant may see. An empty viewer list keeps none.
-fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, String)> {
+/// Sessions this grant may see, in Mini App order. An empty viewer list keeps none.
+///
+/// Returns `(id, name, exchange section caption)` ordered by [`by_section`].
+fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, String, String)> {
     let order = CoreOrder::new(&backend.config);
-    order
+    let cores: Vec<(u64, String)> = order
         .from_sessions(backend.session.sessions(), |session| match access {
             TelegramReportAccess::Owner => true,
             TelegramReportAccess::Viewer(ids) => ids.contains(&session.id),
         })
         .into_iter()
-        .collect()
+        .collect();
+    by_section(
+        cores,
+        backend.session.core_venues(),
+        |(id, _)| *id,
+        |(_, name)| name,
+    )
+    .into_iter()
+    .map(|(section, (id, name))| (id, name, section))
+    .collect()
+}
+
+/// Order per-core rows the way every Mini App list shows them.
+///
+/// Rows are grouped into the terminal's exchange sections, in the terminal's section order
+/// ([`exchange_sections`]), and sorted by name inside each section with numbers compared as
+/// numbers ([`natural_cmp`]), so "SUB ACC 9" comes before "SUB ACC 10".
+///
+/// Args:
+///     rows: Per-core rows in any order.
+///     venues: Live venue of each core id.
+///     id: Core id of one row.
+///     name: Display name of one row.
+///
+/// Returns:
+///     Each row paired with its section caption, in display order.
+pub(super) fn by_section<T>(
+    rows: Vec<T>,
+    venues: &std::collections::HashMap<CoreId, moon_core::venue::CoreVenue>,
+    id: impl Fn(&T) -> u64,
+    name: impl Fn(&T) -> &str,
+) -> Vec<(String, T)> {
+    let sections: Vec<(String, Vec<usize>)> = exchange_sections(
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| (index, venues.get(&id(row)))),
+    )
+    .into_iter()
+    .map(|(venue, mut members)| {
+        members.sort_by(|&a, &b| natural_cmp(name(&rows[a]), name(&rows[b])));
+        (crate::controls::venue_section_label(venue), members)
+    })
+    .collect();
+    let mut slots: Vec<Option<T>> = rows.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(slots.len());
+    for (label, members) in sections {
+        for index in members {
+            if let Some(row) = slots[index].take() {
+                out.push((label.clone(), row));
+            }
+        }
+    }
+    out
+}
+
+/// Compare two names case-insensitively, reading each run of ASCII digits as one number.
+///
+/// Leading zeros do not change a number's value; names equal under that reading fall back to
+/// the raw text, so the order is total.
+///
+/// Args:
+///     a: First name.
+///     b: Second name.
+///
+/// Returns:
+///     The natural order of `a` against `b`.
+pub(super) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    use std::iter::Peekable;
+    use std::str::Chars;
+
+    /// Consume one digit run and return it without leading zeros.
+    fn number(chars: &mut Peekable<Chars<'_>>) -> String {
+        let mut digits = String::new();
+        while let Some(c) = chars.next_if(char::is_ascii_digit) {
+            digits.push(c);
+        }
+        digits.trim_start_matches('0').to_string()
+    }
+
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(p), Some(q)) if p.is_ascii_digit() && q.is_ascii_digit() => {
+                let (m, n) = (number(&mut x), number(&mut y));
+                let by_value = m.len().cmp(&n.len()).then_with(|| m.cmp(&n));
+                if by_value != Ordering::Equal {
+                    return by_value;
+                }
+            }
+            (Some(p), Some(q)) => {
+                let by_char = p.to_lowercase().cmp(q.to_lowercase());
+                if by_char != Ordering::Equal {
+                    return by_char;
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
 }
 
 /// Requested cores that are visible, without repeats, in `visible` order.
@@ -593,12 +696,19 @@ fn scope_targets(requested: &[u64], visible: &[CoreId]) -> Vec<CoreId> {
 ///
 /// The change percent uses the desktop orders table's arithmetic and precision.
 /// Adaptive price text cannot be parsed back into that percent.
-fn order_dto(backend: &Backend, id: u64, name: String, order: &OrderRow) -> OrderDto {
+fn order_dto(
+    backend: &Backend,
+    id: u64,
+    name: String,
+    exchange: String,
+    order: &OrderRow,
+) -> OrderDto {
     let pnl = order_pnl(order).filter(|value| value.is_finite());
     let change = order_pnl_pct(order).filter(|value| value.is_finite());
     OrderDto {
         core: id,
         core_name: name,
+        exchange,
         uid: order.uid,
         coin: order.coin.clone(),
         market: order.market.clone(),
@@ -674,15 +784,17 @@ fn report_dto(report: super::reports::MiniReport) -> Result<ReportDto, MiniAppAp
             .map(|(key, name, total)| RowDto {
                 key,
                 name,
+                section: None,
                 money: money_of(&total),
             })
             .collect(),
         by_core: report
             .by_core
             .into_iter()
-            .map(|(key, name, total)| RowDto {
+            .map(|(key, name, section, total)| RowDto {
                 key,
                 name,
+                section: Some(section),
                 money: money_of(&total),
             })
             .collect(),
