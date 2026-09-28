@@ -1273,6 +1273,9 @@
             balanceRevealed = !balanceRevealed;
             hapticSelection();
             paintBalances();
+            // The repaint rebuilds the button; hand keyboard focus to the new one.
+            var again = sections.balances.querySelector(".eye-btn");
+            if (again) again.focus();
         });
         head.appendChild(eye);
         hero.appendChild(head);
