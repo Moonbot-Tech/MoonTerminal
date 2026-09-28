@@ -838,23 +838,21 @@
         return false;
     }
 
-    // Owner order actions. Drawn only when can_control is true.
+    // Owner order actions, a labelled pair on their own line under the figures. Colours name the
+    // action, never the side: cancel is neutral, Panic Sell the danger tone on every row.
+    // Drawn only when can_control is true.
     function orderActions(row, order) {
         var line = el("div", "order-actions");
         var cancel = document.createElement("button");
         cancel.type = "button";
-        cancel.className = "cmd";
-        cancel.textContent = "✕";
-        cancel.title = tr("mini_cancel");
-        cancel.setAttribute("aria-label", tr("mini_cancel"));
+        cancel.className = "cmd cmd-cancel";
+        cancel.textContent = "✕ " + tr("mini_cancel");
         cancel.disabled = commandBusy;
         var panic = document.createElement("button");
         panic.type = "button";
         panic.className = "cmd cmd-danger";
         var panicLabel = tr(order.panic_armed ? "mini_panic_off" : "mini_panic_sell");
-        panic.textContent = order.panic_armed ? "↺" : "⚡";
-        panic.title = panicLabel;
-        panic.setAttribute("aria-label", panicLabel);
+        panic.textContent = (order.panic_armed ? "↺ " : "⚡ ") + panicLabel;
         panic.disabled = commandBusy;
         cancel.addEventListener("click", function () {
             if (commandBusy) return;
@@ -878,7 +876,7 @@
         row.appendChild(line);
     }
 
-    // Dense terminal row: coin, side, change and PnL; muted flow line; compact actions at the right.
+    // Dense terminal row: coin, side, change and PnL; the price line; the owner's actions below.
     function orderRow(order, data) {
         var row = el("div", "row order-row");
         var main = el("div", "order-main");

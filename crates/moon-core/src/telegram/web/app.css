@@ -1134,17 +1134,13 @@ input:focus-visible {
     color: var(--neg);
 }
 
-/* Compact order row: data on the left, a small action pair at the right. */
+/* Order row: the figures on top, the owner's labelled action pair on a line of its own. */
 .order-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-top: 6px;
-    padding-bottom: 6px;
+    padding-top: 8px;
+    padding-bottom: 8px;
 }
 
 .order-main {
-    flex: 1 1 auto;
     min-width: 0;
 }
 
@@ -1205,17 +1201,30 @@ input:focus-visible {
 }
 
 .order-row .order-actions {
-    flex: none;
-    gap: 4px;
-    padding: 0;
+    gap: 12px;
+    padding: 6px 0 0;
 }
 
 .order-row .order-actions .cmd {
     min-width: 44px;
     min-height: 44px;
-    padding: 0;
-    font-size: 15px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
     border-radius: var(--r-ctl);
+}
+
+/* Side-independent tones: cancel neutral, Panic Sell the danger colour. */
+.order-row .order-actions .cmd-cancel {
+    color: var(--ink);
+    border-color: var(--line);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.order-row .order-actions .cmd-danger {
+    color: var(--danger);
+    border-color: var(--danger);
+    box-shadow: inset 0 0 0 1px var(--danger);
 }
 
 /* Group header: an exchange name truncates; a core name wraps to two lines so the unique tail
