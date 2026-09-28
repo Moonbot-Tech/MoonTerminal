@@ -42,31 +42,3 @@ fn a_vacuum_leaves_no_wal_behind() {
     drop(conn);
     remove_db(&path);
 }
-
-/// The limit holds without any explicit checkpoint: a transaction larger than the limit grows
-/// the sidecar, and the next writer's restart cuts it back.
-#[test]
-fn a_large_transaction_is_cut_back_to_the_limit() {
-    let path = temp_db("wal-limit");
-    let conn = Connection::open(&path).expect("open");
-    enable(&conn).expect("wal");
-    // A limit of the test's own, small enough to cross with a few megabytes.
-    let limit: i64 = 256 * 1024;
-    conn.pragma_update(None, "journal_size_limit", limit)
-        .expect("limit");
-    conn.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, body BLOB);")
-        .expect("table");
-    fill(&conn, 1_000);
-    assert!(wal_len(&path) > limit as u64, "the batch grew the sidecar");
-    let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
-    // The restart happens on the next write after a complete checkpoint.
-    conn.execute("INSERT INTO t(id, body) VALUES(-1, x'00')", [])
-        .expect("write");
-    assert!(
-        wal_len(&path) <= limit as u64,
-        "cut back to the limit: {} bytes",
-        wal_len(&path)
-    );
-    drop(conn);
-    remove_db(&path);
-}

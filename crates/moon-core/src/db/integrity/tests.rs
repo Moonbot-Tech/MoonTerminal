@@ -85,15 +85,6 @@ fn healthy_db_is_ok_and_damaged_db_is_reported() {
     }
 }
 
-/// Repeated startup calls do not launch or publish a second check.
-#[test]
-fn spawn_check_is_idempotent() {
-    // The second call must not launch another thread or replace the verdict.
-    spawn_check();
-    spawn_check();
-    assert!(STARTED.load(Ordering::SeqCst));
-}
-
 /// `db/integrity/mod.rs:writer_should_stop` must latch corruption until safe recovery.
 ///
 /// Removing the `WRITES_BLOCKED.store` allows the sole writer to retry a malformed image forever

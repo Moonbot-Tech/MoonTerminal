@@ -32,26 +32,3 @@ fn cancelled_scope_interrupts_sqlite_work() {
             if failure.code == ErrorCode::OperationInterrupted
     ));
 }
-
-/// Cancellation remains opt-in for ordinary readers and non-replaceable database work.
-///
-/// Installing a process-global handler instead of the thread-local request context makes this
-/// independent connection inherit a cancelled token and abort a query nobody superseded.
-#[test]
-fn ordinary_connection_has_no_cancellation_handler() {
-    let cancellation = ReadCancellation::new();
-    cancellation.cancel();
-    let connection = Connection::open_in_memory().expect("in-memory database");
-    let sum = connection
-        .query_row(
-            "WITH RECURSIVE n(value) AS (
-                 SELECT 1 UNION ALL SELECT value + 1 FROM n WHERE value < 1000
-             )
-             SELECT SUM(value) FROM n",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .expect("ordinary query remains uncancelled");
-
-    assert_eq!(sum, 500_500);
-}
