@@ -1377,11 +1377,36 @@ button.pill:disabled {
     padding: 0;
 }
 
+.detail-switch {
+    min-height: 44px;
+}
+
 .detail-actions {
     display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    padding: 0 var(--sp-4) var(--sp-3) calc(2 * var(--sp-4));
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+}
+
+/* Full-width, sentence-case action button of the core detail screen. */
+.action-btn {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+    background: var(--card);
+    color: var(--ink);
+    font-size: var(--fs-body);
+    font-weight: 500;
+}
+
+.action-btn.cmd-danger {
+    border-color: var(--neg);
+    color: var(--neg);
+}
+
+.action-btn:disabled {
+    opacity: .6;
 }
 
 /* Closed trades: tap a row for the detail sheet. */

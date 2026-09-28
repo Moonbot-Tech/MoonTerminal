@@ -1563,6 +1563,44 @@
     }
 
     // One core in full: state, build, memory, CPU and pings; the owner also gets its controls.
+    // One switch row of the detail screen: label left, ON / OFF pill right.
+    function detailSwitch(core, label, field, key) {
+        var line = el("div", "row spread detail-switch");
+        line.appendChild(el("span", "grow", label));
+        var state = core[field];
+        var known = state === true || state === false;
+        var pill = onOffPill(known ? state : null, true, false);
+        pill.setAttribute("aria-label", label);
+        pill.addEventListener("click", function () {
+            if (commandBusy || !known) return;
+            runCommand(null, "/api/core/switch", { core: core.id, switch: key, on: !state });
+        });
+        line.appendChild(pill);
+        return line;
+    }
+
+    // Owner controls of the detail screen: two switch rows, then full-width actions.
+    function detailControls(core) {
+        var controls = el("div", "card detail-controls");
+        controls.appendChild(detailSwitch(core, tr("mini_trading"), "trading", "trading"));
+        controls.appendChild(detailSwitch(core, tr("mini_autodetect"), "auto_detect", "auto_detect"));
+        var line = el("div", "detail-actions");
+        var cancel = button("cmd action-btn cmd-danger", tr("mini_cancel_all"), function () {
+            if (commandBusy) return;
+            runCommand(null, "/api/core/cancel_all", { core: core.id });
+        });
+        cancel.disabled = commandBusy;
+        line.appendChild(cancel);
+        var reconnect = button("cmd action-btn", tr("mini_reconnect"), function () {
+            if (commandBusy) return;
+            runCommand(null, "/api/core/reconnect", { core: core.id });
+        });
+        reconnect.disabled = commandBusy;
+        line.appendChild(reconnect);
+        controls.appendChild(line);
+        return controls;
+    }
+
     function paintCoreDetail(host, core, data) {
         var wrap = el("div", "core-detail");
         wrap.appendChild(button("cmd text-btn detail-back", "‹ " + tr("mini_back"), closeCoreDetail));
@@ -1589,17 +1627,7 @@
         detailLine(facts, tr("mini_exch_ping"), unitText(core.exch_ping_ms, "mini_unit_ms"));
         wrap.appendChild(facts);
         if (data && data.can_control) {
-            var controls = el("div", "card detail-controls");
-            controls.appendChild(coreActions(core));
-            var line = el("div", "detail-actions");
-            var reconnect = button("cmd chip", tr("mini_reconnect"), function () {
-                if (commandBusy) return;
-                runCommand(null, "/api/core/reconnect", { core: core.id });
-            });
-            reconnect.disabled = commandBusy;
-            line.appendChild(reconnect);
-            controls.appendChild(line);
-            wrap.appendChild(controls);
+            wrap.appendChild(detailControls(core));
         }
         host.appendChild(wrap);
     }
