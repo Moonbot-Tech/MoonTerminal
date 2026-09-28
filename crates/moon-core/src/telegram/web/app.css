@@ -112,13 +112,23 @@
     display: none !important;
 }
 
+/* `clip`, not `hidden`: a hidden overflow makes <body> a scroll container that never scrolls,
+   and every sticky element inside it (the header, group heads, the day-table head) then scrolls
+   away with the page. */
 html,
 body {
     margin: 0;
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
     background: var(--page);
     color: var(--ink);
+}
+
+@supports not (overflow: clip) {
+    html,
+    body {
+        overflow-x: hidden;
+    }
 }
 
 body {
@@ -709,11 +719,17 @@ main {
     white-space: nowrap;
 }
 
+/* Sticks under the app header while its table is on screen; the rule is a shadow because a
+   collapsed border scrolls away from a sticky cell. */
 .day-table th {
+    position: sticky;
+    top: var(--header-h, 52px);
+    z-index: 2;
+    background: var(--card);
+    box-shadow: inset 0 -1px 0 var(--line);
     color: var(--hint);
     font-size: var(--fs-meta);
     font-weight: 500;
-    border-bottom: 1px solid var(--line);
 }
 
 .day-table .right {

@@ -174,6 +174,14 @@ const openTrade = async (page, nth) => {
 const SCREENS = [
     { name: "report-today", run: async () => {} },
     { name: "report-month", run: async (p) => { await p.click('[data-period="month"]'); await settle(p); } },
+    { name: "report-month-scrolled", run: async (p) => {
+        await p.click('[data-period="month"]'); await settle(p);
+        await p.evaluate(() => {
+            const rows = document.querySelectorAll(".day-table tbody tr");
+            if (rows.length) rows[Math.floor(rows.length / 2)].scrollIntoView({ block: "center" });
+        });
+        await settle(p);
+    } },
     { name: "cores", run: async (p) => { await nav(p, "cores"); } },
     { name: "cores-group-open", run: async (p) => { await nav(p, "cores"); await openFirstGroup(p, "cores"); } },
     { name: "core-detail", run: async (p) => {
