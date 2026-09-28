@@ -1606,7 +1606,7 @@ impl RenderState {
         // A pane drawing more than its own core's trades names the exchange and the count. That
         // wins over a shot: the shot exists to keep an account label out of a shared picture, and
         // this string has none. Otherwise a shot in flight names the exchange alone. The core name
-        // is the user's own free text, an account label such as `SUB ACC No 38`. `venue` is never
+        // is the user's own free text, an account label such as `ACCOUNT No 38`. `venue` is never
         // empty while a shot is armed: the order sync resolves it through the shared label helper,
         // which answers with the "not identified" wording for a core that cannot be named.
         let shot = self.shot_caption_active();

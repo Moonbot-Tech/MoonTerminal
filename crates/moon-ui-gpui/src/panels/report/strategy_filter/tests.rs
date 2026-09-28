@@ -35,7 +35,7 @@ fn strategy(core_uid: u64, strategy_id: i64, name: &str) -> ReportStrategy {
 fn every_exact_item_matches_its_core_name() {
     let groups = strategy_groups(
         &[strategy(42, -7, "BREAKOUT")],
-        &[(42, "VLTR$18 ~ F-BN".to_string())],
+        &[(42, "Demo Fund ~ F-BN".to_string())],
         "All strategies",
         "Manual orders",
     );
@@ -43,7 +43,7 @@ fn every_exact_item_matches_its_core_name() {
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[1].items.len(), 2);
     assert!(
-        groups[1].items.iter().all(|item| item.matches("VLTR$18")),
+        groups[1].items.iter().all(|item| item.matches("Demo Fund")),
         "a core-name search must retain its core-wide and exact-strategy rows"
     );
 }

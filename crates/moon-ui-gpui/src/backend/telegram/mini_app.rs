@@ -882,7 +882,7 @@ fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, 
 ///
 /// Rows are grouped into the terminal's exchange sections, in the terminal's section order
 /// ([`exchange_sections`]), and sorted by name inside each section with numbers compared as
-/// numbers ([`natural_cmp`]), so "SUB ACC 9" comes before "SUB ACC 10".
+/// numbers ([`natural_cmp`]), so "Account 9" comes before "Account 10".
 ///
 /// Args:
 ///     rows: Per-core rows in any order.
