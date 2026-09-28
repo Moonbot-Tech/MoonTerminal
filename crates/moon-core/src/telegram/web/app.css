@@ -1496,10 +1496,6 @@ button.pill:disabled {
 }
 
 /* The last characters of a long core name, kept whole beside the ellipsized head. */
-.trade-core-tail {
-    flex: none;
-    white-space: pre;
-}
 
 .trade-sep,
 .trade-when {

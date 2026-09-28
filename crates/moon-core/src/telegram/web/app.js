@@ -1489,6 +1489,21 @@
         return node;
     }
 
+    // Most characters of a core name a closed-trade row shows before it drops leading words.
+    var TRADE_CORE_CHARS = 24;
+
+    // Names share long prefixes, so a long one keeps its trailing whole words behind "…".
+    // Words split on spaces and "/"; the last word alone is kept even when it exceeds the budget.
+    function coreNameTail(name, budget) {
+        if (name.length <= budget) return name;
+        var parts = name.split(/(?=[ \/])/);
+        var tail = parts.pop();
+        while (parts.length && parts[parts.length - 1].length + tail.length + 1 <= budget) {
+            tail = parts.pop() + tail;
+        }
+        return "…" + tail;
+    }
+
     function tradeRow(trade) {
         var row = el("div", "row trade-row");
         row.setAttribute("role", "button");
@@ -1503,13 +1518,10 @@
         var meta = el("div", "sub trade-row-meta");
         var when = trade.closed_short_text || trade.closed_text;
         if (trade.core_name) {
-            // Names share long prefixes, so the ellipsis goes in the middle: the tail stays.
             var name = String(trade.core_name);
-            var cut = name.length > 16 ? name.length - 10 : name.length;
-            var core = el("span", "trade-core", name.slice(0, cut));
+            var core = el("span", "trade-core", coreNameTail(name, TRADE_CORE_CHARS));
             core.title = name;
             meta.appendChild(core);
-            if (cut < name.length) meta.appendChild(el("span", "trade-core-tail", name.slice(cut)));
         }
         if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
         if (when) meta.appendChild(el("span", "trade-when", when));
