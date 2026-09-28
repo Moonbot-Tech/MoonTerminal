@@ -750,7 +750,7 @@ pub fn trades_db_path() -> PathBuf {
 }
 
 /// SQLite database the tape recorder files into (see `market::tape_recorder`): the layout of
-/// [`trades_db_path`], kept apart so the request-only tape can be compared with the ring captures
+/// [`trades_db_path`], kept apart so the station's tape can be compared with the ring captures
 /// the terminal files there, and deleted after a run without touching them.
 pub fn tape_recorder_db_path() -> PathBuf {
     db_dir().join("tape_recorder.sqlite")

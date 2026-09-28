@@ -1,24 +1,34 @@
-//! Tape recorder: the station's request-only tape (`docs-internal/STATION.md` §4.3), built and
-//! measured inside the terminal first (phase T5).
+//! Tape recorder: the station's tape around every trade (`docs-internal/STATION.md` §4.3), built
+//! and measured inside the terminal first (phase T5).
 //!
 //! # Why a client of its own
 //!
 //! The terminal already holds every trade's prints in its live rings and files them at the close
-//! (`trade_replay::worker::capture`). The station will have no live rings: it can only ask a core
-//! for its chart archive around each trade. Whether that is enough is what this measures — and it
-//! cannot ask through the terminal's own client, because a second `request_chart` there REPLACES
-//! the overlap in the live ring with the coarsened archive (moonproto `docs/trades.md`), spoiling
-//! both the capture and the reference it is to be compared with. So the recorder runs one extra
-//! client per exchange — a donor, any core of that exchange, with the same key — in the station's
-//! mode ([`donor`]).
+//! (`trade_replay::worker::capture`). The station has no such rings: it selects a pair only for
+//! as long as a trade of it needs recording. That cannot run through the terminal's own client —
+//! its archive request would REPLACE the overlap in the live ring with the coarsened archive
+//! (moonproto `docs/trades.md`), spoiling both the capture and the reference it is compared with.
+//! So the recorder runs one extra client per exchange — a donor, any core of that exchange, with
+//! the same key — in the station's mode ([`donor`]).
 //!
 //! # What it does
 //!
 //! Every trade the terminal sees open or close becomes a task of its key `(exchange, market)`
-//! ([`plan`]): ask at the open, poll while the position may still be short, ask at the close and
-//! poll until the trail is settled. Each answer is filed into `tape_recorder.sqlite` — the layout
-//! of `trades.sqlite`, a second [`TradeCache`] on its own file — and logged to
-//! `logs/tape_recorder.log`, with a summary line every minute.
+//! ([`plan`]). The recording follows moonproto's capture-station recipe ("Compact Capture
+//! Stations"), its schedule set by the terminal's `[trade_replay]` window:
+//!
+//! - **entry** — the pair joins the donor's selection and its chart archive is asked ONCE: the
+//!   run-up, as far back as the core still holds it;
+//! - **position** — the pair stays selected and the donor's ring is drained by cursor every
+//!   second; a ring that overwrote unread rows leaves an honest gap. No archive is asked again;
+//! - **long position** — past `long_position_min` the pair is let go; at the exit it is selected
+//!   again and the archive asked for the stretch before the exit;
+//! - **exit** — the pair stays selected until `exit + margin_s` is filed, then is let go;
+//! - trades of one key, from any core, share one selection until the last of them is filed.
+//!
+//! There is no cap on pairs and no cancelled recording. Each flush lands in
+//! `tape_recorder.sqlite` — the layout of `trades.sqlite`, a second [`TradeCache`] on its own
+//! file — and is logged to `logs/tape_recorder.log`, with a summary line every minute.
 //!
 //! Once a closed trade is settled here, and the terminal's own close-time capture has had time to
 //! land, the two tapes of it are read back and compared ([`compare`]): coverage, prints, volume and
@@ -44,17 +54,18 @@ mod compare;
 mod donor;
 mod plan;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use donor::{Donor, Reply};
-use plan::KeyTask;
 pub use plan::TradeId;
+use plan::{Filing, KeyTask, QUIET_TAIL_MS};
 
 use crate::config::ServerConfig;
 use crate::feed::Tick;
+use crate::market::trade_replay::Coverage;
 use crate::market::trade_replay::tick_tiles::TileSource;
 use crate::market::trade_replay::trade_cache::TradeCache;
 use crate::session::CoreId;
@@ -63,13 +74,17 @@ use crate::session::CoreId;
 const LOG_FILE: &str = "tape_recorder.log";
 /// How often the running recorder looks at its donors and its schedule.
 const TICK: Duration = Duration::from_millis(250);
+/// How often every recording pair's ring is drained.
+const DRAIN_EVERY: Duration = Duration::from_secs(1);
 /// How often a switched-off recorder looks at the switch.
 const IDLE_TICK: Duration = Duration::from_secs(2);
-/// Archive requests in flight across every donor — each is a multi-megabyte transfer.
+/// Archive requests in flight across every donor. Not a cap on pairs — a selected pair records
+/// its live rows while it waits — but on memory: an archive is unpacked at the core's size before
+/// it is trimmed to the pair's ring (moonproto "Memory Estimate").
 const MAX_IN_FLIGHT: usize = 4;
 /// How long a core whose donor never finished Init is left alone.
 const SHUN: Duration = Duration::from_secs(300);
-/// A donor with nothing asked for this long disconnects.
+/// A donor with nothing selected for this long disconnects.
 const DONOR_IDLE: Duration = Duration::from_secs(600);
 /// An open trade whose exit never arrived is forgotten after this long.
 const OPEN_HORIZON_MS: i64 = 48 * 3_600_000;
@@ -249,6 +264,7 @@ fn run(rx: &Receiver<Cmd>) {
 /// Counters for the summary line.
 #[derive(Default)]
 struct Stats {
+    /// Archives asked, answered, failed or never answered.
     requests: u64,
     answers: u64,
     failed: u64,
@@ -256,6 +272,12 @@ struct Stats {
     spans: u64,
     gaps: u64,
     lost_ms: i64,
+    /// Drains that found unread rows overwritten.
+    clipped: u64,
+    /// Prints that arrived stamped behind what was already filed.
+    late: u64,
+    /// Recordings whose stream broke and were seeded again.
+    breaks: u64,
     /// Opens that were no entry: resent open rows after a (re)connect.
     stale_opens: u64,
     /// Settled trades compared with the ring capture, and their sums.
@@ -274,17 +296,21 @@ struct PendingCompare {
     market: String,
     open_ms: i64,
     close_ms: i64,
-    needed: crate::market::trade_replay::Coverage,
+    needed: Coverage,
 }
+
+type Key = (String, String);
 
 struct Recorder {
     cache: TradeCache,
-    tasks: HashMap<(String, String), KeyTask>,
+    tasks: HashMap<Key, KeyTask>,
     donors: HashMap<String, Donor>,
     shunned: HashMap<CoreId, Instant>,
     stats: Stats,
     last_summary: Instant,
+    next_drain: Instant,
     replies: Vec<Reply>,
+    ticks: Vec<Tick>,
     compares: Vec<PendingCompare>,
 }
 
@@ -298,14 +324,17 @@ impl Recorder {
             return None;
         };
         line(&format!("started, writing {}", path.display()));
+        let now = Instant::now();
         Some(Self {
             cache,
             tasks: HashMap::new(),
             donors: HashMap::new(),
             shunned: HashMap::new(),
             stats: Stats::default(),
-            last_summary: Instant::now(),
+            last_summary: now,
+            next_drain: now,
             replies: Vec::new(),
+            ticks: Vec::new(),
             compares: Vec::new(),
         })
     }
@@ -329,7 +358,7 @@ impl Recorder {
                 self.tasks
                     .entry((exchange, market))
                     .or_insert_with(KeyTask::new)
-                    .opened(now_ms, trade, open_ms, margin, long);
+                    .opened(trade, open_ms, margin, long);
             }
             Cmd::Closed {
                 exchange,
@@ -342,7 +371,7 @@ impl Recorder {
                 self.tasks
                     .entry((exchange, market))
                     .or_insert_with(KeyTask::new)
-                    .closed(now_ms, trade, open_ms, close_ms, margin, long);
+                    .closed(trade, open_ms, close_ms, margin, long);
             }
             Cmd::CoreGone(core) => {
                 let gone: Vec<String> = self
@@ -352,7 +381,7 @@ impl Recorder {
                     .map(|(exchange, _)| exchange.clone())
                     .collect();
                 for exchange in gone {
-                    self.drop_donor(&exchange, now_ms, "its core went away");
+                    self.drop_donor(&exchange, "its core went away");
                 }
             }
         }
@@ -360,15 +389,23 @@ impl Recorder {
 
     fn tick(&mut self, now: Instant, now_ms: i64) {
         self.collect_replies(now, now_ms);
-        self.expire(now, now_ms);
-        self.ask_due(now, now_ms);
-        for ((exchange, market), task) in &mut self.tasks {
+        self.expire(now);
+        if now >= self.next_drain {
+            self.next_drain = now + DRAIN_EVERY;
+            self.drain();
+        }
+        self.reconcile(now, now_ms);
+        for (key, task) in &mut self.tasks {
             task.drop_stale_opens(now_ms - OPEN_HORIZON_MS);
+            if task.overdue(now_ms) {
+                let lost = task.give_up();
+                note_lost(&mut self.stats, key, &lost, "gave up");
+            }
             for (open_ms, close_ms, needed) in task.take_settled() {
                 self.compares.push(PendingCompare {
                     due: now + COMPARE_DELAY,
-                    exchange: exchange.clone(),
-                    market: market.clone(),
+                    exchange: key.0.clone(),
+                    market: key.1.clone(),
                     open_ms,
                     close_ms,
                     needed,
@@ -376,19 +413,20 @@ impl Recorder {
             }
         }
         self.run_compares(now);
+        // A key done here is dropped from its donor's selection by the next reconcile.
         self.tasks.retain(|_, task| !task.is_done());
         let idle: Vec<String> = self
             .donors
             .iter()
             .filter(|(exchange, d)| {
-                d.in_flight() == 0
+                d.selected() == 0
                     && now.duration_since(d.last_used) > DONOR_IDLE
                     && !self.tasks.keys().any(|(e, _)| e == *exchange)
             })
             .map(|(exchange, _)| exchange.clone())
             .collect();
         for exchange in idle {
-            self.drop_donor(&exchange, now_ms, "idle");
+            self.drop_donor(&exchange, "idle");
         }
         if now.duration_since(self.last_summary) >= SUMMARY_EVERY {
             self.last_summary = now;
@@ -396,7 +434,7 @@ impl Recorder {
         }
     }
 
-    /// Drain every donor and file what came back.
+    /// Pump every donor and seed what its archive answers brought.
     fn collect_replies(&mut self, now: Instant, now_ms: i64) {
         let exchanges: Vec<String> = self.donors.keys().cloned().collect();
         for exchange in exchanges {
@@ -405,7 +443,7 @@ impl Recorder {
                 continue;
             };
             let was_ready = donor.is_ready();
-            donor.pump(now, &mut replies);
+            donor.pump(now, now_ms, &mut replies);
             if let Some(took) = donor.init_took().filter(|_| !was_ready) {
                 line(&format!(
                     "donor {exchange} core={} ready after {} ms",
@@ -424,75 +462,90 @@ impl Recorder {
         let Some(donor) = self.donors.get_mut(exchange) else {
             return;
         };
-        let (market, failure) = match reply {
-            Reply::Ready(market) => (market, None),
-            Reply::Failed(market, error) => (market, Some(error)),
+        let market = match &reply {
+            Reply::Ready(market) | Reply::Failed(market, _) => market.clone(),
         };
-        // An answer to a pair already forgotten (expired, or asked by a previous selection).
-        if !donor.is_asking(&market) {
-            return;
-        }
-        let ticks = match failure {
-            None => donor.copy_ring(&market),
-            Some(_) => Vec::new(),
-        };
-        let core = donor.core;
-        donor.forget(&market);
         let key = (exchange.to_string(), market);
-        let Some(task) = self.tasks.get_mut(&key) else {
+        // An answer for a pair let go in the meantime.
+        let Some(task) = self.tasks.get_mut(&key).filter(|t| t.wants_pair()) else {
             return;
         };
-        if let Some(error) = failure {
-            self.stats.failed += 1;
-            fail(task, &mut self.stats, &key, now_ms);
-            line(&format!("failed {} {}: {error}", key.0, key.1));
-            return;
+        match reply {
+            Reply::Ready(market) => {
+                self.stats.answers += 1;
+                // A recording already running files what it drained before the ring is read
+                // again from its oldest row: the new ring may no longer reach back that far.
+                let alive_ms = task.live_epoch().and_then(|epoch| donor.alive_ms(epoch));
+                if let Some(filing) = flush_to(task, alive_ms, true) {
+                    file(&self.cache, &mut self.stats, &key, filing);
+                }
+                donor.restart(&market);
+                let mut ticks = std::mem::take(&mut self.ticks);
+                ticks.clear();
+                // Overwritten while it was read: the recording starts where the read resumed.
+                if let Some(resumed_ms) = donor.drain(&market, &mut ticks).resumed_ms {
+                    self.stats.clipped += 1;
+                    ticks.retain(|t| t.time_ms as i64 >= resumed_ms);
+                }
+                // An answer nobody waits for any more — moonproto's own retry of an ask that
+                // timed out here — still rewrote the ring: it seeds the recording again.
+                let (asked_ms, epoch) = task
+                    .seed()
+                    .map_or((now_ms, donor.epoch()), |s| (s.asked_ms, s.epoch));
+                let oldest = ticks.iter().map(|t| t.time_ms as i64).min().unwrap_or(0);
+                let newest = ticks.iter().map(|t| t.time_ms as i64).max().unwrap_or(0);
+                let count = ticks.len();
+                let lost = task.seeded(ticks, asked_ms, epoch);
+                line(&format!(
+                    "archive {} {} core={}: ring {count} prints {oldest}..{newest} ({} s deep), lost {lost}",
+                    key.0,
+                    key.1,
+                    crate::feed::core_label(donor.core),
+                    (newest - oldest) / 1_000,
+                ));
+                note_lost(&mut self.stats, &key, &lost, "");
+            }
+            Reply::Failed(market, error) => {
+                self.stats.failed += 1;
+                line(&format!("failed {} {}: {error}", key.0, key.1));
+                if task.seed().is_some() {
+                    let fresh = !task.is_live();
+                    let lost = task.seed_failed();
+                    if fresh {
+                        donor.restart(&market);
+                    }
+                    note_lost(
+                        &mut self.stats,
+                        &key,
+                        &lost,
+                        "recording the live rows alone",
+                    );
+                }
+            }
         }
-        self.stats.answers += 1;
-        let ring = ticks
-            .first()
-            .zip(ticks.last())
-            .map(|(first, last)| (first.time_ms as i64, last.time_ms as i64));
-        let filing = task.on_answer(now_ms, ring);
-        let mut prints = 0usize;
-        for &(from_ms, to_ms) in filing.file.spans() {
-            let inside = slice(&ticks, from_ms, to_ms);
-            prints += inside.len();
-            self.cache
-                .insert(&key.0, &key.1, from_ms, to_ms, inside, TileSource::Core);
-        }
-        self.stats.prints += prints as u64;
-        self.stats.spans += filing.file.spans().len() as u64;
-        self.stats.gaps += filing.lost.spans().len() as u64;
-        self.stats.lost_ms += filing.lost.width_ms();
-        let next = task.due_ms().map_or("done".to_string(), |due| {
-            format!("{} s", (due - now_ms) / 1_000)
-        });
-        line(&format!(
-            "answer {} {} core={}: ring {} prints {}..{} ({} s deep), filed {} ({prints} prints), lost {}, next {next}",
-            key.0,
-            key.1,
-            crate::feed::core_label(core),
-            ticks.len(),
-            ring.map_or(0, |r| r.0),
-            ring.map_or(0, |r| r.1),
-            ring.map_or(0, |r| (r.1 - r.0) / 1_000),
-            filing.file,
-            filing.lost,
-        ));
     }
 
-    /// Forget pairs whose answer never came, and donors that never finished Init.
-    fn expire(&mut self, now: Instant, now_ms: i64) {
+    /// Record archives that never came from the live rows alone, and drop donors that never
+    /// finished Init.
+    fn expire(&mut self, now: Instant) {
         for (exchange, donor) in &mut self.donors {
             for market in donor.expired(now) {
-                donor.forget(&market);
                 self.stats.failed += 1;
-                let key = (exchange.clone(), market.clone());
+                line(&format!("no answer {exchange} {market}"));
+                let key = (exchange.clone(), market);
                 if let Some(task) = self.tasks.get_mut(&key) {
-                    fail(task, &mut self.stats, &key, now_ms);
+                    let fresh = !task.is_live();
+                    let lost = task.seed_failed();
+                    if fresh {
+                        donor.restart(&key.1);
+                    }
+                    note_lost(
+                        &mut self.stats,
+                        &key,
+                        &lost,
+                        "recording the live rows alone",
+                    );
                 }
-                line(&format!("no answer {exchange} {market}, forgotten"));
             }
         }
         let stalled: Vec<(String, CoreId)> = self
@@ -503,51 +556,131 @@ impl Recorder {
             .collect();
         for (exchange, core) in stalled {
             self.shunned.insert(core, now);
-            self.drop_donor(&exchange, now_ms, "Init did not finish");
+            self.drop_donor(&exchange, "Init did not finish");
         }
         self.shunned.retain(|_, at| now.duration_since(*at) < SHUN);
     }
 
-    /// Ask every due key whose donor is ready, earliest first, within [`MAX_IN_FLIGHT`].
-    fn ask_due(&mut self, now: Instant, now_ms: i64) {
-        // A key no donor could be asked for at all — no core of its exchange, a shunned one, a
-        // donor stuck in Init — never reaches a failure; past the give-up point it is one.
+    /// Drain every recording pair's ring into its key and file what the frontier passed.
+    fn drain(&mut self) {
         for (key, task) in &mut self.tasks {
-            if task.overdue(now_ms) {
-                fail(task, &mut self.stats, key, now_ms);
-            }
-        }
-        let mut due: Vec<(i64, (String, String))> = self
-            .tasks
-            .iter()
-            .filter_map(|(key, task)| {
-                task.due_ms()
-                    .filter(|&d| d <= now_ms)
-                    .map(|d| (d, key.clone()))
-            })
-            .collect();
-        due.sort();
-        for (_, key) in due {
-            let in_flight: usize = self.donors.values().map(Donor::in_flight).sum();
-            if in_flight >= MAX_IN_FLIGHT {
-                return;
-            }
-            let (exchange, market) = &key;
-            if !self.donors.contains_key(exchange) && !self.connect_donor(exchange, now) {
-                continue;
-            }
-            let Some(donor) = self.donors.get_mut(exchange) else {
+            let Some(epoch) = task.live_epoch() else {
                 continue;
             };
-            if !donor.is_ready() || donor.is_asking(market) {
+            let Some(donor) = self.donors.get_mut(&key.0) else {
+                task.stop();
+                continue;
+            };
+            self.ticks.clear();
+            let drained = donor.drain(&key.1, &mut self.ticks);
+            if let Some(resumed_ms) = drained.resumed_ms {
+                self.stats.clipped += 1;
+                let lost = task.clipped(resumed_ms);
+                note_lost(&mut self.stats, key, &lost, "ring overwrote unread rows");
+            }
+            self.stats.late += task.drained(&self.ticks) as u64;
+            let broke = epoch != donor.epoch();
+            if let Some(filing) = flush_to(task, donor.alive_ms(epoch), broke) {
+                file(&self.cache, &mut self.stats, key, filing);
+            }
+            if broke {
+                self.stats.breaks += 1;
+                task.stop();
+                line(&format!(
+                    "stream broke {} {} core={}, seeding again",
+                    key.0,
+                    key.1,
+                    crate::feed::core_label(donor.core)
+                ));
+            }
+        }
+    }
+
+    /// Let go of the pairs nobody needs, keep every donor's selection the complete set still
+    /// needed, and ask the archive for every pair that must be seeded.
+    fn reconcile(&mut self, now: Instant, now_ms: i64) {
+        let mut wanted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for (key, task) in &mut self.tasks {
+            if task.wants_pair() {
+                wanted
+                    .entry(key.0.clone())
+                    .or_default()
+                    .insert(key.1.clone());
                 continue;
             }
-            self.stats.requests += 1;
-            if let Err(e) = donor.ask(market, now) {
-                self.stats.failed += 1;
-                line(&format!("refused {exchange} {market}: {e}"));
-                if let Some(task) = self.tasks.get_mut(&key) {
-                    fail(task, &mut self.stats, &key, now_ms);
+            if !task.is_live() && task.seed().is_none() {
+                continue;
+            }
+            let alive_ms = task
+                .live_epoch()
+                .and_then(|epoch| self.donors.get(&key.0)?.alive_ms(epoch));
+            if let Some(filing) = flush_to(task, alive_ms, true) {
+                file(&self.cache, &mut self.stats, key, filing);
+            }
+            task.stop();
+            line(&format!("released {} {}", key.0, key.1));
+        }
+        for exchange in self.donors.keys() {
+            wanted.entry(exchange.clone()).or_default();
+        }
+        let mut in_flight: usize = self.donors.values().map(Donor::in_flight).sum();
+        for (exchange, markets) in wanted {
+            if !markets.is_empty()
+                && !self.donors.contains_key(&exchange)
+                && !self.connect_donor(&exchange, now)
+            {
+                continue;
+            }
+            let Some(donor) = self.donors.get_mut(&exchange) else {
+                continue;
+            };
+            if !donor.is_ready() {
+                continue;
+            }
+            if let Err(e) = donor.select(&markets, now) {
+                line(&format!("select {exchange} ({} pairs): {e}", markets.len()));
+                continue;
+            }
+            for market in markets {
+                if in_flight >= MAX_IN_FLIGHT {
+                    break;
+                }
+                let key = (exchange.clone(), market);
+                let Some(task) = self.tasks.get_mut(&key).filter(|t| t.needs_seed()) else {
+                    continue;
+                };
+                self.stats.requests += 1;
+                let fresh = !task.is_live();
+                task.seed_asked(now_ms, donor.epoch());
+                match donor.ask(&key.1, now) {
+                    Ok(()) => {
+                        in_flight += 1;
+                        line(&format!(
+                            "asked {} {} core={}{}",
+                            key.0,
+                            key.1,
+                            crate::feed::core_label(donor.core),
+                            if fresh {
+                                ""
+                            } else {
+                                " again, for a need behind the frontier"
+                            }
+                        ));
+                    }
+                    Err(e) => {
+                        self.stats.failed += 1;
+                        line(&format!("refused {} {}: {e}", key.0, key.1));
+                        let lost = task.seed_failed();
+                        if fresh {
+                            donor.restart(&key.1);
+                        }
+                        note_lost(
+                            &mut self.stats,
+                            &key,
+                            &lost,
+                            "recording the live rows alone",
+                        );
+                    }
                 }
             }
         }
@@ -585,16 +718,21 @@ impl Recorder {
         }
     }
 
-    /// Disconnect a donor; whatever it was asked is asked again through the next one.
-    fn drop_donor(&mut self, exchange: &str, now_ms: i64, why: &str) {
+    /// Disconnect a donor. Its recordings file what its stream brought and stop; the next donor
+    /// of the exchange seeds them again.
+    fn drop_donor(&mut self, exchange: &str, why: &str) {
         let Some(donor) = self.donors.remove(exchange) else {
             return;
         };
-        for market in donor.asked_markets() {
-            let key = (exchange.to_string(), market);
-            if let Some(task) = self.tasks.get_mut(&key) {
-                fail(task, &mut self.stats, &key, now_ms);
+        for (key, task) in &mut self.tasks {
+            if key.0 != exchange {
+                continue;
             }
+            let alive_ms = task.live_epoch().and_then(|epoch| donor.alive_ms(epoch));
+            if let Some(filing) = flush_to(task, alive_ms, true) {
+                file(&self.cache, &mut self.stats, key, filing);
+            }
+            task.stop();
         }
         line(&format!(
             "donor {exchange} core={}: dropped ({why})",
@@ -682,9 +820,11 @@ impl Recorder {
     fn summary(&self, what: &str) {
         let s = &self.stats;
         let ready = self.donors.values().filter(|d| d.is_ready()).count();
+        let pairs: usize = self.donors.values().map(Donor::selected).sum();
         let asking: usize = self.donors.values().map(Donor::in_flight).sum();
+        let recording = self.tasks.values().filter(|t| t.is_live()).count();
         line(&format!(
-            "{what}: keys {} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, stale opens skipped {}",
+            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}",
             self.tasks.len(),
             self.donors.len(),
             s.requests,
@@ -694,6 +834,9 @@ impl Recorder {
             s.spans,
             s.lost_ms / 1_000,
             s.gaps,
+            s.clipped,
+            s.late,
+            s.breaks,
             s.stale_opens,
         ));
         if s.compared > 0 {
@@ -715,21 +858,51 @@ impl Recorder {
     }
 }
 
-/// Record a failed ask of `key`; past the give-up point the rest of it is logged as lost.
-fn fail(task: &mut KeyTask, stats: &mut Stats, key: &(String, String), now_ms: i64) {
-    let lost = task.on_failure(now_ms);
-    if !lost.is_empty() {
-        stats.gaps += lost.spans().len() as u64;
-        stats.lost_ms += lost.width_ms();
-        line(&format!("gave up {} {}: lost {lost}", key.0, key.1));
+/// Flush `task` up to [`QUIET_TAIL_MS`] behind its stream's last sign of life, if it has one.
+fn flush_to(task: &mut KeyTask, alive_ms: Option<i64>, force: bool) -> Option<Filing> {
+    task.flush(alive_ms? - QUIET_TAIL_MS, force)
+}
+
+/// Write one flush of `key` and log it.
+fn file(cache: &TradeCache, stats: &mut Stats, key: &Key, filing: Filing) {
+    if filing.file.is_empty() {
+        return;
     }
+    for &(from_ms, to_ms) in filing.file.spans() {
+        let inside = slice(&filing.ticks, from_ms, to_ms);
+        stats.prints += inside.len() as u64;
+        cache.insert(&key.0, &key.1, from_ms, to_ms, inside, TileSource::Core);
+    }
+    stats.spans += filing.file.spans().len() as u64;
+    line(&format!(
+        "filed {} {} {} ({} prints)",
+        key.0,
+        key.1,
+        filing.file,
+        filing.ticks.len()
+    ));
+}
+
+/// Count and log what a key just lost; nothing for an empty loss.
+fn note_lost(stats: &mut Stats, key: &Key, lost: &Coverage, why: &str) {
+    if lost.is_empty() {
+        return;
+    }
+    stats.gaps += lost.spans().len() as u64;
+    stats.lost_ms += lost.width_ms();
+    let why = if why.is_empty() {
+        String::new()
+    } else {
+        format!(" ({why})")
+    };
+    line(&format!("lost {} {} {lost}{why}", key.0, key.1));
 }
 
 /// Stored spans as one coverage and one ascending run of prints.
 fn flatten(
     spans: Vec<crate::market::trade_replay::trade_cache::StoredSpan>,
-) -> (crate::market::trade_replay::Coverage, Vec<Tick>) {
-    let mut covered = crate::market::trade_replay::Coverage::none();
+) -> (Coverage, Vec<Tick>) {
+    let mut covered = Coverage::none();
     let mut ticks = Vec::new();
     for span in spans {
         covered.add((span.from_ms, span.to_ms));

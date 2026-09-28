@@ -2,7 +2,7 @@
 name = "moon-station"
 version = "0.1.0"
 edition = "2021"
-description = "Headless MoonTerminal station: report replica, order traces and the request-only trade tape, without a window."
+description = "Headless MoonTerminal station: report replica, order traces and the trade tape around every trade, without a window."
 publish = false
 
 [[bin]]

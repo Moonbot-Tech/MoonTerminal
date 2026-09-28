@@ -1,17 +1,31 @@
 //! One donor: the recorder's own client of one core, in the station's mode (`STATION.md` §3.1).
 //!
 //! Compact history, no periodic market refresh, no strategies, and no trade subscription except
-//! the pairs whose archive is on its way. moonproto's capture-station recipe (`docs/trades.md`,
-//! "Compact Capture Stations") is followed as written: select the pair, `request_chart` at once,
-//! copy the ring after `Ready`, forget the pair — the remaining pairs re-selected, and the last one
-//! with `unsubscribe_all_trades`, because an empty selection means ALL markets.
+//! the pairs some trade is being recorded for. moonproto's capture-station recipe (`docs/trades.md`,
+//! "Compact Capture Stations") is followed as written: select the pair with the complete set still
+//! needed, `request_chart` at once, restart the pair's cursor from the oldest row after `Ready`,
+//! drain the ring's new rows by cursor for as long as the pair stays selected, and forget it by
+//! selecting the rest — the last one with `unsubscribe_all_trades`, because an empty selection
+//! means ALL markets. No archive is asked again while a pair records.
 //!
 //! The terminal's own client of the same core is untouched: the subscription is per client (the
 //! core shares only the trades packet), and the archive merges into this client's rings alone.
+//!
+//! # Is the stream alive
+//!
+//! A selected pair makes the core send the donor its exchange's whole trade stream, so a trades
+//! packet arrives many times a second whatever the pair itself does; each is a
+//! `TradesEvent::Applied`. The last one's time is the recording's frontier ([`Donor::alive_ms`]).
+//! A reconnect, or a packet after more than [`STALL_MS`] of silence, starts a new stream EPOCH:
+//! the rows of the gap are gone, and every recording of the old epoch has to be seeded again.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
-use moonproto::state::{MarketHistoryEvent, MarketHistorySizing};
+use moonproto::state::{
+    MarketHistoryEvent, MarketHistorySizing, SeqRingCursor, SeqRingReader, TradeHistoryRow,
+    TradesEvent,
+};
 use moonproto::{
     ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
     RefreshConfig, TradesStreamMode,
@@ -25,15 +39,41 @@ use crate::session::CoreId;
 pub(super) const READY_WAIT: Duration = Duration::from_secs(60);
 
 /// How long an asked archive may stay unanswered. moonproto re-asks every 15 s of silence on its
-/// own and never gives up; past this the pair is forgotten, which cancels those retries.
+/// own; past this the recording starts from the live rows alone, and an answer that still comes
+/// later seeds it again.
 pub(super) const ANSWER_WAIT: Duration = Duration::from_secs(45);
+
+/// A trade stream silent this long has broken rather than paused: a selected pair brings the
+/// exchange's whole stream, which is never quiet for this long, and moonproto itself resubscribes
+/// after 15 s without a packet.
+pub(super) const STALL_MS: i64 = 10_000;
+
+/// Rows copied per bounded drain call.
+const DRAIN_BATCH: usize = 4_096;
 
 /// What one archive request came back as.
 pub(super) enum Reply {
-    /// Merged into this client's rings: copy now, then forget the pair.
+    /// Merged into this client's ring: restart the pair's cursor from its oldest row.
     Ready(String),
     /// Rejected by the client or the core, with its reason.
     Failed(String, String),
+}
+
+/// What one drain read.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Drained {
+    /// The ring overwrote rows before they were read; the first row read after that is at this
+    /// stamp.
+    pub resumed_ms: Option<i64>,
+}
+
+/// One selected pair.
+#[derive(Default)]
+struct Pair {
+    /// When its archive was asked, while the answer is on its way.
+    asked: Option<Instant>,
+    /// The ring and the cursor into it; taken from the snapshot when the recording (re)starts.
+    ring: Option<(SeqRingReader<TradeHistoryRow>, SeqRingCursor)>,
 }
 
 pub(super) struct Donor {
@@ -41,12 +81,19 @@ pub(super) struct Donor {
     client: MoonClient,
     connected_at: Instant,
     ready_at: Option<Instant>,
-    /// Pairs whose archive is on its way, with when each was asked — the retained selection.
-    asked: Vec<(String, Instant)>,
-    /// When the donor last had a pair asked, for dropping one nobody needs any more.
+    /// The selection the core was last sent.
+    pairs: BTreeMap<String, Pair>,
+    /// When the last trades packet arrived, true-UTC milliseconds; `None` while nothing is
+    /// selected or since the stream broke.
+    alive_ms: Option<i64>,
+    /// [`Self::alive_ms`] of the epoch before the current one.
+    previous_alive_ms: Option<i64>,
+    epoch: u64,
+    /// When the donor last had a pair selected, for dropping one nobody needs any more.
     pub last_used: Instant,
     events: Vec<Event>,
     lifecycle: Vec<LifecycleEvent>,
+    rows: Vec<TradeHistoryRow>,
 }
 
 impl Donor {
@@ -83,14 +130,18 @@ impl Donor {
             client,
             connected_at: now,
             ready_at: None,
-            asked: Vec::new(),
+            pairs: BTreeMap::new(),
+            alive_ms: None,
+            previous_alive_ms: None,
+            epoch: 0,
             last_used: now,
             events: Vec::new(),
             lifecycle: Vec::new(),
+            rows: Vec::new(),
         })
     }
 
-    /// Whether Init finished — requests are sent only then.
+    /// Whether Init finished — selections and requests are sent only then.
     pub(super) fn is_ready(&self) -> bool {
         self.ready_at.is_some()
     }
@@ -105,116 +156,183 @@ impl Donor {
         self.ready_at.is_none() && now.duration_since(self.connected_at) > READY_WAIT
     }
 
+    /// Archives asked and not answered.
     pub(super) fn in_flight(&self) -> usize {
-        self.asked.len()
+        self.pairs.values().filter(|p| p.asked.is_some()).count()
     }
 
-    pub(super) fn is_asking(&self, market: &str) -> bool {
-        self.asked.iter().any(|(m, _)| m == market)
+    /// Pairs selected.
+    pub(super) fn selected(&self) -> usize {
+        self.pairs.len()
+    }
+
+    /// The current stream epoch — see the module header.
+    pub(super) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// When the stream of `epoch` was last seen alive: the current one's last packet, or the
+    /// previous one's, for filing what it brought before it broke.
+    pub(super) fn alive_ms(&self, epoch: u64) -> Option<i64> {
+        if epoch == self.epoch {
+            self.alive_ms
+        } else if epoch.saturating_add(1) == self.epoch {
+            self.previous_alive_ms
+        } else {
+            None
+        }
+    }
+
+    fn next_epoch(&mut self) {
+        self.previous_alive_ms = self.alive_ms.take();
+        self.epoch += 1;
     }
 
     /// Drain everything the client queued — most of it (orders, balances, logs the core sends
-    /// every client) is dropped here — and collect the archive answers into `replies`.
-    pub(super) fn pump(&mut self, now: Instant, replies: &mut Vec<Reply>) {
-        self.lifecycle.clear();
-        self.client.drain_lifecycle_events_into(&mut self.lifecycle);
-        if self
-            .lifecycle
-            .iter()
-            .any(|e| matches!(e, LifecycleEvent::Ready))
-            && self.ready_at.is_none()
-        {
-            self.ready_at = Some(now);
+    /// every client) is dropped here — note the stream's pulse, and collect the archive answers
+    /// into `replies`.
+    pub(super) fn pump(&mut self, now: Instant, now_ms: i64, replies: &mut Vec<Reply>) {
+        let mut lifecycle = std::mem::take(&mut self.lifecycle);
+        lifecycle.clear();
+        self.client.drain_lifecycle_events_into(&mut lifecycle);
+        for event in &lifecycle {
+            match event {
+                LifecycleEvent::Ready if self.ready_at.is_none() => self.ready_at = Some(now),
+                // A reconnect: whatever the stream sent while the link was down is gone.
+                LifecycleEvent::Connected { fresh: false } => self.next_epoch(),
+                _ => {}
+            }
         }
-        self.events.clear();
-        self.client.drain_events_into(&mut self.events);
-        for event in self.events.drain(..) {
+        self.lifecycle = lifecycle;
+        let mut events = std::mem::take(&mut self.events);
+        events.clear();
+        self.client.drain_events_into(&mut events);
+        for event in events.drain(..) {
             match event {
                 Event::MarketHistory(MarketHistoryEvent::Ready { ticket, .. }) => {
-                    replies.push(Reply::Ready(ticket.market.clone()));
+                    if let Some(pair) = self.pairs.get_mut(ticket.market.as_str()) {
+                        pair.asked = None;
+                        replies.push(Reply::Ready(ticket.market.clone()));
+                    }
                 }
                 Event::MarketHistory(MarketHistoryEvent::Failed { ticket, error }) => {
-                    replies.push(Reply::Failed(ticket.market.clone(), error.to_string()));
+                    if let Some(pair) = self.pairs.get_mut(ticket.market.as_str()) {
+                        pair.asked = None;
+                        replies.push(Reply::Failed(ticket.market.clone(), error.to_string()));
+                    }
+                }
+                // Packets still in flight after the last pair was let go are not a pulse.
+                Event::Trade(TradesEvent::Applied { .. }) if !self.pairs.is_empty() => {
+                    if self.alive_ms.is_some_and(|at| now_ms - at > STALL_MS) {
+                        self.next_epoch();
+                    }
+                    self.alive_ms = Some(now_ms);
                 }
                 _ => {}
             }
         }
+        self.events = events;
     }
 
-    /// Select `market` alongside the pairs already asked and request its archive.
-    pub(super) fn ask(&mut self, market: &str, now: Instant) -> Result<(), String> {
-        self.asked.push((market.to_string(), now));
-        self.last_used = now;
-        if let Err(e) = self.select() {
-            self.asked.pop();
-            let _ = self.select();
-            return Err(e);
+    /// Send the complete set of pairs still needed, when it changed. A pair left out is
+    /// forgotten with its ring; a pair added starts with an empty one.
+    pub(super) fn select(
+        &mut self,
+        markets: &BTreeSet<String>,
+        now: Instant,
+    ) -> Result<(), String> {
+        if self.pairs.keys().eq(markets.iter()) {
+            return Ok(());
         }
-        match self.client.history().request_chart(market) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                self.forget(market);
-                Err(e.to_string())
-            }
-        }
-    }
-
-    /// Pairs asked longer than [`ANSWER_WAIT`] ago.
-    pub(super) fn expired(&self, now: Instant) -> Vec<String> {
-        self.asked
-            .iter()
-            .filter(|(_, at)| now.duration_since(*at) > ANSWER_WAIT)
-            .map(|(market, _)| market.clone())
-            .collect()
-    }
-
-    /// Every pair still asked, for a caller dropping this donor.
-    pub(super) fn asked_markets(&self) -> Vec<String> {
-        self.asked
-            .iter()
-            .map(|(market, _)| market.clone())
-            .collect()
-    }
-
-    /// Stop retaining `market`: re-select the rest, or unsubscribe when nothing is left.
-    pub(super) fn forget(&mut self, market: &str) {
-        self.asked.retain(|(m, _)| m != market);
-        if let Err(e) = self.select() {
-            log::warn!(
-                "tape recorder: core {} selection update failed: {e}",
-                crate::feed::core_label(self.core)
-            );
-        }
-    }
-
-    fn select(&self) -> Result<(), String> {
-        let result = match self.asked.is_empty() {
+        let result = match markets.is_empty() {
             true => self.client.streams().unsubscribe_all_trades(),
             false => self.client.streams().subscribe_trades_for(
                 TradesStreamMode::TradesOnly,
-                self.asked.iter().map(|(market, _)| market.as_str()),
+                markets.iter().map(String::as_str),
             ),
         };
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| e.to_string())?;
+        self.pairs.retain(|market, _| markets.contains(market));
+        for market in markets {
+            self.pairs.entry(market.clone()).or_default();
+        }
+        if markets.is_empty() {
+            // The stream stops because it was let go, not because it broke.
+            self.alive_ms = None;
+        } else {
+            self.last_used = now;
+        }
+        Ok(())
     }
 
-    /// Everything the ring of `market` holds, ascending — converted exactly as the terminal's
-    /// own ring copy converts it (`market::source::replay`), so the two can be compared print for
-    /// print.
-    pub(super) fn copy_ring(&self, market: &str) -> Vec<Tick> {
-        let Some(readers) = self
+    /// Request the archive of a selected `market`.
+    pub(super) fn ask(&mut self, market: &str, now: Instant) -> Result<(), String> {
+        let Some(pair) = self.pairs.get_mut(market) else {
+            return Err("not selected".to_string());
+        };
+        self.client
+            .history()
+            .request_chart(market)
+            .map_err(|e| e.to_string())?;
+        pair.asked = Some(now);
+        self.last_used = now;
+        Ok(())
+    }
+
+    /// Pairs whose archive was asked longer than [`ANSWER_WAIT`] ago; each is reported once.
+    pub(super) fn expired(&mut self, now: Instant) -> Vec<String> {
+        let mut out = Vec::new();
+        for (market, pair) in &mut self.pairs {
+            if pair
+                .asked
+                .is_some_and(|at| now.duration_since(at) > ANSWER_WAIT)
+            {
+                pair.asked = None;
+                out.push(market.clone());
+            }
+        }
+        out
+    }
+
+    /// Point the pair's cursor at the oldest row its ring holds — after the archive merged, or
+    /// when the recording starts without one.
+    pub(super) fn restart(&mut self, market: &str) {
+        let ring = self
             .client
             .snapshot_versioned()
             .and_then(|snapshot| snapshot.market_history_readers(market))
+            .and_then(|readers| readers.futures_trades.or(readers.spot_trades))
+            .map(|reader| {
+                let cursor = reader.cursor_from_oldest();
+                (reader, cursor)
+            });
+        if let Some(pair) = self.pairs.get_mut(market) {
+            pair.ring = ring;
+        }
+    }
+
+    /// Append every row of `market`'s ring past its cursor to `out`, converted exactly as the
+    /// terminal's own ring copy converts it (`market::source::replay`), so the two can be compared
+    /// print for print. A pair whose ring was not found yet looks for it again, from its oldest
+    /// row.
+    pub(super) fn drain(&mut self, market: &str, out: &mut Vec<Tick>) -> Drained {
+        let found = self.pairs.get(market).is_some_and(|p| p.ring.is_some());
+        if !found {
+            self.restart(market);
+        }
+        let Some((reader, cursor)) = self.pairs.get_mut(market).and_then(|p| p.ring.as_mut())
         else {
-            return Vec::new();
+            return Drained::default();
         };
-        let Some(reader) = readers.futures_trades.or(readers.spot_trades) else {
-            return Vec::new();
-        };
-        let mut ticks = reader.with_last(reader.capacity(), |view| {
-            let mut out = Vec::new();
-            view.for_each(|row| {
+        let mut drained = Drained::default();
+        loop {
+            let meta = reader.drain_new_bounded(cursor, DRAIN_BATCH, &mut self.rows);
+            // Taken from the raw row: a first row the filter below drops still marks where the
+            // read resumed.
+            if meta.clipped && drained.resumed_ms.is_none() {
+                drained.resumed_ms = self.rows.first().map(|row| row.unix_millis());
+            }
+            for row in &self.rows {
                 let tick = Tick {
                     time_ms: row.unix_millis() as f64,
                     price: row.price,
@@ -224,10 +342,10 @@ impl Donor {
                 if tick.time_ms.is_finite() && tick.price.is_finite() && tick.price > 0.0 {
                     out.push(tick);
                 }
-            });
-            out
-        });
-        ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
-        ticks
+            }
+            if meta.caught_up || meta.copied == 0 {
+                return drained;
+            }
+        }
     }
 }

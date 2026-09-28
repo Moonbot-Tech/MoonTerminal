@@ -6,11 +6,12 @@
 //!
 //! - replicates every core's reports into `reports.sqlite` — the same writer, the same checkpoints;
 //! - backfills and keeps each closed trade's order traces (`order_traces.sqlite`);
-//! - records the tape around every trade by archive requests alone
-//!   (`market::tape_recorder`, always on here) into `tape_recorder.sqlite`.
+//! - records the tape around every trade (`market::tape_recorder`, always on here) into
+//!   `tape_recorder.sqlite`: the pair subscribed for the trade's lifetime, seeded once with the
+//!   core's chart archive.
 //!
 //! It never elects a market provider — the terminal does that from its open charts — so no core
-//! is asked for its exchange's live trade stream.
+//! is asked to keep every market's trades; only the pairs of trades in progress are selected.
 //!
 //! Usage: `moon-station --data <dir> [--config <station.toml>]`. The directory is the station's
 //! whole state: the databases under `data/`, the logs under `logs/`, `cfg/diagnostics.toml`, and
