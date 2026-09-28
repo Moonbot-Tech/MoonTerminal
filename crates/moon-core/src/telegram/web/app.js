@@ -826,7 +826,8 @@
     function orderResult(order) {
         var node = el("span", "num order-pnl");
         if (order.pnl_text) {
-            applyMoney(node, "num order-pnl", order.pnl_text, order.pnl);
+            // Dollars like the core header and the summary above it.
+            applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
             return node;
         }
         node.className = "num order-pnl hint";
