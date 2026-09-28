@@ -501,3 +501,55 @@ telegram.mini_cmd_unknown:
   ru: "Результат неизвестен — проверьте ордера"
   en: "Result unknown — check the orders"
   es: "Resultado desconocido — revisa las órdenes"
+telegram.mini_trading:
+  ru: "Торговля"
+  en: "Trading"
+  es: "Trading"
+telegram.mini_autodetect:
+  ru: "Автодетект"
+  en: "Auto-detect"
+  es: "Autodetección"
+telegram.mini_cancel_all:
+  ru: "Снять все ордера"
+  en: "Cancel all orders"
+  es: "Cancelar todas las órdenes"
+telegram.mini_state_unknown:
+  ru: "—"
+  en: "—"
+  es: "—"
+telegram.mini_all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+telegram.mini_cores_trading_on_confirm:
+  ru: "Включить торговлю на {n} ядрах?"
+  en: "Start trading on {n} cores?"
+  es: "¿Activar el trading en {n} núcleos?"
+telegram.mini_cores_trading_off_confirm:
+  ru: "Остановить торговлю на {n} ядрах?"
+  en: "Stop trading on {n} cores?"
+  es: "¿Detener el trading en {n} núcleos?"
+telegram.mini_cores_auto_on_confirm:
+  ru: "Включить автодетект на {n} ядрах?"
+  en: "Turn auto-detect on for {n} cores?"
+  es: "¿Activar la autodetección en {n} núcleos?"
+telegram.mini_cores_auto_off_confirm:
+  ru: "Выключить автодетект на {n} ядрах?"
+  en: "Turn auto-detect off for {n} cores?"
+  es: "¿Desactivar la autodetección en {n} núcleos?"
+telegram.mini_cmd_partial:
+  ru: "Принято {sent} из {n}"
+  en: "Accepted {sent} of {n}"
+  es: "Aceptado {sent} de {n}"
+telegram.mini_cmd_core_not_found:
+  ru: "Ядро не найдено"
+  en: "Core not found"
+  es: "Núcleo no encontrado"
+telegram.mini_start:
+  ru: "Старт"
+  en: "Start"
+  es: "Iniciar"
+telegram.mini_stop:
+  ru: "Стоп"
+  en: "Stop"
+  es: "Detener"

@@ -7,7 +7,8 @@
 //! Every `/api/*` route, read or write, re-verifies initData HMAC, the paired chat, and
 //! `auth_date` within `INIT_DATA_MAX_AGE_SECS` (3600 s) before anything reaches the consumer.
 //! Routes: `POST /api/session`, `POST /api/report`, `POST /api/cores`, `POST /api/balances`,
-//! `POST /api/orders`, `POST /api/order/cancel`, and `POST /api/panic`.
+//! `POST /api/orders`, `POST /api/order/cancel`, `POST /api/panic`, `POST /api/core/switch`,
+//! `POST /api/cores/switch`, and `POST /api/core/cancel_all`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -30,7 +31,10 @@ use crate::util::time::now_unix_secs;
 
 pub mod dto;
 
-use dto::{BalancesDto, CommandResultDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto};
+use dto::{
+    BalancesDto, CommandResultDto, CoreSwitchDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto,
+    ScopeResultDto,
+};
 
 const INDEX_HTML: &str = include_str!("web/index.html");
 const APP_CSS: &str = include_str!("web/app.css");
@@ -143,6 +147,48 @@ pub enum MiniAppApiRequest {
         market: String,
         /// Armed state the page asked for.
         on: bool,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Flip one core's trading or auto-detect switch. Nothing is sent for an unknown core.
+    CoreSwitch {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Target core.
+        core: u64,
+        /// Which switch to flip.
+        switch: CoreSwitchDto,
+        /// State the page asked for.
+        on: bool,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Flip one switch on several cores. Empty or over-cap lists are rejected before this
+    /// event is built.
+    CoresSwitch {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Target cores; unknown ids are never sent.
+        cores: Vec<u64>,
+        /// Which switch to flip.
+        switch: CoreSwitchDto,
+        /// State the page asked for.
+        on: bool,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<ScopeResultDto, MiniAppApiError>>,
+    },
+    /// Cancel every open order of one core. Nothing is sent for an unknown core.
+    CancelAllOrders {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Target core.
+        core: u64,
         /// One-shot typed reply for the HTTP handler.
         reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
     },
@@ -308,6 +354,34 @@ struct CancelOrderBody {
     uid: u64,
 }
 
+/// Body of `POST /api/core/switch`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreSwitchBody {
+    core: u64,
+    switch: CoreSwitchDto,
+    on: bool,
+}
+
+/// Most cores accepted by `POST /api/cores/switch`.
+const MAX_SCOPE_CORES: usize = 256;
+
+/// Body of `POST /api/cores/switch`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoresSwitchBody {
+    cores: Vec<u64>,
+    switch: CoreSwitchDto,
+    on: bool,
+}
+
+/// Body of `POST /api/core/cancel_all`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelAllBody {
+    core: u64,
+}
+
 /// Longest `market` accepted by `POST /api/panic`, in bytes.
 const MAX_MARKET_BYTES: usize = 64;
 
@@ -426,11 +500,61 @@ impl App {
                     })
                 })
             }
+            (&Method::POST, "/api/core/switch") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CoreSwitchBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::CoreSwitch {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        switch: parsed.switch,
+                        on: parsed.on,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/cores/switch") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CoresSwitchBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    if parsed.cores.is_empty() || parsed.cores.len() > MAX_SCOPE_CORES {
+                        return Err(status_response(StatusCode::BAD_REQUEST, "json"));
+                    }
+                    Ok(MiniAppApiRequest::CoresSwitch {
+                        identity,
+                        chat_id,
+                        cores: parsed.cores,
+                        switch: parsed.switch,
+                        on: parsed.on,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/core/cancel_all") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CancelAllBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::CancelAllOrders {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        reply,
+                    })
+                })
+            }
             (&Method::GET, "/api/session")
             | (
                 &Method::GET,
-                "/api/report" | "/api/cores" | "/api/balances" | "/api/orders"
-                | "/api/order/cancel" | "/api/panic",
+                "/api/report"
+                | "/api/cores"
+                | "/api/balances"
+                | "/api/orders"
+                | "/api/order/cancel"
+                | "/api/panic"
+                | "/api/core/switch"
+                | "/api/cores/switch"
+                | "/api/core/cancel_all",
             )
             | (&Method::HEAD, "/")
             | (&Method::OPTIONS, _) => status_response(StatusCode::METHOD_NOT_ALLOWED, "method"),

@@ -76,12 +76,25 @@ pub struct CoreStatusDto {
     pub cpu_proc: Option<f32>,
     pub cpu_sys: Option<f32>,
     pub fault: Option<String>,
+    /// Trading switch; `None` when the core has not reported it.
+    pub trading: Option<bool>,
+    /// Auto-detect switch; `None` when the core has not reported it.
+    pub auto_detect: Option<bool>,
 }
 
-/// Core status list.
+/// Core status list. `can_control` is true only for the owner.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CoresDto {
     pub cores: Vec<CoreStatusDto>,
+    pub can_control: bool,
+}
+
+/// Core switch a Mini App command flips. Serialized as snake_case.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreSwitchDto {
+    Trading,
+    AutoDetect,
 }
 
 /// Freshness of one core's balance. Serialized as snake_case.
@@ -175,6 +188,15 @@ pub struct OrdersDto {
 pub struct CommandResultDto {
     pub ok: bool,
     pub armed: Option<bool>,
+    pub error: Option<CommandErrorDto>,
+}
+
+/// Result of a Mini App command over several cores: `sent` of `requested` were accepted.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ScopeResultDto {
+    pub ok: bool,
+    pub sent: u32,
+    pub requested: u32,
     pub error: Option<CommandErrorDto>,
 }
 

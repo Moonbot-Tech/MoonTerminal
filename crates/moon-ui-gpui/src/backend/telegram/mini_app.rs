@@ -11,12 +11,12 @@ use gpui::Context;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::QuoteBreakdown;
 use moon_core::feed::{ConnFaultKind, ConnStatus, CoreSysStatus, OrderRow};
-use moon_core::session::BalanceState;
+use moon_core::session::{BalanceState, CoreId, CoreRunState};
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::web::dto::{
     BalanceStateDto, BalancesDto, CommandErrorDto, CommandResultDto, ConnDto, CoreBalanceDto,
-    CoreStatusDto, CoresDto, DayDto, ExchangeBalanceDto, MoneyDto, OrderDto, OrdersDto, ReportDto,
-    ReportPeriodDto, RowDto,
+    CoreStatusDto, CoreSwitchDto, CoresDto, DayDto, ExchangeBalanceDto, MoneyDto, OrderDto,
+    OrdersDto, ReportDto, ReportPeriodDto, RowDto, ScopeResultDto,
 };
 use moon_core::telegram::web::{MiniAppApiError, MiniAppApiRequest};
 use moon_core::util::{display_time, fmt};
@@ -82,6 +82,34 @@ pub(super) fn dispatch(
             ..
         } => {
             let _ = reply.try_send(backend.mini_panic_sell(chat_id, core, market, on));
+        }
+        MiniAppApiRequest::CoreSwitch {
+            chat_id,
+            core,
+            switch,
+            on,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_core_switch(chat_id, core, switch, on));
+        }
+        MiniAppApiRequest::CoresSwitch {
+            chat_id,
+            cores,
+            switch,
+            on,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_cores_switch(chat_id, &cores, switch, on));
+        }
+        MiniAppApiRequest::CancelAllOrders {
+            chat_id,
+            core,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_cancel_all(chat_id, core));
         }
         MiniAppApiRequest::Session { reply, .. } => {
             let _ = reply.try_send(Err(MiniAppApiError::Rejected));
@@ -208,6 +236,119 @@ impl Backend {
         Ok(command_hit(Some(self.is_panic_armed(core, &market))))
     }
 
+    /// Flip one core's trading or auto-detect switch through the desktop's session call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///     switch: Which switch to flip.
+    ///     on: State the page asked for.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
+    ///     send is `Unavailable`. `Err` is only the owner gate.
+    fn mini_core_switch(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+        switch: CoreSwitchDto,
+        on: bool,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        let sent = match switch {
+            CoreSwitchDto::Trading => self.session.set_trading(core, on),
+            CoreSwitchDto::AutoDetect => self.session.set_auto_detect(core, on),
+        };
+        match sent {
+            Ok(()) => Ok(command_hit(None)),
+            Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+        }
+    }
+
+    /// Flip one switch on several cores with one scope call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     cores: Requested core ids; unknown ids and repeats are dropped before sending.
+    ///     switch: Which switch to flip.
+    ///     on: State the page asked for.
+    ///
+    /// Returns:
+    ///     `Ok` with `sent` of `requested` known cores accepted; `ok` only when all were.
+    ///     No known core is `NotFound` and sends nothing. `Err` is only the owner gate.
+    fn mini_cores_switch(
+        &mut self,
+        chat_id: i64,
+        cores: &[u64],
+        switch: CoreSwitchDto,
+        on: bool,
+    ) -> Result<ScopeResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        let visible = self.mini_owner_core_ids();
+        let targets = scope_targets(cores, &visible);
+        if targets.is_empty() {
+            return Ok(ScopeResultDto {
+                ok: false,
+                sent: 0,
+                requested: 0,
+                error: Some(CommandErrorDto::NotFound),
+            });
+        }
+        let accepted = match switch {
+            CoreSwitchDto::Trading => self.session.set_trading_many(&targets, on),
+            CoreSwitchDto::AutoDetect => self.session.set_auto_detect_many(&targets, on),
+        };
+        let sent = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
+        let requested = u32::try_from(targets.len()).unwrap_or(u32::MAX);
+        let ok = sent == requested;
+        Ok(ScopeResultDto {
+            ok,
+            sent,
+            requested,
+            error: (!ok).then_some(CommandErrorDto::Unavailable),
+        })
+    }
+
+    /// Cancel every open order of one core through the desktop's session call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
+    ///     send is `Unavailable`. `Err` is only the owner gate.
+    fn mini_cancel_all(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        match self.session.cancel_all_orders(core) {
+            Ok(()) => Ok(command_hit(None)),
+            Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+        }
+    }
+
+    /// Whether `core` is one of the configured sessions the owner sees.
+    fn mini_core_known(&self, core: u64) -> bool {
+        self.mini_owner_core_ids().contains(&core)
+    }
+
+    /// Ids of the configured sessions the owner sees.
+    fn mini_owner_core_ids(&self) -> Vec<CoreId> {
+        visible_cores(self, &TelegramReportAccess::Owner)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect()
+    }
+
     /// Read one period off the UI thread, then re-check the grant before replying.
     ///
     /// A finished read is kept for [`REPORT_CACHE_TTL`] so a request that already received
@@ -299,12 +440,14 @@ impl Backend {
     /// Core status in canonical order, limited to the chat's cores.
     fn mini_cores(&self, chat_id: i64) -> Result<CoresDto, MiniAppApiError> {
         let access = self.mini_access(chat_id).ok_or(MiniAppApiError::Rejected)?;
+        let can_control = matches!(access, TelegramReportAccess::Owner);
         let listed = visible_cores(self, &access);
         let store = self.session.store();
         let venues = self.session.core_venues();
         let mut cores = Vec::with_capacity(listed.len());
         for (id, name) in listed {
             let core = store.core(id);
+            let run = core.map(CoreRunState::from_core).unwrap_or_default();
             let (status, sys, fault) = match core {
                 Some(core) => (core.status.clone(), core.sys, core.fault.clone()),
                 None => (ConnStatus::Disconnected, CoreSysStatus::default(), None),
@@ -321,9 +464,11 @@ impl Backend {
                 fault: fault
                     .as_ref()
                     .map(|fault| fault_kind(&fault.kind).to_string()),
+                trading: run.trading,
+                auto_detect: run.auto_detect,
             });
         }
-        Ok(CoresDto { cores })
+        Ok(CoresDto { cores, can_control })
     }
 
     /// Balances for the chat's cores. The viewer filter is applied before the sum.
@@ -424,6 +569,24 @@ fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, 
         })
         .into_iter()
         .collect()
+}
+
+/// Requested cores that are visible, without repeats, in `visible` order.
+///
+/// Args:
+///     requested: Core ids the page asked for.
+///     visible: Cores the chat may command, in canonical order.
+///
+/// Returns:
+///     The ids to send; unknown ids never appear.
+fn scope_targets(requested: &[u64], visible: &[CoreId]) -> Vec<CoreId> {
+    let mut targets: Vec<CoreId> = Vec::new();
+    for id in visible {
+        if requested.contains(id) && !targets.contains(id) {
+            targets.push(*id);
+        }
+    }
+    targets
 }
 
 /// Map a stored order into the Mini App row.
@@ -640,3 +803,6 @@ fn balance_state_dto(state: BalanceState) -> BalanceStateDto {
         BalanceState::Unpriced => BalanceStateDto::Unpriced,
     }
 }
+
+#[cfg(test)]
+mod tests;
