@@ -185,6 +185,8 @@ pub struct OrderDto {
     pub core_name: String,
     /// Exchange section caption of the order's core.
     pub exchange: String,
+    /// Decimal string on the wire ([`id_text`]); moonproto types it as a full `u64`.
+    #[serde(serialize_with = "id_text::serialize")]
     pub uid: u64,
     pub coin: String,
     pub market: String,
@@ -256,8 +258,11 @@ pub enum StrategyPendingDto {
 }
 
 /// One strategy row. `wanted` is the state last asked for while it is unconfirmed.
+///
+/// `id` goes out as a decimal string ([`id_text`]): strategy ids span the whole 64-bit range.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct StrategyDto {
+    #[serde(serialize_with = "id_text::serialize")]
     pub id: u64,
     pub name: String,
     pub checked: bool,
@@ -313,4 +318,39 @@ pub enum CommandErrorDto {
     Unavailable,
     Rejected,
     Forbidden,
+}
+
+/// 64-bit identifiers as decimal strings on the Mini App wire.
+///
+/// JavaScript parses every JSON number into an IEEE double, which holds integers exactly only up
+/// to 2^53. Strategy ids and order uids use the whole `u64` range, so as numbers the page would
+/// round them and send a different id back. As strings they survive both ways unchanged. Small
+/// counters (core ids from `UidCounter`, trade row ids) stay numbers.
+pub mod id_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    /// Write `id` as its decimal string.
+    ///
+    /// Args:
+    ///     id: Identifier to write.
+    ///     serializer: Target serializer.
+    ///
+    /// Returns:
+    ///     The serializer's result.
+    pub fn serialize<S: Serializer>(id: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(id)
+    }
+
+    /// Read an identifier sent as a decimal string.
+    ///
+    /// Args:
+    ///     deserializer: Source deserializer.
+    ///
+    /// Returns:
+    ///     The id; a JSON number or a string that is not a `u64` is an error, so a rounded id
+    ///     can never be accepted silently.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
 }

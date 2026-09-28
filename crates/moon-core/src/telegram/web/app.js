@@ -2213,7 +2213,10 @@
             return;
         }
         if (!res.ok) {
-            showCmdLine(res.error || tr("mini_error_read"));
+            // A rejected command (4xx other than the session ones) never reads as a read error.
+            haptic("error");
+            var rejected = res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 403;
+            showCmdLine(rejected ? tr("mini_cmd_failed") : (res.error || tr("mini_error_read")));
             reloadAfterCommand(true);
             return;
         }

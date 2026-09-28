@@ -396,6 +396,7 @@ struct ReportPeriodBody {
 #[serde(deny_unknown_fields)]
 struct CancelOrderBody {
     core: u64,
+    #[serde(deserialize_with = "dto::id_text::deserialize")]
     uid: u64,
 }
 
@@ -432,6 +433,7 @@ struct CancelAllBody {
 #[serde(deny_unknown_fields)]
 struct StrategyToggleBody {
     core: u64,
+    #[serde(deserialize_with = "dto::id_text::deserialize")]
     id: u64,
     on: bool,
 }
