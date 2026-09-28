@@ -1441,6 +1441,7 @@ impl CoreData {
             | FeedMsg::MarketDataChanged(_)
             | FeedMsg::ChartArchiveAnswered { .. }
             | FeedMsg::TradeSounds(_)
+            | FeedMsg::TradeOpened { .. }
             | FeedMsg::TradeClosed { .. } => {}
         }
     }

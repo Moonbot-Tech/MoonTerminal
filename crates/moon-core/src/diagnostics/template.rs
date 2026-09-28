@@ -314,6 +314,24 @@ events that report a change. Nothing at all while the switch is off.
 ENV: MOON_SETTINGS_DIAG=1",
     },
     KeyDoc {
+        section: "channels",
+        key: "tape_recorder",
+        default: "false",
+        doc: "\
+Tape recorder -> `logs/tape_recorder.log` and its own `tape_recorder.sqlite`: records the tape
+around every trade the way the future server station will — ONLY by asking the cores for their
+chart archive, at the entry, while the position is open and after the exit — so it can be compared
+with what the terminal captured from its live feed into `trades.sqlite`.
+Answers \"is a request-only tape good enough for the tuner, and where does it lose prints\".
+
+UNLIKE every other key here, this one CHANGES what the terminal does: on, it opens ONE EXTRA
+CONNECTION to one core per exchange (with that core's own key) and asks it for archives. It sends
+no trading command. Off, those connections close; the database stays until you delete it.
+COST: per exchange with trades, one idle client (~5 KB/s, under 1 % of a core) plus a
+multi-megabyte archive per request, at most one every 3 s per market.
+ENV: none — a switch that opens connections is not taken from the environment.",
+    },
+    KeyDoc {
         section: "limits",
         key: "log_ring_lines",
         default: "5000",

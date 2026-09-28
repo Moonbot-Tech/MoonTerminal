@@ -10,6 +10,7 @@ pub mod candles;
 pub mod kline_cache;
 mod screener;
 mod source;
+pub mod tape_recorder;
 pub mod trade_replay;
 
 use std::collections::HashMap;

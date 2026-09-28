@@ -67,6 +67,9 @@ pub struct Channels {
     /// (`"BONK,1000SATS"`) whose catalog spellings are dumped once per core. See
     /// `crate::coin_naming`.
     pub coin_naming: String,
+    /// The station's request-only tape, recorded beside the terminal's own captures — the one key
+    /// here that CONNECTS: one extra client per exchange. See `crate::market::tape_recorder`.
+    pub tape_recorder: bool,
 }
 
 /// `[limits]` — sizes and collapse windows, in effect whether or not anything above is on.
@@ -119,6 +122,7 @@ impl DiagCfg {
             || c.markets
             || c.hl_limit
             || c.settings
+            || c.tape_recorder
             || !c.orders.trim().is_empty()
             || !c.coin_naming.trim().is_empty()
     }
@@ -148,6 +152,7 @@ impl DiagCfg {
         flag("channels.markets", self.channels.markets);
         flag("channels.hl_limit", self.channels.hl_limit);
         flag("channels.settings", self.channels.settings);
+        flag("channels.tape_recorder", self.channels.tape_recorder);
         // The string-valued switches carry their value: "orders" alone would not say which
         // market is being followed, and that is the whole content of the setting.
         let coin_naming = self.channels.coin_naming.trim();

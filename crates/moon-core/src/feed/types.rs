@@ -1459,6 +1459,15 @@ pub enum FeedMsg {
         report_uid: i64,
         outcome: super::report_traces::ReportTracesOutcome,
     },
+    /// A report row of this core just OPENED a trade: the first live `RowUpsert` that carries its
+    /// coin and entry (`live::capture`). Not sent for rows a catch-up page carried — those opened
+    /// before this connection. Read by the tape recorder alone (`market::tape_recorder`), which
+    /// asks the core's archive for the run-up while it still holds it.
+    TradeOpened {
+        coin: String,
+        quote: String,
+        buy: crate::db::ReportStamp,
+    },
     /// A report row of this core just CLOSED, read off the same `RowUpsert` the replica gets.
     ///
     /// Carries what the session needs to file the trade's prints from the core's retained

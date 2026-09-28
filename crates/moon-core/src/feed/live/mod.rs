@@ -426,7 +426,7 @@ impl Drop for ClientSlotGuard {
 /// Returns:
 ///     Decoded endpoint plus transport, with the same localhost/3000/V0 fallbacks used for legacy
 ///     exports.
-fn connection_target(
+pub(crate) fn connection_target(
     network: Option<&moonproto::ImportedNetworkConfig>,
     transport: Option<TransportVersion>,
 ) -> (CoreEndpoint, TransportMode) {
@@ -2205,15 +2205,23 @@ pub(super) fn run(
                                         });
                                     }
                                 }
-                                if let Some(closed) =
-                                    capture.as_mut().and_then(|tracker| tracker.on_row(row))
-                                {
-                                    let _ = tx.send(FeedMsg::TradeClosed {
-                                        coin: closed.coin,
-                                        quote: server.market.clone(),
-                                        buy: closed.buy,
-                                        close: closed.close,
-                                    });
+                                match capture.as_mut().and_then(|tracker| tracker.on_row(row)) {
+                                    Some(capture::RowEdge::Opened { coin, buy }) => {
+                                        let _ = tx.send(FeedMsg::TradeOpened {
+                                            coin,
+                                            quote: server.market.clone(),
+                                            buy,
+                                        });
+                                    }
+                                    Some(capture::RowEdge::Closed(closed)) => {
+                                        let _ = tx.send(FeedMsg::TradeClosed {
+                                            coin: closed.coin,
+                                            quote: server.market.clone(),
+                                            buy: closed.buy,
+                                            close: closed.close,
+                                        });
+                                    }
+                                    None => {}
                                 }
                             }
                             // A page row carries the core's whole column set: the open rows on
