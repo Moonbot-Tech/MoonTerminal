@@ -963,93 +963,36 @@
         return row;
     }
 
-    // Bars share one viewBox so the card width scales them. Null days are a hint tick.
-    function renderBars(days) {
-        var wrap = el("div", "chart");
-        var n = days.length;
-        var slot = 10;
-        var width = Math.max(n, 1) * slot;
-        var height = 80;
-        var pad = 2;
-        var svg = svgEl("svg");
-        svg.setAttribute("class", "bars");
-        svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-        svg.setAttribute("preserveAspectRatio", "none");
-        svg.setAttribute("role", "img");
-        var min = 0;
-        var max = 0;
+    // One row per day, oldest first, the same figures the chat report's day table shows.
+    function dayTable(data, days) {
+        var card = el("div", "card day-card");
+        card.appendChild(el("h2", "card-title", tr("report_days")));
+        if (data.from_text && data.to_text) {
+            card.appendChild(el("p", "day-window num", data.from_text + " — " + data.to_text));
+        }
+        var table = el("table", "day-table");
+        var head = el("tr", "");
+        head.appendChild(el("th", "", tr("report_date")));
+        head.appendChild(el("th", "right", "USDT"));
+        head.appendChild(el("th", "right", tr("report_trades")));
+        var thead = el("thead", "");
+        thead.appendChild(head);
+        table.appendChild(thead);
+        var body = el("tbody", "");
         var i;
-        for (i = 0; i < n; i++) {
-            var sample = days[i] && days[i].usdt;
-            if (typeof sample !== "number" || sample !== sample) continue;
-            if (sample < min) min = sample;
-            if (sample > max) max = sample;
-        }
-        if (min === 0 && max === 0) max = 1;
-        var span = max - min;
-        if (!span) span = 1;
-        function yOf(v) {
-            return height - pad - ((v - min) / span) * (height - pad * 2);
-        }
-        var baseline = yOf(0);
-        var base = svgEl("line");
-        base.setAttribute("class", "baseline");
-        base.setAttribute("x1", "0");
-        base.setAttribute("x2", String(width));
-        base.setAttribute("y1", String(baseline));
-        base.setAttribute("y2", String(baseline));
-        svg.appendChild(base);
-        for (i = 0; i < n; i++) {
+        for (i = 0; i < days.length; i++) {
             var day = days[i] || {};
-            var x = i * slot;
-            var amount = day.usdt;
-            var known = typeof amount === "number" && amount === amount;
-            if (!known) {
-                var tick = svgEl("line");
-                tick.setAttribute("class", "tick");
-                tick.setAttribute("x1", String(x + slot / 2));
-                tick.setAttribute("x2", String(x + slot / 2));
-                tick.setAttribute("y1", String(baseline - 4));
-                tick.setAttribute("y2", String(baseline + 4));
-                svg.appendChild(tick);
-            } else if (amount === 0) {
-                var flat = svgEl("rect");
-                flat.setAttribute("class", "bar-zero");
-                flat.setAttribute("x", String(x + 1));
-                flat.setAttribute("y", String(baseline - 1));
-                flat.setAttribute("width", String(slot - 2));
-                flat.setAttribute("height", "2");
-                svg.appendChild(flat);
-            } else {
-                var y1 = yOf(amount);
-                var top = y1 < baseline ? y1 : baseline;
-                var h = Math.abs(baseline - y1);
-                if (h < 1) h = 1;
-                var bar = svgEl("rect");
-                bar.setAttribute("class", amount < 0 ? "bar-neg" : "bar-pos");
-                bar.setAttribute("x", String(x + 1));
-                bar.setAttribute("y", String(top));
-                bar.setAttribute("width", String(slot - 2));
-                bar.setAttribute("height", String(h));
-                svg.appendChild(bar);
-            }
+            var row = el("tr", "");
+            row.appendChild(el("td", "num", day.start || ""));
+            var money = el("td", "");
+            applyMoney(money, "right num", day.text, day.usdt);
+            row.appendChild(money);
+            row.appendChild(el("td", "right num", String(typeof day.trades === "number" ? day.trades : 0)));
+            body.appendChild(row);
         }
-        var caption = el("p", "chart-caption", tr("mini_chart_hint"));
-        svg.addEventListener("click", function (ev) {
-            if (!n) return;
-            var rect = svg.getBoundingClientRect();
-            if (!(rect.width > 0)) return;
-            var index = Math.floor(((ev.clientX - rect.left) / rect.width) * n);
-            if (index < 0) index = 0;
-            if (index >= n) index = n - 1;
-            var picked = days[index] || {};
-            var text = picked.text;
-            if (text == null || text === "") text = tr("mini_unvalued");
-            caption.textContent = (picked.start || "") + " " + text;
-        });
-        wrap.appendChild(svg);
-        wrap.appendChild(caption);
-        return wrap;
+        table.appendChild(body);
+        card.appendChild(table);
+        return card;
     }
 
     function periodBar() {
@@ -1295,12 +1238,7 @@
         hero.appendChild(el("p", "hero-sub num", bits.join(" \u00B7 ")));
         host.appendChild(hero);
         var days = Array.isArray(data.days) ? data.days : [];
-        if (days.length >= 2) {
-            var chartCard = el("div", "card");
-            chartCard.appendChild(el("h2", "card-title", tr("mini_report_daily")));
-            chartCard.appendChild(renderBars(days));
-            host.appendChild(chartCard);
-        }
+        if (days.length) host.appendChild(dayTable(data, days));
         appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
             nameClass: "name core-name",

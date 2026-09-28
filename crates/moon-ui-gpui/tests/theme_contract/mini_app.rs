@@ -329,11 +329,11 @@ fn mini_balance_text_uses_fixed_cents() {
     );
 }
 
-/// The day chart, balance figures, core names, and Panic Sell button keep the
+/// The day table, balance figures, core names, and Panic Sell button keep the
 /// layout the narrow Mini App popup needs.
 ///
-/// Mutation: drop `line-clamp: 2`, the chart's 16px inset, `.balance-figure`,
-/// or `white-space: nowrap` on `.order-actions .cmd`. The bars meet the card
+/// Mutation: drop `line-clamp: 2`, the day table's 16px cell inset, `.balance-figure`,
+/// or `white-space: nowrap` on `.order-actions .cmd`. The day figures meet the card
 /// edge, core names ellipsize on one line, balance amounts stay pale, or
 /// «Выключить Panic Sell» breaks onto two lines inside the button. Stretching
 /// `.order-actions .cmd` with `flex: 1 1 auto` brings back the full-width
@@ -346,8 +346,8 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
         "a core name must wrap to two lines instead of one ellipsis"
     );
     assert!(
-        css.contains(".chart {\n    padding: 4px 16px 12px;"),
-        "the day chart must use the card's 16px inner inset"
+        css.contains(".day-table td {\n    padding: 7px 16px;"),
+        "the day table must use the card's 16px inner inset"
     );
     assert!(
         css.contains(".balance-figure {\n    color: var(--ink);"),

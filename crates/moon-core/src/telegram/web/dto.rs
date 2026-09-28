@@ -33,11 +33,14 @@ pub struct RowDto {
 }
 
 /// One day in a report series. `start` is an ISO date `YYYY-MM-DD`.
+///
+/// `trades` is the day's closed-trade count, the same figure the chat report's day table shows.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct DayDto {
     pub start: String,
     pub usdt: Option<f64>,
     pub text: Option<String>,
+    pub trades: u64,
 }
 
 /// Authenticated report for one [`ReportPeriodDto`].
@@ -45,6 +48,10 @@ pub struct DayDto {
 pub struct ReportDto {
     pub from: String,
     pub to: String,
+    /// Window start as the chat report stamps it, `DD.MM.YYYY HH:MM` in the report zone.
+    pub from_text: String,
+    /// Window end, same format as `from_text`.
+    pub to_text: String,
     pub total: MoneyDto,
     pub by_exchange: Vec<RowDto>,
     pub by_core: Vec<RowDto>,

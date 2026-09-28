@@ -1169,6 +1169,8 @@ fn report_dto(report: super::reports::MiniReport) -> Result<ReportDto, MiniAppAp
     Ok(ReportDto {
         from,
         to,
+        from_text: stamp(report.from, zone),
+        to_text: stamp(report.to, zone),
         total: money_of(&report.total),
         by_exchange: report
             .by_exchange
@@ -1199,10 +1201,25 @@ fn report_dto(report: super::reports::MiniReport) -> Result<ReportDto, MiniAppAp
                     start,
                     usdt: money.usdt,
                     text: money.text,
+                    trades: money.orders,
                 }
             })
             .collect(),
     })
+}
+
+/// Window edge as the chat report stamps it, `DD.MM.YYYY HH:MM` in the report zone.
+///
+/// Args:
+///     secs: UTC unix seconds of the window edge.
+///     zone: Display zone.
+///
+/// Returns:
+///     The stamp, or an empty string outside chrono's range.
+fn stamp(secs: i64, zone: Tz) -> String {
+    display_time::at(secs, zone)
+        .map(|value| value.format("%d.%m.%Y %H:%M").to_string())
+        .unwrap_or_default()
 }
 
 /// Inclusive window edge as `YYYY-MM-DD` in the report zone.

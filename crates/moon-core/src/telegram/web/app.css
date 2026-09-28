@@ -167,8 +167,7 @@ button {
 .loading-label,
 .sub,
 .k,
-.fine,
-.chart-caption {
+.fine {
     color: var(--hint);
 }
 
@@ -177,7 +176,6 @@ button {
 .loading-label,
 .card-title,
 .sub,
-.chart-caption,
 .orders-line {
     font-size: 13px;
 }
@@ -649,42 +647,43 @@ main {
     color: var(--hint);
 }
 
-.chart {
-    padding: 4px 16px 12px;
+.day-window {
+    margin: -4px 16px 8px;
+    color: var(--hint);
+    font-size: var(--fs-meta);
 }
 
-.bars {
+.day-table {
     width: 100%;
-    height: 96px;
-    display: block;
+    border-collapse: collapse;
+    font-size: 14px;
 }
 
-.bars .bar-pos {
-    fill: var(--accent);
+.day-table th,
+.day-table td {
+    padding: 7px 16px;
+    text-align: left;
+    white-space: nowrap;
 }
 
-.bars .bar-neg {
-    fill: var(--danger);
+.day-table th {
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    font-weight: 500;
+    border-bottom: 1px solid var(--line);
 }
 
-.bars .bar-zero {
-    fill: var(--hint);
+.day-table .right {
+    text-align: right;
 }
 
-.bars .tick {
-    stroke: var(--hint);
-    stroke-width: 1.5;
+.day-table td.num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
 }
 
-.bars .baseline {
-    stroke: var(--line);
-    stroke-width: 1;
-}
-
-.chart-caption {
-    margin: 0;
-    min-height: 1.2em;
-    padding: 8px 0 0;
+.day-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--hint) 8%, transparent);
 }
 
 .empty,
