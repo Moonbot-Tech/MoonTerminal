@@ -42,6 +42,10 @@ fn station_file_cores_become_servers_keyed_by_their_uid() {
         first.active && first.feed.reports,
         "a new server replicates reports"
     );
+    assert!(
+        !first.feed.log && !first.feed.orders && !first.feed.strategies && !first.feed.detects,
+        "the station reads reports alone: no core log reaches its disk"
+    );
     assert!(!cfg.servers[1].active);
     assert!(
         cfg.servers[1].key.is_empty(),

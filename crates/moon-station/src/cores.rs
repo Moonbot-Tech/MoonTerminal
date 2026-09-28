@@ -23,7 +23,7 @@
 use std::path::Path;
 
 use anyhow::Context;
-use moon_core::config::{AppConfig, Secret, ServerConfig, TransportVersion};
+use moon_core::config::{AppConfig, FeedFlags, Secret, ServerConfig, TransportVersion};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
@@ -49,6 +49,21 @@ struct CoreEntry {
     #[serde(default)]
     transport: Option<TransportVersion>,
 }
+
+/// What the station reads from a core: its reports alone (`STATION.md` §3.2). Above all no
+/// `log`: with it the feed writes every core's log to the data root, and the station keeps no
+/// logs. The clock offset still samples `ServerLog` — that pass ignores this flag — and stores
+/// nothing but the offset.
+const STATION_FEED: FeedFlags = FeedFlags {
+    orders: false,
+    detects: false,
+    reports: true,
+    balance: false,
+    strategies: false,
+    log: false,
+    alerts: false,
+    arb: false,
+};
 
 fn default_true() -> bool {
     true
@@ -97,6 +112,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<AppConf
             }
             server.name = entry.name;
             server.active = entry.active;
+            server.feed = STATION_FEED;
             server.transport = entry.transport;
             Ok(server)
         })
