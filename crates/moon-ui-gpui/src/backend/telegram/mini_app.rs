@@ -1059,7 +1059,7 @@ fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
 ///     trade: Trade read by [`super::reports::read_mini_trades`].
 ///
 /// Returns:
-///     The row. A strategy id no longer listed on the core shows as `#<id>`; `0` or a negative id is manual.
+///     The row, its strategy attributed by [`trade_strategy`].
 fn trade_dto(
     backend: &Backend,
     zone: Tz,
@@ -1068,19 +1068,14 @@ fn trade_dto(
 ) -> TradeDto {
     let profit = trade.profit_usdt.filter(|value| value.is_finite());
     let pct = trade.pct.filter(|value| value.is_finite());
-    let strategy = trade
-        .strategy_id
-        .and_then(|sid| u64::try_from(sid).ok())
-        .filter(|sid| *sid != 0)
-        .map(|sid| {
-            backend
-                .session
-                .store()
-                .core(trade.core_uid)
-                .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
-                .map(|row| row.name.clone())
-                .unwrap_or_else(|| format!("#{sid}"))
-        });
+    let (strategy, manual) = trade_strategy(trade.strategy_id, |sid| {
+        backend
+            .session
+            .store()
+            .core(trade.core_uid)
+            .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
+            .map(|row| row.name.clone())
+    });
     TradeDto {
         core: trade.core_uid,
         core_name: trade.core_name.clone(),
@@ -1106,6 +1101,33 @@ fn trade_dto(
             .map(|buy| trade.close_utc - buy)
             .filter(|secs| *secs >= 0),
         strategy,
+        manual,
+    }
+}
+
+/// Attribute a closed trade to its strategy the way the desktop Report does.
+///
+/// The stored id is Delphi-signed: a strategy whose id has the top bit set is stored negative, so
+/// it is reinterpreted `as u64` exactly like the Report's own lookup rather than dropped.
+///
+/// Args:
+///     strategy_id: The row's `strategyid`; `None` when the row carries none.
+///     name: Live name of a strategy id on the trade's core, `None` when the core does not list it.
+///
+/// Returns:
+///     `(name, manual)`: a known strategy's name, `#<id>` for one the core no longer lists,
+///     `(None, true)` for `0` (manual), and `(None, false)` when the id is unknown.
+fn trade_strategy(
+    strategy_id: Option<i64>,
+    name: impl FnOnce(u64) -> Option<String>,
+) -> (Option<String>, bool) {
+    match strategy_id {
+        None => (None, false),
+        Some(0) => (None, true),
+        Some(sid) => {
+            let sid = sid as u64;
+            (Some(name(sid).unwrap_or_else(|| format!("#{sid}"))), false)
+        }
     }
 }
 

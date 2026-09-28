@@ -13,6 +13,7 @@ use moon_core::feed::OrderRow;
 
 use super::{
     by_section, distance_text, natural_cmp, order_to_entry_pct, scope_targets, strategy_pending,
+    trade_strategy,
 };
 
 /// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
@@ -194,4 +195,33 @@ fn the_telegram_log_prefix_still_matches_this_module() {
 fn distance_to_entry_text_carries_no_sign() {
     assert_eq!(distance_text(1.5).as_deref(), Some("1.50%"));
     assert_eq!(distance_text(-1.5).as_deref(), Some("1.50%"));
+}
+
+/// `mini_app.rs:trade_strategy` names strategy trades, marks only `0` manual, and leaves a missing
+/// id unknown.
+///
+/// Mutation: drop negative ids (`u64::try_from`) or treat a missing id as manual. A strategy whose
+/// Delphi-signed id is negative then shows as manual in the trade sheet. Oracle: id `-7` names the
+/// strategy listed under `(-7i64) as u64`.
+#[test]
+fn trade_strategy_names_signed_ids_and_separates_manual_from_unknown() {
+    let names = |sid: u64| match sid {
+        5 => Some("Demo Alpha".to_string()),
+        sid if sid == (-7i64) as u64 => Some("Demo Beta".to_string()),
+        _ => None,
+    };
+    assert_eq!(
+        trade_strategy(Some(5), names),
+        (Some("Demo Alpha".to_string()), false)
+    );
+    assert_eq!(
+        trade_strategy(Some(-7), names),
+        (Some("Demo Beta".to_string()), false)
+    );
+    assert_eq!(
+        trade_strategy(Some(9), names),
+        (Some("#9".to_string()), false)
+    );
+    assert_eq!(trade_strategy(Some(0), names), (None, true));
+    assert_eq!(trade_strategy(None, names), (None, false));
 }

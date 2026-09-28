@@ -237,8 +237,11 @@ pub struct TradeDto {
     pub qty_text: String,
     /// Seconds from entry to close; `None` when the entry time is unknown.
     pub duration_secs: Option<i64>,
-    /// Strategy name; `None` for a manual trade.
+    /// Strategy name; `None` for a manual trade or one whose strategy is unknown.
     pub strategy: Option<String>,
+    /// The row marks the trade as manual (`strategyid = 0`); `false` when a strategy is named or
+    /// the row carries no strategy id at all.
+    pub manual: bool,
 }
 
 /// Latest closed trades, newest first, at most `limit` of them.

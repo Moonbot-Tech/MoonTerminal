@@ -1583,7 +1583,7 @@
         detailLine(sheet, tr("mini_trade_exit"), trade.exit_text);
         detailLine(sheet, tr("mini_trade_qty"), trade.qty_text);
         detailLine(sheet, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
-        detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || tr("mini_trade_manual"));
+        detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || (trade.manual ? tr("mini_trade_manual") : "—"));
         detailLine(sheet, tr("mini_trade_closed"), trade.closed_text);
         if (!sheetBackdrop) {
             sheetBackdrop = el("div", "sheet-backdrop");

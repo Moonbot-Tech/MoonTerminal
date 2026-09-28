@@ -18,7 +18,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 40,
-      "strategy": null
+      "strategy": null,
+      "manual": true
     },
     {
       "core": 1006,
@@ -38,7 +39,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 137,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1011,
@@ -58,7 +60,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1016,
@@ -78,7 +81,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 331,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1021,
@@ -98,7 +102,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 428,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1026,
@@ -118,7 +123,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 525,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1031,
@@ -138,7 +144,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 622,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1036,
@@ -158,7 +165,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 719,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1041,
@@ -178,7 +186,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1046,
@@ -198,7 +207,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 913,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1051,
@@ -218,7 +228,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1010,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1056,
@@ -238,7 +249,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1107,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1003,
@@ -258,7 +270,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1204,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1008,
@@ -278,7 +291,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1301,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1013,
@@ -298,7 +312,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1018,
@@ -318,7 +333,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1495,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1023,
@@ -338,7 +354,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1592,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1028,
@@ -358,7 +375,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1689,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1033,
@@ -378,7 +396,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1786,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1038,
@@ -398,7 +417,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 1883,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1043,
@@ -418,7 +438,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1048,
@@ -438,7 +459,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2077,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1053,
@@ -458,7 +480,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2174,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1058,
@@ -478,7 +501,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2271,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1005,
@@ -498,7 +522,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2368,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1010,
@@ -518,7 +543,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2465,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1015,
@@ -538,7 +564,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1020,
@@ -558,7 +585,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2659,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1025,
@@ -578,7 +606,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2756,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1030,
@@ -598,7 +627,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2853,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1035,
@@ -618,7 +648,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 2950,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1040,
@@ -638,7 +669,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3047,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1045,
@@ -658,7 +690,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1050,
@@ -678,7 +711,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3241,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1055,
@@ -698,7 +732,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3338,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1002,
@@ -718,7 +753,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3435,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1007,
@@ -738,7 +774,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3532,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1012,
@@ -758,7 +795,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3629,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1017,
@@ -778,7 +816,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1022,
@@ -798,7 +837,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3823,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1027,
@@ -818,7 +858,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 3920,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1032,
@@ -838,7 +879,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4017,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1037,
@@ -858,7 +900,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4114,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1042,
@@ -878,7 +921,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4211,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1047,
@@ -898,7 +942,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1052,
@@ -918,7 +963,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4405,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1057,
@@ -938,7 +984,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4502,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1004,
@@ -958,7 +1005,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4599,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1009,
@@ -978,7 +1026,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4696,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1014,
@@ -998,7 +1047,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4793,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1019,
@@ -1018,7 +1068,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1024,
@@ -1038,7 +1089,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 4987,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     },
     {
       "core": 1029,
@@ -1058,7 +1110,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5084,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1034,
@@ -1078,7 +1131,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5181,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1039,
@@ -1098,7 +1152,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5278,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1044,
@@ -1118,7 +1173,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5375,
-      "strategy": null
+      "strategy": null,
+      "manual": false
     },
     {
       "core": 1049,
@@ -1138,7 +1194,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": null,
-      "strategy": "Demo Strategy 01"
+      "strategy": "Demo Strategy 01",
+      "manual": false
     },
     {
       "core": 1054,
@@ -1158,7 +1215,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5569,
-      "strategy": "Demo Strategy 02"
+      "strategy": "Demo Strategy 02",
+      "manual": false
     },
     {
       "core": 1001,
@@ -1178,7 +1236,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5666,
-      "strategy": "Demo Strategy 03"
+      "strategy": "Demo Strategy 03",
+      "manual": false
     },
     {
       "core": 1006,
@@ -1198,7 +1257,8 @@
       "exit_text": "1.0100",
       "qty_text": "1000",
       "duration_secs": 5763,
-      "strategy": "Demo Strategy 04"
+      "strategy": "Demo Strategy 04",
+      "manual": false
     }
   ],
   "limit": 200
