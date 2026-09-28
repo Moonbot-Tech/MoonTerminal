@@ -175,3 +175,15 @@ fn order_to_entry_pct_measures_resting_entries_only() {
 
     assert_eq!(order_to_entry_pct(&resting_order(100.0, 0.0)), None);
 }
+
+#[test]
+fn the_telegram_log_prefix_still_matches_this_module() {
+    // moon-core raises this prefix to `info` by default but cannot verify it from its own side;
+    // a module move or a `[[bin]]` rename would mute the owner-command lines again.
+    let prefix = moon_core::diagnostics::TELEGRAM_TARGET;
+    assert!(
+        module_path!().starts_with(prefix),
+        "the default filter raises {prefix:?}, but this module logs as {:?}",
+        module_path!()
+    );
+}

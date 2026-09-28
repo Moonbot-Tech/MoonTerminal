@@ -32,11 +32,13 @@ use super::config::DiagCfg;
 /// Raised for `panels::chart` alone rather than the whole binary: that subtree is where the money
 /// paths log — the manual order, its refusals, the shot — and it is a handful of event-driven
 /// lines, whereas the binary at large has never had its volume at `info` measured even once.
-/// [`TICKS_AXIS_TARGET`] is the one other raise, for the same reason: one line per load of the
-/// tuner's Entry/Exit axis and one per deal it asks the venue for, written so a batch that looks
-/// stuck can be read instead of guessed.
+/// [`TICKS_AXIS_TARGET`] is raised for the same reason: one line per load of the tuner's
+/// Entry/Exit axis and one per deal it asks the venue for, written so a batch that looks stuck can
+/// be read instead of guessed. [`TELEGRAM_TARGET`] is the third: the Mini App's owner commands (a
+/// strategy toggle, an order action) are rare, and each is exactly the line a support case needs.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
-    moonterminal::analytics::tuner::ticks=info,moon_gpui=info,moon_core=info";
+    moonterminal::analytics::tuner::ticks=info,moonterminal::backend::telegram=info,\
+    moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
 const BALANCES_TARGET: &str = "moon_core::feed::live";
@@ -149,3 +151,8 @@ mod tests;
 /// own `module_path!()`, which would be muted again by the binary's `warn` baseline the day the
 /// module moved.
 pub const TICKS_AXIS_TARGET: &str = "moonterminal::analytics::tuner::ticks";
+
+/// Module prefix of the terminal's Telegram backend, the Mini App's command handlers included —
+/// raised to `info` by [`DEFAULT_BASE_FILTER`] so an owner command leaves a line in the app log.
+/// Public so the binary can check it against its own `module_path!()`.
+pub const TELEGRAM_TARGET: &str = "moonterminal::backend::telegram";

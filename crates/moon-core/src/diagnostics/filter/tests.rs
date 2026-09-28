@@ -287,3 +287,31 @@ fn the_ticks_fetch_target_is_raised_by_the_base_filter() {
         "{DEFAULT_BASE_FILTER:?} does not raise {directive:?}"
     );
 }
+
+/// The Mini App's owner commands log at `info` under the binary's Telegram backend; the default
+/// base filter must let them through while the rest of the binary stays at `warn`.
+#[test]
+fn telegram_backend_info_passes_by_default() {
+    let spec = compose(&DiagCfg::default(), None);
+    assert!(
+        allows(
+            &spec,
+            "moonterminal::backend::telegram::mini_app",
+            log::Level::Info
+        ),
+        "{spec}"
+    );
+    assert!(allows(&spec, TELEGRAM_TARGET, log::Level::Info), "{spec}");
+    assert!(
+        !allows(
+            &spec,
+            "moonterminal::backend::telegram::mini_app",
+            log::Level::Debug
+        ),
+        "debug stays off: {spec}"
+    );
+    assert!(
+        !allows(&spec, "moonterminal::backend::other", log::Level::Info),
+        "the rest of the binary stays at warn: {spec}"
+    );
+}
