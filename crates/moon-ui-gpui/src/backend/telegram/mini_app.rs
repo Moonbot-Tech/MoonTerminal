@@ -525,10 +525,11 @@ impl Backend {
                     }
                     match result {
                         Ok(trades) => {
+                            let now_secs = moon_core::util::now_unix_ms_i64() / 1000;
                             let dto = TradesDto {
                                 trades: trades
                                     .iter()
-                                    .map(|trade| trade_dto(this, zone, trade))
+                                    .map(|trade| trade_dto(this, zone, now_secs, trade))
                                     .collect(),
                                 limit: u32::try_from(super::reports::MINI_TRADES_LIMIT)
                                     .unwrap_or(u32::MAX),
@@ -1006,11 +1007,17 @@ fn order_dto(
 /// Args:
 ///     backend: Source of venues and live strategy names.
 ///     zone: Display zone for the close time.
+///     now_secs: Current UTC Unix seconds; decides whether the short close time drops the date.
 ///     trade: Trade read by [`super::reports::read_mini_trades`].
 ///
 /// Returns:
 ///     The row. A strategy id no longer listed on the core shows as `#<id>`; `0` or a negative id is manual.
-fn trade_dto(backend: &Backend, zone: Tz, trade: &super::reports::MiniTrade) -> TradeDto {
+fn trade_dto(
+    backend: &Backend,
+    zone: Tz,
+    now_secs: i64,
+    trade: &super::reports::MiniTrade,
+) -> TradeDto {
     let profit = trade.profit_usdt.filter(|value| value.is_finite());
     let pct = trade.pct.filter(|value| value.is_finite());
     let strategy = trade
@@ -1042,6 +1049,7 @@ fn trade_dto(backend: &Backend, zone: Tz, trade: &super::reports::MiniTrade) -> 
             .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
         closed_at: trade.close_utc,
         closed_text: display_time::format_minute(trade.close_utc, zone),
+        closed_short_text: display_time::format_short_minute(trade.close_utc, zone, now_secs),
         entry_text: price_text(trade.buy_price),
         exit_text: price_text(trade.sell_price),
         qty_text: fmt::qty(trade.quantity),

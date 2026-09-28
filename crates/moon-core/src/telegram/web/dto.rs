@@ -213,6 +213,8 @@ pub struct TradeDto {
     pub profit_pct_text: Option<String>,
     pub closed_at: i64,
     pub closed_text: String,
+    /// Compact close time for the list row: `HH:MM` today, `DD.MM HH:MM` otherwise.
+    pub closed_short_text: String,
     pub entry_text: Option<String>,
     pub exit_text: Option<String>,
     pub qty_text: String,

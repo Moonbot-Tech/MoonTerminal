@@ -1616,10 +1616,16 @@
         top.appendChild(coin);
         top.appendChild(el("span", "badge order-side " + sideClass(trade.side), trade.side || ""));
         left.appendChild(top);
-        var meta = [];
-        if (trade.core_name) meta.push(trade.core_name);
-        if (trade.closed_text) meta.push(trade.closed_text);
-        left.appendChild(el("div", "sub trade-meta", meta.join(" · ")));
+        var meta = el("div", "sub trade-row-meta");
+        var when = trade.closed_short_text || trade.closed_text;
+        if (trade.core_name) {
+            var core = el("span", "trade-core", trade.core_name);
+            core.title = trade.core_name;
+            meta.appendChild(core);
+        }
+        if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
+        if (when) meta.appendChild(el("span", "trade-when", when));
+        left.appendChild(meta);
         row.appendChild(left);
         var right = el("div", "trade-result");
         var profit = el("span", "");
