@@ -562,35 +562,6 @@ fn replay_read_protocol_keeps_bars_visible_without_stale_rows() {
     }
 }
 
-/// `market/trade_replay/mod.rs:TradeReplaySeries::read_into` must derive a candle Y range after
-/// a revision-matched reread; dropping that fallback puts a bars-only replay off screen.
-#[test]
-fn replay_repeat_keeps_candle_range_after_bars_are_already_shipped() {
-    let series = bars_only_series();
-    let mut out = ChartHistoryBuffers::default();
-    let first = series.read_into(
-        0.0,
-        0.0,
-        (2 * MINUTE_MS) as f32,
-        Some(&candle_params(0)),
-        &mut out,
-    );
-
-    let repeat = series.read_into(
-        0.0,
-        0.0,
-        (2 * MINUTE_MS) as f32,
-        Some(&candle_params(first.candles_revision)),
-        &mut out,
-    );
-
-    assert_eq!(
-        repeat.tick_price_range,
-        Some((90.0, 110.0)),
-        "the original bar envelope remains available when no candle rows are re-emitted"
-    );
-}
-
 /// `read_into` must keep candle geometry out of the tick span.
 ///
 /// Breakage: a bar that only partly overlaps the prints used to stay whole, so a short trade

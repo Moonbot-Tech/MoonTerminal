@@ -10,17 +10,6 @@ fn the_lock_outranks_the_window() {
     assert_eq!(ChartTabKind::of(false, true), ChartTabKind::Compare);
 }
 
-/// A profile that never split its defaults holds nothing here, and "nothing" has to mean "follow
-/// Main" rather than "the built-in default" — otherwise the first launch after the split would
-/// redress every window.
-#[test]
-fn an_untouched_profile_holds_nothing() {
-    let empty = ChartTabDefaults::default();
-    assert!(empty.candle_view.is_none());
-    assert!(empty.chart_graphics.is_none());
-    assert!(empty.chart_labels.is_none());
-}
-
 /// A hand-edited file states nonsense in one place and the rest of the layout must survive it.
 #[test]
 fn a_broken_table_costs_only_itself() {

@@ -159,30 +159,3 @@ fn a_non_rail_core_still_collapses_and_expands() {
         "toggling B must not disturb the rail-selected root"
     );
 }
-
-/// (f) A stale overlay (`Some(A)`) with a rail that now resolves to `None`: assigning
-/// unconditionally clears it, while an `is_none()` early-return guard would leave it stale.
-#[test]
-fn focus_clears_a_stale_overlay_unconditionally() {
-    let workspace = [1, 2];
-    let stale_overlay = Some(1);
-    let resolved = rail_seed_core(None, Some(&workspace));
-    assert_eq!(resolved, None);
-
-    let unconditional_assign = resolved;
-    assert_eq!(
-        unconditional_assign, None,
-        "assigning unconditionally must clear a stale overlay"
-    );
-
-    let mut guarded = stale_overlay;
-    if resolved.is_none() {
-        // The rejected shape: an early return leaves the stale overlay untouched.
-    } else {
-        guarded = resolved;
-    }
-    assert_eq!(
-        guarded, stale_overlay,
-        "an is_none() guard would wrongly keep the stale overlay, which is why new() assigns unconditionally"
-    );
-}

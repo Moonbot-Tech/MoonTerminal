@@ -212,24 +212,6 @@ fn one_in_flight_request_coalesces_later_mutations() {
     );
 }
 
-/// `startup.rs:dispatch_live_persistence` must not clear dirty state from a success acknowledgement;
-/// adding that clear loses the later layout mutation and restores stale state after restart.
-#[test]
-fn in_flight_success_does_not_claim_a_later_mutation() {
-    let writes = Arc::new(Mutex::new(Vec::new()));
-    let mut coordinator = coordinator(writes, None, None, Arc::new(AtomicBool::new(false)));
-    let request = PersistenceSnapshot::empty().with_layout(layout(100.0));
-    assert!(coordinator.dispatch(request));
-    // Dispatch cleared the dirty flag; this is the later mutation the old acknowledgement must
-    // never clear.
-    let mut layout_dirty = true;
-    let acknowledgement = wait_for_ack(&mut coordinator);
-    if acknowledgement.failed().layout {
-        layout_dirty = true;
-    }
-    assert!(layout_dirty);
-}
-
 /// `persistence/coordinator.rs:PersistenceAck::failed` must report a failed selected class;
 /// returning an empty mask prevents the live loop from retrying the latest user layout.
 #[test]

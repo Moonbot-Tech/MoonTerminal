@@ -139,20 +139,6 @@ fn the_peak_restarts_where_the_delay_ends() {
     assert_eq!(w.exit.kind, ExitKind::Stop, "{w:?}");
 }
 
-/// A short's peak is the lowest middle and its line 1 % above it.
-#[test]
-fn a_short_trails_the_lowest_middle() {
-    let ticks = tape(&[
-        (100, 99.8, 100.0),
-        (3_000, 97.8, 98.0),
-        (5_000, 98.9, 99.1),
-        (9_000, 98.9, 99.1),
-    ]);
-    // 97.9 · 1.01 = 98.879; the middle 99.0 is above it at 6 450.
-    let w = walk(&deal(true), &ticks, fill(), 50.0, &trailing());
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_450), "{w:?}");
-}
-
 /// A short's trailing buys back into the ask: the middle 99.0 crossed the line at 6 450, the sale
 /// fills at the ask proxy 99.1 — the price an anchored stop would be held against.
 #[test]

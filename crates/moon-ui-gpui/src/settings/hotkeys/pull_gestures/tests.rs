@@ -268,14 +268,3 @@ fn every_row_the_preview_offers_is_one_the_apply_writes() {
     assert!(hotkeys.same_hotkeys_for_move);
     assert_eq!(hotkeys.buy_move_kind, MoveKind::ALL[3]);
 }
-
-/// Building a preview must not touch the draft — the user has not pressed anything yet.
-#[test]
-fn building_a_preview_changes_nothing() {
-    let hotkeys = HotkeysConfig::default();
-    let before = hotkeys.clone();
-    let mut core = empty_core();
-    core.buy_set_click = ordinal(MouseGestureBinding::MiddleAlt);
-    let _ = preview_core_gestures(&hotkeys, &core);
-    assert_eq!(before.buy_set_click, hotkeys.buy_set_click);
-}

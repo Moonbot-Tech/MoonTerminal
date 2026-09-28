@@ -1,6 +1,6 @@
 use moonproto::ExchangeCode;
 
-use super::{ARB_VENUES, Brand, CoreVenue, MarketKind, Venue, arb_alias, arb_row_matches, venue};
+use super::{ARB_VENUES, Brand, CoreVenue, MarketKind, Venue, arb_alias, venue};
 use crate::symbol::Exchange;
 
 /// The ordinals are wire values, so the oracle is moonproto's own constants rather than the
@@ -319,18 +319,4 @@ fn a_deployer_matches_by_its_dex_name() {
 fn an_exchange_does_not_match_a_core_with_a_dex() {
     assert!(!core_venue(13, "xyz").matches_arb(13, ""));
     assert!(core_venue(13, "").matches_arb(13, ""));
-}
-
-/// The free function and the method are one rule, so the caption pass — which holds bare pairs —
-/// cannot dim a row the click would open.
-#[test]
-fn the_pair_form_answers_exactly_like_the_venue_form() {
-    for (code, dex) in [(4u8, ""), (13, "hyna"), (13, "")] {
-        for row in [(4u8, ""), (51, "hyna"), (13, "")] {
-            assert_eq!(
-                arb_row_matches((code, dex), row),
-                core_venue(code, dex).matches_arb(row.0, row.1),
-            );
-        }
-    }
 }

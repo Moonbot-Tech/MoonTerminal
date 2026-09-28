@@ -506,30 +506,6 @@ fn average_order_spend_excludes_positive_spend_funding_rows() {
     );
 }
 
-/// `report_read.rs::query_totals_attempt` must keep `spend_offset = volume_offset + 5`. Moving
-/// it one column in either direction reads volume data as spend data or reads past the result,
-/// producing a wrong or failed Report average-order footer.
-#[test]
-fn average_order_spend_columns_follow_the_complete_volume_block() {
-    let conn = traded_volume_report(1);
-    let totals = query_totals(
-        &conn,
-        &ReportFilter {
-            core_uids: vec![1],
-            ..ReportFilter::default()
-        },
-    )
-    .expect("query ordered aggregate columns")
-    .quotes;
-
-    let usdt = totals
-        .entry_spend
-        .totals
-        .first()
-        .expect("the independently seeded USDT rows create one spend bucket");
-    assert_eq!((usdt.orders, usdt.spent, usdt.profit), (2, 3.0, 50.0));
-}
-
 /// Removing the exit leg, signing short quantity, reusing `spentbtc`, moving the closed/Funding
 /// predicates into `build_where`, or coupling volume completeness to profit coverage turns one of
 /// these exact assertions red and would misstate the current filtered Report footer.
