@@ -24,6 +24,8 @@
     --card-high: #f8fafc;
     --row-line: var(--line);
     --pos: #0e6e45;
+    --pill-on: var(--pos);
+    --pill-on-fill: rgba(14, 110, 69, 0.14);
     --neg: var(--danger);
     --warn: #b97824;
     --tint: rgba(0, 157, 255, 0.08);
@@ -70,6 +72,8 @@
     --button: #ffb347;
     --button-ink: #131416;
     --pos: #1e8c5b;
+    --pill-on: #3ddc84;
+    --pill-on-fill: rgba(61, 220, 132, 0.16);
     --neg: #e5484d;
     --danger: #e5484d;
     --warn: #ffb347;
@@ -91,6 +95,8 @@
         --button: #ffb347;
         --button-ink: #131416;
         --pos: #1e8c5b;
+        --pill-on: #3ddc84;
+        --pill-on-fill: rgba(61, 220, 132, 0.16);
         --neg: #e5484d;
         --danger: #e5484d;
         --warn: #ffb347;
@@ -106,13 +112,23 @@
     display: none !important;
 }
 
+/* `clip`, not `hidden`: a hidden overflow makes <body> a scroll container that never scrolls,
+   and every sticky element inside it (the header, group heads, the day-table head) then scrolls
+   away with the page. */
 html,
 body {
     margin: 0;
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
     background: var(--page);
     color: var(--ink);
+}
+
+@supports not (overflow: clip) {
+    html,
+    body {
+        overflow-x: hidden;
+    }
 }
 
 body {
@@ -167,8 +183,7 @@ button {
 .loading-label,
 .sub,
 .k,
-.fine,
-.chart-caption {
+.fine {
     color: var(--hint);
 }
 
@@ -177,7 +192,6 @@ button {
 .loading-label,
 .card-title,
 .sub,
-.chart-caption,
 .orders-line {
     font-size: 13px;
 }
@@ -227,7 +241,7 @@ button {
 }
 
 main {
-    padding-bottom: calc(64px + var(--inset-bottom));
+    padding-bottom: calc(70px + var(--inset-bottom));
     padding-left: var(--inset-left);
     padding-right: var(--inset-right);
 }
@@ -276,6 +290,53 @@ main {
     line-height: 1.15;
     font-size: clamp(24px, 8vw, var(--fs-hero));
     overflow-wrap: anywhere;
+}
+
+/* A hidden balance figure: regular-weight asterisks, not the figure's bold. A mask carries no
+   sign or meaning, so every one is the muted text colour; `.num.masked` outranks the figure's
+   own colour rules (`.balance-figure`, `.hero-value`). */
+.masked,
+.num.masked {
+    font-weight: 400;
+    letter-spacing: 0.12em;
+    color: var(--hint);
+}
+
+/* Balances total: its label left, the eye that hides every figure of the tab right. */
+.hero-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 4px;
+}
+
+.eye-btn {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: -10px;
+    color: var(--link);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.eye-btn:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: -2px;
+    border-radius: var(--r-ctl);
+}
+
+.eye-icon {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .hero-sub {
@@ -524,11 +585,21 @@ main {
     background: var(--page);
 }
 
+/* Entry -> current and the quantity: each figure stays whole; the line wraps between them. */
 .order-flow {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 12px;
+    row-gap: 2px;
     margin: 2px 0 0;
+}
+
+.order-bit {
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+}
+
+.order-mark {
+    color: var(--ink);
 }
 
 .order-pnl {
@@ -606,16 +677,18 @@ main {
     border-radius: var(--r-card);
 }
 
+/* Each option sizes from its own label, so "Last month" gets the room it needs and every
+   label stays on one line. */
 .segments button {
-    flex: 1 1 0;
+    flex: 1 1 auto;
     min-width: 44px;
     min-height: 44px;
     border-radius: var(--r-ctl);
-    padding: 4px 2px;
+    padding: 4px 6px;
     color: var(--hint);
     font-size: 13px;
     line-height: 1.1;
-    white-space: normal;
+    white-space: nowrap;
     hyphens: none;
     text-align: center;
     box-shadow: inset 0 0 0 1px transparent;
@@ -627,58 +700,49 @@ main {
     box-shadow: inset 0 0 0 1px var(--accent);
 }
 
-.search {
-    display: block;
-    width: calc(100% - 32px);
-    min-height: 44px;
-    margin: 0 16px 12px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 8px;
-    background: var(--card);
-    color: var(--ink);
-}
-
-.search::placeholder {
+.day-window {
+    margin: 2px 16px 10px;
     color: var(--hint);
+    font-size: var(--fs-meta);
 }
 
-.chart {
-    padding: 4px 16px 12px;
-}
-
-.bars {
+.day-table {
     width: 100%;
-    height: 96px;
-    display: block;
+    border-collapse: collapse;
+    font-size: 14px;
 }
 
-.bars .bar-pos {
-    fill: var(--accent);
+.day-table th,
+.day-table td {
+    padding: 7px 16px;
+    text-align: left;
+    white-space: nowrap;
 }
 
-.bars .bar-neg {
-    fill: var(--danger);
+/* Sticks under the app header while its table is on screen; the rule is a shadow because a
+   collapsed border scrolls away from a sticky cell. */
+.day-table th {
+    position: sticky;
+    top: var(--header-h, 52px);
+    z-index: 2;
+    background: var(--card);
+    box-shadow: inset 0 -1px 0 var(--line);
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    font-weight: 500;
 }
 
-.bars .bar-zero {
-    fill: var(--hint);
+.day-table .right {
+    text-align: right;
 }
 
-.bars .tick {
-    stroke: var(--hint);
-    stroke-width: 1.5;
+.day-table td.num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
 }
 
-.bars .baseline {
-    stroke: var(--line);
-    stroke-width: 1;
-}
-
-.chart-caption {
-    margin: 0;
-    min-height: 1.2em;
-    padding: 8px 0 0;
+.day-table tbody tr:nth-child(even) {
+    background: color-mix(in srgb, var(--hint) 8%, transparent);
 }
 
 .empty,
@@ -868,32 +932,6 @@ main {
     white-space: nowrap;
 }
 
-.tool-row {
-    display: flex;
-    align-items: center;
-    gap: var(--sp-2);
-    margin: 0 var(--sp-4) 12px;
-}
-
-.tool-row .search {
-    flex: 1 1 auto;
-    min-width: 0;
-    width: auto;
-    margin: 0;
-}
-
-.text-btn.inline {
-    align-self: center;
-    margin-left: auto;
-    padding-right: 0;
-}
-
-.text-btn.standalone {
-    display: block;
-    margin: calc(-1 * var(--sp-2)) var(--sp-4) 0 auto;
-    padding-right: 0;
-}
-
 #app-nav {
     position: fixed;
     left: 0;
@@ -910,7 +948,7 @@ main {
 
 #app-nav button {
     flex: 1 1 0;
-    min-height: 52px;
+    min-height: 58px;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -928,16 +966,16 @@ main {
 
 #app-nav svg {
     display: block;
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
 }
 
 .nav-label {
     display: block;
     max-width: 100%;
     overflow: hidden;
-    font-size: 11px;
-    line-height: 1.1;
+    font-size: 12px;
+    line-height: 1.15;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -1002,45 +1040,19 @@ input:focus-visible {
     min-width: 0;
 }
 
-.hero-toggle {
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.hero-toggle:focus-visible {
-    outline: 2px solid var(--link);
-    outline-offset: -2px;
-}
-
-/* Per-core and all-cores controls. */
-.core-row {
-    flex-wrap: wrap;
-}
-
-.core-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
-    flex: 1 0 100%;
-    padding-left: 16px;
-}
-
-/* All-cores bar: one tight row of two segmented START/STOP pairs; never wraps — on a narrow
-   phone the gaps and buttons tighten and a label ellipsizes before the row would break. */
+/* All-cores bar: one line per switch, its name and on-count left, two separate action buttons
+   right, each a full 44px target. The buttons are actions, never a selected state. */
 .mass-actions {
     display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 12px;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 16px 12px;
 }
 
 .mass-title {
     color: var(--hint);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     white-space: nowrap;
@@ -1049,60 +1061,50 @@ input:focus-visible {
 .mass-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mass-text {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
 }
 
 .mass-label {
     min-width: 0;
     overflow: hidden;
-    color: var(--sub);
-    font-size: var(--fs-meta);
+    color: var(--ink);
+    font-size: var(--fs-body);
+    font-weight: 500;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mass-state {
+    color: var(--hint);
+    font-size: var(--fs-meta);
     white-space: nowrap;
 }
 
 .mass-pair {
     display: inline-flex;
     flex: none;
-}
-
-/* The caption only fits beside both pairs on a wide popup; aria-label names the bar below. */
-@media (max-width: 439px) {
-    .mass-title {
-        display: none;
-    }
-
-    .mass-actions {
-        gap: 8px;
-        padding: 6px 10px;
-    }
-
-    .mass-group {
-        gap: 4px;
-    }
+    gap: 6px;
 }
 
 .mass-pair .mass-btn {
-    min-height: 32px;
-    min-width: 0;
-    padding: 0 8px;
-    font-size: 10px;
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--link);
 }
 
-.mass-pair .mass-btn:first-child {
-    border-radius: var(--r-ctl) 0 0 var(--r-ctl);
-}
-
-.mass-pair .mass-btn + .mass-btn {
-    margin-left: -1px;
-    border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
-}
-
-@media (max-width: 439px) {
-    .mass-pair .mass-btn {
-        padding: 0 6px;
-    }
+/* Stop for every core: danger text on the plain outline, not a red selected frame. */
+.mass-pair .mass-btn.mass-stop {
+    color: var(--neg);
 }
 
 /* Exchange section caption inside a per-core list (report, orders). */
@@ -1112,7 +1114,7 @@ input:focus-visible {
     padding-bottom: 2px;
     color: var(--hint);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
@@ -1121,39 +1123,26 @@ input:focus-visible {
     margin: 12px 16px 4px;
     color: var(--hint);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 400;
     letter-spacing: 0.06em;
     text-transform: uppercase;
 }
 
 .chip {
-    min-height: 40px;
-    min-width: 40px;
+    min-height: 44px;
+    min-width: 44px;
     padding: 0 12px;
     border: 1px solid var(--line);
     border-radius: var(--r-ctl);
     background: var(--card);
     color: var(--sub);
-    font-family: var(--font-mono);
-    font-size: 11px;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
     white-space: nowrap;
 }
 
-.chip.on {
-    border-color: var(--pos);
-    color: var(--pos);
-    background: var(--tint);
-}
-
-.chip.off {
-    border-color: var(--line);
-    color: var(--sub);
-}
-
-.chip.unknown,
 .chip:disabled {
     color: var(--hint);
     opacity: .6;
@@ -1165,22 +1154,24 @@ input:focus-visible {
     color: var(--neg);
 }
 
-/* Compact order row: data on the left, a small action pair at the right. */
+/* Order row: the figures on top, the owner's labelled action pair on a line of its own. */
 .order-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-top: 6px;
-    padding-bottom: 6px;
+    padding-top: 8px;
+    padding-bottom: 8px;
 }
 
 .order-main {
-    flex: 1 1 auto;
     min-width: 0;
 }
 
 .order-row .order-top {
     gap: 6px;
+    justify-content: flex-start;
+}
+
+/* Word labels inside the mono figures read in the UI face, without the mono's wide tracking. */
+.order-row .k {
+    font-family: var(--font-ui);
 }
 
 .order-row .order-top .name {
@@ -1192,20 +1183,23 @@ input:focus-visible {
     font-size: 14px;
 }
 
-.order-row .order-side {
+/* Position side badge (LONG / SHORT) on order rows, trade rows and the trade sheet. */
+.order-side {
     padding: 1px 4px;
     border-radius: var(--r-ctl);
     background: var(--tint);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
     text-transform: uppercase;
 }
 
-.order-row .order-side.pos {
+.order-side.pos {
     color: var(--pos);
 }
 
-.order-row .order-side.neg {
+.order-side.neg {
     color: var(--neg);
 }
 
@@ -1223,29 +1217,60 @@ input:focus-visible {
 }
 
 .order-row .order-flow {
-    font-size: 11px;
+    font-size: 12px;
 }
 
 .order-row .order-actions {
-    flex: none;
-    gap: 4px;
-    padding: 0;
+    gap: 12px;
+    padding: 6px 0 0;
 }
 
 .order-row .order-actions .cmd {
     min-width: 44px;
     min-height: 44px;
-    padding: 0;
-    font-size: 15px;
+    padding: 0 14px;
+    font-size: 13px;
+    font-weight: 500;
     border-radius: var(--r-ctl);
 }
 
-/* Order group header: the name truncates, count and PnL stay on the right. */
+/* Side-independent tones: cancel neutral, Panic Sell the danger colour. */
+.order-row .order-actions .cmd-cancel {
+    color: var(--ink);
+    border-color: var(--line);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.order-row .order-actions .cmd-danger {
+    color: var(--danger);
+    border-color: var(--danger);
+    box-shadow: inset 0 0 0 1px var(--danger);
+}
+
+/* Group header: an exchange name truncates; a core name wraps to two lines so the unique tail
+   of names sharing a long prefix stays visible. Count and PnL stay on the first line. */
 .group-head .name {
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.group-head.core-head {
+    align-items: flex-start;
+    padding-top: 13px;
+    padding-bottom: 13px;
+}
+
+.group-head .name.core-name {
+    white-space: normal;
+    line-height: 1.3;
+}
+
+.group-head.core-head .chev,
+.group-head.core-head .group-meta,
+.group-head.core-head .count {
+    line-height: 1.3;
 }
 
 .group-head .group-meta {
@@ -1268,15 +1293,8 @@ input:focus-visible {
     .segments,
     .summary,
     .loading-label,
-    .tool-row,
     .stale-bar,
     .stat-strip {
-        margin-left: 12px;
-        margin-right: 12px;
-    }
-
-    .search {
-        width: calc(100% - 24px);
         margin-left: 12px;
         margin-right: 12px;
     }
@@ -1292,4 +1310,273 @@ input:focus-visible {
         display: grid;
         grid-template-columns: repeat(2, 1fr);
     }
+}
+
+
+/* Cores list rows open the core detail screen. */
+.core-row {
+    cursor: pointer;
+}
+
+.core-row .row-chev {
+    flex: none;
+    align-self: center;
+    color: var(--hint);
+    font-size: 20px;
+    line-height: 1;
+}
+
+.strategy-row .cmd,
+.core-detail .cmd {
+    min-height: 44px;
+}
+
+/* ON / OFF pill: the app's one on/off look (strategies, core detail switches). */
+.pill {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    min-width: 64px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1.5px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--sub);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+/* A tappable pill keeps a 44px target around its visible shape. */
+button.pill {
+    min-height: 44px;
+    cursor: pointer;
+}
+
+/* ON reads from its own tokens: the dark palette's --pos is too faint for a label on a card. */
+.pill.on {
+    border-color: var(--pill-on);
+    color: var(--pill-on);
+    background-color: var(--pill-on-fill);
+}
+
+.pill.off {
+    border-color: var(--line);
+    color: var(--hint);
+}
+
+.pill.pending {
+    border-style: dashed;
+    opacity: .55;
+}
+
+.pill.unknown {
+    border-style: dashed;
+    color: var(--hint);
+}
+
+button.pill:disabled {
+    cursor: default;
+}
+
+/* Core row status line: connection state, then the read-only trading tag. */
+.core-sub {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 2px;
+}
+
+.trade-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+/* Small non-interactive ON / OFF tag: the pill's colours at label size. */
+.tag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 16px;
+    padding: 0 5px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    line-height: 1;
+}
+
+.tag.on {
+    border-color: var(--pill-on);
+    color: var(--pill-on);
+    background-color: var(--pill-on-fill);
+}
+
+.tag.off {
+    color: var(--hint);
+}
+
+.tag.unknown {
+    border-style: dashed;
+    color: var(--hint);
+}
+
+/* A long unbroken folder path ellipsizes; the full path rides the title. */
+.folder-row {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detail-back {
+    display: block;
+    min-width: 44px;
+    margin: var(--sp-2) var(--sp-4) 0;
+    padding: 0;
+}
+
+.detail-switch {
+    min-height: 44px;
+}
+
+.detail-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+}
+
+/* Full-width, sentence-case action button of the core detail screen. */
+.action-btn {
+    width: 100%;
+    min-height: 44px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+    background: var(--card);
+    color: var(--ink);
+    font-size: var(--fs-body);
+    font-weight: 500;
+}
+
+.action-btn.cmd-danger {
+    border-color: var(--neg);
+    color: var(--neg);
+}
+
+.action-btn:disabled {
+    opacity: .6;
+}
+
+/* Closed trades: tap a row for the detail sheet. */
+.trade-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.trade-result {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.trade-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Row line 2: only the core name truncates; the close time always shows whole. */
+.trade-row-meta {
+    display: flex;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.trade-core {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The last characters of a long core name, kept whole beside the ellipsized head. */
+
+.trade-sep,
+.trade-when {
+    flex: none;
+    white-space: pre;
+}
+
+.sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+.sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    max-height: calc(var(--tg-viewport-stable-height, 100vh) * 0.8 - var(--inset-top));
+    overflow-y: auto;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    border-radius: var(--r-card) var(--r-card) 0 0;
+    padding-left: var(--inset-left);
+    padding-right: var(--inset-right);
+    padding-bottom: var(--inset-bottom);
+}
+
+.sheet-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-1);
+}
+
+.sheet-result {
+    flex-wrap: wrap;
+}
+
+.sheet .hero-value {
+    min-width: 0;
+    font-size: 24px;
+    overflow-wrap: anywhere;
+}
+
+.sheet-close {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+/* Narrow phones: the detail and sheet rows take the same 12px sides as the rest (declared
+   after their base rules so the cascade keeps them). */
+@media (max-width: 360px) {
+    .detail-actions,
+    .sheet-head {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}
+
+/* A small caption above a list, e.g. how many trades it shows. */
+.list-caption {
+    margin: 0 16px var(--sp-2);
+    color: var(--hint);
+    font-size: var(--fs-meta);
 }

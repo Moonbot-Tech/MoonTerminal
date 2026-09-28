@@ -221,10 +221,6 @@ telegram.mini_tab_balances:
   ru: "Балансы"
   en: "Balances"
   es: "Saldos"
-telegram.mini_tab_orders:
-  ru: "Ордера"
-  en: "Orders"
-  es: "Órdenes"
 telegram.mini_period_today:
   ru: "Сегодня"
   en: "Today"
@@ -253,10 +249,6 @@ telegram.mini_report_by_core:
   ru: "По ядрам"
   en: "By core"
   es: "Por núcleo"
-telegram.mini_report_daily:
-  ru: "По дням"
-  en: "By day"
-  es: "Por día"
 telegram.mini_report_orders:
   ru: "Сделки"
   en: "Trades"
@@ -345,14 +337,10 @@ telegram.mini_orders_entry:
   ru: "Вход"
   en: "Entry"
   es: "Entrada"
-telegram.mini_orders_mark:
-  ru: "Текущая"
-  en: "Mark"
-  es: "Precio actual"
-telegram.mini_search:
-  ru: "Поиск"
-  en: "Search"
-  es: "Buscar"
+telegram.mini_orders_to_entry:
+  ru: "до входа"
+  en: "to entry"
+  es: "a la entrada"
 telegram.mini_empty_report:
   ru: "За этот период сделок нет."
   en: "No trades in this period."
@@ -369,10 +357,6 @@ telegram.mini_empty_orders:
   ru: "Нет открытых ордеров"
   en: "No open orders"
   es: "No hay órdenes abiertas"
-telegram.mini_empty_search:
-  ru: "Ничего не найдено"
-  en: "Nothing found"
-  es: "No hay resultados"
 telegram.mini_error_read:
   ru: "Не удалось прочитать данные."
   en: "Could not read the data."
@@ -433,22 +417,10 @@ telegram.mini_show_all:
   ru: "Показать все ({n})"
   en: "Show all ({n})"
   es: "Mostrar todo ({n})"
-telegram.mini_chart_hint:
-  ru: "Нажмите на столбец, чтобы увидеть день"
-  en: "Tap a bar to see the day"
-  es: "Toca una barra para ver el día"
 telegram.mini_cores_problems:
   ru: "Проблемы: {n}"
   en: "Issues: {n}"
   es: "Problemas: {n}"
-telegram.mini_expand_all:
-  ru: "Развернуть все"
-  en: "Expand all"
-  es: "Expandir todo"
-telegram.mini_collapse_all:
-  ru: "Свернуть все"
-  en: "Collapse all"
-  es: "Contraer todo"
 telegram.mini_online:
   ru: "онлайн"
   en: "online"
@@ -457,10 +429,6 @@ telegram.mini_orders_summary:
   ru: "Открытых ордеров: {n}"
   en: "{n} open orders"
   es: "{n} órdenes abiertas"
-telegram.mini_clear_search:
-  ru: "Сбросить поиск"
-  en: "Clear search"
-  es: "Borrar búsqueda"
 telegram.mini_cancel:
   ru: "Отменить"
   en: "Cancel"
@@ -513,10 +481,6 @@ telegram.mini_cancel_all:
   ru: "Снять все ордера"
   en: "Cancel all orders"
   es: "Cancelar todas las órdenes"
-telegram.mini_state_unknown:
-  ru: "—"
-  en: "—"
-  es: "—"
 telegram.mini_all_cores:
   ru: "Все ядра"
   en: "All cores"
@@ -545,11 +509,151 @@ telegram.mini_cmd_core_not_found:
   ru: "Ядро не найдено"
   en: "Core not found"
   es: "Núcleo no encontrado"
-telegram.mini_start:
-  ru: "Старт"
-  en: "Start"
-  es: "Iniciar"
-telegram.mini_stop:
-  ru: "Стоп"
-  en: "Stop"
-  es: "Detener"
+telegram.mini_tab_trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Cierres"
+telegram.mini_deals_open:
+  ru: "Открытые"
+  en: "Open"
+  es: "Abiertas"
+telegram.mini_deals_closed:
+  ru: "Закрытые"
+  en: "Closed"
+  es: "Cerradas"
+telegram.mini_tab_strategies:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+telegram.mini_empty_trades:
+  ru: "Закрытых сделок нет"
+  en: "No closed trades yet"
+  es: "Aún no hay operaciones cerradas"
+telegram.mini_trades_shown_one:
+  ru: "Последняя {n} сделка"
+  en: "Last {n} trade"
+  es: "Último {n} cierre"
+telegram.mini_trades_shown_few:
+  ru: "Последние {n} сделки"
+  en: "Last {n} trades"
+  es: "Últimos {n} cierres"
+telegram.mini_trades_shown_many:
+  ru: "Последние {n} сделок"
+  en: "Last {n} trades"
+  es: "Últimos {n} cierres"
+telegram.mini_empty_strategies:
+  ru: "Стратегий нет"
+  en: "No strategies"
+  es: "No hay estrategias"
+telegram.mini_trade_entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+telegram.mini_trade_exit:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salida"
+telegram.mini_trade_qty:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cant."
+telegram.mini_trade_duration:
+  ru: "Длительность"
+  en: "Duration"
+  es: "Duración"
+telegram.mini_trade_strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+telegram.mini_trade_manual:
+  ru: "Вручную"
+  en: "Manual"
+  es: "Manual"
+telegram.mini_trade_closed:
+  ru: "Закрыта"
+  en: "Closed"
+  es: "Cerrada"
+telegram.mini_duration_dh:
+  ru: "{d} д {h} ч"
+  en: "{d}d {h}h"
+  es: "{d} d {h} h"
+telegram.mini_duration_hm:
+  ru: "{h} ч {m} мин"
+  en: "{h}h {m}m"
+  es: "{h} h {m} min"
+telegram.mini_duration_ms:
+  ru: "{m} мин {s} с"
+  en: "{m}m {s}s"
+  es: "{m} min {s} s"
+telegram.mini_strategy_root:
+  ru: "Без папки"
+  en: "No folder"
+  es: "Sin carpeta"
+telegram.mini_strategy_pending:
+  ru: "Ждёт ядро…"
+  en: "Waiting for core…"
+  es: "Esperando al núcleo…"
+telegram.mini_strategy_timed_out:
+  ru: "Ядро не ответило — состояние неизвестно"
+  en: "Core did not confirm — state unknown"
+  es: "El núcleo no confirmó — estado desconocido"
+telegram.mini_version:
+  ru: "Версия"
+  en: "Version"
+  es: "Versión"
+telegram.mini_memory:
+  ru: "Память"
+  en: "Memory"
+  es: "Memoria"
+telegram.mini_free_memory:
+  ru: "Свободно"
+  en: "Free"
+  es: "Libre"
+telegram.mini_unit_mb:
+  ru: "МБ"
+  en: "MB"
+  es: "MB"
+telegram.mini_reconnect:
+  ru: "Переподключить"
+  en: "Reconnect"
+  es: "Reconectar"
+telegram.mini_back:
+  ru: "Назад"
+  en: "Back"
+  es: "Atrás"
+telegram.mini_close:
+  ru: "Закрыть"
+  en: "Close"
+  es: "Cerrar"
+telegram.mini_balances_show:
+  ru: "Показать суммы"
+  en: "Show amounts"
+  es: "Mostrar importes"
+telegram.mini_balances_hide:
+  ru: "Скрыть суммы"
+  en: "Hide amounts"
+  es: "Ocultar importes"
+telegram.mini_start_all:
+  ru: "Старт все"
+  en: "Start all"
+  es: "Iniciar todos"
+telegram.mini_stop_all:
+  ru: "Стоп все"
+  en: "Stop all"
+  es: "Detener todos"
+telegram.mini_on_of:
+  ru: "вкл {on} из {total}"
+  en: "on {on} of {total}"
+  es: "activos {on} de {total}"
+telegram.mini_orders_n_one:
+  ru: "{n} орд."
+  en: "{n} order"
+  es: "{n} orden"
+telegram.mini_orders_n_few:
+  ru: "{n} орд."
+  en: "{n} orders"
+  es: "{n} órdenes"
+telegram.mini_orders_n_many:
+  ru: "{n} орд."
+  en: "{n} orders"
+  es: "{n} órdenes"

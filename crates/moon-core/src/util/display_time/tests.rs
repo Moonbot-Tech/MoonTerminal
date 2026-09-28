@@ -155,3 +155,25 @@ fn previous_month_start_keeps_the_year_for_a_mid_year_date() {
         NaiveDate::from_ymd_opt(2024, 5, 1).expect("valid May start"),
     );
 }
+
+/// Same-day closes show only the clock; earlier days carry the day and month.
+#[test]
+fn short_minute_drops_the_date_only_for_today_in_the_zone() {
+    // 2026-03-10 22:30 UTC is already 2026-03-10 23:30 in Warsaw (UTC+1).
+    let close = Utc
+        .with_ymd_and_hms(2026, 3, 10, 22, 30, 0)
+        .unwrap()
+        .timestamp();
+    let same_day = Utc
+        .with_ymd_and_hms(2026, 3, 10, 22, 45, 0)
+        .unwrap()
+        .timestamp();
+    assert_eq!(format_short_minute(close, Warsaw, same_day), "23:30");
+    // 23:05 UTC is 00:05 on the 11th in Warsaw, so the close is no longer today there.
+    let next_day = Utc
+        .with_ymd_and_hms(2026, 3, 10, 23, 5, 0)
+        .unwrap()
+        .timestamp();
+    assert_eq!(format_short_minute(close, Warsaw, next_day), "10.03 23:30");
+    assert_eq!(format_short_minute(0, Warsaw, next_day), "");
+}

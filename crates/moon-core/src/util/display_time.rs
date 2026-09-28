@@ -257,6 +257,31 @@ pub fn format_minute(secs: i64, zone: Tz) -> String {
 /// The one date-and-minute pattern [`format_minute`] prints.
 const MINUTE_FORMAT: &str = "%Y-%m-%d %H:%M";
 
+/// Format UTC Unix seconds as a compact selected-zone time for narrow rows.
+///
+/// Args:
+///     secs: UTC Unix timestamp in seconds; non-positive values mean unknown.
+///     zone: Selected display zone.
+///     now_secs: Current UTC Unix seconds, which decide what "today" is in `zone`.
+///
+/// Returns:
+///     `HH:MM` when `secs` falls on today's civil date in `zone`, otherwise `DD.MM HH:MM`;
+///     empty for an unknown or unrepresentable time.
+pub fn format_short_minute(secs: i64, zone: Tz, now_secs: i64) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
+    let Some(value) = at(secs, zone) else {
+        return String::new();
+    };
+    let pattern = if date(now_secs, zone) == Some(value.date_naive()) {
+        "%H:%M"
+    } else {
+        "%d.%m %H:%M"
+    };
+    value.format(pattern).to_string()
+}
+
 /// Format UTC Unix seconds as `YYYY-MM-DD` in the selected zone.
 ///
 /// Args:

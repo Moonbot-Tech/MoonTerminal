@@ -16,7 +16,8 @@ use sha2::Sha256;
 use touche::body::HttpBody;
 use touche::{Body, Method, Request, StatusCode};
 
-use super::{App, MiniAppApiError, MiniAppApiRequest};
+use super::dto::{StrategyDto, id_text};
+use super::{App, CancelOrderBody, MiniAppApiError, MiniAppApiRequest, StrategyToggleBody};
 use crate::config::Secret;
 
 const BOT_TOKEN: &str = "123456:authoring-fixture-token";
@@ -150,8 +151,16 @@ fn accept(event: MiniAppApiRequest) {
         MiniAppApiRequest::Orders { reply, .. } => {
             let _ = reply.send(Err(MiniAppApiError::Rejected));
         }
+        MiniAppApiRequest::Trades { reply, .. } => {
+            let _ = reply.send(Err(MiniAppApiError::Rejected));
+        }
+        MiniAppApiRequest::Strategies { reply, .. } => {
+            let _ = reply.send(Err(MiniAppApiError::Rejected));
+        }
         MiniAppApiRequest::CoreSwitch { reply, .. }
-        | MiniAppApiRequest::CancelAllOrders { reply, .. } => {
+        | MiniAppApiRequest::CancelAllOrders { reply, .. }
+        | MiniAppApiRequest::StrategyToggle { reply, .. }
+        | MiniAppApiRequest::CoreReconnect { reply, .. } => {
             let _ = reply.send(Ok(super::dto::CommandResultDto {
                 ok: true,
                 armed: None,
@@ -222,7 +231,7 @@ fn telegram_write_auth_date_past_one_hour_is_rejected() {
     let one_past = signed_at(now.saturating_sub(INIT_DATA_MAX_AGE_SECS + 1));
     let forged = with_forged_hash(&fresh);
     let routes = [
-        ("/api/order/cancel", r#"{"core":1,"uid":2}"#),
+        ("/api/order/cancel", r#"{"core":1,"uid":"2"}"#),
         ("/api/panic", r#"{"core":1,"market":"BTCUSDT","on":true}"#),
     ];
 
@@ -281,7 +290,7 @@ fn telegram_cancel_unknown_field_is_rejected() {
         &app,
         "/api/order/cancel",
         Some(&init_data),
-        r#"{"core":1,"uid":2}"#,
+        r#"{"core":1,"uid":"2"}"#,
     );
     assert_eq!(
         status, 200,
@@ -292,7 +301,7 @@ fn telegram_cancel_unknown_field_is_rejected() {
         &app,
         "/api/order/cancel",
         Some(&init_data),
-        r#"{"core":1,"uid":2,"note":1}"#,
+        r#"{"core":1,"uid":"2","note":1}"#,
     );
     assert_eq!(
         status, 400,
@@ -383,12 +392,12 @@ fn telegram_panic_market_over_64_bytes_is_rejected() {
     );
 }
 
-/// `web.rs` route arms `/api/core/switch`, `/api/cores/switch` and
-/// `/api/core/cancel_all` must authenticate through `handle_api`.
+/// `web.rs` route arms `/api/core/switch`, `/api/cores/switch`, `/api/core/cancel_all`,
+/// `/api/strategy/toggle` and `/api/core/reconnect` must authenticate through `handle_api`.
 ///
 /// Mutation: one arm parses its body and sends the command without the
 /// initData HMAC, freshness and paired-chat check. Anyone holding the tunnel URL
-/// can then stop trading or cancel every order on the owner's cores. The fresh
+/// can then stop trading, cancel every order, toggle strategies or reconnect the owner's cores. The fresh
 /// paired launch reaching 200 is the control that the routes are not hard-coded
 /// to reject.
 #[test]
@@ -414,6 +423,8 @@ fn telegram_core_control_routes_require_fresh_paired_init_data() {
             r#"{"cores":[1,2],"switch":"auto_detect","on":false}"#,
         ),
         ("/api/core/cancel_all", r#"{"core":1}"#),
+        ("/api/strategy/toggle", r#"{"core":1,"id":"7","on":true}"#),
+        ("/api/core/reconnect", r#"{"core":1}"#),
     ];
 
     for (path, body) in routes {
@@ -445,4 +456,38 @@ fn telegram_core_control_routes_require_fresh_paired_init_data() {
             "{path} a fresh paired launch must reach the command, body {text}"
         );
     }
+}
+
+/// `dto.rs:id_text` carries ids past 2^53 through the DTO JSON and back through the command
+/// bodies unchanged.
+///
+/// Mutation: drop `serialize_with` on `StrategyDto.id` or `deserialize_with` on the bodies. The id
+/// then goes out as a JSON number the page rounds, or a string body is rejected as `json`, and the
+/// strategy toggle never reaches its handler. Oracle: `u64::MAX` and a negative stored id
+/// -1234567890123456789 read as `u64` (17212176183586094827) survive both directions.
+#[test]
+fn big_ids_round_trip_as_decimal_strings() {
+    for id in [u64::MAX, (-1_234_567_890_123_456_789_i64) as u64] {
+        let dto = StrategyDto {
+            id,
+            name: "S".into(),
+            checked: true,
+            wanted: None,
+            pending: None,
+        };
+        let json = serde_json::to_value(&dto).expect("serialize");
+        let text = id.to_string();
+        assert_eq!(json["id"], serde_json::Value::String(text.clone()));
+
+        let body = format!(r#"{{"core":1,"id":"{text}","on":true}}"#);
+        let toggle: StrategyToggleBody = serde_json::from_str(&body).expect("toggle body");
+        assert_eq!(toggle.id, id);
+        let body = format!(r#"{{"core":1,"uid":"{text}"}}"#);
+        let cancel: CancelOrderBody = serde_json::from_str(&body).expect("cancel body");
+        assert_eq!(cancel.uid, id);
+    }
+    assert!(serde_json::from_str::<StrategyToggleBody>(r#"{"core":1,"id":7,"on":true}"#).is_err());
+    let mut out = Vec::new();
+    id_text::serialize(&7, &mut serde_json::Serializer::new(&mut out)).expect("serialize");
+    assert_eq!(out, br#""7""#);
 }

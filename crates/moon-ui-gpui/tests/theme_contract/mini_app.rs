@@ -329,11 +329,11 @@ fn mini_balance_text_uses_fixed_cents() {
     );
 }
 
-/// The day chart, balance figures, core names, and Panic Sell button keep the
+/// The day table, balance figures, core names, and Panic Sell button keep the
 /// layout the narrow Mini App popup needs.
 ///
-/// Mutation: drop `line-clamp: 2`, the chart's 16px inset, `.balance-figure`,
-/// or `white-space: nowrap` on `.order-actions .cmd`. The bars meet the card
+/// Mutation: drop `line-clamp: 2`, the day table's 16px cell inset, `.balance-figure`,
+/// or `white-space: nowrap` on `.order-actions .cmd`. The day figures meet the card
 /// edge, core names ellipsize on one line, balance amounts stay pale, or
 /// «Выключить Panic Sell» breaks onto two lines inside the button. Stretching
 /// `.order-actions .cmd` with `flex: 1 1 auto` brings back the full-width
@@ -346,8 +346,8 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
         "a core name must wrap to two lines instead of one ellipsis"
     );
     assert!(
-        css.contains(".chart {\n    padding: 4px 16px 12px;"),
-        "the day chart must use the card's 16px inner inset"
+        css.contains(".day-table td {\n    padding: 7px 16px;"),
+        "the day table must use the card's 16px inner inset"
     );
     assert!(
         css.contains(".balance-figure {\n    color: var(--ink);"),
@@ -381,15 +381,15 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
     );
 }
 
-/// `web/app.js:ensureCollapse` must start every group collapsed.
+/// `web/app.js:ensureCollapse` starts the groups of every pane collapsed: Orders,
+/// Strategies, Cores and Balances.
 ///
 /// Mutation: restore `collapse[pane][slot] = count > 20 && !problem`, or drop
-/// the `collapseUser` skip. Balances and small order groups then open on first
-/// paint and on every poll the user has not toggled, which is the popup the
-/// user asked to close. Dropping `!query &&` in `appendGroups` would also keep
-/// a search from opening the groups that match it.
+/// the `collapseUser` skip. Small order groups then open on first paint and on
+/// every poll the user has not toggled. Dropping the cores or balances call
+/// brings back the wall of open exchange groups the owner asked to fold.
 #[test]
-fn mini_groups_start_collapsed_until_the_user_toggles() {
+fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     let js = read_core_src("telegram/web/app.js");
     let ensure = braced_body(&js, "function ensureCollapse(");
     assert!(
@@ -405,15 +405,16 @@ fn mini_groups_start_collapsed_until_the_user_toggles() {
         "row count and problems must not decide the default"
     );
     assert!(
-        js.contains("ensureCollapse(\"cores\", cores);")
-            && js.contains("ensureCollapse(\"balances\", perCore);")
-            && js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);"),
-        "cores, balances, and orders must all seed the collapsed default"
+        js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);")
+            && js.contains("ensureCollapse(\"strategies\", withRows, strategyCoreKey);")
+            && js.contains("ensureCollapse(\"cores\", cores, null);")
+            && js.contains("ensureCollapse(\"balances\", perCore, null);"),
+        "orders, strategies, cores and balances must seed the collapsed default"
     );
     let append = braced_body(&js, "function appendGroups(");
     assert!(
-        append.contains("var collapsed = !query && !!collapse[pane][slot];"),
-        "a search query must still force-expand the groups it draws"
+        append.contains("var collapsed = !!collapse[pane][slot];"),
+        "a group must draw folded exactly when its collapse slot says so"
     );
 }
 
@@ -423,10 +424,11 @@ fn mini_groups_start_collapsed_until_the_user_toggles() {
 /// `appendGroups` call. A collapsed exchange then shows only its name, which
 /// is the popup the user could not read without opening every group.
 ///
-/// An order group's PnL sums the finite figures and dashes only when none
+/// An order group's PnL sums the finite figures and shows nothing when none
 /// exist. Mutation: set `known = false` and `break` on the first order
 /// without a figure. A core with open positions plus one unfilled order
-/// then shows a dash instead of those positions' PnL.
+/// then loses those positions' PnL. Mutation: draw a dash for an unvalued
+/// core. The header then shows "—" where a PnL is expected.
 #[test]
 fn mini_collapsed_groups_carry_their_summary() {
     let js = read_core_src("telegram/web/app.js");
@@ -440,13 +442,18 @@ fn mini_collapsed_groups_carry_their_summary() {
         balances.contains("total_text"),
         "a balance group must show the exchange total the page already received"
     );
+    let known = braced_body(&js, "function knownPnl(");
+    assert!(
+        known.contains("known += 1") && !known.contains("known = false"),
+        "an order group must sum every finite PnL, not stop at the first unvalued order"
+    );
     let orders = braced_body(&js, "function orderGroupSummary(");
     assert!(
-        orders.contains("known += 1")
-            && orders.contains("\\u2014")
-            && orders.contains("applyMoney(fig, \"num\", text, sum)")
-            && !orders.contains("known = false"),
-        "an order group sums finite PnL and shows a dash only when none is finite"
+        orders.contains("knownPnl(items)")
+            && orders.contains("mini_orders_n_")
+            && orders.contains("applyMoney(fig, \"num\", text, pnl.sum)")
+            && !orders.contains("\\u2014"),
+        "an order group labels its count and shows PnL only when some order is valued"
     );
 }
 

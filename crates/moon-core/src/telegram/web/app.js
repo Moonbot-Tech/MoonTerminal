@@ -8,12 +8,16 @@
     var RETRY_MS = [1000, 2000, 4000];
     var REPORT_RETRY_LIMIT = 6;
     var REPORT_RETRY_MS = 2000;
-    var TAB_NAMES = ["report", "cores", "balances", "orders"];
+    // The server answers within 5 s; a request still open well past that is dead, and the queue is serial.
+    var FETCH_TIMEOUT_MS = 12000;
+    var TAB_NAMES = ["report", "cores", "balances", "orders", "trades", "strategies"];
+    // Nav buttons by data-tab; "deals" shows the orders or trades pane.
     var TAB_KEYS = {
         report: "mini_tab_report",
         cores: "mini_tab_cores",
         balances: "mini_tab_balances",
-        orders: "mini_tab_orders"
+        strategies: "mini_tab_strategies",
+        deals: "mini_tab_trades"
     };
     var PERIODS = [
         ["today", "mini_period_today"],
@@ -30,11 +34,13 @@
     var main = document.getElementById("app-main");
     var nav = document.getElementById("app-nav");
     var sections = {};
+    // One nav tab holds open orders and closed trades; this is the segment it shows.
+    var dealsSegment = "orders";
+    var dealsSwitch = null;
     var buttons = {};
     var payloads = {};
-    var queries = { cores: "", balances: "", orders: "" };
-    var collapse = { cores: {}, balances: {}, orders: {} };
-    var collapseUser = { cores: {}, balances: {}, orders: {} };
+    var collapse = { cores: {}, balances: {}, orders: {}, strategies: {} };
+    var collapseUser = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var hasData = {};
     var queue = [];
     var busy = false;
@@ -43,8 +49,10 @@
     var cmdTimer = null;
     var period = "today";
     var current = null;
-    // The balances total starts masked each time the pane opens; never persisted.
+    // Every money figure of the balances tab starts masked; one eye toggle on the total reveals
+    // them together. Kept for the popup's life like a toggled group, never persisted.
     var balanceRevealed = false;
+    var BALANCE_MASK = "******";
     var loadToken = 0;
     var sessionOk = false;
     var commandBusy = false;
@@ -59,6 +67,12 @@
     var updatedTimer = null;
     var reportExpanded = false;
     var MONEY_LIST_LIMIT = 8;
+    // Core detail screen: the open core id, and the list scroll to return to.
+    var coreDetailId = null;
+    var coreListY = 0;
+    var sheet = document.getElementById("sheet");
+    var sheetBackdrop = null;
+    var sheetOpen = false;
 
     function tr(key) {
         var value = labels[key];
@@ -71,6 +85,17 @@
             if (Object.prototype.hasOwnProperty.call(vars, k)) s = s.split("{" + k + "}").join(String(vars[k]));
         }
         return s;
+    }
+
+    // Plural form for a count: "one", "few" or "many" (other falls to many).
+    function pluralForm(n) {
+        var form = "many";
+        try {
+            form = new Intl.PluralRules(labels.locale || "en").select(n);
+        } catch (err) {
+            form = n === 1 ? "one" : "many";
+        }
+        return form === "one" || form === "few" ? form : "many";
     }
 
     if (labels.locale) {
@@ -165,22 +190,35 @@
         node.textContent = text;
     }
 
-    function focusSnap() {
-        var active = document.activeElement;
-        if (!active || !active.id || active.selectionStart == null) return null;
-        return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
+    // A hidden balance figure: the mask replaces the amount, never an unvalued note.
+    function maskMoney(node, baseClass) {
+        node.className = baseClass + " masked";
+        node.textContent = BALANCE_MASK;
     }
 
-    function restoreSnap(snap, y) {
-        if (snap) {
-            var node = document.getElementById(snap.id);
-            if (node) {
-                node.focus();
-                if (node.setSelectionRange && snap.start != null) {
-                    node.setSelectionRange(snap.start, snap.end);
-                }
-            }
+    // Open eye while the figures are hidden (tap to show), crossed eye while they are shown.
+    function eyeIcon(crossed) {
+        var icon = svgEl("svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("aria-hidden", "true");
+        icon.setAttribute("class", "eye-icon");
+        var lid = svgEl("path");
+        lid.setAttribute("d", "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z");
+        icon.appendChild(lid);
+        var pupil = svgEl("circle");
+        pupil.setAttribute("cx", "12");
+        pupil.setAttribute("cy", "12");
+        pupil.setAttribute("r", "3");
+        icon.appendChild(pupil);
+        if (crossed) {
+            var slash = svgEl("path");
+            slash.setAttribute("d", "M4 4l16 16");
+            icon.appendChild(slash);
         }
+        return icon;
+    }
+
+    function restoreScroll(y) {
         window.scrollTo(0, y || 0);
         syncBackButton();
     }
@@ -268,7 +306,9 @@
             body: JSON.stringify(job.body)
         };
         if (controller) opts.signal = controller.signal;
+        var deadline = controller ? setTimeout(function () { controller.abort(); }, FETCH_TIMEOUT_MS) : null;
         fetch(job.path, opts).then(function (response) {
+            if (deadline) clearTimeout(deadline);
             return response.text().then(function (text) {
                 var parsed = null;
                 if (text) {
@@ -322,6 +362,7 @@
             }
             finish(job, { ok: true, status: pack.status, data: pack.parsed, raw: pack.text });
         }).catch(function () {
+            if (deadline) clearTimeout(deadline);
             if (job.cancelled) {
                 finish(job, { ok: false, status: 0, cancelled: true, retry: false, error: "" });
                 return;
@@ -330,12 +371,17 @@
         });
     }
 
+    // Database reads (report, trades) get the long retry so a slow read can land in the cache.
+    function slowRead(path) {
+        return path === "/api/report" || path === "/api/trades";
+    }
+
     function retryLimit(job) {
-        return job.path === "/api/report" ? REPORT_RETRY_LIMIT : RETRY_MS.length;
+        return slowRead(job.path) ? REPORT_RETRY_LIMIT : RETRY_MS.length;
     }
 
     function retryWait(job) {
-        if (job.path === "/api/report") return REPORT_RETRY_MS;
+        if (slowRead(job.path)) return REPORT_RETRY_MS;
         return RETRY_MS[job.attempt];
     }
 
@@ -354,13 +400,15 @@
             if (!sessionOk || token !== loadToken || current !== name) return;
             if (document.visibilityState !== "visible") return;
             loadTab(name, token, true);
-        }, name === "report" ? REPORT_POLL_MS : POLL_MS);
+        }, name === "report" || name === "trades" ? REPORT_POLL_MS : POLL_MS);
     }
 
     function pathFor(name) {
         if (name === "report") return "/api/report";
         if (name === "cores") return "/api/cores";
         if (name === "balances") return "/api/balances";
+        if (name === "trades") return "/api/trades";
+        if (name === "strategies") return "/api/strategies";
         return "/api/orders";
     }
 
@@ -462,54 +510,6 @@
         return { label: tr("mini_refresh"), run: refreshCurrent };
     }
 
-    function clearSearchAction(pane, repaint) {
-        return {
-            label: tr("mini_clear_search"),
-            run: function () {
-                queries[pane] = "";
-                repaint();
-            }
-        };
-    }
-
-    function searchField(id, value, onInput) {
-        var input = document.createElement("input");
-        input.type = "search";
-        input.id = id;
-        input.className = "search";
-        input.value = value || "";
-        input.placeholder = tr("mini_search");
-        input.setAttribute("aria-label", tr("mini_search"));
-        input.setAttribute("autocomplete", "off");
-        input.setAttribute("autocapitalize", "off");
-        input.setAttribute("spellcheck", "false");
-        input.addEventListener("input", function () {
-            onInput(input.value);
-        });
-        return input;
-    }
-
-    function matchesQuery(query, fields) {
-        if (!query) return true;
-        var needle = String(query).toLowerCase();
-        var i;
-        for (i = 0; i < fields.length; i++) {
-            if (fields[i] == null) continue;
-            if (String(fields[i]).toLowerCase().indexOf(needle) !== -1) return true;
-        }
-        return false;
-    }
-
-    function filterItems(items, query, fieldsOf) {
-        if (!query) return items;
-        var out = [];
-        var i;
-        for (i = 0; i < items.length; i++) {
-            if (matchesQuery(query, fieldsOf(items[i]))) out.push(items[i]);
-        }
-        return out;
-    }
-
     function groupBy(items, keyFn) {
         var order = [];
         var map = {};
@@ -543,9 +543,8 @@
         return item && item.exchange ? String(item.exchange) : "";
     }
 
-    // Every group starts collapsed, including on a later refresh. A group the
-    // user has toggled keeps that choice while the popup stays open. Search
-    // still draws matching groups open and clearing it restores this choice.
+    // Every pane's groups start collapsed, including on a later refresh. A group the
+    // user has toggled keeps that choice while the popup stays open.
     function ensureCollapse(pane, items, keyFn) {
         var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
         var i;
@@ -591,43 +590,53 @@
         var wrap = el("span", "group-meta");
         var span = el("span", "num balance-figure");
         if (!found) applyMoney(span, "num balance-figure", null, null);
+        else if (!balanceRevealed && found.total_text) maskMoney(span, "num balance-figure");
         else applyMoney(span, "num balance-figure", found.total_text, found.total);
         wrap.appendChild(span);
         return wrap;
     }
 
-    // Core header: order count, plus the sum of finite order.pnl figures.
-    // An order that has no position yet has no pnl, because order_pnl returns
-    // nothing, and that row adds nothing. The chart position caption skips
-    // the same rows. The header shows a dash only when no order in the group
-    // has a finite figure.
-    function orderGroupSummary(items) {
-        var wrap = el("span", "group-meta");
-        wrap.appendChild(el("span", "num", String(items.length)));
+    // Signed dollars for a client PnL sum, the balance figures' "$" suffix; null when not finite.
+    function signedDollars(value) {
+        var text = signedFixed(value);
+        return text == null ? null : text + "$";
+    }
+
+    // Finite order.pnl figures of a set of orders: their sum and how many there were. An order
+    // with no position yet has no pnl (order_pnl returns nothing) and adds nothing; the chart
+    // position caption skips the same rows.
+    function knownPnl(orders) {
         var sum = 0;
         var known = 0;
         var i;
-        for (i = 0; i < items.length; i++) {
-            var pnl = items[i] && items[i].pnl;
+        for (i = 0; i < orders.length; i++) {
+            var pnl = orders[i] && orders[i].pnl;
             if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) {
                 continue;
             }
             known += 1;
             sum += pnl;
         }
-        var text = known ? signedFixed(sum) : null;
-        var fig = el("span", "num");
-        if (!known || text == null) {
-            fig.className = "num hint";
-            fig.textContent = "\u2014";
-        } else {
-            applyMoney(fig, "num", text, sum);
+        return { sum: sum, known: known };
+    }
+
+    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no
+    // valued order shows the count alone.
+    function orderGroupSummary(items) {
+        var wrap = el("span", "group-meta");
+        var n = items.length;
+        wrap.appendChild(el("span", "num hint", trf("mini_orders_n_" + pluralForm(n), { n: n })));
+        var pnl = knownPnl(items);
+        var text = pnl.known ? signedDollars(pnl.sum) : null;
+        if (text != null) {
+            var fig = el("span", "num");
+            applyMoney(fig, "num", text, pnl.sum);
+            wrap.appendChild(fig);
         }
-        wrap.appendChild(fig);
         return wrap;
     }
 
-    function appendGroups(parent, pane, items, isProblem, renderRow, query, repaint, keyFn, labelFn, nameClass, summaryFn) {
+    function appendGroups(parent, pane, items, isProblem, renderRow, repaint, keyFn, labelFn, nameClass, summaryFn) {
         var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
         var g;
         for (g = 0; g < groups.length; g++) {
@@ -640,11 +649,12 @@
                 if (isProblem(ordered[j])) problems += 1;
             }
             var slot = "k:" + group.key;
-            var collapsed = !query && !!collapse[pane][slot];
+            var collapsed = !!collapse[pane][slot];
             var card = el("div", "card");
             var head = document.createElement("button");
             head.type = "button";
-            head.className = "row group-head";
+            // A core-name header wraps its title, so its chevron and figures sit on the first line.
+            head.className = (" " + (nameClass || "") + " ").indexOf(" core-name ") !== -1 ? "row group-head core-head" : "row group-head";
             head.setAttribute("aria-expanded", collapsed ? "false" : "true");
             var title = group.key;
             if (typeof labelFn === "function" && group.items.length) title = labelFn(group.items[0]);
@@ -708,54 +718,41 @@
         return any ? box : null;
     }
 
-    function switchChip(core, label, field, key) {
-        var state = core[field];
-        var known = state === true || state === false;
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "cmd chip " + (known ? (state ? "on" : "off") : "unknown");
-        // On/off reads from the chip colour, as the terminal's toggles do.
-        chip.textContent = known ? label : label + " · " + tr("mini_state_unknown");
-        chip.setAttribute("aria-pressed", known ? String(state) : "mixed");
-        chip.disabled = commandBusy || !known;
-        chip.addEventListener("click", function () {
-            if (commandBusy || !known) return;
-            runCommand(null, "/api/core/switch", { core: core.id, switch: key, on: !state });
-        });
-        return chip;
-    }
-
-    // Owner-only per-core switches; a single core fires without a confirm.
-    function coreActions(core) {
-        var line = el("div", "core-actions");
-        line.appendChild(switchChip(core, tr("mini_trading"), "trading", "trading"));
-        line.appendChild(switchChip(core, tr("mini_autodetect"), "auto_detect", "auto_detect"));
-        var cancel = document.createElement("button");
-        cancel.type = "button";
-        cancel.className = "cmd chip cmd-danger";
-        cancel.textContent = tr("mini_cancel_all");
-        cancel.disabled = commandBusy;
-        cancel.addEventListener("click", function () {
-            if (commandBusy) return;
-            runCommand(null, "/api/core/cancel_all", { core: core.id });
-        });
-        line.appendChild(cancel);
-        return line;
-    }
-
-    function coreRow(core, data) {
+    function coreRow(core) {
         var row = el("div", "row core-row");
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        row.addEventListener("click", function () {
+            openCoreDetail(core.id);
+        });
+        row.addEventListener("keydown", function (event) {
+            if (event.target !== row) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            openCoreDetail(core.id);
+        });
         row.appendChild(el("span", dotClass(core)));
         var body = el("div", "grow");
         var coreName = el("div", "name core-name", core.name || "");
         coreName.title = core.name || "";
         body.appendChild(coreName);
         var secondary = core.fault ? faultLabel(core.fault) : tr("mini_core_" + (core.conn || ""));
-        if (secondary) body.appendChild(el("div", "sub", secondary));
+        var sub = el("div", "sub core-sub");
+        if (secondary) {
+            sub.appendChild(el("span", "", secondary));
+            sub.appendChild(el("span", "sep", "·"));
+        }
+        // What a trader checks first: whether this core trades. Read-only; switched on the detail screen.
+        var trade = el("span", "trade-state");
+        trade.appendChild(el("span", "", tr("mini_trading")));
+        trade.appendChild(stateTag(core.trading));
+        sub.appendChild(trade);
+        body.appendChild(sub);
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
-        if (data && data.can_control) row.appendChild(coreActions(core));
+        // Per-core controls live on the detail screen the row opens.
+        row.appendChild(el("span", "row-chev", "›"));
         return row;
     }
 
@@ -777,17 +774,26 @@
         var free = el("span", "");
         free.appendChild(el("span", "k", tr("mini_free") + " "));
         var freeVal = el("span", "num");
-        applyMoney(freeVal, "num", row.free_text, row.free);
+        if (!balanceRevealed && row.free_text) maskMoney(freeVal, "num");
+        else applyMoney(freeVal, "num", row.free_text, row.free);
         free.appendChild(freeVal);
         var total = el("span", "money-col");
         total.appendChild(el("span", "k", tr("mini_total") + " "));
         var totalVal = el("span", "num");
-        applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
+        if (!balanceRevealed && row.total_text) maskMoney(totalVal, "num balance-figure");
+        else applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
         total.appendChild(totalVal);
         bottom.appendChild(free);
         bottom.appendChild(total);
         wrap.appendChild(bottom);
         return wrap;
+    }
+
+    // The wire keeps buy/sell; the page names the position side. LONG / SHORT stay untranslated.
+    function sideLabel(side) {
+        if (side === "buy") return "LONG";
+        if (side === "sell") return "SHORT";
+        return side || "";
     }
 
     function sideClass(side) {
@@ -796,35 +802,27 @@
         return "hint";
     }
 
-    function mutedBits(label, text) {
-        var span = el("span", "");
-        span.appendChild(el("span", "k", label));
-        var shown = text == null || text === "" ? "\u2014" : text;
-        span.appendChild(el("span", "num", shown));
-        return span;
-    }
-
+    // Directional move of a held position; for a resting entry, how far the mark is from it.
+    // Nothing at all when neither is known: a dash reads as a broken figure.
     function orderChange(order) {
-        var node = el("span", "num order-change");
         if (order.change_text) {
             var tone = signClass(order.change_pct);
-            node.className = "num order-change" + (tone ? " " + tone : "");
-            node.textContent = order.change_text;
-            return node;
+            return el("span", "num order-change" + (tone ? " " + tone : ""), order.change_text);
         }
-        node.className = "num order-change hint";
-        node.textContent = "\u2014";
-        return node;
+        if (order.to_entry_text) {
+            var wait = el("span", "num order-change hint");
+            wait.appendChild(el("span", "k", tr("mini_orders_to_entry") + " "));
+            wait.appendChild(document.createTextNode(order.to_entry_text));
+            return wait;
+        }
+        return null;
     }
 
     function orderResult(order) {
+        if (!order.pnl_text) return null;
         var node = el("span", "num order-pnl");
-        if (order.pnl_text) {
-            applyMoney(node, "num order-pnl", order.pnl_text, order.pnl);
-            return node;
-        }
-        node.className = "num order-pnl hint";
-        node.textContent = "\u2014";
+        // Dollars like the core header and the summary above it.
+        applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
         return node;
     }
 
@@ -840,23 +838,21 @@
         return false;
     }
 
-    // Owner order actions. Drawn only when can_control is true.
+    // Owner order actions, a labelled pair on their own line under the figures. Colours name the
+    // action, never the side: cancel is neutral, Panic Sell the danger tone on every row.
+    // Drawn only when can_control is true.
     function orderActions(row, order) {
         var line = el("div", "order-actions");
         var cancel = document.createElement("button");
         cancel.type = "button";
-        cancel.className = "cmd";
-        cancel.textContent = "✕";
-        cancel.title = tr("mini_cancel");
-        cancel.setAttribute("aria-label", tr("mini_cancel"));
+        cancel.className = "cmd cmd-cancel";
+        cancel.textContent = "✕ " + tr("mini_cancel");
         cancel.disabled = commandBusy;
         var panic = document.createElement("button");
         panic.type = "button";
         panic.className = "cmd cmd-danger";
         var panicLabel = tr(order.panic_armed ? "mini_panic_off" : "mini_panic_sell");
-        panic.textContent = order.panic_armed ? "↺" : "⚡";
-        panic.title = panicLabel;
-        panic.setAttribute("aria-label", panicLabel);
+        panic.textContent = (order.panic_armed ? "↺ " : "⚡ ") + panicLabel;
         panic.disabled = commandBusy;
         cancel.addEventListener("click", function () {
             if (commandBusy) return;
@@ -880,7 +876,7 @@
         row.appendChild(line);
     }
 
-    // Dense terminal row: coin, side, change and PnL; muted flow line; compact actions at the right.
+    // Dense terminal row: coin, side, change and PnL; the price line; the owner's actions below.
     function orderRow(order, data) {
         var row = el("div", "row order-row");
         var main = el("div", "order-main");
@@ -888,109 +884,67 @@
         var coin = el("span", "name order-coin", order.coin || "");
         coin.title = order.coin || "";
         top.appendChild(coin);
-        top.appendChild(el("span", "badge order-side " + sideClass(order.side), order.side || ""));
-        top.appendChild(orderChange(order));
-        top.appendChild(orderResult(order));
+        top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
+        var change = orderChange(order);
+        if (change) top.appendChild(change);
+        var result = orderResult(order);
+        if (result) top.appendChild(result);
         main.appendChild(top);
+        // Entry -> current price, then the quantity. Each figure is one unbreakable unit and the
+        // line wraps between them, so no price is ever cut to an ellipsis.
         var flow = el("div", "sub order-flow");
-        flow.appendChild(mutedBits(tr("mini_orders_qty"), order.qty_text));
-        flow.appendChild(document.createTextNode(" · "));
-        flow.appendChild(mutedBits(tr("mini_orders_entry"), order.entry_text));
-        flow.appendChild(document.createTextNode(" → "));
-        flow.appendChild(mutedBits(tr("mini_orders_mark"), order.mark_text));
+        if (order.entry_text || order.mark_text) {
+            var prices = el("span", "order-bit");
+            prices.appendChild(el("span", "k", tr("mini_orders_entry")));
+            prices.appendChild(el("span", "num", order.entry_text || "?"));
+            if (order.mark_text) {
+                prices.appendChild(el("span", "order-arrow", " → "));
+                prices.appendChild(el("span", "num order-mark", order.mark_text));
+            }
+            flow.appendChild(prices);
+        }
+        if (order.qty_text) {
+            var qty = el("span", "order-bit");
+            qty.appendChild(el("span", "k", tr("mini_orders_qty")));
+            qty.appendChild(el("span", "num", order.qty_text));
+            flow.appendChild(qty);
+        }
         main.appendChild(flow);
         row.appendChild(main);
         if (data.can_control) orderActions(row, order);
         return row;
     }
 
-    // Bars share one viewBox so the card width scales them. Null days are a hint tick.
-    function renderBars(days) {
-        var wrap = el("div", "chart");
-        var n = days.length;
-        var slot = 10;
-        var width = Math.max(n, 1) * slot;
-        var height = 80;
-        var pad = 2;
-        var svg = svgEl("svg");
-        svg.setAttribute("class", "bars");
-        svg.setAttribute("viewBox", "0 0 " + width + " " + height);
-        svg.setAttribute("preserveAspectRatio", "none");
-        svg.setAttribute("role", "img");
-        var min = 0;
-        var max = 0;
+    // One row per day, oldest first, the same figures the chat report's day table shows.
+    function dayTable(data, days) {
+        var card = el("div", "card day-card");
+        card.appendChild(el("h2", "card-title", tr("report_days")));
+        if (data.from_text && data.to_text) {
+            card.appendChild(el("p", "day-window num", data.from_text + " — " + data.to_text));
+        }
+        var table = el("table", "day-table");
+        var head = el("tr", "");
+        head.appendChild(el("th", "", tr("report_date")));
+        head.appendChild(el("th", "right", "USDT"));
+        head.appendChild(el("th", "right", tr("report_trades")));
+        var thead = el("thead", "");
+        thead.appendChild(head);
+        table.appendChild(thead);
+        var body = el("tbody", "");
         var i;
-        for (i = 0; i < n; i++) {
-            var sample = days[i] && days[i].usdt;
-            if (typeof sample !== "number" || sample !== sample) continue;
-            if (sample < min) min = sample;
-            if (sample > max) max = sample;
-        }
-        if (min === 0 && max === 0) max = 1;
-        var span = max - min;
-        if (!span) span = 1;
-        function yOf(v) {
-            return height - pad - ((v - min) / span) * (height - pad * 2);
-        }
-        var baseline = yOf(0);
-        var base = svgEl("line");
-        base.setAttribute("class", "baseline");
-        base.setAttribute("x1", "0");
-        base.setAttribute("x2", String(width));
-        base.setAttribute("y1", String(baseline));
-        base.setAttribute("y2", String(baseline));
-        svg.appendChild(base);
-        for (i = 0; i < n; i++) {
+        for (i = 0; i < days.length; i++) {
             var day = days[i] || {};
-            var x = i * slot;
-            var amount = day.usdt;
-            var known = typeof amount === "number" && amount === amount;
-            if (!known) {
-                var tick = svgEl("line");
-                tick.setAttribute("class", "tick");
-                tick.setAttribute("x1", String(x + slot / 2));
-                tick.setAttribute("x2", String(x + slot / 2));
-                tick.setAttribute("y1", String(baseline - 4));
-                tick.setAttribute("y2", String(baseline + 4));
-                svg.appendChild(tick);
-            } else if (amount === 0) {
-                var flat = svgEl("rect");
-                flat.setAttribute("class", "bar-zero");
-                flat.setAttribute("x", String(x + 1));
-                flat.setAttribute("y", String(baseline - 1));
-                flat.setAttribute("width", String(slot - 2));
-                flat.setAttribute("height", "2");
-                svg.appendChild(flat);
-            } else {
-                var y1 = yOf(amount);
-                var top = y1 < baseline ? y1 : baseline;
-                var h = Math.abs(baseline - y1);
-                if (h < 1) h = 1;
-                var bar = svgEl("rect");
-                bar.setAttribute("class", amount < 0 ? "bar-neg" : "bar-pos");
-                bar.setAttribute("x", String(x + 1));
-                bar.setAttribute("y", String(top));
-                bar.setAttribute("width", String(slot - 2));
-                bar.setAttribute("height", String(h));
-                svg.appendChild(bar);
-            }
+            var row = el("tr", "");
+            row.appendChild(el("td", "num", day.start || ""));
+            var money = el("td", "");
+            applyMoney(money, "right num", day.text, day.usdt);
+            row.appendChild(money);
+            row.appendChild(el("td", "right num", String(typeof day.trades === "number" ? day.trades : 0)));
+            body.appendChild(row);
         }
-        var caption = el("p", "chart-caption", tr("mini_chart_hint"));
-        svg.addEventListener("click", function (ev) {
-            if (!n) return;
-            var rect = svg.getBoundingClientRect();
-            if (!(rect.width > 0)) return;
-            var index = Math.floor(((ev.clientX - rect.left) / rect.width) * n);
-            if (index < 0) index = 0;
-            if (index >= n) index = n - 1;
-            var picked = days[index] || {};
-            var text = picked.text;
-            if (text == null || text === "") text = tr("mini_unvalued");
-            caption.textContent = (picked.start || "") + " " + text;
-        });
-        wrap.appendChild(svg);
-        wrap.appendChild(caption);
-        return wrap;
+        table.appendChild(body);
+        card.appendChild(table);
+        return card;
     }
 
     function periodBar() {
@@ -1024,6 +978,36 @@
         var i;
         for (i = 0; i < nodes.length; i++) {
             var on = nodes[i].getAttribute("data-period") === period;
+            nodes[i].className = on ? "active" : "";
+            nodes[i].setAttribute("aria-pressed", on ? "true" : "false");
+        }
+    }
+
+    // Open | Closed switch of the merged trades tab; it sits outside both panes like the period bar.
+    function dealsBar() {
+        var bar = el("div", "segments");
+        var segs = [["orders", "mini_deals_open"], ["trades", "mini_deals_closed"]];
+        var i;
+        for (i = 0; i < segs.length; i++) {
+            (function (value, key) {
+                var button = document.createElement("button");
+                button.type = "button";
+                button.textContent = tr(key);
+                button.setAttribute("data-seg", value);
+                button.addEventListener("click", function () {
+                    selectTab(value);
+                });
+                bar.appendChild(button);
+            })(segs[i][0], segs[i][1]);
+        }
+        return bar;
+    }
+
+    function paintDealsPressed() {
+        var nodes = dealsSwitch.querySelectorAll("button");
+        var i;
+        for (i = 0; i < nodes.length; i++) {
+            var on = nodes[i].getAttribute("data-seg") === dealsSegment;
             nodes[i].className = on ? "active" : "";
             nodes[i].setAttribute("aria-pressed", on ? "true" : "false");
         }
@@ -1123,64 +1107,18 @@
     function ordersSummary(orders) {
         var line = el("p", "summary spread");
         line.appendChild(el("span", "", tr("mini_orders_summary").replace("{n}", String(orders.length))));
-        var sum = 0;
-        var seen = 0;
-        var i;
-        for (i = 0; i < orders.length; i++) {
-            var pnl = orders[i] && orders[i].pnl;
-            if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) continue;
-            seen += 1;
-            sum += pnl;
-        }
-        var text = seen ? signedFixed(sum) : null;
+        var pnl = knownPnl(orders);
+        var text = pnl.known ? signedDollars(pnl.sum) : null;
         if (text != null) {
             var fig = el("span", "");
-            applyMoney(fig, "num money-col", text, sum);
+            applyMoney(fig, "num money-col", text, pnl.sum);
             line.appendChild(fig);
         }
         return line;
     }
 
-    // One text button that opens or closes every group of the pane at once.
-    function appendToggleAll(host, pane, items, keyFn, query, repaint) {
-        if (query) return;
-        var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
-        if (groups.length < 2) return;
-        var anyOpen = false;
-        var g;
-        for (g = 0; g < groups.length; g++) {
-            if (!collapse[pane]["k:" + groups[g].key]) anyOpen = true;
-        }
-        var toggle = button("text-btn", tr(anyOpen ? "mini_collapse_all" : "mini_expand_all"), function () {
-            var i;
-            for (i = 0; i < groups.length; i++) {
-                var slot = "k:" + groups[i].key;
-                collapse[pane][slot] = anyOpen;
-                collapseUser[pane][slot] = true;
-            }
-            hapticSelection();
-            repaint();
-        });
-        // The toggle rides the line above it instead of taking a row of its own: beside the
-        // search field when there is one, else at the end of the pane's summary line.
-        var prev = host.lastElementChild;
-        if (prev && prev.classList.contains("search")) {
-            var row = el("div", "tool-row");
-            host.replaceChild(row, prev);
-            row.appendChild(prev);
-            row.appendChild(toggle);
-        } else if (prev && (prev.classList.contains("stat-strip") || prev.classList.contains("summary"))) {
-            toggle.className = "text-btn inline";
-            prev.appendChild(toggle);
-        } else {
-            toggle.className = "text-btn standalone";
-            host.appendChild(toggle);
-        }
-    }
-
     function paintReport() {
         var host = paneBody("report");
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.report || {};
@@ -1188,7 +1126,7 @@
         var orders = typeof total.orders === "number" ? total.orders : 0;
         if (!orders) {
             host.appendChild(emptyState(tr("mini_empty_report"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         var hero = el("div", "card hero");
@@ -1206,19 +1144,15 @@
         hero.appendChild(el("p", "hero-sub num", bits.join(" \u00B7 ")));
         host.appendChild(hero);
         var days = Array.isArray(data.days) ? data.days : [];
-        if (days.length >= 2) {
-            var chartCard = el("div", "card");
-            chartCard.appendChild(el("h2", "card-title", tr("mini_report_daily")));
-            chartCard.appendChild(renderBars(days));
-            host.appendChild(chartCard);
-        }
+        // A one-day window (today, yesterday) has one row that only repeats the total above.
+        if (days.length > 1) host.appendChild(dayTable(data, days));
         appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
             nameClass: "name core-name",
             limit: MONEY_LIST_LIMIT,
             meta: coreOrdersMeta
         });
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     // Owner-only bar over every visible core; each action asks one confirm.
@@ -1230,22 +1164,31 @@
         card.setAttribute("role", "group");
         card.setAttribute("aria-label", tr("mini_all_cores"));
         card.appendChild(el("span", "mass-title", tr("mini_all_cores")));
+        // One line per switch: its name and how many cores have it on, then two actions for
+        // every core. Neither button is a selected state; Stop only carries the danger tone.
         function addPair(label, key, onConfirm, offConfirm) {
             var group = el("div", "mass-group");
-            group.appendChild(el("span", "mass-label", label));
+            var text = el("div", "mass-text");
+            text.appendChild(el("span", "mass-label", label));
+            var on = 0;
+            for (var c = 0; c < cores.length; c++) {
+                if (cores[c][key] === true) on += 1;
+            }
+            text.appendChild(el("span", "mass-state", trf("mini_on_of", { on: on, total: ids.length })));
+            group.appendChild(text);
             var pair = el("span", "mass-pair");
             group.appendChild(pair);
-            [true, false].forEach(function (on) {
+            [true, false].forEach(function (turnOn) {
                 var btn = document.createElement("button");
                 btn.type = "button";
-                btn.className = "cmd chip mass-btn" + (on ? "" : " cmd-danger");
-                btn.textContent = tr(on ? "mini_start" : "mini_stop");
-                btn.setAttribute("aria-label", label + " " + btn.textContent);
+                btn.className = "cmd chip mass-btn" + (turnOn ? "" : " mass-stop");
+                btn.textContent = tr(turnOn ? "mini_start_all" : "mini_stop_all");
+                btn.setAttribute("aria-label", label + ": " + btn.textContent);
                 btn.disabled = commandBusy || !ids.length;
                 btn.addEventListener("click", function () {
                     if (commandBusy || !ids.length) return;
-                    var ask = trf(on ? onConfirm : offConfirm, { n: ids.length });
-                    runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: on });
+                    var ask = trf(turnOn ? onConfirm : offConfirm, { n: ids.length });
+                    runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: turnOn });
                 });
                 pair.appendChild(btn);
             });
@@ -1258,11 +1201,22 @@
 
     function paintCores() {
         var host = sections.cores;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.cores || {};
         var cores = Array.isArray(data.cores) ? data.cores : [];
+        if (coreDetailId != null) {
+            var shownCore = findCore(cores, coreDetailId);
+            if (shownCore) {
+                paintCoreDetail(host, shownCore, data);
+                restoreScroll(y);
+                return;
+            }
+            // The core left the list (grant or config change): back to the list at its
+            // old scroll; restoreScroll below scrolls there and syncs the Back button.
+            coreDetailId = null;
+            y = coreListY;
+        }
         var online = 0;
         var problems = 0;
         var i;
@@ -1272,7 +1226,7 @@
         }
         if (!cores.length) {
             host.appendChild(emptyState(tr("mini_empty_cores"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         var strip = el("div", "stat-strip");
@@ -1287,35 +1241,19 @@
             strip.appendChild(el("span", "neg", tr("mini_cores_problems").replace("{n}", String(problems))));
         }
         host.appendChild(strip);
-        var coreQuery = cores.length > 10 ? queries.cores : "";
-        if (cores.length > 10) {
-            host.appendChild(searchField("search-cores", coreQuery, function (value) {
-                queries.cores = value;
-                paintCores();
-            }));
-        }
-        var filtered = filterItems(cores, coreQuery, function (core) {
-            return [core.name, core.exchange];
-        });
-        if (coreQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("cores", paintCores)));
-            restoreSnap(snap, y);
-            return;
-        }
-        ensureCollapse("cores", cores);
-        appendToggleAll(host, "cores", cores, null, coreQuery, paintCores);
         if (data.can_control) host.appendChild(massActions(cores));
+        // Exchange groups start folded; the header summary says how many cores are online.
+        ensureCollapse("cores", cores, null);
         appendGroups(
-            host, "cores", filtered, coreProblem,
-            function (core) { return coreRow(core, data); },
-            coreQuery, paintCores, null, null, null, coreGroupSummary
+            host, "cores", cores, coreProblem,
+            coreRow,
+            paintCores, null, null, null, coreGroupSummary
         );
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function paintBalances() {
         var host = sections.balances;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.balances || {};
@@ -1323,38 +1261,31 @@
         var perExchange = Array.isArray(data.per_exchange) ? data.per_exchange : [];
         if (!perCore.length && !perExchange.length) {
             host.appendChild(emptyState(tr("mini_empty_balances"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
-        var hero = el("div", "card hero hero-toggle");
-        hero.setAttribute("role", "button");
-        hero.tabIndex = 0;
-        hero.appendChild(el("p", "label", tr("mini_total")));
-        var big = el("p", "");
-        function paintTotal() {
-            if (balanceRevealed) applyMoney(big, "hero-value num", data.total_text, data.total);
-            else {
-                big.className = "hero-value num";
-                big.textContent = "••••••";
-            }
-            hero.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
-        }
-        function toggleTotal() {
+        var hero = el("div", "card hero");
+        var head = el("div", "hero-head");
+        head.appendChild(el("p", "label", tr("mini_total")));
+        var eye = document.createElement("button");
+        eye.type = "button";
+        eye.className = "eye-btn";
+        eye.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
+        eye.setAttribute("aria-label", tr(balanceRevealed ? "mini_balances_hide" : "mini_balances_show"));
+        eye.appendChild(eyeIcon(balanceRevealed));
+        eye.addEventListener("click", function () {
             balanceRevealed = !balanceRevealed;
             hapticSelection();
-            paintTotal();
-        }
-        hero.addEventListener("click", function (event) {
-            if (event.target && event.target.closest && event.target.closest("button, a")) return;
-            toggleTotal();
+            paintBalances();
+            // The repaint rebuilds the button; hand keyboard focus to the new one.
+            var again = sections.balances.querySelector(".eye-btn");
+            if (again) again.focus();
         });
-        hero.addEventListener("keydown", function (event) {
-            if (event.target !== hero) return;
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            toggleTotal();
-        });
-        paintTotal();
+        head.appendChild(eye);
+        hero.appendChild(head);
+        var big = el("p", "");
+        if (!balanceRevealed && data.total_text) maskMoney(big, "hero-value num");
+        else applyMoney(big, "hero-value num", data.total_text, data.total);
         hero.appendChild(big);
         if (data.stale > 0 || data.excluded > 0) {
             var meta = el("div", "hero-sub badges");
@@ -1365,31 +1296,15 @@
             hero.appendChild(meta);
         }
         host.appendChild(hero);
-        var balanceQuery = perCore.length > 10 ? queries.balances : "";
-        if (perCore.length > 10) {
-            host.appendChild(searchField("search-balances", balanceQuery, function (value) {
-                queries.balances = value;
-                paintBalances();
-            }));
-        }
-        var filtered = filterItems(perCore, balanceQuery, function (row) {
-            return [row.name, row.exchange];
-        });
-        if (balanceQuery && perCore.length && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("balances", paintBalances)));
-            restoreSnap(snap, y);
-            return;
-        }
-        if (filtered.length) {
-            ensureCollapse("balances", perCore);
-            appendToggleAll(host, "balances", perCore, null, balanceQuery, paintBalances);
+        // Exchange groups start folded; the header carries the exchange total.
+        if (perCore.length) {
+            ensureCollapse("balances", perCore, null);
             appendGroups(
                 host,
                 "balances",
-                filtered,
+                perCore,
                 balanceProblem,
                 balanceRow,
-                balanceQuery,
                 paintBalances,
                 null,
                 null,
@@ -1397,41 +1312,24 @@
                 balanceGroupSummary
             );
         }
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function paintOrders() {
         var host = sections.orders;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.orders || {};
         var orders = Array.isArray(data.orders) ? data.orders : [];
         if (!orders.length) {
             host.appendChild(emptyState(tr("mini_empty_orders"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         host.appendChild(ordersSummary(orders));
-        var orderQuery = orders.length > 10 ? queries.orders : "";
-        if (orders.length > 10) {
-            host.appendChild(searchField("search-orders", orderQuery, function (value) {
-                queries.orders = value;
-                paintOrders();
-            }));
-        }
-        var filtered = filterItems(orders, orderQuery, function (order) {
-            return [order.coin, order.core_name, order.market, order.side];
-        });
-        if (orderQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("orders", paintOrders)));
-            restoreSnap(snap, y);
-            return;
-        }
         ensureCollapse("orders", orders, orderCoreKey);
-        appendToggleAll(host, "orders", orders, orderCoreKey, orderQuery, paintOrders);
         // Core groups arrive in exchange sections; each section gets the terminal's caption.
-        var sectionsOf = groupBy(filtered, function (order) { return String(order.exchange || ""); });
+        var sectionsOf = groupBy(orders, function (order) { return String(order.exchange || ""); });
         var s;
         for (s = 0; s < sectionsOf.length; s++) {
             if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
@@ -1441,7 +1339,6 @@
                 sectionsOf[s].items,
                 orderIsProblem,
                 function (order) { return orderRow(order, data); },
-                orderQuery,
                 paintOrders,
                 orderCoreKey,
                 orderCoreLabel,
@@ -1449,14 +1346,460 @@
                 orderGroupSummary
             );
         }
-        restoreSnap(snap, y);
+        restoreScroll(y);
+    }
+
+    function findCore(cores, id) {
+        var i;
+        for (i = 0; i < cores.length; i++) {
+            if (cores[i] && cores[i].id === id) return cores[i];
+        }
+        return null;
+    }
+
+    function openCoreDetail(id) {
+        if (coreDetailId === id) return;
+        hapticSelection();
+        coreListY = window.pageYOffset || 0;
+        coreDetailId = id;
+        paintCores();
+        window.scrollTo(0, 0);
+        syncBackButton();
+    }
+
+    function closeCoreDetail() {
+        if (coreDetailId == null) return;
+        coreDetailId = null;
+        if (current === "cores") {
+            paintCores();
+            window.scrollTo(0, coreListY);
+        }
+        syncBackButton();
+    }
+
+    function detailLine(card, label, value) {
+        var line = el("div", "row spread");
+        line.appendChild(el("span", "k", label));
+        var shown = value == null || value === "" ? "—" : value;
+        line.appendChild(el("span", "num", shown));
+        card.appendChild(line);
+    }
+
+    function unitText(value, unitKey) {
+        if (typeof value !== "number") return null;
+        return String(value) + " " + tr(unitKey);
+    }
+
+    // One core in full: state, build, memory, CPU and pings; the owner also gets its controls.
+    // One switch row of the detail screen: label left, ON / OFF pill right.
+    function detailSwitch(core, label, field, key) {
+        var line = el("div", "row spread detail-switch");
+        line.appendChild(el("span", "grow", label));
+        var state = core[field];
+        var known = state === true || state === false;
+        var pill = onOffPill(known ? state : null, true, false);
+        pill.setAttribute("aria-label", label);
+        pill.addEventListener("click", function () {
+            if (commandBusy || !known) return;
+            runCommand(null, "/api/core/switch", { core: core.id, switch: key, on: !state });
+        });
+        line.appendChild(pill);
+        return line;
+    }
+
+    // Owner controls of the detail screen: two switch rows, then full-width actions.
+    function detailControls(core) {
+        var controls = el("div", "card detail-controls");
+        controls.appendChild(detailSwitch(core, tr("mini_trading"), "trading", "trading"));
+        controls.appendChild(detailSwitch(core, tr("mini_autodetect"), "auto_detect", "auto_detect"));
+        var line = el("div", "detail-actions");
+        var cancel = button("cmd action-btn cmd-danger", tr("mini_cancel_all"), function () {
+            if (commandBusy) return;
+            runCommand(null, "/api/core/cancel_all", { core: core.id });
+        });
+        cancel.disabled = commandBusy;
+        line.appendChild(cancel);
+        var reconnect = button("cmd action-btn", tr("mini_reconnect"), function () {
+            if (commandBusy) return;
+            runCommand(null, "/api/core/reconnect", { core: core.id });
+        });
+        reconnect.disabled = commandBusy;
+        line.appendChild(reconnect);
+        controls.appendChild(line);
+        return controls;
+    }
+
+    function paintCoreDetail(host, core, data) {
+        var wrap = el("div", "core-detail");
+        // Telegram's header back arrow already closes the screen; the text link is only for a
+        // client without that button.
+        if (!headerBackAvailable()) {
+            wrap.appendChild(button("cmd text-btn detail-back", "‹ " + tr("mini_back"), closeCoreDetail));
+        }
+        var head = el("div", "card");
+        var top = el("div", "row detail-head");
+        top.appendChild(el("span", dotClass(core)));
+        var body = el("div", "grow");
+        body.appendChild(el("div", "name core-name", core.name || ""));
+        var state = core.fault ? faultLabel(core.fault) : tr("mini_core_" + (core.conn || ""));
+        var sub = [];
+        if (core.exchange) sub.push(core.exchange);
+        if (state) sub.push(state);
+        if (sub.length) body.appendChild(el("div", core.fault ? "sub neg" : "sub", sub.join(" · ")));
+        top.appendChild(body);
+        head.appendChild(top);
+        wrap.appendChild(head);
+        var facts = el("div", "card");
+        detailLine(facts, tr("mini_version"), core.version);
+        detailLine(facts, tr("mini_memory"), unitText(core.mem_mb, "mini_unit_mb"));
+        detailLine(facts, tr("mini_free_memory"), unitText(core.free_mem_mb, "mini_unit_mb"));
+        var cpu = typeof core.cpu_proc === "number" ? core.cpu_proc : core.cpu_sys;
+        detailLine(facts, tr("mini_cpu"), typeof cpu === "number" ? unitText(Math.round(cpu * 10) / 10, "mini_unit_pct") : null);
+        detailLine(facts, tr("mini_ping"), unitText(core.ping_ms, "mini_unit_ms"));
+        detailLine(facts, tr("mini_exch_ping"), unitText(core.exch_ping_ms, "mini_unit_ms"));
+        wrap.appendChild(facts);
+        if (data && data.can_control) {
+            wrap.appendChild(detailControls(core));
+        }
+        host.appendChild(wrap);
+    }
+
+    // Days and hours, hours and minutes, or minutes and seconds; every unit comes from the label map.
+    function fmtDuration(secs) {
+        if (typeof secs !== "number" || secs !== secs || secs < 0) return null;
+        var s = Math.floor(secs);
+        var d = Math.floor(s / 86400);
+        var h = Math.floor((s % 86400) / 3600);
+        var m = Math.floor((s % 3600) / 60);
+        if (d > 0) return trf("mini_duration_dh", { d: d, h: h });
+        if (h > 0) return trf("mini_duration_hm", { h: h, m: m });
+        return trf("mini_duration_ms", { m: m, s: s % 60 });
+    }
+
+    function tradePct(trade, baseClass) {
+        var node = el("span", baseClass);
+        if (trade.profit_pct_text) {
+            var tone = signClass(trade.profit_pct);
+            node.className = baseClass + (tone ? " " + tone : "");
+            node.textContent = trade.profit_pct_text;
+        } else {
+            node.className = baseClass + " hint";
+            node.textContent = "—";
+        }
+        return node;
+    }
+
+    // Most characters of a core name a closed-trade row shows before it drops leading words.
+    var TRADE_CORE_CHARS = 24;
+
+    // Names share long prefixes, so a long one keeps its trailing whole words behind "…".
+    // Words split on spaces and "/"; the last word alone is kept even when it exceeds the budget.
+    function coreNameTail(name, budget) {
+        if (name.length <= budget) return name;
+        var parts = name.split(/(?=[ \/])/);
+        var tail = parts.pop();
+        while (parts.length && parts[parts.length - 1].length + tail.length + 1 <= budget) {
+            tail = parts.pop() + tail;
+        }
+        return "…" + tail;
+    }
+
+    // Once the row is laid out, drop further leading words while the name still overflows its
+    // span, so the kept tail is never cut at its right end.
+    function fitCoreName(node) {
+        var text = node.textContent;
+        while (node.scrollWidth > node.clientWidth) {
+            var body = text.charAt(0) === "…" ? text.slice(1) : text;
+            var cut = body.slice(1).search(/[ \/]/);
+            if (cut < 0) return;
+            text = "…" + body.slice(cut + 1);
+            node.textContent = text;
+        }
+    }
+
+    function tradeRow(trade) {
+        var row = el("div", "row trade-row");
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        var left = el("div", "grow");
+        var top = el("div", "order-top");
+        var coin = el("span", "name order-coin", trade.coin || "");
+        coin.title = trade.coin || "";
+        top.appendChild(coin);
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
+        left.appendChild(top);
+        var meta = el("div", "sub trade-row-meta");
+        var when = trade.closed_short_text || trade.closed_text;
+        if (trade.core_name) {
+            var name = String(trade.core_name);
+            var core = el("span", "trade-core", coreNameTail(name, TRADE_CORE_CHARS));
+            core.title = name;
+            meta.appendChild(core);
+            window.requestAnimationFrame(function () { fitCoreName(core); });
+        }
+        if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
+        if (when) meta.appendChild(el("span", "trade-when", when));
+        left.appendChild(meta);
+        row.appendChild(left);
+        var right = el("div", "trade-result");
+        var profit = el("span", "");
+        applyMoney(profit, "num money-col", trade.profit_text, trade.profit);
+        right.appendChild(profit);
+        right.appendChild(tradePct(trade, "num fine"));
+        row.appendChild(right);
+        function open() {
+            openTradeSheet(trade);
+        }
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", function (event) {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            open();
+        });
+        return row;
+    }
+
+    function paintTrades() {
+        var host = sections.trades;
+        var y = window.pageYOffset || 0;
+        clear(host);
+        var data = payloads.trades || {};
+        var trades = Array.isArray(data.trades) ? data.trades : [];
+        if (!trades.length) {
+            host.appendChild(emptyState(tr("mini_empty_trades"), refreshAction()));
+            restoreScroll(y);
+            return;
+        }
+        // The count shown, not the backend's cap.
+        host.appendChild(el("p", "list-caption", trf("mini_trades_shown_" + pluralForm(trades.length), { n: trades.length })));
+        var card = el("div", "card");
+        var i;
+        for (i = 0; i < trades.length; i++) card.appendChild(tradeRow(trades[i]));
+        host.appendChild(card);
+        restoreScroll(y);
+    }
+
+    function openTradeSheet(trade) {
+        if (!sheet) return;
+        hapticSelection();
+        clear(sheet);
+        var head = el("div", "sheet-head");
+        var titleBox = el("div", "grow");
+        var top = el("div", "order-top");
+        var title = el("span", "name order-coin", trade.coin || "");
+        title.id = "sheet-title";
+        top.appendChild(title);
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), sideLabel(trade.side)));
+        titleBox.appendChild(top);
+        var where = [];
+        if (trade.core_name) where.push(trade.core_name);
+        if (trade.exchange) where.push(trade.exchange);
+        titleBox.appendChild(el("div", "sub trade-meta", where.join(" · ")));
+        head.appendChild(titleBox);
+        var closeBtn = button("cmd text-btn sheet-close", tr("mini_close"), closeSheet);
+        head.appendChild(closeBtn);
+        sheet.appendChild(head);
+        var result = el("div", "row spread sheet-result");
+        var profit = el("span", "");
+        applyMoney(profit, "hero-value num", trade.profit_text, trade.profit);
+        result.appendChild(profit);
+        result.appendChild(tradePct(trade, "num"));
+        sheet.appendChild(result);
+        detailLine(sheet, tr("mini_trade_entry"), trade.entry_text);
+        detailLine(sheet, tr("mini_trade_exit"), trade.exit_text);
+        detailLine(sheet, tr("mini_trade_qty"), trade.qty_text);
+        detailLine(sheet, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
+        detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || (trade.manual ? tr("mini_trade_manual") : "—"));
+        detailLine(sheet, tr("mini_trade_closed"), trade.closed_text);
+        if (!sheetBackdrop) {
+            sheetBackdrop = el("div", "sheet-backdrop");
+            sheetBackdrop.addEventListener("click", closeSheet);
+            document.body.appendChild(sheetBackdrop);
+        }
+        sheetBackdrop.hidden = false;
+        sheet.setAttribute("aria-labelledby", "sheet-title");
+        sheet.hidden = false;
+        sheetOpen = true;
+        document.body.style.overflow = "hidden";
+        closeBtn.focus();
+        syncBackButton();
+    }
+
+    function closeSheet() {
+        if (!sheetOpen) return;
+        sheetOpen = false;
+        if (sheet) {
+            sheet.hidden = true;
+            clear(sheet);
+        }
+        if (sheetBackdrop) sheetBackdrop.hidden = true;
+        document.body.style.overflow = "";
+        syncBackButton();
+    }
+
+    document.addEventListener("keydown", function (event) {
+        if (sheetOpen && event.key === "Escape") closeSheet();
+    });
+
+    function strategyCoreKey(core) {
+        return "id:" + String(core.core);
+    }
+
+    function strategyCoreLabel(core) {
+        return core.core_name || "";
+    }
+
+    function strategiesOf(core) {
+        var out = [];
+        var folders = Array.isArray(core.folders) ? core.folders : [];
+        var i;
+        var j;
+        for (i = 0; i < folders.length; i++) {
+            var list = Array.isArray(folders[i].strategies) ? folders[i].strategies : [];
+            for (j = 0; j < list.length; j++) out.push(list[j]);
+        }
+        return out;
+    }
+
+    function strategyCoreProblem(core) {
+        var list = strategiesOf(core);
+        var i;
+        for (i = 0; i < list.length; i++) {
+            if (list[i].pending === "timed_out") return true;
+        }
+        return false;
+    }
+
+    // Core header: "on N of M" strategies, muted at the right.
+    function strategyGroupSummary(items) {
+        var on = 0;
+        var total = 0;
+        var i;
+        var j;
+        for (i = 0; i < items.length; i++) {
+            var list = strategiesOf(items[i]);
+            for (j = 0; j < list.length; j++) {
+                total += 1;
+                if (list[j].checked) on += 1;
+            }
+        }
+        return el("span", "count num hint", trf("mini_on_of", { on: on, total: total }));
+    }
+
+    // The app's one on/off look: an ON / OFF pill (labels stay untranslated). `state` null is
+    // unknown; a pending pill waits for its core and is never tappable.
+    function onOffPill(state, interactive, pending) {
+        var known = state === true || state === false;
+        var cls = "pill " + (known ? (state ? "on" : "off") : "unknown") + (pending ? " pending" : "");
+        var pill = document.createElement(interactive ? "button" : "span");
+        pill.className = interactive ? "cmd " + cls : cls;
+        pill.textContent = known ? (state ? "ON" : "OFF") : "?";
+        if (!interactive) return pill;
+        pill.type = "button";
+        pill.setAttribute("aria-pressed", known ? String(state) : "mixed");
+        pill.disabled = commandBusy || !known || !!pending;
+        return pill;
+    }
+
+    // Small read-only ON / OFF tag in the pill's look; an unknown state is a muted dash.
+    function stateTag(state) {
+        var known = state === true || state === false;
+        return el("span", "tag " + (known ? (state ? "on" : "off") : "unknown"), known ? (state ? "ON" : "OFF") : "—");
+    }
+
+    // The pill is the core's confirmed state; the sub line says when a change is unconfirmed.
+    function strategyRow(core, strategy, canControl) {
+        var row = el("div", "row spread strategy-row");
+        var body = el("div", "grow");
+        var name = el("div", "name core-name", strategy.name || "");
+        name.title = strategy.name || "";
+        body.appendChild(name);
+        if (strategy.pending === "pending") {
+            body.appendChild(el("div", "sub", tr("mini_strategy_pending")));
+        } else if (strategy.pending === "timed_out") {
+            body.appendChild(el("div", "sub neg", tr("mini_strategy_timed_out")));
+        }
+        row.appendChild(body);
+        var on = strategy.checked === true;
+        var waiting = strategy.pending === "pending";
+        if (!canControl) {
+            var shown = onOffPill(on, false, waiting);
+            shown.setAttribute("aria-label", strategy.name || "");
+            row.appendChild(shown);
+            return row;
+        }
+        var chip = onOffPill(on, true, waiting);
+        chip.setAttribute("aria-label", strategy.name || "");
+        chip.addEventListener("click", function () {
+            if (commandBusy || waiting) return;
+            runCommand(null, "/api/strategy/toggle", { core: core.core, id: strategy.id, on: !on });
+        });
+        row.appendChild(chip);
+        return row;
+    }
+
+    function strategyCoreBody(core, canControl) {
+        var box = el("div", "strategy-core");
+        var folders = Array.isArray(core.folders) ? core.folders : [];
+        var i;
+        var j;
+        for (i = 0; i < folders.length; i++) {
+            var folder = folders[i];
+            var list = Array.isArray(folder.strategies) ? folder.strategies : [];
+            if (!list.length) continue;
+            var folderRow = el("div", "row section-row folder-row", folder.path ? folder.path : tr("mini_strategy_root"));
+            if (folder.path) folderRow.title = folder.path;
+            box.appendChild(folderRow);
+            for (j = 0; j < list.length; j++) box.appendChild(strategyRow(core, list[j], canControl));
+        }
+        return box;
+    }
+
+    function paintStrategies() {
+        var host = sections.strategies;
+        var y = window.pageYOffset || 0;
+        clear(host);
+        var data = payloads.strategies || {};
+        var cores = Array.isArray(data.cores) ? data.cores : [];
+        var withRows = [];
+        var i;
+        for (i = 0; i < cores.length; i++) {
+            if (strategiesOf(cores[i]).length) withRows.push(cores[i]);
+        }
+        if (!withRows.length) {
+            host.appendChild(emptyState(tr("mini_empty_strategies"), refreshAction()));
+            restoreScroll(y);
+            return;
+        }
+        // A core carries dozens of strategies, so its group starts folded.
+        ensureCollapse("strategies", withRows, strategyCoreKey);
+        var sectionsOf = groupBy(withRows, function (core) { return String(core.exchange || ""); });
+        var s;
+        for (s = 0; s < sectionsOf.length; s++) {
+            if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
+            appendGroups(
+                host,
+                "strategies",
+                sectionsOf[s].items,
+                strategyCoreProblem,
+                function (core) { return strategyCoreBody(core, !!data.can_control); },
+                paintStrategies,
+                strategyCoreKey,
+                strategyCoreLabel,
+                "name grow core-name",
+                strategyGroupSummary
+            );
+        }
+        restoreScroll(y);
     }
 
     var paint = {
         report: paintReport,
         cores: paintCores,
         balances: paintBalances,
-        orders: paintOrders
+        orders: paintOrders,
+        trades: paintTrades,
+        strategies: paintStrategies
     };
 
     var lastClock = "";
@@ -1477,7 +1820,7 @@
     }
 
     function staleAfter(name) {
-        return name === "report" ? REPORT_POLL_MS * 2 : Math.max(POLL_MS * 5, 15000);
+        return name === "report" || name === "trades" ? REPORT_POLL_MS * 2 : Math.max(POLL_MS * 5, 15000);
     }
 
     // Relative age of the current tab's last good read; the fixed clock rides the tooltip.
@@ -1586,16 +1929,23 @@
         setSpinning(false);
         cancelPending();
         current = name;
-        if (name === "balances") balanceRevealed = false;
+        closeSheet();
+        coreDetailId = null;
         loadToken += 1;
         var i;
         for (i = 0; i < TAB_NAMES.length; i++) {
             var tab = TAB_NAMES[i];
-            var on = tab === name;
-            sections[tab].hidden = !on;
-            buttons[tab].className = on ? "active" : "";
-            if (on) buttons[tab].setAttribute("aria-current", "page");
-            else buttons[tab].removeAttribute("aria-current");
+            sections[tab].hidden = tab !== name;
+            buttons[tab].className = "";
+            buttons[tab].removeAttribute("aria-current");
+        }
+        buttons[name].className = "active";
+        buttons[name].setAttribute("aria-current", "page");
+        var deals = name === "orders" || name === "trades";
+        if (deals) dealsSegment = name;
+        if (dealsSwitch) {
+            dealsSwitch.hidden = !deals;
+            paintDealsPressed();
         }
         paintUpdated();
         loadTab(name, loadToken, !!hasData[name]);
@@ -1662,13 +2012,19 @@
         for (i = 0; i < nodes.length; i++) {
             var button = nodes[i];
             var name = button.getAttribute("data-tab");
-            buttons[name] = button;
+            if (name === "deals") {
+                buttons.orders = button;
+                buttons.trades = button;
+            } else {
+                buttons[name] = button;
+            }
             var label = tr(TAB_KEYS[name]);
             var span = button.querySelector(".nav-label");
             if (span) span.textContent = label;
             button.setAttribute("aria-label", label);
             button.addEventListener("click", function (ev) {
-                selectTab(ev.currentTarget.getAttribute("data-tab"));
+                var tab = ev.currentTarget.getAttribute("data-tab");
+                selectTab(tab === "deals" ? dealsSegment : tab);
             });
         }
         var found = document.querySelectorAll("#app-main section[data-tab]");
@@ -1678,6 +2034,8 @@
         reportPeriod = document.getElementById("report-period");
         reportBody = document.getElementById("report-body");
         if (reportPeriod) reportPeriod.appendChild(periodBar());
+        dealsSwitch = document.getElementById("deals-switch");
+        if (dealsSwitch) dealsSwitch.appendChild(dealsBar());
         window.addEventListener("resize", paintUpdated);
         bindRefresh();
         bindHeaderHeight();
@@ -1752,12 +2110,8 @@
         if (kind === "success" || kind === "error") feedback.notificationOccurred(kind);
     }
 
-    function hasQuery() {
-        return !!(queries.cores || queries.balances || queries.orders);
-    }
-
     function anyGroupOpen() {
-        var panes = ["cores", "balances", "orders"];
+        var panes = ["cores", "balances", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {
@@ -1770,7 +2124,7 @@
     }
 
     function collapseOpenGroups() {
-        var panes = ["cores", "balances", "orders"];
+        var panes = ["cores", "balances", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {
@@ -1785,21 +2139,30 @@
     }
 
     function onBack() {
-        if (hasQuery()) {
-            queries.cores = "";
-            queries.balances = "";
-            queries.orders = "";
-        } else {
-            collapseOpenGroups();
+        if (sheetOpen) {
+            closeSheet();
+            return;
         }
+        if (coreDetailId != null) {
+            closeCoreDetail();
+            return;
+        }
+        collapseOpenGroups();
         if (current && paint[current]) paint[current]();
         else syncBackButton();
+    }
+
+    function headerBackAvailable() {
+        var button = webapp && webapp.BackButton;
+        if (!button || typeof button.show !== "function") return false;
+        // Clients before Bot API 6.1 carry the object but never draw the arrow.
+        return typeof webapp.isVersionAtLeast !== "function" || webapp.isVersionAtLeast("6.1");
     }
 
     function syncBackButton() {
         var button = webapp && webapp.BackButton;
         if (!button) return;
-        var needed = hasQuery() || anyGroupOpen();
+        var needed = sheetOpen || coreDetailId != null || anyGroupOpen();
         if (typeof button.isVisible === "boolean" && button.isVisible === needed) return;
         if (needed && typeof button.show === "function") button.show();
         else if (!needed && typeof button.hide === "function") button.hide();
@@ -1840,11 +2203,12 @@
     }
 
     function setCommandsDisabled(disabled) {
-        var nodes = document.querySelectorAll(".order-actions .cmd, .core-actions .cmd, .mass-actions .cmd");
+        var nodes = document.querySelectorAll(".order-actions .cmd, .mass-actions .cmd, .strategy-row .cmd, .core-detail .cmd");
         var i;
         for (i = 0; i < nodes.length; i++) {
-            // A chip with no known state stays off whatever the busy flag says.
-            nodes[i].disabled = !!disabled || nodes[i].className.indexOf("unknown") >= 0;
+            // A chip with no known state, or a strategy awaiting its core, stays off whatever the busy flag says.
+            var cls = nodes[i].className;
+            nodes[i].disabled = !!disabled || cls.indexOf("unknown") >= 0 || cls.indexOf("pending") >= 0;
         }
     }
 
@@ -1853,15 +2217,15 @@
         return !!(res && (res.cancelled || res.status === 0 || res.status === 504));
     }
 
-    // Reload the pane in view; a core switch lands a moment later, so cores read twice.
+    // Reload the pane in view; a core switch or strategy toggle lands a moment later, so those read twice.
     function reloadAfterCommand(silent) {
         var pane = current;
         if (!pane) return;
         if (!silent) hasData[pane] = false;
         reloadPane(pane, silent);
-        if (pane === "cores") {
+        if (pane === "cores" || pane === "strategies") {
             setTimeout(function () {
-                if (current === "cores") reloadPane("cores", true);
+                if (current === pane) reloadPane(pane, true);
             }, 1500);
         }
     }
@@ -1875,12 +2239,22 @@
             return;
         }
         if (!res.ok) {
-            showCmdLine(res.error || tr("mini_error_read"));
+            // A rejected command (4xx other than the session ones) never reads as a read error.
+            haptic("error");
+            var rejected = res.status >= 400 && res.status < 500 && res.status !== 401 && res.status !== 403;
+            showCmdLine(rejected ? tr("mini_cmd_failed") : (res.error || tr("mini_error_read")));
+            reloadAfterCommand(true);
             return;
         }
         var data = res.data || {};
         var partial = typeof data.sent === "number" && typeof data.requested === "number"
             && data.sent !== data.requested;
+        // A reconnect only starts one; the next cores poll shows whether it came back.
+        if (data.ok === true && path === "/api/core/reconnect") {
+            showCmdLine("");
+            reloadAfterCommand(true);
+            return;
+        }
         if (data.ok === true && !partial) {
             haptic("success");
             showCmdLine(tr("mini_cmd_sent"));
@@ -1898,6 +2272,7 @@
             failed = path.indexOf("/api/core") === 0 ? tr("mini_cmd_core_not_found") : tr("mini_cmd_not_found");
         }
         showCmdLine(failed);
+        reloadAfterCommand(true);
     }
 
     // confirmText null fires at once; otherwise exactly one confirm.
@@ -1906,6 +2281,8 @@
         commandBusy = true;
         setCommandsDisabled(true);
         function send() {
+            // A command must not wait behind a background read; the pane reloads after it anyway.
+            cancelPending();
             hapticImpact();
             api(path, body, true).then(function (res) { finishCommand(path, res); });
         }
