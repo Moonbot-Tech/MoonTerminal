@@ -83,6 +83,17 @@
         return s;
     }
 
+    // Plural form for a count: "one", "few" or "many" (other falls to many).
+    function pluralForm(n) {
+        var form = "many";
+        try {
+            form = new Intl.PluralRules(labels.locale || "en").select(n);
+        } catch (err) {
+            form = n === 1 ? "one" : "many";
+        }
+        return form === "one" || form === "few" ? form : "many";
+    }
+
     if (labels.locale) {
         document.documentElement.lang = labels.locale;
     }
@@ -1630,6 +1641,8 @@
             restoreSnap(snap, y);
             return;
         }
+        // The count shown, not the backend's cap.
+        host.appendChild(el("p", "list-caption", trf("mini_trades_shown_" + pluralForm(trades.length), { n: trades.length })));
         var card = el("div", "card");
         var i;
         for (i = 0; i < trades.length; i++) card.appendChild(tradeRow(trades[i]));

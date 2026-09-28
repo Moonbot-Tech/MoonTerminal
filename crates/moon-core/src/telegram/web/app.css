@@ -1488,3 +1488,10 @@ button.pill:disabled {
         padding-right: 12px;
     }
 }
+
+/* A small caption above a list, e.g. how many trades it shows. */
+.list-caption {
+    margin: 0 16px var(--sp-2);
+    color: var(--hint);
+    font-size: var(--fs-meta);
+}

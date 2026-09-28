@@ -565,6 +565,18 @@ telegram.mini_empty_trades:
   ru: "Закрытых сделок нет"
   en: "No closed trades yet"
   es: "Aún no hay operaciones cerradas"
+telegram.mini_trades_shown_one:
+  ru: "Последняя {n} сделка"
+  en: "Last {n} trade"
+  es: "Último {n} cierre"
+telegram.mini_trades_shown_few:
+  ru: "Последние {n} сделки"
+  en: "Last {n} trades"
+  es: "Últimos {n} cierres"
+telegram.mini_trades_shown_many:
+  ru: "Последние {n} сделок"
+  en: "Last {n} trades"
+  es: "Últimos {n} cierres"
 telegram.mini_empty_strategies:
   ru: "Стратегий нет"
   en: "No strategies"
