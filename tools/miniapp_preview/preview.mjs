@@ -17,6 +17,7 @@ const WEB = path.join(ROOT, "crates", "moon-core", "src", "telegram", "web");
 const LOCALES = path.join(ROOT, "locales");
 const FIXTURES = path.join(HERE, "fixtures");
 
+// Command-line options: output folder, label locale, one screen by name.
 function args() {
     const out = { out: path.join(HERE, "out"), locale: "ru", only: null };
     const argv = process.argv.slice(2);
@@ -35,6 +36,7 @@ function args() {
     return out;
 }
 
+// playwright-core and js-yaml from the tool's own node_modules.
 function loadDeps() {
     try {
         return { chromium: require("playwright-core").chromium, yaml: require("js-yaml") };
@@ -132,6 +134,7 @@ async function openPage(browser, html, viewport, theme, api, log) {
     return { page, context };
 }
 
+// Every read route answered from the fixtures; commands succeed.
 function defaultApi() {
     return {
         "/api/session": { ok: true },
@@ -197,6 +200,7 @@ const SCREENS = [
     { name: "session-denied", api: { "/api/session": () => ({ status: 403, body: {} }) }, ready: "#startup", run: async () => {} },
 ];
 
+// Every screen at every viewport and theme; returns the files and unexpected page errors.
 async function shoot(browser, html, opts) {
     const shots = [];
     const log = { errors: [], sent: [] };
@@ -273,9 +277,14 @@ async function interactions(browser, html, texts) {
     return failures;
 }
 
+// Render, then check; the exit code is the verdict.
 async function main() {
     const opts = args();
     const { chromium, yaml } = loadDeps();
+    if (opts.only && !SCREENS.some((s) => s.name === opts.only)) {
+        console.error(`[FAIL] unknown screen ${opts.only}; known: ${SCREENS.map((s) => s.name).join(", ")}`);
+        process.exit(2);
+    }
     fs.mkdirSync(opts.out, { recursive: true });
     const texts = labels(yaml, opts.locale);
     const html = fs.readFileSync(path.join(WEB, "index.html"), "utf8")

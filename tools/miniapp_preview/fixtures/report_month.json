@@ -1,11 +1,11 @@
 {
-  "from": "2026-09-28T00:00:00Z",
+  "from": "2026-09-01T00:00:00Z",
   "to": "2026-09-28T12:00:00Z",
   "from_text": "01.09.2026 00:00",
   "to_text": "28.09.2026 12:00",
   "total": {
     "usdt": 1000,
-    "text": "+1000.00",
+    "text": "+1000.00$",
     "orders": 100,
     "unknown_orders": 1
   },
@@ -15,7 +15,7 @@
       "name": "Binance Futures",
       "money": {
         "usdt": 700,
-        "text": "+700.00",
+        "text": "+700.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -25,7 +25,7 @@
       "name": "Hyperliquid Spot",
       "money": {
         "usdt": 300,
-        "text": "+300.00",
+        "text": "+300.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -38,7 +38,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -49,7 +49,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
-        "text": "-10.00",
+        "text": "-10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -60,7 +60,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -71,7 +71,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -82,7 +82,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -93,7 +93,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -115,7 +115,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -126,7 +126,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -137,7 +137,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -148,7 +148,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -159,7 +159,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
-        "text": "-10.00",
+        "text": "-10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -170,7 +170,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -181,7 +181,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -192,7 +192,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -203,7 +203,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -214,7 +214,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
-        "text": "-10.00",
+        "text": "-10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -225,7 +225,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -236,7 +236,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -247,7 +247,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -258,7 +258,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -269,7 +269,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
-        "text": "-10.00",
+        "text": "-10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -280,7 +280,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -291,7 +291,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -302,7 +302,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -313,7 +313,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -20,
-        "text": "-20.00",
+        "text": "-20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -324,7 +324,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": -10,
-        "text": "-10.00",
+        "text": "-10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -335,7 +335,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 0,
-        "text": "0.00",
+        "text": "0.00$",
         "orders": 4,
         "unknown_orders": 0
       }
@@ -346,7 +346,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 10,
-        "text": "+10.00",
+        "text": "+10.00$",
         "orders": 14,
         "unknown_orders": 0
       }
@@ -357,7 +357,7 @@
       "section": "Binance Futures",
       "money": {
         "usdt": 20,
-        "text": "+20.00",
+        "text": "+20.00$",
         "orders": 24,
         "unknown_orders": 0
       }
@@ -367,67 +367,67 @@
     {
       "start": "01.09",
       "usdt": -30,
-      "text": "-30.00",
+      "text": "-30.00$",
       "trades": 20
     },
     {
       "start": "02.09",
       "usdt": -20,
-      "text": "-20.00",
+      "text": "-20.00$",
       "trades": 27
     },
     {
       "start": "03.09",
       "usdt": -10,
-      "text": "-10.00",
+      "text": "-10.00$",
       "trades": 34
     },
     {
       "start": "04.09",
       "usdt": 0,
-      "text": "0.00",
+      "text": "0.00$",
       "trades": 41
     },
     {
       "start": "05.09",
       "usdt": 10,
-      "text": "+10.00",
+      "text": "+10.00$",
       "trades": 48
     },
     {
       "start": "06.09",
       "usdt": 20,
-      "text": "+20.00",
+      "text": "+20.00$",
       "trades": 55
     },
     {
       "start": "07.09",
       "usdt": 30,
-      "text": "+30.00",
+      "text": "+30.00$",
       "trades": 22
     },
     {
       "start": "08.09",
       "usdt": -30,
-      "text": "-30.00",
+      "text": "-30.00$",
       "trades": 29
     },
     {
       "start": "09.09",
       "usdt": -20,
-      "text": "-20.00",
+      "text": "-20.00$",
       "trades": 36
     },
     {
       "start": "10.09",
       "usdt": -10,
-      "text": "-10.00",
+      "text": "-10.00$",
       "trades": 43
     },
     {
       "start": "11.09",
       "usdt": 0,
-      "text": "0.00",
+      "text": "0.00$",
       "trades": 50
     },
     {
@@ -439,97 +439,97 @@
     {
       "start": "13.09",
       "usdt": 20,
-      "text": "+20.00",
+      "text": "+20.00$",
       "trades": 24
     },
     {
       "start": "14.09",
       "usdt": 30,
-      "text": "+30.00",
+      "text": "+30.00$",
       "trades": 31
     },
     {
       "start": "15.09",
       "usdt": -30,
-      "text": "-30.00",
+      "text": "-30.00$",
       "trades": 38
     },
     {
       "start": "16.09",
       "usdt": -20,
-      "text": "-20.00",
+      "text": "-20.00$",
       "trades": 45
     },
     {
       "start": "17.09",
       "usdt": -10,
-      "text": "-10.00",
+      "text": "-10.00$",
       "trades": 52
     },
     {
       "start": "18.09",
       "usdt": 0,
-      "text": "0.00",
+      "text": "0.00$",
       "trades": 59
     },
     {
       "start": "19.09",
       "usdt": 10,
-      "text": "+10.00",
+      "text": "+10.00$",
       "trades": 26
     },
     {
       "start": "20.09",
       "usdt": 20,
-      "text": "+20.00",
+      "text": "+20.00$",
       "trades": 33
     },
     {
       "start": "21.09",
       "usdt": 30,
-      "text": "+30.00",
+      "text": "+30.00$",
       "trades": 40
     },
     {
       "start": "22.09",
       "usdt": -30,
-      "text": "-30.00",
+      "text": "-30.00$",
       "trades": 47
     },
     {
       "start": "23.09",
       "usdt": -20,
-      "text": "-20.00",
+      "text": "-20.00$",
       "trades": 54
     },
     {
       "start": "24.09",
       "usdt": -10,
-      "text": "-10.00",
+      "text": "-10.00$",
       "trades": 21
     },
     {
       "start": "25.09",
       "usdt": 0,
-      "text": "0.00",
+      "text": "0.00$",
       "trades": 28
     },
     {
       "start": "26.09",
       "usdt": 10,
-      "text": "+10.00",
+      "text": "+10.00$",
       "trades": 35
     },
     {
       "start": "27.09",
       "usdt": 20,
-      "text": "+20.00",
+      "text": "+20.00$",
       "trades": 42
     },
     {
       "start": "28.09",
       "usdt": 30,
-      "text": "+30.00",
+      "text": "+30.00$",
       "trades": 49
     }
   ]
