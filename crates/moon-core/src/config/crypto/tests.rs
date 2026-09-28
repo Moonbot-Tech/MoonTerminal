@@ -254,3 +254,20 @@ fn a_second_machine_can_be_added_without_locking_out_the_first() {
     assert_eq!(open_file(&shared, Some(&first)).unwrap().0, b"servers");
     assert_eq!(open_file(&shared, Some(&second)).unwrap().0, b"servers");
 }
+
+/// A standalone file opens on the machine that sealed it and nowhere else: it carries one machine
+/// slot and no password slot, so a foreign machine gets "no way in", not a password prompt.
+#[test]
+fn a_standalone_file_opens_only_on_its_own_machine() {
+    let machine_key = [3u8; 32];
+    let file = seal_for_machine(b"app key", &machine_key).unwrap();
+
+    let (plain, material) = open_file(&file, Some(&machine_key)).unwrap();
+    assert_eq!(plain, b"app key");
+    assert_eq!(material.header.machine_slot_count(), 1);
+    assert!(!material.header.has_password_slot());
+    assert!(matches!(
+        open_file(&file, Some(&[4u8; 32])).unwrap_err(),
+        AccessError::NoKey
+    ));
+}

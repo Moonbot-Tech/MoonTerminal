@@ -1,0 +1,49 @@
+# moon-station: the terminal's station. Installed by `moon-remote setup`; the core keys come as
+# encrypted credentials through the drop-in moon-station.service.d/credentials.conf, which
+# `moon-station-admin put-cred` keeps in step with /etc/moon-station/creds.
+[Unit]
+Description=MoonTerminal station
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=moon-station
+Group=moon-station
+ExecStart=/opt/moon-station/bin/moon-station --data /var/lib/moon-station --config /etc/moon-station/station.toml
+Restart=always
+RestartSec=5
+StateDirectory=moon-station
+StateDirectoryMode=0700
+RuntimeDirectory=moon-station
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+
+[Install]
+WantedBy=multi-user.target

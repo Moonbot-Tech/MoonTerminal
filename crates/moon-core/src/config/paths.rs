@@ -840,6 +840,20 @@ pub fn storage_path() -> PathBuf {
     cfg_dir().join("storage.toml")
 }
 
+/// The servers the terminal prepared for its station (`moon-remote`): each host's pinned key and
+/// administrator in `hosts.toml`, the app's own SSH key sealed in `app_key.enc`. Created on first
+/// access.
+pub fn remote_dir() -> PathBuf {
+    let dir = data_dir().join("remote");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!(
+            "could not create the remote directory {}: {e}",
+            dir.display()
+        );
+    }
+    dir
+}
+
 /// Log directory for diagnostic core commands/reports.
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")

@@ -295,6 +295,32 @@ pub fn decrypt_standalone(data: &[u8]) -> anyhow::Result<Vec<u8>> {
     }
 }
 
+/// Encrypt a file that is NOT `servers.enc` for this machine, without touching the process key
+/// material — the counterpart of [`decrypt_standalone`].
+///
+/// For a secret that must not ride inside `servers.enc`, because another process could write it
+/// there concurrently with the terminal's own autosave and one of the two copies would silently
+/// win. The file gets a fresh key and one slot, this machine's; it has no password slot, so it
+/// opens on this machine only.
+pub fn encrypt_standalone(plain: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let machine_key = machine::key_or_create()?;
+    seal_for_machine(plain, &machine_key)
+}
+
+/// [`encrypt_standalone`] with the machine key supplied, so the format can be tested without an
+/// OS key store.
+fn seal_for_machine(plain: &[u8], machine_key: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+    let mut material = Material {
+        key: wrap::new_file_key()?,
+        header: Header::new(),
+        needs_rewrite: false,
+    };
+    add_machine(&mut material, machine_key)?;
+    let header_bytes = format::header_bytes(&material.header)?;
+    let (nonce, ciphertext) = wrap::seal(&material.key, plain, &header_bytes)?;
+    Ok(format::assemble(&header_bytes, &nonce, &ciphertext))
+}
+
 /// Set, change, or remove the encryption password.
 ///
 /// Only the slot changes; the payload key is untouched, so existing backups stay readable with the

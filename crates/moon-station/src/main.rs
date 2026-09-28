@@ -12,8 +12,11 @@
 //! It never elects a market provider — the terminal does that from its open charts — so no core
 //! is asked for its exchange's live trade stream.
 //!
-//! Usage: `moon-station --data <dir>`. The directory is the station's whole state: `station.toml`
-//! (the cores), the databases under `data/`, the logs under `logs/`, `cfg/diagnostics.toml`.
+//! Usage: `moon-station --data <dir> [--config <station.toml>]`. The directory is the station's
+//! whole state: the databases under `data/`, the logs under `logs/`, `cfg/diagnostics.toml`, and
+//! `station.toml` (the cores) unless `--config` names it elsewhere — the service keeps it in
+//! `/etc/moon-station`, read-only to the station. Core keys come as systemd credentials
+//! (`cores.rs`).
 
 mod cores;
 
@@ -28,7 +31,7 @@ const DIAG_POLL_EVERY: Duration = Duration::from_secs(1);
 const STATUS_EVERY: Duration = Duration::from_secs(60);
 
 fn main() -> anyhow::Result<()> {
-    let data_root = data_root()?;
+    let (data_root, config) = args()?;
     anyhow::ensure!(
         moon_core::config::paths::set_data_dir_override(data_root.clone()),
         "data root already set"
@@ -48,7 +51,7 @@ fn main() -> anyhow::Result<()> {
         data_root.display()
     );
 
-    let cfg = cores::load(&data_root)?;
+    let cfg = cores::load(&config.unwrap_or_else(|| data_root.join("station.toml")))?;
     log::info!(
         "cores: {} configured, {} active",
         cfg.servers.len(),
@@ -114,18 +117,24 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// `--data <dir>`, required: the station never guesses where its state lives.
-fn data_root() -> anyhow::Result<PathBuf> {
+/// `--data <dir>`, required: the station never guesses where its state lives. `--config <file>`,
+/// optional: `station.toml` somewhere else.
+fn args() -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
+    const USAGE: &str = "usage: moon-station --data <dir> [--config <station.toml>]";
+    let (mut data, mut config) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--data" {
-            let dir = args
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("--data needs a directory"))?;
-            let dir = PathBuf::from(dir);
-            std::fs::create_dir_all(&dir)?;
-            return Ok(dir);
-        }
+        let slot = match arg.as_str() {
+            "--data" => &mut data,
+            "--config" => &mut config,
+            other => anyhow::bail!("unknown argument {other:?}; {USAGE}"),
+        };
+        let value = args
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("{arg} needs a path; {USAGE}"))?;
+        *slot = Some(PathBuf::from(value));
     }
-    anyhow::bail!("usage: moon-station --data <dir>")
+    let data = data.ok_or_else(|| anyhow::anyhow!(USAGE))?;
+    std::fs::create_dir_all(&data)?;
+    Ok((data, config))
 }

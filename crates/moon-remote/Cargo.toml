@@ -1,0 +1,30 @@
+[package]
+name = "moon-remote"
+version = "0.1.0"
+edition = "2021"
+description = "Prepares a Linux server for moon-station over SSH: an administrator reached by the terminal's own key, a closed server, a service user, core keys as systemd credentials."
+publish = false
+
+[[bin]]
+name = "moon-remote"
+path = "src/main.rs"
+
+[dependencies]
+# With `desktop`: the terminal's machine key (OS keyring) seals the app's SSH key, and the core
+# keys come from the terminal's own `servers.enc`.
+moon-core = { path = "../moon-core" }
+anyhow = "1"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+sha2 = "0.10"
+zeroize = "1"
+getrandom = "0.2"
+# SSH on `ring`, the crypto the workspace already builds; the default aws-lc-rs needs cmake and
+# a C toolchain for every target. No RSA: the app key is ed25519 and hosts offer ed25519 keys.
+russh = { version = "0.63", default-features = false, features = ["ring"] }
+tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros"] }
+rpassword = "7"
+
+[lints]
+workspace = true
