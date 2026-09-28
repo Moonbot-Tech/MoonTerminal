@@ -250,7 +250,7 @@ function validateCurrentPage() {
     if (contract.json.kind === "MoonProtoBound") moonProtoBound++;
     if (contract.json.kind === "TerminalOnly") terminalOnly++;
     const raw = contract.raw;
-    const tbcMatches = raw.match(/ToBeConnected:ui\\./g);
+    const tbcMatches = raw.match(/ToBeConnected:ui\./g);
     if (tbcMatches) toBeConnected += tbcMatches.length;
     if (Array.isArray(contract.json.missing_api)) missingApi += contract.json.missing_api.length;
 
