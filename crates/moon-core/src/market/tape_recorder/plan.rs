@@ -37,17 +37,28 @@ pub(super) const QUIET_TAIL_MS: i64 = 10_000;
 pub(super) const LAST_ASK_SLACK_MS: i64 = QUIET_TAIL_MS + 2_000;
 /// Pause before asking again after a request that failed or never came back.
 pub(super) const RETRY_MS: i64 = 6_000;
-/// How far apart an open and a close stamp of the same trade may land. Both are lifted onto true
-/// UTC through the core's measured clock offset, which may be re-measured between the two events.
-const SAME_TRADE_MS: i64 = 5_000;
+/// How long past its deadline a key keeps asking through failures before the rest of it is
+/// given up as lost — a donor that refuses the market for good would otherwise be asked forever.
+pub(super) const GIVE_UP_MS: i64 = 120_000;
+
+/// One trade: the core that holds it and its report row. Thirty cores trading one coin open
+/// thirty trades of one key within the same seconds, so stamps cannot tell them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TradeId {
+    pub core: u64,
+    pub rec_id: i64,
+}
 
 /// One trade of a key, with the settings in force when its window was last shaped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Trade {
+    id: TradeId,
     open_ms: i64,
     close_ms: Option<i64>,
     margin_ms: i64,
     long_position_ms: i64,
+    /// Handed to the comparison once settled ([`KeyTask::take_settled`]).
+    reported: bool,
 }
 
 impl Trade {
@@ -107,13 +118,22 @@ impl KeyTask {
     }
 
     /// A trade opened: ask at once, while the ring still holds the run-up.
-    pub(super) fn opened(&mut self, now_ms: i64, open_ms: i64, margin_ms: i64, long_ms: i64) {
-        if self.matching_open(open_ms).is_none() {
+    pub(super) fn opened(
+        &mut self,
+        now_ms: i64,
+        id: TradeId,
+        open_ms: i64,
+        margin_ms: i64,
+        long_ms: i64,
+    ) {
+        if !self.trades.iter().any(|t| t.id == id) {
             self.trades.push(Trade {
+                id,
                 open_ms,
                 close_ms: None,
                 margin_ms,
                 long_position_ms: long_ms,
+                reported: false,
             });
         }
         self.next_due_ms = now_ms;
@@ -125,34 +145,27 @@ impl KeyTask {
     pub(super) fn closed(
         &mut self,
         now_ms: i64,
+        id: TradeId,
         open_ms: i64,
         close_ms: i64,
         margin_ms: i64,
         long_ms: i64,
     ) {
         let trade = Trade {
+            id,
             open_ms,
             close_ms: Some(close_ms),
             margin_ms,
             long_position_ms: long_ms,
+            reported: false,
         };
-        match self.matching_open(open_ms) {
+        match self.trades.iter().position(|t| t.id == id) {
+            // A second closing upsert of a trade already settled is not a new window.
+            Some(index) if self.trades[index].close_ms.is_some() => return,
             Some(index) => self.trades[index] = trade,
             None => self.trades.push(trade),
         }
         self.next_due_ms = now_ms;
-    }
-
-    /// The open trade whose entry lands nearest `open_ms`, within [`SAME_TRADE_MS`].
-    fn matching_open(&self, open_ms: i64) -> Option<usize> {
-        self.trades
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.close_ms.is_none())
-            .map(|(index, t)| (index, (t.open_ms - open_ms).abs()))
-            .filter(|&(_, distance)| distance <= SAME_TRADE_MS)
-            .min_by_key(|&(_, distance)| distance)
-            .map(|(index, _)| index)
     }
 
     /// Everything the key's trades need.
@@ -190,6 +203,24 @@ impl KeyTask {
     /// When the key asks next, or `None` while it waits for an exit or is finished.
     pub(super) fn due_ms(&self) -> Option<i64> {
         self.deadline().map(|_| self.next_due_ms)
+    }
+
+    /// Closed trades whose every needed stretch is now filed or lost — each handed out once, as
+    /// `(open_ms, close_ms, needed)`. Taken before [`Self::is_done`] drops the key.
+    pub(super) fn take_settled(&mut self) -> Vec<(i64, i64, Coverage)> {
+        let resolved = self.resolved();
+        let mut out = Vec::new();
+        for trade in &mut self.trades {
+            let Some(close_ms) = trade.close_ms else {
+                continue;
+            };
+            let needed = trade.needed();
+            if !trade.reported && resolved.covers(&needed) {
+                trade.reported = true;
+                out.push((trade.open_ms, close_ms, needed));
+            }
+        }
+        out
     }
 
     /// Every trade closed and every stretch resolved: the key can be dropped.
@@ -244,9 +275,29 @@ impl KeyTask {
         Filing { file, lost }
     }
 
-    /// A request failed or never came back: ask again shortly.
-    pub(super) fn on_failure(&mut self, now_ms: i64) {
+    /// Still asking [`GIVE_UP_MS`] past the deadline — whatever kept the answers away.
+    pub(super) fn overdue(&self, now_ms: i64) -> bool {
+        self.deadline()
+            .is_some_and(|deadline| now_ms > deadline.saturating_add(GIVE_UP_MS))
+    }
+
+    /// A request failed or never came back: ask again shortly — or, [`GIVE_UP_MS`] past the
+    /// deadline, name what is still unresolved lost and let the key settle.
+    ///
+    /// Returns:
+    ///     What was given up, empty while the key keeps asking.
+    pub(super) fn on_failure(&mut self, now_ms: i64) -> Coverage {
+        if let Some(deadline) = self.deadline() {
+            if now_ms > deadline.saturating_add(GIVE_UP_MS) {
+                let lost = self.needed().minus(&self.resolved());
+                for &span in lost.spans() {
+                    self.lost.add(span);
+                }
+                return lost;
+            }
+        }
         self.next_due_ms = now_ms.saturating_add(RETRY_MS);
+        Coverage::none()
     }
 
     /// Next ask: one step on, but never later than the last ask past the deadline.

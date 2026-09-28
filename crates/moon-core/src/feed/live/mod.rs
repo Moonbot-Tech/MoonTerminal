@@ -2206,15 +2206,17 @@ pub(super) fn run(
                                     }
                                 }
                                 match capture.as_mut().and_then(|tracker| tracker.on_row(row)) {
-                                    Some(capture::RowEdge::Opened { coin, buy }) => {
+                                    Some(capture::RowEdge::Opened { rec_id, coin, buy }) => {
                                         let _ = tx.send(FeedMsg::TradeOpened {
+                                            rec_id,
                                             coin,
                                             quote: server.market.clone(),
                                             buy,
                                         });
                                     }
-                                    Some(capture::RowEdge::Closed(closed)) => {
+                                    Some(capture::RowEdge::Closed(rec_id, closed)) => {
                                         let _ = tx.send(FeedMsg::TradeClosed {
+                                            rec_id,
                                             coin: closed.coin,
                                             quote: server.market.clone(),
                                             buy: closed.buy,

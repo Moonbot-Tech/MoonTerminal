@@ -65,7 +65,7 @@ fn a_complete_closing_row_is_announced() {
     );
 }
 
-/// A partial close вЂ” `CloseDate` alone вЂ” completes itself from the open row seen earlier, and a
+/// A partial close — `CloseDate` alone — completes itself from the open row seen earlier, and a
 /// second closing upsert of the same row is not announced again.
 #[test]
 fn a_partial_close_is_completed_from_the_open_row_and_announced_once() {
@@ -77,6 +77,7 @@ fn a_partial_close_is_completed_from_the_open_row_and_announced_once() {
     assert_eq!(
         tracker.on_row(&open),
         Some(RowEdge::Opened {
+            rec_id: 7,
             coin: "SUE".into(),
             buy: ReportStamp::Seconds(1_000),
         }),

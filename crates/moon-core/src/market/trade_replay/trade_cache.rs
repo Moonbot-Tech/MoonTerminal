@@ -216,6 +216,13 @@ impl TradeCache {
     /// logs once and lets the thread exit, after which every op fails the same way a closed
     /// channel does: reads answer `None`, writes are dropped.
     pub fn open(path: PathBuf) -> Option<Self> {
+        Self::open_with_ceiling(path, max_bytes)
+    }
+
+    /// [`Self::open`] for a file other than `trades.sqlite`, whose byte ceiling is not the Storage
+    /// tab's `[trade_replay] max_mb`: `ceiling` is asked at open and after every insert, and
+    /// `None` keeps everything.
+    pub fn open_with_ceiling(path: PathBuf, ceiling: fn() -> Option<i64>) -> Option<Self> {
         let (tx, rx) = mpsc::channel::<Op>();
         std::thread::Builder::new()
             .name("trade-cache".into())
@@ -231,7 +238,7 @@ impl TradeCache {
                     log::warn!("trade cache schema failed {}: {e}", path.display());
                     return;
                 }
-                let held = match prune(&conn, max_bytes()) {
+                let held = match prune(&conn, ceiling()) {
                     Ok(held) => held,
                     Err(e) => {
                         // The ceiling still needs a true count to work from: a zero here would
@@ -242,7 +249,7 @@ impl TradeCache {
                 };
                 crate::db::trace::install_on(&conn);
                 log::info!("trade cache открыт: {}", path.display());
-                run(conn, rx, held);
+                run(conn, rx, held, ceiling);
             })
             .ok()?;
         Some(Self { tx })
@@ -601,7 +608,12 @@ fn trim_to_ceiling(
 /// after every insert rather than only at open. While `spans` still holds rows it moves them
 /// into `packs` a batch at a time, only when no op is waiting — an op never queues behind more
 /// than one batch.
-fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, mut held: i64) {
+fn run(
+    conn: rusqlite::Connection,
+    rx: mpsc::Receiver<Op>,
+    mut held: i64,
+    ceiling: fn() -> Option<i64>,
+) {
     let mut repack = match legacy_rows_left(&conn) {
         Ok(true) => Some(RepackTally::start()),
         Ok(false) => None,
@@ -628,12 +640,12 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, mut held: i64) {
                 Err(_) => return,
             }
         };
-        serve(&conn, op, &mut held);
+        serve(&conn, op, &mut held, ceiling);
     }
 }
 
 /// One queued op.
-fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64) {
+fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> Option<i64>) {
     match op {
         Op::Insert {
             exchange,
@@ -653,7 +665,7 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64) {
             match res {
                 Ok(wrote) => {
                     *held += wrote;
-                    match trim_to_ceiling(conn, *held, max_bytes()) {
+                    match trim_to_ceiling(conn, *held, ceiling()) {
                         Ok(now_held) => *held = now_held,
                         Err(e) => {
                             // Rows may already be gone: re-count rather than carry an

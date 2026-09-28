@@ -435,11 +435,17 @@ impl SessionManager {
                             stats.ui_state |= core.folders_rev != before;
                         }
                     }
-                    FeedMsg::TradeOpened { coin, quote, buy } => {
+                    FeedMsg::TradeOpened {
+                        rec_id,
+                        coin,
+                        quote,
+                        buy,
+                    } => {
                         // Not `ui_state` either: only the tape recorder listens.
-                        self.record_opened_trade(sess.id, &coin, &quote, buy);
+                        self.record_opened_trade(sess.id, rec_id, &coin, &quote, buy);
                     }
                     FeedMsg::TradeClosed {
+                        rec_id,
                         coin,
                         quote,
                         buy,
@@ -448,7 +454,7 @@ impl SessionManager {
                         // Not `ui_state`: nothing on screen changes; the prints go to the replay
                         // worker's own store. Every step that cannot resolve simply files
                         // nothing — the next window pages the venue as it always did.
-                        self.capture_closed_trade(sess.id, &coin, &quote, buy, close);
+                        self.capture_closed_trade(sess.id, rec_id, &coin, &quote, buy, close);
                     }
                     traces @ FeedMsg::ReportTraces { .. } => {
                         // Not `ui_state`: the answer is for the trace resolver, which wakes its
@@ -481,6 +487,7 @@ impl SessionManager {
     ///
     /// Args:
     ///     core: The core that closed the trade.
+    ///     rec_id: The trade's report row.
     ///     coin: The row's coin token.
     ///     quote: The core's quote setting.
     ///     buy: Entry stamp, core-local.
@@ -488,6 +495,7 @@ impl SessionManager {
     fn capture_closed_trade(
         &self,
         core: CoreId,
+        rec_id: i64,
         coin: &str,
         quote: &str,
         buy: crate::db::ReportStamp,
@@ -509,6 +517,7 @@ impl SessionManager {
         crate::market::tape_recorder::trade_closed(
             &address.exchange_key,
             &market,
+            crate::market::tape_recorder::TradeId { core, rec_id },
             open_ms,
             close_ms,
         );
@@ -534,12 +543,14 @@ impl SessionManager {
     ///
     /// Args:
     ///     core: The core that opened the trade.
+    ///     rec_id: The trade's report row.
     ///     coin: The row's coin token.
     ///     quote: The core's quote setting.
     ///     buy: Entry stamp, core-local.
     fn record_opened_trade(
         &self,
         core: CoreId,
+        rec_id: i64,
         coin: &str,
         quote: &str,
         buy: crate::db::ReportStamp,
@@ -555,7 +566,12 @@ impl SessionManager {
         };
         let open_ms = self.true_utc_axis(core).stamp_to_utc_ms(buy, core);
         if open_ms > 0 {
-            crate::market::tape_recorder::trade_opened(&address.exchange_key, &market, open_ms);
+            crate::market::tape_recorder::trade_opened(
+                &address.exchange_key,
+                &market,
+                crate::market::tape_recorder::TradeId { core, rec_id },
+                open_ms,
+            );
         }
     }
 

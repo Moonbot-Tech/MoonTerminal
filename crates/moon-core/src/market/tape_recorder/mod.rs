@@ -20,6 +20,10 @@
 //! of `trades.sqlite`, a second [`TradeCache`] on its own file — and logged to
 //! `logs/tape_recorder.log`, with a summary line every minute.
 //!
+//! Once a closed trade is settled here, and the terminal's own close-time capture has had time to
+//! land, the two tapes of it are read back and compared ([`compare`]): coverage, prints, volume and
+//! the level touches the entry model fills on. The ring capture is the reference.
+//!
 //! # The switch
 //!
 //! `channels.tape_recorder` in `cfg/diagnostics.toml`, off by default and re-read live. It is the
@@ -28,8 +32,12 @@
 //! a run and off again, not a setting a user keeps. Off, nothing is connected and the trade events
 //! are not even queued; switched off while running, the donors disconnect and the tasks are dropped.
 //!
+//! The thread, once started, stays for the rest of the process: switched off it only reads the
+//! switch every two seconds.
+//!
 //! Nothing here depends on the GUI, so it moves into the station crate as it is.
 
+mod compare;
 mod donor;
 mod plan;
 
@@ -40,6 +48,7 @@ use std::time::{Duration, Instant};
 
 use donor::{Donor, Reply};
 use plan::KeyTask;
+pub use plan::TradeId;
 
 use crate::config::ServerConfig;
 use crate::feed::Tick;
@@ -61,8 +70,15 @@ const SHUN: Duration = Duration::from_secs(300);
 const DONOR_IDLE: Duration = Duration::from_secs(600);
 /// An open trade whose exit never arrived is forgotten after this long.
 const OPEN_HORIZON_MS: i64 = 48 * 3_600_000;
+/// An open older than this when it reaches the recorder is not an entry happening now: after a
+/// (re)connect the core resends every open row (the open-row check), and the feed's tracker,
+/// rebuilt with the connection, sees them for the first time.
+const FRESH_OPEN_MS: i64 = 120_000;
 /// How often the summary line is written.
 const SUMMARY_EVERY: Duration = Duration::from_secs(60);
+/// How long after a trade settles here its comparison waits: the terminal's own capture files the
+/// trail on its settle pass (`margin + 5 s` after the exit) through a queue of its own.
+const COMPARE_DELAY: Duration = Duration::from_secs(30);
 
 /// Whether the recorder is switched on (`channels.tape_recorder`).
 pub fn enabled() -> bool {
@@ -85,11 +101,13 @@ enum Cmd {
     Opened {
         exchange: String,
         market: String,
+        trade: TradeId,
         open_ms: i64,
     },
     Closed {
         exchange: String,
         market: String,
+        trade: TradeId,
         open_ms: i64,
         close_ms: i64,
     },
@@ -130,22 +148,24 @@ pub fn core_down(id: CoreId) {
 }
 
 /// A trade opened on `exchange_key`/`market` at `open_ms` (true UTC).
-pub fn trade_opened(exchange_key: &str, market: &str, open_ms: i64) {
+pub fn trade_opened(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64) {
     if enabled() {
         send(Cmd::Opened {
             exchange: exchange_key.to_string(),
             market: market.to_string(),
+            trade,
             open_ms,
         });
     }
 }
 
 /// A trade closed on `exchange_key`/`market` (true UTC).
-pub fn trade_closed(exchange_key: &str, market: &str, open_ms: i64, close_ms: i64) {
+pub fn trade_closed(exchange_key: &str, market: &str, trade: TradeId, open_ms: i64, close_ms: i64) {
     if enabled() {
         send(Cmd::Closed {
             exchange: exchange_key.to_string(),
             market: market.to_string(),
+            trade,
             open_ms,
             close_ms,
         });
@@ -225,6 +245,25 @@ struct Stats {
     spans: u64,
     gaps: u64,
     lost_ms: i64,
+    /// Opens that were no entry: resent open rows after a (re)connect.
+    stale_opens: u64,
+    /// Settled trades compared with the ring capture, and their sums.
+    compared: u64,
+    needed_ms: i64,
+    recorded_ms: i64,
+    captured_ms: i64,
+    common_ms: i64,
+    touches: compare::Touches,
+}
+
+/// A settled trade waiting for the terminal's capture to land before it is compared.
+struct PendingCompare {
+    due: Instant,
+    exchange: String,
+    market: String,
+    open_ms: i64,
+    close_ms: i64,
+    needed: crate::market::trade_replay::Coverage,
 }
 
 struct Recorder {
@@ -235,12 +274,15 @@ struct Recorder {
     stats: Stats,
     last_summary: Instant,
     replies: Vec<Reply>,
+    compares: Vec<PendingCompare>,
 }
 
 impl Recorder {
     fn start() -> Option<Self> {
         let path = crate::config::paths::tape_recorder_db_path();
-        let Some(cache) = TradeCache::open(path.clone()) else {
+        // No ceiling: a measuring file, deleted by hand after a run — not the Storage tab's
+        // `max_mb`, which is for `trades.sqlite` and would evict spans before they are compared.
+        let Some(cache) = TradeCache::open_with_ceiling(path.clone(), || None) else {
             line("not started: the database thread could not be spawned");
             return None;
         };
@@ -253,6 +295,7 @@ impl Recorder {
             stats: Stats::default(),
             last_summary: Instant::now(),
             replies: Vec::new(),
+            compares: Vec::new(),
         })
     }
 
@@ -263,17 +306,24 @@ impl Recorder {
             Cmd::Opened {
                 exchange,
                 market,
+                trade,
                 open_ms,
             } => {
+                if now_ms - open_ms > FRESH_OPEN_MS {
+                    // Hundreds at every (re)connect: counted, not logged one by one.
+                    self.stats.stale_opens += 1;
+                    return;
+                }
                 line(&format!("open {exchange} {market} at {open_ms}"));
                 self.tasks
                     .entry((exchange, market))
                     .or_insert_with(KeyTask::new)
-                    .opened(now_ms, open_ms, margin, long);
+                    .opened(now_ms, trade, open_ms, margin, long);
             }
             Cmd::Closed {
                 exchange,
                 market,
+                trade,
                 open_ms,
                 close_ms,
             } => {
@@ -281,7 +331,7 @@ impl Recorder {
                 self.tasks
                     .entry((exchange, market))
                     .or_insert_with(KeyTask::new)
-                    .closed(now_ms, open_ms, close_ms, margin, long);
+                    .closed(now_ms, trade, open_ms, close_ms, margin, long);
             }
             Cmd::CoreGone(core) => {
                 let gone: Vec<String> = self
@@ -301,9 +351,20 @@ impl Recorder {
         self.collect_replies(now, now_ms);
         self.expire(now, now_ms);
         self.ask_due(now, now_ms);
-        for task in self.tasks.values_mut() {
+        for ((exchange, market), task) in &mut self.tasks {
             task.drop_stale_opens(now_ms - OPEN_HORIZON_MS);
+            for (open_ms, close_ms, needed) in task.take_settled() {
+                self.compares.push(PendingCompare {
+                    due: now + COMPARE_DELAY,
+                    exchange: exchange.clone(),
+                    market: market.clone(),
+                    open_ms,
+                    close_ms,
+                    needed,
+                });
+            }
         }
+        self.run_compares(now);
         self.tasks.retain(|_, task| !task.is_done());
         let idle: Vec<String> = self
             .donors
@@ -372,7 +433,7 @@ impl Recorder {
         };
         if let Some(error) = failure {
             self.stats.failed += 1;
-            task.on_failure(now_ms);
+            fail(task, &mut self.stats, &key, now_ms);
             line(&format!("failed {} {}: {error}", key.0, key.1));
             return;
         }
@@ -416,8 +477,9 @@ impl Recorder {
             for market in donor.expired(now) {
                 donor.forget(&market);
                 self.stats.failed += 1;
-                if let Some(task) = self.tasks.get_mut(&(exchange.clone(), market.clone())) {
-                    task.on_failure(now_ms);
+                let key = (exchange.clone(), market.clone());
+                if let Some(task) = self.tasks.get_mut(&key) {
+                    fail(task, &mut self.stats, &key, now_ms);
                 }
                 line(&format!("no answer {exchange} {market}, forgotten"));
             }
@@ -437,6 +499,13 @@ impl Recorder {
 
     /// Ask every due key whose donor is ready, earliest first, within [`MAX_IN_FLIGHT`].
     fn ask_due(&mut self, now: Instant, now_ms: i64) {
+        // A key no donor could be asked for at all — no core of its exchange, a shunned one, a
+        // donor stuck in Init — never reaches a failure; past the give-up point it is one.
+        for (key, task) in &mut self.tasks {
+            if task.overdue(now_ms) {
+                fail(task, &mut self.stats, key, now_ms);
+            }
+        }
         let mut due: Vec<(i64, (String, String))> = self
             .tasks
             .iter()
@@ -467,7 +536,7 @@ impl Recorder {
                 self.stats.failed += 1;
                 line(&format!("refused {exchange} {market}: {e}"));
                 if let Some(task) = self.tasks.get_mut(&key) {
-                    task.on_failure(now_ms);
+                    fail(task, &mut self.stats, &key, now_ms);
                 }
             }
         }
@@ -511,8 +580,9 @@ impl Recorder {
             return;
         };
         for market in donor.asked_markets() {
-            if let Some(task) = self.tasks.get_mut(&(exchange.to_string(), market)) {
-                task.on_failure(now_ms);
+            let key = (exchange.to_string(), market);
+            if let Some(task) = self.tasks.get_mut(&key) {
+                fail(task, &mut self.stats, &key, now_ms);
             }
         }
         line(&format!(
@@ -521,12 +591,89 @@ impl Recorder {
         ));
     }
 
+    /// Compare every settled trade whose delay ran out.
+    fn run_compares(&mut self, now: Instant) {
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.compares)
+            .into_iter()
+            .partition(|c| c.due <= now);
+        self.compares = waiting;
+        for pending in due {
+            self.compare_one(&pending);
+        }
+    }
+
+    /// Read one trade back from both files and log the verdict.
+    fn compare_one(&mut self, p: &PendingCompare) {
+        let Some((from_ms, to_ms)) = p.needed.hull() else {
+            return;
+        };
+        let what = format!(
+            "compare {} {} {}..{}",
+            p.exchange, p.market, p.open_ms, p.close_ms
+        );
+        let Some(reference) = crate::market::trade_replay::trade_cache::handle() else {
+            line(&format!(
+                "{what}: trades.sqlite is switched off, nothing to compare with"
+            ));
+            return;
+        };
+        let (Some(recorded), Some(captured)) = (
+            self.cache.read(&p.exchange, &p.market, from_ms, to_ms),
+            reference.read(&p.exchange, &p.market, from_ms, to_ms),
+        ) else {
+            line(&format!("{what}: a read timed out, skipped"));
+            return;
+        };
+        // The ring capture alone: a venue walk in the same file is another source altogether.
+        let captured: Vec<_> = captured
+            .into_iter()
+            .filter(|s| s.source == TileSource::Core)
+            .collect();
+        let (recorded_cov, recorded_ticks) = flatten(recorded);
+        let (captured_cov, captured_ticks) = flatten(captured);
+        let c = compare::compare(
+            &p.needed,
+            compare::Tape {
+                covered: &recorded_cov,
+                ticks: &recorded_ticks,
+            },
+            compare::Tape {
+                covered: &captured_cov,
+                ticks: &captured_ticks,
+            },
+        );
+        let s = &mut self.stats;
+        s.compared += 1;
+        s.needed_ms += c.needed_ms;
+        s.recorded_ms += c.recorded_ms;
+        s.captured_ms += c.captured_ms;
+        s.common_ms += c.common_ms;
+        s.touches.add(c.touches);
+        let t = c.touches;
+        line(&format!(
+            "{what}: needed {} s, recorded {} s, ring {} s, both {} s; prints recorded {} / ring {}, volume {:.4} / {:.4}; touches both {} (same ms {}, <=100 ms {}), ring only {}, recorded only {}",
+            c.needed_ms / 1_000,
+            c.recorded_ms / 1_000,
+            c.captured_ms / 1_000,
+            c.common_ms / 1_000,
+            c.recorded_prints,
+            c.captured_prints,
+            c.recorded_volume,
+            c.captured_volume,
+            t.both,
+            t.same_ms,
+            t.near,
+            t.only_captured,
+            t.only_recorded,
+        ));
+    }
+
     fn summary(&self, what: &str) {
         let s = &self.stats;
         let ready = self.donors.values().filter(|d| d.is_ready()).count();
         let asking: usize = self.donors.values().map(Donor::in_flight).sum();
         line(&format!(
-            "{what}: keys {} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps",
+            "{what}: keys {} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, stale opens skipped {}",
             self.tasks.len(),
             self.donors.len(),
             s.requests,
@@ -536,8 +683,49 @@ impl Recorder {
             s.spans,
             s.lost_ms / 1_000,
             s.gaps,
+            s.stale_opens,
         ));
+        if s.compared > 0 {
+            let t = s.touches;
+            line(&format!(
+                "{what}: compared {} trades - needed {} s, recorded {} s, ring {} s, both {} s; touches both {} (same ms {}, <=100 ms {}), ring only {}, recorded only {}",
+                s.compared,
+                s.needed_ms / 1_000,
+                s.recorded_ms / 1_000,
+                s.captured_ms / 1_000,
+                s.common_ms / 1_000,
+                t.both,
+                t.same_ms,
+                t.near,
+                t.only_captured,
+                t.only_recorded,
+            ));
+        }
     }
+}
+
+/// Record a failed ask of `key`; past the give-up point the rest of it is logged as lost.
+fn fail(task: &mut KeyTask, stats: &mut Stats, key: &(String, String), now_ms: i64) {
+    let lost = task.on_failure(now_ms);
+    if !lost.is_empty() {
+        stats.gaps += lost.spans().len() as u64;
+        stats.lost_ms += lost.width_ms();
+        line(&format!("gave up {} {}: lost {lost}", key.0, key.1));
+    }
+}
+
+/// Stored spans as one coverage and one ascending run of prints.
+fn flatten(
+    spans: Vec<crate::market::trade_replay::trade_cache::StoredSpan>,
+) -> (crate::market::trade_replay::Coverage, Vec<Tick>) {
+    let mut covered = crate::market::trade_replay::Coverage::none();
+    let mut ticks = Vec::new();
+    for span in spans {
+        covered.add((span.from_ms, span.to_ms));
+        ticks.extend(span.ticks);
+    }
+    ticks.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    (covered, ticks)
 }
 
 /// The prints of an ascending run inside `[from_ms, to_ms]`.
