@@ -36,7 +36,7 @@
     var sections = {};
     var buttons = {};
     var payloads = {};
-    var queries = { cores: "", balances: "", orders: "", strategies: "" };
+    var queries = { orders: "" };
     var collapse = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var collapseUser = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var hasData = {};
@@ -563,7 +563,7 @@
         return item && item.exchange ? String(item.exchange) : "";
     }
 
-    // Every group starts collapsed, including on a later refresh. A group the
+    // Orders and Strategies groups start collapsed, including on a later refresh. A group the
     // user has toggled keeps that choice while the popup stays open. Search
     // still draws matching groups open and clearing it restores this choice.
     function ensureCollapse(pane, items, keyFn) {
@@ -1337,28 +1337,12 @@
             strip.appendChild(el("span", "neg", tr("mini_cores_problems").replace("{n}", String(problems))));
         }
         host.appendChild(strip);
-        var coreQuery = cores.length > 10 ? queries.cores : "";
-        if (cores.length > 10) {
-            host.appendChild(searchField("search-cores", coreQuery, function (value) {
-                queries.cores = value;
-                paintCores();
-            }));
-        }
-        var filtered = filterItems(cores, coreQuery, function (core) {
-            return [core.name, core.exchange];
-        });
-        if (coreQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("cores", paintCores)));
-            restoreSnap(snap, y);
-            return;
-        }
-        ensureCollapse("cores", cores);
-        appendToggleAll(host, "cores", cores, null, coreQuery, paintCores);
+        // Exchange groups start open; a header tap still folds one.
         if (data.can_control) host.appendChild(massActions(cores));
         appendGroups(
-            host, "cores", filtered, coreProblem,
+            host, "cores", cores, coreProblem,
             function (core) { return coreRow(core, data); },
-            coreQuery, paintCores, null, null, null, coreGroupSummary
+            "", paintCores, null, null, null, coreGroupSummary
         );
         restoreSnap(snap, y);
     }
@@ -1415,31 +1399,15 @@
             hero.appendChild(meta);
         }
         host.appendChild(hero);
-        var balanceQuery = perCore.length > 10 ? queries.balances : "";
-        if (perCore.length > 10) {
-            host.appendChild(searchField("search-balances", balanceQuery, function (value) {
-                queries.balances = value;
-                paintBalances();
-            }));
-        }
-        var filtered = filterItems(perCore, balanceQuery, function (row) {
-            return [row.name, row.exchange];
-        });
-        if (balanceQuery && perCore.length && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("balances", paintBalances)));
-            restoreSnap(snap, y);
-            return;
-        }
-        if (filtered.length) {
-            ensureCollapse("balances", perCore);
-            appendToggleAll(host, "balances", perCore, null, balanceQuery, paintBalances);
+        // Exchange groups start open; a header tap still folds one.
+        if (perCore.length) {
             appendGroups(
                 host,
                 "balances",
-                filtered,
+                perCore,
                 balanceProblem,
                 balanceRow,
-                balanceQuery,
+                "",
                 paintBalances,
                 null,
                 null,
@@ -1856,8 +1824,8 @@
             restoreSnap(snap, y);
             return;
         }
+        // A core carries dozens of strategies, so its group starts folded.
         ensureCollapse("strategies", withRows, strategyCoreKey);
-        appendToggleAll(host, "strategies", withRows, strategyCoreKey, "", paintStrategies);
         var sectionsOf = groupBy(withRows, function (core) { return String(core.exchange || ""); });
         var s;
         for (s = 0; s < sectionsOf.length; s++) {
@@ -2184,7 +2152,7 @@
     }
 
     function hasQuery() {
-        return !!(queries.cores || queries.balances || queries.orders || queries.strategies);
+        return !!queries.orders;
     }
 
     function anyGroupOpen() {
@@ -2225,10 +2193,7 @@
             return;
         }
         if (hasQuery()) {
-            queries.cores = "";
-            queries.balances = "";
             queries.orders = "";
-            queries.strategies = "";
         } else {
             collapseOpenGroups();
         }

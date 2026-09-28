@@ -381,15 +381,16 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
     );
 }
 
-/// `web/app.js:ensureCollapse` must start every group collapsed.
+/// `web/app.js:ensureCollapse` starts Orders and Strategies groups collapsed; Cores and
+/// Balances, which have no expand-all button, start open.
 ///
 /// Mutation: restore `collapse[pane][slot] = count > 20 && !problem`, or drop
-/// the `collapseUser` skip. Balances and small order groups then open on first
-/// paint and on every poll the user has not toggled, which is the popup the
-/// user asked to close. Dropping `!query &&` in `appendGroups` would also keep
+/// the `collapseUser` skip. Small order groups then open on first paint and on
+/// every poll the user has not toggled. Seeding cores or balances hides them
+/// behind header taps with no expand-all left. Dropping `!query &&` in `appendGroups` would also keep
 /// a search from opening the groups that match it.
 #[test]
-fn mini_groups_start_collapsed_until_the_user_toggles() {
+fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     let js = read_core_src("telegram/web/app.js");
     let ensure = braced_body(&js, "function ensureCollapse(");
     assert!(
@@ -405,10 +406,13 @@ fn mini_groups_start_collapsed_until_the_user_toggles() {
         "row count and problems must not decide the default"
     );
     assert!(
-        js.contains("ensureCollapse(\"cores\", cores);")
-            && js.contains("ensureCollapse(\"balances\", perCore);")
-            && js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);"),
-        "cores, balances, and orders must all seed the collapsed default"
+        js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);")
+            && js.contains("ensureCollapse(\"strategies\", withRows, strategyCoreKey);"),
+        "orders and strategies must seed the collapsed default"
+    );
+    assert!(
+        !js.contains("ensureCollapse(\"cores\"") && !js.contains("ensureCollapse(\"balances\""),
+        "cores and balances have no expand-all button, so their groups must start open"
     );
     let append = braced_body(&js, "function appendGroups(");
     assert!(
