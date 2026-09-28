@@ -1422,7 +1422,11 @@
 
     function paintCoreDetail(host, core, data) {
         var wrap = el("div", "core-detail");
-        wrap.appendChild(button("cmd text-btn detail-back", "‹ " + tr("mini_back"), closeCoreDetail));
+        // Telegram's header back arrow already closes the screen; the text link is only for a
+        // client without that button.
+        if (!headerBackAvailable()) {
+            wrap.appendChild(button("cmd text-btn detail-back", "‹ " + tr("mini_back"), closeCoreDetail));
+        }
         var head = el("div", "card");
         var top = el("div", "row detail-head");
         top.appendChild(el("span", dotClass(core)));
@@ -2111,6 +2115,13 @@
         collapseOpenGroups();
         if (current && paint[current]) paint[current]();
         else syncBackButton();
+    }
+
+    function headerBackAvailable() {
+        var button = webapp && webapp.BackButton;
+        if (!button || typeof button.show !== "function") return false;
+        // Clients before Bot API 6.1 carry the object but never draw the arrow.
+        return typeof webapp.isVersionAtLeast !== "function" || webapp.isVersionAtLeast("6.1");
     }
 
     function syncBackButton() {
