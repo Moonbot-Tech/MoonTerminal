@@ -37,7 +37,13 @@ fn main() -> anyhow::Result<()> {
         "data root already set"
     );
     let (diag_cfg, diag_err) = moon_core::diagnostics::init();
-    if let Err(e) = moon_core::applog::install(&moon_core::diagnostics::filter_string(&diag_cfg)) {
+    // The terminal's base filter raises only its own crates to `info`; the station's startup,
+    // tape-window and minute status lines come from this one.
+    let filter = format!(
+        "{},moon_station=info",
+        moon_core::diagnostics::filter_string(&diag_cfg)
+    );
+    if let Err(e) = moon_core::applog::install(&filter) {
         eprintln!("logger not installed: {e}");
     }
     moon_core::applog::set_file_logging(true, 14);
@@ -51,13 +57,28 @@ fn main() -> anyhow::Result<()> {
         data_root.display()
     );
 
-    let cfg = cores::load(&config.unwrap_or_else(|| data_root.join("station.toml")))?;
+    let station = cores::load(&config.unwrap_or_else(|| data_root.join("station.toml")))?;
+    let cfg = station.config;
+    // The terminal's window around a trade, before the recorder builds its first one.
+    if let Some(secs) = station.tape.margin_s {
+        moon_core::market::trade_replay::set_margin_s(secs);
+    }
+    if let Some(minutes) = station.tape.long_position_min {
+        moon_core::market::trade_replay::set_long_position_min(minutes);
+    }
+    log::info!(
+        "tape window: margin {} s, long position from {} min",
+        moon_core::market::trade_replay::margin_ms() / 1_000,
+        moon_core::market::trade_replay::long_position_ms() / 60_000
+    );
     log::info!(
         "cores: {} configured, {} active",
         cfg.servers.len(),
         cfg.servers.iter().filter(|s| s.active).count()
     );
 
+    // Before any core is spawned: every feed reads it when its client is built.
+    moon_core::feed::station::enable();
     moon_core::market::tape_recorder::set_always_on();
     // The interprocess lease on the replica: a second station, or a terminal, on the same data
     // root is refused here rather than corrupting the file.

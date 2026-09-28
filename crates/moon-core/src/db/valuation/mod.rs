@@ -713,6 +713,12 @@ fn stage_outbox(
     row_id: i64,
     action: OutboxAction,
 ) -> rusqlite::Result<()> {
+    // No valuation worker runs on the station to drain the outbox, so every row would only grow
+    // the replica. Valuing trades on the station later (its Telegram report) has to decide how
+    // the worker learns the rows staged nowhere before it.
+    if crate::feed::station::enabled() {
+        return Ok(());
+    }
     conn.execute(
         &format!(
             "INSERT INTO {OUTBOX_TABLE}(source_kind, core_uid, row_id, action)

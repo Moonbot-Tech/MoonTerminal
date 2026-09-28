@@ -22,10 +22,19 @@ pub struct CoreKey {
     pub key: Secret,
 }
 
+/// The terminal's window around a trade (`[trade_replay]`), sent as the station's `[tape]`.
+#[derive(Clone, Copy, Serialize)]
+pub struct TapeWindow {
+    pub margin_s: u32,
+    pub long_position_min: u32,
+}
+
 /// `station.toml` as the station reads it: no key, the credential is `core-<uid>`.
 #[derive(Serialize)]
 struct StationFile<'a> {
     core: Vec<StationCore<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tape: Option<TapeWindow>,
 }
 
 #[derive(Serialize)]
@@ -36,8 +45,8 @@ struct StationCore<'a> {
     transport: Option<TransportVersion>,
 }
 
-/// The station's `station.toml` for `cores`.
-pub fn station_toml(cores: &[CoreKey]) -> anyhow::Result<String> {
+/// The station's `station.toml` for `cores`; without `tape` the station keeps its own window.
+pub fn station_toml(cores: &[CoreKey], tape: Option<TapeWindow>) -> anyhow::Result<String> {
     let file = StationFile {
         core: cores
             .iter()
@@ -47,6 +56,7 @@ pub fn station_toml(cores: &[CoreKey]) -> anyhow::Result<String> {
                 transport: c.transport,
             })
             .collect(),
+        tape,
     };
     Ok(toml::to_string_pretty(&file)?)
 }
@@ -77,6 +87,7 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
 pub fn push_cores(
     target: &Target,
     cores: &[CoreKey],
+    tape: Option<TapeWindow>,
     say: &mut dyn FnMut(&str),
 ) -> anyhow::Result<()> {
     anyhow::ensure!(!cores.is_empty(), "no cores to send");
@@ -117,7 +128,7 @@ pub fn push_cores(
     }
     run(
         script::helper("put-config", &[]),
-        station_toml(cores)?.as_bytes(),
+        station_toml(cores, tape)?.as_bytes(),
     )?;
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;

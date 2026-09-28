@@ -12,6 +12,15 @@
 //! transport = "v1"   # optional; the key's own mode when absent
 //! ```
 //!
+//! `[tape]` carries the terminal's `[trade_replay]` window, so a trade's tape is recorded as far
+//! around it as the terminal asks for:
+//!
+//! ```toml
+//! [tape]
+//! margin_s = 180
+//! long_position_min = 10
+//! ```
+//!
 //! A `key =` line is refused rather than ignored: a key in a plain file is exactly what this
 //! layout exists to prevent.
 //!
@@ -32,6 +41,26 @@ use zeroize::Zeroizing;
 struct StationFile {
     #[serde(default, rename = "core")]
     cores: Vec<CoreEntry>,
+    #[serde(default)]
+    tape: Tape,
+}
+
+/// `[tape]`: the terminal's window around a trade. Absent fields keep the station's own
+/// `storage.toml` values.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tape {
+    /// Seconds of prints on each side of a trade (`[trade_replay] margin_s`).
+    pub margin_s: Option<u32>,
+    /// From how many minutes a position is recorded as its two ends
+    /// (`[trade_replay] long_position_min`).
+    pub long_position_min: Option<u32>,
+}
+
+/// What the station runs with: the cores, and the tape window.
+pub struct Station {
+    pub config: AppConfig,
+    pub tape: Tape,
 }
 
 /// One `[[core]]`.
@@ -71,7 +100,7 @@ fn default_true() -> bool {
 
 /// The station's configuration: every core of `station.toml` at `path`, or of the terminal's own
 /// files when there is none.
-pub fn load(path: &Path) -> anyhow::Result<AppConfig> {
+pub fn load(path: &Path) -> anyhow::Result<Station> {
     if path.exists() {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
@@ -83,7 +112,7 @@ pub fn load(path: &Path) -> anyhow::Result<AppConfig> {
 }
 
 /// `creds` is the credentials directory; `None` when the process was not given one.
-fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<AppConfig> {
+fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station> {
     let file: StationFile = toml::from_str(text)?;
     anyhow::ensure!(!file.cores.is_empty(), "no [[core]] entries");
     // A uid keys a core's reports, traces and tape: two entries sharing one would merge two
@@ -117,7 +146,10 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<AppConf
             Ok(server)
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    Ok(AppConfig::headless(servers))
+    Ok(Station {
+        config: AppConfig::headless(servers),
+        tape: file.tape,
+    })
 }
 
 /// The credential `core-<uid>`, as systemd placed it.
@@ -137,13 +169,16 @@ fn core_key(creds: Option<&Path>, uid: u64) -> anyhow::Result<Secret> {
 }
 
 #[cfg(feature = "terminal-config")]
-fn terminal_config(_missing: &Path) -> anyhow::Result<AppConfig> {
+fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
     log::info!("no station.toml: reading the terminal's configuration from the data root");
-    AppConfig::load(None, false)
+    Ok(Station {
+        config: AppConfig::load(None, false)?,
+        tape: Tape::default(),
+    })
 }
 
 #[cfg(not(feature = "terminal-config"))]
-fn terminal_config(missing: &Path) -> anyhow::Result<AppConfig> {
+fn terminal_config(missing: &Path) -> anyhow::Result<Station> {
     anyhow::bail!(
         "{} not found: it lists the cores to connect to",
         missing.display()

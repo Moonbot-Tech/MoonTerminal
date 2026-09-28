@@ -134,10 +134,13 @@ fn run() -> anyhow::Result<()> {
                     .collect::<anyhow::Result<_>>()?,
                 _ => anyhow::bail!("give either --from-terminal or --dummy <uid>:<name>"),
             };
-            if from_terminal {
+            let tape = if from_terminal {
                 confirm_keys(&target, &cores)?;
-            }
-            station::push_cores(&target, &cores, &mut say)?;
+                terminal_tape()
+            } else {
+                None
+            };
+            station::push_cores(&target, &cores, tape, &mut say)?;
         }
         "status" => {
             let logs = args.value("--logs")?;
@@ -173,16 +176,28 @@ fn terminal_cores(picks: &[String]) -> anyhow::Result<Vec<CoreKey>> {
     let all = moon_core::config::read_core_keys()?;
     let mut cores = Vec::new();
     for pick in picks {
-        let entry = all
+        // A uid, or a name in any case — refused when two names differ in case only.
+        let mut found = all
             .iter()
-            .find(|e| e.name == *pick || e.uid.to_string() == *pick)
+            .filter(|e| e.uid.to_string() == *pick || e.name.eq_ignore_ascii_case(pick));
+        let entry = found
+            .next()
             .ok_or_else(|| anyhow::anyhow!("no core {pick:?} in servers.enc"))?;
+        anyhow::ensure!(
+            found.next().is_none(),
+            "{pick:?} names more than one core: give its uid"
+        );
         anyhow::ensure!(
             entry.uid != 0,
             "core {:?} has no uid yet: start the terminal once",
             entry.name
         );
         anyhow::ensure!(!entry.key.is_empty(), "core {:?} has no key", entry.name);
+        anyhow::ensure!(
+            entry.active,
+            "core {:?} is switched off in the terminal: switch it on or leave it out",
+            entry.name
+        );
         cores.push(CoreKey {
             uid: entry.uid,
             name: entry.name.clone(),
@@ -191,6 +206,19 @@ fn terminal_cores(picks: &[String]) -> anyhow::Result<Vec<CoreKey>> {
         });
     }
     Ok(cores)
+}
+
+/// The terminal's `[trade_replay]` window for the station's tape. Read only when the file exists:
+/// loading a missing one would write a default into the terminal's folder.
+fn terminal_tape() -> Option<station::TapeWindow> {
+    if !moon_core::config::paths::storage_path().exists() {
+        return None;
+    }
+    let cfg = moon_core::config::storage::load().trade_replay;
+    Some(station::TapeWindow {
+        margin_s: cfg.margin_s,
+        long_position_min: cfg.long_position_min,
+    })
 }
 
 /// A stand-in key: tests the path end to end without any real key leaving this machine.

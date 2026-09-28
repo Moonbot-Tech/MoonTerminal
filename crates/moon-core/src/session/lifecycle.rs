@@ -62,8 +62,11 @@ impl SessionManager {
     ) -> Self {
         let market = MarketStore::shared(epoch_ms);
         let market_source = MarketDataSource::new(market.clone());
-        // The optional local kline cache preserves candle history across restarts.
-        market_source.init_kline_cache(crate::config::paths::klines_db_path());
+        // The optional local kline cache preserves candle history across restarts. The station
+        // draws no candles and keeps no such file.
+        if !crate::feed::station::enabled() {
+            market_source.init_kline_cache(crate::config::paths::klines_db_path());
+        }
         let mut mgr = Self {
             trade_sounds: Vec::new(),
             trade_sound_epochs: HashMap::new(),

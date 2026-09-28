@@ -17,7 +17,14 @@ fn the_station_file_carries_no_key() {
             key: Secret::new("OTHER-KEY"),
         },
     ];
-    let text = station_toml(&cores).unwrap();
+    let text = station_toml(
+        &cores,
+        Some(TapeWindow {
+            margin_s: 180,
+            long_position_min: 10,
+        }),
+    )
+    .unwrap();
     assert!(!text.contains("SECRET-KEY-TEXT") && !text.contains("OTHER-KEY"));
     assert!(!text.lines().any(|l| l.trim_start().starts_with("key")));
 
@@ -27,4 +34,13 @@ fn the_station_file_carries_no_key() {
     assert_eq!(list[0]["name"].as_str(), Some("BinF \"1\""));
     assert_eq!(list[0]["transport"].as_str(), Some("v1"));
     assert!(list[1].get("transport").is_none());
+    assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
+    assert_eq!(back["tape"]["long_position_min"].as_integer(), Some(10));
+    assert!(
+        toml::from_str::<toml::Value>(&station_toml(&cores, None).unwrap())
+            .unwrap()
+            .get("tape")
+            .is_none(),
+        "no window from the terminal leaves the station its own"
+    );
 }

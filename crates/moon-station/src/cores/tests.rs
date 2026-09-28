@@ -29,7 +29,8 @@ fn station_file_cores_become_servers_keyed_by_their_uid() {
         "#,
         Some(&dir),
     )
-    .expect("parses");
+    .expect("parses")
+    .config;
     assert_eq!(cfg.servers.len(), 2);
     let first = &cfg.servers[0];
     assert_eq!((first.id, first.uid, first.name.as_str()), (3, 3, "BinF1"));
@@ -79,11 +80,12 @@ fn a_shared_or_zero_uid_is_refused() {
 #[test]
 fn a_key_in_the_station_file_is_refused() {
     let dir = creds("inline", &[(3, "k1")]);
-    let err = from_station_file(
+    let Err(err) = from_station_file(
         "[[core]]\nuid = 3\nname = \"A\"\nkey = \"plain\"\n",
         Some(&dir),
-    )
-    .unwrap_err();
+    ) else {
+        panic!("a station.toml with a key was accepted");
+    };
     assert!(format!("{err:#}").contains("key"), "{err:#}");
 }
 
@@ -96,4 +98,20 @@ fn an_active_core_without_its_credential_is_refused() {
         from_station_file(text, None).is_err(),
         "no credentials directory at all"
     );
+}
+
+/// The terminal's window rides in `[tape]`; without the section the station keeps its own.
+#[test]
+fn the_tape_window_comes_from_the_station_file() {
+    let dir = creds("tape", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"A\"\n";
+    let with_tape = format!("{core}[tape]\nmargin_s = 180\nlong_position_min = 10\n");
+    let station = from_station_file(&with_tape, Some(&dir)).unwrap();
+    assert_eq!(station.tape.margin_s, Some(180));
+    assert_eq!(station.tape.long_position_min, Some(10));
+
+    let station = from_station_file(core, Some(&dir)).unwrap();
+    assert!(station.tape.margin_s.is_none() && station.tape.long_position_min.is_none());
+    let unknown = format!("{core}[tape]\nmargin = 180\n");
+    assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }

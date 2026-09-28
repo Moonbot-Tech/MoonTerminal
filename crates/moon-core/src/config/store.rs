@@ -33,36 +33,45 @@ pub struct CoreKeyEntry {
     pub key: super::Secret,
     /// The terminal's transport override from settings.toml; `None` = the key's own mode.
     pub transport: Option<super::TransportVersion>,
+    /// Switched on in the terminal (settings.toml; on when the file does not say, as there).
+    pub active: bool,
 }
 
 /// Every core's key from servers.enc, READ ONLY: decrypted without adopting the file's key
 /// material and parsed without [`super::AppConfig::load`], which may assign uids, upgrade the
 /// schema and save — racing a running terminal's own saves. settings.toml is read only for the
-/// transport overrides, and nothing is moved aside when it is unreadable.
+/// transport overrides and the on/off switch; unreadable, it is an error and nothing is moved.
 pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
     let bytes = std::fs::read(paths::servers_path()).context("read servers.enc")?;
     let plain = zeroize::Zeroizing::new(crypto::decrypt_standalone(&bytes)?);
     let sf: ServersFile =
         toml::from_str(std::str::from_utf8(&plain)?).context("parse servers.enc")?;
-    let transports: std::collections::HashMap<u64, super::TransportVersion> =
-        std::fs::read_to_string(paths::settings_path())
-            .ok()
-            .and_then(|text| toml::from_str::<SettingsFile>(&text).ok())
-            .map(|meta| {
-                meta.servers
-                    .into_iter()
-                    .filter_map(|s| Some((s.uid, s.transport?)))
-                    .collect()
-            })
-            .unwrap_or_default();
+    // No file is a terminal that never saved one: every core on, as there. A file that cannot be
+    // read or parsed — the terminal may be writing it this instant — is an error, not "all on":
+    // guessing would ship a core the user switched off.
+    let meta: std::collections::HashMap<u64, (bool, Option<super::TransportVersion>)> =
+        match std::fs::read_to_string(paths::settings_path()) {
+            Ok(text) => toml::from_str::<SettingsFile>(&text)
+                .context("parse settings.toml")?
+                .servers
+                .into_iter()
+                .map(|s| (s.uid, (s.active, s.transport)))
+                .collect(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+            Err(e) => return Err(e).context("read settings.toml"),
+        };
     Ok(sf
         .servers
         .into_iter()
-        .map(|entry| CoreKeyEntry {
-            transport: transports.get(&entry.uid).copied(),
-            uid: entry.uid,
-            name: entry.name,
-            key: entry.key,
+        .map(|entry| {
+            let (active, transport) = meta.get(&entry.uid).copied().unwrap_or((true, None));
+            CoreKeyEntry {
+                active,
+                transport,
+                uid: entry.uid,
+                name: entry.name,
+                key: entry.key,
+            }
         })
         .collect())
 }

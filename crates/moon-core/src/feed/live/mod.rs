@@ -494,6 +494,8 @@ pub(super) fn run(
     chart_text: &mut ChartTextWanted,
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
+    // Read once per client: the switch is set before any feed starts and never cleared.
+    let station = crate::feed::station::enabled();
     market_role.begin_client();
     chart_text.begin_client();
 
@@ -522,10 +524,21 @@ pub(super) fn run(
     );
 
     let client_cfg = ClientConfig::new(host, port, info.keys.master_key, info.keys.mac_key)
-        .with_transport_mode(transport)
-        .with_market_history(MarketHistorySizing::auto_with_budget_percent(
+        .with_transport_mode(transport);
+    // The station charts nothing and elects no provider: the smallest rings, and no periodic
+    // market-list or tag refresh — the Init steps still load the catalog once.
+    let client_cfg = if station {
+        client_cfg
+            .with_market_history(MarketHistorySizing::Compact)
+            .with_refresh(moonproto::RefreshConfig {
+                update_markets_every: None,
+                check_tags_every: None,
+            })
+    } else {
+        client_cfg.with_market_history(MarketHistorySizing::auto_with_budget_percent(
             chart_memory_percent,
-        ));
+        ))
+    };
 
     // 3. Initialize WITHOUT market subscriptions. The coordinator assigns the core's market role
     //    via SetMarket after learning its exchange (Identity) and electing a provider. Only ONE
@@ -1066,13 +1079,16 @@ pub(super) fn run(
             let _ = tx.send(FeedMsg::Status(st));
             if reconnected {
                 // Mark the retained snapshot stale BEFORE asking for a new one, so a pre-outage
-                // QR cannot become actionable the instant the badge flips to Ready.
-                let _ = tx.send(FeedMsg::TelegramStale);
-                if let Err(error) = client.telegram().refresh() {
-                    log::warn!(
-                        "core {} telegram refresh failed: {error}",
-                        crate::feed::core_label(server.id)
-                    );
+                // QR cannot become actionable the instant the badge flips to Ready. The station
+                // runs no bot of the core's and asks nothing about it.
+                if !station {
+                    let _ = tx.send(FeedMsg::TelegramStale);
+                    if let Err(error) = client.telegram().refresh() {
+                        log::warn!(
+                            "core {} telegram refresh failed: {error}",
+                            crate::feed::core_label(server.id)
+                        );
+                    }
                 }
                 // A close that happened while the link was down updated a row BELOW the catch-up
                 // cursor, so catch-up will not bring it. The library does repeat its retained
@@ -1090,7 +1106,9 @@ pub(super) fn run(
                     }
                 }
             }
-            if request_license_state {
+            // The station asks the core for none of what a terminal shows — license, run state,
+            // settings, hedge mode, balances, chart alerts.
+            if request_license_state && !station {
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
                         "core {} request kernel license state failed: {error}",
@@ -1179,6 +1197,9 @@ pub(super) fn run(
         // only after an actual event instead of polling continuously every 8 ms.
         events.clear();
         event_queue.drain_events_into(&mut events);
+        if station {
+            events.retain(crate::feed::station::keeps);
+        }
         let had_domain_event = !events.is_empty();
         // v4 delivers Stop/VStop changes as ordinary `OrderEvent::Updated` field
         // mutations rather than dedicated events, so `Updated` (already matched
@@ -1224,7 +1245,11 @@ pub(super) fn run(
                 break;
             }
         }
-        account_reconciliation.observe_events(&events, account_now);
+        // The station never repairs an account: it shows the repairs no event, so none is ever
+        // queued and no repair deadline exists to hold the wait below at zero.
+        if !station {
+            account_reconciliation.observe_events(&events, account_now);
+        }
         if account_reconciliation.balance_due(account_now) {
             match client.balances().refresh() {
                 Ok(()) => {
@@ -1320,7 +1345,11 @@ pub(super) fn run(
         // attempt is marked whether or not the request left, so a core stuck mid-connect cannot ask
         // on every wake-up.
         if account_reconciliation.api_expiry_due(account_now) {
-            if is_ready {
+            if station {
+                // Never asked; pushed out a full interval so the due deadline cannot hold the
+                // wait below at zero.
+                account_reconciliation.defer_api_expiry(account_now);
+            } else if is_ready {
                 if let Err(error) = client.account().refresh_api_expiration_time() {
                     log::debug!(
                         "core {} api expiration poll not sent: {error}",
@@ -2727,7 +2756,7 @@ pub(super) fn run(
         } else {
             Duration::from_secs(5)
         };
-        if should_publish_assets(&events, last_assets.elapsed(), assets_every) {
+        if !station && should_publish_assets(&events, last_assets.elapsed(), assets_every) {
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
                 // The account base currency (USDT/BTC/...) is required to convert `btc_balance_*`,
@@ -2752,7 +2781,7 @@ pub(super) fn run(
         // Check transfer assets on EVERY iteration rather than in the 1 Hz/domain-event block so a
         // `refresh_transfer_assets` response, requested by clicking the core in the Assets window,
         // reaches the UI immediately even when the core has no stream of market events.
-        if let Some(snap) = client.snapshot() {
+        if let Some(snap) = client.snapshot().filter(|_| !station) {
             let tr = snap.transfer_assets();
             let rev = tr.revision();
             if rev != last_transfer_rev {
