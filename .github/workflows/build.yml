@@ -187,7 +187,7 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
           components: clippy
-      # `musl-gcc` for the C inside the station's dependencies (ring, SQLite, mimalloc).
+      # `musl-gcc` for the C inside the station's dependencies (ring, SQLite).
       - name: Install the musl C toolchain
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
       - uses: Swatinem/rust-cache@v2

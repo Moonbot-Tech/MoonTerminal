@@ -21,20 +21,19 @@
 //!
 //! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
 //! the process exits; the report replica and the order traces need no such step, the replica
-//! resuming from its last committed checkpoint and the traces backfilled at the next start. SIGHUP re-reads `station.toml`: cores removed or switched off disconnect,
-//! the tape window moves. A core ADDED needs its credential, which systemd hands over only at a
-//! start, so that one takes a restart.
+//! resuming from its last committed checkpoint and the traces backfilled at the next start.
+//! SIGHUP re-reads `station.toml`: cores removed or switched off disconnect, the tape window moves.
+//! A core ADDED needs its credential, which systemd hands over only at a start, so that one takes
+//! a restart.
+//!
+//! The allocator is musl's own. `mimalloc` was measured in its place (2026-09-28): the same CPU at
+//! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server.
 
 mod cores;
 mod signals;
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-// musl's allocator serialises every thread on one lock; the station runs a feed thread per core.
-#[cfg(target_env = "musl")]
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
