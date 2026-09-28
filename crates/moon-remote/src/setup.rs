@@ -278,8 +278,9 @@ fn must_refuse(
     }
 }
 
-/// Send a station binary through the helper; sha256 checked on the server before it replaces
-/// anything.
+/// Send a station binary through the helper's `update`: sha256 checked on the server before it
+/// replaces anything; a station already running is restarted on it and must stay up, or the
+/// previous binary goes back and this fails.
 pub fn install_station(
     target: &Target,
     admin: &str,
@@ -298,13 +299,52 @@ pub fn install_station(
         },
         pin,
     )?;
-    let out = script::checked(conn.run(
-        &script::helper("install-bin", &[&digest]),
-        &bytes,
-        APT_TIMEOUT,
-    )?)?;
+    // The connection, not the update, failed — an error, or an end without an exit status: the
+    // update goes on without it (the helper detaches it), and what the server says it did is the
+    // answer, read through a new one. `update=running` there means it is still under way.
+    let run = conn.run(&script::helper("update", &[&digest]), &bytes, APT_TIMEOUT);
+    let out = match run {
+        Ok(out) if out.status.is_some() => out,
+        dropped => {
+            let e = match dropped {
+                Ok(out) => anyhow::anyhow!(
+                    "the connection ended before the update did: {}",
+                    out.stdout_text().trim()
+                ),
+                Err(e) => e,
+            };
+            return Err(match last_update(target, admin, app, pin) {
+                Some(verdict) => e.context(format!("the server's last update says: {verdict}")),
+                None => e,
+            });
+        }
+    };
+    let out = script::checked(out)?;
     say_values(say, &out.stdout_text());
     Ok(())
+}
+
+/// The last update's verdict as the server keeps it, through a fresh connection; `None` when that
+/// cannot be read either.
+fn last_update(
+    target: &Target,
+    admin: &str,
+    app: &PrivateKey,
+    pin: Option<&str>,
+) -> Option<String> {
+    let conn = Conn::open(
+        target,
+        &Auth::Key {
+            user: admin,
+            key: app,
+        },
+        pin,
+    )
+    .ok()?;
+    let out = conn
+        .run(&script::helper("status", &[]), &[], STEP_TIMEOUT)
+        .ok()?;
+    script::value(&out.stdout_text(), "last_update").map(str::to_owned)
 }
 
 fn say_values(say: &mut dyn FnMut(&str), text: &str) {

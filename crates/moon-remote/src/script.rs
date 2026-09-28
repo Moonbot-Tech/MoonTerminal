@@ -103,14 +103,18 @@ pub fn helper(command: &str, args: &[&str]) -> String {
     line
 }
 
-/// A non-zero exit becomes an error with the command's own words.
+/// A non-zero exit becomes an error with the command's own words — what it printed before it
+/// failed as well as why: a helper reports its steps on stdout and its reason on stderr.
 pub fn checked(out: Output) -> anyhow::Result<Output> {
     if out.ok() {
         return Ok(out);
     }
-    let detail = match out.stderr_text() {
-        text if text.is_empty() => out.stdout_text().trim().to_owned(),
-        text => text,
+    let stdout = out.stdout_text().trim().to_owned();
+    let stderr = out.stderr_text();
+    let detail = match (stdout.is_empty(), stderr.is_empty()) {
+        (_, true) => stdout,
+        (true, false) => stderr,
+        (false, false) => format!("{stderr}\n{stdout}"),
     };
     match out.status {
         Some(code) => anyhow::bail!("exit {code}: {detail}"),

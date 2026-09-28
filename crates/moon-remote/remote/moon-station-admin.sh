@@ -13,6 +13,13 @@ CREDS=/etc/moon-station/creds
 DROPIN_DIR=/etc/systemd/system/moon-station.service.d
 DROPIN=$DROPIN_DIR/credentials.conf
 UNIT=moon-station.service
+# How long a station just (re)started must stay up to count as healthy: longer than its slowest
+# start-up check (the report replica's integrity pass, ~11 s on 1 vCPU).
+HEALTH_S=30
+# The last update's or rollback's own output, so its verdict survives a dropped SSH connection;
+# `status` reports its last line — `update=running` / `rollback=running` while one is under way.
+UPDATE_LOG=/opt/moon-station/update.log
+LOCK=/run/moon-station-admin.lock
 
 die() {
     echo "error: $*" >&2
@@ -20,6 +27,13 @@ die() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run it through sudo"
+
+# One changing command at a time: two updates, or an update and a rollback, would restart and
+# judge each other's binary.
+lock() {
+    exec 9>"$LOCK"
+    flock -n 9 || die "another station command is running"
+}
 
 valid_uid() {
     case "$1" in
@@ -103,6 +117,93 @@ cmd_install_bin() {
     echo "bin=$got"
 }
 
+# The station, just (re)started, stays up for $HEALTH_S seconds: active throughout, the same
+# process, no restart by systemd (the unit restarts a crash after 5 s). Until the station has its
+# API this is all a health check can see — not whether its cores connected.
+healthy() {
+    pid=$(systemctl show -p MainPID --value "$UNIT")
+    restarts=$(systemctl show -p NRestarts --value "$UNIT")
+    [ "$pid" != 0 ] || return 1
+    i=0
+    while [ "$i" -lt "$HEALTH_S" ]; do
+        sleep 1
+        i=$((i + 1))
+        systemctl is-active --quiet "$UNIT" || return 1
+        [ "$(systemctl show -p MainPID --value "$UNIT")" = "$pid" ] || return 1
+        [ "$(systemctl show -p NRestarts --value "$UNIT")" = "$restarts" ] || return 1
+    done
+}
+
+# Put .prev back, restart and check it. Fails when there is no .prev or it does not stay up. The
+# .prev stays: a rollback that fails can be retried.
+restore_prev() {
+    [ -f "$BIN.prev" ] || die "no previous binary to roll back to"
+    ln -f "$BIN.prev" "$BIN.back"
+    mv -f "$BIN.back" "$BIN"
+    systemctl restart "$UNIT"
+    healthy || die "rolled back to $(sha256sum "$BIN" | cut -d' ' -f1), which does not stay up either"
+    echo "rolled_back=$(sha256sum "$BIN" | cut -d' ' -f1)"
+}
+
+# update <sha256>; stdin: the binary. Installed as install-bin does; a station already enabled is
+# restarted on it and must stay healthy, or the previous binary goes back and the update fails.
+# One not enabled yet (the setup, before its cores) is only installed: `start` comes with them.
+#
+# The restart, the check and the rollback run detached (`finish-update`, its own session, its
+# output in $UPDATE_LOG): a connection that drops during the minute they may take must not cut a
+# rollback in half. This command waits for it and prints what it wrote.
+cmd_update() {
+    lock
+    echo "update=running" >"$UPDATE_LOG"
+    # Not a pipe: `sh` has no pipefail, and a refused binary must stop here.
+    installed=$(cmd_install_bin "$@") || {
+        echo "update=refused" >>"$UPDATE_LOG"
+        exit 1
+    }
+    echo "$installed"
+    if ! systemctl is-enabled --quiet "$UNIT"; then
+        echo "health=not-started" | tee -a "$UPDATE_LOG"
+        return
+    fi
+    # `update=running` stays the last line until the detached half writes its verdict.
+    detached finish-update
+}
+
+# rollback: the previous binary back, by hand — detached like an update.
+cmd_rollback() {
+    lock
+    echo "rollback=running" >"$UPDATE_LOG"
+    detached finish-rollback
+}
+
+# Run this helper's `$1` in a session of its own with its output appended to $UPDATE_LOG, wait,
+# and print what it wrote; fail when it failed.
+detached() {
+    from=$(wc -l <"$UPDATE_LOG")
+    rc=0
+    setsid -w "$0" "$1" >>"$UPDATE_LOG" 2>&1 </dev/null || rc=$?
+    tail -n +"$((from + 1))" "$UPDATE_LOG"
+    [ "$rc" -eq 0 ] || exit "$rc"
+}
+
+# finish-update: the detached half of `update`.
+cmd_finish_update() {
+    systemctl restart "$UNIT"
+    if healthy; then
+        echo "health=ok"
+        return
+    fi
+    echo "health=failed"
+    restore_prev
+    die "the new binary did not stay up; the previous one is back"
+}
+
+# finish-rollback: the detached half of `rollback`.
+cmd_finish_rollback() {
+    restore_prev
+    echo "health=ok"
+}
+
 cmd_status() {
     echo "active=$(systemctl is-active "$UNIT" 2>/dev/null || true)"
     echo "enabled=$(systemctl is-enabled "$UNIT" 2>/dev/null || true)"
@@ -114,6 +215,8 @@ cmd_status() {
     [ -f "$CONF" ] && echo "config=yes" || echo "config=no"
     creds=$( (cd "$CREDS" && ls core-*.cred 2>/dev/null | sed 's/\.cred$//' | tr '\n' ' ') || true)
     echo "creds=${creds% }"
+    [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
+    return 0
 }
 
 cmd_logs() {
@@ -131,17 +234,36 @@ case "$cmd" in
 put-cred) cmd_put_cred "$@" ;;
 drop-cred) cmd_drop_cred "$@" ;;
 put-config) cmd_put_config ;;
-install-bin) cmd_install_bin "$@" ;;
-# start: enabled for every boot, and (re)started so new credentials and config take effect.
+install-bin)
+    lock
+    cmd_install_bin "$@"
+    ;;
+update) cmd_update "$@" ;;
+rollback) cmd_rollback ;;
+finish-update) cmd_finish_update ;;
+finish-rollback) cmd_finish_rollback ;;
+# start: enabled for every boot, and (re)started so new credentials and config take effect. Every
+# command that restarts or stops the station waits for no update: a restart in the middle of an
+# update's health check would roll a good binary back.
 start)
+    lock
     systemctl enable --quiet "$UNIT"
     systemctl restart "$UNIT"
     ;;
-restart) systemctl restart "$UNIT" ;;
+restart)
+    lock
+    systemctl restart "$UNIT"
+    ;;
 # reload: station.toml again without a restart (SIGHUP) — for a changed tape window or a core
 # taken out; a core added still needs `start` for its credential.
-reload) systemctl reload "$UNIT" ;;
-stop) systemctl stop "$UNIT" ;;
+reload)
+    lock
+    systemctl reload "$UNIT"
+    ;;
+stop)
+    lock
+    systemctl stop "$UNIT"
+    ;;
 status) cmd_status ;;
 logs) cmd_logs "$@" ;;
 *) die "unknown command: $cmd" ;;

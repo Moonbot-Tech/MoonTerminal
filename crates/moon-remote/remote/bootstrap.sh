@@ -13,6 +13,8 @@ SSHD_DROPIN=/etc/ssh/sshd_config.d/00-moon-station.conf
 UNIT=/etc/systemd/system/moon-station.service
 F2B_JAIL=/etc/fail2ban/jail.d/moon-station.conf
 AUTO_UPGRADES=/etc/apt/apt.conf.d/20auto-upgrades
+SYSCTL=/etc/sysctl.d/60-moon-station.conf
+RMEM_MAX=8388608
 
 die() {
     echo "error: $*" >&2
@@ -133,8 +135,9 @@ step_helper() {
     rm -f "$rule"
 }
 
-# service; stdin: the unit file. The service account, its directories, the unit. Does not start
-# anything: the station has nothing to connect to until its credentials exist.
+# service; stdin: the unit file. The service account, its directories, the unit, the UDP receive
+# ceiling. Does not start the station — it has nothing to connect to until its credentials exist —
+# but restarts one already running when the ceiling was raised, so its socket gets it.
 step_service() {
     getent group moon-station >/dev/null || groupadd --system moon-station
     if ! id moon-station >/dev/null 2>&1; then
@@ -147,6 +150,18 @@ step_service() {
     install -d -m 700 -o moon-station -g moon-station /var/lib/moon-station
     echo "unit=$(put_file "$UNIT" 644 root:root)"
     systemctl daemon-reload
+    # moonproto asks for an 8 MB UDP receive buffer; the kernel caps it at rmem_max, 208 KB on a
+    # stock Ubuntu. Raised, never lowered.
+    # A running station keeps the buffer it opened with: restarted, so the new ceiling applies.
+    if [ "$(cat /proc/sys/net/core/rmem_max)" -lt "$RMEM_MAX" ]; then
+        echo "net.core.rmem_max = $RMEM_MAX" | put_file "$SYSCTL" 644 root:root >/dev/null
+        sysctl -q -p "$SYSCTL"
+        if systemctl is-active --quiet moon-station; then
+            systemctl restart moon-station
+            echo "station=restarted"
+        fi
+    fi
+    echo "rmem_max=$(cat /proc/sys/net/core/rmem_max)"
 }
 
 # harden: keys only, no root login. Our file sorts before cloud-init's 50-cloud-init.conf, and
