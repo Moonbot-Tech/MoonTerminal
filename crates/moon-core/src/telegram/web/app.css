@@ -1316,9 +1316,54 @@ input:focus-visible {
     min-height: 44px;
 }
 
-.strategy-row .chip {
+/* ON / OFF pill: the app's one on/off look (strategies, core detail switches). */
+.pill {
+    display: inline-flex;
     flex: none;
-    min-width: 44px;
+    align-items: center;
+    justify-content: center;
+    min-width: 64px;
+    min-height: 32px;
+    padding: 0 14px;
+    border: 1.5px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--sub);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+}
+
+/* A tappable pill keeps a 44px target around its visible shape. */
+button.pill {
+    min-height: 44px;
+    cursor: pointer;
+}
+
+.pill.on {
+    border-color: var(--pos);
+    color: var(--pos);
+    background-color: rgba(14, 110, 69, 0.14);
+}
+
+.pill.off {
+    border-color: var(--line);
+    color: var(--hint);
+}
+
+.pill.pending {
+    border-style: dashed;
+    opacity: .55;
+}
+
+.pill.unknown {
+    border-style: dashed;
+    color: var(--hint);
+}
+
+button.pill:disabled {
+    cursor: default;
 }
 
 /* A long unbroken folder path ellipsizes; the full path rides the title. */

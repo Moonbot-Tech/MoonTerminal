@@ -1776,7 +1776,22 @@
         return el("span", "count num", on + "/" + total);
     }
 
-    // The chip colour is the core's confirmed state; the sub line says when a change is unconfirmed.
+    // The app's one on/off look: an ON / OFF pill (labels stay untranslated). `state` null is
+    // unknown; a pending pill waits for its core and is never tappable.
+    function onOffPill(state, interactive, pending) {
+        var known = state === true || state === false;
+        var cls = "pill " + (known ? (state ? "on" : "off") : "unknown") + (pending ? " pending" : "");
+        var pill = document.createElement(interactive ? "button" : "span");
+        pill.className = interactive ? "cmd " + cls : cls;
+        pill.textContent = known ? (state ? "ON" : "OFF") : "?";
+        if (!interactive) return pill;
+        pill.type = "button";
+        pill.setAttribute("aria-pressed", known ? String(state) : "mixed");
+        pill.disabled = commandBusy || !known || !!pending;
+        return pill;
+    }
+
+    // The pill is the core's confirmed state; the sub line says when a change is unconfirmed.
     function strategyRow(core, strategy, canControl) {
         var row = el("div", "row spread strategy-row");
         var body = el("div", "grow");
@@ -1790,21 +1805,15 @@
         }
         row.appendChild(body);
         var on = strategy.checked === true;
-        var glyph = on ? "✓" : "—";
+        var waiting = strategy.pending === "pending";
         if (!canControl) {
-            var shown = el("span", "chip strategy-state " + (on ? "on" : "off"), glyph);
+            var shown = onOffPill(on, false, waiting);
             shown.setAttribute("aria-label", strategy.name || "");
             row.appendChild(shown);
             return row;
         }
-        var waiting = strategy.pending === "pending";
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "cmd chip " + (on ? "on" : "off") + (waiting ? " pending" : "");
-        chip.textContent = glyph;
-        chip.setAttribute("aria-pressed", String(on));
+        var chip = onOffPill(on, true, waiting);
         chip.setAttribute("aria-label", strategy.name || "");
-        chip.disabled = commandBusy || waiting;
         chip.addEventListener("click", function () {
             if (commandBusy || waiting) return;
             runCommand(null, "/api/strategy/toggle", { core: core.core, id: strategy.id, on: !on });
