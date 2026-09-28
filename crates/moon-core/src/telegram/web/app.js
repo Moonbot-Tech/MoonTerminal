@@ -1504,6 +1504,19 @@
         return "…" + tail;
     }
 
+    // Once the row is laid out, drop further leading words while the name still overflows its
+    // span, so the kept tail is never cut at its right end.
+    function fitCoreName(node) {
+        var text = node.textContent;
+        while (node.scrollWidth > node.clientWidth) {
+            var body = text.charAt(0) === "…" ? text.slice(1) : text;
+            var cut = body.slice(1).search(/[ \/]/);
+            if (cut < 0) return;
+            text = "…" + body.slice(cut + 1);
+            node.textContent = text;
+        }
+    }
+
     function tradeRow(trade) {
         var row = el("div", "row trade-row");
         row.setAttribute("role", "button");
@@ -1522,6 +1535,7 @@
             var core = el("span", "trade-core", coreNameTail(name, TRADE_CORE_CHARS));
             core.title = name;
             meta.appendChild(core);
+            window.requestAnimationFrame(function () { fitCoreName(core); });
         }
         if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
         if (when) meta.appendChild(el("span", "trade-when", when));

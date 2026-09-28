@@ -443,6 +443,8 @@ pub(super) struct MiniTrade {
     pub quantity: f64,
     /// Strategy id; `None` or `0` for a manual trade.
     pub strategy_id: Option<i64>,
+    /// Stored `channelname`: the strategy's name when the row was written, empty when absent.
+    pub channel_name: String,
 }
 
 /// Read the latest closed, non-emulator trades on one snapshot, newest first.
@@ -499,7 +501,7 @@ pub(super) fn read_mini_trades(
         index("closedate"),
         index("strategyid"),
     );
-    let rec_id = index("id");
+    let (rec_id, channel_name) = (index("id"), index("channelname"));
     let (profit, pct) = (
         index(db::VALUATION_PROFIT_COLUMN),
         index(db::PROFIT_PERCENT_COLUMN),
@@ -533,6 +535,7 @@ pub(super) fn read_mini_trades(
             sell_price: cell(sell_price).and_then(value_f64).unwrap_or_default(),
             quantity: cell(quantity).and_then(value_f64).unwrap_or_default(),
             strategy_id: cell(strategy).and_then(value_i64),
+            channel_name: cell(channel_name).map(value_text).unwrap_or_default(),
         });
     }
     trades.sort_by_key(|trade| std::cmp::Reverse(trade.close_utc));

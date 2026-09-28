@@ -1068,7 +1068,7 @@ fn trade_dto(
 ) -> TradeDto {
     let profit = trade.profit_usdt.filter(|value| value.is_finite());
     let pct = trade.pct.filter(|value| value.is_finite());
-    let (strategy, manual) = trade_strategy(trade.strategy_id, |sid| {
+    let (strategy, manual) = trade_strategy(trade.strategy_id, &trade.channel_name, |sid| {
         backend
             .session
             .store()
@@ -1112,13 +1112,16 @@ fn trade_dto(
 ///
 /// Args:
 ///     strategy_id: The row's `strategyid`; `None` when the row carries none.
+///     stored: The row's own `channelname`, the name the Report shows for a strategy the core no
+///         longer lists.
 ///     name: Live name of a strategy id on the trade's core, `None` when the core does not list it.
 ///
 /// Returns:
-///     `(name, manual)`: a known strategy's name, `#<id>` for one the core no longer lists,
-///     `(None, true)` for `0` (manual), and `(None, false)` when the id is unknown.
+///     `(name, manual)`: the live name, else the stored one, else `#<id>`; `(None, true)` for `0`
+///     (manual), and `(None, false)` when the id is unknown.
 fn trade_strategy(
     strategy_id: Option<i64>,
+    stored: &str,
     name: impl FnOnce(u64) -> Option<String>,
 ) -> (Option<String>, bool) {
     match strategy_id {
@@ -1126,7 +1129,11 @@ fn trade_strategy(
         Some(0) => (None, true),
         Some(sid) => {
             let sid = sid as u64;
-            (Some(name(sid).unwrap_or_else(|| format!("#{sid}"))), false)
+            let stored = stored.trim();
+            let shown = name(sid)
+                .or_else(|| (!stored.is_empty()).then(|| stored.to_string()))
+                .unwrap_or_else(|| format!("#{sid}"));
+            (Some(shown), false)
         }
     }
 }

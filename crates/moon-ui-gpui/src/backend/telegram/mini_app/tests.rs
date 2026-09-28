@@ -200,9 +200,10 @@ fn distance_to_entry_text_carries_no_sign() {
 /// `mini_app.rs:trade_strategy` names strategy trades, marks only `0` manual, and leaves a missing
 /// id unknown.
 ///
-/// Mutation: drop negative ids (`u64::try_from`) or treat a missing id as manual. A strategy whose
-/// Delphi-signed id is negative then shows as manual in the trade sheet. Oracle: id `-7` names the
-/// strategy listed under `(-7i64) as u64`.
+/// Mutation: drop negative ids (`u64::try_from`), treat a missing id as manual, or skip the stored
+/// name. A strategy whose Delphi-signed id is negative then shows as manual in the trade sheet, or
+/// one the core no longer lists shows as a bare id. Oracle: id `-7` names the strategy listed
+/// under `(-7i64) as u64`; an unlisted id with a stored name shows that name.
 #[test]
 fn trade_strategy_names_signed_ids_and_separates_manual_from_unknown() {
     let names = |sid: u64| match sid {
@@ -211,17 +212,21 @@ fn trade_strategy_names_signed_ids_and_separates_manual_from_unknown() {
         _ => None,
     };
     assert_eq!(
-        trade_strategy(Some(5), names),
+        trade_strategy(Some(5), "Demo Old", names),
         (Some("Demo Alpha".to_string()), false)
     );
     assert_eq!(
-        trade_strategy(Some(-7), names),
+        trade_strategy(Some(-7), "", names),
         (Some("Demo Beta".to_string()), false)
     );
     assert_eq!(
-        trade_strategy(Some(9), names),
+        trade_strategy(Some(9), " Demo Gone ", names),
+        (Some("Demo Gone".to_string()), false)
+    );
+    assert_eq!(
+        trade_strategy(Some(9), "", names),
         (Some("#9".to_string()), false)
     );
-    assert_eq!(trade_strategy(Some(0), names), (None, true));
-    assert_eq!(trade_strategy(None, names), (None, false));
+    assert_eq!(trade_strategy(Some(0), "Demo Alpha", names), (None, true));
+    assert_eq!(trade_strategy(None, "", names), (None, false));
 }
