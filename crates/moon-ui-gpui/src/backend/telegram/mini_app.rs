@@ -24,7 +24,7 @@ use moon_core::util::{display_time, fmt};
 
 use crate::Backend;
 use crate::core_order::{CoreOrder, exchange_sections};
-use crate::order_math::{MONEY_DECIMALS, order_pnl, order_pnl_pct};
+use crate::order_math::{MONEY_DECIMALS, order_pnl, order_pnl_pct, pct_to_entry, position_qty};
 use crate::panels::{BalanceFigures, aggregate_balance_figures};
 
 /// How long a finished report may answer the same chat and period without reading again.
@@ -1002,6 +1002,7 @@ fn order_dto(
 ) -> OrderDto {
     let pnl = order_pnl(order).filter(|value| value.is_finite());
     let change = order_pnl_pct(order).filter(|value| value.is_finite());
+    let to_entry = order_to_entry_pct(order);
     OrderDto {
         core: id,
         core_name: name,
@@ -1019,8 +1020,29 @@ fn order_dto(
         change_pct: change,
         change_text: change
             .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
+        to_entry_pct: to_entry,
+        to_entry_text: to_entry
+            .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
         panic_armed: backend.is_panic_armed(id, &order.market),
     }
+}
+
+/// Distance from the current mark to the entry of an order that holds no position yet.
+///
+/// A resting entry has no PnL, so the row states how far the price still has to travel to fill
+/// it, with the arithmetic Moonbot's price-approach alert uses ([`pct_to_entry`]). Negative once
+/// the mark has passed the entry.
+///
+/// Args:
+///     order: Stored order row.
+///
+/// Returns:
+///     The percent, or `None` once the order holds a position or a price is unusable.
+fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
+    if position_qty(order).is_some() {
+        return None;
+    }
+    pct_to_entry(order, f64::from(order.price)).filter(|value| value.is_finite())
 }
 
 /// Map a read closed trade into the Mini App row.

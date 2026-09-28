@@ -171,9 +171,14 @@ pub struct BalancesDto {
 /// `side` is the closed set `"buy"` (long) or `"sell"` (short).
 /// `change_pct` and `change_text` are the directional move from entry to the
 /// current mark, the same percent the desktop orders table shows. Both are
-/// absent when that percent cannot be computed. Adaptive `entry_text` and
-/// `mark_text` drop cents once a price reaches 1000, so the page cannot
-/// recover the percent by parsing them.
+/// absent when that percent cannot be computed, which includes every order
+/// whose entry has not filled: it holds no position, so it has no PnL.
+/// `to_entry_pct` and `to_entry_text` cover exactly that case instead: how far
+/// the current mark still has to travel to reach the entry, signed so that a
+/// negative value means the mark has already passed it. They are absent once
+/// the order holds a position. Adaptive `entry_text` and `mark_text` drop
+/// cents once a price reaches 1000, so the page cannot recover either percent
+/// by parsing them.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct OrderDto {
     pub core: u64,
@@ -191,6 +196,8 @@ pub struct OrderDto {
     pub pnl_text: Option<String>,
     pub change_pct: Option<f64>,
     pub change_text: Option<String>,
+    pub to_entry_pct: Option<f64>,
+    pub to_entry_text: Option<String>,
     pub panic_armed: bool,
 }
 

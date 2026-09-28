@@ -341,6 +341,10 @@ telegram.mini_orders_mark:
   ru: "Текущая"
   en: "Mark"
   es: "Precio actual"
+telegram.mini_orders_to_entry:
+  ru: "до входа"
+  en: "to entry"
+  es: "a la entrada"
 telegram.mini_empty_report:
   ru: "За этот период сделок нет."
   en: "No trades in this period."

@@ -566,6 +566,7 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_orders_qty",
     "mini_orders_entry",
     "mini_orders_mark",
+    "mini_orders_to_entry",
     "mini_empty_report",
     "mini_empty_cores",
     "mini_empty_balances",

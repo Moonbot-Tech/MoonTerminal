@@ -9,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use moon_core::telegram::web::dto::StrategyPendingDto;
 
-use super::{by_section, natural_cmp, scope_targets, strategy_pending};
+use moon_core::feed::OrderRow;
+
+use super::{by_section, natural_cmp, order_to_entry_pct, scope_targets, strategy_pending};
 
 /// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
@@ -100,4 +102,76 @@ fn strategy_pending_times_out_until_row_agrees_or_list_moves() {
         None,
         "a fresh strategy list after the window is the truth"
     );
+}
+
+/// Build a resting long entry at `entry` with the mark at `mark`, no fill yet.
+fn resting_order(entry: f64, mark: f32) -> OrderRow {
+    OrderRow {
+        market: "LINKUSDT".into(),
+        market_display: "LINKUSDT".into(),
+        coin: "LINK".into(),
+        quote: "USDT".into(),
+        is_short: false,
+        size: 10.0,
+        remaining_size: 0.0,
+        sl_on: false,
+        ts_on: false,
+        vstop_on: false,
+        sl_fixed: false,
+        ts_fixed: false,
+        vstop_fixed: false,
+        vstop_level: 0.0,
+        vstop_vol: 0.0,
+        buy_price: entry,
+        sell_price: 0.0,
+        create_time_ms: 0.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
+        price: mark,
+        fill_pct: 0.0,
+        strat: "test".into(),
+        strat_name: String::new(),
+        strat_id: 1,
+        status: String::new(),
+        uid: 1,
+        emulator: false,
+        job_is_done: false,
+        pending: true,
+        filled: false,
+        stop_loss: None,
+        trailing: None,
+        take_profit: None,
+        vstop: None,
+        pending_cond: None,
+        liq: None,
+        panic_sell: false,
+        is_moon_shot: false,
+        corridor_price_down: 0.0,
+        corridor_price_up: 0.0,
+        buy_trace: None,
+        sell_trace: None,
+    }
+}
+
+/// `mini_app.rs:order_to_entry_pct` states the distance to a resting entry, by side, and only
+/// while the order holds no position.
+///
+/// Mutation: drop the position gate, or ignore the side. A filled order then shows a distance
+/// beside its PnL, or a short's entry above the market reads as already passed.
+/// Oracle: long entry 100 at mark 110 is +10 %, short entry 100 at mark 80 is +20 %.
+#[test]
+fn order_to_entry_pct_measures_resting_entries_only() {
+    let long = resting_order(100.0, 110.0);
+    assert_eq!(order_to_entry_pct(&long), Some(10.0));
+
+    let mut short = resting_order(100.0, 80.0);
+    short.is_short = true;
+    assert_eq!(order_to_entry_pct(&short), Some(20.0));
+
+    let mut filled = resting_order(100.0, 110.0);
+    filled.filled = true;
+    filled.fill_pct = 100.0;
+    assert_eq!(order_to_entry_pct(&filled), None);
+
+    assert_eq!(order_to_entry_pct(&resting_order(100.0, 0.0)), None);
 }

@@ -810,28 +810,27 @@
         return span;
     }
 
+    // Directional move of a held position; for a resting entry, how far the mark is from it.
+    // Nothing at all when neither is known: a dash reads as a broken figure.
     function orderChange(order) {
-        var node = el("span", "num order-change");
         if (order.change_text) {
             var tone = signClass(order.change_pct);
-            node.className = "num order-change" + (tone ? " " + tone : "");
-            node.textContent = order.change_text;
-            return node;
+            return el("span", "num order-change" + (tone ? " " + tone : ""), order.change_text);
         }
-        node.className = "num order-change hint";
-        node.textContent = "\u2014";
-        return node;
+        if (order.to_entry_text) {
+            var wait = el("span", "num order-change hint");
+            wait.appendChild(el("span", "k", tr("mini_orders_to_entry") + " "));
+            wait.appendChild(document.createTextNode(order.to_entry_text));
+            return wait;
+        }
+        return null;
     }
 
     function orderResult(order) {
+        if (!order.pnl_text) return null;
         var node = el("span", "num order-pnl");
-        if (order.pnl_text) {
-            // Dollars like the core header and the summary above it.
-            applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
-            return node;
-        }
-        node.className = "num order-pnl hint";
-        node.textContent = "\u2014";
+        // Dollars like the core header and the summary above it.
+        applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
         return node;
     }
 
@@ -896,8 +895,10 @@
         coin.title = order.coin || "";
         top.appendChild(coin);
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
-        top.appendChild(orderChange(order));
-        top.appendChild(orderResult(order));
+        var change = orderChange(order);
+        if (change) top.appendChild(change);
+        var result = orderResult(order);
+        if (result) top.appendChild(result);
         main.appendChild(top);
         var flow = el("div", "sub order-flow");
         flow.appendChild(mutedBits(tr("mini_orders_qty"), order.qty_text));
