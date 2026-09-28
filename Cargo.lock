@@ -4234,6 +4234,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "moon-station"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "moon-core",
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "moon-sum-tree"
 version = "0.0.0"
 source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#e4f2d4e915366dae6dd9da9f1f57deb12aa1a524"

@@ -35,6 +35,9 @@
 //! The thread, once started, stays for the rest of the process: switched off it only reads the
 //! switch every two seconds.
 //!
+//! A host whose whole job this is — the station — turns it on for good with [`set_always_on`],
+//! whatever the file says.
+//!
 //! Nothing here depends on the GUI, so it moves into the station crate as it is.
 
 mod compare;
@@ -80,9 +83,17 @@ const SUMMARY_EVERY: Duration = Duration::from_secs(60);
 /// trail on its settle pass (`margin + 5 s` after the exit) through a queue of its own.
 const COMPARE_DELAY: Duration = Duration::from_secs(30);
 
-/// Whether the recorder is switched on (`channels.tape_recorder`).
+/// Set by a host that records always — the station — whatever the diagnostics file says.
+static ALWAYS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the recorder is switched on (`channels.tape_recorder`, or [`set_always_on`]).
 pub fn enabled() -> bool {
-    crate::diagnostics::tape_recorder()
+    ALWAYS_ON.load(std::sync::atomic::Ordering::Relaxed) || crate::diagnostics::tape_recorder()
+}
+
+/// Record whatever `channels.tape_recorder` says: for a host whose whole job this is.
+pub fn set_always_on() {
+    ALWAYS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// A configured core the recorder may take as a donor.
