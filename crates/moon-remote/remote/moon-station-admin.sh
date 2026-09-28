@@ -138,6 +138,9 @@ start)
     systemctl restart "$UNIT"
     ;;
 restart) systemctl restart "$UNIT" ;;
+# reload: station.toml again without a restart (SIGHUP) — for a changed tape window or a core
+# taken out; a core added still needs `start` for its credential.
+reload) systemctl reload "$UNIT" ;;
 stop) systemctl stop "$UNIT" ;;
 status) cmd_status ;;
 logs) cmd_logs "$@" ;;

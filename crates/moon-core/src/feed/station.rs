@@ -25,6 +25,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use moonproto::Event;
 
+mod link;
+pub use link::StationLink;
+
 static STATION: AtomicBool = AtomicBool::new(false);
 
 /// Switch this process into station mode. Call once, before the first core is spawned.

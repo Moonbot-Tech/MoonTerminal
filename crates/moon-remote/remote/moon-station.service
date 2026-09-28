@@ -11,6 +11,9 @@ Type=simple
 User=moon-station
 Group=moon-station
 ExecStart=/opt/moon-station/bin/moon-station --data /var/lib/moon-station --config /etc/moon-station/station.toml
+# SIGHUP re-reads station.toml: cores removed or switched off disconnect, the tape window moves.
+# A core added needs its credential, which only a start hands over.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 StateDirectory=moon-station

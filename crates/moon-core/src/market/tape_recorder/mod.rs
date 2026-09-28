@@ -92,6 +92,8 @@ const OPEN_HORIZON_MS: i64 = 48 * 3_600_000;
 /// (re)connect the core resends every open row (the open-row check), and the feed's tracker,
 /// rebuilt with the connection, sees them for the first time.
 const FRESH_OPEN_MS: i64 = 120_000;
+/// How long a stopping recorder waits for its last writes.
+const SHUTDOWN_SYNC: Duration = Duration::from_secs(5);
 /// How often the summary line is written.
 const SUMMARY_EVERY: Duration = Duration::from_secs(60);
 /// How long after a trade settles here its comparison waits: the terminal's own capture files the
@@ -139,6 +141,8 @@ enum Cmd {
     },
     /// A core's connection went away or was replaced: a donor on it must not be used again.
     CoreGone(CoreId),
+    /// The process is stopping: file what is drained, and answer once it is on disk.
+    Shutdown(Sender<()>),
 }
 
 fn cores() -> std::sync::MutexGuard<'static, Vec<Core>> {
@@ -198,6 +202,20 @@ pub fn trade_closed(exchange_key: &str, market: &str, trade: TradeId, open_ms: i
     }
 }
 
+/// Stop the recorder for good, as the process exits: every recording files what it drained up to
+/// its stream's frontier, the donors disconnect, the summary is written, and the call returns once
+/// the file has taken it — or after `timeout`. A recorder that never started returns at once.
+///
+/// Returns:
+///     Whether everything was on disk in time.
+pub fn shutdown(timeout: Duration) -> bool {
+    let Some(Some(tx)) = TX.get() else {
+        return true;
+    };
+    let (reply, done) = mpsc::channel();
+    tx.send(Cmd::Shutdown(reply)).is_ok() && done.recv_timeout(timeout).is_ok()
+}
+
 /// Send to a thread that is already running; never starts one.
 fn notify(cmd: Cmd) {
     if let Some(Some(tx)) = TX.get() {
@@ -236,6 +254,22 @@ fn run(rx: &Receiver<Cmd>) {
             Err(RecvTimeoutError::Disconnected) => return,
         }
         pending.extend(rx.try_iter());
+        if let Some(at) = pending.iter().position(|c| matches!(c, Cmd::Shutdown(_))) {
+            let Cmd::Shutdown(reply) = pending.remove(at) else {
+                return;
+            };
+            if let Some(mut rec) = recorder.take() {
+                // What arrived in the same wake still counts: a trade that closed as the stop was
+                // asked is filed with its close.
+                let now_ms = crate::util::now_unix_ms_i64();
+                for cmd in pending.drain(..) {
+                    rec.apply(cmd, now_ms);
+                }
+                rec.shutdown();
+            }
+            let _ = reply.send(());
+            return;
+        }
         if !enabled() {
             if let Some(stopped) = recorder.take() {
                 stopped.summary("stopped");
@@ -373,6 +407,8 @@ impl Recorder {
                     .or_insert_with(KeyTask::new)
                     .closed(trade, open_ms, close_ms, margin, long);
             }
+            // Taken by `run` before a command reaches here.
+            Cmd::Shutdown(_) => {}
             Cmd::CoreGone(core) => {
                 let gone: Vec<String> = self
                     .donors
@@ -738,6 +774,19 @@ impl Recorder {
             "donor {exchange} core={}: dropped ({why})",
             crate::feed::core_label(donor.core)
         ));
+    }
+
+    /// File every recording up to its frontier, disconnect the donors, write the summary, and
+    /// wait for the file to take it all.
+    fn shutdown(&mut self) {
+        let exchanges: Vec<String> = self.donors.keys().cloned().collect();
+        for exchange in exchanges {
+            self.drop_donor(&exchange, "stopping");
+        }
+        self.summary("stopped");
+        if !self.cache.sync(SHUTDOWN_SYNC) {
+            line("stopped before the last writes reached the file");
+        }
     }
 
     /// Compare every settled trade whose delay ran out.

@@ -14,6 +14,16 @@ codegen-units = 1
 lto = true
 strip = true
 
+# The station's server binary (`cargo zigbuild -p moon-station --profile station --target
+# x86_64-unknown-linux-musl`, STATION.md §6). Release, but thin LTO over parallel codegen units:
+# after a moon-core edit it rebuilds in 35 s against the release profile's 187 s, for a binary
+# 11.5 MB instead of 10.1 MB (2026-09-28, 24-thread desktop). Its CPU cost on the station is not
+# measured yet.
+[profile.station]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+
 # Dev build for the GPUI shell: the main source of stuttering (even for the cursor) is the DX12
 # debug/validation layer enabled by GPUI and wgpu in debug via `cfg!(debug_assertions)`
 # (also responsible for `HRESULT 0x887A002D` at startup without Graphics Tools). Disable it without

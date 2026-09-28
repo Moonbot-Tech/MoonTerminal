@@ -20,6 +20,13 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 zeroize = "1"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = { version = "0.4", default-features = false }
+
+# musl's own allocator serialises every thread on one lock (`src/main.rs`).
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = { version = "0.1", default-features = false }
+
 [features]
 # Read the cores from a copy of the terminal's `cfg/servers.enc` when no `station.toml` is
 # present — a development convenience on the terminal's own machine, where the keyring holds

@@ -18,11 +18,23 @@
 //! `station.toml` (the cores) unless `--config` names it elsewhere — the service keeps it in
 //! `/etc/moon-station`, read-only to the station. Core keys come as systemd credentials
 //! (`cores.rs`).
+//!
+//! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
+//! the process exits; the report replica and the order traces need no such step, the replica
+//! resuming from its last committed checkpoint and the traces backfilled at the next start. SIGHUP re-reads `station.toml`: cores removed or switched off disconnect,
+//! the tape window moves. A core ADDED needs its credential, which systemd hands over only at a
+//! start, so that one takes a restart.
 
 mod cores;
+mod signals;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+// musl's allocator serialises every thread on one lock; the station runs a feed thread per core.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -30,6 +42,9 @@ const DRAIN_EVERY: Duration = Duration::from_millis(100);
 const DIAG_POLL_EVERY: Duration = Duration::from_secs(1);
 /// How often the connection summary is logged.
 const STATUS_EVERY: Duration = Duration::from_secs(60);
+/// How long a stopping station waits for the tape recorder's last writes. systemd waits 90 s
+/// before it kills.
+const STOP_WAIT: Duration = Duration::from_secs(15);
 
 fn main() -> anyhow::Result<()> {
     let (data_root, config) = args()?;
@@ -58,25 +73,13 @@ fn main() -> anyhow::Result<()> {
         data_root.display()
     );
 
-    let station = cores::load(&config.unwrap_or_else(|| data_root.join("station.toml")))?;
-    let cfg = station.config;
+    let signals = signals::Signals::install()?;
+    let config_path = config.unwrap_or_else(|| data_root.join("station.toml"));
+    let station = cores::load(&config_path)?;
     // The terminal's window around a trade, before the recorder builds its first one.
-    if let Some(secs) = station.tape.margin_s {
-        moon_core::market::trade_replay::set_margin_s(secs);
-    }
-    if let Some(minutes) = station.tape.long_position_min {
-        moon_core::market::trade_replay::set_long_position_min(minutes);
-    }
-    log::info!(
-        "tape window: margin {} s, long position from {} min",
-        moon_core::market::trade_replay::margin_ms() / 1_000,
-        moon_core::market::trade_replay::long_position_ms() / 60_000
-    );
-    log::info!(
-        "cores: {} configured, {} active",
-        cfg.servers.len(),
-        cfg.servers.iter().filter(|s| s.active).count()
-    );
+    apply_tape(&station.tape);
+    let cfg = station.config;
+    log_cores(&cfg);
 
     // Before any core is spawned: every feed reads it when its client is built.
     moon_core::feed::station::enable();
@@ -97,15 +100,29 @@ fn main() -> anyhow::Result<()> {
     // feeds deliver anything, and again whenever a core names its exchange.
     session.map_cores_to_themselves();
 
-    let groups: Vec<String> = {
-        let mut groups: Vec<String> = cfg.servers.iter().map(|s| s.group.clone()).collect();
-        groups.sort();
-        groups.dedup();
-        groups
-    };
+    let mut groups = groups_of(&cfg);
     let mut last_diag = Instant::now();
     let mut last_status = Instant::now();
     loop {
+        if signals.stop_requested() {
+            log::info!("stopping");
+            if !moon_core::market::tape_recorder::shutdown(STOP_WAIT) {
+                log::warn!("the tape recorder did not finish its last writes in time");
+            }
+            log::info!("stopped");
+            return Ok(());
+        }
+        if signals.take_reload() {
+            match reload(&config_path) {
+                Ok(cfg) => {
+                    session.reconcile(&cfg, Some(&reports.tx));
+                    session.map_cores_to_themselves();
+                    groups = groups_of(&cfg);
+                }
+                // The running set stays as it was: a half-written file must not drop every core.
+                Err(e) => log::error!("reload of {} failed: {e:#}", config_path.display()),
+            }
+        }
         if session.drain().identity {
             session.map_cores_to_themselves();
         }
@@ -137,6 +154,46 @@ fn main() -> anyhow::Result<()> {
         }
         std::thread::sleep(DRAIN_EVERY);
     }
+}
+
+/// Re-read `station.toml` and apply its tape window; the cores are for the caller to reconcile.
+fn reload(path: &Path) -> anyhow::Result<moon_core::config::AppConfig> {
+    let station = cores::load(path)?;
+    log::info!("reloaded {}", path.display());
+    apply_tape(&station.tape);
+    log_cores(&station.config);
+    Ok(station.config)
+}
+
+/// The terminal's window around a trade; absent fields keep what is in force.
+fn apply_tape(tape: &cores::Tape) {
+    if let Some(secs) = tape.margin_s {
+        moon_core::market::trade_replay::set_margin_s(secs);
+    }
+    if let Some(minutes) = tape.long_position_min {
+        moon_core::market::trade_replay::set_long_position_min(minutes);
+    }
+    log::info!(
+        "tape window: margin {} s, long position from {} min",
+        moon_core::market::trade_replay::margin_ms() / 1_000,
+        moon_core::market::trade_replay::long_position_ms() / 60_000
+    );
+}
+
+fn log_cores(cfg: &moon_core::config::AppConfig) {
+    log::info!(
+        "cores: {} configured, {} active",
+        cfg.servers.len(),
+        cfg.servers.iter().filter(|s| s.active).count()
+    );
+}
+
+/// The core groups the status line sums over.
+fn groups_of(cfg: &moon_core::config::AppConfig) -> Vec<String> {
+    let mut groups: Vec<String> = cfg.servers.iter().map(|s| s.group.clone()).collect();
+    groups.sort();
+    groups.dedup();
+    groups
 }
 
 /// `--data <dir>`, required: the station never guesses where its state lives. `--config <file>`,

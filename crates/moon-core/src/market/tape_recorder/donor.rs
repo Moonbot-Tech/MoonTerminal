@@ -23,15 +23,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
 
 use moonproto::state::{
-    MarketHistoryEvent, MarketHistorySizing, SeqRingCursor, SeqRingReader, TradeHistoryRow,
-    TradesEvent,
+    MarketHistoryEvent, SeqRingCursor, SeqRingReader, TradeHistoryRow, TradesEvent,
 };
-use moonproto::{
-    ClientConfig, ConnectConfig, Event, InitConfig, InitialStrategies, LifecycleEvent, MoonClient,
-    RefreshConfig, TradesStreamMode,
-};
+use moonproto::{Event, LifecycleEvent};
 
 use crate::config::ServerConfig;
+use crate::feed::station::StationLink;
 use crate::feed::{Side, Tick};
 use crate::session::CoreId;
 
@@ -78,7 +75,7 @@ struct Pair {
 
 pub(super) struct Donor {
     pub core: CoreId,
-    client: MoonClient,
+    client: StationLink,
     connected_at: Instant,
     ready_at: Option<Instant>,
     /// The selection the core was last sent.
@@ -100,31 +97,7 @@ impl Donor {
     /// Connect a client of `server` in the station's mode. Returns at once; [`Self::pump`]
     /// notices when Init finished.
     pub(super) fn connect(server: &ServerConfig, now: Instant) -> anyhow::Result<Self> {
-        let info = moonproto::parse_key_info(server.key.expose())
-            .ok_or_else(|| anyhow::anyhow!("key unreadable"))?;
-        let (endpoint, transport) =
-            crate::feed::live::connection_target(info.network.as_ref(), server.transport);
-        let cfg = ClientConfig::new(
-            endpoint.address.to_string(),
-            endpoint.port,
-            info.keys.master_key,
-            info.keys.mac_key,
-        )
-        .with_transport_mode(transport)
-        .with_market_history(MarketHistorySizing::Compact)
-        .with_refresh(RefreshConfig {
-            update_markets_every: None,
-            check_tags_every: None,
-        });
-        // No subscriptions at Init; the strategies list is required or Init never completes.
-        let init = InitConfig {
-            initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
-            ..Default::default()
-        };
-        let client = MoonClient::connect(
-            cfg,
-            ConnectConfig::new(init).with_connect_timeout(Duration::from_secs(15)),
-        )?;
+        let client = StationLink::connect(server)?;
         Ok(Self {
             core: server.id,
             client,
@@ -244,14 +217,8 @@ impl Donor {
         if self.pairs.keys().eq(markets.iter()) {
             return Ok(());
         }
-        let result = match markets.is_empty() {
-            true => self.client.streams().unsubscribe_all_trades(),
-            false => self.client.streams().subscribe_trades_for(
-                TradesStreamMode::TradesOnly,
-                markets.iter().map(String::as_str),
-            ),
-        };
-        result.map_err(|e| e.to_string())?;
+        self.client
+            .select_pairs(markets.iter().map(String::as_str))?;
         self.pairs.retain(|market, _| markets.contains(market));
         for market in markets {
             self.pairs.entry(market.clone()).or_default();
@@ -270,10 +237,7 @@ impl Donor {
         let Some(pair) = self.pairs.get_mut(market) else {
             return Err("not selected".to_string());
         };
-        self.client
-            .history()
-            .request_chart(market)
-            .map_err(|e| e.to_string())?;
+        self.client.request_chart(market)?;
         pair.asked = Some(now);
         self.last_used = now;
         Ok(())
@@ -297,15 +261,10 @@ impl Donor {
     /// Point the pair's cursor at the oldest row its ring holds — after the archive merged, or
     /// when the recording starts without one.
     pub(super) fn restart(&mut self, market: &str) {
-        let ring = self
-            .client
-            .snapshot_versioned()
-            .and_then(|snapshot| snapshot.market_history_readers(market))
-            .and_then(|readers| readers.futures_trades.or(readers.spot_trades))
-            .map(|reader| {
-                let cursor = reader.cursor_from_oldest();
-                (reader, cursor)
-            });
+        let ring = self.client.trades_ring(market).map(|reader| {
+            let cursor = reader.cursor_from_oldest();
+            (reader, cursor)
+        });
         if let Some(pair) = self.pairs.get_mut(market) {
             pair.ring = ring;
         }
