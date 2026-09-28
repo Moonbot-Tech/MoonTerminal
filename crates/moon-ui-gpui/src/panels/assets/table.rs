@@ -778,7 +778,7 @@ impl AssetsView {
         // so the expanded section reads as four matching vertical containers.
         //
         // Roughly 420 rather than 240 rendered pixels at the shipped default font delta: core
-        // names here are the user's own free text and run long (`VLTR$18 ~ F-BN / SUB ACC No 38
+        // names here are the user's own free text and run long (`Sample Desk ~ S-HL / ACCOUNT No 38
         // L`), while the free/total pair beside them already takes roughly half the column — so at
         // 240, and still at 300, the name truncated to a few characters plus an ellipsis. A roster
         // you cannot read by name cannot be used to pick a transfer host, which is the column's
@@ -796,7 +796,7 @@ impl AssetsView {
         //
         // And the DEFAULT is now measured rather than fixed. 420 px was chosen against the names
         // above, but a name is the user's own free text: at the shipped width every row read
-        // `AWS$22 ~ F-BN / SHOT_FUT (SU…`, ellipsized exactly at the sub-account that says which
+        // `Demo Fund ~ F-BN / SUBACCOUNT (…`, ellipsized exactly at the sub-account that says which
         // row it is, while the three wallet columns beside it held one short entry each. The
         // column is sized to its widest name plus the figure it must not overlap, floored at the
         // shipped width and capped at `MAX_BASE_W` (`roster_width::auto_base`); a stored drag

@@ -73,7 +73,7 @@ pub(super) const KIND_W: f32 = 72.0;
 pub(super) const KIND_MIN_W: f32 = 48.0;
 /// FLOOR of the core column's preferred width. Unlike every other column this one is
 /// content-measured per data load (`list::table::core_col_w`): its single-core label is a
-/// free-form server name, which no fixed width fits — 88 truncated real names on a wide
+/// free-form server name, which no fixed width fits — 88 truncated core names on a wide
 /// window while the flexible name column held the slack. The floor is what the column takes
 /// when every measured name is shorter, and when there is nothing to measure yet; it also
 /// covers the multi-core aggregate label ("Núcleos: 999", the longest locale form, stays

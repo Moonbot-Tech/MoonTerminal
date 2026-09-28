@@ -29,10 +29,10 @@ fn scope_targets_drops_unknown_and_duplicate_cores() {
 
 /// `mini_app.rs:natural_cmp` reads digit runs as numbers and ignores letter case.
 ///
-/// Mutation: compare the raw strings. "SUB ACC № 10" then sorts before "№ 9".
+/// Mutation: compare the raw strings. "Account № 10" then sorts before "№ 9".
 #[test]
 fn natural_cmp_orders_numbers_by_value() {
-    assert_eq!(natural_cmp("SUB ACC № 9", "SUB ACC № 10"), Ordering::Less);
+    assert_eq!(natural_cmp("Account № 9", "Account № 10"), Ordering::Less);
     assert_eq!(natural_cmp("core 21", "core 3"), Ordering::Greater);
     assert_eq!(natural_cmp("alpha", "Beta"), Ordering::Less);
     assert_eq!(natural_cmp("core 007", "core 7"), Ordering::Less);

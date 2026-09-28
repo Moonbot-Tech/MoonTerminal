@@ -78,7 +78,7 @@ pub(in crate::analytics::tuner) const DEAL_COLS: &[DealCol] = &[
         Align::Left,
         false,
     ),
-    // The core name is the long text ("VLTR$18 ~ F-BG / …"). It is the fill: the coin is a
+    // The core name is the long text ("Demo Fund ~ F-BG / …"). It is the fill: the coin is a
     // short ticker and used to take the free width while this column stayed at 72px.
     col(
         COL_CORE,

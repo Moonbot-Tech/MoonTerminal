@@ -693,7 +693,7 @@ fn today_omits_daily_navigation() {
 fn core_names_span_the_money_columns() {
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    let name = "VLTR$18 / SUB ACC No 11 with a long server name";
+    let name = "Sample Desk / ACCOUNT No 11 with a long server name";
     let page = Page {
         request,
         from: 0,
