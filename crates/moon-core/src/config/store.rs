@@ -26,6 +26,47 @@ pub fn read_servers() -> anyhow::Result<ServersFile> {
     Ok(sf)
 }
 
+/// One core's key as the terminal stores it — for handing it to the station.
+pub struct CoreKeyEntry {
+    pub uid: u64,
+    pub name: String,
+    pub key: super::Secret,
+    /// The terminal's transport override from settings.toml; `None` = the key's own mode.
+    pub transport: Option<super::TransportVersion>,
+}
+
+/// Every core's key from servers.enc, READ ONLY: decrypted without adopting the file's key
+/// material and parsed without [`super::AppConfig::load`], which may assign uids, upgrade the
+/// schema and save — racing a running terminal's own saves. settings.toml is read only for the
+/// transport overrides, and nothing is moved aside when it is unreadable.
+pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
+    let bytes = std::fs::read(paths::servers_path()).context("read servers.enc")?;
+    let plain = zeroize::Zeroizing::new(crypto::decrypt_standalone(&bytes)?);
+    let sf: ServersFile =
+        toml::from_str(std::str::from_utf8(&plain)?).context("parse servers.enc")?;
+    let transports: std::collections::HashMap<u64, super::TransportVersion> =
+        std::fs::read_to_string(paths::settings_path())
+            .ok()
+            .and_then(|text| toml::from_str::<SettingsFile>(&text).ok())
+            .map(|meta| {
+                meta.servers
+                    .into_iter()
+                    .filter_map(|s| Some((s.uid, s.transport?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+    Ok(sf
+        .servers
+        .into_iter()
+        .map(|entry| CoreKeyEntry {
+            transport: transports.get(&entry.uid).copied(),
+            uid: entry.uid,
+            name: entry.name,
+            key: entry.key,
+        })
+        .collect())
+}
+
 /// Encrypts and writes servers.enc, including Telegram credentials when present.
 ///
 /// Refuses to write over a file this process never opened; see [`refuse_blind_overwrite`].

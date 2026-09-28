@@ -108,6 +108,7 @@ pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
     StratSlot, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
 };
+pub use store::{CoreKeyEntry, read_core_keys};
 pub use tab_badges::TabBadgeSettings;
 pub use theme::{ChartTheme, ChartThemeSet};
 // Keep the counter private to `config` so external code cannot construct or replace it.

@@ -5,7 +5,7 @@
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>
 //!             [--login-key <file>] --admin <name> [--station-bin <file>]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
-//! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal [--core <name|uid>]… | --dummy <uid>:<name>…)
+//! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! ```
 //!
@@ -163,27 +163,33 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The terminal's own cores, from its `servers.enc`: every active one, or the ones picked.
+/// The picked cores' keys from the terminal's `servers.enc`, read without writing anything
+/// back. Every core must be named: full-access keys leave this machine only by choice.
 fn terminal_cores(picks: &[String]) -> anyhow::Result<Vec<CoreKey>> {
-    let cfg = moon_core::config::AppConfig::load(None, false)?;
-    let cores: Vec<CoreKey> = cfg
-        .servers
-        .iter()
-        .filter(|s| s.active && s.uid != 0 && !s.key.is_empty())
-        .filter(|s| {
-            picks.is_empty()
-                || picks
-                    .iter()
-                    .any(|p| *p == s.name || *p == s.uid.to_string())
-        })
-        .map(|s| CoreKey {
-            uid: s.uid,
-            name: s.name.clone(),
-            transport: s.transport,
-            key: s.key.clone(),
-        })
-        .collect();
-    anyhow::ensure!(!cores.is_empty(), "no matching active core with a key");
+    anyhow::ensure!(
+        !picks.is_empty(),
+        "--from-terminal needs --core <name|uid> for each core to send"
+    );
+    let all = moon_core::config::read_core_keys()?;
+    let mut cores = Vec::new();
+    for pick in picks {
+        let entry = all
+            .iter()
+            .find(|e| e.name == *pick || e.uid.to_string() == *pick)
+            .ok_or_else(|| anyhow::anyhow!("no core {pick:?} in servers.enc"))?;
+        anyhow::ensure!(
+            entry.uid != 0,
+            "core {:?} has no uid yet: start the terminal once",
+            entry.name
+        );
+        anyhow::ensure!(!entry.key.is_empty(), "core {:?} has no key", entry.name);
+        cores.push(CoreKey {
+            uid: entry.uid,
+            name: entry.name.clone(),
+            transport: entry.transport,
+            key: entry.key.clone(),
+        });
+    }
     Ok(cores)
 }
 
