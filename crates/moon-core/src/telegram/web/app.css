@@ -282,10 +282,47 @@ main {
     overflow-wrap: anywhere;
 }
 
-/* A hidden total: regular-weight asterisks, not the figure's bold. */
-.hero-value.masked {
+/* A hidden balance figure: regular-weight asterisks, not the figure's bold. */
+.masked {
     font-weight: 400;
     letter-spacing: 0.12em;
+}
+
+/* Balances total: its label left, the eye that hides every figure of the tab right. */
+.hero-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 4px;
+}
+
+.eye-btn {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: -10px;
+    color: var(--link);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.eye-btn:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: -2px;
+    border-radius: var(--r-ctl);
+}
+
+.eye-icon {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .hero-sub {
@@ -969,16 +1006,6 @@ input:focus-visible {
 .money-col,
 .balance-side {
     min-width: 0;
-}
-
-.hero-toggle {
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-}
-
-.hero-toggle:focus-visible {
-    outline: 2px solid var(--link);
-    outline-offset: -2px;
 }
 
 /* All-cores bar: one line per switch, its label left and a START/STOP pair right, each button

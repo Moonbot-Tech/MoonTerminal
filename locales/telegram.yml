@@ -633,3 +633,11 @@ telegram.mini_close:
   ru: "Закрыть"
   en: "Close"
   es: "Cerrar"
+telegram.mini_balances_show:
+  ru: "Показать суммы"
+  en: "Show amounts"
+  es: "Mostrar importes"
+telegram.mini_balances_hide:
+  ru: "Скрыть суммы"
+  en: "Hide amounts"
+  es: "Ocultar importes"

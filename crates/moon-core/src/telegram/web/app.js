@@ -49,8 +49,10 @@
     var cmdTimer = null;
     var period = "today";
     var current = null;
-    // The balances total starts masked each time the pane opens; never persisted.
+    // Every money figure of the balances tab starts masked; one eye toggle on the total reveals
+    // them together. Kept for the popup's life like a toggled group, never persisted.
     var balanceRevealed = false;
+    var BALANCE_MASK = "******";
     var loadToken = 0;
     var sessionOk = false;
     var commandBusy = false;
@@ -186,6 +188,34 @@
         var tone = signClass(value);
         node.className = baseClass + (tone ? " " + tone : "");
         node.textContent = text;
+    }
+
+    // A hidden balance figure: the mask replaces the amount, never an unvalued note.
+    function maskMoney(node, baseClass) {
+        node.className = baseClass + " masked";
+        node.textContent = BALANCE_MASK;
+    }
+
+    // Open eye while the figures are hidden (tap to show), crossed eye while they are shown.
+    function eyeIcon(crossed) {
+        var icon = svgEl("svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("aria-hidden", "true");
+        icon.setAttribute("class", "eye-icon");
+        var lid = svgEl("path");
+        lid.setAttribute("d", "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z");
+        icon.appendChild(lid);
+        var pupil = svgEl("circle");
+        pupil.setAttribute("cx", "12");
+        pupil.setAttribute("cy", "12");
+        pupil.setAttribute("r", "3");
+        icon.appendChild(pupil);
+        if (crossed) {
+            var slash = svgEl("path");
+            slash.setAttribute("d", "M4 4l16 16");
+            icon.appendChild(slash);
+        }
+        return icon;
     }
 
     function restoreScroll(y) {
@@ -560,6 +590,7 @@
         var wrap = el("span", "group-meta");
         var span = el("span", "num balance-figure");
         if (!found) applyMoney(span, "num balance-figure", null, null);
+        else if (!balanceRevealed && found.total_text) maskMoney(span, "num balance-figure");
         else applyMoney(span, "num balance-figure", found.total_text, found.total);
         wrap.appendChild(span);
         return wrap;
@@ -724,12 +755,14 @@
         var free = el("span", "");
         free.appendChild(el("span", "k", tr("mini_free") + " "));
         var freeVal = el("span", "num");
-        applyMoney(freeVal, "num", row.free_text, row.free);
+        if (!balanceRevealed && row.free_text) maskMoney(freeVal, "num");
+        else applyMoney(freeVal, "num", row.free_text, row.free);
         free.appendChild(freeVal);
         var total = el("span", "money-col");
         total.appendChild(el("span", "k", tr("mini_total") + " "));
         var totalVal = el("span", "num");
-        applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
+        if (!balanceRevealed && row.total_text) maskMoney(totalVal, "num balance-figure");
+        else applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
         total.appendChild(totalVal);
         bottom.appendChild(free);
         bottom.appendChild(total);
@@ -1206,35 +1239,25 @@
             restoreScroll(y);
             return;
         }
-        var hero = el("div", "card hero hero-toggle");
-        hero.setAttribute("role", "button");
-        hero.tabIndex = 0;
-        hero.appendChild(el("p", "label", tr("mini_total")));
-        var big = el("p", "");
-        function paintTotal() {
-            if (balanceRevealed) applyMoney(big, "hero-value num", data.total_text, data.total);
-            else {
-                big.className = "hero-value num masked";
-                big.textContent = "******";
-            }
-            hero.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
-        }
-        function toggleTotal() {
+        var hero = el("div", "card hero");
+        var head = el("div", "hero-head");
+        head.appendChild(el("p", "label", tr("mini_total")));
+        var eye = document.createElement("button");
+        eye.type = "button";
+        eye.className = "eye-btn";
+        eye.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
+        eye.setAttribute("aria-label", tr(balanceRevealed ? "mini_balances_hide" : "mini_balances_show"));
+        eye.appendChild(eyeIcon(balanceRevealed));
+        eye.addEventListener("click", function () {
             balanceRevealed = !balanceRevealed;
             hapticSelection();
-            paintTotal();
-        }
-        hero.addEventListener("click", function (event) {
-            if (event.target && event.target.closest && event.target.closest("button, a")) return;
-            toggleTotal();
+            paintBalances();
         });
-        hero.addEventListener("keydown", function (event) {
-            if (event.target !== hero) return;
-            if (event.key !== "Enter" && event.key !== " ") return;
-            event.preventDefault();
-            toggleTotal();
-        });
-        paintTotal();
+        head.appendChild(eye);
+        hero.appendChild(head);
+        var big = el("p", "");
+        if (!balanceRevealed && data.total_text) maskMoney(big, "hero-value num");
+        else applyMoney(big, "hero-value num", data.total_text, data.total);
         hero.appendChild(big);
         if (data.stale > 0 || data.excluded > 0) {
             var meta = el("div", "hero-sub badges");
@@ -1844,7 +1867,6 @@
         current = name;
         closeSheet();
         coreDetailId = null;
-        if (name === "balances") balanceRevealed = false;
         loadToken += 1;
         var i;
         for (i = 0; i < TAB_NAMES.length; i++) {

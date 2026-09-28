@@ -639,4 +639,6 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_reconnect",
     "mini_back",
     "mini_close",
+    "mini_balances_show",
+    "mini_balances_hide",
 ];
