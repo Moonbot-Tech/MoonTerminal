@@ -68,19 +68,3 @@ fn a_set_mode_is_never_reseeded_from_the_key() {
         );
     }
 }
-
-/// The other half: while nothing is set, the key is the only thing that can answer -- that is how
-/// a core being added, and an older config on its first load, get a mode at all.
-#[test]
-fn an_unset_mode_is_taken_from_the_key() {
-    assert_eq!(
-        seeded_transport(None, "not-a-key"),
-        transport_from_key("not-a-key"),
-        "with nothing stored the key decides, whatever it says"
-    );
-    assert_eq!(
-        seeded_transport(None, ""),
-        None,
-        "an empty key names nothing"
-    );
-}

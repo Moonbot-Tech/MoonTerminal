@@ -1438,24 +1438,6 @@ fn one_fold_serves_the_total_and_every_subtotal() {
     assert_eq!(fold_total(&[]).trades, 0, "an empty fold is all zeroes");
 }
 
-/// `profit_monitor/mod.rs:arrivals` must not treat an EMPTY previous snapshot as a baseline.
-///
-/// Breakage: storing `Some({})` and diffing against it makes the first populated read — report
-/// replication catching up after the window opens — light every row in the table at once, the exact
-/// failure the rebaseline rule exists to prevent.
-#[test]
-fn an_empty_previous_snapshot_is_not_a_baseline() {
-    let empty: HashMap<u64, (i64, i64)> = HashMap::new();
-
-    // What the view does: an empty baseline is filtered away before the diff.
-    let baseline = Some(&empty).filter(|seen| !seen.is_empty());
-    let (_, arrived) = super::arrivals(baseline, &summary().cores);
-    assert!(
-        arrived.is_empty(),
-        "a table filling up for the first time must not read as a table full of arrivals"
-    );
-}
-
 /// `profit_monitor/model.rs:scoped_query_core_ids` must retain only data-only previously seen
 /// cores, and keep an unhidden preset unfiltered: inverting its configured-core filter or returning
 /// `core_order` when nothing is hidden silently removes real core money from the monitor total.

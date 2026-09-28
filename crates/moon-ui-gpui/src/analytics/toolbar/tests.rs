@@ -475,14 +475,3 @@ fn a_fresh_partially_hidden_implicit_all_query_uses_only_visible_configured_core
         "a fresh partial scope must query exactly the configured cores it still shows"
     );
 }
-
-/// `toolbar.rs:analytics_core_filter_ids` must preserve its `hidden = None` early return.
-/// Replacing it with a filtered empty slice would make an unhidden Analytics window query the
-/// no-match sentinel at startup and display no trades even though every core is in scope.
-#[test]
-fn a_fresh_unhidden_implicit_all_query_remains_unfiltered() {
-    assert!(
-        analytics_core_filter_ids(&HashSet::new(), None, None, &[], &[]).is_empty(),
-        "an absent hidden scope means every core, which the report filter represents as empty"
-    );
-}

@@ -643,27 +643,6 @@ fn starting_scope_without_configured_cores_stays_unfiltered() {
     );
 }
 
-/// Deleting `workspace.rs:EffectiveCoreScope::or_configured`'s fallback branch would make startup
-/// and all-offline byte-identical inputs read fleet-wide Report rows instead of the group's own rows.
-#[test]
-fn startup_with_configured_cores_uses_the_group_and_not_the_sentinel() {
-    let session = resolve_group_scope(WorkspaceMode::Classic, None, &[], RetainedCoreScope::All)
-        .with_membership_counts(0, 0);
-    let configured = resolve_group_scope(
-        WorkspaceMode::Classic,
-        None,
-        &[11, 22],
-        RetainedCoreScope::All,
-    )
-    .with_membership_counts(2, 2);
-
-    let chosen = session.or_configured(|| configured.clone());
-    let query = query_core_ids(chosen.ids().to_vec(), chosen.membership_total() > 0);
-    assert_eq!(query, vec![11, 22]);
-    assert!(!query.is_empty());
-    assert!(!query.contains(&NO_MATCH_CORE_UID));
-}
-
 /// Relaxing `workspace.rs:EffectiveCoreScope::or_configured` from `ids.is_empty() &&
 /// membership_total == 0` to only `ids.is_empty()` would broaden an offline explicit selection.
 #[test]

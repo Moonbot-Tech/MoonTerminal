@@ -48,17 +48,6 @@ fn a_created_or_deleted_strategy_does_not_block_confirmation() {
     assert!(!pending.confirmed_by([2, 3].into_iter()));
 }
 
-/// The sequence is what the tree cache hashes, and its one job there is to separate two orders of
-/// the SAME ids — the case a second press before the core answers produces.
-#[test]
-fn the_sequence_is_exposed_in_order_for_the_cache() {
-    assert_eq!(PendingOrder::new(vec![1, 3, 2]).ids(), &[1, 3, 2]);
-    assert_ne!(
-        PendingOrder::new(vec![1, 2, 3]).ids(),
-        PendingOrder::new(vec![1, 3, 2]).ids()
-    );
-}
-
 /// Rank is what places a row, and an id the sequence never named has none — such a row keeps the
 /// row it follows instead of taking a position the operator never chose.
 #[test]

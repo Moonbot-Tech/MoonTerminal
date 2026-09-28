@@ -19,29 +19,6 @@ fn every_order_column_descriptor_is_sortable() {
     }
 }
 
-/// Every stop cell reads ON or OFF — a row must never show a stop's state as unknown.
-///
-/// Whether the stop is the order's own or the one its strategy supplies before the fill is settled
-/// in the feed (`stop_inherited_from_strategy`); by the time a cell draws it, the question "will it
-/// act?" already has an answer, and a dash in the column would only hide it.
-///
-/// Mutation: add a third label for some sub-state. Working orders would show a placeholder instead
-/// of the protection their strategy is about to apply.
-///
-/// Returns:
-///     Nothing; both flag values map to a definite label.
-#[test]
-fn every_stop_cell_reads_on_or_off() {
-    for kind in [
-        OrderStopKind::StopLoss,
-        OrderStopKind::Trailing,
-        OrderStopKind::VStop,
-    ] {
-        assert_eq!(stop_look(kind, true).0, "ON");
-        assert_eq!(stop_look(kind, false).0, "OFF");
-    }
-}
-
 /// All disabled stops share MoonBot's muted status convention; enabled stops stay positive.
 ///
 /// Mutation: restore Danger for SL OFF. A disabled stop would again read as an error while

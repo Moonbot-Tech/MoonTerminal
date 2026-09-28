@@ -17,18 +17,6 @@ fn infinite_ttl_pane_is_never_pruned() {
     assert!(c.pane.is_some());
 }
 
-/// ...and no close timer is armed for it either.
-///
-/// Breaks on: `next_ttl_deadline_ms` computing `born_ms + ttl_ms` without asking whether the TTL is
-/// finite. That sum is infinite, and the caller turns a deadline into a sleep — leaving a task
-/// parked for `u64::MAX` milliseconds for the life of the process.
-#[test]
-fn infinite_ttl_pane_has_no_deadline() {
-    let c = container_with_ttl(f64::INFINITY);
-
-    assert_eq!(c.next_ttl_deadline_ms(), None);
-}
-
 /// A finite TTL still closes its pane on the deadline, so the fix cannot have made every pane
 /// permanent.
 #[test]

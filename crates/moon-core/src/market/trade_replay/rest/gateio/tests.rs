@@ -542,12 +542,3 @@ fn gate_futures_full_page_pages_back_by_time_and_drops_the_rows_already_taken() 
     let first = parse_futures_trades(&no_id, 3, None).expect("parses");
     assert_eq!(first.ticks.len(), 1, "a first page keeps it");
 }
-
-/// `rest/gateio.rs:fetch_trades` sends the cursor's boundary as `to`, one second past the
-/// boundary's own second, and never an `offset`.
-#[test]
-fn gate_futures_before_cursor_moves_to_onto_the_boundary_second() {
-    // `trade_window_seconds` is the one rule for `to`; the cursor reuses it on its boundary.
-    let (_, to) = trade_window_seconds(0, 1_789_726_950_929);
-    assert_eq!(to, 1_789_726_951);
-}

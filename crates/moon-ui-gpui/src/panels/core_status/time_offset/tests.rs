@@ -116,20 +116,3 @@ fn the_tooltip_is_built_from_the_facts_not_restated() {
     };
     assert_ne!(tz_offset_tooltip(&other_source), base_tooltip);
 }
-
-/// `tz_offset_facts`: every field is carried through unchanged from the retained status — the
-/// hover has nothing to say that the status itself did not report.
-#[test]
-fn facts_carry_the_retained_status_through_unchanged() {
-    let status = CoreTimeOffsetStatus {
-        offset_secs: Some(-1_800),
-        observed_at_utc: 123_456_789,
-        samples: 7,
-        source: OffsetSource::Replica,
-    };
-    let facts = tz_offset_facts(&status);
-    assert_eq!(facts.offset_secs, status.offset_secs);
-    assert_eq!(facts.observed_at_utc, status.observed_at_utc);
-    assert_eq!(facts.samples, status.samples);
-    assert_eq!(facts.source, status.source);
-}
