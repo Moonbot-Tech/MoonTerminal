@@ -162,6 +162,17 @@ impl SessionManager {
         }
     }
 
+    /// Map every core to itself as its own market-data provider, and send no market role.
+    ///
+    /// For a headless host (the station), which reads each core's catalog and addresses its
+    /// trades by the core's own exchange but must never subscribe a core to its exchange's live
+    /// trade stream — which only [`Self::set_open`]'s role commands do. Call it once after
+    /// [`Self::start`] and again whenever a drain reports [`super::DrainStats::identity`].
+    pub fn map_cores_to_themselves(&mut self) {
+        self.set_market_mode(MarketDataMode::PerCore);
+        self.reconcile_providers();
+    }
+
     /// Rebuild `core_provider` (core to provider core) and `providers` (exchange to provider).
     /// `Dedup` prefers one Ready core per exchange, retaining the current Ready provider when
     /// possible and falling back to the exchange's first available core when none are Ready. In

@@ -198,6 +198,9 @@ pub struct DrainStats {
     /// A core filed an archived-trace answer (`FeedMsg::ReportTraces`). The UI's one trace
     /// resolver adopts it on this edge; nothing else reads `CoreData::report_traces`.
     pub report_traces: bool,
+    /// A core named its exchange (`FeedMsg::Identity`). A headless host re-maps its providers
+    /// on this edge ([`SessionManager::map_cores_to_themselves`]).
+    pub identity: bool,
 }
 
 /// Which order book a core's provider pulls, from the venue its platform code names.

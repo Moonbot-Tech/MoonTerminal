@@ -6,15 +6,22 @@
 //! carrying `servers.enc` to a clean machine silently minted a key that could never open it, and
 //! left that key behind in the keyring. Creation now happens only where a key is actually being
 //! established: writing a new file, or adding this machine to one that was just unlocked.
+//!
+//! Built without the `desktop` feature (the headless station) there is no keyring: reading answers
+//! "no key here" and establishing one fails, so a file opens by its password slot alone.
 
-use anyhow::{Context, anyhow};
+#[cfg(feature = "desktop")]
+use anyhow::Context;
+use anyhow::anyhow;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 /// Keyring service name.
+#[cfg(feature = "desktop")]
 const KEYRING_SERVICE: &str = "moon-terminal";
+#[cfg(feature = "desktop")]
 /// Keyring entry name. Unchanged from the pre-slot format on purpose: the key it holds is reused
 /// as this machine's wrapping key, so existing installations keep opening their files with no
 /// migration step and no second prompt.
@@ -40,6 +47,7 @@ const SLOT_ID_LEN: usize = 16;
 /// deliberately NOT folded into `None`: "no key here" and "the key store is broken" lead to
 /// different outcomes, and treating a locked keyring as absent would offer to start over with an
 /// empty config while the real key was still sitting there.
+#[cfg(feature = "desktop")]
 pub(super) fn key() -> anyhow::Result<Option<Zeroizing<[u8; 32]>>> {
     let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER).context("keyring entry")?;
     match entry.get_password() {
@@ -55,9 +63,16 @@ pub(super) fn key() -> anyhow::Result<Option<Zeroizing<[u8; 32]>>> {
     }
 }
 
+/// No keyring in this build: never a key here.
+#[cfg(not(feature = "desktop"))]
+pub(super) fn key() -> anyhow::Result<Option<Zeroizing<[u8; 32]>>> {
+    Ok(None)
+}
+
 /// Read this machine's wrapping key, generating and storing one when the keyring has no entry.
 ///
 /// Call this only when a key is genuinely being established. See the module note.
+#[cfg(feature = "desktop")]
 pub(super) fn key_or_create() -> anyhow::Result<Zeroizing<[u8; 32]>> {
     if let Some(existing) = key()? {
         return Ok(existing);
@@ -70,6 +85,14 @@ pub(super) fn key_or_create() -> anyhow::Result<Zeroizing<[u8; 32]>> {
         .context("store keyring key")?;
     log::info!("сгенерирован новый ключ шифрования конфига (сохранён в OS keyring)");
     Ok(fresh)
+}
+
+/// No keyring in this build: a machine key cannot be established.
+#[cfg(not(feature = "desktop"))]
+pub(super) fn key_or_create() -> anyhow::Result<Zeroizing<[u8; 32]>> {
+    Err(anyhow!(
+        "this build has no OS keyring (the `desktop` feature is off): no machine key"
+    ))
 }
 
 /// Identify a machine slot from its wrapping key.

@@ -379,6 +379,7 @@ impl SessionManager {
                             format!("{}:{:08x}", venue.id.code, venue.id.dex),
                         );
                         self.core_venue.insert(sess.id, venue);
+                        stats.identity = true;
                         self.market_source
                             .set_orderbook_kind(sess.id, orderbook_kind_for_exchange(id));
                         stats.ui_state = true;
@@ -506,6 +507,7 @@ impl SessionManager {
             return;
         };
         let Ok(address) = self.market_source.replay_address(core) else {
+            log::debug!("[x] trade-replay capture: core {core} has no replay address yet");
             return;
         };
         let (open_ms, close_ms) = self
@@ -559,20 +561,24 @@ impl SessionManager {
             return;
         }
         let Some(market) = self.market_source.resolve_market(core, quote, coin) else {
+            log::debug!("[x] tape recorder: open of {coin} resolves to no market on core {core}");
             return;
         };
         let Ok(address) = self.market_source.replay_address(core) else {
+            log::debug!("[x] tape recorder: core {core} has no replay address yet");
             return;
         };
         let open_ms = self.true_utc_axis(core).stamp_to_utc_ms(buy, core);
-        if open_ms > 0 {
-            crate::market::tape_recorder::trade_opened(
-                &address.exchange_key,
-                &market,
-                crate::market::tape_recorder::TradeId { core, rec_id },
-                open_ms,
-            );
+        if open_ms <= 0 {
+            log::debug!("[x] tape recorder: open of {coin} on core {core} has no usable stamp");
+            return;
         }
+        crate::market::tape_recorder::trade_opened(
+            &address.exchange_key,
+            &market,
+            crate::market::tape_recorder::TradeId { core, rec_id },
+            open_ms,
+        );
     }
 
     /// The time axis that lifts `core`'s report stamps onto true UTC through its measured clock

@@ -9,6 +9,12 @@ name = "moon_core"
 path = "src/lib.rs"
 
 [features]
+default = ["desktop"]
+# The OS keyring behind `servers.enc`'s machine slot (config/crypto/machine.rs). A desktop
+# terminal needs it; the headless station does not — it takes core keys from its own
+# credentials — and on Linux the keyring backend links D-Bus, which a static server build
+# cannot carry. Without it the machine slot is absent and `servers.enc` opens by password only.
+desktop = ["dep:keyring"]
 # Explicit debug/test bridge for the terminal debug button. Default builds must
 # not enable MoonProto diagnostics; see tests/moonproto_feature_guard.rs.
 moonproto-diagnostics = ["moonproto/diagnostics"]
@@ -69,7 +75,7 @@ aes-gcm = "0.10"
 # which is the property that matters here: the file travels, so an attacker holding a copy gets
 # unlimited offline attempts against whatever the user typed.
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
-keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
+keyring = { version = "3", optional = true, features = ["windows-native", "apple-native", "linux-native-sync-persistent", "crypto-rust"] }
 getrandom = "0.2"
 base64 = "0.22"
 zeroize = "1"

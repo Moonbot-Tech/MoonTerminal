@@ -381,6 +381,25 @@ impl AppConfig {
         }
     }
 
+    /// A config holding `servers` and defaults for everything else, for a headless host that
+    /// takes its cores from its own configuration rather than from `servers.enc` — the station.
+    /// Nothing reads or writes the terminal's files through it. Server ids follow their uids and
+    /// every server's group exists, as in every loaded config.
+    pub fn headless(servers: Vec<ServerConfig>) -> Self {
+        let floor = servers.iter().map(|s| s.uid).max();
+        let mut cfg = Self::blank(floor);
+        cfg.chart_memory_percent = schema::default_chart_memory_percent();
+        cfg.servers = servers
+            .into_iter()
+            .map(|mut s| {
+                s.id = s.uid;
+                s
+            })
+            .collect();
+        ensure_server_group_configs(&cfg.servers, &mut cfg.groups);
+        cfg
+    }
+
     /// Load and merge server secrets, settings, and separate UI config files.
     ///
     /// The `settings.toml` read status is computed before choosing a load branch so every
