@@ -37,17 +37,21 @@ use std::sync::OnceLock;
 /// assertion below, leaving the real gate unchecked while the suite still reported green.
 const TEST_JOB: &str = "tests";
 
+/// The job that builds, tests and lints the station for the Linux target it ships for.
+const STATION_JOB: &str = "station-linux";
+
 /// Every job that compiles the workspace and therefore runs the lockfile contract's three steps
 /// (verify -> refresh MoonUI -> assert nothing else moved). `audit` is deliberately excluded: it
 /// runs cargo-deny over the already-committed lock and never touches it.
-const COMPILING_JOBS: [&str; 4] = ["windows", TEST_JOB, "macos-probe", "clippy"];
+const COMPILING_JOBS: [&str; 5] = ["windows", TEST_JOB, "macos-probe", "clippy", STATION_JOB];
 
-/// The compiling jobs that BLOCK a merge — the Windows `.exe` release gate, the `tests` gate, and
-/// the `clippy` gate — and so must neither be silently skipped nor downgraded to a probe.
+/// The compiling jobs that BLOCK a merge — the Windows `.exe` release gate, the `tests` gate, the
+/// `clippy` gate and the station's Linux gate — and so must neither be silently skipped nor
+/// downgraded to a probe.
 /// `macos-probe` is deliberately excluded here even though it shares the same `if:` condition: it already carries
 /// `continue-on-error: true` and never blocks, so there is no gate left for a quiet skip to hide
 /// behind, and it needs no guard of its own.
-const GATING_JOBS: [&str; 3] = ["windows", TEST_JOB, "clippy"];
+const GATING_JOBS: [&str; 4] = ["windows", TEST_JOB, "clippy", STATION_JOB];
 
 /// The only job-level `if:` a `GATING_JOBS` member may carry, normalized the same way
 /// [`normalize_if_condition`] normalizes what it reads from `build.yml`. The weekly `schedule:`
@@ -534,6 +538,41 @@ fn the_clippy_job_is_a_gate_that_actually_runs_cargo_clippy() {
             "job `{CLIPPY_JOB}` must not chain anything onto clippy — `{sep}` can swallow a \
              failure: `{command}`"
         );
+    }
+}
+
+/// Breakage guarded: the station's Linux gate quietly narrowing — its test step dropped, clippy
+/// allowed to warn, a command chained to swallow a failure, or the target switched away from the
+/// static musl build the terminal installs on the user's server. Any of those turns the only
+/// Linux compile in CI into a job that passes whatever the station does there.
+#[test]
+fn the_station_job_builds_tests_and_lints_for_linux() {
+    let text = workflow_text();
+    let body = job_body(&text, STATION_JOB)
+        .unwrap_or_else(|| panic!("build.yml must keep a `{STATION_JOB}:` job"));
+    let commands: Vec<&str> = body
+        .iter()
+        .filter_map(|line| line.trim().strip_prefix("run:"))
+        .map(str::trim)
+        .filter(|command| command.starts_with("cargo "))
+        .collect();
+    for expected in [
+        "cargo build -p moon-station --locked --target x86_64-unknown-linux-musl",
+        "cargo test -p moon-station --locked --target x86_64-unknown-linux-musl",
+        "cargo clippy -p moon-station --all-targets --locked --target x86_64-unknown-linux-musl -- -D warnings",
+    ] {
+        assert!(
+            commands.contains(&expected),
+            "job `{STATION_JOB}` must run `{expected}`; it runs {commands:?}"
+        );
+    }
+    for command in &commands {
+        for sep in [";", "&&", "||", "|"] {
+            assert!(
+                !command.contains(sep),
+                "job `{STATION_JOB}` must not chain anything onto cargo — `{sep}` can swallow a                  failure: `{command}`"
+            );
+        }
     }
 }
 
