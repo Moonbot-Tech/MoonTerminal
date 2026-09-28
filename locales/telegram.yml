@@ -481,10 +481,6 @@ telegram.mini_cancel_all:
   ru: "Снять все ордера"
   en: "Cancel all orders"
   es: "Cancelar todas las órdenes"
-telegram.mini_state_unknown:
-  ru: "—"
-  en: "—"
-  es: "—"
 telegram.mini_all_cores:
   ru: "Все ядра"
   en: "All cores"

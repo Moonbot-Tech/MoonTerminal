@@ -601,7 +601,6 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_trading",
     "mini_autodetect",
     "mini_cancel_all",
-    "mini_state_unknown",
     "mini_all_cores",
     "mini_cores_trading_on_confirm",
     "mini_cores_trading_off_confirm",

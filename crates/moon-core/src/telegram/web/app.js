@@ -693,42 +693,7 @@
         return any ? box : null;
     }
 
-    function switchChip(core, label, field, key) {
-        var state = core[field];
-        var known = state === true || state === false;
-        var chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "cmd chip " + (known ? (state ? "on" : "off") : "unknown");
-        // On/off reads from the chip colour, as the terminal's toggles do.
-        chip.textContent = known ? label : label + " · " + tr("mini_state_unknown");
-        chip.setAttribute("aria-pressed", known ? String(state) : "mixed");
-        chip.disabled = commandBusy || !known;
-        chip.addEventListener("click", function () {
-            if (commandBusy || !known) return;
-            runCommand(null, "/api/core/switch", { core: core.id, switch: key, on: !state });
-        });
-        return chip;
-    }
-
-    // Owner-only per-core switches; a single core fires without a confirm.
-    function coreActions(core) {
-        var line = el("div", "core-actions");
-        line.appendChild(switchChip(core, tr("mini_trading"), "trading", "trading"));
-        line.appendChild(switchChip(core, tr("mini_autodetect"), "auto_detect", "auto_detect"));
-        var cancel = document.createElement("button");
-        cancel.type = "button";
-        cancel.className = "cmd chip cmd-danger";
-        cancel.textContent = tr("mini_cancel_all");
-        cancel.disabled = commandBusy;
-        cancel.addEventListener("click", function () {
-            if (commandBusy) return;
-            runCommand(null, "/api/core/cancel_all", { core: core.id });
-        });
-        line.appendChild(cancel);
-        return line;
-    }
-
-    function coreRow(core, data) {
+    function coreRow(core) {
         var row = el("div", "row core-row");
         row.setAttribute("role", "button");
         row.tabIndex = 0;
@@ -751,14 +716,8 @@
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
-        if (data && data.can_control) {
-            var actions = coreActions(core);
-            // A switch tap acts on the core; it never opens the detail screen.
-            actions.addEventListener("click", function (event) {
-                event.stopPropagation();
-            });
-            row.appendChild(actions);
-        }
+        // Per-core controls live on the detail screen the row opens.
+        row.appendChild(el("span", "row-chev", "›"));
         return row;
     }
 
@@ -1245,7 +1204,7 @@
         ensureCollapse("cores", cores, null);
         appendGroups(
             host, "cores", cores, coreProblem,
-            function (core) { return coreRow(core, data); },
+            coreRow,
             paintCores, null, null, null, coreGroupSummary
         );
         restoreSnap(snap, y);
@@ -2171,7 +2130,7 @@
     }
 
     function setCommandsDisabled(disabled) {
-        var nodes = document.querySelectorAll(".order-actions .cmd, .core-actions .cmd, .mass-actions .cmd, .strategy-row .cmd, .core-detail .cmd");
+        var nodes = document.querySelectorAll(".order-actions .cmd, .mass-actions .cmd, .strategy-row .cmd, .core-detail .cmd");
         var i;
         for (i = 0; i < nodes.length; i++) {
             // A chip with no known state, or a strategy awaiting its core, stays off whatever the busy flag says.

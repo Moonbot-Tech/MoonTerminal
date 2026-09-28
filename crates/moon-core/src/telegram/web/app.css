@@ -975,35 +975,19 @@ input:focus-visible {
     outline-offset: -2px;
 }
 
-/* Per-core and all-cores controls. */
-.core-row {
-    flex-wrap: wrap;
-}
-
-.core-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-top: 8px;
-    flex: 1 0 100%;
-    padding-left: 16px;
-}
-
-/* All-cores bar: one tight row of two segmented START/STOP pairs; never wraps — on a narrow
-   phone the gaps and buttons tighten and a label ellipsizes before the row would break. */
+/* All-cores bar: one line per switch, its label left and a START/STOP pair right, each button
+   a full 44px target. */
 .mass-actions {
     display: flex;
-    flex-wrap: nowrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 6px 12px;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 16px 12px;
 }
 
 .mass-title {
     color: var(--hint);
     font-family: var(--font-mono);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     white-space: nowrap;
@@ -1012,15 +996,17 @@ input:focus-visible {
 .mass-group {
     display: flex;
     align-items: center;
-    gap: 6px;
+    justify-content: space-between;
+    gap: 12px;
     min-width: 0;
 }
 
 .mass-label {
     min-width: 0;
     overflow: hidden;
-    color: var(--sub);
-    font-size: var(--fs-meta);
+    color: var(--ink);
+    font-size: var(--fs-body);
+    font-weight: 500;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -1030,27 +1016,12 @@ input:focus-visible {
     flex: none;
 }
 
-/* The caption only fits beside both pairs on a wide popup; aria-label names the bar below. */
-@media (max-width: 439px) {
-    .mass-title {
-        display: none;
-    }
-
-    .mass-actions {
-        gap: 8px;
-        padding: 6px 10px;
-    }
-
-    .mass-group {
-        gap: 4px;
-    }
-}
-
 .mass-pair .mass-btn {
-    min-height: 32px;
-    min-width: 0;
-    padding: 0 8px;
-    font-size: 10px;
+    min-height: 44px;
+    min-width: 76px;
+    padding: 0 14px;
+    font-size: 14px;
+    font-weight: 600;
 }
 
 .mass-pair .mass-btn:first-child {
@@ -1060,12 +1031,6 @@ input:focus-visible {
 .mass-pair .mass-btn + .mass-btn {
     margin-left: -1px;
     border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
-}
-
-@media (max-width: 439px) {
-    .mass-pair .mass-btn {
-        padding: 0 6px;
-    }
 }
 
 /* Exchange section caption inside a per-core list (report, orders). */
@@ -1104,18 +1069,6 @@ input:focus-visible {
     white-space: nowrap;
 }
 
-.chip.on {
-    border-color: var(--pos);
-    color: var(--pos);
-    background: var(--tint);
-}
-
-.chip.off {
-    border-color: var(--line);
-    color: var(--sub);
-}
-
-.chip.unknown,
 .chip:disabled {
     color: var(--hint);
     opacity: .6;
@@ -1274,6 +1227,14 @@ input:focus-visible {
 /* Cores list rows open the core detail screen. */
 .core-row {
     cursor: pointer;
+}
+
+.core-row .row-chev {
+    flex: none;
+    align-self: center;
+    color: var(--hint);
+    font-size: 20px;
+    line-height: 1;
 }
 
 .strategy-row .cmd,
