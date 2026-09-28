@@ -1148,22 +1148,31 @@
         card.setAttribute("role", "group");
         card.setAttribute("aria-label", tr("mini_all_cores"));
         card.appendChild(el("span", "mass-title", tr("mini_all_cores")));
+        // One line per switch: its name and how many cores have it on, then two actions for
+        // every core. Neither button is a selected state; Stop only carries the danger tone.
         function addPair(label, key, onConfirm, offConfirm) {
             var group = el("div", "mass-group");
-            group.appendChild(el("span", "mass-label", label));
+            var text = el("div", "mass-text");
+            text.appendChild(el("span", "mass-label", label));
+            var on = 0;
+            for (var c = 0; c < cores.length; c++) {
+                if (cores[c][key] === true) on += 1;
+            }
+            text.appendChild(el("span", "mass-state", trf("mini_on_of", { on: on, total: ids.length })));
+            group.appendChild(text);
             var pair = el("span", "mass-pair");
             group.appendChild(pair);
-            [true, false].forEach(function (on) {
+            [true, false].forEach(function (turnOn) {
                 var btn = document.createElement("button");
                 btn.type = "button";
-                btn.className = "cmd chip mass-btn" + (on ? "" : " cmd-danger");
-                btn.textContent = tr(on ? "mini_start" : "mini_stop");
-                btn.setAttribute("aria-label", label + " " + btn.textContent);
+                btn.className = "cmd chip mass-btn" + (turnOn ? "" : " mass-stop");
+                btn.textContent = tr(turnOn ? "mini_start_all" : "mini_stop_all");
+                btn.setAttribute("aria-label", label + ": " + btn.textContent);
                 btn.disabled = commandBusy || !ids.length;
                 btn.addEventListener("click", function () {
                     if (commandBusy || !ids.length) return;
-                    var ask = trf(on ? onConfirm : offConfirm, { n: ids.length });
-                    runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: on });
+                    var ask = trf(turnOn ? onConfirm : offConfirm, { n: ids.length });
+                    runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: turnOn });
                 });
                 pair.appendChild(btn);
             });

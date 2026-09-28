@@ -608,8 +608,6 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_cores_auto_off_confirm",
     "mini_cmd_partial",
     "mini_cmd_core_not_found",
-    "mini_start",
-    "mini_stop",
     "mini_tab_trades",
     "mini_deals_open",
     "mini_deals_closed",
@@ -641,4 +639,7 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_close",
     "mini_balances_show",
     "mini_balances_hide",
+    "mini_start_all",
+    "mini_stop_all",
+    "mini_on_of",
 ];

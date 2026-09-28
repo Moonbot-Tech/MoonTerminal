@@ -1008,8 +1008,8 @@ input:focus-visible {
     min-width: 0;
 }
 
-/* All-cores bar: one line per switch, its label left and a START/STOP pair right, each button
-   a full 44px target. */
+/* All-cores bar: one line per switch, its name and on-count left, two separate action buttons
+   right, each a full 44px target. The buttons are actions, never a selected state. */
 .mass-actions {
     display: flex;
     flex-direction: column;
@@ -1030,7 +1030,13 @@ input:focus-visible {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: 8px;
+    min-width: 0;
+}
+
+.mass-text {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
 }
 
@@ -1044,26 +1050,29 @@ input:focus-visible {
     white-space: nowrap;
 }
 
+.mass-state {
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    white-space: nowrap;
+}
+
 .mass-pair {
     display: inline-flex;
     flex: none;
+    gap: 6px;
 }
 
 .mass-pair .mass-btn {
     min-height: 44px;
-    min-width: 76px;
-    padding: 0 14px;
-    font-size: 14px;
+    padding: 0 10px;
+    font-size: 13px;
     font-weight: 600;
+    color: var(--link);
 }
 
-.mass-pair .mass-btn:first-child {
-    border-radius: var(--r-ctl) 0 0 var(--r-ctl);
-}
-
-.mass-pair .mass-btn + .mass-btn {
-    margin-left: -1px;
-    border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
+/* Stop for every core: danger text on the plain outline, not a red selected frame. */
+.mass-pair .mass-btn.mass-stop {
+    color: var(--neg);
 }
 
 /* Exchange section caption inside a per-core list (report, orders). */

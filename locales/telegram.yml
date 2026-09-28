@@ -509,14 +509,6 @@ telegram.mini_cmd_core_not_found:
   ru: "Ядро не найдено"
   en: "Core not found"
   es: "Núcleo no encontrado"
-telegram.mini_start:
-  ru: "Старт"
-  en: "Start"
-  es: "Iniciar"
-telegram.mini_stop:
-  ru: "Стоп"
-  en: "Stop"
-  es: "Detener"
 telegram.mini_tab_trades:
   ru: "Сделки"
   en: "Trades"
@@ -641,3 +633,15 @@ telegram.mini_balances_hide:
   ru: "Скрыть суммы"
   en: "Hide amounts"
   es: "Ocultar importes"
+telegram.mini_start_all:
+  ru: "Старт все"
+  en: "Start all"
+  es: "Iniciar todos"
+telegram.mini_stop_all:
+  ru: "Стоп все"
+  en: "Stop all"
+  es: "Detener todos"
+telegram.mini_on_of:
+  ru: "вкл {on} из {total}"
+  en: "on {on} of {total}"
+  es: "activos {on} de {total}"
