@@ -174,8 +174,9 @@ pub struct BalancesDto {
 /// absent when that percent cannot be computed, which includes every order
 /// whose entry has not filled: it holds no position, so it has no PnL.
 /// `to_entry_pct` and `to_entry_text` cover exactly that case instead: how far
-/// the current mark still has to travel to reach the entry, signed so that a
-/// negative value means the mark has already passed it. They are absent once
+/// the current mark still has to travel to reach the entry. The percent is
+/// signed so that a negative value means the mark has already passed it; the
+/// text is unsigned, since it is a distance, not a result. They are absent once
 /// the order holds a position. Adaptive `entry_text` and `mark_text` drop
 /// cents once a price reaches 1000, so the page cannot recover either percent
 /// by parsing them.

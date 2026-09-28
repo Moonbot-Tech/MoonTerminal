@@ -1021,10 +1021,15 @@ fn order_dto(
         change_text: change
             .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
         to_entry_pct: to_entry,
-        to_entry_text: to_entry
-            .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
+        to_entry_text: to_entry.and_then(distance_text),
         panic_armed: backend.is_panic_armed(id, &order.market),
     }
+}
+
+/// Unsigned text of a distance to entry: a "+" beside a resting order reads as profit, and which
+/// way the mark has to travel is the side's business, not the figure's.
+fn distance_text(pct: f64) -> Option<String> {
+    fmt::pct(pct.abs(), MONEY_DECIMALS).map(|(text, _)| text)
 }
 
 /// Distance from the current mark to the entry of an order that holds no position yet.

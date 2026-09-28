@@ -11,7 +11,9 @@ use moon_core::telegram::web::dto::StrategyPendingDto;
 
 use moon_core::feed::OrderRow;
 
-use super::{by_section, natural_cmp, order_to_entry_pct, scope_targets, strategy_pending};
+use super::{
+    by_section, distance_text, natural_cmp, order_to_entry_pct, scope_targets, strategy_pending,
+};
 
 /// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
@@ -186,4 +188,10 @@ fn the_telegram_log_prefix_still_matches_this_module() {
         "the default filter raises {prefix:?}, but this module logs as {:?}",
         module_path!()
     );
+}
+
+#[test]
+fn distance_to_entry_text_carries_no_sign() {
+    assert_eq!(distance_text(1.5).as_deref(), Some("1.50%"));
+    assert_eq!(distance_text(-1.5).as_deref(), Some("1.50%"));
 }
