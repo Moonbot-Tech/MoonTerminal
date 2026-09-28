@@ -289,7 +289,8 @@ fn retention_is_not_the_query_window() {
 /// `is_usd_stable` lists bare `USD`, and that is how Bybit spells a coin-margined contract
 /// (`BTCUSD`). Routing on it sends the inverse market to `linear`, where Bybit answers
 /// `retCode 10001`. Spot is `spot` before the quote is read, including a name that would
-/// otherwise look inverse. `BTCPERP` is deliberately not asserted: issue #732.
+/// otherwise look inverse. Bybit's USDC perpetual `BTCPERP` has no quote suffix and is still
+/// `linear` (issue #732).
 #[test]
 fn bybit_category_splits_usdt_from_bare_usd() {
     let bybit = |kind| Venue {
@@ -316,6 +317,14 @@ fn bybit_category_splits_usdt_from_bare_usd() {
     );
     assert_eq!(
         bybit_category(bybit(MarketKind::Futures), "BTCUSDC"),
+        Some("linear")
+    );
+    assert_eq!(
+        bybit_category(bybit(MarketKind::Futures), "BTCPERP"),
+        Some("linear")
+    );
+    assert_eq!(
+        bybit_category(bybit(MarketKind::Futures), "ethperp"),
         Some("linear")
     );
     assert_eq!(

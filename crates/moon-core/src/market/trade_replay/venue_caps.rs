@@ -577,6 +577,11 @@ pub fn bybit_category(venue: Venue, market: &str) -> Option<&'static str> {
     if venue.kind == MarketKind::Spot {
         return Some("spot");
     }
+    // Bybit's USDC perpetuals are spelled `<BASE>PERP` with no quote suffix, so the parsed quote
+    // is empty; they are USDC-settled and live on `linear` (issue #732).
+    if market.trim().to_ascii_uppercase().ends_with("PERP") {
+        return Some("linear");
+    }
     let quote = crate::symbol::resolve_quote_on(market, crate::symbol::Exchange::Bybit);
     // Settled in the quote asset -> linear. Everything else, bare `USD` included, is settled in
     // the base and is a coin-margined contract.
