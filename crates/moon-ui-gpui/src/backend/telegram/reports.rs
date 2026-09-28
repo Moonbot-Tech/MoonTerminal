@@ -417,6 +417,157 @@ pub(super) fn read_mini_report(
     })
 }
 
+/// Most closed trades the Mini App Trades tab lists.
+pub(super) const MINI_TRADES_LIMIT: usize = 50;
+
+/// One closed trade read for the Mini App, with its dates already on UTC.
+pub(super) struct MiniTrade {
+    /// Core that made the trade.
+    pub core_uid: u64,
+    /// Report row id.
+    pub rec_id: i64,
+    pub coin: String,
+    /// Core name stored on the row.
+    pub core_name: String,
+    pub is_short: bool,
+    /// Valued profit in USDT, `None` when unvalued.
+    pub profit_usdt: Option<f64>,
+    /// Profit percent, already x100.
+    pub pct: Option<f64>,
+    /// Entry time, UTC seconds; `None` when unknown.
+    pub buy_utc: Option<i64>,
+    /// Close time, UTC seconds.
+    pub close_utc: i64,
+    pub buy_price: f64,
+    pub sell_price: f64,
+    pub quantity: f64,
+    /// Strategy id; `None` or `0` for a manual trade.
+    pub strategy_id: Option<i64>,
+}
+
+/// Read the latest closed, non-emulator trades on one snapshot, newest first.
+///
+/// Scope follows [`read_mini_report`]: the owner reads every core, a viewer only granted cores,
+/// and a viewer with no granted core in the snapshot reads [`moon_core::config::NO_MATCH_CORE_UID`].
+/// The query over-reads by 25 rows because it sorts by the core-local close date; the rows are then
+/// re-sorted on UTC and cut to `limit`.
+///
+/// Args:
+///     zone: Display zone for the report axis.
+///     access: Chat grant captured at admission.
+///     limit: Most trades to return.
+///
+/// Returns:
+///     The trades, or the database error. No closed trades is an empty `Ok`.
+pub(super) fn read_mini_trades(
+    zone: Tz,
+    access: TelegramReportAccess,
+    limit: usize,
+) -> db::ReadResult<Vec<MiniTrade>> {
+    let conn = db::open_reader()?;
+    let snap = db::read_snapshot(&conn)?;
+    let mut cores = db::distinct_cores(&snap)?;
+    if let TelegramReportAccess::Viewer(allowed) = &access {
+        cores.retain(|(id, _)| allowed.contains(id));
+    }
+    let scoped_ids = if access == TelegramReportAccess::Owner {
+        Vec::new()
+    } else if cores.is_empty() {
+        vec![moon_core::config::NO_MATCH_CORE_UID]
+    } else {
+        cores.iter().map(|(id, _)| *id).collect()
+    };
+    let filter = ReportFilter {
+        core_uids: scoped_ids,
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        axis: db::ReportAxis::load(&snap, zone)?,
+        ..Default::default()
+    };
+    let table = db::query_reports(&snap, &filter, "closedate", true, limit + 25)?;
+    let index = |name: &str| table.cols.iter().position(|col| col == name);
+    let (coin, core_name, is_short, quantity) = (
+        index("coin"),
+        index("core_name"),
+        index("isshort"),
+        index("quantity"),
+    );
+    let (buy_price, sell_price, buy_date, close_date, strategy) = (
+        index("buyprice"),
+        index("sellprice"),
+        index("buydate"),
+        index("closedate"),
+        index("strategyid"),
+    );
+    let rec_id = index("id");
+    let (profit, pct) = (
+        index(db::VALUATION_PROFIT_COLUMN),
+        index(db::PROFIT_PERCENT_COLUMN),
+    );
+    let mut trades = Vec::with_capacity(table.rows.len());
+    for (row_index, row) in table.rows.iter().enumerate() {
+        let Some(&core_uid) = table.core_uids.get(row_index) else {
+            continue;
+        };
+        let cell = |ix: Option<usize>| ix.and_then(|ix| row.get(ix));
+        let Some(close_local) = cell(close_date)
+            .and_then(value_i64)
+            .filter(|secs| *secs > 0)
+        else {
+            continue;
+        };
+        trades.push(MiniTrade {
+            core_uid,
+            rec_id: cell(rec_id).and_then(value_i64).unwrap_or_default(),
+            coin: cell(coin).map(value_text).unwrap_or_default(),
+            core_name: cell(core_name).map(value_text).unwrap_or_default(),
+            is_short: cell(is_short).and_then(value_i64).is_some_and(|v| v != 0),
+            profit_usdt: cell(profit).and_then(value_f64),
+            pct: cell(pct).and_then(value_f64),
+            buy_utc: cell(buy_date)
+                .and_then(value_i64)
+                .filter(|secs| *secs > 0)
+                .map(|secs| filter.axis.to_utc(secs, core_uid)),
+            close_utc: filter.axis.to_utc(close_local, core_uid),
+            buy_price: cell(buy_price).and_then(value_f64).unwrap_or_default(),
+            sell_price: cell(sell_price).and_then(value_f64).unwrap_or_default(),
+            quantity: cell(quantity).and_then(value_f64).unwrap_or_default(),
+            strategy_id: cell(strategy).and_then(value_i64),
+        });
+    }
+    trades.sort_by_key(|trade| std::cmp::Reverse(trade.close_utc));
+    trades.truncate(limit);
+    Ok(trades)
+}
+
+/// A stored whole number, accepting a real from an older database.
+fn value_i64(value: &rusqlite::types::Value) -> Option<i64> {
+    match value {
+        rusqlite::types::Value::Integer(i) => Some(*i),
+        rusqlite::types::Value::Real(r) => Some(*r as i64),
+        _ => None,
+    }
+}
+
+/// A stored number as `f64`, or `None` for text, blobs and nulls.
+fn value_f64(value: &rusqlite::types::Value) -> Option<f64> {
+    match value {
+        rusqlite::types::Value::Real(r) => Some(*r),
+        rusqlite::types::Value::Integer(i) => Some(*i as f64),
+        _ => None,
+    }
+}
+
+/// A stored value as text; numbers print in decimal, null is empty.
+fn value_text(value: &rusqlite::types::Value) -> String {
+    match value {
+        rusqlite::types::Value::Text(text) => text.clone(),
+        rusqlite::types::Value::Integer(i) => i.to_string(),
+        rusqlite::types::Value::Real(r) => r.to_string(),
+        _ => String::new(),
+    }
+}
+
 /// Stable exchange key shared by the Mini App row and independent of the localized caption.
 fn exchange_key(venue: Option<&moon_core::venue::CoreVenue>) -> String {
     match scope_of(venue) {

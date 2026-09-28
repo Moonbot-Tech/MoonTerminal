@@ -15,8 +15,9 @@ use moon_core::session::{BalanceState, CoreId, CoreRunState};
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::web::dto::{
     BalanceStateDto, BalancesDto, CommandErrorDto, CommandResultDto, ConnDto, CoreBalanceDto,
-    CoreStatusDto, CoreSwitchDto, CoresDto, DayDto, ExchangeBalanceDto, MoneyDto, OrderDto,
-    OrdersDto, ReportDto, ReportPeriodDto, RowDto, ScopeResultDto,
+    CoreStatusDto, CoreStrategiesDto, CoreSwitchDto, CoresDto, DayDto, ExchangeBalanceDto,
+    MoneyDto, OrderDto, OrdersDto, ReportDto, ReportPeriodDto, RowDto, ScopeResultDto,
+    StrategiesDto, StrategyDto, StrategyFolderDto, StrategyPendingDto, TradeDto, TradesDto,
 };
 use moon_core::telegram::web::{MiniAppApiError, MiniAppApiRequest};
 use moon_core::util::{display_time, fmt};
@@ -28,6 +29,9 @@ use crate::panels::{BalanceFigures, aggregate_balance_figures};
 
 /// How long a finished report may answer the same chat and period without reading again.
 const REPORT_CACHE_TTL: Duration = Duration::from_secs(15);
+
+/// How long a strategy toggle stays `Pending` before it is reported as `TimedOut`.
+const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
 
 /// Kind key paired with the existing Core Status short label. No new locale values.
 pub(super) const FAULT_LABELS: &[(&str, &str)] = &[
@@ -110,6 +114,30 @@ pub(super) fn dispatch(
             ..
         } => {
             let _ = reply.try_send(backend.mini_cancel_all(chat_id, core));
+        }
+        MiniAppApiRequest::Trades { chat_id, reply, .. } => {
+            backend.mini_trades(chat_id, reply, cx);
+        }
+        MiniAppApiRequest::Strategies { chat_id, reply, .. } => {
+            let _ = reply.try_send(backend.mini_strategies(chat_id));
+        }
+        MiniAppApiRequest::StrategyToggle {
+            chat_id,
+            core,
+            id,
+            on,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_strategy_toggle(chat_id, core, id, on));
+        }
+        MiniAppApiRequest::CoreReconnect {
+            chat_id,
+            core,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_core_reconnect(chat_id, core, cx));
         }
         MiniAppApiRequest::Session { reply, .. } => {
             let _ = reply.try_send(Err(MiniAppApiError::Rejected));
@@ -437,6 +465,248 @@ impl Backend {
         .detach();
     }
 
+    /// Read the latest closed trades off the UI thread, then re-check the grant before replying.
+    ///
+    /// Same cache and busy rules as [`Self::mini_report`]: a finished read answers the same chat
+    /// and grant for [`REPORT_CACHE_TTL`], and a request without a cache hit while a read is in
+    /// flight is `Busy`. A read failure is `ReadFailed`, never an empty list.
+    fn mini_trades(
+        &mut self,
+        chat_id: i64,
+        reply: SyncSender<Result<TradesDto, MiniAppApiError>>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(access) = self.mini_access(chat_id) else {
+            let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+            return;
+        };
+        let (serve_cached, drop_cached) = match &self.telegram.mini_trades_last {
+            Some((cached_chat, cached_access, at, _))
+                if *cached_chat == chat_id && at.elapsed() < REPORT_CACHE_TTL =>
+            {
+                (cached_access == &access, cached_access != &access)
+            }
+            _ => (false, false),
+        };
+        if serve_cached {
+            if let Some((_, _, _, dto)) = &self.telegram.mini_trades_last {
+                let _ = reply.try_send(Ok(dto.clone()));
+            }
+            return;
+        }
+        if drop_cached {
+            self.telegram.mini_trades_last = None;
+        }
+        if self.telegram.mini_trades_pending {
+            let _ = reply.try_send(Err(MiniAppApiError::Busy));
+            return;
+        }
+        let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let read_access = access.clone();
+        self.telegram.mini_trades_pending = true;
+        cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            let result = executor
+                .spawn(async move {
+                    super::reports::read_mini_trades(
+                        zone,
+                        read_access,
+                        super::reports::MINI_TRADES_LIMIT,
+                    )
+                })
+                .await;
+            cx.update(|cx| {
+                let _ = this.update(cx, |this, _| {
+                    this.telegram.mini_trades_pending = false;
+                    if this.mini_access(chat_id).as_ref() != Some(&access) {
+                        this.telegram.mini_trades_last = None;
+                        let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+                        return;
+                    }
+                    match result {
+                        Ok(trades) => {
+                            let dto = TradesDto {
+                                trades: trades
+                                    .iter()
+                                    .map(|trade| trade_dto(this, zone, trade))
+                                    .collect(),
+                                limit: u32::try_from(super::reports::MINI_TRADES_LIMIT)
+                                    .unwrap_or(u32::MAX),
+                            };
+                            this.telegram.mini_trades_last =
+                                Some((chat_id, access, Instant::now(), dto.clone()));
+                            let _ = reply.try_send(Ok(dto));
+                        }
+                        Err(_) => {
+                            let _ = reply.try_send(Err(MiniAppApiError::ReadFailed));
+                        }
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
+    /// Strategies of the chat's cores, grouped by folder, with unconfirmed toggles marked.
+    ///
+    /// Confirmed, vanished and settled toggle entries are dropped from the pending map first.
+    fn mini_strategies(&mut self, chat_id: i64) -> Result<StrategiesDto, MiniAppApiError> {
+        let access = self.mini_access(chat_id).ok_or(MiniAppApiError::Rejected)?;
+        let can_control = matches!(access, TelegramReportAccess::Owner);
+        self.prune_mini_strategy_wanted();
+        let listed = visible_cores(self, &access);
+        let store = self.session.store();
+        let now = Instant::now();
+        let mut cores = Vec::with_capacity(listed.len());
+        for (id, name, exchange) in listed {
+            let mut folders: Vec<StrategyFolderDto> = Vec::new();
+            if let Some(data) = store.core(id) {
+                for row in &data.strategies {
+                    let path = crate::strategies::tree::ops::split_path(&row.folder_path).join("/");
+                    let entry = self.telegram.mini_strategy_wanted.get(&(id, row.id));
+                    let pending = entry.and_then(|entry| {
+                        strategy_pending(
+                            *entry,
+                            data.strategies_ack_rev,
+                            data.strategies_rev,
+                            row.checked,
+                            now,
+                        )
+                    });
+                    let strategy = StrategyDto {
+                        id: row.id,
+                        name: row.name.clone(),
+                        checked: row.checked,
+                        wanted: pending.and(entry.map(|(wanted, ..)| *wanted)),
+                        pending,
+                    };
+                    match folders.iter_mut().find(|folder| folder.path == path) {
+                        Some(folder) => folder.strategies.push(strategy),
+                        None => folders.push(StrategyFolderDto {
+                            path,
+                            strategies: vec![strategy],
+                        }),
+                    }
+                }
+            }
+            cores.push(CoreStrategiesDto {
+                core: id,
+                core_name: name,
+                exchange,
+                folders,
+            });
+        }
+        Ok(StrategiesDto { cores, can_control })
+    }
+
+    /// Drop toggle entries whose strategy is gone or whose state [`strategy_pending`] settled.
+    fn prune_mini_strategy_wanted(&mut self) {
+        let store = self.session.store();
+        let now = Instant::now();
+        self.telegram
+            .mini_strategy_wanted
+            .retain(|&(core, id), entry| {
+                let Some(data) = store.core(core) else {
+                    return false;
+                };
+                let Some(row) = data.strategies.iter().find(|row| row.id == id) else {
+                    return false;
+                };
+                strategy_pending(
+                    *entry,
+                    data.strategies_ack_rev,
+                    data.strategies_rev,
+                    row.checked,
+                    now,
+                )
+                .is_some()
+            });
+    }
+
+    /// Turn one strategy on or off without touching the core's strategy engine.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///     id: Strategy id on that core.
+    ///     on: Checked state the page asked for.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for an unknown core or strategy, and nothing is sent. A toggle
+    ///     already pending for the same state is a hit without a second send. A refused send is
+    ///     `Unavailable`. `Err` is only the owner gate.
+    fn mini_strategy_toggle(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+        id: u64,
+        on: bool,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        let now = Instant::now();
+        let listed = self.session.store().core(core).and_then(|data| {
+            data.strategies
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| (data.strategies_ack_rev, data.strategies_rev, row.checked))
+        });
+        let Some((ack_before, rev_before, checked)) = listed else {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        };
+        let already = self
+            .telegram
+            .mini_strategy_wanted
+            .get(&(core, id))
+            .is_some_and(|entry| {
+                entry.0 == on
+                    && strategy_pending(*entry, ack_before, rev_before, checked, now)
+                        == Some(StrategyPendingDto::Pending)
+            });
+        if already {
+            return Ok(command_hit(None));
+        }
+        match self.session.apply_strategies(core, vec![(id, on)], None) {
+            Ok(()) => {
+                self.telegram
+                    .mini_strategy_wanted
+                    .insert((core, id), (on, now, ack_before, rev_before));
+                Ok(command_hit(None))
+            }
+            Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+        }
+    }
+
+    /// Queue one core for the desktop's reconnect path.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///     cx: Backend context, notified so the queue drains.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for a core that is not configured, and nothing is queued. A hit
+    ///     only means the request was queued; the next core status read shows the outcome.
+    ///     `Err` is only the owner gate.
+    fn mini_core_reconnect(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+        cx: &mut Context<Self>,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        if !self.reconnect_request.contains(&core) {
+            self.reconnect_request.push(core);
+        }
+        cx.notify();
+        Ok(command_hit(None))
+    }
+
     /// Core status in canonical order, limited to the chat's cores.
     fn mini_cores(&self, chat_id: i64) -> Result<CoresDto, MiniAppApiError> {
         let access = self.mini_access(chat_id).ok_or(MiniAppApiError::Rejected)?;
@@ -465,6 +735,11 @@ impl Backend {
                     .map(|fault| fault_kind(&fault.kind).to_string()),
                 trading: run.trading,
                 auto_detect: run.auto_detect,
+                version: core
+                    .and_then(|core| core.server_version)
+                    .map(fmt::core_build),
+                mem_mb: sys.used_memory_mb.map(u32::from),
+                free_mem_mb: sys.free_physical_memory_mb.map(u32::from),
             });
         }
         Ok(CoresDto { cores, can_control })
@@ -724,6 +999,94 @@ fn order_dto(
             .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
         panic_armed: backend.is_panic_armed(id, &order.market),
     }
+}
+
+/// Map a read closed trade into the Mini App row.
+///
+/// Args:
+///     backend: Source of venues and live strategy names.
+///     zone: Display zone for the close time.
+///     trade: Trade read by [`super::reports::read_mini_trades`].
+///
+/// Returns:
+///     The row. A strategy id no longer listed on the core shows as `#<id>`; `0` or a negative id is manual.
+fn trade_dto(backend: &Backend, zone: Tz, trade: &super::reports::MiniTrade) -> TradeDto {
+    let profit = trade.profit_usdt.filter(|value| value.is_finite());
+    let pct = trade.pct.filter(|value| value.is_finite());
+    let strategy = trade
+        .strategy_id
+        .and_then(|sid| u64::try_from(sid).ok())
+        .filter(|sid| *sid != 0)
+        .map(|sid| {
+            backend
+                .session
+                .store()
+                .core(trade.core_uid)
+                .and_then(|data| data.strategies.iter().find(|row| row.id == sid))
+                .map(|row| row.name.clone())
+                .unwrap_or_else(|| format!("#{sid}"))
+        });
+    TradeDto {
+        core: trade.core_uid,
+        core_name: trade.core_name.clone(),
+        exchange: crate::controls::venue_section_label(
+            backend.session.core_venues().get(&trade.core_uid),
+        ),
+        rec_id: trade.rec_id,
+        coin: trade.coin.clone(),
+        side: if trade.is_short { "sell" } else { "buy" }.to_string(),
+        profit,
+        profit_text: profit.map(signed_dollars),
+        profit_pct: pct,
+        profit_pct_text: pct
+            .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
+        closed_at: trade.close_utc,
+        closed_text: display_time::format_minute(trade.close_utc, zone),
+        entry_text: price_text(trade.buy_price),
+        exit_text: price_text(trade.sell_price),
+        qty_text: fmt::qty(trade.quantity),
+        duration_secs: trade
+            .buy_utc
+            .map(|buy| trade.close_utc - buy)
+            .filter(|secs| *secs >= 0),
+        strategy,
+    }
+}
+
+/// Unconfirmed state of one strategy toggle, or `None` once it is settled.
+///
+/// Settled means the core acknowledged a checkbox delta, the strategy list was rebuilt, and the
+/// row shows the asked state. After [`STRATEGY_CONFIRM_WINDOW`] an unconfirmed toggle is
+/// `TimedOut` until the row shows the asked state or the core sends a fresh strategy list
+/// (`strategies_rev` moved), whose state is then the truth.
+///
+/// Args:
+///     entry: `(wanted, sent_at, ack_rev before, strategies_rev before)` recorded at send.
+///     ack_now: Current `strategies_ack_rev` of the core.
+///     rev_now: Current `strategies_rev` of the core.
+///     checked: Current checked state of the row.
+///     now: Current instant.
+///
+/// Returns:
+///     `Pending`, `TimedOut`, or `None` when the entry should be dropped.
+pub(super) fn strategy_pending(
+    entry: (bool, Instant, u64, u64),
+    ack_now: u64,
+    rev_now: u64,
+    checked: bool,
+    now: Instant,
+) -> Option<StrategyPendingDto> {
+    let (wanted, sent_at, ack_before, rev_before) = entry;
+    if ack_now != ack_before && rev_now != rev_before && checked == wanted {
+        return None;
+    }
+    if now.saturating_duration_since(sent_at) < STRATEGY_CONFIRM_WINDOW {
+        return Some(StrategyPendingDto::Pending);
+    }
+    if checked == wanted || rev_now != rev_before {
+        return None;
+    }
+    Some(StrategyPendingDto::TimedOut)
 }
 
 /// `Period` values the chat buttons Today, Yesterday, Month, and Last month already use.

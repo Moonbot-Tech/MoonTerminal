@@ -8,12 +8,14 @@
     var RETRY_MS = [1000, 2000, 4000];
     var REPORT_RETRY_LIMIT = 6;
     var REPORT_RETRY_MS = 2000;
-    var TAB_NAMES = ["report", "cores", "balances", "orders"];
+    var TAB_NAMES = ["report", "cores", "balances", "orders", "trades", "strategies"];
     var TAB_KEYS = {
         report: "mini_tab_report",
         cores: "mini_tab_cores",
         balances: "mini_tab_balances",
-        orders: "mini_tab_orders"
+        orders: "mini_tab_orders",
+        trades: "mini_tab_trades",
+        strategies: "mini_tab_strategies"
     };
     var PERIODS = [
         ["today", "mini_period_today"],
@@ -32,9 +34,9 @@
     var sections = {};
     var buttons = {};
     var payloads = {};
-    var queries = { cores: "", balances: "", orders: "" };
-    var collapse = { cores: {}, balances: {}, orders: {} };
-    var collapseUser = { cores: {}, balances: {}, orders: {} };
+    var queries = { cores: "", balances: "", orders: "", strategies: "" };
+    var collapse = { cores: {}, balances: {}, orders: {}, strategies: {} };
+    var collapseUser = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var hasData = {};
     var queue = [];
     var busy = false;
@@ -59,6 +61,12 @@
     var updatedTimer = null;
     var reportExpanded = false;
     var MONEY_LIST_LIMIT = 8;
+    // Core detail screen: the open core id, and the list scroll to return to.
+    var coreDetailId = null;
+    var coreListY = 0;
+    var sheet = document.getElementById("sheet");
+    var sheetBackdrop = null;
+    var sheetOpen = false;
 
     function tr(key) {
         var value = labels[key];
@@ -330,12 +338,17 @@
         });
     }
 
+    // Database reads (report, trades) get the long retry so a slow read can land in the cache.
+    function slowRead(path) {
+        return path === "/api/report" || path === "/api/trades";
+    }
+
     function retryLimit(job) {
-        return job.path === "/api/report" ? REPORT_RETRY_LIMIT : RETRY_MS.length;
+        return slowRead(job.path) ? REPORT_RETRY_LIMIT : RETRY_MS.length;
     }
 
     function retryWait(job) {
-        if (job.path === "/api/report") return REPORT_RETRY_MS;
+        if (slowRead(job.path)) return REPORT_RETRY_MS;
         return RETRY_MS[job.attempt];
     }
 
@@ -354,13 +367,15 @@
             if (!sessionOk || token !== loadToken || current !== name) return;
             if (document.visibilityState !== "visible") return;
             loadTab(name, token, true);
-        }, name === "report" ? REPORT_POLL_MS : POLL_MS);
+        }, name === "report" || name === "trades" ? REPORT_POLL_MS : POLL_MS);
     }
 
     function pathFor(name) {
         if (name === "report") return "/api/report";
         if (name === "cores") return "/api/cores";
         if (name === "balances") return "/api/balances";
+        if (name === "trades") return "/api/trades";
+        if (name === "strategies") return "/api/strategies";
         return "/api/orders";
     }
 
@@ -745,6 +760,17 @@
 
     function coreRow(core, data) {
         var row = el("div", "row core-row");
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        row.addEventListener("click", function () {
+            openCoreDetail(core.id);
+        });
+        row.addEventListener("keydown", function (event) {
+            if (event.target !== row) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            openCoreDetail(core.id);
+        });
         row.appendChild(el("span", dotClass(core)));
         var body = el("div", "grow");
         var coreName = el("div", "name core-name", core.name || "");
@@ -755,7 +781,14 @@
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
-        if (data && data.can_control) row.appendChild(coreActions(core));
+        if (data && data.can_control) {
+            var actions = coreActions(core);
+            // A switch tap acts on the core; it never opens the detail screen.
+            actions.addEventListener("click", function (event) {
+                event.stopPropagation();
+            });
+            row.appendChild(actions);
+        }
         return row;
     }
 
@@ -1263,6 +1296,18 @@
         clear(host);
         var data = payloads.cores || {};
         var cores = Array.isArray(data.cores) ? data.cores : [];
+        if (coreDetailId != null) {
+            var shownCore = findCore(cores, coreDetailId);
+            if (shownCore) {
+                paintCoreDetail(host, shownCore, data);
+                restoreSnap(snap, y);
+                return;
+            }
+            // The core left the list (grant or config change): back to the list at its
+            // old scroll; restoreSnap below scrolls there and syncs the Back button.
+            coreDetailId = null;
+            y = coreListY;
+        }
         var online = 0;
         var problems = 0;
         var i;
@@ -1452,11 +1497,375 @@
         restoreSnap(snap, y);
     }
 
+    function findCore(cores, id) {
+        var i;
+        for (i = 0; i < cores.length; i++) {
+            if (cores[i] && cores[i].id === id) return cores[i];
+        }
+        return null;
+    }
+
+    function openCoreDetail(id) {
+        if (coreDetailId === id) return;
+        hapticSelection();
+        coreListY = window.pageYOffset || 0;
+        coreDetailId = id;
+        paintCores();
+        window.scrollTo(0, 0);
+        syncBackButton();
+    }
+
+    function closeCoreDetail() {
+        if (coreDetailId == null) return;
+        coreDetailId = null;
+        if (current === "cores") {
+            paintCores();
+            window.scrollTo(0, coreListY);
+        }
+        syncBackButton();
+    }
+
+    function detailLine(card, label, value) {
+        var line = el("div", "row spread");
+        line.appendChild(el("span", "k", label));
+        var shown = value == null || value === "" ? "—" : value;
+        line.appendChild(el("span", "num", shown));
+        card.appendChild(line);
+    }
+
+    function unitText(value, unitKey) {
+        if (typeof value !== "number") return null;
+        return String(value) + " " + tr(unitKey);
+    }
+
+    // One core in full: state, build, memory, CPU and pings; the owner also gets its controls.
+    function paintCoreDetail(host, core, data) {
+        var wrap = el("div", "core-detail");
+        wrap.appendChild(button("cmd text-btn detail-back", "‹ " + tr("mini_back"), closeCoreDetail));
+        var head = el("div", "card");
+        var top = el("div", "row detail-head");
+        top.appendChild(el("span", dotClass(core)));
+        var body = el("div", "grow");
+        body.appendChild(el("div", "name core-name", core.name || ""));
+        var state = core.fault ? faultLabel(core.fault) : tr("mini_core_" + (core.conn || ""));
+        var sub = [];
+        if (core.exchange) sub.push(core.exchange);
+        if (state) sub.push(state);
+        if (sub.length) body.appendChild(el("div", core.fault ? "sub neg" : "sub", sub.join(" · ")));
+        top.appendChild(body);
+        head.appendChild(top);
+        wrap.appendChild(head);
+        var facts = el("div", "card");
+        detailLine(facts, tr("mini_version"), core.version);
+        detailLine(facts, tr("mini_memory"), unitText(core.mem_mb, "mini_unit_mb"));
+        detailLine(facts, tr("mini_free_memory"), unitText(core.free_mem_mb, "mini_unit_mb"));
+        var cpu = typeof core.cpu_proc === "number" ? core.cpu_proc : core.cpu_sys;
+        detailLine(facts, tr("mini_cpu"), typeof cpu === "number" ? unitText(Math.round(cpu * 10) / 10, "mini_unit_pct") : null);
+        detailLine(facts, tr("mini_ping"), unitText(core.ping_ms, "mini_unit_ms"));
+        detailLine(facts, tr("mini_exch_ping"), unitText(core.exch_ping_ms, "mini_unit_ms"));
+        wrap.appendChild(facts);
+        if (data && data.can_control) {
+            var controls = el("div", "card detail-controls");
+            controls.appendChild(coreActions(core));
+            var line = el("div", "detail-actions");
+            var reconnect = button("cmd chip", tr("mini_reconnect"), function () {
+                if (commandBusy) return;
+                runCommand(null, "/api/core/reconnect", { core: core.id });
+            });
+            reconnect.disabled = commandBusy;
+            line.appendChild(reconnect);
+            controls.appendChild(line);
+            wrap.appendChild(controls);
+        }
+        host.appendChild(wrap);
+    }
+
+    // Days and hours, hours and minutes, or minutes and seconds; every unit comes from the label map.
+    function fmtDuration(secs) {
+        if (typeof secs !== "number" || secs !== secs || secs < 0) return null;
+        var s = Math.floor(secs);
+        var d = Math.floor(s / 86400);
+        var h = Math.floor((s % 86400) / 3600);
+        var m = Math.floor((s % 3600) / 60);
+        if (d > 0) return trf("mini_duration_dh", { d: d, h: h });
+        if (h > 0) return trf("mini_duration_hm", { h: h, m: m });
+        return trf("mini_duration_ms", { m: m, s: s % 60 });
+    }
+
+    function tradePct(trade, baseClass) {
+        var node = el("span", baseClass);
+        if (trade.profit_pct_text) {
+            var tone = signClass(trade.profit_pct);
+            node.className = baseClass + (tone ? " " + tone : "");
+            node.textContent = trade.profit_pct_text;
+        } else {
+            node.className = baseClass + " hint";
+            node.textContent = "—";
+        }
+        return node;
+    }
+
+    function tradeRow(trade) {
+        var row = el("div", "row trade-row");
+        row.setAttribute("role", "button");
+        row.tabIndex = 0;
+        var left = el("div", "grow");
+        var top = el("div", "order-top");
+        var coin = el("span", "name order-coin", trade.coin || "");
+        coin.title = trade.coin || "";
+        top.appendChild(coin);
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), trade.side || ""));
+        left.appendChild(top);
+        var meta = [];
+        if (trade.core_name) meta.push(trade.core_name);
+        if (trade.closed_text) meta.push(trade.closed_text);
+        left.appendChild(el("div", "sub trade-meta", meta.join(" · ")));
+        row.appendChild(left);
+        var right = el("div", "trade-result");
+        var profit = el("span", "");
+        applyMoney(profit, "num money-col", trade.profit_text, trade.profit);
+        right.appendChild(profit);
+        right.appendChild(tradePct(trade, "num fine"));
+        row.appendChild(right);
+        function open() {
+            openTradeSheet(trade);
+        }
+        row.addEventListener("click", open);
+        row.addEventListener("keydown", function (event) {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            open();
+        });
+        return row;
+    }
+
+    function paintTrades() {
+        var host = sections.trades;
+        var snap = focusSnap();
+        var y = window.pageYOffset || 0;
+        clear(host);
+        var data = payloads.trades || {};
+        var trades = Array.isArray(data.trades) ? data.trades : [];
+        if (!trades.length) {
+            host.appendChild(emptyState(tr("mini_empty_trades"), refreshAction()));
+            restoreSnap(snap, y);
+            return;
+        }
+        var card = el("div", "card");
+        var i;
+        for (i = 0; i < trades.length; i++) card.appendChild(tradeRow(trades[i]));
+        host.appendChild(card);
+        restoreSnap(snap, y);
+    }
+
+    function openTradeSheet(trade) {
+        if (!sheet) return;
+        hapticSelection();
+        clear(sheet);
+        var head = el("div", "sheet-head");
+        var titleBox = el("div", "grow");
+        var top = el("div", "order-top");
+        var title = el("span", "name order-coin", trade.coin || "");
+        title.id = "sheet-title";
+        top.appendChild(title);
+        top.appendChild(el("span", "badge order-side " + sideClass(trade.side), trade.side || ""));
+        titleBox.appendChild(top);
+        var where = [];
+        if (trade.core_name) where.push(trade.core_name);
+        if (trade.exchange) where.push(trade.exchange);
+        titleBox.appendChild(el("div", "sub trade-meta", where.join(" · ")));
+        head.appendChild(titleBox);
+        var closeBtn = button("cmd text-btn sheet-close", tr("mini_close"), closeSheet);
+        head.appendChild(closeBtn);
+        sheet.appendChild(head);
+        var result = el("div", "row spread sheet-result");
+        var profit = el("span", "");
+        applyMoney(profit, "hero-value num", trade.profit_text, trade.profit);
+        result.appendChild(profit);
+        result.appendChild(tradePct(trade, "num"));
+        sheet.appendChild(result);
+        detailLine(sheet, tr("mini_trade_entry"), trade.entry_text);
+        detailLine(sheet, tr("mini_trade_exit"), trade.exit_text);
+        detailLine(sheet, tr("mini_trade_qty"), trade.qty_text);
+        detailLine(sheet, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
+        detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || tr("mini_trade_manual"));
+        detailLine(sheet, tr("mini_trade_closed"), trade.closed_text);
+        if (!sheetBackdrop) {
+            sheetBackdrop = el("div", "sheet-backdrop");
+            sheetBackdrop.addEventListener("click", closeSheet);
+            document.body.appendChild(sheetBackdrop);
+        }
+        sheetBackdrop.hidden = false;
+        sheet.setAttribute("aria-labelledby", "sheet-title");
+        sheet.hidden = false;
+        sheetOpen = true;
+        document.body.style.overflow = "hidden";
+        closeBtn.focus();
+        syncBackButton();
+    }
+
+    function closeSheet() {
+        if (!sheetOpen) return;
+        sheetOpen = false;
+        if (sheet) {
+            sheet.hidden = true;
+            clear(sheet);
+        }
+        if (sheetBackdrop) sheetBackdrop.hidden = true;
+        document.body.style.overflow = "";
+        syncBackButton();
+    }
+
+    document.addEventListener("keydown", function (event) {
+        if (sheetOpen && event.key === "Escape") closeSheet();
+    });
+
+    function strategyCoreKey(core) {
+        return "id:" + String(core.core);
+    }
+
+    function strategyCoreLabel(core) {
+        return core.core_name || "";
+    }
+
+    function strategiesOf(core) {
+        var out = [];
+        var folders = Array.isArray(core.folders) ? core.folders : [];
+        var i;
+        var j;
+        for (i = 0; i < folders.length; i++) {
+            var list = Array.isArray(folders[i].strategies) ? folders[i].strategies : [];
+            for (j = 0; j < list.length; j++) out.push(list[j]);
+        }
+        return out;
+    }
+
+    function strategyCoreProblem(core) {
+        var list = strategiesOf(core);
+        var i;
+        for (i = 0; i < list.length; i++) {
+            if (list[i].pending === "timed_out") return true;
+        }
+        return false;
+    }
+
+    // Core header: strategies switched on out of all of them.
+    function strategyGroupSummary(items) {
+        var on = 0;
+        var total = 0;
+        var i;
+        var j;
+        for (i = 0; i < items.length; i++) {
+            var list = strategiesOf(items[i]);
+            for (j = 0; j < list.length; j++) {
+                total += 1;
+                if (list[j].checked) on += 1;
+            }
+        }
+        return el("span", "count num", on + "/" + total);
+    }
+
+    // The chip colour is the core's confirmed state; the sub line says when a change is unconfirmed.
+    function strategyRow(core, strategy, canControl) {
+        var row = el("div", "row spread strategy-row");
+        var body = el("div", "grow");
+        var name = el("div", "name core-name", strategy.name || "");
+        name.title = strategy.name || "";
+        body.appendChild(name);
+        if (strategy.pending === "pending") {
+            body.appendChild(el("div", "sub", tr("mini_strategy_pending")));
+        } else if (strategy.pending === "timed_out") {
+            body.appendChild(el("div", "sub neg", tr("mini_strategy_timed_out")));
+        }
+        row.appendChild(body);
+        var on = strategy.checked === true;
+        var glyph = on ? "✓" : "—";
+        if (!canControl) {
+            var shown = el("span", "chip strategy-state " + (on ? "on" : "off"), glyph);
+            shown.setAttribute("aria-label", strategy.name || "");
+            row.appendChild(shown);
+            return row;
+        }
+        var waiting = strategy.pending === "pending";
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "cmd chip " + (on ? "on" : "off") + (waiting ? " pending" : "");
+        chip.textContent = glyph;
+        chip.setAttribute("aria-pressed", String(on));
+        chip.setAttribute("aria-label", strategy.name || "");
+        chip.disabled = commandBusy || waiting;
+        chip.addEventListener("click", function () {
+            if (commandBusy || waiting) return;
+            runCommand(null, "/api/strategy/toggle", { core: core.core, id: strategy.id, on: !on });
+        });
+        row.appendChild(chip);
+        return row;
+    }
+
+    function strategyCoreBody(core, canControl) {
+        var box = el("div", "strategy-core");
+        var folders = Array.isArray(core.folders) ? core.folders : [];
+        var i;
+        var j;
+        for (i = 0; i < folders.length; i++) {
+            var folder = folders[i];
+            var list = Array.isArray(folder.strategies) ? folder.strategies : [];
+            if (!list.length) continue;
+            var folderRow = el("div", "row section-row folder-row", folder.path ? folder.path : tr("mini_strategy_root"));
+            if (folder.path) folderRow.title = folder.path;
+            box.appendChild(folderRow);
+            for (j = 0; j < list.length; j++) box.appendChild(strategyRow(core, list[j], canControl));
+        }
+        return box;
+    }
+
+    function paintStrategies() {
+        var host = sections.strategies;
+        var snap = focusSnap();
+        var y = window.pageYOffset || 0;
+        clear(host);
+        var data = payloads.strategies || {};
+        var cores = Array.isArray(data.cores) ? data.cores : [];
+        var withRows = [];
+        var i;
+        for (i = 0; i < cores.length; i++) {
+            if (strategiesOf(cores[i]).length) withRows.push(cores[i]);
+        }
+        if (!withRows.length) {
+            host.appendChild(emptyState(tr("mini_empty_strategies"), refreshAction()));
+            restoreSnap(snap, y);
+            return;
+        }
+        ensureCollapse("strategies", withRows, strategyCoreKey);
+        appendToggleAll(host, "strategies", withRows, strategyCoreKey, "", paintStrategies);
+        var sectionsOf = groupBy(withRows, function (core) { return String(core.exchange || ""); });
+        var s;
+        for (s = 0; s < sectionsOf.length; s++) {
+            if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
+            appendGroups(
+                host,
+                "strategies",
+                sectionsOf[s].items,
+                strategyCoreProblem,
+                function (core) { return strategyCoreBody(core, !!data.can_control); },
+                "",
+                paintStrategies,
+                strategyCoreKey,
+                strategyCoreLabel,
+                "name grow core-name",
+                strategyGroupSummary
+            );
+        }
+        restoreSnap(snap, y);
+    }
+
     var paint = {
         report: paintReport,
         cores: paintCores,
         balances: paintBalances,
-        orders: paintOrders
+        orders: paintOrders,
+        trades: paintTrades,
+        strategies: paintStrategies
     };
 
     var lastClock = "";
@@ -1477,7 +1886,7 @@
     }
 
     function staleAfter(name) {
-        return name === "report" ? REPORT_POLL_MS * 2 : Math.max(POLL_MS * 5, 15000);
+        return name === "report" || name === "trades" ? REPORT_POLL_MS * 2 : Math.max(POLL_MS * 5, 15000);
     }
 
     // Relative age of the current tab's last good read; the fixed clock rides the tooltip.
@@ -1586,6 +1995,8 @@
         setSpinning(false);
         cancelPending();
         current = name;
+        closeSheet();
+        coreDetailId = null;
         if (name === "balances") balanceRevealed = false;
         loadToken += 1;
         var i;
@@ -1753,11 +2164,11 @@
     }
 
     function hasQuery() {
-        return !!(queries.cores || queries.balances || queries.orders);
+        return !!(queries.cores || queries.balances || queries.orders || queries.strategies);
     }
 
     function anyGroupOpen() {
-        var panes = ["cores", "balances", "orders"];
+        var panes = ["cores", "balances", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {
@@ -1770,7 +2181,7 @@
     }
 
     function collapseOpenGroups() {
-        var panes = ["cores", "balances", "orders"];
+        var panes = ["cores", "balances", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {
@@ -1785,10 +2196,19 @@
     }
 
     function onBack() {
+        if (sheetOpen) {
+            closeSheet();
+            return;
+        }
+        if (coreDetailId != null) {
+            closeCoreDetail();
+            return;
+        }
         if (hasQuery()) {
             queries.cores = "";
             queries.balances = "";
             queries.orders = "";
+            queries.strategies = "";
         } else {
             collapseOpenGroups();
         }
@@ -1799,7 +2219,7 @@
     function syncBackButton() {
         var button = webapp && webapp.BackButton;
         if (!button) return;
-        var needed = hasQuery() || anyGroupOpen();
+        var needed = sheetOpen || coreDetailId != null || hasQuery() || anyGroupOpen();
         if (typeof button.isVisible === "boolean" && button.isVisible === needed) return;
         if (needed && typeof button.show === "function") button.show();
         else if (!needed && typeof button.hide === "function") button.hide();
@@ -1840,11 +2260,12 @@
     }
 
     function setCommandsDisabled(disabled) {
-        var nodes = document.querySelectorAll(".order-actions .cmd, .core-actions .cmd, .mass-actions .cmd");
+        var nodes = document.querySelectorAll(".order-actions .cmd, .core-actions .cmd, .mass-actions .cmd, .strategy-row .cmd, .core-detail .cmd");
         var i;
         for (i = 0; i < nodes.length; i++) {
-            // A chip with no known state stays off whatever the busy flag says.
-            nodes[i].disabled = !!disabled || nodes[i].className.indexOf("unknown") >= 0;
+            // A chip with no known state, or a strategy awaiting its core, stays off whatever the busy flag says.
+            var cls = nodes[i].className;
+            nodes[i].disabled = !!disabled || cls.indexOf("unknown") >= 0 || cls.indexOf("pending") >= 0;
         }
     }
 
@@ -1853,15 +2274,15 @@
         return !!(res && (res.cancelled || res.status === 0 || res.status === 504));
     }
 
-    // Reload the pane in view; a core switch lands a moment later, so cores read twice.
+    // Reload the pane in view; a core switch or strategy toggle lands a moment later, so those read twice.
     function reloadAfterCommand(silent) {
         var pane = current;
         if (!pane) return;
         if (!silent) hasData[pane] = false;
         reloadPane(pane, silent);
-        if (pane === "cores") {
+        if (pane === "cores" || pane === "strategies") {
             setTimeout(function () {
-                if (current === "cores") reloadPane("cores", true);
+                if (current === pane) reloadPane(pane, true);
             }, 1500);
         }
     }
@@ -1881,6 +2302,12 @@
         var data = res.data || {};
         var partial = typeof data.sent === "number" && typeof data.requested === "number"
             && data.sent !== data.requested;
+        // A reconnect only starts one; the next cores poll shows whether it came back.
+        if (data.ok === true && path === "/api/core/reconnect") {
+            showCmdLine("");
+            reloadAfterCommand(true);
+            return;
+        }
         if (data.ok === true && !partial) {
             haptic("success");
             showCmdLine(tr("mini_cmd_sent"));

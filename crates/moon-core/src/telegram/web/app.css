@@ -1293,3 +1293,128 @@ input:focus-visible {
         grid-template-columns: repeat(2, 1fr);
     }
 }
+
+/* Six tabs share the bar: a smaller icon and label keep every one visible at phone width. */
+@media (max-width: 439px) {
+    #app-nav svg {
+        width: 22px;
+        height: 22px;
+    }
+
+    .nav-label {
+        font-size: 10px;
+    }
+}
+
+/* Cores list rows open the core detail screen. */
+.core-row {
+    cursor: pointer;
+}
+
+.strategy-row .cmd,
+.core-detail .cmd {
+    min-height: 44px;
+}
+
+.strategy-row .chip {
+    flex: none;
+    min-width: 44px;
+}
+
+/* A long unbroken folder path ellipsizes; the full path rides the title. */
+.folder-row {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detail-back {
+    display: block;
+    min-width: 44px;
+    margin: var(--sp-2) var(--sp-4) 0;
+    padding: 0;
+}
+
+.detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 var(--sp-4) var(--sp-3) calc(2 * var(--sp-4));
+}
+
+/* Closed trades: tap a row for the detail sheet. */
+.trade-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.trade-result {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.trade-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    background: rgba(0, 0, 0, 0.4);
+}
+
+.sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 6;
+    max-height: calc(var(--tg-viewport-stable-height, 100vh) * 0.8 - var(--inset-top));
+    overflow-y: auto;
+    background: var(--card);
+    border-top: 1px solid var(--line);
+    border-radius: var(--r-card) var(--r-card) 0 0;
+    padding-left: var(--inset-left);
+    padding-right: var(--inset-right);
+    padding-bottom: var(--inset-bottom);
+}
+
+.sheet-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4) var(--sp-1);
+}
+
+.sheet-result {
+    flex-wrap: wrap;
+}
+
+.sheet .hero-value {
+    min-width: 0;
+    font-size: 24px;
+    overflow-wrap: anywhere;
+}
+
+.sheet-close {
+    min-height: 44px;
+    min-width: 44px;
+}
+
+/* Narrow phones: the detail and sheet rows take the same 12px sides as the rest (declared
+   after their base rules so the cascade keeps them). */
+@media (max-width: 360px) {
+    .detail-actions,
+    .sheet-head {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}

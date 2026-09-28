@@ -150,8 +150,16 @@ fn accept(event: MiniAppApiRequest) {
         MiniAppApiRequest::Orders { reply, .. } => {
             let _ = reply.send(Err(MiniAppApiError::Rejected));
         }
+        MiniAppApiRequest::Trades { reply, .. } => {
+            let _ = reply.send(Err(MiniAppApiError::Rejected));
+        }
+        MiniAppApiRequest::Strategies { reply, .. } => {
+            let _ = reply.send(Err(MiniAppApiError::Rejected));
+        }
         MiniAppApiRequest::CoreSwitch { reply, .. }
-        | MiniAppApiRequest::CancelAllOrders { reply, .. } => {
+        | MiniAppApiRequest::CancelAllOrders { reply, .. }
+        | MiniAppApiRequest::StrategyToggle { reply, .. }
+        | MiniAppApiRequest::CoreReconnect { reply, .. } => {
             let _ = reply.send(Ok(super::dto::CommandResultDto {
                 ok: true,
                 armed: None,
@@ -383,12 +391,12 @@ fn telegram_panic_market_over_64_bytes_is_rejected() {
     );
 }
 
-/// `web.rs` route arms `/api/core/switch`, `/api/cores/switch` and
-/// `/api/core/cancel_all` must authenticate through `handle_api`.
+/// `web.rs` route arms `/api/core/switch`, `/api/cores/switch`, `/api/core/cancel_all`,
+/// `/api/strategy/toggle` and `/api/core/reconnect` must authenticate through `handle_api`.
 ///
 /// Mutation: one arm parses its body and sends the command without the
 /// initData HMAC, freshness and paired-chat check. Anyone holding the tunnel URL
-/// can then stop trading or cancel every order on the owner's cores. The fresh
+/// can then stop trading, cancel every order, toggle strategies or reconnect the owner's cores. The fresh
 /// paired launch reaching 200 is the control that the routes are not hard-coded
 /// to reject.
 #[test]
@@ -414,6 +422,8 @@ fn telegram_core_control_routes_require_fresh_paired_init_data() {
             r#"{"cores":[1,2],"switch":"auto_detect","on":false}"#,
         ),
         ("/api/core/cancel_all", r#"{"core":1}"#),
+        ("/api/strategy/toggle", r#"{"core":1,"id":7,"on":true}"#),
+        ("/api/core/reconnect", r#"{"core":1}"#),
     ];
 
     for (path, body) in routes {

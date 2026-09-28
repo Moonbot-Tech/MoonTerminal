@@ -553,3 +553,99 @@ telegram.mini_stop:
   ru: "Стоп"
   en: "Stop"
   es: "Detener"
+telegram.mini_tab_trades:
+  ru: "Сделки"
+  en: "Trades"
+  es: "Cierres"
+telegram.mini_tab_strategies:
+  ru: "Стратегии"
+  en: "Strategies"
+  es: "Estrategias"
+telegram.mini_empty_trades:
+  ru: "Закрытых сделок нет"
+  en: "No closed trades yet"
+  es: "Aún no hay operaciones cerradas"
+telegram.mini_empty_strategies:
+  ru: "Стратегий нет"
+  en: "No strategies"
+  es: "No hay estrategias"
+telegram.mini_trade_entry:
+  ru: "Вход"
+  en: "Entry"
+  es: "Entrada"
+telegram.mini_trade_exit:
+  ru: "Выход"
+  en: "Exit"
+  es: "Salida"
+telegram.mini_trade_qty:
+  ru: "Кол-во"
+  en: "Qty"
+  es: "Cant."
+telegram.mini_trade_duration:
+  ru: "Длительность"
+  en: "Duration"
+  es: "Duración"
+telegram.mini_trade_strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+telegram.mini_trade_manual:
+  ru: "Вручную"
+  en: "Manual"
+  es: "Manual"
+telegram.mini_trade_closed:
+  ru: "Закрыта"
+  en: "Closed"
+  es: "Cerrada"
+telegram.mini_duration_dh:
+  ru: "{d} д {h} ч"
+  en: "{d}d {h}h"
+  es: "{d} d {h} h"
+telegram.mini_duration_hm:
+  ru: "{h} ч {m} мин"
+  en: "{h}h {m}m"
+  es: "{h} h {m} min"
+telegram.mini_duration_ms:
+  ru: "{m} мин {s} с"
+  en: "{m}m {s}s"
+  es: "{m} min {s} s"
+telegram.mini_strategy_root:
+  ru: "Без папки"
+  en: "No folder"
+  es: "Sin carpeta"
+telegram.mini_strategy_pending:
+  ru: "Ждёт ядро…"
+  en: "Waiting for core…"
+  es: "Esperando al núcleo…"
+telegram.mini_strategy_timed_out:
+  ru: "Ядро не ответило — состояние неизвестно"
+  en: "Core did not confirm — state unknown"
+  es: "El núcleo no confirmó — estado desconocido"
+telegram.mini_version:
+  ru: "Версия"
+  en: "Version"
+  es: "Versión"
+telegram.mini_memory:
+  ru: "Память"
+  en: "Memory"
+  es: "Memoria"
+telegram.mini_free_memory:
+  ru: "Свободно"
+  en: "Free"
+  es: "Libre"
+telegram.mini_unit_mb:
+  ru: "МБ"
+  en: "MB"
+  es: "MB"
+telegram.mini_reconnect:
+  ru: "Переподключить"
+  en: "Reconnect"
+  es: "Reconectar"
+telegram.mini_back:
+  ru: "Назад"
+  en: "Back"
+  es: "Atrás"
+telegram.mini_close:
+  ru: "Закрыть"
+  en: "Close"
+  es: "Cerrar"

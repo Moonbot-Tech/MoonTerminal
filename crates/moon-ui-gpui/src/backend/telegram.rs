@@ -3,7 +3,8 @@ use crate::Backend;
 use gpui::Context;
 use moon_core::config::TelegramConfig;
 use moon_core::config::telegram_access::TelegramReportAccess;
-use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto};
+use moon_core::session::CoreId;
+use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto, TradesDto};
 use moon_core::telegram::{
     TelegramService, TelegramStatus,
     api::{
@@ -16,6 +17,7 @@ use moon_core::telegram::{
     web::*,
 };
 use rust_i18n::t;
+use std::collections::HashMap;
 use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -43,6 +45,18 @@ pub(crate) struct TelegramState {
         Instant,
         ReportDto,
     )>,
+    /// At most one Mini App trades read is computed at a time, including timed-out requests.
+    mini_trades_pending: bool,
+    /// Last finished Mini App trades read for one chat and admission grant.
+    ///
+    /// Same lifetime rules as `mini_report_last`: served only to the same grant, cleared on
+    /// service restart.
+    mini_trades_last: Option<(i64, TelegramReportAccess, Instant, TradesDto)>,
+    /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
+    ///
+    /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
+    /// service restart.
+    mini_strategy_wanted: HashMap<(CoreId, u64), (bool, Instant, u64, u64)>,
     pub(crate) service: Option<TelegramService>,
     pub(crate) status: TelegramStatus,
     pub(crate) mini_status: MiniAppStatus,
@@ -79,6 +93,9 @@ impl TelegramState {
             report_pending: false,
             mini_report_pending: false,
             mini_report_last: None,
+            mini_trades_pending: false,
+            mini_trades_last: None,
+            mini_strategy_wanted: HashMap::new(),
             service,
             status,
             mini_status: MiniAppStatus::Stopped,
@@ -95,10 +112,13 @@ impl TelegramState {
         let retired = std::mem::take(&mut self.retired_menu_chats);
         let report_pending = self.report_pending;
         let mini_report_pending = self.mini_report_pending;
+        let mini_trades_pending = self.mini_trades_pending;
         *self = Self::new_with_menu_cleanup(config, retired);
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
-        // `mini_report_last` stays clear: a restarted service must not replay the previous grant.
+        self.mini_trades_pending = mini_trades_pending;
+        // `mini_report_last` and `mini_trades_last` stay clear: a restarted service must not
+        // replay the previous grant.
     }
 
     /// Retain only removed identities, and never transfer them to a different bot token.
@@ -140,6 +160,8 @@ impl TelegramState {
     /// Retire the current transport without blocking the coordination loop.
     fn restart(&mut self) {
         self.mini_report_last = None;
+        self.mini_trades_last = None;
+        self.mini_strategy_wanted.clear();
         self.pairing = None;
         self.status = TelegramStatus::Stopping;
         self.mini_status = MiniAppStatus::Stopped;
@@ -594,4 +616,28 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_cmd_core_not_found",
     "mini_start",
     "mini_stop",
+    "mini_tab_trades",
+    "mini_tab_strategies",
+    "mini_empty_trades",
+    "mini_empty_strategies",
+    "mini_trade_entry",
+    "mini_trade_exit",
+    "mini_trade_qty",
+    "mini_trade_duration",
+    "mini_trade_strategy",
+    "mini_trade_manual",
+    "mini_trade_closed",
+    "mini_duration_dh",
+    "mini_duration_hm",
+    "mini_duration_ms",
+    "mini_strategy_root",
+    "mini_strategy_pending",
+    "mini_strategy_timed_out",
+    "mini_version",
+    "mini_memory",
+    "mini_free_memory",
+    "mini_unit_mb",
+    "mini_reconnect",
+    "mini_back",
+    "mini_close",
 ];

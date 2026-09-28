@@ -8,7 +8,8 @@
 //! `auth_date` within `INIT_DATA_MAX_AGE_SECS` (3600 s) before anything reaches the consumer.
 //! Routes: `POST /api/session`, `POST /api/report`, `POST /api/cores`, `POST /api/balances`,
 //! `POST /api/orders`, `POST /api/order/cancel`, `POST /api/panic`, `POST /api/core/switch`,
-//! `POST /api/cores/switch`, and `POST /api/core/cancel_all`.
+//! `POST /api/cores/switch`, `POST /api/core/cancel_all`, `POST /api/trades`,
+//! `POST /api/strategies`, `POST /api/strategy/toggle`, and `POST /api/core/reconnect`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -33,7 +34,7 @@ pub mod dto;
 
 use dto::{
     BalancesDto, CommandResultDto, CoreSwitchDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto,
-    ScopeResultDto,
+    ScopeResultDto, StrategiesDto, TradesDto,
 };
 
 const INDEX_HTML: &str = include_str!("web/index.html");
@@ -183,6 +184,50 @@ pub enum MiniAppApiRequest {
     },
     /// Cancel every open order of one core. Nothing is sent for an unknown core.
     CancelAllOrders {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Target core.
+        core: u64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Latest closed trades for every visible core.
+    Trades {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<TradesDto, MiniAppApiError>>,
+    },
+    /// Strategies for every visible core.
+    Strategies {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<StrategiesDto, MiniAppApiError>>,
+    },
+    /// Turn one strategy on or off. Nothing is sent for an unknown core or strategy.
+    StrategyToggle {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Core that owns the strategy.
+        core: u64,
+        /// Strategy id from the same list the strategies route returns.
+        id: u64,
+        /// State the page asked for.
+        on: bool,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Reconnect one core. Nothing is sent for an unknown core.
+    CoreReconnect {
         /// Signed identity that passed pairing.
         identity: SignedInitData,
         /// Paired chat id.
@@ -382,6 +427,22 @@ struct CancelAllBody {
     core: u64,
 }
 
+/// Body of `POST /api/strategy/toggle`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrategyToggleBody {
+    core: u64,
+    id: u64,
+    on: bool,
+}
+
+/// Body of `POST /api/core/reconnect`. Unknown fields are rejected.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreReconnectBody {
+    core: u64,
+}
+
 /// Longest `market` accepted by `POST /api/panic`, in bytes.
 const MAX_MARKET_BYTES: usize = 64;
 
@@ -543,6 +604,50 @@ impl App {
                     })
                 })
             }
+            (&Method::POST, "/api/trades") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Trades {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/strategies") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Strategies {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/strategy/toggle") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<StrategyToggleBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::StrategyToggle {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        id: parsed.id,
+                        on: parsed.on,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/core/reconnect") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<CoreReconnectBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::CoreReconnect {
+                        identity,
+                        chat_id,
+                        core: parsed.core,
+                        reply,
+                    })
+                })
+            }
             (&Method::GET, "/api/session")
             | (
                 &Method::GET,
@@ -554,7 +659,11 @@ impl App {
                 | "/api/panic"
                 | "/api/core/switch"
                 | "/api/cores/switch"
-                | "/api/core/cancel_all",
+                | "/api/core/cancel_all"
+                | "/api/trades"
+                | "/api/strategies"
+                | "/api/strategy/toggle"
+                | "/api/core/reconnect",
             )
             | (&Method::HEAD, "/")
             | (&Method::OPTIONS, _) => status_response(StatusCode::METHOD_NOT_ALLOWED, "method"),

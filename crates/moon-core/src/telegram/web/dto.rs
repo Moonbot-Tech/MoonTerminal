@@ -83,6 +83,12 @@ pub struct CoreStatusDto {
     pub trading: Option<bool>,
     /// Auto-detect switch; `None` when the core has not reported it.
     pub auto_detect: Option<bool>,
+    /// Core build text; `None` when the core has not reported its version.
+    pub version: Option<String>,
+    /// Memory the core process uses, in MB; `None` when not reported.
+    pub mem_mb: Option<u32>,
+    /// Free physical memory on the core host, in MB; `None` when not reported.
+    pub free_mem_mb: Option<u32>,
 }
 
 /// Core status list. `can_control` is true only for the owner.
@@ -185,6 +191,84 @@ pub struct OrderDto {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct OrdersDto {
     pub orders: Vec<OrderDto>,
+    pub can_control: bool,
+}
+
+/// One closed trade. Money, prices and dates are preformatted text.
+///
+/// `side` is the closed set `"buy"` (long) or `"sell"` (short). `closed_at` is UTC seconds.
+/// `profit` and `profit_pct` are `None` when the trade could not be valued.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct TradeDto {
+    pub core: u64,
+    pub core_name: String,
+    /// Exchange section caption of the trade's core.
+    pub exchange: String,
+    pub rec_id: i64,
+    pub coin: String,
+    pub side: String,
+    pub profit: Option<f64>,
+    pub profit_text: Option<String>,
+    pub profit_pct: Option<f64>,
+    pub profit_pct_text: Option<String>,
+    pub closed_at: i64,
+    pub closed_text: String,
+    pub entry_text: Option<String>,
+    pub exit_text: Option<String>,
+    pub qty_text: String,
+    /// Seconds from entry to close; `None` when the entry time is unknown.
+    pub duration_secs: Option<i64>,
+    /// Strategy name; `None` for a manual trade.
+    pub strategy: Option<String>,
+}
+
+/// Latest closed trades, newest first, at most `limit` of them.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct TradesDto {
+    pub trades: Vec<TradeDto>,
+    pub limit: u32,
+}
+
+/// Unconfirmed state of a strategy toggle. Serialized as snake_case.
+///
+/// `TimedOut` means the core did not confirm in time; the real state is unknown, not rejected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyPendingDto {
+    Pending,
+    TimedOut,
+}
+
+/// One strategy row. `wanted` is the state last asked for while it is unconfirmed.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct StrategyDto {
+    pub id: u64,
+    pub name: String,
+    pub checked: bool,
+    pub wanted: Option<bool>,
+    pub pending: Option<StrategyPendingDto>,
+}
+
+/// Strategies of one folder. `path` is `"/"`-joined; `""` is the root.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct StrategyFolderDto {
+    pub path: String,
+    pub strategies: Vec<StrategyDto>,
+}
+
+/// Strategies of one core, grouped by folder.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CoreStrategiesDto {
+    pub core: u64,
+    pub core_name: String,
+    pub exchange: String,
+    pub folders: Vec<StrategyFolderDto>,
+}
+
+/// Strategy list. `can_control` is true only for the owner.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct StrategiesDto {
+    pub cores: Vec<CoreStrategiesDto>,
     pub can_control: bool,
 }
 

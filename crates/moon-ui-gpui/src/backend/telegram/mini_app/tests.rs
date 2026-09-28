@@ -5,7 +5,11 @@ use std::collections::HashMap;
 
 use moon_core::venue::CoreVenue;
 
-use super::{by_section, natural_cmp, scope_targets};
+use std::time::{Duration, Instant};
+
+use moon_core::telegram::web::dto::StrategyPendingDto;
+
+use super::{by_section, natural_cmp, scope_targets, strategy_pending};
 
 /// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
@@ -69,4 +73,31 @@ fn by_section_groups_by_exchange_then_natural_name() {
     );
     assert_eq!(ordered[1].0, ordered[2].0);
     assert_ne!(ordered[2].0, ordered[3].0);
+}
+
+/// `mini_app.rs:strategy_pending` keeps a toggle Pending inside the 45 s window, then TimedOut
+/// only while the row disagrees AND no fresh strategy list arrived.
+///
+/// Mutation: `if checked == wanted || rev_now != rev_before {` -> `if checked == wanted {`.
+/// A core that rebuilt its strategy list without flipping the row then keeps the timed-out chip
+/// forever. Oracle: the documented window (45 s) and the settle rule, not the function's output.
+#[test]
+fn strategy_pending_times_out_until_row_agrees_or_list_moves() {
+    let sent = Instant::now();
+    let entry = (true, sent, 5, 7);
+    let at = |secs| sent + Duration::from_secs(secs);
+    assert_eq!(
+        strategy_pending(entry, 5, 7, false, at(44)),
+        Some(StrategyPendingDto::Pending)
+    );
+    assert_eq!(
+        strategy_pending(entry, 5, 7, false, at(46)),
+        Some(StrategyPendingDto::TimedOut)
+    );
+    assert_eq!(strategy_pending(entry, 5, 7, true, at(46)), None);
+    assert_eq!(
+        strategy_pending(entry, 5, 8, false, at(46)),
+        None,
+        "a fresh strategy list after the window is the truth"
+    );
 }
