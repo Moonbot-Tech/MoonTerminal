@@ -188,22 +188,7 @@
         node.textContent = text;
     }
 
-    function focusSnap() {
-        var active = document.activeElement;
-        if (!active || !active.id || active.selectionStart == null) return null;
-        return { id: active.id, start: active.selectionStart, end: active.selectionEnd };
-    }
-
-    function restoreSnap(snap, y) {
-        if (snap) {
-            var node = document.getElementById(snap.id);
-            if (node) {
-                node.focus();
-                if (node.setSelectionRange && snap.start != null) {
-                    node.setSelectionRange(snap.start, snap.end);
-                }
-            }
-        }
+    function restoreScroll(y) {
         window.scrollTo(0, y || 0);
         syncBackButton();
     }
@@ -1085,7 +1070,6 @@
 
     function paintReport() {
         var host = paneBody("report");
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.report || {};
@@ -1093,7 +1077,7 @@
         var orders = typeof total.orders === "number" ? total.orders : 0;
         if (!orders) {
             host.appendChild(emptyState(tr("mini_empty_report"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         var hero = el("div", "card hero");
@@ -1119,7 +1103,7 @@
             limit: MONEY_LIST_LIMIT,
             meta: coreOrdersMeta
         });
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     // Owner-only bar over every visible core; each action asks one confirm.
@@ -1159,7 +1143,6 @@
 
     function paintCores() {
         var host = sections.cores;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.cores || {};
@@ -1168,11 +1151,11 @@
             var shownCore = findCore(cores, coreDetailId);
             if (shownCore) {
                 paintCoreDetail(host, shownCore, data);
-                restoreSnap(snap, y);
+                restoreScroll(y);
                 return;
             }
             // The core left the list (grant or config change): back to the list at its
-            // old scroll; restoreSnap below scrolls there and syncs the Back button.
+            // old scroll; restoreScroll below scrolls there and syncs the Back button.
             coreDetailId = null;
             y = coreListY;
         }
@@ -1185,7 +1168,7 @@
         }
         if (!cores.length) {
             host.appendChild(emptyState(tr("mini_empty_cores"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         var strip = el("div", "stat-strip");
@@ -1208,12 +1191,11 @@
             coreRow,
             paintCores, null, null, null, coreGroupSummary
         );
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function paintBalances() {
         var host = sections.balances;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.balances || {};
@@ -1221,7 +1203,7 @@
         var perExchange = Array.isArray(data.per_exchange) ? data.per_exchange : [];
         if (!perCore.length && !perExchange.length) {
             host.appendChild(emptyState(tr("mini_empty_balances"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         var hero = el("div", "card hero hero-toggle");
@@ -1279,19 +1261,18 @@
                 balanceGroupSummary
             );
         }
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function paintOrders() {
         var host = sections.orders;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.orders || {};
         var orders = Array.isArray(data.orders) ? data.orders : [];
         if (!orders.length) {
             host.appendChild(emptyState(tr("mini_empty_orders"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         host.appendChild(ordersSummary(orders));
@@ -1314,7 +1295,7 @@
                 orderGroupSummary
             );
         }
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function findCore(cores, id) {
@@ -1499,14 +1480,13 @@
 
     function paintTrades() {
         var host = sections.trades;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.trades || {};
         var trades = Array.isArray(data.trades) ? data.trades : [];
         if (!trades.length) {
             host.appendChild(emptyState(tr("mini_empty_trades"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         // The count shown, not the backend's cap.
@@ -1515,7 +1495,7 @@
         var i;
         for (i = 0; i < trades.length; i++) card.appendChild(tradeRow(trades[i]));
         host.appendChild(card);
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     function openTradeSheet(trade) {
@@ -1690,7 +1670,6 @@
 
     function paintStrategies() {
         var host = sections.strategies;
-        var snap = focusSnap();
         var y = window.pageYOffset || 0;
         clear(host);
         var data = payloads.strategies || {};
@@ -1702,7 +1681,7 @@
         }
         if (!withRows.length) {
             host.appendChild(emptyState(tr("mini_empty_strategies"), refreshAction()));
-            restoreSnap(snap, y);
+            restoreScroll(y);
             return;
         }
         // A core carries dozens of strategies, so its group starts folded.
@@ -1724,7 +1703,7 @@
                 strategyGroupSummary
             );
         }
-        restoreSnap(snap, y);
+        restoreScroll(y);
     }
 
     var paint = {
