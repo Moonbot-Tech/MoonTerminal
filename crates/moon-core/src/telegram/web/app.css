@@ -1205,12 +1205,30 @@ input:focus-visible {
     border-radius: var(--r-ctl);
 }
 
-/* Order group header: the name truncates, count and PnL stay on the right. */
+/* Group header: an exchange name truncates; a core name wraps to two lines so the unique tail
+   of names sharing a long prefix stays visible. Count and PnL stay on the first line. */
 .group-head .name {
     min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.group-head.core-head {
+    align-items: flex-start;
+    padding-top: 13px;
+    padding-bottom: 13px;
+}
+
+.group-head .name.core-name {
+    white-space: normal;
+    line-height: 1.3;
+}
+
+.group-head.core-head .chev,
+.group-head.core-head .group-meta,
+.group-head.core-head .count {
+    line-height: 1.3;
 }
 
 .group-head .group-meta {
@@ -1392,6 +1410,12 @@ button.pill:disabled {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* The last characters of a long core name, kept whole beside the ellipsized head. */
+.trade-core-tail {
+    flex: none;
+    white-space: pre;
 }
 
 .trade-sep,

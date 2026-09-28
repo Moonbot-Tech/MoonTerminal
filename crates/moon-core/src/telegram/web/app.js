@@ -628,7 +628,8 @@
             var card = el("div", "card");
             var head = document.createElement("button");
             head.type = "button";
-            head.className = "row group-head";
+            // A core-name header wraps its title, so its chevron and figures sit on the first line.
+            head.className = (" " + (nameClass || "") + " ").indexOf(" core-name ") !== -1 ? "row group-head core-head" : "row group-head";
             head.setAttribute("aria-expanded", collapsed ? "false" : "true");
             var title = group.key;
             if (typeof labelFn === "function" && group.items.length) title = labelFn(group.items[0]);
@@ -1506,9 +1507,13 @@
         var meta = el("div", "sub trade-row-meta");
         var when = trade.closed_short_text || trade.closed_text;
         if (trade.core_name) {
-            var core = el("span", "trade-core", trade.core_name);
-            core.title = trade.core_name;
+            // Names share long prefixes, so the ellipsis goes in the middle: the tail stays.
+            var name = String(trade.core_name);
+            var cut = name.length > 16 ? name.length - 10 : name.length;
+            var core = el("span", "trade-core", name.slice(0, cut));
+            core.title = name;
             meta.appendChild(core);
+            if (cut < name.length) meta.appendChild(el("span", "trade-core-tail", name.slice(cut)));
         }
         if (trade.core_name && when) meta.appendChild(el("span", "trade-sep", " · "));
         if (when) meta.appendChild(el("span", "trade-when", when));
