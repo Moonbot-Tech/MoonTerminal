@@ -278,6 +278,12 @@ main {
     overflow-wrap: anywhere;
 }
 
+/* A hidden total: regular-weight asterisks, not the figure's bold. */
+.hero-value.masked {
+    font-weight: 400;
+    letter-spacing: 0.12em;
+}
+
 .hero-sub {
     margin: 4px 16px 0;
     color: var(--hint);

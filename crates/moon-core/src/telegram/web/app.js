@@ -1384,8 +1384,8 @@
         function paintTotal() {
             if (balanceRevealed) applyMoney(big, "hero-value num", data.total_text, data.total);
             else {
-                big.className = "hero-value num";
-                big.textContent = "••••••";
+                big.className = "hero-value num masked";
+                big.textContent = "******";
             }
             hero.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
         }
