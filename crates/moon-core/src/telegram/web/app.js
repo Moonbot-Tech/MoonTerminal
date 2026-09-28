@@ -39,7 +39,6 @@
     var dealsSwitch = null;
     var buttons = {};
     var payloads = {};
-    var queries = { orders: "" };
     var collapse = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var collapseUser = { cores: {}, balances: {}, orders: {}, strategies: {} };
     var hasData = {};
@@ -496,54 +495,6 @@
         return { label: tr("mini_refresh"), run: refreshCurrent };
     }
 
-    function clearSearchAction(pane, repaint) {
-        return {
-            label: tr("mini_clear_search"),
-            run: function () {
-                queries[pane] = "";
-                repaint();
-            }
-        };
-    }
-
-    function searchField(id, value, onInput) {
-        var input = document.createElement("input");
-        input.type = "search";
-        input.id = id;
-        input.className = "search";
-        input.value = value || "";
-        input.placeholder = tr("mini_search");
-        input.setAttribute("aria-label", tr("mini_search"));
-        input.setAttribute("autocomplete", "off");
-        input.setAttribute("autocapitalize", "off");
-        input.setAttribute("spellcheck", "false");
-        input.addEventListener("input", function () {
-            onInput(input.value);
-        });
-        return input;
-    }
-
-    function matchesQuery(query, fields) {
-        if (!query) return true;
-        var needle = String(query).toLowerCase();
-        var i;
-        for (i = 0; i < fields.length; i++) {
-            if (fields[i] == null) continue;
-            if (String(fields[i]).toLowerCase().indexOf(needle) !== -1) return true;
-        }
-        return false;
-    }
-
-    function filterItems(items, query, fieldsOf) {
-        if (!query) return items;
-        var out = [];
-        var i;
-        for (i = 0; i < items.length; i++) {
-            if (matchesQuery(query, fieldsOf(items[i]))) out.push(items[i]);
-        }
-        return out;
-    }
-
     function groupBy(items, keyFn) {
         var order = [];
         var map = {};
@@ -578,8 +529,7 @@
     }
 
     // Every pane's groups start collapsed, including on a later refresh. A group the
-    // user has toggled keeps that choice while the popup stays open. Search
-    // still draws matching groups open and clearing it restores this choice.
+    // user has toggled keeps that choice while the popup stays open.
     function ensureCollapse(pane, items, keyFn) {
         var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
         var i;
@@ -661,7 +611,7 @@
         return wrap;
     }
 
-    function appendGroups(parent, pane, items, isProblem, renderRow, query, repaint, keyFn, labelFn, nameClass, summaryFn) {
+    function appendGroups(parent, pane, items, isProblem, renderRow, repaint, keyFn, labelFn, nameClass, summaryFn) {
         var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
         var g;
         for (g = 0; g < groups.length; g++) {
@@ -674,7 +624,7 @@
                 if (isProblem(ordered[j])) problems += 1;
             }
             var slot = "k:" + group.key;
-            var collapsed = !query && !!collapse[pane][slot];
+            var collapsed = !!collapse[pane][slot];
             var card = el("div", "card");
             var head = document.createElement("button");
             head.type = "button";
@@ -1173,43 +1123,6 @@
         return line;
     }
 
-    // One text button that opens or closes every group of the pane at once.
-    function appendToggleAll(host, pane, items, keyFn, query, repaint) {
-        if (query) return;
-        var groups = groupBy(items, function (item) { return groupKeyOf(item, keyFn); });
-        if (groups.length < 2) return;
-        var anyOpen = false;
-        var g;
-        for (g = 0; g < groups.length; g++) {
-            if (!collapse[pane]["k:" + groups[g].key]) anyOpen = true;
-        }
-        var toggle = button("text-btn", tr(anyOpen ? "mini_collapse_all" : "mini_expand_all"), function () {
-            var i;
-            for (i = 0; i < groups.length; i++) {
-                var slot = "k:" + groups[i].key;
-                collapse[pane][slot] = anyOpen;
-                collapseUser[pane][slot] = true;
-            }
-            hapticSelection();
-            repaint();
-        });
-        // The toggle rides the line above it instead of taking a row of its own: beside the
-        // search field when there is one, else at the end of the pane's summary line.
-        var prev = host.lastElementChild;
-        if (prev && prev.classList.contains("search")) {
-            var row = el("div", "tool-row");
-            host.replaceChild(row, prev);
-            row.appendChild(prev);
-            row.appendChild(toggle);
-        } else if (prev && (prev.classList.contains("stat-strip") || prev.classList.contains("summary"))) {
-            toggle.className = "text-btn inline";
-            prev.appendChild(toggle);
-        } else {
-            toggle.className = "text-btn standalone";
-            host.appendChild(toggle);
-        }
-    }
-
     function paintReport() {
         var host = paneBody("report");
         var snap = focusSnap();
@@ -1332,7 +1245,7 @@
         appendGroups(
             host, "cores", cores, coreProblem,
             function (core) { return coreRow(core, data); },
-            "", paintCores, null, null, null, coreGroupSummary
+            paintCores, null, null, null, coreGroupSummary
         );
         restoreSnap(snap, y);
     }
@@ -1398,7 +1311,6 @@
                 perCore,
                 balanceProblem,
                 balanceRow,
-                "",
                 paintBalances,
                 null,
                 null,
@@ -1422,25 +1334,9 @@
             return;
         }
         host.appendChild(ordersSummary(orders));
-        var orderQuery = orders.length > 10 ? queries.orders : "";
-        if (orders.length > 10) {
-            host.appendChild(searchField("search-orders", orderQuery, function (value) {
-                queries.orders = value;
-                paintOrders();
-            }));
-        }
-        var filtered = filterItems(orders, orderQuery, function (order) {
-            return [order.coin, order.core_name, order.market, sideLabel(order.side)];
-        });
-        if (orderQuery && !filtered.length) {
-            host.appendChild(emptyState(tr("mini_empty_search"), clearSearchAction("orders", paintOrders)));
-            restoreSnap(snap, y);
-            return;
-        }
         ensureCollapse("orders", orders, orderCoreKey);
-        appendToggleAll(host, "orders", orders, orderCoreKey, orderQuery, paintOrders);
         // Core groups arrive in exchange sections; each section gets the terminal's caption.
-        var sectionsOf = groupBy(filtered, function (order) { return String(order.exchange || ""); });
+        var sectionsOf = groupBy(orders, function (order) { return String(order.exchange || ""); });
         var s;
         for (s = 0; s < sectionsOf.length; s++) {
             if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
@@ -1450,7 +1346,6 @@
                 sectionsOf[s].items,
                 orderIsProblem,
                 function (order) { return orderRow(order, data); },
-                orderQuery,
                 paintOrders,
                 orderCoreKey,
                 orderCoreLabel,
@@ -1857,7 +1752,6 @@
                 sectionsOf[s].items,
                 strategyCoreProblem,
                 function (core) { return strategyCoreBody(core, !!data.can_control); },
-                "",
                 paintStrategies,
                 strategyCoreKey,
                 strategyCoreLabel,
@@ -2186,10 +2080,6 @@
         if (kind === "success" || kind === "error") feedback.notificationOccurred(kind);
     }
 
-    function hasQuery() {
-        return !!queries.orders;
-    }
-
     function anyGroupOpen() {
         var panes = ["cores", "balances", "orders", "strategies"];
         var p;
@@ -2227,11 +2117,7 @@
             closeCoreDetail();
             return;
         }
-        if (hasQuery()) {
-            queries.orders = "";
-        } else {
-            collapseOpenGroups();
-        }
+        collapseOpenGroups();
         if (current && paint[current]) paint[current]();
         else syncBackButton();
     }
@@ -2239,7 +2125,7 @@
     function syncBackButton() {
         var button = webapp && webapp.BackButton;
         if (!button) return;
-        var needed = sheetOpen || coreDetailId != null || hasQuery() || anyGroupOpen();
+        var needed = sheetOpen || coreDetailId != null || anyGroupOpen();
         if (typeof button.isVisible === "boolean" && button.isVisible === needed) return;
         if (needed && typeof button.show === "function") button.show();
         else if (!needed && typeof button.hide === "function") button.hide();

@@ -341,10 +341,6 @@ telegram.mini_orders_mark:
   ru: "Текущая"
   en: "Mark"
   es: "Precio actual"
-telegram.mini_search:
-  ru: "Поиск"
-  en: "Search"
-  es: "Buscar"
 telegram.mini_empty_report:
   ru: "За этот период сделок нет."
   en: "No trades in this period."
@@ -361,10 +357,6 @@ telegram.mini_empty_orders:
   ru: "Нет открытых ордеров"
   en: "No open orders"
   es: "No hay órdenes abiertas"
-telegram.mini_empty_search:
-  ru: "Ничего не найдено"
-  en: "Nothing found"
-  es: "No hay resultados"
 telegram.mini_error_read:
   ru: "Не удалось прочитать данные."
   en: "Could not read the data."
@@ -429,14 +421,6 @@ telegram.mini_cores_problems:
   ru: "Проблемы: {n}"
   en: "Issues: {n}"
   es: "Problemas: {n}"
-telegram.mini_expand_all:
-  ru: "Развернуть все"
-  en: "Expand all"
-  es: "Expandir todo"
-telegram.mini_collapse_all:
-  ru: "Свернуть все"
-  en: "Collapse all"
-  es: "Contraer todo"
 telegram.mini_online:
   ru: "онлайн"
   en: "online"
@@ -445,10 +429,6 @@ telegram.mini_orders_summary:
   ru: "Открытых ордеров: {n}"
   en: "{n} open orders"
   es: "{n} órdenes abiertas"
-telegram.mini_clear_search:
-  ru: "Сбросить поиск"
-  en: "Clear search"
-  es: "Borrar búsqueda"
 telegram.mini_cancel:
   ru: "Отменить"
   en: "Cancel"

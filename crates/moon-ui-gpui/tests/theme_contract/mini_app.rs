@@ -387,8 +387,7 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
 /// Mutation: restore `collapse[pane][slot] = count > 20 && !problem`, or drop
 /// the `collapseUser` skip. Small order groups then open on first paint and on
 /// every poll the user has not toggled. Dropping the cores or balances call
-/// brings back the wall of open exchange groups the owner asked to fold. Dropping `!query &&` in `appendGroups` would also keep
-/// a search from opening the groups that match it.
+/// brings back the wall of open exchange groups the owner asked to fold.
 #[test]
 fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     let js = read_core_src("telegram/web/app.js");
@@ -414,8 +413,8 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     );
     let append = braced_body(&js, "function appendGroups(");
     assert!(
-        append.contains("var collapsed = !query && !!collapse[pane][slot];"),
-        "a search query must still force-expand the groups it draws"
+        append.contains("var collapsed = !!collapse[pane][slot];"),
+        "a group must draw folded exactly when its collapse slot says so"
     );
 }
 
