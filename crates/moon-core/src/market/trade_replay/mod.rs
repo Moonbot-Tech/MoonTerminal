@@ -261,9 +261,12 @@ pub enum ReplayIntent {
     Chart,
     /// A model replaying the trade off the tiles (the tuner's Entry/Exit axis). The lead before
     /// the entry is walked before the trail: the run-up is what the entry model reads, and on a
-    /// pumped coin the trail alone exhausts a venue's page budget. No archive wait: the
+    /// pumped coin the trail alone exhausts a venue's page budget. No archive follow-up: the
     /// requester reads the tiles itself once the stage has run, and thirty seconds per row of a
-    /// batch would be paid for an archive the close-time capture already filed.
+    /// batch would be paid for an archive the close-time capture already filed. What it does
+    /// wait for, before filing the ring, is the core's FIRST archive answer per market and
+    /// client — a few seconds once, bounded by `market::source::archive::ARCHIVE_WAIT`, and only
+    /// for a focus the tiles do not already hold.
     Model,
 }
 

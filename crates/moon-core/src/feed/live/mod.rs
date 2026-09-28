@@ -548,7 +548,7 @@ pub(super) fn run(
         ConnectConfig::new(init).with_connect_timeout(Duration::from_secs(15)),
         event_sink,
     )?);
-    client_slot.set(Some(client.clone()));
+    let client_epoch = client_slot.set(Some(client.clone()));
     let _client_slot_guard = ClientSlotGuard {
         slot: client_slot.clone(),
     };
@@ -1474,6 +1474,10 @@ pub(super) fn run(
                         &ticket.market,
                         crate::feed::core_label(server.id),
                     );
+                    let _ = tx.send(FeedMsg::ChartArchiveAnswered {
+                        market: ticket.market.clone(),
+                        epoch: client_epoch,
+                    });
                 }
                 Event::MarketHistory(moonproto::state::MarketHistoryEvent::Failed {
                     ticket,
@@ -1484,6 +1488,10 @@ pub(super) fn run(
                         crate::feed::core_label(server.id),
                         ticket.market
                     );
+                    let _ = tx.send(FeedMsg::ChartArchiveAnswered {
+                        market: ticket.market.clone(),
+                        epoch: client_epoch,
+                    });
                 }
                 // A failed CoinCard request for deep chart history used to fall into `_ => {}`
                 // SILENTLY, so candles "did not arrive" without any trace in the log.

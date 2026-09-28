@@ -28,7 +28,7 @@ impl MarketDataSource {
         market: &str,
         window: ReplayWindow,
     ) -> Option<CoreReplayTicks> {
-        self.core_ticks(address, market, window, CoreSpanRule::BracketPosition)
+        self.core_ticks(address, market, window, CoreSpanRule::BracketPosition, None)
     }
 
     /// Copy whatever a matching core's ring holds inside `[from_ms, to_ms]` — the capture a
@@ -44,12 +44,17 @@ impl MarketDataSource {
     ///     market: Exchange-native market name.
     ///     from_ms: Left edge, inclusive.
     ///     to_ms: Right edge, inclusive.
+    ///     archive_deadline: Wait for each donor's first archive answer before copying, until this
+    ///         moment — for the tape stage, whose copy is final; it passes ONE deadline for every
+    ///         span of a focus ([`super::ARCHIVE_WAIT`] from its start). `None` copies at once:
+    ///         the close-time capture, whose window is the live tail.
     pub(crate) fn capture_core_span(
         &self,
         address: &ReplayAddress,
         market: &str,
         from_ms: i64,
         to_ms: i64,
+        archive_deadline: Option<std::time::Instant>,
     ) -> Option<CoreReplayTicks> {
         let window = ReplayWindow {
             from_ms,
@@ -60,7 +65,13 @@ impl MarketDataSource {
             long_position_ms: crate::market::trade_replay::long_position_ms(),
             over_budget: false,
         };
-        self.core_ticks(address, market, window, CoreSpanRule::Overlap)
+        self.core_ticks(
+            address,
+            market,
+            window,
+            CoreSpanRule::Overlap,
+            archive_deadline,
+        )
     }
 
     fn core_ticks(
@@ -69,6 +80,9 @@ impl MarketDataSource {
         market: &str,
         window: ReplayWindow,
         rule: CoreSpanRule,
+        // One deadline for every donor, and the caller's for every span: a venue with a dozen
+        // cores, or a long position's two ends, must not wait a dozen times.
+        deadline: Option<std::time::Instant>,
     ) -> Option<CoreReplayTicks> {
         let (donors, archive) = {
             let inner = self.inner.read().expect("market source poisoned");
@@ -105,10 +119,43 @@ impl MarketDataSource {
             if format!("{}:{:08x}", exchange.code, exchange.dex) != address.exchange_key {
                 continue;
             }
-            let Some(readers) = snapshot.market_history_readers(market) else {
+            let Some(mut readers) = snapshot.market_history_readers(market) else {
                 continue;
             };
-            archive.request(provider, market, &client, epoch);
+            match deadline {
+                Some(deadline) => {
+                    let started = std::time::Instant::now();
+                    let waited = archive.request_and_wait(
+                        provider,
+                        market,
+                        &client,
+                        epoch,
+                        deadline,
+                        || slot.get_with_epoch().map(|(_, e)| e) == Some(epoch),
+                    );
+                    let elapsed = started.elapsed();
+                    // Only a wait that actually blocked is worth a line; an earlier answer returns
+                    // in microseconds on every later row of the market.
+                    if elapsed >= std::time::Duration::from_millis(1) {
+                        super::market_diag(format!(
+                            "tape archive wait {market} provider={provider}: {waited:?} after {} ms",
+                            elapsed.as_millis()
+                        ));
+                    }
+                    // The readers were taken before the answer; take them again, from whatever
+                    // client the slot holds NOW, so the copy reads the rings the merge produced —
+                    // or, after a reconnect mid-wait, the live client's rather than the dead one's.
+                    match slot
+                        .get_with_epoch()
+                        .and_then(|(client, _)| client.snapshot_versioned())
+                        .and_then(|snapshot| snapshot.market_history_readers(market))
+                    {
+                        Some(fresh) => readers = fresh,
+                        None => continue,
+                    }
+                }
+                None => archive.request(provider, market, &client, epoch),
+            }
             // Whichever ring this client filled, as every other reader of the rings takes it
             // (`history.rs`, `read.rs`, `volume.rs`): the donor is ONE client of ONE venue, so
             // it holds this market's prints under one kind only, and picking strictly by the

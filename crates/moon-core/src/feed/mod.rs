@@ -92,12 +92,15 @@ pub struct SharedMoonClient {
 }
 
 impl SharedMoonClient {
-    pub(crate) fn set(&self, client: Option<Arc<MoonClient>>) {
+    /// Install `client` (or clear the slot) and return the slot's epoch after it — the epoch a
+    /// just-installed client lives under, which the feed stamps on what it reports about it.
+    pub(crate) fn set(&self, client: Option<Arc<MoonClient>>) -> u64 {
         let mut slot = self.inner.write().expect("moon client slot poisoned");
         if client.is_some() {
             slot.epoch = slot.epoch.wrapping_add(1);
         }
         slot.client = client;
+        slot.epoch
     }
 
     pub fn get(&self) -> Option<Arc<MoonClient>> {
