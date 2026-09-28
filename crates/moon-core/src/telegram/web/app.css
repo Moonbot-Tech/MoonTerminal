@@ -282,10 +282,14 @@ main {
     overflow-wrap: anywhere;
 }
 
-/* A hidden balance figure: regular-weight asterisks, not the figure's bold. */
-.masked {
+/* A hidden balance figure: regular-weight asterisks, not the figure's bold. A mask carries no
+   sign or meaning, so every one is the muted text colour; `.num.masked` outranks the figure's
+   own colour rules (`.balance-figure`, `.hero-value`). */
+.masked,
+.num.masked {
     font-weight: 400;
     letter-spacing: 0.12em;
+    color: var(--hint);
 }
 
 /* Balances total: its label left, the eye that hides every figure of the tab right. */
