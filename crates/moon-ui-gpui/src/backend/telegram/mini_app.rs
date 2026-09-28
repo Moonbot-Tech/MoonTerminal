@@ -11,12 +11,12 @@ use gpui::Context;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::QuoteBreakdown;
 use moon_core::feed::{ConnFaultKind, ConnStatus, CoreSysStatus, OrderRow};
-use moon_core::session::BalanceState;
+use moon_core::session::{BalanceState, CoreId, CoreRunState};
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::web::dto::{
     BalanceStateDto, BalancesDto, CommandErrorDto, CommandResultDto, ConnDto, CoreBalanceDto,
-    CoreStatusDto, CoresDto, DayDto, ExchangeBalanceDto, MoneyDto, OrderDto, OrdersDto, ReportDto,
-    ReportPeriodDto, RowDto,
+    CoreStatusDto, CoreSwitchDto, CoresDto, DayDto, ExchangeBalanceDto, MoneyDto, OrderDto,
+    OrdersDto, ReportDto, ReportPeriodDto, RowDto, ScopeResultDto,
 };
 use moon_core::telegram::web::{MiniAppApiError, MiniAppApiRequest};
 use moon_core::util::{display_time, fmt};
@@ -82,6 +82,34 @@ pub(super) fn dispatch(
             ..
         } => {
             let _ = reply.try_send(backend.mini_panic_sell(chat_id, core, market, on));
+        }
+        MiniAppApiRequest::CoreSwitch {
+            chat_id,
+            core,
+            switch,
+            on,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_core_switch(chat_id, core, switch, on));
+        }
+        MiniAppApiRequest::CoresSwitch {
+            chat_id,
+            cores,
+            switch,
+            on,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_cores_switch(chat_id, &cores, switch, on));
+        }
+        MiniAppApiRequest::CancelAllOrders {
+            chat_id,
+            core,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(backend.mini_cancel_all(chat_id, core));
         }
         MiniAppApiRequest::Session { reply, .. } => {
             let _ = reply.try_send(Err(MiniAppApiError::Rejected));
@@ -208,6 +236,119 @@ impl Backend {
         Ok(command_hit(Some(self.is_panic_armed(core, &market))))
     }
 
+    /// Flip one core's trading or auto-detect switch through the desktop's session call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///     switch: Which switch to flip.
+    ///     on: State the page asked for.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
+    ///     send is `Unavailable`. `Err` is only the owner gate.
+    fn mini_core_switch(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+        switch: CoreSwitchDto,
+        on: bool,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        let sent = match switch {
+            CoreSwitchDto::Trading => self.session.set_trading(core, on),
+            CoreSwitchDto::AutoDetect => self.session.set_auto_detect(core, on),
+        };
+        match sent {
+            Ok(()) => Ok(command_hit(None)),
+            Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+        }
+    }
+
+    /// Flip one switch on several cores with one scope call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     cores: Requested core ids; unknown ids and repeats are dropped before sending.
+    ///     switch: Which switch to flip.
+    ///     on: State the page asked for.
+    ///
+    /// Returns:
+    ///     `Ok` with `sent` of `requested` known cores accepted; `ok` only when all were.
+    ///     No known core is `NotFound` and sends nothing. `Err` is only the owner gate.
+    fn mini_cores_switch(
+        &mut self,
+        chat_id: i64,
+        cores: &[u64],
+        switch: CoreSwitchDto,
+        on: bool,
+    ) -> Result<ScopeResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        let visible = self.mini_owner_core_ids();
+        let targets = scope_targets(cores, &visible);
+        if targets.is_empty() {
+            return Ok(ScopeResultDto {
+                ok: false,
+                sent: 0,
+                requested: 0,
+                error: Some(CommandErrorDto::NotFound),
+            });
+        }
+        let accepted = match switch {
+            CoreSwitchDto::Trading => self.session.set_trading_many(&targets, on),
+            CoreSwitchDto::AutoDetect => self.session.set_auto_detect_many(&targets, on),
+        };
+        let sent = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
+        let requested = u32::try_from(targets.len()).unwrap_or(u32::MAX);
+        let ok = sent == requested;
+        Ok(ScopeResultDto {
+            ok,
+            sent,
+            requested,
+            error: (!ok).then_some(CommandErrorDto::Unavailable),
+        })
+    }
+
+    /// Cancel every open order of one core through the desktop's session call.
+    ///
+    /// Args:
+    ///     chat_id: Paired chat that sent the command.
+    ///     core: Core id.
+    ///
+    /// Returns:
+    ///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
+    ///     send is `Unavailable`. `Err` is only the owner gate.
+    fn mini_cancel_all(
+        &mut self,
+        chat_id: i64,
+        core: u64,
+    ) -> Result<CommandResultDto, MiniAppApiError> {
+        self.mini_owner(chat_id)?;
+        if !self.mini_core_known(core) {
+            return Ok(command_miss(CommandErrorDto::NotFound));
+        }
+        match self.session.cancel_all_orders(core) {
+            Ok(()) => Ok(command_hit(None)),
+            Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+        }
+    }
+
+    /// Whether `core` is one of the configured sessions the owner sees.
+    fn mini_core_known(&self, core: u64) -> bool {
+        self.mini_owner_core_ids().contains(&core)
+    }
+
+    /// Ids of the configured sessions the owner sees.
+    fn mini_owner_core_ids(&self) -> Vec<CoreId> {
+        visible_cores(self, &TelegramReportAccess::Owner)
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect()
+    }
+
     /// Read one period off the UI thread, then re-check the grant before replying.
     ///
     /// A finished read is kept for [`REPORT_CACHE_TTL`] so a request that already received
@@ -299,12 +440,13 @@ impl Backend {
     /// Core status in canonical order, limited to the chat's cores.
     fn mini_cores(&self, chat_id: i64) -> Result<CoresDto, MiniAppApiError> {
         let access = self.mini_access(chat_id).ok_or(MiniAppApiError::Rejected)?;
+        let can_control = matches!(access, TelegramReportAccess::Owner);
         let listed = visible_cores(self, &access);
         let store = self.session.store();
-        let venues = self.session.core_venues();
         let mut cores = Vec::with_capacity(listed.len());
-        for (id, name) in listed {
+        for (id, name, exchange) in listed {
             let core = store.core(id);
+            let run = core.map(CoreRunState::from_core).unwrap_or_default();
             let (status, sys, fault) = match core {
                 Some(core) => (core.status.clone(), core.sys, core.fault.clone()),
                 None => (ConnStatus::Disconnected, CoreSysStatus::default(), None),
@@ -312,7 +454,7 @@ impl Backend {
             cores.push(CoreStatusDto {
                 id,
                 name,
-                exchange: crate::controls::venue_section_label(venues.get(&id)),
+                exchange,
                 conn: conn_of(&status),
                 ping_ms: sys.round_trip_ms,
                 exch_ping_ms: sys.order_api_latency_ms.map(u32::from),
@@ -321,9 +463,11 @@ impl Backend {
                 fault: fault
                     .as_ref()
                     .map(|fault| fault_kind(&fault.kind).to_string()),
+                trading: run.trading,
+                auto_detect: run.auto_detect,
             });
         }
-        Ok(CoresDto { cores })
+        Ok(CoresDto { cores, can_control })
     }
 
     /// Balances for the chat's cores. The viewer filter is applied before the sum.
@@ -334,7 +478,7 @@ impl Backend {
         let venues = self.session.core_venues();
         let mut per_core = Vec::with_capacity(cores.len());
         let mut figures = Vec::with_capacity(cores.len());
-        for (id, name) in &cores {
+        for (id, name, exchange) in &cores {
             let (state, free, total) = match store.core(*id) {
                 Some(data) => (
                     data.balance_state(),
@@ -347,7 +491,7 @@ impl Backend {
             per_core.push(CoreBalanceDto {
                 id: *id,
                 name: name.clone(),
-                exchange: crate::controls::venue_section_label(venues.get(id)),
+                exchange: exchange.clone(),
                 state: balance_state_dto(state),
                 free: show.then_some(free),
                 total: show.then_some(total),
@@ -362,7 +506,7 @@ impl Backend {
             cores
                 .iter()
                 .enumerate()
-                .map(|(index, (id, _))| (index, venues.get(id))),
+                .map(|(index, (id, _, _))| (index, venues.get(id))),
         ) {
             let rows: Vec<BalanceFigures> = members.iter().map(|&index| figures[index]).collect();
             let summed = aggregate_balance_figures(&rows);
@@ -394,18 +538,18 @@ impl Backend {
         let staged = {
             let store = self.session.store();
             let mut staged = Vec::new();
-            for (id, name) in &cores {
+            for (id, name, exchange) in &cores {
                 if let Some(data) = store.core(*id) {
                     for order in &data.orders {
-                        staged.push((*id, name.clone(), order.clone()));
+                        staged.push((*id, name.clone(), exchange.clone(), order.clone()));
                     }
                 }
             }
             staged
         };
         let mut orders = Vec::with_capacity(staged.len());
-        for (id, name, order) in staged {
-            orders.push(order_dto(self, id, name, &order));
+        for (id, name, exchange, order) in staged {
+            orders.push(order_dto(self, id, name, exchange, &order));
         }
         Ok(OrdersDto {
             orders,
@@ -414,28 +558,157 @@ impl Backend {
     }
 }
 
-/// Sessions in canonical order that this grant may see. An empty viewer list keeps none.
-fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, String)> {
+/// Sessions this grant may see, in Mini App order. An empty viewer list keeps none.
+///
+/// Returns `(id, name, exchange section caption)` ordered by [`by_section`].
+fn visible_cores(backend: &Backend, access: &TelegramReportAccess) -> Vec<(u64, String, String)> {
     let order = CoreOrder::new(&backend.config);
-    order
+    let cores: Vec<(u64, String)> = order
         .from_sessions(backend.session.sessions(), |session| match access {
             TelegramReportAccess::Owner => true,
             TelegramReportAccess::Viewer(ids) => ids.contains(&session.id),
         })
         .into_iter()
-        .collect()
+        .collect();
+    by_section(
+        cores,
+        backend.session.core_venues(),
+        |(id, _)| *id,
+        |(_, name)| name,
+    )
+    .into_iter()
+    .map(|(section, (id, name))| (id, name, section))
+    .collect()
+}
+
+/// Order per-core rows the way every Mini App list shows them.
+///
+/// Rows are grouped into the terminal's exchange sections, in the terminal's section order
+/// ([`exchange_sections`]), and sorted by name inside each section with numbers compared as
+/// numbers ([`natural_cmp`]), so "SUB ACC 9" comes before "SUB ACC 10".
+///
+/// Args:
+///     rows: Per-core rows in any order.
+///     venues: Live venue of each core id.
+///     id: Core id of one row.
+///     name: Display name of one row.
+///
+/// Returns:
+///     Each row paired with its section caption, in display order.
+pub(super) fn by_section<T>(
+    rows: Vec<T>,
+    venues: &std::collections::HashMap<CoreId, moon_core::venue::CoreVenue>,
+    id: impl Fn(&T) -> u64,
+    name: impl Fn(&T) -> &str,
+) -> Vec<(String, T)> {
+    let sections: Vec<(String, Vec<usize>)> = exchange_sections(
+        rows.iter()
+            .enumerate()
+            .map(|(index, row)| (index, venues.get(&id(row)))),
+    )
+    .into_iter()
+    .map(|(venue, mut members)| {
+        members.sort_by(|&a, &b| natural_cmp(name(&rows[a]), name(&rows[b])));
+        (crate::controls::venue_section_label(venue), members)
+    })
+    .collect();
+    let mut slots: Vec<Option<T>> = rows.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(slots.len());
+    for (label, members) in sections {
+        for index in members {
+            if let Some(row) = slots[index].take() {
+                out.push((label.clone(), row));
+            }
+        }
+    }
+    out
+}
+
+/// Compare two names case-insensitively, reading each run of ASCII digits as one number.
+///
+/// Leading zeros do not change a number's value; names equal under that reading fall back to
+/// the raw text, so the order is total.
+///
+/// Args:
+///     a: First name.
+///     b: Second name.
+///
+/// Returns:
+///     The natural order of `a` against `b`.
+pub(super) fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    use std::iter::Peekable;
+    use std::str::Chars;
+
+    /// Consume one digit run and return it without leading zeros.
+    fn number(chars: &mut Peekable<Chars<'_>>) -> String {
+        let mut digits = String::new();
+        while let Some(c) = chars.next_if(char::is_ascii_digit) {
+            digits.push(c);
+        }
+        digits.trim_start_matches('0').to_string()
+    }
+
+    let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (x.peek().copied(), y.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(p), Some(q)) if p.is_ascii_digit() && q.is_ascii_digit() => {
+                let (m, n) = (number(&mut x), number(&mut y));
+                let by_value = m.len().cmp(&n.len()).then_with(|| m.cmp(&n));
+                if by_value != Ordering::Equal {
+                    return by_value;
+                }
+            }
+            (Some(p), Some(q)) => {
+                let by_char = p.to_lowercase().cmp(q.to_lowercase());
+                if by_char != Ordering::Equal {
+                    return by_char;
+                }
+                x.next();
+                y.next();
+            }
+        }
+    }
+}
+
+/// Requested cores that are visible, without repeats, in `visible` order.
+///
+/// Args:
+///     requested: Core ids the page asked for.
+///     visible: Cores the chat may command, in canonical order.
+///
+/// Returns:
+///     The ids to send; unknown ids never appear.
+fn scope_targets(requested: &[u64], visible: &[CoreId]) -> Vec<CoreId> {
+    let mut targets: Vec<CoreId> = Vec::new();
+    for id in visible {
+        if requested.contains(id) && !targets.contains(id) {
+            targets.push(*id);
+        }
+    }
+    targets
 }
 
 /// Map a stored order into the Mini App row.
 ///
 /// The change percent uses the desktop orders table's arithmetic and precision.
 /// Adaptive price text cannot be parsed back into that percent.
-fn order_dto(backend: &Backend, id: u64, name: String, order: &OrderRow) -> OrderDto {
+fn order_dto(
+    backend: &Backend,
+    id: u64,
+    name: String,
+    exchange: String,
+    order: &OrderRow,
+) -> OrderDto {
     let pnl = order_pnl(order).filter(|value| value.is_finite());
     let change = order_pnl_pct(order).filter(|value| value.is_finite());
     OrderDto {
         core: id,
         core_name: name,
+        exchange,
         uid: order.uid,
         coin: order.coin.clone(),
         market: order.market.clone(),
@@ -511,15 +784,17 @@ fn report_dto(report: super::reports::MiniReport) -> Result<ReportDto, MiniAppAp
             .map(|(key, name, total)| RowDto {
                 key,
                 name,
+                section: None,
                 money: money_of(&total),
             })
             .collect(),
         by_core: report
             .by_core
             .into_iter()
-            .map(|(key, name, total)| RowDto {
+            .map(|(key, name, section, total)| RowDto {
                 key,
                 name,
+                section: Some(section),
                 money: money_of(&total),
             })
             .collect(),
@@ -640,3 +915,6 @@ fn balance_state_dto(state: BalanceState) -> BalanceStateDto {
         BalanceState::Unpriced => BalanceStateDto::Unpriced,
     }
 }
+
+#[cfg(test)]
+mod tests;

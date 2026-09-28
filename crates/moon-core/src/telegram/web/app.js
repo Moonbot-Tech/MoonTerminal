@@ -43,6 +43,8 @@
     var cmdTimer = null;
     var period = "today";
     var current = null;
+    // The balances total starts masked each time the pane opens; never persisted.
+    var balanceRevealed = false;
     var loadToken = 0;
     var sessionOk = false;
     var commandBusy = false;
@@ -63,6 +65,14 @@
         return typeof value === "string" ? value : "";
     }
 
+    function trf(key, vars) {
+        var s = tr(key);
+        for (var k in vars) {
+            if (Object.prototype.hasOwnProperty.call(vars, k)) s = s.split("{" + k + "}").join(String(vars[k]));
+        }
+        return s;
+    }
+
     if (labels.locale) {
         document.documentElement.lang = labels.locale;
     }
@@ -71,13 +81,23 @@
         var scheme = webapp && webapp.colorScheme;
         if (scheme === "dark" || scheme === "light") {
             document.documentElement.style.colorScheme = scheme;
+            document.documentElement.dataset.scheme = scheme;
         }
     }
 
+    // Telegram 6.9+ takes a hex, so the chrome matches the terminal page colour.
     function applyChromeColors() {
         if (!webapp) return;
-        if (webapp.setHeaderColor) webapp.setHeaderColor("secondary_bg_color");
-        if (webapp.setBackgroundColor) webapp.setBackgroundColor("secondary_bg_color");
+        var color = "secondary_bg_color";
+        if (typeof webapp.isVersionAtLeast === "function" && webapp.isVersionAtLeast("6.9")) {
+            var page = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
+            if (/^#[0-9a-fA-F]{6}$/.test(page)) color = page;
+        }
+        if (webapp.setHeaderColor) webapp.setHeaderColor(color);
+        if (webapp.setBackgroundColor) webapp.setBackgroundColor(color);
+        if (color.charAt(0) === "#" && typeof webapp.setBottomBarColor === "function") {
+            webapp.setBottomBarColor(color);
+        }
     }
 
     applyScheme();
@@ -510,17 +530,6 @@
         return groups;
     }
 
-    function problemsFirst(items, isProblem) {
-        var bad = [];
-        var good = [];
-        var i;
-        for (i = 0; i < items.length; i++) {
-            if (isProblem(items[i])) bad.push(items[i]);
-            else good.push(items[i]);
-        }
-        return bad.concat(good);
-    }
-
     function coreProblem(core) {
         return !core || core.conn !== "ready" || !!core.fault;
     }
@@ -623,7 +632,8 @@
         var g;
         for (g = 0; g < groups.length; g++) {
             var group = groups[g];
-            var ordered = problemsFirst(group.items, isProblem);
+            // The server already sends rows by exchange section, then by name.
+            var ordered = group.items;
             var problems = 0;
             var j;
             for (j = 0; j < ordered.length; j++) {
@@ -698,7 +708,42 @@
         return any ? box : null;
     }
 
-    function coreRow(core) {
+    function switchChip(core, label, field, key) {
+        var state = core[field];
+        var known = state === true || state === false;
+        var chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "cmd chip " + (known ? (state ? "on" : "off") : "unknown");
+        // On/off reads from the chip colour, as the terminal's toggles do.
+        chip.textContent = known ? label : label + " · " + tr("mini_state_unknown");
+        chip.setAttribute("aria-pressed", known ? String(state) : "mixed");
+        chip.disabled = commandBusy || !known;
+        chip.addEventListener("click", function () {
+            if (commandBusy || !known) return;
+            runCommand(null, "/api/core/switch", { core: core.id, switch: key, on: !state });
+        });
+        return chip;
+    }
+
+    // Owner-only per-core switches; a single core fires without a confirm.
+    function coreActions(core) {
+        var line = el("div", "core-actions");
+        line.appendChild(switchChip(core, tr("mini_trading"), "trading", "trading"));
+        line.appendChild(switchChip(core, tr("mini_autodetect"), "auto_detect", "auto_detect"));
+        var cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "cmd chip cmd-danger";
+        cancel.textContent = tr("mini_cancel_all");
+        cancel.disabled = commandBusy;
+        cancel.addEventListener("click", function () {
+            if (commandBusy) return;
+            runCommand(null, "/api/core/cancel_all", { core: core.id });
+        });
+        line.appendChild(cancel);
+        return line;
+    }
+
+    function coreRow(core, data) {
         var row = el("div", "row core-row");
         row.appendChild(el("span", dotClass(core)));
         var body = el("div", "grow");
@@ -710,6 +755,7 @@
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
+        if (data && data.can_control) row.appendChild(coreActions(core));
         return row;
     }
 
@@ -800,12 +846,17 @@
         var cancel = document.createElement("button");
         cancel.type = "button";
         cancel.className = "cmd";
-        cancel.textContent = tr("mini_cancel");
+        cancel.textContent = "✕";
+        cancel.title = tr("mini_cancel");
+        cancel.setAttribute("aria-label", tr("mini_cancel"));
         cancel.disabled = commandBusy;
         var panic = document.createElement("button");
         panic.type = "button";
         panic.className = "cmd cmd-danger";
-        panic.textContent = tr(order.panic_armed ? "mini_panic_off" : "mini_panic_sell");
+        var panicLabel = tr(order.panic_armed ? "mini_panic_off" : "mini_panic_sell");
+        panic.textContent = order.panic_armed ? "↺" : "⚡";
+        panic.title = panicLabel;
+        panic.setAttribute("aria-label", panicLabel);
         panic.disabled = commandBusy;
         cancel.addEventListener("click", function () {
             if (commandBusy) return;
@@ -829,23 +880,26 @@
         row.appendChild(line);
     }
 
+    // Dense terminal row: coin, side, change and PnL; muted flow line; compact actions at the right.
     function orderRow(order, data) {
         var row = el("div", "row order-row");
+        var main = el("div", "order-main");
         var top = el("div", "order-top");
-        var coin = el("span", "name", order.coin || "");
+        var coin = el("span", "name order-coin", order.coin || "");
         coin.title = order.coin || "";
         top.appendChild(coin);
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), order.side || ""));
         top.appendChild(orderChange(order));
         top.appendChild(orderResult(order));
-        row.appendChild(top);
+        main.appendChild(top);
         var flow = el("div", "sub order-flow");
         flow.appendChild(mutedBits(tr("mini_orders_qty"), order.qty_text));
-        flow.appendChild(document.createTextNode(" "));
+        flow.appendChild(document.createTextNode(" · "));
         flow.appendChild(mutedBits(tr("mini_orders_entry"), order.entry_text));
-        flow.appendChild(document.createTextNode(" \u2192 "));
+        flow.appendChild(document.createTextNode(" → "));
         flow.appendChild(mutedBits(tr("mini_orders_mark"), order.mark_text));
-        row.appendChild(flow);
+        main.appendChild(flow);
+        row.appendChild(main);
         if (data.can_control) orderActions(row, order);
         return row;
     }
@@ -1004,8 +1058,14 @@
         var card = el("div", "card");
         card.appendChild(el("h2", "card-title", label));
         var i;
+        var lastSection = null;
         for (i = 0; i < cut; i++) {
             var row = list[i];
+            // Per-core rows carry their exchange section and arrive grouped by it.
+            if (typeof row.section === "string" && row.section !== lastSection) {
+                lastSection = row.section;
+                card.appendChild(el("div", "row section-row", row.section));
+            }
             var line = el("div", "row spread");
             var left = el("div", "grow");
             var name = el("div", opts.nameClass || "name", row.name || row.key || "");
@@ -1152,14 +1212,48 @@
             chartCard.appendChild(renderBars(days));
             host.appendChild(chartCard);
         }
+        appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         appendMoneyList(host, tr("mini_report_by_core"), data.by_core, {
             nameClass: "name core-name",
-            sort: true,
             limit: MONEY_LIST_LIMIT,
             meta: coreOrdersMeta
         });
-        appendMoneyList(host, tr("mini_report_by_exchange"), data.by_exchange, { sort: true });
         restoreSnap(snap, y);
+    }
+
+    // Owner-only bar over every visible core; each action asks one confirm.
+    function massActions(cores) {
+        var ids = [];
+        var i;
+        for (i = 0; i < cores.length; i++) ids.push(cores[i].id);
+        var card = el("div", "card mass-actions");
+        card.setAttribute("role", "group");
+        card.setAttribute("aria-label", tr("mini_all_cores"));
+        card.appendChild(el("span", "mass-title", tr("mini_all_cores")));
+        function addPair(label, key, onConfirm, offConfirm) {
+            var group = el("div", "mass-group");
+            group.appendChild(el("span", "mass-label", label));
+            var pair = el("span", "mass-pair");
+            group.appendChild(pair);
+            [true, false].forEach(function (on) {
+                var btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "cmd chip mass-btn" + (on ? "" : " cmd-danger");
+                btn.textContent = tr(on ? "mini_start" : "mini_stop");
+                btn.setAttribute("aria-label", label + " " + btn.textContent);
+                btn.disabled = commandBusy || !ids.length;
+                btn.addEventListener("click", function () {
+                    if (commandBusy || !ids.length) return;
+                    var ask = trf(on ? onConfirm : offConfirm, { n: ids.length });
+                    runCommand(ask, "/api/cores/switch", { cores: ids, switch: key, on: on });
+                });
+                pair.appendChild(btn);
+            });
+            card.appendChild(group);
+        }
+        addPair(tr("mini_trading"), "trading", "mini_cores_trading_on_confirm", "mini_cores_trading_off_confirm");
+        addPair(tr("mini_autodetect"), "auto_detect", "mini_cores_auto_on_confirm", "mini_cores_auto_off_confirm");
+        return card;
     }
 
     function paintCores() {
@@ -1210,7 +1304,12 @@
         }
         ensureCollapse("cores", cores);
         appendToggleAll(host, "cores", cores, null, coreQuery, paintCores);
-        appendGroups(host, "cores", filtered, coreProblem, coreRow, coreQuery, paintCores, null, null, null, coreGroupSummary);
+        if (data.can_control) host.appendChild(massActions(cores));
+        appendGroups(
+            host, "cores", filtered, coreProblem,
+            function (core) { return coreRow(core, data); },
+            coreQuery, paintCores, null, null, null, coreGroupSummary
+        );
         restoreSnap(snap, y);
     }
 
@@ -1227,10 +1326,35 @@
             restoreSnap(snap, y);
             return;
         }
-        var hero = el("div", "card hero");
+        var hero = el("div", "card hero hero-toggle");
+        hero.setAttribute("role", "button");
+        hero.tabIndex = 0;
         hero.appendChild(el("p", "label", tr("mini_total")));
         var big = el("p", "");
-        applyMoney(big, "hero-value num", data.total_text, data.total);
+        function paintTotal() {
+            if (balanceRevealed) applyMoney(big, "hero-value num", data.total_text, data.total);
+            else {
+                big.className = "hero-value num";
+                big.textContent = "••••••";
+            }
+            hero.setAttribute("aria-pressed", balanceRevealed ? "true" : "false");
+        }
+        function toggleTotal() {
+            balanceRevealed = !balanceRevealed;
+            hapticSelection();
+            paintTotal();
+        }
+        hero.addEventListener("click", function (event) {
+            if (event.target && event.target.closest && event.target.closest("button, a")) return;
+            toggleTotal();
+        });
+        hero.addEventListener("keydown", function (event) {
+            if (event.target !== hero) return;
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            toggleTotal();
+        });
+        paintTotal();
         hero.appendChild(big);
         if (data.stale > 0 || data.excluded > 0) {
             var meta = el("div", "hero-sub badges");
@@ -1306,19 +1430,25 @@
         }
         ensureCollapse("orders", orders, orderCoreKey);
         appendToggleAll(host, "orders", orders, orderCoreKey, orderQuery, paintOrders);
-        appendGroups(
-            host,
-            "orders",
-            filtered,
-            orderIsProblem,
-            function (order) { return orderRow(order, data); },
-            orderQuery,
-            paintOrders,
-            orderCoreKey,
-            orderCoreLabel,
-            "name grow core-name",
-            orderGroupSummary
-        );
+        // Core groups arrive in exchange sections; each section gets the terminal's caption.
+        var sectionsOf = groupBy(filtered, function (order) { return String(order.exchange || ""); });
+        var s;
+        for (s = 0; s < sectionsOf.length; s++) {
+            if (sectionsOf[s].key) host.appendChild(el("h2", "section-label", sectionsOf[s].key));
+            appendGroups(
+                host,
+                "orders",
+                sectionsOf[s].items,
+                orderIsProblem,
+                function (order) { return orderRow(order, data); },
+                orderQuery,
+                paintOrders,
+                orderCoreKey,
+                orderCoreLabel,
+                "name grow core-name",
+                orderGroupSummary
+            );
+        }
         restoreSnap(snap, y);
     }
 
@@ -1456,6 +1586,7 @@
         setSpinning(false);
         cancelPending();
         current = name;
+        if (name === "balances") balanceRevealed = false;
         loadToken += 1;
         var i;
         for (i = 0; i < TAB_NAMES.length; i++) {
@@ -1708,10 +1839,13 @@
         }, 4000);
     }
 
-    function setOrderActionsDisabled(disabled) {
-        var nodes = document.querySelectorAll(".order-actions .cmd");
+    function setCommandsDisabled(disabled) {
+        var nodes = document.querySelectorAll(".order-actions .cmd, .core-actions .cmd, .mass-actions .cmd");
         var i;
-        for (i = 0; i < nodes.length; i++) nodes[i].disabled = !!disabled;
+        for (i = 0; i < nodes.length; i++) {
+            // A chip with no known state stays off whatever the busy flag says.
+            nodes[i].disabled = !!disabled || nodes[i].className.indexOf("unknown") >= 0;
+        }
     }
 
     // Cancelled, a dropped connection, or 504: the page cannot tell whether the command landed.
@@ -1719,13 +1853,25 @@
         return !!(res && (res.cancelled || res.status === 0 || res.status === 504));
     }
 
-    function finishCommand(res) {
+    // Reload the pane in view; a core switch lands a moment later, so cores read twice.
+    function reloadAfterCommand(silent) {
+        var pane = current;
+        if (!pane) return;
+        if (!silent) hasData[pane] = false;
+        reloadPane(pane, silent);
+        if (pane === "cores") {
+            setTimeout(function () {
+                if (current === "cores") reloadPane("cores", true);
+            }, 1500);
+        }
+    }
+
+    function finishCommand(path, res) {
         commandBusy = false;
-        setOrderActionsDisabled(false);
+        setCommandsDisabled(false);
         if (commandUnresolved(res)) {
             showCmdLine(tr("mini_cmd_unknown"));
-            hasData.orders = false;
-            if (current === "orders") reloadPane("orders", false);
+            reloadAfterCommand(false);
             return;
         }
         if (!res.ok) {
@@ -1733,29 +1879,47 @@
             return;
         }
         var data = res.data || {};
-        if (data.ok === true) {
+        var partial = typeof data.sent === "number" && typeof data.requested === "number"
+            && data.sent !== data.requested;
+        if (data.ok === true && !partial) {
             haptic("success");
             showCmdLine(tr("mini_cmd_sent"));
-            if (current === "orders") reloadPane("orders", true);
+            reloadAfterCommand(true);
             return;
         }
         haptic("error");
-        var failed = data.error === "not_found" ? tr("mini_cmd_not_found") : tr("mini_cmd_failed");
+        if (partial) {
+            showCmdLine(trf("mini_cmd_partial", { sent: data.sent, n: data.requested }));
+            reloadAfterCommand(true);
+            return;
+        }
+        var failed = tr("mini_cmd_failed");
+        if (data.error === "not_found") {
+            failed = path.indexOf("/api/core") === 0 ? tr("mini_cmd_core_not_found") : tr("mini_cmd_not_found");
+        }
         showCmdLine(failed);
     }
 
+    // confirmText null fires at once; otherwise exactly one confirm.
     function runCommand(confirmText, path, body) {
         if (commandBusy) return;
         commandBusy = true;
-        setOrderActionsDisabled(true);
+        setCommandsDisabled(true);
+        function send() {
+            hapticImpact();
+            api(path, body, true).then(function (res) { finishCommand(path, res); });
+        }
+        if (confirmText == null) {
+            send();
+            return;
+        }
         askConfirm(confirmText, function (ok) {
             if (!ok) {
                 commandBusy = false;
-                setOrderActionsDisabled(false);
+                setCommandsDisabled(false);
                 return;
             }
-            hapticImpact();
-            api(path, body, true).then(finishCommand);
+            send();
         });
     }
 

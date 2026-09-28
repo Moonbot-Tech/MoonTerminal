@@ -19,12 +19,83 @@
     --sp-2: 8px;
     --sp-3: 12px;
     --sp-4: 16px;
-    --r-card: 10px;
-    --r-ctl: 8px;
+    --r-card: 8px;
+    --r-ctl: 4px;
+    --card-high: #f8fafc;
+    --row-line: var(--line);
+    --pos: #0e6e45;
+    --neg: var(--danger);
+    --warn: #b97824;
+    --tint: rgba(0, 157, 255, 0.08);
+    --font-ui: "Inter", -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+    --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
     --inset-top: max(env(safe-area-inset-top, 0px), calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px)));
     --inset-right: max(env(safe-area-inset-right, 0px), calc(var(--tg-safe-area-inset-right, 0px) + var(--tg-content-safe-area-inset-right, 0px)));
     --inset-bottom: max(env(safe-area-inset-bottom, 0px), calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px)));
     --inset-left: max(env(safe-area-inset-left, 0px), calc(var(--tg-safe-area-inset-left, 0px) + var(--tg-content-safe-area-inset-left, 0px)));
+}
+
+/* MoonTerminal palettes (tools/tour/theme.snapshot.toml); the scheme follows Telegram. */
+:root[data-scheme="light"] {
+    --page: #f3f5f7;
+    --card: #ffffff;
+    --card-high: #f8fafc;
+    --ink: #17202a;
+    --sub: #4b5865;
+    --hint: #768391;
+    --line: #e1e5ea;
+    --row-line: #eceff2;
+    --accent: #009dff;
+    --link: #009dff;
+    --button: #009dff;
+    --button-ink: #ffffff;
+    --pos: #0e6e45;
+    --neg: #b7352f;
+    --danger: #b7352f;
+    --warn: #b97824;
+    --tint: rgba(0, 157, 255, 0.08);
+}
+
+:root[data-scheme="dark"] {
+    --page: #131416;
+    --card: #1a1c1f;
+    --card-high: #22252b;
+    --ink: #e8e4dc;
+    --sub: #97928a;
+    --hint: #7d7669;
+    --line: #2a2d31;
+    --row-line: #2a2d31;
+    --accent: #ffb347;
+    --link: #ffb347;
+    --button: #ffb347;
+    --button-ink: #131416;
+    --pos: #1e8c5b;
+    --neg: #e5484d;
+    --danger: #e5484d;
+    --warn: #ffb347;
+    --tint: rgba(255, 179, 71, 0.11);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-scheme]) {
+        --page: #131416;
+        --card: #1a1c1f;
+        --card-high: #22252b;
+        --ink: #e8e4dc;
+        --sub: #97928a;
+        --hint: #7d7669;
+        --line: #2a2d31;
+        --row-line: #2a2d31;
+        --accent: #ffb347;
+        --link: #ffb347;
+        --button: #ffb347;
+        --button-ink: #131416;
+        --pos: #1e8c5b;
+        --neg: #e5484d;
+        --danger: #e5484d;
+        --warn: #ffb347;
+        --tint: rgba(255, 179, 71, 0.11);
+    }
 }
 
 * {
@@ -38,13 +109,14 @@
 html,
 body {
     margin: 0;
+    max-width: 100vw;
     overflow-x: hidden;
     background: var(--page);
     color: var(--ink);
 }
 
 body {
-    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-family: var(--font-ui);
     font-variant-numeric: tabular-nums;
     line-height: 1.35;
     min-height: 100%;
@@ -138,7 +210,7 @@ button {
 }
 
 .num {
-    font-family: inherit;
+    font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
 }
 
@@ -168,6 +240,7 @@ main {
 .card {
     background: var(--card);
     border-radius: var(--r-card);
+    border: 1px solid var(--line);
     margin: 0 16px 12px;
     overflow: clip;
 }
@@ -232,7 +305,7 @@ main {
 .row {
     min-height: 48px;
     padding: 8px 16px;
-    border-bottom: 1px solid var(--line);
+    border-bottom: 1px solid var(--row-line);
 }
 
 .card > :last-child {
@@ -326,11 +399,11 @@ main {
 }
 
 .pos {
-    color: var(--accent);
+    color: var(--pos);
 }
 
 .neg {
-    color: var(--danger);
+    color: var(--neg);
 }
 
 .hint {
@@ -345,15 +418,15 @@ main {
 }
 
 .dot-ok {
-    background: var(--accent);
+    background: var(--pos);
 }
 
 .dot-bad {
-    background: var(--danger);
+    background: var(--neg);
 }
 
 .dot-wait {
-    background: var(--hint);
+    background: var(--warn);
 }
 
 .core-row {
@@ -447,7 +520,7 @@ main {
 }
 
 .badge-warn {
-    color: var(--danger);
+    color: var(--warn);
     background: var(--page);
 }
 
@@ -529,26 +602,29 @@ main {
     margin: 0 16px 12px;
     padding: 2px;
     background: var(--card);
-    border-radius: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
 }
 
 .segments button {
     flex: 1 1 0;
     min-width: 44px;
     min-height: 44px;
-    border-radius: 8px;
-    padding: 6px 4px;
+    border-radius: var(--r-ctl);
+    padding: 4px 2px;
     color: var(--hint);
     font-size: 13px;
-    line-height: 1.15;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.1;
+    white-space: normal;
+    hyphens: none;
+    text-align: center;
+    box-shadow: inset 0 0 0 1px transparent;
 }
 
 .segments button.active {
-    background: var(--button);
-    color: var(--button-ink);
+    background: var(--tint);
+    color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .search {
@@ -834,8 +910,8 @@ main {
 
 #app-nav button {
     flex: 1 1 0;
-    min-width: 44px;
     min-height: 52px;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -846,8 +922,8 @@ main {
 }
 
 #app-nav button.active {
-    color: var(--button);
-    box-shadow: inset 0 2px 0 var(--button);
+    color: var(--accent);
+    box-shadow: inset 0 2px 0 var(--accent);
 }
 
 #app-nav svg {
@@ -904,5 +980,296 @@ input:focus-visible {
 
     .order-top .name {
         max-width: 100%;
+    }
+}
+
+/* Numbers read in the terminal's mono face. */
+.hero-value,
+.balance-figure,
+.stat-strip .stat-value,
+.metrics,
+.count,
+.group-meta,
+.order-flow,
+.money-col {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+.spread,
+.money-col,
+.balance-side {
+    min-width: 0;
+}
+
+.hero-toggle {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hero-toggle:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: -2px;
+}
+
+/* Per-core and all-cores controls. */
+.core-row {
+    flex-wrap: wrap;
+}
+
+.core-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+    flex: 1 0 100%;
+    padding-left: 16px;
+}
+
+/* All-cores bar: one tight row of two segmented START/STOP pairs; wraps to two rows on
+   the narrowest popups. */
+.mass-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding: 6px 12px;
+}
+
+.mass-title {
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.mass-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+
+.mass-label {
+    color: var(--sub);
+    font-size: var(--fs-meta);
+    white-space: nowrap;
+}
+
+.mass-pair {
+    display: inline-flex;
+}
+
+/* The caption only fits beside both pairs on a wide popup; aria-label names the bar below. */
+@media (max-width: 439px) {
+    .mass-title {
+        display: none;
+    }
+}
+
+.mass-pair .mass-btn {
+    min-height: 32px;
+    min-width: 0;
+    padding: 0 8px;
+    font-size: 10px;
+}
+
+.mass-pair .mass-btn:first-child {
+    border-radius: var(--r-ctl) 0 0 var(--r-ctl);
+}
+
+.mass-pair .mass-btn + .mass-btn {
+    margin-left: -1px;
+    border-radius: 0 var(--r-ctl) var(--r-ctl) 0;
+}
+
+/* Exchange section caption inside a per-core list (report, orders). */
+.section-row {
+    min-height: 0;
+    padding-top: 8px;
+    padding-bottom: 2px;
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.section-label {
+    margin: 12px 16px 4px;
+    color: var(--hint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.chip {
+    min-height: 40px;
+    min-width: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-ctl);
+    background: var(--card);
+    color: var(--sub);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.chip.on {
+    border-color: var(--pos);
+    color: var(--pos);
+    background: var(--tint);
+}
+
+.chip.off {
+    border-color: var(--line);
+    color: var(--sub);
+}
+
+.chip.unknown,
+.chip:disabled {
+    color: var(--hint);
+    opacity: .6;
+}
+
+.chip.cmd-danger,
+.cmd-danger {
+    border-color: var(--neg);
+    color: var(--neg);
+}
+
+/* Compact order row: data on the left, a small action pair at the right. */
+.order-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+}
+
+.order-main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.order-row .order-top {
+    gap: 6px;
+}
+
+.order-row .order-top .name {
+    flex: 0 1 auto;
+    max-width: none;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.order-row .order-side {
+    padding: 1px 4px;
+    border-radius: var(--r-ctl);
+    background: var(--tint);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    text-transform: uppercase;
+}
+
+.order-row .order-side.pos {
+    color: var(--pos);
+}
+
+.order-row .order-side.neg {
+    color: var(--neg);
+}
+
+.order-row .order-change,
+.order-row .order-pnl {
+    font-size: 13px;
+}
+
+.order-row .order-change {
+    margin-left: auto;
+}
+
+.order-row .order-pnl {
+    margin-left: 0;
+}
+
+.order-row .order-flow {
+    font-size: 11px;
+}
+
+.order-row .order-actions {
+    flex: none;
+    gap: 4px;
+    padding: 0;
+}
+
+.order-row .order-actions .cmd {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 15px;
+    border-radius: var(--r-ctl);
+}
+
+/* Order group header: the name truncates, count and PnL stay on the right. */
+.group-head .name {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.group-head .group-meta {
+    flex: none;
+    gap: 12px;
+    padding-left: 8px;
+}
+
+@media (max-width: 360px) {
+    .segments button {
+        font-size: 12px;
+    }
+
+    .app-header {
+        padding-left: calc(12px + var(--inset-left));
+        padding-right: calc(12px + var(--inset-right));
+    }
+
+    .card,
+    .segments,
+    .summary,
+    .loading-label,
+    .tool-row,
+    .stale-bar,
+    .stat-strip {
+        margin-left: 12px;
+        margin-right: 12px;
+    }
+
+    .search {
+        width: calc(100% - 24px);
+        margin-left: 12px;
+        margin-right: 12px;
+    }
+
+    .row {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}
+
+@media (max-width: 340px) {
+    .segments {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
     }
 }

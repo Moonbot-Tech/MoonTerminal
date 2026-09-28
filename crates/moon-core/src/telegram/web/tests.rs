@@ -150,6 +150,23 @@ fn accept(event: MiniAppApiRequest) {
         MiniAppApiRequest::Orders { reply, .. } => {
             let _ = reply.send(Err(MiniAppApiError::Rejected));
         }
+        MiniAppApiRequest::CoreSwitch { reply, .. }
+        | MiniAppApiRequest::CancelAllOrders { reply, .. } => {
+            let _ = reply.send(Ok(super::dto::CommandResultDto {
+                ok: true,
+                armed: None,
+                error: None,
+            }));
+        }
+        MiniAppApiRequest::CoresSwitch { cores, reply, .. } => {
+            let n = u32::try_from(cores.len()).unwrap_or(u32::MAX);
+            let _ = reply.send(Ok(super::dto::ScopeResultDto {
+                ok: true,
+                sent: n,
+                requested: n,
+                error: None,
+            }));
+        }
     }
 }
 
@@ -364,4 +381,68 @@ fn telegram_panic_market_over_64_bytes_is_rejected() {
         Some("json"),
         "an overlong market is the same JSON refusal as a bad body, body {text}"
     );
+}
+
+/// `web.rs` route arms `/api/core/switch`, `/api/cores/switch` and
+/// `/api/core/cancel_all` must authenticate through `handle_api`.
+///
+/// Mutation: one arm parses its body and sends the command without the
+/// initData HMAC, freshness and paired-chat check. Anyone holding the tunnel URL
+/// can then stop trading or cancel every order on the owner's cores. The fresh
+/// paired launch reaching 200 is the control that the routes are not hard-coded
+/// to reject.
+#[test]
+fn telegram_core_control_routes_require_fresh_paired_init_data() {
+    let app = handler_with_acceptor();
+    let now = stable_unix_now();
+    let fresh = signed_at(now);
+    let one_past = signed_at(now.saturating_sub(INIT_DATA_MAX_AGE_SECS + 1));
+    let forged = with_forged_hash(&fresh);
+    let now_text = now.to_string();
+    let stranger = signed_init_data(&[
+        ("auth_date", now_text.as_str()),
+        ("query_id", "AAEAAQ"),
+        ("user", "{\"id\":42,\"first_name\":\"Eve\"}"),
+    ]);
+    let routes = [
+        (
+            "/api/core/switch",
+            r#"{"core":1,"switch":"trading","on":false}"#,
+        ),
+        (
+            "/api/cores/switch",
+            r#"{"cores":[1,2],"switch":"auto_detect","on":false}"#,
+        ),
+        ("/api/core/cancel_all", r#"{"core":1}"#),
+    ];
+
+    for (path, body) in routes {
+        let (status, text) = post(&app, path, None, body);
+        assert_eq!(status, 401, "{path} without initData body {text}");
+        assert_eq!(
+            error_code(&text),
+            Some("missing_init_data"),
+            "{path} body {text}"
+        );
+
+        let (status, text) = post(&app, path, Some(&forged), body);
+        assert_eq!(status, 401, "{path} forged hash body {text}");
+        assert_eq!(error_code(&text), Some("hash"), "{path} body {text}");
+
+        let (status, text) = post(&app, path, Some(&one_past), body);
+        assert_eq!(status, 401, "{path} stale launch body {text}");
+        assert_eq!(error_code(&text), Some("stale"), "{path} body {text}");
+
+        let (status, text) = post(&app, path, Some(&stranger), body);
+        assert_ne!(
+            status, 200,
+            "{path} a validly signed but unpaired user must not reach the core, body {text}"
+        );
+
+        let (status, text) = post(&app, path, Some(&fresh), body);
+        assert_eq!(
+            status, 200,
+            "{path} a fresh paired launch must reach the command, body {text}"
+        );
+    }
 }
