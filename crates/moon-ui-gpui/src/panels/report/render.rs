@@ -338,10 +338,12 @@ impl Render for ReportPanel {
                 .child(section)
         };
         // Shrink before wrapping: while the row still fits one line the two selectors keep their
-        // words, and the moment it does not they drop to an icon and a count — a second line is the
-        // answer only once that has already been given up. `wrap_fit` owns the decision; here the
+        // words, and the moment it does not they drop to an icon and a count while the scope
+        // caption moves its differences into its tooltip — a second line is the answer only once
+        // that has already been given up. `wrap_fit` owns the decision; here the
         // leading section reports one line's height and the row reports its own size.
         let compact = self.wrap_fit.compact();
+        let scope_choices = self.scope_choices();
         let line = crate::controls::wrap_fit::LineHeight::default();
         let (core_combo, core_fit) = self.core_combo(compact, cx);
         let core_filters = crate::controls::wrap_fit::measured_section(
@@ -356,10 +358,12 @@ impl Render for ReportPanel {
         // whether the mask field is one of its sections at all.
         let strategy_mask_present = strategy_mask.is_some();
         // No caption beside the coin field: its placeholder names it without consuming row width.
+        // The period leads and the scope dropdown follows it: "which days" is read before "which
+        // of their trades".
         let trade_filters = design::chrome_section(cx)
             .child(coin_field)
-            .child(self.scope_control.clone());
-        let period_filters = design::chrome_section(cx).child(self.period_combo(cx));
+            .child(self.period_combo(cx));
+        let scope_filters = design::chrome_section(cx).child(self.scope_control.clone());
         // Manual bounds exist only in detached windows. Each caption stays attached to its field,
         // while From and To remain independent sections so a narrow host can wrap between them.
         let date_filters = self.detached.then(|| {
@@ -415,8 +419,8 @@ impl Render for ReportPanel {
             .child(separated(strategy_filter))
             .children(strategy_mask.map(separated))
             .child(separated(trade_filters))
-            .child(separated(period_filters))
             .children(date_filters.into_iter().flatten().map(separated))
+            .child(separated(scope_filters))
             // Export and Columns retain the trailing edge without a flexible wrapping spacer.
             .child(separated(actions).ml_auto());
         let filters = crate::controls::wrap_fit::measured_row(
@@ -434,6 +438,10 @@ impl Render for ReportPanel {
                         core_fit.full_w,
                         core_fit.compact_w,
                         self.strategy_full_width(cx),
+                        controls::scope_compact_saving(
+                            cx,
+                            &controls::scope_differences(&scope_choices),
+                        ),
                     )
                 } else {
                     0.0
@@ -443,7 +451,7 @@ impl Render for ReportPanel {
                     self.detached,
                     strategy_mask_present,
                     core_fit.full_w,
-                    controls::FilterRowLabels::of(self),
+                    controls::FilterRowLabels::of(self, &scope_choices, compact),
                 ),
             },
             |panel, fit| panel.wrap_fit = fit,
