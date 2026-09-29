@@ -103,6 +103,7 @@ fn moved_in_flight_core_blocks_a_ready_sibling_on_its_new_ip() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            restarts0: 0,
         },
     );
     manager.core_updates.lanes.insert(
@@ -302,6 +303,7 @@ fn verifying_core_blocks_a_ready_sibling_on_its_new_ip() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            restarts0: 0,
         },
     );
     manager.core_updates.lanes.insert(
@@ -363,6 +365,7 @@ fn settled_verifying_core_releases_its_lane_to_a_ready_sibling() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            restarts0: 0,
         },
     );
     manager.core_updates.lanes.insert(
@@ -539,18 +542,31 @@ fn reconnect_backoff_counts_as_one_connection_departure() {
 fn a_named_build_on_the_same_number_is_installed() {
     let named = UpdateTarget::Named("MoonBot-R2".to_string());
     assert_eq!(
-        verified_outcome(&named, Some(771), 771),
+        verified_outcome(&named, Some(771), 771, true),
         CoreUpdateOutcome::Succeeded {
             from: Some(771),
             to: 771
         }
     );
     assert_eq!(
-        verified_outcome(&named, Some(770), 771),
+        verified_outcome(&named, Some(770), 771, true),
         CoreUpdateOutcome::Succeeded {
             from: Some(770),
             to: 771
         }
+    );
+}
+
+/// A same-number Named attempt with no proof the core process restarted (an ordinary network
+/// reconnect to the same process also reaches `Verifying`) stays `Unchanged`.
+///
+/// Breaks when the restart proof is ignored: a reconnect blip reads "installed".
+#[test]
+fn a_named_build_without_a_restart_proof_stays_unchanged() {
+    let named = UpdateTarget::Named("MoonBot-R2".to_string());
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771, false),
+        CoreUpdateOutcome::Unchanged { version: 771 }
     );
 }
 
@@ -561,18 +577,18 @@ fn a_named_build_on_the_same_number_is_installed() {
 fn a_release_on_the_same_number_stays_unchanged() {
     let release = UpdateTarget::Release;
     assert_eq!(
-        verified_outcome(&release, Some(771), 771),
+        verified_outcome(&release, Some(771), 771, true),
         CoreUpdateOutcome::Unchanged { version: 771 }
     );
     assert_eq!(
-        verified_outcome(&release, Some(770), 771),
+        verified_outcome(&release, Some(770), 771, true),
         CoreUpdateOutcome::Succeeded {
             from: Some(770),
             to: 771
         }
     );
     assert_eq!(
-        verified_outcome(&release, None, 771),
+        verified_outcome(&release, None, 771, true),
         CoreUpdateOutcome::Succeeded {
             from: None,
             to: 771
