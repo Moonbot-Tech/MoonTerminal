@@ -623,7 +623,9 @@ impl MetalLayers {
     /// An empty batch cannot. A missing or invalid cross or volume bake is damage, because
     /// there is no span that proves the rows are offscreen. Otherwise both bake spans, margins
     /// included, are tested against the new times and against the oldest rows this append would
-    /// evict. The ring is read before any mutation.
+    /// evict. Metal scales the volume band by the whole ring's maximum, so a batch that would move
+    /// that maximum, by a new peak or by evicting the current one, is damage wherever it lands.
+    /// The ring is read before any mutation.
     ///
     /// Args:
     ///     data: Rows about to be appended.
@@ -640,6 +642,18 @@ impl MetalLayers {
         let Some(volume) = self.volume_texture.as_ref().filter(|tex| tex.key.valid) else {
             return true;
         };
+        let scale = (self.volume_buy_max, self.volume_sell_max);
+        let mut probe = scale;
+        let raised = update_cross_volume_max(&mut probe, data);
+        let evicted = evicted_cross_ranges(
+            self.cross_head,
+            self.cross_count,
+            self.combo_capacity,
+            data.len(),
+        );
+        if raised || ranges_touch_volume_max(&self.crosses, &evicted, scale) {
+            return true;
+        }
         let cross_span = tick_bake_span(
             cross.key.bake_t0,
             cross.key.tex_w as f32,
