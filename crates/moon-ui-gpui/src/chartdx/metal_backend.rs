@@ -12,16 +12,18 @@ use metal::{
     RenderPipelineState, SamplerDescriptor, TextureDescriptor,
 };
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
+use moon_chart::tick_volume::{tick_bake_span, tick_touches_bake};
 use moon_core::data::{LevelInstance, PriceLinePoint};
 use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
+use std::time::{Duration, Instant};
 
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
     SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
-    evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, ranges_touch_volume_max,
-    reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
+    evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, queue_appended_ranges,
+    ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -29,15 +31,19 @@ const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.
 const MIN_COMBO_CAPACITY: usize = 1;
 
 /// The DX11 combo's backend-free bake planner, shared so both backends decide rebakes and blit
-/// windows by one rule. Its append-damage and LOD helpers have no Metal caller yet.
+/// windows by one rule. Its LOD helpers have no Metal caller yet.
 #[path = "combo/plan.rs"]
 #[allow(dead_code)]
 mod combo_plan;
 
 use combo_plan::{
-    ComboBakeKey, VolumeBakeKey, combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake,
-    plan_volume_bake, volume_band_px, volume_blit_uv,
+    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, combo_tex_w,
+    combo_v_margin_px, cross_blit_uv, plan_cross_bake, plan_volume_bake, volume_band_px,
+    volume_blit_uv,
 };
+
+/// How long eviction damage alone may wait before it forces a full rebake of both bitmaps.
+const EVICTION_REBAKE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 struct BufferSlot {
@@ -311,7 +317,11 @@ pub struct MetalLayers {
     base_cache: BaseCache,
     combo_texture: Option<ComboTexture>,
     volume_texture: Option<VolumeTexture>,
+    /// Ring runs appended since the last bake, drawn incrementally into both bitmaps.
     combo_dirty_ranges: Vec<(usize, usize)>,
+    /// When rows evicted from inside a baked span are finally erased by a full rebake. Evicted
+    /// rows stay painted until then, so a full ring sheds history in steps, not one bake per tick.
+    eviction_rebake_at: Option<Instant>,
     crosses: Vec<ChartCross>,
     cross_head: usize,
     cross_count: usize,
@@ -381,6 +391,7 @@ impl MetalLayers {
             combo_texture: None,
             volume_texture: None,
             combo_dirty_ranges: Vec::new(),
+            eviction_rebake_at: None,
             crosses: Vec::new(),
             cross_head: 0,
             cross_count: 0,
@@ -520,6 +531,7 @@ impl MetalLayers {
         self.combo_texture = None;
         self.volume_texture = None;
         self.combo_dirty_ranges.clear();
+        self.eviction_rebake_at = None;
     }
 
     pub fn reset_combo(&mut self, data: Vec<ChartCross>) {
@@ -540,6 +552,10 @@ impl MetalLayers {
         self.combo_dirty_ranges.clear();
     }
 
+    /// Appends live ticks to the ring. The new rows are queued for an incremental draw into both
+    /// bitmaps; eviction of rows that may be baked is deferred to one coalesced rebake, while a
+    /// capacity-sized batch (or a queue that would cover the ring) invalidates both bakes at once.
+    /// A volume scale change still rebakes the volume bitmap, via its planner's scale check.
     pub fn append_combo(&mut self, data: &[ChartCross]) {
         if data.is_empty() {
             return;
@@ -552,6 +568,7 @@ impl MetalLayers {
             evicted_cross_ranges(old_head, old_count, self.combo_capacity, data.len());
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
+        let evicts_baked = full_reset || self.evicts_baked(&evicted_ranges);
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -569,18 +586,67 @@ impl MetalLayers {
             self.update_volume_scale(data);
         }
         self.combo_buffers_dirty = true;
-        // Always FULL-bake the combo texture when crosses change. Incremental partial baking through
-        // `combo_dirty_ranges` is fragile on Metal: combo bakes at fixed `bake_t0` but composites with
-        // the `(view_time0 - bake_t0)` offset. During redraw frames such as mouse movement, this
-        // temporarily shifted the ENTIRE cross layer a few seconds backward until the next full bake
-        // realigned `bake_t0`. A full bake linearly rebuilds `[0..count]` and samples `bake_t0` again
-        // from the current view, which is correct and cheap because `cross_count` is small.
-        self.invalidate_bakes();
-        self.combo_dirty_ranges.clear();
+        let queued = !full_reset
+            && queue_appended_ranges(
+                &mut self.combo_dirty_ranges,
+                old_head,
+                data.len(),
+                self.combo_capacity,
+            );
+        match append_bake_damage(queued, evicts_baked) {
+            AppendBakeDamage::None => {}
+            AppendBakeDamage::Defer => {
+                if self.eviction_rebake_at.is_none() {
+                    self.eviction_rebake_at = Some(Instant::now() + EVICTION_REBAKE_INTERVAL);
+                }
+            }
+            AppendBakeDamage::Invalidate => {
+                self.invalidate_bakes();
+                self.combo_dirty_ranges.clear();
+            }
+        }
     }
 
-    /// Forces the next prepare to fully rebake both the cross and the volume bitmaps.
+    /// Whether any row in the evicted ring `ranges` may be painted inside either baked span.
+    fn evicts_baked(&self, ranges: &[(usize, usize); 2]) -> bool {
+        let spans = [
+            self.combo_texture.as_ref().map(|tex| {
+                tick_bake_span(
+                    tex.key.bake_t0,
+                    tex.key.tex_w as f32,
+                    tex.key.time_to_px,
+                    tex.key.marker_half,
+                )
+            }),
+            self.volume_texture.as_ref().map(|tex| {
+                tick_bake_span(
+                    tex.key.bake_t0,
+                    tex.key.tex_w as f32,
+                    tex.key.time_to_px,
+                    0.0,
+                )
+            }),
+        ];
+        spans.into_iter().flatten().any(|span| {
+            ranges.iter().any(|&(start, count)| {
+                let end = start.saturating_add(count).min(self.crosses.len());
+                start < end
+                    && self.crosses[start..end]
+                        .iter()
+                        .any(|cross| tick_touches_bake(cross.time_rel, span))
+            })
+        })
+    }
+
+    /// Whether deferred eviction damage is due for its full rebake, so a frame must prepare.
+    pub fn eviction_rebake_due(&self, now: Instant) -> bool {
+        self.eviction_rebake_at.is_some_and(|at| now >= at)
+    }
+
+    /// Forces the next prepare to fully rebake both the cross and the volume bitmaps; that bake
+    /// also erases rows whose eviction was deferred.
     fn invalidate_bakes(&mut self) {
+        self.eviction_rebake_at = None;
         if let Some(tex) = self.combo_texture.as_mut() {
             tex.key.valid = false;
         }
@@ -655,6 +721,7 @@ impl MetalLayers {
         self.combo_texture = None;
         self.volume_texture = None;
         self.combo_dirty_ranges.clear();
+        self.eviction_rebake_at = None;
         self.bg_uniform = BufferSlot::default();
         self.grid_uniform = BufferSlot::default();
         self.cursor_uniform = BufferSlot::default();
@@ -907,6 +974,10 @@ impl MetalLayers {
         pixel_format: MTLPixelFormat,
         view: &ChartViewGpu,
     ) -> bool {
+        // Before any early return, so a due deadline is always consumed and never re-arms frames.
+        if self.eviction_rebake_due(Instant::now()) {
+            self.invalidate_bakes();
+        }
         if self.cross_count == 0 {
             return false;
         }

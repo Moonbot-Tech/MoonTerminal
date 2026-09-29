@@ -60,6 +60,20 @@ fn evicted_cross_ranges_handles_wrapped_full_ring() {
     assert_eq!(evicted_cross_ranges(4, 5, 5, 3), [(4, 1), (0, 2)]);
 }
 
+/// `types.rs:queue_appended_ranges` must queue each append's wrapped runs for the incremental
+/// bake and refuse once the queue would cover the ring. Queuing past that point would redraw an
+/// overwritten slot twice, doubling a translucent tick in the Metal bitmap until the next rebake.
+#[test]
+fn queue_appended_ranges_splits_at_the_wrap_and_refuses_a_full_ring() {
+    let mut pending = Vec::new();
+    assert!(queue_appended_ranges(&mut pending, 8, 3, 10));
+    assert_eq!(pending, vec![(8, 2), (0, 1)]);
+    assert!(queue_appended_ranges(&mut pending, 1, 2, 10));
+    assert_eq!(pending, vec![(8, 2), (0, 1), (1, 2)]);
+    assert!(!queue_appended_ranges(&mut pending, 3, 5, 10));
+    assert_eq!(pending, vec![(8, 2), (0, 1), (1, 2)]);
+}
+
 /// `types.rs:seg_of` must carry the pin flag into the slot the three seg shaders read it from.
 ///
 /// The flag is the whole feature: dropped here, an exit line that left the price band is silently
