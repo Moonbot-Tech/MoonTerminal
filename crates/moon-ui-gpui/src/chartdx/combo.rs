@@ -30,7 +30,10 @@ use super::types::{
     lod_bake_rows, reset_cross_ring, ring_time_range,
 };
 
+mod volume_scale;
+
 use super::price_ring::{PriceRing, RingPending};
+use volume_scale::{carry_volume_scale, fold_volume_scale, volume_window_bounds};
 
 const MIN_COMBO_CAPACITY: u32 = 1;
 /// Price-line ring capacity ceiling: slot offsets and the ring length travel to the shader as f32
@@ -971,6 +974,12 @@ impl ComboLayer {
             // A capacity-sized batch resets the CPU mirror to slot zero, regardless of old head.
             let written =
                 !full_reset && ring_write_no_overwrite(context, &tick_buffer, self.head, cap, data);
+            // Before the mirror moves: the carry reads the rows this append evicts.
+            let carried_scale = if written {
+                self.carry_volume_window_scale(data)
+            } else {
+                None
+            };
             self.head = (self.head + n) % cap;
             self.count = (self.count + n).min(cap);
             append_cross_ring(
@@ -995,7 +1004,15 @@ impl ComboLayer {
             // prepare_combo compares the new bake-window scale with the scale actually baked.
             // A global maximum (including an evicted offscreen maximum) cannot affect that scale.
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
-            self.volume_window_cache = None;
+            self.volume_window_cache = carried_scale.map(|(key, scale)| {
+                (
+                    VolumeScaleKey {
+                        data_generation: self.volume_data_generation,
+                        ..key
+                    },
+                    scale,
+                )
+            });
             // New runs draw into each bitmap separately, so crosses always sit above the bars.
             self.settle_append_damage(append_bake_damage(written, evicts_baked), Instant::now());
         }
@@ -1079,6 +1096,37 @@ impl ComboLayer {
         )
     }
 
+    /// The current cached window scale updated for an in-place append of `data`, or `None` when
+    /// no current cache exists or an evicted row inside its window may have held a maximum.
+    /// Must run before `data` enters the resident mirror.
+    fn carry_volume_window_scale(
+        &self,
+        data: &[ChartCross],
+    ) -> Option<(VolumeScaleKey, (f32, f32))> {
+        let (key, cached) = self.volume_window_cache?;
+        if key.data_generation != self.volume_data_generation
+            || self.resident_count == 0
+            || data.len() >= self.cross_capacity as usize
+        {
+            return None;
+        }
+        let (left, right) = volume_window_bounds(
+            f32::from_bits(key.bake_t0_bits),
+            f32::from_bits(key.tex_w_bits),
+            f32::from_bits(key.time_to_px_bits),
+        );
+        let evicted = evicted_cross_ranges(
+            self.resident_head,
+            self.resident_count,
+            self.cross_capacity as usize,
+            data.len(),
+        );
+        let evicted_rows = evicted
+            .into_iter()
+            .flat_map(|(start, count)| &self.resident_crosses[start..start + count]);
+        carry_volume_scale(cached, evicted_rows, data, left, right).map(|scale| (key, scale))
+    }
+
     /// Cache the exact historical volume-window predicate over a bounded ring lookup.
     fn volume_scale_for_bake_window(
         &mut self,
@@ -1100,8 +1148,7 @@ impl ComboLayer {
         {
             return cached;
         }
-        let time_left = bake_t0 - 2.0 / time_to_px;
-        let time_right = bake_t0 + (tex_w + 2.0) / time_to_px;
+        let (time_left, time_right) = volume_window_bounds(bake_t0, tex_w, time_to_px);
         let range = self.resident_time_range(f64::from(time_left), f64::from(time_right));
         let runs = tick_slot_runs(
             range,
@@ -1109,22 +1156,13 @@ impl ComboLayer {
             self.resident_count,
             self.cross_capacity as usize,
         );
-        let mut buy = 1e-6f32;
-        let mut sell = 1e-6f32;
-        for c in runs
-            .into_iter()
-            .flat_map(|(start, count)| &self.resident_crosses[start..start + count])
-        {
-            if c.time_rel < time_left || c.time_rel > time_right || c.qty <= 0.0 {
-                continue;
-            }
-            match c.side {
-                0 => buy = buy.max(c.qty),
-                1 => sell = sell.max(c.qty),
-                _ => {} // Sides >= 2 are liquidations without volume bars, so exclude them from scale.
-            }
-        }
-        let out = (buy, sell);
+        let out = fold_volume_scale(
+            (1e-6, 1e-6),
+            runs.into_iter()
+                .flat_map(|(start, count)| &self.resident_crosses[start..start + count]),
+            time_left,
+            time_right,
+        );
         self.volume_window_cache = Some((key, out));
         out
     }
