@@ -14,7 +14,7 @@ use super::{
 /// server-row control.
 #[test]
 fn column_ids_are_the_complete_spec_indices() {
-    assert_eq!(ConnColId::ALL.len(), 13);
+    assert_eq!(ConnColId::ALL.len(), 14);
 
     for (index, column) in ConnColId::ALL.into_iter().enumerate() {
         assert_eq!(column as usize, index, "{column:?} must index its own spec");
@@ -52,7 +52,12 @@ fn indent_parts_match_the_header_inset() {
 /// at non-default font scales.
 #[test]
 fn widths_follow_the_frozen_per_column_policy() {
-    const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
+    const MICRO_COLUMNS: [ConnColId; 4] = [
+        ConnColId::Proto,
+        ConnColId::Preset,
+        ConnColId::Total,
+        ConnColId::Data,
+    ];
     const TEXT_SCALED_COLUMNS: [ConnColId; 4] = [
         ConnColId::Name,
         ConnColId::Key,
@@ -130,7 +135,12 @@ fn growth_and_tooltips_match_the_text_column_contract() {
 /// its readable character count shrink when the user raises the Font setting.
 #[test]
 fn caps_match_the_text_column_contract_at_each_font_scale() {
-    const MICRO_COLUMNS: [ConnColId; 3] = [ConnColId::Proto, ConnColId::Preset, ConnColId::Data];
+    const MICRO_COLUMNS: [ConnColId; 4] = [
+        ConnColId::Proto,
+        ConnColId::Preset,
+        ConnColId::Total,
+        ConnColId::Data,
+    ];
     const TEXT_SCALED_COLUMNS: [ConnColId; 4] = [
         ConnColId::Name,
         ConnColId::Key,

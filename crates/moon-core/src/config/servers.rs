@@ -246,6 +246,10 @@ pub struct ServerConfig {
     /// excluded core still connects, still streams, and still writes to the databases.
     #[serde(default)]
     pub workspace_membership: WorkspaceMembership,
+    /// How this core counts toward the Assets footer and Telegram Mini App totals. Display only: it never affects the
+    /// connection, the feed, or the per-core balance rows.
+    #[serde(default)]
+    pub total_mode: TotalMode,
 }
 
 /// MoonProto transport mode, mirroring MoonBot's `V0 / V1 / V2` radio in Moon Proto settings.
@@ -426,77 +430,154 @@ impl Serialize for WorkspaceMembership {
 }
 
 impl<'de> Deserialize<'de> for WorkspaceMembership {
-    /// Map an unknown string, i64/u64/f64/bool/unit, sequence, or map to the default.
-    ///
-    /// These forms are covered explicitly so a cosmetic field cannot reject the remaining
-    /// settings. Other data forms use the standard `serde::de::Visitor` rejection.
+    /// Read a membership code; anything else becomes the default (see [`forgiving_code`]).
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        /// Visitor for TOML forms that have a safe default membership.
-        struct AnyScalar;
+        forgiving_code(
+            d,
+            "a workspace membership (both / classic / auto)",
+            Self::from_code,
+        )
+    }
+}
 
-        impl<'de> serde::de::Visitor<'de> for AnyScalar {
-            type Value = WorkspaceMembership;
+/// Deserialize a cosmetic string-coded setting that never rejects the rest of the file.
+///
+/// An unknown string, an i64/u64/f64/bool/unit, a sequence, or a map becomes `T::default()`;
+/// containers are consumed whole so deserialization stays synchronized. Other data forms use the
+/// standard `serde::de::Visitor` rejection.
+///
+/// Args:
+///     d: The deserializer positioned on the field.
+///     what: What the field holds, for serde diagnostics.
+///     parse: Parses a known code, `None` for an unknown one.
+///
+/// Returns:
+///     The parsed value, or `T::default()` for any other accepted form.
+fn forgiving_code<'de, D: serde::Deserializer<'de>, T: Default>(
+    d: D,
+    what: &'static str,
+    parse: fn(&str) -> Option<T>,
+) -> Result<T, D::Error> {
+    /// Visitor for TOML forms that have a safe default value.
+    struct AnyScalar<T> {
+        what: &'static str,
+        parse: fn(&str) -> Option<T>,
+    }
 
-            /// Describe accepted string codes for serde diagnostics.
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a workspace membership (both / classic / auto)")
-            }
+    impl<'de, T: Default> serde::de::Visitor<'de> for AnyScalar<T> {
+        type Value = T;
 
-            /// Parse a string code, mapping an unknown code to the default.
-            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::from_code(v).unwrap_or_default())
-            }
-
-            // Invalid scalar values affect only this cosmetic field.
-            /// Map a signed 64-bit integer to the default.
-            fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::default())
-            }
-
-            /// Map an unsigned 64-bit integer to the default.
-            fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::default())
-            }
-
-            /// Map a floating-point value to the default.
-            fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::default())
-            }
-
-            /// Map a Boolean value to the default.
-            fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::default())
-            }
-
-            /// Map unit/null to the default.
-            fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
-                Ok(WorkspaceMembership::default())
-            }
-
-            // Consume the entire invalid container so deserialization stays synchronized.
-            /// Consume an entire sequence and return the default.
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<Self::Value, A::Error> {
-                while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
-                Ok(WorkspaceMembership::default())
-            }
-
-            /// Consume an entire map and return the default.
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> Result<Self::Value, A::Error> {
-                while map
-                    .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
-                    .is_some()
-                {}
-                Ok(WorkspaceMembership::default())
-            }
+        /// Describe accepted string codes for serde diagnostics.
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str(self.what)
         }
 
-        d.deserialize_any(AnyScalar)
+        /// Parse a string code, mapping an unknown code to the default.
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<T, E> {
+            Ok((self.parse)(v).unwrap_or_default())
+        }
+
+        // Invalid scalar values affect only this cosmetic field.
+        /// Map a signed 64-bit integer to the default.
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<T, E> {
+            Ok(T::default())
+        }
+
+        /// Map an unsigned 64-bit integer to the default.
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<T, E> {
+            Ok(T::default())
+        }
+
+        /// Map a floating-point value to the default.
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<T, E> {
+            Ok(T::default())
+        }
+
+        /// Map a Boolean value to the default.
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<T, E> {
+            Ok(T::default())
+        }
+
+        /// Map unit/null to the default.
+        fn visit_unit<E: serde::de::Error>(self) -> Result<T, E> {
+            Ok(T::default())
+        }
+
+        // Consume the entire invalid container so deserialization stays synchronized.
+        /// Consume an entire sequence and return the default.
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<T, A::Error> {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(T::default())
+        }
+
+        /// Consume an entire map and return the default.
+        fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<T, A::Error> {
+            while map
+                .next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?
+                .is_some()
+            {}
+            Ok(T::default())
+        }
+    }
+
+    d.deserialize_any(AnyScalar { what, parse })
+}
+
+/// How a core's balance counts toward the Assets footer and Telegram Mini App totals. Display only: the core still
+/// connects, streams, and shows its own balance row whatever the mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TotalMode {
+    /// Counted once per exchange account: cores sharing one account and wallet fold into one
+    /// contribution.
+    #[default]
+    Auto,
+    /// Never counted in the total, even when the core reports no account identity.
+    Exclude,
+    /// Always counted on its own, never folded with another core.
+    Separate,
+}
+
+impl TotalMode {
+    /// Every mode, in the order the Settings dropdown lists them.
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Exclude, Self::Separate];
+
+    /// Stable code persisted in `settings.toml`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Exclude => "exclude",
+            Self::Separate => "separate",
+        }
+    }
+
+    /// Parse a `settings.toml` code, returning `None` for an unknown code.
+    ///
+    /// `Deserialize` maps an unknown code to `Default` (`Auto`).
+    pub fn from_code(code: &str) -> Option<Self> {
+        match code.trim() {
+            "auto" => Some(Self::Auto),
+            "exclude" => Some(Self::Exclude),
+            "separate" => Some(Self::Separate),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for TotalMode {
+    /// Serialize the stable lowercase code used by `settings.toml`.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for TotalMode {
+    /// Read a total-mode code; anything else becomes the default (see [`forgiving_code`]).
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        forgiving_code(
+            d,
+            "a total mode (auto / exclude / separate)",
+            Self::from_code,
+        )
     }
 }
 

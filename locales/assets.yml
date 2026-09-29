@@ -89,6 +89,31 @@ assets.balances_stale_n:
   ru: "нет связи: %{n}"
   en: "offline: %{n}"
   es: "sin conexión: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n:
+  ru: "одним счётом: %{n}"
+  en: "same account: %{n}"
+  es: "misma cuenta: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n:
+  ru: "не в итоге: %{n}"
+  en: "excluded: %{n}"
+  es: "excluidos: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into:
+  ru: "%{cores} — тот же счёт, что %{core}: учтены один раз"
+  en: "%{cores} share the account of %{core}: counted once"
+  es: "%{cores} comparten la cuenta de %{core}: contada una vez"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat:
+  ru: "(Hyperliquid: режим счёта (единый или стандартный) терминалу не виден; если кошельки раздельные, поставьте ядру «Отдельно» в Настройки → Подключения → В итоге)"
+  en: "(Hyperliquid: the terminal cannot see the account mode, unified or standard; if the wallets are separate, set the core to \"Separate\" in Settings → Connections → In total)"
+  es: "(Hyperliquid: el terminal no ve el modo de cuenta, unificado o estándar; si las billeteras están separadas, ponga el núcleo en «Por separado» en Ajustes → Conexiones → En total)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list:
+  ru: "Не в итоге по настройке ядра: %{cores}"
+  en: "Excluded by core setting: %{cores}"
+  es: "Excluidos por ajuste del núcleo: %{cores}"
 assets.section_positions:
   ru: "Позиции"
   en: "Positions"

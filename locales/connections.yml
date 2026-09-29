@@ -179,6 +179,10 @@ conn.col.preset:
   ru: "Пресет"
   en: "Preset"
   es: "Preset"
+conn.col.total:
+  ru: "В итоге"
+  en: "In total"
+  es: "En total"
 conn.col.group:
   ru: "Группа"
   en: "Group"
@@ -285,6 +289,10 @@ conn.tip.preset:
   ru: "В каком режиме рабочего пространства ядро видно в списках: везде, только в MANUAL или только в AUTO. Это только отображение — скрытое ядро всё равно подключается и записывает данные."
   en: "Which workspace mode shows this core in every list: both, MANUAL only, or AUTO only. Display only — a hidden core still connects and still records."
   es: "En qué modo de espacio de trabajo se muestra este núcleo en las listas: ambos, solo MANUAL o solo AUTO. Solo visualización — un núcleo oculto sigue conectándose y registrando."
+conn.tip.total:
+  ru: "Как ядро входит в итог внизу Активов. Авто: ядра на одном биржевом счёте считаются один раз. Не учитывать: ядро не входит в итог. Отдельно: ядро всегда считается само по себе, без склейки."
+  en: "How this core counts toward the Assets footer total. Auto: cores on the same exchange account count once. Exclude: the core is left out of the total. Separate: the core always counts on its own, never merged."
+  es: "Cómo cuenta este núcleo en el total al pie de Activos. Auto: los núcleos de la misma cuenta de la bolsa cuentan una vez. Excluir: el núcleo queda fuera del total. Por separado: el núcleo siempre cuenta por sí solo, sin fusionarse."
 conn.preset.both:
   ru: "Оба"
   en: "Both"
@@ -299,6 +307,18 @@ conn.preset.auto:
   ru: "AUTO"
   en: "AUTO"
   es: "AUTO"
+conn.total.auto:
+  ru: "Авто (по счёту)"
+  en: "Auto (by account)"
+  es: "Auto (por cuenta)"
+conn.total.exclude:
+  ru: "Не учитывать"
+  en: "Exclude"
+  es: "Excluir"
+conn.total.separate:
+  ru: "Отдельно"
+  en: "Separate"
+  es: "Por separado"
 conn.tip.group:
   ru: "Группа = ОТДЕЛЬНОЕ главное окно. Все ядра с одинаковым именем группы живут в одном окне; новое имя группы → новое главное окно."
   en: "Group = a SEPARATE main window. All cores with the same group name live in one window; a new group name → a new main window."

@@ -15,6 +15,8 @@ fn agg(id: CoreId, free: f64, total: f64, state: BalanceState) -> CoreAgg {
         free,
         total,
         state,
+        merge: None,
+        mode: Default::default(),
     }
 }
 
@@ -231,4 +233,94 @@ fn tooltip_shows_dash_when_nothing_reported() {
         !tip.contains("0.0$"),
         "an unreported scope must not read as an empty one"
     );
+}
+
+/// An aggregate on a known account, so `scope_totals` can fold it.
+fn on_account(
+    id: CoreId,
+    total: f64,
+    brand: moon_core::venue::Brand,
+    mode: moon_core::config::TotalMode,
+) -> CoreAgg {
+    CoreAgg {
+        merge: moon_core::venue::merge_key(
+            Some(moon_core::venue::Venue {
+                brand,
+                kind: moon_core::venue::MarketKind::Futures,
+            }),
+            moon_core::account::AccountIdentity::from_auth("acct-a", "", 0),
+        ),
+        mode,
+        ..agg(id, total, total, BalanceState::Live)
+    }
+}
+
+/// Breakage: `balances.rs::scope_totals` summing the raw rows instead of `aggregate_members` —
+/// two cores on one account would show that account twice in the footer. The folded count must
+/// reach the facts and the tooltip must name which core was folded into which.
+#[test]
+fn two_cores_on_one_account_are_one_account_in_the_footer() {
+    use moon_core::config::TotalMode;
+    use moon_core::venue::Brand;
+    let aggs = vec![
+        on_account(1, 100.0, Brand::Bybit, TotalMode::Auto),
+        on_account(2, 100.0, Brand::Bybit, TotalMode::Auto),
+    ];
+    let t = scope_totals(&aggs, &HashSet::new());
+    assert_eq!((t.free, t.total), (100.0, 100.0));
+    let f = facts(&t);
+    let folded = format!("· {}", rust_i18n::t!("assets.balances_folded_n", n = 1));
+    assert!(f.contains(&folded), "facts {f:?} lack the folded count");
+    let tip = summary_tooltip(&t, &f);
+    let line = rust_i18n::t!(
+        "assets.balances_folded_into",
+        cores = "core-2",
+        core = "core-1"
+    );
+    assert!(
+        tip.contains(line.as_ref()),
+        "tooltip {tip:?} lacks the fold line"
+    );
+    assert!(
+        !tip.contains(rust_i18n::t!("assets.balances_folded_hl_caveat").as_ref()),
+        "a non-Hyperliquid fold carries no Hyperliquid caveat"
+    );
+}
+
+/// Breakage: `summary_tooltip` dropping the excluded list or `facts` the excluded count — a core
+/// the user left out of the total would vanish from it without a word.
+#[test]
+fn an_excluded_core_is_named_in_facts_and_tooltip() {
+    use moon_core::config::TotalMode;
+    use moon_core::venue::Brand;
+    let aggs = vec![
+        agg(1, 10.0, 10.0, BalanceState::Live),
+        on_account(2, 50.0, Brand::Bybit, TotalMode::Exclude),
+    ];
+    let t = scope_totals(&aggs, &HashSet::new());
+    assert_eq!(t.total, 10.0);
+    let f = facts(&t);
+    let excluded = format!("· {}", rust_i18n::t!("assets.balances_excluded_n", n = 1));
+    assert!(f.contains(&excluded), "facts {f:?} lack the excluded count");
+    let tip = summary_tooltip(&t, &f);
+    let line = rust_i18n::t!("assets.balances_excluded_list", cores = "core-2");
+    assert!(
+        tip.contains(line.as_ref()),
+        "tooltip {tip:?} lacks the excluded list"
+    );
+}
+
+/// Breakage: `summary_tooltip` losing the Hyperliquid caveat — a folded Hyperliquid account
+/// would read as exact when its cores report the shared wallet differently.
+#[test]
+fn a_hyperliquid_fold_carries_its_caveat() {
+    use moon_core::config::TotalMode;
+    use moon_core::venue::Brand;
+    let aggs = vec![
+        on_account(1, 100.0, Brand::Hyperliquid, TotalMode::Auto),
+        on_account(2, 90.0, Brand::Hyperliquid, TotalMode::Auto),
+    ];
+    let t = scope_totals(&aggs, &HashSet::new());
+    let tip = summary_tooltip(&t, &facts(&t));
+    assert!(tip.contains(rust_i18n::t!("assets.balances_folded_hl_caveat").as_ref()));
 }

@@ -105,3 +105,13 @@ fn core_group_changes_are_not_structural() {
         "adding a core group must not reconnect anything"
     );
 }
+
+/// Regression target: `AppConfig::structural_sig` hashing `total_mode` — toggling how a core
+/// counts in the Assets total would reconnect the whole fleet.
+#[test]
+fn changing_only_the_total_mode_is_not_structural() {
+    let auto = config(CoreSortMode::AddedOldest, vec![server(1, "Alpha")]);
+    let mut excluded = auto.clone();
+    excluded.servers[0].total_mode = super::TotalMode::Exclude;
+    assert_eq!(auto.structural_sig(), excluded.structural_sig());
+}

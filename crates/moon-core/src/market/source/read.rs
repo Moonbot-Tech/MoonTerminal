@@ -1,5 +1,6 @@
 //! Source read plane for revisions, prices, ticker data, search, and chart-history draining.
 
+use crate::account::AccountIdentity;
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
 use crate::market::source::{MarketLabel, MarketLimits, max_order_notional, session_usdt};
@@ -109,6 +110,14 @@ pub(super) fn dex_names_of(snapshot: &moonproto::MoonClientSnapshot) -> Vec<Stri
         .auth_info()
         .map(|info| info.known_dexes.iter().map(|d| d.name.clone()).collect())
         .unwrap_or_default()
+}
+
+/// Account identity out of one snapshot's `AuthCheck` response.
+pub(super) fn account_identity_of(
+    snapshot: &moonproto::MoonClientSnapshot,
+) -> Option<AccountIdentity> {
+    let info = snapshot.auth_info()?;
+    AccountIdentity::from_auth(&info.account_id, &info.btc_address, info.binance_account_id)
 }
 
 /// The protocol's platform code for a raw wire byte.
@@ -781,6 +790,20 @@ impl MarketDataSource {
             }
         }
         any.then_some(out)
+    }
+
+    /// Return every account identity one core stated, for `venue::merge_key` to pick from per brand.
+    ///
+    /// Args:
+    ///     core: Core whose `AuthCheck` response is read. Its OWN, not its market provider's: the
+    ///         account is the core's identity, never its data source's.
+    ///
+    /// Returns:
+    ///     The identity, or `None` before `AuthCheck` arrived or when the core stated none.
+    pub fn account_identity(&self, core: CoreId) -> Option<AccountIdentity> {
+        self.core_client(core)
+            .and_then(|c| c.snapshot_versioned())
+            .and_then(|snapshot| account_identity_of(&snapshot))
     }
 
     /// Return the Hyperliquid deployer names one core knows, indexed by deployer index.

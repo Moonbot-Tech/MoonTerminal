@@ -1,6 +1,8 @@
 //! Asset-row assembly: the entry types, per-core aggregation, and market/coin resolution.
 
 use super::*;
+use moon_core::config::TotalMode;
+use moon_core::venue::{AccountMergeKey, merge_key};
 
 /// Asset-table row associated with its core and computed USDT values.
 #[derive(Clone)]
@@ -333,6 +335,8 @@ impl AssetsView {
         self.query_cores(b)
             .into_iter()
             .map(|(id, name)| {
+                let merge = core_merge_key(b, id);
+                let mode = core_total_mode(b, id);
                 let Some(cd) = store.core(id) else {
                     return CoreAgg {
                         id,
@@ -340,11 +344,15 @@ impl AssetsView {
                         free: 0.0,
                         total: 0.0,
                         state: BalanceState::Awaiting,
+                        merge,
+                        mode,
                     };
                 };
                 CoreAgg {
                     id,
                     name,
+                    merge,
+                    mode,
                     // The USDT balance is already computed core-side against the base currency.
                     free: cd.assets.global.free_usdt,
                     total: cd.assets.global.total_usdt,
@@ -378,4 +386,24 @@ impl AssetsView {
         }
         seen
     }
+}
+
+/// How the core's balance counts toward a total, from its persisted setting.
+pub(crate) fn core_total_mode(b: &Backend, core: CoreId) -> TotalMode {
+    b.config
+        .servers
+        .iter()
+        .find(|sv| sv.id == core)
+        .map(|sv| sv.total_mode)
+        .unwrap_or_default()
+}
+
+/// Which exchange account and wallet the core's balance is, or `None` when that is unknown.
+pub(crate) fn core_merge_key(b: &Backend, core: CoreId) -> Option<AccountMergeKey> {
+    let venue = b
+        .session
+        .core_venues()
+        .get(&core)
+        .and_then(|v| v.resolved());
+    merge_key(venue, b.session.account_identity(core))
 }

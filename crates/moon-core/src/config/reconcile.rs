@@ -190,6 +190,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 trade: m.and_then(|m| m.trade.clone()),
                 transport,
                 workspace_membership: m.map(|m| m.workspace_membership).unwrap_or_default(),
+                total_mode: m.map(|m| m.total_mode).unwrap_or_default(),
             }
         })
         .collect();
@@ -306,6 +307,7 @@ pub fn split(
                 trade: s.trade.clone(),
                 transport: s.transport,
                 workspace_membership: s.workspace_membership,
+                total_mode: s.total_mode,
             })
             .collect(),
     };

@@ -245,6 +245,10 @@ pub struct SettingsView {
     /// CONTROLLED for the same reason as [`Self::proto_open`]: its three items are a `Vec` plus
     /// one boxed handler each, built only for the row whose menu is actually open.
     preset_open: Option<u64>,
+    /// Row key of the connections row whose footer-total-mode menu is open, or `None`.
+    ///
+    /// CONTROLLED for the same reason as [`Self::preset_open`].
+    total_open: Option<u64>,
     /// Row key of the connections row whose input currently has keyboard focus, or `None`.
     ///
     /// Tracked so `connections::on_conn_visible_range` can blur a focused input the instant its row
@@ -617,6 +621,7 @@ impl SettingsView {
             feed_open: None,
             proto_open: None,
             preset_open: None,
+            total_open: None,
             focused_conn_row: None,
             conn_scroll: MoonVirtualListScrollHandle::new(),
             conn_entries: Rc::new(Vec::new()),

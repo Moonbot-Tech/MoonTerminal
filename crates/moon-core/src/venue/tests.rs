@@ -320,3 +320,117 @@ fn an_exchange_does_not_match_a_core_with_a_dex() {
     assert!(!core_venue(13, "xyz").matches_arb(13, ""));
     assert!(core_venue(13, "").matches_arb(13, ""));
 }
+
+/// Build a merge key for a venue and an account id, the way the Assets panel does.
+fn key_of(brand: Brand, kind: MarketKind, account: &str) -> Option<super::AccountMergeKey> {
+    super::merge_key(
+        Some(Venue { brand, kind }),
+        crate::account::AccountIdentity::from_auth(account, "", 0),
+    )
+}
+
+/// Breakage: `venue.rs::merge_key` inventing a key when a half is missing — every core with an
+/// unknown venue or account would share one key and fold into one row of the total.
+#[test]
+fn a_merge_key_needs_both_venue_and_account() {
+    let account = crate::account::AccountIdentity::from_auth("acct-a", "", 0);
+    assert_eq!(super::merge_key(None, account), None);
+    let venue = Venue {
+        brand: Brand::Bybit,
+        kind: MarketKind::Spot,
+    };
+    assert_eq!(super::merge_key(Some(venue), None), None);
+}
+
+/// Breakage: `Brand::wallet_scope` returning `PerMarket` for a unified brand — a spot and a
+/// futures core on one Hyperliquid/Bybit/OKX/BitGet account report one wallet and would be
+/// counted twice.
+#[test]
+fn unified_wallet_brands_merge_spot_and_futures() {
+    for brand in [Brand::Hyperliquid, Brand::Bybit, Brand::Okx, Brand::BitGet] {
+        assert_eq!(
+            key_of(brand, MarketKind::Spot, "acct-a"),
+            key_of(brand, MarketKind::Futures, "acct-a"),
+            "{brand:?} spot and futures share one wallet"
+        );
+    }
+}
+
+/// Breakage: `Brand::wallet_scope` returning `Shared` for Binance — its spot and futures wallets
+/// are separate money on one uid, and folding them would understate the total.
+#[test]
+fn binance_spot_and_futures_are_separate_wallets() {
+    let uid = |kind| {
+        super::merge_key(
+            Some(Venue {
+                brand: Brand::Binance,
+                kind,
+            }),
+            crate::account::AccountIdentity::from_auth("", "", 777),
+        )
+    };
+    assert_ne!(uid(MarketKind::Spot), uid(MarketKind::Futures));
+    assert_eq!(uid(MarketKind::Futures), uid(MarketKind::Futures));
+}
+
+/// Breakage: `merge_key` leaving the brand out of the key — one account id reused on two
+/// exchanges names two different wallets.
+#[test]
+fn one_account_id_on_two_brands_is_two_wallets() {
+    assert_ne!(
+        key_of(Brand::Bybit, MarketKind::Futures, "acct-a"),
+        key_of(Brand::Okx, MarketKind::Futures, "acct-a")
+    );
+}
+
+/// Merge key of a core on `brand`/`kind` stating `account_id`, `address` and a Binance uid field.
+fn key_from(
+    brand: Brand,
+    kind: MarketKind,
+    account_id: &str,
+    address: &str,
+    uid: i64,
+) -> Option<super::AccountMergeKey> {
+    super::merge_key(
+        Some(Venue { brand, kind }),
+        crate::account::AccountIdentity::from_auth(account_id, address, uid),
+    )
+}
+
+/// Breakage: `merge_key` reading the Binance uid field on Hyperliquid — there it is a checksum
+/// of the address, so two cores on one wallet reporting different checksums would be summed
+/// twice, and two wallets sharing a checksum would fold into one.
+#[test]
+fn hyperliquid_keys_on_the_address_not_the_uid_field() {
+    let hl = |address, uid| key_from(Brand::Hyperliquid, MarketKind::Futures, "", address, uid);
+    assert!(hl("0xabc", 11).is_some());
+    assert_eq!(hl("0xabc", 11), hl("0xABC", 22), "same address folds");
+    assert_ne!(hl("0xabc", 11), hl("0xdef", 11), "same uid field does not");
+}
+
+/// Breakage: `merge_key` falling back to the account id or address on Binance — only the uid is
+/// the exchange's own account number there; a Binance core without one is never merged.
+#[test]
+fn binance_keys_on_the_uid_only() {
+    assert_eq!(
+        key_from(Brand::Binance, MarketKind::Futures, "acct-a", "0xabc", 0),
+        None
+    );
+    assert_eq!(
+        key_from(Brand::Binance, MarketKind::Futures, "acct-a", "", 7),
+        key_from(Brand::Binance, MarketKind::Futures, "acct-b", "", 7)
+    );
+}
+
+/// Breakage: `Brand::wallet_scope` letting Gate or HTX fold — their cores state only a deposit
+/// address, which is not proof of one wallet.
+#[test]
+fn gate_and_htx_never_fold() {
+    for brand in [Brand::Gate, Brand::Htx] {
+        assert_eq!(
+            key_from(brand, MarketKind::Spot, "acct-a", "0xabc", 7),
+            None,
+            "{brand:?}"
+        );
+    }
+}

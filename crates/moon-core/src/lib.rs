@@ -9,6 +9,7 @@
 //! Used by the `moonterminal` GPUI shell (which depends on the core, not vice versa). The old
 //! `moon-terminal` egui shell has been removed.
 
+pub mod account;
 pub mod alert_blob;
 pub mod applog;
 mod backup_store;

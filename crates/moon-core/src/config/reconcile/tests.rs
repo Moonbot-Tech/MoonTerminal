@@ -552,3 +552,66 @@ id = 2981",
         "the selection must persist by name, got: {text}"
     );
 }
+
+/// Regression target: `reconcile::split` dropping `total_mode` — the user's Exclude/Separate
+/// choice would hold for one session and every save would reset it to Auto, silently
+/// re-adding the core to the Assets total.
+#[test]
+fn the_total_mode_survives_a_split_and_reload() {
+    for (code, mode) in [
+        ("exclude", crate::config::TotalMode::Exclude),
+        ("separate", crate::config::TotalMode::Separate),
+    ] {
+        let server = merged_server(
+            "",
+            &format!("uid = 7\nname = \"alpha\"\ntotal_mode = \"{code}\""),
+        );
+        assert_eq!(server.total_mode, mode, "merge must read the stored mode");
+        let (_, meta) = split(
+            std::slice::from_ref(&server),
+            &[],
+            &[],
+            Language::default(),
+            MarketDataMode::default(),
+            true,
+            false,
+            false,
+            360,
+            true,
+            0,
+            true,
+            14,
+            UiThemeMode::default(),
+            default_ui_scale(),
+            100,
+            crate::config::CoreSortMode::default(),
+            crate::db::valuation::ValuationMode::default(),
+            8,
+            TelegramConfig::default(),
+        );
+        let text = toml::to_string(&meta.servers[0]).expect("server meta must serialize");
+        let reloaded = merged_server("", &text);
+        assert_eq!(
+            reloaded.total_mode, mode,
+            "a saved {code} must reload, got: {text}"
+        );
+    }
+}
+
+/// Regression target: `TotalMode`'s deserializer rejecting a malformed value — one hand-edited
+/// field would fail the whole `settings.toml` load instead of falling back to Auto.
+#[test]
+fn a_malformed_total_mode_reads_as_auto_and_keeps_the_rest() {
+    for bad in ["\"sometimes\"", "3", "{ a = 1 }", "[1, 2]", "true"] {
+        let server = merged_server(
+            "",
+            &format!("uid = 7\nname = \"alpha\"\ntotal_mode = {bad}\ntransport = \"v2\""),
+        );
+        assert_eq!(server.total_mode, crate::config::TotalMode::Auto, "{bad}");
+        assert_eq!(
+            server.transport,
+            Some(crate::config::TransportVersion::V2),
+            "{bad} must not cost the neighbouring fields"
+        );
+    }
+}

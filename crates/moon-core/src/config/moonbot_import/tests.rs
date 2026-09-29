@@ -59,6 +59,7 @@ fn config() -> AppConfig {
             trade: None,
             transport: None,
             workspace_membership: WorkspaceMembership::default(),
+            total_mode: Default::default(),
         });
     }
     cfg

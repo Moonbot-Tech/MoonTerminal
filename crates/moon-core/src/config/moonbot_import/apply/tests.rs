@@ -126,6 +126,7 @@ fn three_cores() -> AppConfig {
             trade: None,
             transport: None,
             workspace_membership: crate::config::WorkspaceMembership::default(),
+            total_mode: Default::default(),
         });
     }
     cfg

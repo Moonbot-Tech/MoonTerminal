@@ -8,10 +8,14 @@
 //! Trust itself is not decided here: [`moon_core::session::BalanceState`] is classified by the
 //! core that owns the data, so this panel, the shell header and any future consumer agree. This
 //! module aggregates and renders it. The sum itself is [`aggregate_balance_figures`], which takes
-//! plain figures and no GPUI types; the Assets footer and the Mini App both call it.
+//! plain figures and no GPUI types; [`aggregate_account_figures`] folds shared accounts before it and
+//! is what the Assets footer and the Mini App both call.
 
+use super::dedupe::{FoldedGroup, TotalMember, fold_accounts};
 use super::*;
+use moon_core::config::TotalMode;
 use moon_core::session::BalanceState;
+use moon_core::venue::{AccountMergeKey, Brand};
 use rust_i18n::t;
 
 /// Per-core subtotal: free/total balance in USDT plus how much it can be trusted.
@@ -30,6 +34,10 @@ pub(super) struct CoreAgg {
     pub(super) total: f64,
     /// Store-owned trust classification for `free` and `total`.
     pub(super) state: BalanceState,
+    /// Which exchange account and wallet this balance is, or `None` when unknown.
+    pub(super) merge: Option<AccountMergeKey>,
+    /// How this core counts toward the footer total (persisted per core).
+    pub(super) mode: TotalMode,
 }
 
 /// Scope total plus the trust metadata needed to caption it honestly.
@@ -49,13 +57,22 @@ struct ScopeTotals {
     /// rendering `0$` there would state "the account is empty" when the truth is "nothing has
     /// reported yet".
     counted: usize,
+    /// Cores left out because another core already counts the same account.
+    folded: usize,
+    /// Cores the user set to stay out of the total.
+    excluded_by_user: usize,
+    /// Names of those user-excluded cores, for the tooltip.
+    excluded_names: Vec<String>,
+    /// Which core was counted for each shared account, and which were folded into it.
+    fold_detail: Vec<FoldedGroup>,
 }
 
 impl ScopeTotals {
-    /// How many cores the scope covers.
+    /// How many independent contributions the total covers.
     ///
-    /// Derived rather than counted separately: every in-scope core lands in exactly one of the
-    /// three buckets, so the caption cannot drift out of step with the sum it labels.
+    /// Derived rather than counted separately: every contribution — one per core, or one per
+    /// shared account — lands in exactly one of the three buckets, so the caption cannot drift
+    /// out of step with the sum it labels. Folded and user-excluded cores are reported apart.
     fn cores(&self) -> usize {
         self.counted + self.awaiting + self.unpriced
     }
@@ -187,6 +204,16 @@ pub(crate) struct BalanceFigures {
     pub total: f64,
 }
 
+impl BalanceFigures {
+    /// Whether this reading can be added to a sum: a value-bearing state and finite figures.
+    ///
+    /// The one test the footer sum, the account fold and the Mini App share, so a reading is
+    /// never shown by one and dropped by another.
+    pub(crate) fn usable(&self) -> bool {
+        self.state.has_value() && self.free.is_finite() && self.total.is_finite()
+    }
+}
+
 /// Sum of usable balances. `free` and `total` are `None` when `counted == 0`.
 ///
 /// `stale` counts cores inside `counted`. `excluded` is `awaiting + unpriced`, including a
@@ -231,8 +258,7 @@ pub(crate) fn aggregate_balance_figures(rows: &[BalanceFigures]) -> BalanceAggre
         // A figure that cannot be added is not a contribution, whatever its state says. The
         // producer validates these values, but keeping the check structural prevents a malformed
         // aggregate from being counted while its arithmetic is silently skipped.
-        let usable = row.state.has_value() && row.free.is_finite() && row.total.is_finite();
-        if !usable {
+        if !row.usable() {
             if row.state == BalanceState::Awaiting {
                 awaiting = awaiting.saturating_add(1);
             } else {
@@ -259,23 +285,82 @@ pub(crate) fn aggregate_balance_figures(rows: &[BalanceFigures]) -> BalanceAggre
     }
 }
 
+/// A total with cores sharing one exchange account counted once.
+pub(crate) struct AccountAggregate {
+    /// The sum over the folded rows.
+    pub(crate) sum: BalanceAggregate,
+    /// Account groups where only one of several reporting cores was counted.
+    pub(crate) folded: Vec<FoldedGroup>,
+    /// Names of the cores the user set to stay out of the total.
+    pub(crate) excluded_by_user: Vec<String>,
+}
+
+/// Fold members sharing an account ([`fold_accounts`]), then sum ([`aggregate_balance_figures`]).
+///
+/// The one path every account-aware total takes, so the Assets footer and the Mini App agree.
+fn aggregate_members(members: &[TotalMember]) -> AccountAggregate {
+    let outcome = fold_accounts(members);
+    AccountAggregate {
+        sum: aggregate_balance_figures(&outcome.rows),
+        folded: outcome.folded,
+        excluded_by_user: outcome.excluded_by_user,
+    }
+}
+
+/// Sum per-core figures, counting cores that share one exchange account once.
+///
+/// Looks up each core's total setting and account key in `b`, as the Assets footer does.
+///
+/// Args:
+///     b: Backend holding the per-core settings and account identities.
+///     rows: `(core, display name, figures)` already limited to the caller's scope.
+///
+/// Returns:
+///     The folded sum, the folds made and the user exclusions.
+pub(crate) fn aggregate_account_figures(
+    b: &Backend,
+    rows: &[(CoreId, String, BalanceFigures)],
+) -> AccountAggregate {
+    let members: Vec<TotalMember> = rows
+        .iter()
+        .map(|(id, name, figures)| TotalMember {
+            name: name.clone(),
+            figures: *figures,
+            merge: core_merge_key(b, *id),
+            mode: core_total_mode(b, *id),
+        })
+        .collect();
+    aggregate_members(&members)
+}
+
 /// Scope total with trust metadata.
 ///
 /// Cores without a usable figure are NOT summed: their balance is unknown, and a silent zero
 /// would understate the total. They are counted as awaiting or unpriced so the caller can say the
 /// total is partial instead of presenting it as complete. The arithmetic is
-/// [`aggregate_balance_figures`]; this wrapper keeps the panel's empty-selection-means-all filter.
+/// [`aggregate_balance_figures`]; this wrapper keeps the panel's empty-selection-means-all filter
+/// and, after it, folds cores sharing one exchange account into one contribution
+/// ([`fold_accounts`]) so that account's money is counted once.
 fn scope_totals(aggs: &[CoreAgg], sel: &HashSet<CoreId>) -> ScopeTotals {
-    let rows: Vec<BalanceFigures> = aggs
+    let members: Vec<TotalMember> = aggs
         .iter()
         .filter(|a| in_scope(sel, a.id))
-        .map(|a| BalanceFigures {
-            state: a.state,
-            free: a.free,
-            total: a.total,
+        .map(|a| TotalMember {
+            name: a.name.clone(),
+            figures: BalanceFigures {
+                state: a.state,
+                free: a.free,
+                total: a.total,
+            },
+            merge: a.merge.clone(),
+            mode: a.mode,
         })
         .collect();
-    let summed = aggregate_balance_figures(&rows);
+    let AccountAggregate {
+        sum: summed,
+        folded,
+        excluded_by_user,
+    } = aggregate_members(&members);
     ScopeTotals {
         free: summed.free.unwrap_or(0.0),
         total: summed.total.unwrap_or(0.0),
@@ -283,6 +368,10 @@ fn scope_totals(aggs: &[CoreAgg], sel: &HashSet<CoreId>) -> ScopeTotals {
         unpriced: summed.unpriced as usize,
         stale: summed.stale as usize,
         counted: summed.counted as usize,
+        folded: folded.iter().map(|g| g.folded.len()).sum(),
+        excluded_by_user: excluded_by_user.len(),
+        excluded_names: excluded_by_user,
+        fold_detail: folded,
     }
 }
 
@@ -323,6 +412,8 @@ fn scope_amount_text(t: &ScopeTotals, v: f64) -> String {
 fn facts(t: &ScopeTotals) -> Vec<String> {
     [
         (t.cores(), "assets.cores_n", true),
+        (t.folded, "assets.balances_folded_n", false),
+        (t.excluded_by_user, "assets.balances_excluded_n", false),
         (t.stale, "assets.balances_stale_n", false),
         (t.unpriced, "assets.balances_unpriced_n", false),
         (t.awaiting, "assets.balances_awaiting", false),
@@ -357,6 +448,27 @@ fn summary_tooltip(t: &ScopeTotals, tail: &[String]) -> String {
     }
     out.push('\n');
     out.push_str(&t!("assets.balances_scope_hint"));
+    // Name every fold and exclusion: the counts in the row say THAT cores were left out, only
+    // here does the user see WHICH, to check an automatic fold against their own accounts.
+    for group in &t.fold_detail {
+        out.push('\n');
+        out.push_str(&t!(
+            "assets.balances_folded_into",
+            cores = group.folded.join(", "),
+            core = group.kept
+        ));
+        if group.brand == Some(Brand::Hyperliquid) {
+            out.push(' ');
+            out.push_str(&t!("assets.balances_folded_hl_caveat"));
+        }
+    }
+    if !t.excluded_names.is_empty() {
+        out.push('\n');
+        out.push_str(&t!(
+            "assets.balances_excluded_list",
+            cores = t.excluded_names.join(", ")
+        ));
+    }
     out
 }
 
