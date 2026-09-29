@@ -852,7 +852,7 @@ fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
     let minute = 1_700_000_040;
     {
         let store = super::super::open_store(&path).expect("open valuation fixture");
-        super::super::store_rate_search(&store, 8, minute, minute + 60, now_unix_ms_i64())
+        super::super::store_rate_search(&store, 8, minute, minute + 60, now_unix_ms_i64(), false)
             .expect("persist retry boundary");
     }
     let reports = Connection::open_in_memory().expect("open report fixture");
@@ -1952,4 +1952,94 @@ fn current_failures_leave_healthy_currencies_eligible_for_every_refresh() {
             assert!(resolve_next_rate(&source, &generation, &dirty, &mut state, minute).is_err());
         }
     }
+}
+
+/// Breakage: `mod.rs:purge_hyperliquid_collisions` dropping the poisoned rate but keeping its
+/// trade value leaves startup reconciliation blind to the row, so a RUB trade keeps its
+/// collision-priced USDT total forever instead of being revalued through the fixed router.
+#[test]
+fn collision_purge_hands_poisoned_rows_back_to_startup_reconciliation() {
+    let _health = super::super::test_health_guard();
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-reconcile-purge-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create purge reconciliation fixture directory");
+    let path = dir.join("valuation.sqlite");
+    let minute: i64 = 1_700_000_040;
+    {
+        let store = super::super::open_store(&path).expect("open valuation fixture");
+        for (row_id, quote, provider, symbol) in [
+            (10, 13, "hyperliquid_spot", "RUB/USDC"),
+            (11, 8, "binance_spot", "USDCUSDT"),
+        ] {
+            store
+                .execute(
+                    "INSERT INTO rates (
+                         algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc,
+                         rate_usdt, price_basis, provider, symbol, orientation, candle_open_ms,
+                         candle_close_ms, leg1_rate, fetched_at_ms
+                     ) VALUES (?1,?2,?3,?3,0.5,0,?4,?5,0,?6,?7,0.5,1)",
+                    rusqlite::params![
+                        super::super::ALGORITHM_VERSION,
+                        quote,
+                        minute,
+                        provider,
+                        symbol,
+                        minute * 1_000,
+                        minute * 1_000 + 59_999
+                    ],
+                )
+                .expect("seed rate");
+            store
+                .execute(
+                    "INSERT INTO trade_values (
+                         source_kind, core_uid, row_id, algorithm_version, closedate,
+                         quote_ordinal, profit_quote, spent_quote, rate_minute_utc, rate_usdt,
+                         profit_usdt, spent_usdt, valued_at_ms
+                     ) VALUES (0,1,?1,?2,1700000045,?3,5.0,100.0,?4,0.5,2.5,50.0,1)",
+                    rusqlite::params![row_id, super::super::ALGORITHM_VERSION, quote, minute],
+                )
+                .expect("seed trade value");
+        }
+        store
+            .execute_batch("PRAGMA user_version = 0")
+            .expect("rewind schema version");
+    }
+    drop(super::super::open_store(&path).expect("reopen runs the collision purge"));
+    let reports = Connection::open_in_memory().expect("open report fixture");
+    reports
+        .execute_batch(
+            "CREATE TABLE orders_rep (
+                 core_uid INTEGER, newrecid INTEGER, closedate INTEGER,
+                 basecurrency INTEGER, profitbtc REAL, spentbtc REAL
+             );
+             INSERT INTO orders_rep VALUES (1, 10, 1700000045, 13, 5.0, 100.0);
+             INSERT INTO orders_rep VALUES (1, 11, 1700000045, 8, 5.0, 100.0);",
+        )
+        .expect("seed report fixture");
+    let attach = format!(
+        "ATTACH DATABASE '{}' AS valuation",
+        path.to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "''")
+    );
+    reports
+        .execute(&attach, [])
+        .expect("attach valuation fixture");
+
+    let pending = reconciliation_batch(&reports, TradeSource::Typed, None, 256)
+        .expect("scan startup reconciliation")
+        .expect("valuation cache attached");
+
+    assert_eq!(
+        pending
+            .iter()
+            .map(|input| (input.core_uid, input.row_id, input.quote_ordinal))
+            .collect::<Vec<_>>(),
+        vec![(1, 10, 13)]
+    );
+    drop(reports);
+    std::fs::remove_dir_all(&dir).expect("remove purge reconciliation fixture directory");
 }

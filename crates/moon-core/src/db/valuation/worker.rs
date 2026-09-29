@@ -1408,6 +1408,7 @@ fn prepare_trade(
                                 minute_utc,
                                 latest_closed,
                                 now_ms,
+                                true,
                             ) {
                                 return PrepareResult::Retry(super::store_fault(error));
                             }
@@ -1454,6 +1455,7 @@ fn defer_provider_trade(
         minute,
         minute.saturating_sub(60),
         now_unix_ms_i64(),
+        false,
     )
     .map_err(super::store_fault)?;
     match delete_trade(store, input.source, input.core_uid, input.row_id) {
@@ -1609,6 +1611,7 @@ fn prefetch_rates(
                         *minute,
                         minute.saturating_sub(60),
                         fetched_at,
+                        false,
                     )
                     .map_err(|error| PrefetchError {
                         fault: super::store_fault(error),

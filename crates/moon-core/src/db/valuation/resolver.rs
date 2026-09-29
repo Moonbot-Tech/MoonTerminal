@@ -9,6 +9,25 @@ use crate::db::QuoteCurrency;
 #[cfg(test)]
 mod tests;
 
+/// Hyperliquid spot tokens that genuinely are the asset their ticker names.
+///
+/// Hyperliquid spot token names are permissionless, so ticker equality is not currency
+/// identity: a token named RUB or EUR there is not the fiat currency. `isCanonical` cannot
+/// filter this because USDH, the reason Hyperliquid is routed at all, is non-canonical.
+pub(super) const HYPERLIQUID_GENUINE_TICKERS: [&str; 3] = ["USDC", "USDE", "USDH"];
+
+/// Decide whether a Hyperliquid spot market may serve one conversion leg.
+///
+/// Args:
+///     base: Neutral base ticker.
+///     quote: Neutral quote ticker.
+///
+/// Returns:
+///     True only when both tickers are in `HYPERLIQUID_GENUINE_TICKERS`.
+pub(super) fn hyperliquid_leg_allowed(base: &str, quote: &str) -> bool {
+    HYPERLIQUID_GENUINE_TICKERS.contains(&base) && HYPERLIQUID_GENUINE_TICKERS.contains(&quote)
+}
+
 /// One provider market that converts base units into quote units.
 #[derive(Clone, Debug)]
 struct LegRoute {
@@ -389,19 +408,24 @@ struct LookupKey {
 ///     quote: Neutral quote ticker.
 ///
 /// Returns:
-///     Direct and inverse Binance, Bybit, and Hyperliquid routes in stable rank order.
+///     Direct and inverse Binance, Bybit, and Hyperliquid routes in stable rank order;
+///     Hyperliquid routes are emitted only for allow-listed pairs (`hyperliquid_leg_allowed`).
 fn leg_routes(base: &str, quote: &str) -> Vec<LegRoute> {
     let mut routes = Vec::with_capacity(6);
     for (provider_rank, provider) in ["binance_spot", "bybit_spot", "hyperliquid_spot"]
         .into_iter()
         .enumerate()
     {
-        let direct_symbol = if provider == "hyperliquid_spot" {
+        let hyperliquid = provider == "hyperliquid_spot";
+        if hyperliquid && !hyperliquid_leg_allowed(base, quote) {
+            continue;
+        }
+        let direct_symbol = if hyperliquid {
             format!("{base}/{quote}")
         } else {
             format!("{base}{quote}")
         };
-        let inverse_symbol = if provider == "hyperliquid_spot" {
+        let inverse_symbol = if hyperliquid {
             format!("{quote}/{base}")
         } else {
             format!("{quote}{base}")
