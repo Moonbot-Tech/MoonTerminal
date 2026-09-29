@@ -490,25 +490,29 @@ pub(super) fn filter_row_signature(
 /// resolve from these: their combined swing outgrows what compacting saves, so a row that ignored
 /// them could stay compact after a shorter label made the full row fit again. The width follows the
 /// CHOICE, so the period is a discriminant and the scope caption its difference keys.
+///
+/// Built from the choices alone, never from the fit it feeds: a signature that changes with the
+/// compact state retires that state on the very next frame (`wrap_fit::WrapFit::resolve`), so the
+/// row flips between full and compact every frame and the panel re-renders without end.
+#[derive(Debug, PartialEq)]
 pub(super) struct FilterRowLabels {
     period: std::mem::Discriminant<Period>,
-    /// The scope caption's difference keys, `None` on a compact row: its caption is the bare title
-    /// whatever differs, so a pick made from the open menu must not retire the compact state and
-    /// flash the full row for a frame.
-    scope_keys: Option<Vec<&'static str>>,
+    /// The scope caption's difference keys, on a full and a compact row alike — as the scope
+    /// choices were before the caption named its differences. A pick made while the row is compact
+    /// retires the compact state for one frame; the full row then overflows again and settles.
+    scope_keys: Vec<&'static str>,
 }
 
 impl FilterRowLabels {
-    /// Read the label-bearing filter choices off the panel.
+    /// Read the label-bearing filter choices.
     ///
     /// Args:
-    ///     panel: Report panel whose period and scope choices label the row's triggers.
+    ///     period: The report period, whose preset labels the period trigger.
     ///     choices: The panel's scope choices, snapshotted once per frame by the caller.
-    ///     compact: Whether the row is compact, where the scope caption carries no differences.
-    pub(super) fn of(panel: &ReportPanel, choices: &ScopeChoices, compact: bool) -> Self {
+    pub(super) fn of(period: &Period, choices: &ScopeChoices) -> Self {
         Self {
-            period: std::mem::discriminant(&panel.period),
-            scope_keys: (!compact).then(|| scope_difference_keys(choices)),
+            period: std::mem::discriminant(period),
+            scope_keys: scope_difference_keys(choices),
         }
     }
 }
