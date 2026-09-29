@@ -426,6 +426,7 @@ impl Backend {
             return;
         };
         let order = CoreOrder::new(&self.config);
+        let names = self.report_core_names();
         let venues = self.session.core_venues().clone();
         let read_access = access.clone();
         self.telegram.mini_report_pending = true;
@@ -433,7 +434,15 @@ impl Backend {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
                 .spawn(async move {
-                    super::reports::read_mini_report(from, to, zone, order, venues, read_access)
+                    super::reports::read_mini_report(
+                        from,
+                        to,
+                        zone,
+                        order,
+                        &names,
+                        venues,
+                        read_access,
+                    )
                 })
                 .await;
             cx.update(|cx| {
@@ -502,6 +511,7 @@ impl Backend {
             return;
         }
         let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let names = self.report_core_names();
         let read_access = access.clone();
         self.telegram.mini_trades_pending = true;
         cx.spawn(async move |this, cx| {
@@ -511,6 +521,7 @@ impl Backend {
                     super::reports::read_mini_trades(
                         zone,
                         read_access,
+                        names,
                         super::reports::MINI_TRADES_LIMIT,
                     )
                 })
