@@ -536,6 +536,7 @@ impl MetalLayers {
             self.cross_count,
             self.combo_capacity,
         );
+        let lines_changed = self.price_line_capacity != price_line_capacity;
         self.combo_capacity = combo_capacity;
         self.price_line_capacity = price_line_capacity;
         reset_cross_ring(
@@ -550,9 +551,12 @@ impl MetalLayers {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
         }
-        // The data state re-sets both lines after a capacity change, as it does for DX11.
-        self.last_ring = PriceRing::new(self.price_line_capacity);
-        self.mark_ring = PriceRing::new(self.price_line_capacity);
+        // The data state re-sets both lines after a line-capacity change, as it does for DX11; a
+        // tick-only change keeps the rings and their buffers.
+        if lines_changed {
+            self.last_ring = PriceRing::new(self.price_line_capacity);
+            self.mark_ring = PriceRing::new(self.price_line_capacity);
+        }
         self.recalc_volume_scale();
         self.price_line_buffers_dirty = true;
         self.combo_texture = None;
