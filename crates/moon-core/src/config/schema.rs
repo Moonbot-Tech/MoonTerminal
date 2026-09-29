@@ -115,13 +115,9 @@ pub enum UiThemeMode {
     /// Experimental for the same reason as [`Self::LightExperimental`].
     #[serde(rename = "dark-experimental")]
     DarkExperimental,
-    /// Also the catch-all for a value this build does not know, which is why it is declared
-    /// LAST (`serde(other)` demands it). A newer build persists modes this one has no variant
-    /// for; without the catch-all that one string fails the WHOLE `SettingsFile`, which the
-    /// loader quarantines to `.bak` and replaces with defaults — a downgrade then loses every
-    /// setting, not just the theme.
+    /// Also where a mode this build does not know lands: `SettingsFile::ui_theme_mode` reads
+    /// through `config::tolerant`, which falls back to this default with a warning.
     #[default]
-    #[serde(other)]
     Dark,
 }
 
@@ -299,10 +295,14 @@ pub struct ServerMeta {
     pub trade: Option<groups::GroupTradeSettings>,
     /// MoonProto transport mode (`V0`/`V1`/`V2`); see `ServerConfig::transport`. Absent in older
     /// files and while no key has been read, in which case the key decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::config::tolerant::or_default"
+    )]
     pub transport: Option<TransportVersion>,
     /// This core's workspace-preset display membership; see `ServerConfig::workspace_membership`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub workspace_membership: WorkspaceMembership,
 }
 
@@ -312,10 +312,10 @@ pub struct SettingsFile {
     #[serde(default = "default_version")]
     pub version: u32,
     /// Interface language. Missing in older files means the serde default, the system locale.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub language: Language,
     /// Market-data source (deduplicated by provider or per core). Older files use the default.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub market_mode: MarketDataMode,
     /// Separate chart tab per core (AddToChart): true = 1-HL-core, false = all cores in
     /// one 1-HL tab. Older files default to true.
@@ -347,7 +347,7 @@ pub struct SettingsFile {
     #[serde(default = "servers::default_log_retention_days")]
     pub log_retention_days: u32,
     /// Interface theme mode. Graphite shares dark colour data; this plaintext setting is not secret.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub ui_theme_mode: UiThemeMode,
     /// Window content zoom, the one UI scale control in Settings. A retired `ui_density` key in
     /// an older file is ignored on load and not written back.
@@ -378,14 +378,14 @@ pub struct SettingsFile {
     #[serde(default)]
     pub core_groups: Vec<CoreGroup>,
     /// How core lists are ordered app-wide; missing values default to `Name`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub core_sort: CoreSortMode,
     /// Which conversion every quote-money surface applies; missing values default to `Historical`.
     ///
     /// No schema bump accompanies this field: `Historical` is both the serde default and the
     /// intended default, so an older file that omits it already reads correctly, and the next save
     /// materializes the key.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub report_valuation_mode: ValuationMode,
     /// Next uid to issue, persisted so deleted identities are not reused.
     ///

@@ -1133,55 +1133,64 @@ pub struct HotkeysConfig {
     /// the wire: `SharedConfig`'s hotkey block carries no figure gesture at all (`switch_figure` is
     /// the only drawing entry there), so unlike every other gesture in this struct there is nothing
     /// for "pull layout from core" to reconcile this against, and the default is ours to keep.
-    #[serde(default = "default_middle")]
+    #[serde(default = "default_middle", deserialize_with = "tolerant_middle")]
     pub fig_delete_click: MouseGestureBinding,
 
     /// Live Moonbot MultiOrders path: places a long from the order book.
-    #[serde(default = "default_left_double")]
+    #[serde(
+        default = "default_left_double",
+        deserialize_with = "tolerant_left_double"
+    )]
     pub buy_set_click: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: places a short from the order book.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub short_set_click: MouseGestureBinding,
     /// Live Moonbot path: places a pending long.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub pending_long_click: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: places a pending short.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub pending_short_click: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: moves an open/buy long.
-    #[serde(default = "default_left_shift")]
+    #[serde(
+        default = "default_left_shift",
+        deserialize_with = "tolerant_left_shift"
+    )]
     pub buy_move_click: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: moves a TP/sell long.
-    #[serde(default = "default_left_ctrl")]
+    #[serde(default = "default_left_ctrl", deserialize_with = "tolerant_left_ctrl")]
     pub sell_move_click: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: secondary gesture for moving an open/buy long.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub buy_move_click2: MouseGestureBinding,
     /// Live Moonbot MultiOrders path: secondary gesture for moving a TP/sell long.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub sell_move_click2: MouseGestureBinding,
     /// Delphi `ReplaceBuyKind`: how the primary Move Open gesture lays out what it moves.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub buy_move_kind: MoveKind,
     /// Delphi `ReplaceSellKind`: the same for the primary Move TP gesture.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub sell_move_kind: MoveKind,
     /// Delphi `ReplaceBuyKind2`: the secondary Move Open gesture's kind.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub buy_move_kind2: MoveKind,
     /// Delphi `ReplaceSellKind2`: the secondary Move TP gesture's kind.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub sell_move_kind2: MoveKind,
     /// Delphi `SameHotkeysForMove`: short-move gestures mirror long-move gestures.
     #[serde(default = "default_same_hotkeys_for_move")]
     pub same_hotkeys_for_move: bool,
-    #[serde(default = "default_left_shift")]
+    #[serde(
+        default = "default_left_shift",
+        deserialize_with = "tolerant_left_shift"
+    )]
     pub short_buy_move_click: MouseGestureBinding,
-    #[serde(default = "default_left_ctrl")]
+    #[serde(default = "default_left_ctrl", deserialize_with = "tolerant_left_ctrl")]
     pub short_sell_move_click: MouseGestureBinding,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub short_buy_move_click2: MouseGestureBinding,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub short_sell_move_click2: MouseGestureBinding,
 
     /// The mouse half of every keyboard slot that has one, keyed by [`KeySlot::name`].
@@ -1191,8 +1200,13 @@ pub struct HotkeysConfig {
     /// step. Absent means unset, and an unset gesture is removed rather than stored as `none`, so
     /// a file that never used one carries no table at all — and an older build, which does not know
     /// the table, ignores it and keeps every other value. A name this build does not know is kept
-    /// through a load-and-save and never offered as a slot.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    /// through a load-and-save and never offered as a slot; a gesture VALUE this build cannot read drops
+    /// that one entry on load, so the next save does not write it back.
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "crate::config::tolerant::map_values"
+    )]
     pub action_clicks: BTreeMap<String, MouseGestureBinding>,
 }
 
@@ -1877,4 +1891,30 @@ fn default_left_ctrl() -> MouseGestureBinding {
 
 fn default_same_hotkeys_for_move() -> bool {
     true
+}
+
+// Field-default twins of the `default_*` gestures above for `tolerant::or_else`: an unknown
+// gesture a newer build wrote falls back to the same binding an absent key gets.
+fn tolerant_middle<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<MouseGestureBinding, D::Error> {
+    super::tolerant::or_else(d, default_middle)
+}
+
+fn tolerant_left_double<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<MouseGestureBinding, D::Error> {
+    super::tolerant::or_else(d, default_left_double)
+}
+
+fn tolerant_left_shift<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<MouseGestureBinding, D::Error> {
+    super::tolerant::or_else(d, default_left_shift)
+}
+
+fn tolerant_left_ctrl<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<MouseGestureBinding, D::Error> {
+    super::tolerant::or_else(d, default_left_ctrl)
 }
