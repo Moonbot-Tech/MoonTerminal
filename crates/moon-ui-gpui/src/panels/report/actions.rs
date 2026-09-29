@@ -313,6 +313,7 @@ impl ReportPanel {
                     kind: self.kind,
                     deleted_only: self.deleted_only,
                     show_open: self.show_open,
+                    period_basis: self.period_basis,
                     period: self.period,
                     strategy_name_mask: self.strategy_name_mask.clone(),
                 },
@@ -464,6 +465,22 @@ impl ReportPanel {
     pub(super) fn set_show_open(&mut self, on: bool, cx: &mut Context<Self>) {
         if self.show_open != on {
             self.show_open = on;
+            self.persist_filters(None, cx);
+            self.request_requery(cx);
+        }
+    }
+
+    /// Switch which timestamp the period bounds apply to, persist it, and request fresh rows.
+    ///
+    /// Args:
+    ///     basis: Close or open date.
+    ///     cx: Panel context used to persist and request the query.
+    ///
+    /// Returns:
+    ///     Nothing; re-selecting the current value is a no-op.
+    pub(super) fn set_period_basis(&mut self, basis: db::PeriodBasis, cx: &mut Context<Self>) {
+        if self.period_basis != basis {
+            self.period_basis = basis;
             self.persist_filters(None, cx);
             self.request_requery(cx);
         }

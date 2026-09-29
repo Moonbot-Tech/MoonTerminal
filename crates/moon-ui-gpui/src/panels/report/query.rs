@@ -327,6 +327,7 @@ impl ReportPanel {
             emulator: self.kind.to_filter(),
             deleted_only: self.deleted_only,
             rows: super::row_scope_for(self.closed_only, self.show_open),
+            period_basis: super::period_basis_for(self.closed_only, self.period_basis),
             // The SAME axis the cells are rendered on, so a window can never be built on one axis
             // while a timestamp inside it is printed on another.
             axis: self.report_axis(),

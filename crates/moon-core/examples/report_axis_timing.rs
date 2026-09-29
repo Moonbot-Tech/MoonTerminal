@@ -102,7 +102,7 @@ fn filter_of(axis: ReportAxis, from: i64, to: i64) -> ReportFilter {
         strategies: None,
         strategy_name_mask: String::new(),
         valuation: Default::default(),
-        core_names: Default::default(),
+        ..Default::default()
     }
 }
 

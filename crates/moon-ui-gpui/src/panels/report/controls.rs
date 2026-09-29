@@ -93,6 +93,24 @@ impl ReportScopeControl {
         }
     }
 
+    /// Apply a period-basis selection only when it changes the live owner filter.
+    ///
+    /// Args:
+    ///     owner: Weak Report owner captured by a menu item.
+    ///     basis: Newly selected timestamp the period bounds apply to.
+    ///     cx: Application context used to read and update the owner.
+    ///
+    /// Returns:
+    ///     Nothing; selecting the checked row causes no owner update or query invalidation.
+    fn select_basis(owner: &WeakEntity<ReportPanel>, basis: db::PeriodBasis, cx: &mut App) {
+        let Some(owner) = owner.upgrade() else {
+            return;
+        };
+        if owner.read(cx).period_basis != basis {
+            owner.update(cx, |panel, cx| panel.set_period_basis(basis, cx));
+        }
+    }
+
     /// Toggle the deleted-only filter from its live owner value.
     ///
     /// Args:
@@ -150,7 +168,8 @@ impl Render for ReportScopeControl {
     ///
     /// Returns:
     ///     The existing direction, kind, deleted-only, and comment menu semantics, plus the
-    ///     open-positions lifecycle row. Direction and kind stay radio groups; deleted-only,
+    ///     period-basis group and the open-positions lifecycle row. Direction, kind and basis stay
+    ///     radio groups; deleted-only,
     ///     open-positions and the comment pane are each their own checkable section, because they
     ///     answer independent questions rather than alternatives of one.
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -182,6 +201,13 @@ impl Render for ReportScopeControl {
         if deleted_only {
             label.push('/');
             label.push_str(&t!("report.filter.deleted_short"));
+        }
+        // The basis section sits inside the closed menu, so a non-default basis must show on the
+        // caption; an Analytics-scoped panel pins the close date and offers no basis at all.
+        let period_basis = panel.period_basis;
+        if let Some(key) = super::period_basis_caption_key(lifecycle_forced_closed, period_basis) {
+            label.push('/');
+            label.push_str(&t!(key));
         }
 
         let side_owner = self.owner.clone();
@@ -232,6 +258,29 @@ impl Render for ReportScopeControl {
             move |app, kind| Self::select_kind(&kind_owner, kind, app),
         ));
         items.push(MoonMenuItem::separator());
+        // Absent, not disabled, under a host forcing closed rows: the Analytics-scoped window hands
+        // over close-date bounds, and it shows no basis choice anywhere.
+        if !lifecycle_forced_closed {
+            let basis_owner = self.owner.clone();
+            items.extend(crate::panels::radio_items(
+                [
+                    (
+                        db::PeriodBasis::CloseDate,
+                        "rb-close".into(),
+                        t!("report.period_basis.close").to_string().into(),
+                    ),
+                    (
+                        db::PeriodBasis::OpenDate,
+                        "rb-open".into(),
+                        t!("report.period_basis.open").to_string().into(),
+                    ),
+                ],
+                period_basis,
+                crate::panels::RadioMark::Check,
+                move |app, basis| Self::select_basis(&basis_owner, basis, app),
+            ));
+            items.push(MoonMenuItem::separator());
+        }
         let deleted_owner = self.owner.clone();
         items.push(
             MoonMenuItem::with_key("rd-deleted", t!("report.filter.deleted").to_string())
@@ -343,6 +392,7 @@ pub(super) fn filter_row_signature(
             labels.kind,
             labels.deleted_only,
             labels.period,
+            labels.period_basis_marked,
         ),
     )
 }
@@ -359,6 +409,8 @@ pub(super) struct FilterRowLabels {
     kind: std::mem::Discriminant<ReportKind>,
     deleted_only: bool,
     period: std::mem::Discriminant<Period>,
+    /// Whether the scope caption carries the open-date marker, which widens that trigger.
+    period_basis_marked: bool,
 }
 
 impl FilterRowLabels {
@@ -369,6 +421,11 @@ impl FilterRowLabels {
             kind: std::mem::discriminant(&panel.kind),
             deleted_only: panel.deleted_only,
             period: std::mem::discriminant(&panel.period),
+            period_basis_marked: super::period_basis_caption_key(
+                panel.closed_only,
+                panel.period_basis,
+            )
+            .is_some(),
         }
     }
 }
@@ -852,16 +909,30 @@ impl ReportPanel {
                 },
             ));
         }
-        MoonDropdown::new("rep-period")
-            .label(self.period.label())
-            .trigger_caret(true)
-            .trigger_variant(MoonButtonVariant::Soft)
-            .trigger_size(MoonButtonSize::density(cx))
-            // Fitted rather than a literal width: the longest localized labels no longer fit the
-            // old figures, and MoonUI's font-aware fitting knows their advance at the live UI scale.
-            .fit_trigger_width(100.0, 150.0)
-            .fit_menu_width(130.0, 190.0)
-            .items(items)
+        // The tooltip names the timestamp the bounds filter on, so the preset never reads as
+        // ambiguous; it follows the EFFECTIVE basis, which a host forcing closed rows pins. An
+        // unbounded period filters on no timestamp, so it carries no tooltip.
+        let bounded =
+            self.period != Period::All || self.from_query.is_some() || self.to_query.is_some();
+        let mut trigger = div().id("rep-period-tip");
+        if bounded {
+            let basis = super::period_basis_for(self.closed_only, self.period_basis);
+            let tip = t!(super::period_basis_tooltip_key(basis));
+            trigger = trigger.tooltip(crate::panels::common::text_tooltip(tip.to_string()));
+        }
+        trigger.child(
+            MoonDropdown::new("rep-period")
+                .label(self.period.label())
+                .trigger_caret(true)
+                .trigger_variant(MoonButtonVariant::Soft)
+                .trigger_size(MoonButtonSize::density(cx))
+                // Fitted rather than a literal width: the longest localized labels no longer
+                // fit the old figures, and MoonUI's font-aware fitting knows their advance at
+                // the live UI scale.
+                .fit_trigger_width(100.0, 150.0)
+                .fit_menu_width(130.0, 190.0)
+                .items(items),
+        )
     }
 
     /// Build the selection commands for the totals line.

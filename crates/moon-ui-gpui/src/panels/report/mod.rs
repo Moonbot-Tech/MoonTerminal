@@ -298,6 +298,26 @@ pub(super) fn row_scope_for(closed_only: bool, show_open: bool) -> db::RowScope 
     }
 }
 
+/// Resolve which timestamp the period bounds apply to.
+///
+/// `closed_only` is the HOST's word, as in [`row_scope_for`]: the Analytics-scoped window hands
+/// over close-date bounds, so it stays on the close date whatever the user's dormant scope-menu
+/// value says — enforced here, at the one composition point, rather than by overwriting that value.
+///
+/// Args:
+///     closed_only: Whether the HOST forces closed trades.
+///     basis: The USER's scope-menu choice.
+///
+/// Returns:
+///     The basis the database filter carries.
+pub(super) fn period_basis_for(closed_only: bool, basis: db::PeriodBasis) -> db::PeriodBasis {
+    if closed_only {
+        db::PeriodBasis::CloseDate
+    } else {
+        basis
+    }
+}
+
 /// Resolve the durable period slot for one effective workspace scope.
 ///
 /// Args:
@@ -361,6 +381,7 @@ pub(super) fn next_prefs_for_period_pick(
     prefs.kind = Some(live.kind.id().to_string());
     prefs.deleted_only = Some(live.deleted_only);
     prefs.show_open = Some(live.show_open);
+    prefs.period_basis = Some(period_basis_id(live.period_basis).to_string());
     prefs.strategy_name_mask = Some(live.strategy_name_mask.clone());
     if let Some(period) = picked_period {
         let key = Some(period.menu_key().to_string());
@@ -465,6 +486,74 @@ fn side_id(side: SideFilter) -> &'static str {
         SideFilter::Long => "long",
         SideFilter::Short => "short",
     }
+}
+
+/// Stable persisted id of a period basis — the vocabulary [`ReportFilterPrefs::period_basis`]
+/// deliberately does not hold.
+///
+/// [`ReportFilterPrefs::period_basis`]: moon_core::config::ReportFilterPrefs::period_basis
+///
+/// Args:
+///     basis: Timestamp the period bounds apply to.
+///
+/// Returns:
+///     `"close"` or `"open"`.
+fn period_basis_id(basis: db::PeriodBasis) -> &'static str {
+    match basis {
+        db::PeriodBasis::CloseDate => "close",
+        db::PeriodBasis::OpenDate => "open",
+    }
+}
+
+/// Return the locale key of the tooltip naming the timestamp a period basis filters on.
+///
+/// Args:
+///     basis: Effective period basis.
+///
+/// Returns:
+///     The `report.period_basis.tooltip_*` key.
+fn period_basis_tooltip_key(basis: db::PeriodBasis) -> &'static str {
+    match basis {
+        db::PeriodBasis::CloseDate => "report.period_basis.tooltip_close",
+        db::PeriodBasis::OpenDate => "report.period_basis.tooltip_open",
+    }
+}
+
+/// Return the locale key of the scope-caption marker for a period basis, if it shows one.
+///
+/// The basis choice lives inside the closed scope menu, so a non-default one must surface on the
+/// trigger caption; the default close date adds nothing. `closed_only` pins the close date exactly
+/// as [`period_basis_for`] does, so a host-scoped panel never advertises a basis its query ignores.
+///
+/// Args:
+///     closed_only: Whether the HOST forces closed trades.
+///     basis: The USER's menu choice.
+///
+/// Returns:
+///     `Some("report.period_basis.open_short")` under the effective open date, else `None`.
+pub(super) fn period_basis_caption_key(
+    closed_only: bool,
+    basis: db::PeriodBasis,
+) -> Option<&'static str> {
+    match period_basis_for(closed_only, basis) {
+        db::PeriodBasis::CloseDate => None,
+        db::PeriodBasis::OpenDate => Some("report.period_basis.open_short"),
+    }
+}
+
+/// Restore a period basis from a persisted [`period_basis_id`].
+///
+/// Args:
+///     id: Stored id.
+///
+/// Returns:
+///     The basis, or `None` for an id this build does not know.
+fn period_basis_from_id(id: &str) -> Option<db::PeriodBasis> {
+    Some(match id {
+        "close" => db::PeriodBasis::CloseDate,
+        "open" => db::PeriodBasis::OpenDate,
+        _ => return None,
+    })
 }
 
 /// Restore a direction filter from a persisted [`side_id`].
@@ -678,6 +767,10 @@ pub struct ReportPanel {
     /// rows of one list. [`Self::closed_only`] still wins outright over it; the precedence is
     /// spelled once, in [`row_scope_for`].
     pub(super) show_open: bool,
+    /// Which timestamp the period bounds apply to: close date by default, open date on the user's
+    /// pick. Persisted beside [`Self::side`]; [`Self::closed_only`] forces the close date, spelled
+    /// once in [`period_basis_for`].
+    pub(super) period_basis: db::PeriodBasis,
     /// Whether Analytics owns this panel's filters.
     ///
     /// A scoped standalone window is handed its side, kind and dates by Analytics and forces

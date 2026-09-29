@@ -57,10 +57,10 @@ pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
 pub use report_read::{
     CHART_TRADE_HISTORY_ATTACH, COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord,
-    DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, ProfitMetric, ReportFilter, ReportStrategy,
-    ReportStrategyKey, ReportTable, ReportTotals, RowScope, SideFilter, StrategyPurgeRows,
-    VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns,
-    distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
+    DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, PeriodBasis, ProfitMetric, ReportFilter,
+    ReportStrategy, ReportStrategyKey, ReportTable, ReportTotals, RowScope, SideFilter,
+    StrategyPurgeRows, VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN,
+    display_columns, distinct_cores, distinct_strategies, max_core_uid, open_rows_for_bound,
     query_chart_trade_history, query_chart_trade_history_for_cores, query_reports, query_totals,
     rows_by_core, strategy_purge_rows,
 };

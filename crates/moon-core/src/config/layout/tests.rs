@@ -1622,6 +1622,7 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
         show_open: Some(false),
+        period_basis: Some("open".to_string()),
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_%\\".to_string()),
@@ -1641,6 +1642,10 @@ fn a_malformed_report_filter_member_defaults_alone_without_costing_the_layout() 
     assert_eq!(
         legacy.show_open, None,
         "a file written before the active-positions preference must leave the panel default standing"
+    );
+    assert_eq!(
+        legacy.period_basis, None,
+        "a file written before the period-basis preference must leave the close-date default standing"
     );
 
     // One level up, the salvage is coarser by design: an entry that is not a table at all takes

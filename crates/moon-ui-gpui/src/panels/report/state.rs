@@ -49,6 +49,8 @@ pub(in crate::panels) struct ReportFilterSet {
     /// Show still-running positions alongside closed trades — a trade's LIFECYCLE, an axis
     /// independent of [`Self::kind`].
     pub(super) show_open: bool,
+    /// Which timestamp the period bounds apply to.
+    pub(super) period_basis: db::PeriodBasis,
     /// Period preset.
     pub(super) period: Period,
     /// Auto strategy-name mask.
@@ -92,6 +94,11 @@ pub(super) fn applied_filters(
             .unwrap_or(current.kind),
         deleted_only: stored.deleted_only.unwrap_or(current.deleted_only),
         show_open: stored.show_open.unwrap_or(current.show_open),
+        period_basis: stored
+            .period_basis
+            .as_deref()
+            .and_then(period_basis_from_id)
+            .unwrap_or(current.period_basis),
         period: apply_period_from_prefs(stored, period_bucket, current.period),
         strategy_name_mask: stored
             .strategy_name_mask
@@ -912,6 +919,9 @@ impl ReportPanel {
             // value dormant: one default everywhere beats a field whose seed depends on a host
             // class it does not describe.
             show_open: true,
+            // Close date, what the period has always filtered on; dormant in a scoped panel for
+            // the same reason as `show_open` above.
+            period_basis: db::PeriodBasis::CloseDate,
             scoped: scope.is_some(),
             show_comment,
             comment_metadata_loaded: false,
@@ -1237,6 +1247,7 @@ impl ReportPanel {
             kind: self.kind,
             deleted_only: self.deleted_only,
             show_open: self.show_open,
+            period_basis: self.period_basis,
             period: self.period,
             strategy_name_mask: self.strategy_name_mask.clone(),
         };
@@ -1258,6 +1269,7 @@ impl ReportPanel {
         self.kind = applied.kind;
         self.deleted_only = applied.deleted_only;
         self.show_open = applied.show_open;
+        self.period_basis = applied.period_basis;
         self.period = applied.period;
         self.strategy_name_mask = applied.strategy_name_mask;
         let mask = self.strategy_name_mask.clone();

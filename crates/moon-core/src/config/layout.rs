@@ -592,6 +592,13 @@ pub struct ReportFilterPrefs {
     /// exactly what every file written before this field existed must continue to mean.
     #[serde(default, deserialize_with = "de_lenient")]
     pub show_open: Option<bool>,
+    /// Which timestamp the period bounds apply to, as the Report panel's own id — opaque here for
+    /// the same reason as [`Self::side`].
+    ///
+    /// Absent means the close date, which is what every file written before this field existed
+    /// already meant.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub period_basis: Option<String>,
     /// Classic and Auto single-server period preset id — the panel's menu key, opaque here for
     /// the same reason as [`Self::side`].
     ///
