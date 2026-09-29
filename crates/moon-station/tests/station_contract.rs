@@ -154,13 +154,17 @@ fn trading_stays_inside_tg_trade() {
 }
 
 /// The `SessionManager` calls the station makes: start the feeds, drain them, map each core to
-/// itself as its market source, sum the connection status, and reconcile on a reload. Anything
-/// else it would call on the session — a command to a core, a trading call — lands here first.
-const SESSION_CALLS: [&str; 4] = [
+/// itself as its market source, sum the connection status, reconcile on a reload, and rebuild a
+/// core whose exchange identity went stale on a fresh client (the same respawn the terminal's
+/// Reconnect uses; it sends the core no command). Anything else it would call on the session — a
+/// command to a core, a trading call — lands here first.
+const SESSION_CALLS: [&str; 6] = [
     "conn_summary_group",
     "drain",
     "map_cores_to_themselves",
     "reconcile",
+    "reconnect",
+    "take_identity_respawn_requests",
 ];
 
 /// Breakage guarded: the station growing a call into the terminal's session beyond the ones
