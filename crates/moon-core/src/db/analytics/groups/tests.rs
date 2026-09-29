@@ -27,6 +27,7 @@ fn q() -> Query {
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,
+        core_names: Default::default(),
     }
 }
 

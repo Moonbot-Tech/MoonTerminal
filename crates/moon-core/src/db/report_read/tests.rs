@@ -1479,6 +1479,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         }]),
         strategy_name_mask: "ignored-catalog-mask".to_string(),
         valuation: Default::default(),
+        core_names: Default::default(),
     };
     let keys = distinct_strategies(&conn, &scoped)
         .expect("load scoped strategy choices")
@@ -2035,14 +2036,14 @@ fn every_synthetic_column_can_both_project_and_sort() {
     for entry in super::SYNTHETIC {
         let column = entry.name;
         let names = vec![column.to_string()];
-        let select = super::source_select(&source, &names, Some(&valuation));
+        let select = super::source_select(&source, &names, Some(&valuation), &Default::default());
         assert!(
             !select.starts_with("NULL"),
             "{column} must project an expression on a full-schema source"
         );
         // No expression means `query_reports_attempt` falls back to the constant `1`, which drops
         // this source's ordering entirely and hands the merge an arbitrary top-N.
-        super::source_sort_expression(&source, column, Some(&valuation))
+        super::source_sort_expression(&source, column, Some(&valuation), &Default::default())
             .unwrap_or_else(|| panic!("{column} must be sortable on a full-schema source"));
         assert!(
             super::super::DISPLAY_COLUMNS.contains(&column),
@@ -2394,7 +2395,9 @@ fn every_corrected_column_sorts_by_the_same_sql_it_projects() {
     let corrected: Vec<&str> = columns
         .iter()
         .map(String::as_str)
-        .filter(|column| super::corrected_column_expression(&source, column).is_some())
+        .filter(|column| {
+            super::corrected_column_expression(&source, column, &Default::default()).is_some()
+        })
         .collect();
     assert!(
         !corrected.is_empty(),
@@ -2403,8 +2406,8 @@ fn every_corrected_column_sorts_by_the_same_sql_it_projects() {
 
     for column in corrected {
         let names = vec![column.to_string()];
-        let select = super::source_select(&source, &names, None);
-        let sort = super::source_sort_expression(&source, column, None)
+        let select = super::source_select(&source, &names, None, &Default::default());
+        let sort = super::source_sort_expression(&source, column, None, &Default::default())
             .expect("a corrected column must remain sortable");
         assert_eq!(
             select,
@@ -2945,5 +2948,46 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
     assert!(
         !plan.contains("SCAN orders_rep") && !plan.contains("SCAN TABLE orders_rep"),
         "multi-core chart history scanned orders_rep: {plan}"
+    );
+}
+
+/// `report_read.rs::corrected_column_expression` must print, and sort by, the configured name of a
+/// renamed core on every one of its trades, while a core no longer configured keeps the name its
+/// rows stored.
+#[test]
+fn report_core_column_shows_and_sorts_by_the_configured_name() {
+    let conn = Connection::open_in_memory().expect("open core-name fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, core_name TEXT, newrecid INTEGER NOT NULL,
+             closedate INTEGER, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'core-z-old', 1, 1700000000, 'BTCUSDT'),
+             (1, 'core-z-older', 2, 1700000060, 'ETHUSDT'),
+             (2, 'core-b-gone', 3, 1700000120, 'SOLUSDT');",
+    )
+    .expect("seed core-name fixture");
+    let filter = ReportFilter {
+        core_names: super::super::CoreNames::from_pairs([(1, "a-core-renamed")]),
+        ..ReportFilter::default()
+    };
+
+    let table = query_reports(&conn, &filter, "core_name", false, 100).expect("query Report rows");
+    let at = table
+        .cols
+        .iter()
+        .position(|col| col == "core_name")
+        .expect("core_name column");
+    let names: Vec<Value> = table.rows.iter().map(|row| row[at].clone()).collect();
+
+    assert_eq!(
+        names,
+        vec![
+            Value::Text("a-core-renamed".into()),
+            Value::Text("a-core-renamed".into()),
+            Value::Text("core-b-gone".into()),
+        ],
+        "a renamed core reads one current name and sorts under it; a removed core keeps its own"
     );
 }

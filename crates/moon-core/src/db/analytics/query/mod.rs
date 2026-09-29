@@ -106,6 +106,10 @@ pub struct Query {
     /// whenever every row can be valued; it cannot invent a rate, so an unpriced scope still falls
     /// back to its native quote rather than showing a converted figure that is partly guessed.
     pub prefer_usdt: bool,
+    /// Current names of the configured cores, projected as `core_name` in place of the copy each
+    /// trade stored when it was downloaded, so a renamed core is one name on every Analytics row.
+    /// Empty serves the stored names.
+    pub core_names: crate::db::CoreNames,
 }
 
 /// Latest instant a persisted or picked bound may name.
@@ -914,7 +918,11 @@ pub(in crate::db) fn unified_from_mode(
         let proj = cols
             .iter()
             .map(|c| {
-                if *c == "strategyid" && src.cols.contains(*c) {
+                if *c == "core_name" && src.cols.contains(*c) && src.cols.contains("core_uid") {
+                    // Published under the original name, so every aggregate reading `o.core_name`
+                    // (group labels, the summary core list, top trades) gets the current one.
+                    format!("{} AS \"core_name\"", q.core_names.sql("r"))
+                } else if *c == "strategyid" && src.cols.contains(*c) {
                     // The attributed value is published UNDER THE ORIGINAL NAME, so every
                     // query outside this source keeps reading `o.strategyid` and gets it.
                     format!("{sid} AS \"strategyid\"")

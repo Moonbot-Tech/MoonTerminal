@@ -21,6 +21,7 @@ fn q(from: i64, to: i64) -> Query {
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,
+        core_names: Default::default(),
     }
 }
 
@@ -1305,4 +1306,40 @@ fn undated_closes_exclude_open_rows_and_dated_closes() {
 
     drop(conn);
     remove_db(&path);
+}
+
+/// `query/mod.rs:unified_from_mode` must project the configured name as `core_name`, so the
+/// strategy group of a renamed core is labelled with its current name rather than whichever stored
+/// copy `MAX(o.core_name)` in `groups.rs:groups` happens to pick, while a core no longer configured
+/// keeps its stored name.
+#[test]
+fn strategy_groups_name_a_renamed_core_by_its_configured_name() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep(
+            core_uid INTEGER, core_name TEXT, coin TEXT, isshort INTEGER,
+            buydate INTEGER, closedate INTEGER, profitbtc REAL, strategyid INTEGER,
+            emulator INTEGER, spentbtc REAL, basecurrency INTEGER
+         );
+         INSERT INTO orders_rep VALUES
+            (1, 'core-a-old', 'BTC', 0, 90, 100, 2.0, 10, 0, 20.0, 1),
+            (1, 'core-z-older', 'ETH', 0, 91, 101, 1.0, 10, 0, 20.0, 1),
+            (2, 'core-b-gone', 'SOL', 0, 92, 102, 1.0, 10, 0, 20.0, 1);",
+    )
+    .expect("renamed-core fixture");
+    let mut query = q(1, 200);
+    query.core_names = crate::db::CoreNames::from_pairs([(1, "core-a-renamed")]);
+
+    let scoped = summary_on(&conn, &query, false, false).expect("renamed-core summary");
+    let summary = scoped.data().expect("USDT fixture is comparable");
+    let core_of = |key: &str| {
+        summary
+            .strategies
+            .iter()
+            .find(|strategy| strategy.key == key)
+            .map(|strategy| strategy.core.clone())
+            .unwrap_or_else(|| panic!("strategy group {key}"))
+    };
+    assert_eq!(core_of("10@1"), "core-a-renamed");
+    assert_eq!(core_of("10@2"), "core-b-gone");
 }

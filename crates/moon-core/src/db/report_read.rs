@@ -442,6 +442,12 @@ pub struct ReportFilter {
     /// already receive this one value: a mode that reached the rows but not the totals would print
     /// a footer that does not sum the column above it.
     pub valuation: ValuationMode,
+    /// Current names of the configured cores; the `core_name` column shows these and sorts by them.
+    ///
+    /// Carried on the filter for the reason [`Self::valuation`] is: the rows and the export both
+    /// read this one value, so the file cannot name a core differently from the grid. Empty serves
+    /// the stored names, which is what a caller without the configuration means.
+    pub core_names: super::CoreNames,
 }
 
 /// Exact report strategy identity across all connected cores.
@@ -559,6 +565,7 @@ fn synthetic_expression(
 ///     src: Physical report source and its discovered schema.
 ///     cols: Shared runtime display columns to project in order.
 ///     valuation: Derived-cache fragments when that cache is joined.
+///     core_names: Current configured core names for the `core_name` column.
 ///
 /// Returns:
 ///     Comma-separated SQL projection for the aliased source.
@@ -566,6 +573,7 @@ fn source_select(
     src: &ReadSource,
     cols: &[String],
     valuation: Option<&super::valuation::CoverageSql>,
+    core_names: &super::CoreNames,
 ) -> String {
     cols.iter()
         .map(|c| {
@@ -575,7 +583,7 @@ fn source_select(
                 format!("{sql} AS \"{c}\"")
             } else if src.legacy && c == "id" && src.cols.contains("db_id") {
                 "r.\"db_id\" AS \"id\"".to_string()
-            } else if let Some(sql) = corrected_column_expression(src, c) {
+            } else if let Some(sql) = corrected_column_expression(src, c, core_names) {
                 format!("{sql} AS \"{c}\"")
             } else if src.cols.contains(c) {
                 format!("r.\"{c}\"")
@@ -597,10 +605,21 @@ fn source_select(
 /// Args:
 ///     src: Physical source whose schema decides availability.
 ///     col: Runtime Report column key.
+///     core_names: Current configured core names, resolving `core_name`.
 ///
 /// Returns:
 ///     The expression, or `None` for every column this reader serves as stored.
-fn corrected_column_expression(src: &ReadSource, col: &str) -> Option<String> {
+fn corrected_column_expression(
+    src: &ReadSource,
+    col: &str,
+    core_names: &super::CoreNames,
+) -> Option<String> {
+    if col == "core_name" && src.cols.contains(col) && src.cols.contains("core_uid") {
+        // The stored name is a copy from download time; a renamed core must read one name on
+        // every trade, and sort by that same name.
+        let sql = core_names.sql("r");
+        return (sql != format!("r.\"{col}\"")).then_some(sql);
+    }
     if col == "basecurrency" && src.cols.contains(col) {
         // The displayed ticker must name the currency the row's own profit column is in, or the
         // table would print USDT beside a total the footer counted as BTC.
@@ -661,6 +680,7 @@ fn sort_column(cols: &[String], key: &str) -> String {
 ///     src: Physical source whose schema determines sort availability.
 ///     col: Validated runtime sort-column key.
 ///     valuation: Derived-cache fragments when that cache is joined.
+///     core_names: Current configured core names for the `core_name` column.
 ///
 /// Returns:
 ///     SQL expression when the source can sort by the column, otherwise `None`.
@@ -668,11 +688,12 @@ fn source_sort_expression(
     src: &ReadSource,
     col: &str,
     valuation: Option<&super::valuation::CoverageSql>,
+    core_names: &super::CoreNames,
 ) -> Option<String> {
     if let Some(entry) = synthetic(col) {
         return synthetic_expression(entry, src, valuation);
     }
-    if let Some(sql) = corrected_column_expression(src, col) {
+    if let Some(sql) = corrected_column_expression(src, col, core_names) {
         return Some(sql);
     }
     if src.cols.contains(col) {
@@ -2022,7 +2043,7 @@ fn run_row_pass(
             .as_ref()
             .map(|parts| parts.per_row.joins.as_str())
             .unwrap_or("");
-        let select = source_select(src, pass.cols, valuation.as_ref());
+        let select = source_select(src, pass.cols, valuation.as_ref(), &pass.filter.core_names);
         let rec_id_select = rec_id_expr(src);
         // Sort in SQL only if this source can express the column; otherwise source order is
         // irrelevant, because the merge below reorders everything anyway.
@@ -2054,7 +2075,12 @@ fn run_row_pass(
         // The same source-shape test `source_sort_expression` already uses for `id` is what
         // picks the right column. A source offering neither keeps today's undefined tie order,
         // which is no worse than before this rewrite.
-        let order = match source_sort_expression(src, sort_col, valuation.as_ref()) {
+        let order = match source_sort_expression(
+            src,
+            sort_col,
+            valuation.as_ref(),
+            &pass.filter.core_names,
+        ) {
             Some(expression) if desc => {
                 let mut order = format!("{expression} {dir}");
                 if src.cols.contains("core_uid") {

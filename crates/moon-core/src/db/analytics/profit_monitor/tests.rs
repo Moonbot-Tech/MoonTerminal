@@ -28,6 +28,7 @@ fn query(from: i64, to: i64) -> Query {
         metric: Default::default(),
         valuation: Default::default(),
         prefer_usdt: false,
+        core_names: Default::default(),
     }
 }
 

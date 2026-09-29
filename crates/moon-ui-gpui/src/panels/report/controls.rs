@@ -479,11 +479,15 @@ impl ReportPanel {
             // the retained Classic picker itself, so an offered-but-hidden row would let the user
             // check a core the group window never shows. A core absent from `config.servers` (e.g.
             // one deleted since it traded) is unaffected — `core_displayed_in_group` shows it.
+            // Labelled with the name the core column prints, so a renamed core is picked by the
+            // name its rows show; the stored name stays only for a core no longer configured.
+            let names = backend.report_core_names();
             let db_cores: Vec<(CoreId, String)> = self
                 .cores
                 .clone()
                 .into_iter()
                 .filter(|(id, _)| backend.core_displayed_in_group(&self.group, *id))
+                .map(|(id, stored)| (id, names.resolve(id, &stored).to_string()))
                 .collect();
             (
                 CoreOrder::new(&backend.config).from_db(db_cores),

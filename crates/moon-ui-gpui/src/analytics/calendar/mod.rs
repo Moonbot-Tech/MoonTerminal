@@ -684,6 +684,7 @@ impl AnalyticsView {
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,
+            core_names: self.core_names.clone(),
         }
     }
 
@@ -707,6 +708,7 @@ impl AnalyticsView {
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,
+            core_names: self.core_names.clone(),
         })
     }
 

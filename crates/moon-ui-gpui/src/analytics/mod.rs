@@ -469,6 +469,9 @@ pub struct AnalyticsView {
     /// Which conversion turns quote money into USDT. Mirrors the application-wide backend setting;
     /// see [`Self::observe_valuation_mode`] for why it is a mirror rather than a live read.
     valuation_mode: ValuationMode,
+    /// Current names of the configured cores, mirrored for the reason `valuation_mode` is; read
+    /// paths show them in place of the name each trade stored at download time.
+    core_names: moon_core::db::CoreNames,
     /// Background summary state with distinct loading, unavailable, ready, and
     /// failed outcomes so only a successful empty read appears empty.
     pub(in crate::analytics) data: ProfitLoadState<Summary>,
@@ -983,6 +986,7 @@ impl AnalyticsView {
             }));
         }
         let saved_valuation_mode = backend.read(cx).valuation_mode();
+        let saved_core_names = backend.read(cx).report_core_names();
         // Seeded so a window opened on a fleet measured in an earlier session renders corrected
         // times on its first paint, not on the first backend wake after it.
         let seeded_axis = backend.read(cx).report_axis(display_zone);
@@ -1021,6 +1025,7 @@ impl AnalyticsView {
             metric: saved_metric,
             prefer_usdt: saved_prefer_usdt,
             valuation_mode: saved_valuation_mode,
+            core_names: saved_core_names,
             data: ProfitLoadState::default(),
             strategy_data: ProfitLoadState::default(),
             strategy_data_period: saved_strat_period.unwrap_or(Period::CurMonth),
@@ -1219,6 +1224,21 @@ impl AnalyticsView {
         self.reload(cx);
     }
 
+    /// Adopt core renames saved in Settings, and reload if a configured name moved.
+    ///
+    /// Mirrored and synced like [`Self::observe_valuation_mode`], for the same reasons.
+    ///
+    /// Args:
+    ///     cx: Analytics window context used to read the backend and schedule the reload.
+    fn observe_core_names(&mut self, cx: &mut Context<Self>) {
+        let names = self.backend.read(cx).report_core_names();
+        if self.core_names == names {
+            return;
+        }
+        self.core_names = names;
+        self.reload(cx);
+    }
+
     /// Mark report-derived caches stale and schedule a load-shed automatic refresh.
     ///
     /// This poll also adopts application-wide valuation-mode changes before comparing data
@@ -1230,6 +1250,7 @@ impl AnalyticsView {
         self.observe_valuation_health(cx);
         self.observe_report_axis(cx);
         self.observe_valuation_mode(cx);
+        self.observe_core_names(cx);
         let generation = self.current_report_generation();
         if !self
             .report_refresh
@@ -1502,6 +1523,7 @@ impl AnalyticsView {
             metric: self.metric,
             valuation: self.valuation_mode,
             prefer_usdt: self.prefer_usdt,
+            core_names: self.core_names.clone(),
         }
     }
 
