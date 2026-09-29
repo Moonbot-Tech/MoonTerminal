@@ -14,6 +14,22 @@ use std::collections::BTreeMap;
 pub struct CoreNames(BTreeMap<u64, String>);
 
 impl CoreNames {
+    /// Current name of every configured core, which report reads show in place of the name each
+    /// trade stored when it was downloaded.
+    ///
+    /// Args:
+    ///     servers: Configured cores.
+    ///
+    /// Returns:
+    ///     The uid-to-name map; a core no longer configured keeps its stored name.
+    pub fn from_servers(servers: &[crate::config::ServerConfig]) -> Self {
+        Self::from_pairs(
+            servers
+                .iter()
+                .map(|server| (server.id, server.name.as_str())),
+        )
+    }
+
     /// Build the map from `(uid, name)` pairs; a blank name keeps the stored one for that core.
     ///
     /// Args:

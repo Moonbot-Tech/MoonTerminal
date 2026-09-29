@@ -1,648 +1,134 @@
-//! Telegram application adapter: localization, durable authorization, and pairing.
+//! The terminal as the host of the Telegram bot and Mini App (`moon_tg`).
+//!
+//! Everything the bot says and does lives in `moon-tg`; this file only lends it the Backend — the
+//! saved configuration and its persistence, the sessions, the header-clock zone, the Panic Sell
+//! override the chart button shares, the reconnect queue — and runs its reads on GPUI's
+//! background executor.
+
 use crate::Backend;
 use gpui::Context;
-use moon_core::config::TelegramConfig;
-use moon_core::config::telegram_access::TelegramReportAccess;
-use moon_core::session::CoreId;
-use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto, TradesDto};
-use moon_core::telegram::{
-    TelegramService, TelegramStatus,
-    api::{
-        InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup,
-        ReplyMarkup,
-    },
-    commands::ParsedCommand,
-    runtime::mini_app::MiniAppStatus,
-    runtime::{Response, Work},
-    web::*,
-};
-use rust_i18n::t;
-use std::collections::HashMap;
-use std::sync::mpsc::SyncSender;
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use moon_core::config::{AppConfig, TelegramConfig};
+use moon_core::session::{CoreId, SessionManager};
+use moon_tg::{Job, TelegramState, TgHost};
 
-mod mini_app;
-mod reports;
-#[cfg(test)]
-mod tests;
-
-/// Process-only service state; no credential is rendered by Debug.
-pub(crate) struct TelegramState {
-    /// At most one database report is computed at a time, including timed-out requests.
-    report_pending: bool,
-    /// At most one Mini App report is computed at a time, including timed-out requests.
-    mini_report_pending: bool,
-    /// Last finished Mini App report for one chat, period, and admission grant.
-    ///
-    /// A read that outlives the 5 s HTTP wait stays here for 60 s so the page retry can still
-    /// receive it. A hit is served only when the stored grant still equals the chat's current
-    /// admission. Service restart, a failed admission recheck, and a grant mismatch all clear it.
-    mini_report_last: Option<(
-        i64,
-        ReportPeriodDto,
-        TelegramReportAccess,
-        Instant,
-        ReportDto,
-    )>,
-    /// At most one Mini App trades read is computed at a time, including timed-out requests.
-    mini_trades_pending: bool,
-    /// Last finished Mini App trades read for one chat and admission grant.
-    ///
-    /// Same lifetime rules as `mini_report_last`: served only to the same grant, cleared on
-    /// service restart.
-    mini_trades_last: Option<(i64, TelegramReportAccess, Instant, TradesDto)>,
-    /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
-    ///
-    /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
-    /// service restart.
-    mini_strategy_wanted: HashMap<(CoreId, u64), (bool, Instant, u64, u64)>,
-    pub(crate) service: Option<TelegramService>,
-    pub(crate) status: TelegramStatus,
-    pub(crate) mini_status: MiniAppStatus,
-    pub(crate) pairing: Option<(String, Instant)>,
-    pub(crate) revision: u64,
-    /// Retry a briefly contended worker configuration publication on the next owner tick.
-    configuration_pending: bool,
-    /// Retirement runs off GPUI; the next saved service starts only after the old one joins.
-    retiring: Option<JoinHandle<()>>,
-    /// Same-token service restarts must still clear menus for previously revoked chats.
-    retired_menu_chats: Vec<i64>,
+/// The Backend lent to `moon_tg` for one call on the UI thread.
+struct GuiTgHost<'a, 'b> {
+    backend: &'a mut Backend,
+    cx: &'a mut Context<'b, Backend>,
 }
-impl TelegramState {
-    /// Construct optional transport only from saved configuration.
-    pub(crate) fn new(config: &TelegramConfig) -> Self {
-        Self::new_with_menu_cleanup(config, Vec::new())
+
+impl TgHost for GuiTgHost<'_, '_> {
+    fn config(&self) -> &AppConfig {
+        &self.backend.config
     }
 
-    /// Start transport with cleanup-only identities retained from the same bot credential.
-    fn new_with_menu_cleanup(config: &TelegramConfig, retired_menu_chats: Vec<i64>) -> Self {
-        let service = TelegramService::start_localized_with_menu_cleanup(
-            config,
-            telegram_labels(),
-            &retired_menu_chats,
-        );
-        let status = if config.token.is_empty() {
-            TelegramStatus::Disabled
-        } else if service.is_some() {
-            TelegramStatus::Starting
-        } else {
-            TelegramStatus::Unavailable
-        };
-        Self {
-            report_pending: false,
-            mini_report_pending: false,
-            mini_report_last: None,
-            mini_trades_pending: false,
-            mini_trades_last: None,
-            mini_strategy_wanted: HashMap::new(),
-            service,
-            status,
-            mini_status: MiniAppStatus::Stopped,
-            pairing: None,
-            revision: 0,
-            configuration_pending: false,
-            retiring: None,
-            retired_menu_chats,
-        }
+    fn session(&self) -> &SessionManager {
+        &self.backend.session
     }
 
-    /// Replace joined transport without forgetting pending cleanup for the same bot.
-    fn start_saved(&mut self, config: &TelegramConfig) {
-        let retired = std::mem::take(&mut self.retired_menu_chats);
-        let report_pending = self.report_pending;
-        let mini_report_pending = self.mini_report_pending;
-        let mini_trades_pending = self.mini_trades_pending;
-        *self = Self::new_with_menu_cleanup(config, retired);
-        self.report_pending = report_pending;
-        self.mini_report_pending = mini_report_pending;
-        self.mini_trades_pending = mini_trades_pending;
-        // `mini_report_last` and `mini_trades_last` stay clear: a restarted service must not
-        // replay the previous grant.
+    fn session_mut(&mut self) -> &mut SessionManager {
+        &mut self.backend.session
     }
 
-    /// Retain only removed identities, and never transfer them to a different bot token.
-    fn remember_menu_cleanup(&mut self, before: &TelegramConfig, saved: &TelegramConfig) {
-        if before.token.expose() != saved.token.expose() {
-            self.retired_menu_chats.clear();
-        } else {
-            for &chat in &before.authorized_chat_ids {
-                if !saved.authorized_chat_ids.contains(&chat)
-                    && !self.retired_menu_chats.contains(&chat)
-                {
-                    self.retired_menu_chats.push(chat);
-                }
-            }
-        }
-    }
-    /// Stop and join transport before their owners disappear.
-    pub(crate) fn stop(&mut self) {
-        if let Some(join) = self.retiring.take() {
-            let _ = join.join();
-        }
-        if let Some(mut service) = self.service.take() {
-            service.stop();
-        }
-        self.status = TelegramStatus::Stopped;
-        self.mini_status = MiniAppStatus::Stopped;
-        self.pairing = None;
+    fn state(&self) -> &TelegramState {
+        &self.backend.telegram
     }
 
-    /// Revoke liveness without joining, so a caller can do useful work while transports wind down.
-    ///
-    /// The blocking half stays in [`Self::stop`]: quit signals here first, persists, then joins.
-    pub(crate) fn request_stop(&mut self) {
-        if let Some(service) = self.service.as_mut() {
-            service.request_stop();
-        }
+    fn state_mut(&mut self) -> &mut TelegramState {
+        &mut self.backend.telegram
     }
 
-    /// Retire the current transport without blocking the coordination loop.
-    fn restart(&mut self) {
-        self.mini_report_last = None;
-        self.mini_trades_last = None;
-        self.mini_strategy_wanted.clear();
-        self.pairing = None;
-        self.status = TelegramStatus::Stopping;
-        self.mini_status = MiniAppStatus::Stopped;
-        if let Some(mut service) = self.service.take() {
-            service.request_stop();
-            self.retiring = Some(std::thread::spawn(move || {
-                service.stop();
-            }));
+    fn report_zone(&self) -> chrono_tz::Tz {
+        moon_core::util::display_time::zone_or_utc(self.backend.header_clock_zone())
+    }
+
+    fn save_paired_chat(&mut self, chat_id: i64) -> bool {
+        let backend = &mut *self.backend;
+        let mut candidate = backend.config.clone();
+        let newly_paired = candidate.telegram.pair_chat(chat_id);
+        if candidate.save_telegram().is_err() {
+            return false;
         }
+        backend.config = candidate;
+        // An open Settings draft learns the new chat too, so its next Save does not drop it.
+        if newly_paired && let Some(preview) = backend.preview.as_mut() {
+            preview.telegram.pair_chat(chat_id);
+        }
+        true
+    }
+
+    fn save_cleared_pairing(&mut self) -> bool {
+        let backend = &mut *self.backend;
+        let mut candidate = backend.config.clone();
+        candidate.telegram.clear_pairing();
+        if candidate.save_telegram().is_err() {
+            return false;
+        }
+        backend.config = candidate;
+        if let Some(preview) = backend.preview.as_mut() {
+            preview.telegram.clear_pairing();
+        }
+        true
+    }
+
+    fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
+        self.backend.is_panic_armed(core, market)
+    }
+
+    fn toggle_panic_sell(&mut self, core: CoreId, market: String) -> bool {
+        self.backend.toggle_panic_sell(core, market)
+    }
+
+    fn request_reconnect(&mut self, core: CoreId) {
+        if !self.backend.reconnect_request.contains(&core) {
+            self.backend.reconnect_request.push(core);
+        }
+        // The coordination tick drains the queue; the notify repaints what shows it.
+        self.cx.notify();
+    }
+
+    fn spawn(&mut self, job: Job) {
+        self.cx
+            .spawn(async move |this, cx| {
+                let executor = cx.update(|cx| cx.background_executor().clone());
+                let finish = executor.spawn(async move { job() }).await;
+                cx.update(|cx| {
+                    let _ = this.update(cx, |backend, cx| finish(&mut GuiTgHost { backend, cx }));
+                });
+            })
+            .detach();
+    }
+
+    fn repaint(&mut self) {
+        self.cx.notify();
     }
 }
+
 impl Backend {
     /// Reconcile a successfully persisted token or identity change; retain saved failures.
     pub(crate) fn reconcile_telegram(&mut self, before: &TelegramConfig) {
-        let saved = &self.config.telegram;
-        self.telegram.remember_menu_cleanup(before, saved);
-        if before.token.expose() != saved.token.expose() || !before.same_chat_permissions(saved) {
-            // Cancel the old API's liveness before retiring it: a queued report or a pending
-            // navigation send must not continue with grants that have just been revoked.
-            self.telegram.restart();
-            if self.telegram.retiring.is_none() {
-                self.telegram.start_saved(saved);
-            }
-        } else {
-            if let Some(service) = self.telegram.service.as_ref() {
-                self.telegram.configuration_pending |= !service.configure(saved);
-                self.telegram.configuration_pending |= !service.set_labels(telegram_labels());
-            }
-        }
-        self.telegram.revision = self.telegram.revision.wrapping_add(1);
+        moon_tg::reconcile(&mut self.telegram, &self.config.telegram, before);
     }
+
     /// Issue a fresh ten-minute pairing code from the live transport ledger.
     pub(crate) fn issue_telegram_pairing(&mut self) {
-        self.telegram.pairing = self
-            .telegram
-            .service
-            .as_ref()
-            .and_then(TelegramService::pairing_code)
-            .map(|code| (code, Instant::now() + Duration::from_secs(600)));
-        self.telegram.revision = self.telegram.revision.wrapping_add(1);
+        moon_tg::issue_pairing(&mut self.telegram);
     }
+
     /// Persist revocation before displaying an empty paired set or restarting service.
-    pub(crate) fn reset_telegram_pairing(&mut self) {
-        let mut candidate = self.config.clone();
-        candidate.telegram.authorized_chat_ids.clear();
-        candidate.telegram.owner_chat_id = None;
-        candidate.telegram.chat_access.clear();
-        if candidate.save_telegram().is_err() {
-            self.telegram.status = TelegramStatus::Unavailable;
-            return;
-        }
-        self.telegram
-            .remember_menu_cleanup(&self.config.telegram, &candidate.telegram);
-        self.config = candidate;
-        if let Some(preview) = self.preview.as_mut() {
-            preview.telegram.authorized_chat_ids.clear();
-            preview.telegram.owner_chat_id = None;
-            preview.telegram.chat_access.clear();
-        }
-        self.telegram.restart();
-        if self.telegram.retiring.is_none() {
-            self.telegram.start_saved(&self.config.telegram);
-        }
+    pub(crate) fn reset_telegram_pairing(&mut self, cx: &mut Context<Self>) {
+        moon_tg::reset_pairing(&mut GuiTgHost { backend: self, cx });
     }
+
     /// Drain bounded transport work on the 100 ms owner loop.
     pub(crate) fn tick_telegram(&mut self, cx: &mut Context<Self>) {
-        if self
-            .telegram
-            .retiring
-            .as_ref()
-            .is_some_and(|join| join.is_finished())
-        {
-            if let Some(join) = self.telegram.retiring.take() {
-                let _ = join.join();
-            }
-            self.telegram.start_saved(&self.config.telegram);
-            cx.notify();
-        }
-        if self.telegram.service.is_none() {
-            return;
-        }
-        if self.telegram.configuration_pending
-            && let Some(service) = self.telegram.service.as_ref()
-        {
-            let configured = service.configure(&self.config.telegram);
-            let localized = service.set_labels(telegram_labels());
-            self.telegram.configuration_pending = !configured || !localized;
-        }
-        let mut changed = false;
-        for _ in 0..64 {
-            let work = self
-                .telegram
-                .service
-                .as_ref()
-                .and_then(TelegramService::try_recv);
-            let Some(work) = work else {
-                break;
-            };
-            changed = true;
-            match work {
-                Work::Status(status) => self.telegram.status = status,
-                Work::MiniStatus(status) => self.telegram.mini_status = status,
-                Work::Pair { chat_id, reply } => {
-                    let mut candidate = self.config.clone();
-                    let newly_paired = !candidate.telegram.authorized_chat_ids.contains(&chat_id);
-                    if newly_paired {
-                        candidate.telegram.authorized_chat_ids.push(chat_id);
-                    }
-                    let saved = candidate.save_telegram().is_ok();
-                    if saved {
-                        self.config = candidate;
-                        if newly_paired
-                            && let Some(preview) = self.preview.as_mut()
-                            && !preview.telegram.authorized_chat_ids.contains(&chat_id)
-                        {
-                            preview.telegram.authorized_chat_ids.push(chat_id);
-                        }
-                        if let Some(service) = self.telegram.service.as_ref() {
-                            self.telegram.configuration_pending |=
-                                !service.configure(&self.config.telegram);
-                        }
-                        self.telegram.pairing = None;
-                    }
-                    let text = if saved {
-                        t!("telegram.pair_success")
-                    } else {
-                        t!("telegram.refusal")
-                    }
-                    .to_string();
-                    let keyboard = saved.then(navigation_keyboard);
-                    let _ = reply.try_send(Response::PairSaved {
-                        saved,
-                        text,
-                        keyboard,
-                    });
-                }
-                Work::Command {
-                    chat_id,
-                    command,
-                    reply,
-                } => {
-                    if matches!(command, ParsedCommand::Pair { .. }) {
-                        answer(&reply, t!("telegram.refusal").to_string());
-                        continue;
-                    }
-                    if !self.config.telegram.authorized_chat_ids.contains(&chat_id) {
-                        answer(&reply, t!("telegram.refusal").to_string());
-                        continue;
-                    }
-                    match command {
-                        ParsedCommand::Start => self.telegram_report(
-                            chat_id,
-                            moon_core::telegram::report::ReportRequest::new(
-                                moon_core::telegram::report::Period::Today,
-                                false,
-                            ),
-                            reply,
-                            cx,
-                        ),
-                        ParsedCommand::Report(request) => {
-                            self.telegram_report(chat_id, request, reply, cx)
-                        }
-                        ParsedCommand::Help => {
-                            let zone = moon_core::util::display_time::zone_or_utc(
-                                self.header_clock_zone(),
-                            );
-                            let _ = reply.try_send(reports::help(&zone.to_string()));
-                        }
-                        ParsedCommand::MiniApp => {
-                            let keyboard = match &self.telegram.mini_status {
-                                MiniAppStatus::Tunneling { url, .. }
-                                    if self.config.telegram.mini_app_enabled =>
-                                {
-                                    Some(InlineKeyboardMarkup::from_rows(vec![vec![
-                                        InlineKeyboardButton::web_app(
-                                            t!("telegram.open").to_string(),
-                                            url.clone(),
-                                        ),
-                                    ]]))
-                                }
-                                _ => None,
-                            };
-                            let text = if keyboard.is_some() {
-                                t!("telegram.bot_ready").to_string()
-                            } else if !self.config.telegram.mini_app_enabled {
-                                t!("telegram.bot_mini_disabled").to_string()
-                            } else {
-                                t!("telegram.bot_mini_wait").to_string()
-                            };
-                            let keyboard = keyboard
-                                .map(ReplyMarkup::Inline)
-                                .or_else(|| Some(navigation_keyboard()));
-                            let _ = reply.try_send(Response::Text { text, keyboard });
-                        }
-                        _ => {
-                            let _ = reply.try_send(Response::Text {
-                                text: format!(
-                                    "{}\n\n{}",
-                                    t!("telegram.invalid"),
-                                    t!("telegram.report_help")
-                                ),
-                                keyboard: Some(navigation_keyboard()),
-                            });
-                        }
-                    }
-                }
-                Work::MiniApp(request) => self.telegram_mini_request(request, cx),
-            }
-        }
-        if self
-            .telegram
-            .pairing
-            .as_ref()
-            .is_some_and(|(_, expiry)| Instant::now() >= *expiry)
-        {
-            self.telegram.pairing = None;
-            changed = true;
-        }
-        if changed {
-            self.telegram.revision = self.telegram.revision.wrapping_add(1);
-            cx.notify();
-        }
+        moon_tg::tick(&mut GuiTgHost { backend: self, cx });
     }
+
     /// The service's own state, without the per-core roster.
     ///
     /// A settings surface must show only whether the service itself is up.
     pub(crate) fn telegram_service_status_text(&self) -> String {
-        status_text(&self.telegram.status)
-    }
-
-    /// Recheck pairing and Mini App enablement on every authenticated HTTP request.
-    fn telegram_mini_request(&mut self, request: MiniAppApiRequest, cx: &mut Context<Self>) {
-        match request {
-            MiniAppApiRequest::Session { chat_id, reply, .. } => {
-                if !self.config.telegram.mini_app_enabled
-                    || !self.config.telegram.authorized_chat_ids.contains(&chat_id)
-                {
-                    let _ = reply.try_send(Err(MiniAppApiError::Rejected));
-                    return;
-                }
-                let _ = reply.try_send(Ok(()));
-            }
-            other => mini_app::dispatch(self, other, cx),
-        }
+        moon_tg::status_text(&self.telegram.status)
     }
 }
-/// Nonblocking localized response; a disconnected requester cannot stall Backend.
-fn answer(reply: &SyncSender<Response>, text: String) {
-    let _ = reply.try_send(Response::Text {
-        text,
-        keyboard: None,
-    });
-}
-/// Render service health through the Telegram locale domain.
-fn status_text(status: &TelegramStatus) -> String {
-    match status {
-        TelegramStatus::Stopping => t!("telegram.stopping"),
-        TelegramStatus::Disabled => t!("telegram.state.disabled"),
-        TelegramStatus::Starting => t!("telegram.state.starting"),
-        TelegramStatus::Unpaired | TelegramStatus::Paired { .. } => t!("telegram.state.connected"),
-        TelegramStatus::RateLimited { retry_after_secs } => {
-            t!("telegram.rate_limited", seconds = retry_after_secs)
-        }
-        TelegramStatus::Unavailable => t!("telegram.state.unavailable"),
-        TelegramStatus::Stopped => t!("telegram.stopped"),
-    }
-    .to_string()
-}
-
-/// Global navigation owns periods and help; report actions remain inline.
-fn navigation_keyboard() -> ReplyMarkup {
-    let locale = rust_i18n::locale();
-    let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(|(name, icon)| {
-        let key = format!("telegram.button_{name}");
-        KeyboardButton {
-            text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
-            style: None,
-        }
-    });
-    ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: vec![vec![today, yesterday, help], vec![month, lastmonth]],
-        resize_keyboard: true,
-        is_persistent: true,
-    })
-}
-
-/// Stable glyphs are kept outside localization dictionaries and shared by rendering and aliases.
-fn navigation_buttons() -> [(&'static str, &'static str); 5] {
-    [
-        ("today", "\u{1f4c5}"),
-        ("yesterday", "\u{23ee}"),
-        ("month", "\u{1f5d3}"),
-        ("lastmonth", "\u{1f4c6}"),
-        ("help", "\u{2139}\u{fe0f}"),
-    ]
-}
-
-/// Compose Mini App page and shell labels, plus reply-button aliases in the UI locale domain.
-fn telegram_labels() -> std::collections::BTreeMap<String, String> {
-    let mut labels: std::collections::BTreeMap<String, String> = [
-        ("menu_miniapp".to_string(), t!("telegram.open").to_string()),
-        (
-            "mini_shell_checking".to_string(),
-            t!("telegram.mini_shell_checking").to_string(),
-        ),
-        (
-            "mini_shell_denied".to_string(),
-            t!("telegram.mini_shell_denied").to_string(),
-        ),
-        (
-            "mini_shell_unreachable".to_string(),
-            t!("telegram.mini_shell_unreachable").to_string(),
-        ),
-        ("refusal".to_string(), t!("telegram.refusal").to_string()),
-        ("locale".to_string(), rust_i18n::locale().to_string()),
-    ]
-    .into_iter()
-    .collect();
-    labels.insert(
-        "report_delivery_failed".into(),
-        t!("telegram.report_delivery_failed").to_string(),
-    );
-    // Keep old keyboard labels usable after the desktop locale changes.
-    for locale in ["ru", "en", "es"] {
-        for (name, icon) in [("home", "\u{1f4ca}"), ("help", "\u{2753}")] {
-            let key = format!("telegram.button_{name}");
-            labels.insert(
-                format!("button_{name}_legacy_emoji_{locale}"),
-                format!("{icon} {}", t!(&key, locale = locale)),
-            );
-        }
-        for (name, icon) in navigation_buttons() {
-            let key = format!("telegram.button_{name}");
-            labels.insert(
-                format!("button_{name}_emoji_{locale}"),
-                format!("{icon} {}", t!(&key, locale = locale)),
-            );
-        }
-        for name in ["today", "yesterday", "month", "lastmonth", "daily", "home"] {
-            let key = format!("telegram.button_{name}");
-            labels.insert(
-                format!("button_{name}_{locale}"),
-                t!(&key, locale = locale).to_string(),
-            );
-        }
-        labels.insert(
-            format!("button_miniapp_{locale}"),
-            t!("telegram.mini_open", locale = locale).to_string(),
-        );
-        labels.insert(
-            format!("button_help_{locale}"),
-            t!("telegram.button_help", locale = locale).to_string(),
-        );
-    }
-    for key in MINI_LABEL_KEYS {
-        let path = format!("telegram.{key}");
-        labels.insert((*key).to_string(), t!(&path).to_string());
-    }
-    for (kind, panel_key) in moon_core::feed::fault_keys::FAULT_KIND_SHORT_KEYS {
-        let path = (*panel_key).to_string();
-        labels.insert(format!("mini_fault_{kind}"), t!(&path).to_string());
-    }
-    labels
-}
-
-/// Mini App page keys. Values live in the locale files; this list only wires the lookup.
-const MINI_LABEL_KEYS: &[&str] = &[
-    "mini_title",
-    "mini_tab_report",
-    "mini_tab_cores",
-    "mini_tab_balances",
-    "mini_period_today",
-    "mini_period_yesterday",
-    "mini_period_month",
-    "mini_period_lastmonth",
-    "mini_report_total",
-    "mini_report_by_exchange",
-    "mini_report_by_core",
-    "report_days",
-    "report_date",
-    "report_trades",
-    "mini_report_orders",
-    "mini_unvalued",
-    "mini_core_ready",
-    "mini_core_connecting",
-    "mini_core_stage",
-    "mini_core_failed",
-    "mini_core_disconnected",
-    "mini_cores_online",
-    "mini_ping",
-    "mini_exch_ping",
-    "mini_cpu",
-    "mini_unit_ms",
-    "mini_unit_pct",
-    "mini_fault",
-    "mini_balance_stale",
-    "mini_balance_awaiting",
-    "mini_balance_unpriced",
-    "mini_total",
-    "mini_free",
-    "mini_partial",
-    "mini_orders_qty",
-    "mini_orders_entry",
-    "mini_orders_to_entry",
-    "mini_empty_report",
-    "mini_empty_cores",
-    "mini_empty_balances",
-    "mini_empty_orders",
-    "mini_error_read",
-    "mini_error_busy",
-    "mini_error_stale_session",
-    "mini_error_network",
-    "mini_retry",
-    "mini_loading",
-    "mini_updated",
-    "mini_updated_now",
-    "mini_updated_secs",
-    "mini_updated_mins",
-    "mini_refresh",
-    "mini_stale_data",
-    "mini_report_core_orders",
-    "mini_report_unvalued_n",
-    "mini_show_all",
-    "mini_cores_problems",
-    "mini_online",
-    "mini_orders_summary",
-    "mini_cancel",
-    "mini_cancel_confirm",
-    "mini_panic_sell",
-    "mini_panic_off",
-    "mini_panic_confirm",
-    "mini_panic_off_confirm",
-    "mini_cmd_failed",
-    "mini_cmd_sent",
-    "mini_cmd_not_found",
-    "mini_cmd_unknown",
-    "mini_trading",
-    "mini_autodetect",
-    "mini_cancel_all",
-    "mini_all_cores",
-    "mini_cores_trading_on_confirm",
-    "mini_cores_trading_off_confirm",
-    "mini_cores_auto_on_confirm",
-    "mini_cores_auto_off_confirm",
-    "mini_cmd_partial",
-    "mini_cmd_core_not_found",
-    "mini_tab_trades",
-    "mini_deals_open",
-    "mini_deals_closed",
-    "mini_tab_strategies",
-    "mini_empty_trades",
-    "mini_trades_shown_one",
-    "mini_trades_shown_few",
-    "mini_trades_shown_many",
-    "mini_empty_strategies",
-    "mini_trade_entry",
-    "mini_trade_exit",
-    "mini_trade_qty",
-    "mini_trade_duration",
-    "mini_trade_strategy",
-    "mini_trade_manual",
-    "mini_trade_closed",
-    "mini_duration_dh",
-    "mini_duration_hm",
-    "mini_duration_ms",
-    "mini_strategy_root",
-    "mini_strategy_pending",
-    "mini_strategy_timed_out",
-    "mini_version",
-    "mini_memory",
-    "mini_free_memory",
-    "mini_unit_mb",
-    "mini_reconnect",
-    "mini_back",
-    "mini_close",
-    "mini_balances_show",
-    "mini_balances_hide",
-    "mini_start_all",
-    "mini_stop_all",
-    "mini_on_of",
-    "mini_orders_n_one",
-    "mini_orders_n_few",
-    "mini_orders_n_many",
-];

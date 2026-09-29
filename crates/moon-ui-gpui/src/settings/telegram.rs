@@ -343,7 +343,7 @@ impl SettingsView {
                                     .label(t!("telegram.pair_reset").to_string())
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.backend.update(cx, |b, bcx| {
-                                            b.reset_telegram_pairing();
+                                            b.reset_telegram_pairing(bcx);
                                             bcx.notify();
                                         });
                                     }))

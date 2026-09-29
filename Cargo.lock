@@ -4720,6 +4720,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "moon-tg"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "moon-core",
+ "rusqlite",
+ "rust-i18n",
+]
+
+[[package]]
 name = "moon-ui"
 version = "0.1.0"
 source = "git+https://github.com/Moonbot-Tech/MoonUI?branch=master#48f5a650a721f8ed4fedaf74a957cc5858de4196"
@@ -4827,6 +4839,7 @@ dependencies = [
  "moon-core",
  "moon-gpui",
  "moon-gpui-platform",
+ "moon-tg",
  "moon-ui",
  "objc",
  "qrcode",

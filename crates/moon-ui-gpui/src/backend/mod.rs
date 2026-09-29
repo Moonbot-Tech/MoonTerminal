@@ -2103,18 +2103,9 @@ impl Backend {
         self.config.report_valuation_mode
     }
 
-    /// Current name of every configured core, which report reads show in place of the name each
-    /// trade stored when it was downloaded.
-    ///
-    /// Returns:
-    ///     The uid-to-name map; a core no longer configured keeps its stored name.
+    /// Current name of every configured core ([`moon_core::db::CoreNames::from_servers`]).
     pub(crate) fn report_core_names(&self) -> moon_core::db::CoreNames {
-        moon_core::db::CoreNames::from_pairs(
-            self.config
-                .servers
-                .iter()
-                .map(|server| (server.id, server.name.as_str())),
-        )
+        moon_core::db::CoreNames::from_servers(&self.config.servers)
     }
 
     /// The time axis every replicated report timestamp is DISPLAYED on.

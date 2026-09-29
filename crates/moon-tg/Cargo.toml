@@ -1,0 +1,20 @@
+[package]
+name = "moon-tg"
+version = "0.1.0"
+edition = "2024"
+description = "The Telegram bot and Mini App of MoonTerminal, shared by the desktop terminal and the station."
+publish = false
+
+[dependencies]
+# Without `desktop`: the station links this crate, and the desktop feature would bring the OS
+# keyring and, on Linux, D-Bus into its static musl build. The terminal still gets `desktop`
+# through its own dependency on moon-core; feature unification only ever adds.
+moon-core = { path = "../moon-core", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
+log = "0.4"
+rusqlite = "0.40.1"
+rust-i18n = "4.1"
+
+[lints]
+workspace = true

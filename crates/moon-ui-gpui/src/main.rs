@@ -89,7 +89,7 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 /// Shared backend stored in one `Entity`, drained by coordination loops, and notifying UI observers.
 struct Backend {
     /// Optional Telegram service, joined before application owners disappear.
-    telegram: backend::telegram::TelegramState,
+    telegram: moon_tg::TelegramState,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,
@@ -713,6 +713,9 @@ fn main() -> anyhow::Result<()> {
     // Touched here, the frame is built where there is room, and every later `t!()` is a map lookup
     // costing nothing. The key is arbitrary; only the initialization it forces matters.
     let _ = rust_i18n::t!("common.loading");
+    // The Telegram crate reads the same folder through its own `i18n!`, so its dictionary is a
+    // second frame of the same size; built here for the same reason.
+    moon_tg::warm_locales();
 
     // Before the updater, before the configuration, before a window: the UI-atlas tools that work
     // on a file the crawl already wrote need none of it, and running them through a normal launch
