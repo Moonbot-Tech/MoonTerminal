@@ -7,6 +7,8 @@
 //! Device-loss handling resets every resource when the hook's device generation changes after
 //! GPUI recreates the device. Otherwise the new context would draw from stale buffers.
 
+use std::time::{Duration, Instant};
+
 use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
 use moon_chart::tick_volume::{
@@ -42,8 +44,9 @@ const BLIT_HLSL: &str = include_str!("shaders/blit.hlsl");
 mod plan;
 
 use plan::{
-    ComboBakeKey, VolumeBakeKey, combo_v_margin_px, combo_x_margin_px, cross_blit_uv,
-    lod_instance_count, plan_cross_bake, plan_volume_bake, volume_band_px, volume_blit_uv,
+    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, combo_tex_w,
+    combo_v_margin_px, cross_blit_uv, lod_instance_count, plan_cross_bake, plan_volume_bake,
+    volume_band_px, volume_blit_uv,
 };
 
 /// Cross-rendering pipeline and resident VRAM tick ring.
@@ -81,7 +84,7 @@ struct CrossPipe {
     sampler: ID3D11SamplerState,
 }
 
-/// Cross bitmap `(W * 1.2) x (H + 2 * margin)`, containing baked crosses and a UV-scroll anchor.
+/// Cross bitmap `(W + 2 * x_margin) x (H + 2 * margin)`, containing baked crosses and a UV-scroll anchor.
 struct ComboTex {
     _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
     rtv: ID3D11RenderTargetView,
@@ -90,7 +93,7 @@ struct ComboTex {
     last_baked_head: u32,
 }
 
-/// Volume band bitmap `(W * 1.2) x band`, baked without a price axis so Y motion never touches it.
+/// Volume band bitmap `(W + 2 * x_margin) x band`, baked without a price axis so Y motion never touches it.
 struct VolumeTex {
     _tex: ID3D11Texture2D, // Retain the texture through RAII while its RTV and SRV reference it.
     rtv: ID3D11RenderTargetView,
@@ -147,7 +150,13 @@ pub struct ComboLayer {
     /// Reusable LOD reduction scratch and the gathered rows it uploads.
     lod_pick: LodPick,
     lod_rows: Vec<ChartCross>,
+    /// When rows evicted from inside a baked span are finally erased by a full rebake. Evicted
+    /// rows stay painted until then, so a full ring sheds history in steps, not one bake per tick.
+    eviction_rebake_at: Option<Instant>,
 }
+
+/// How long eviction damage alone may wait before it forces a full rebake of both bitmaps.
+const EVICTION_REBAKE_INTERVAL: Duration = Duration::from_secs(1);
 
 impl ComboLayer {
     /// Creates empty GPU resources with retained default appearance.
@@ -179,6 +188,7 @@ impl ComboLayer {
             tick_style: TickStyleGpu::default(),
             lod_pick: LodPick::default(),
             lod_rows: Vec::new(),
+            eviction_rebake_at: None,
         }
     }
 
@@ -360,6 +370,7 @@ impl ComboLayer {
             self.pipe = None;
             self.tex = None;
             self.vol_tex = None;
+            self.eviction_rebake_at = None;
             self.count = 0;
             self.head = 0;
             self.resident_crosses.clear();
@@ -376,6 +387,8 @@ impl ComboLayer {
             self.pipe = Some(self.create_pipe(device));
         }
         self.apply_uploads(context);
+        // Before any early return, so a due deadline is always consumed and never re-arms frames.
+        self.flush_due_eviction(Instant::now());
         if self.volume_scale_dirty {
             self.invalidate_bakes();
             self.volume_scale_dirty = false;
@@ -404,8 +417,21 @@ impl ComboLayer {
         self.draw_price_lines_to_backbuffer(view, context, rtv, gpu, panel_clip);
     }
 
-    /// Force the next prepare to fully rebake both bitmaps.
+    /// Whether deferred eviction damage is due for its full rebake, so a frame must prepare.
+    pub fn eviction_rebake_due(&self, now: Instant) -> bool {
+        self.eviction_rebake_at.is_some_and(|at| now >= at)
+    }
+
+    /// Invalidate both bakes once deferred eviction damage falls due.
+    fn flush_due_eviction(&mut self, now: Instant) {
+        if self.eviction_rebake_due(now) {
+            self.invalidate_bakes();
+        }
+    }
+
+    /// Force the next prepare to fully rebake both bitmaps; that bake also erases evicted rows.
     fn invalidate_bakes(&mut self) {
+        self.eviction_rebake_at = None;
         if let Some(tex) = self.tex.as_mut() {
             tex.key.valid = false;
         }
@@ -427,7 +453,7 @@ impl ComboLayer {
         if bw <= 0.0 || bh <= 0.0 {
             return;
         }
-        let tex_w = (bw + combo_x_margin_px(bw)).round().max(1.0) as u32;
+        let tex_w = combo_tex_w(bw);
         let tex_h = bh.round().max(1.0) as u32;
         let v_margin = combo_v_margin_px(bh);
         let tex_h_total = tex_h + 2 * v_margin as u32;
@@ -614,6 +640,10 @@ impl ComboLayer {
         }
         let tex = self.tex.as_ref().unwrap();
         super::gpu::debug_dump_combo_texture_once(device, context, &tex._tex);
+        if vol_plan.full && cross_plan.full {
+            // Both bitmaps now hold only resident rows, so no eviction damage remains.
+            self.eviction_rebake_at = None;
+        }
         if vol_plan.full || cross_plan.full {
             crate::diag::record_us(&crate::diag::CHART_COMBO_BAKE_US, bake_t);
         }
@@ -933,8 +963,8 @@ impl ComboLayer {
                 &data
             };
             let full_reset = data.len() >= cap as usize;
-            let invalidates_bake = self.tex.as_ref().is_some_and(|tex| {
-                self.append_invalidates_bake(
+            let evicts_baked = self.tex.as_ref().is_some_and(|tex| {
+                self.append_evicts_baked(
                     data.len(),
                     tick_bake_span(
                         tex.key.bake_t0,
@@ -944,7 +974,7 @@ impl ComboLayer {
                     ),
                 )
             }) || self.vol_tex.as_ref().is_some_and(|tex| {
-                self.append_invalidates_bake(
+                self.append_evicts_baked(
                     data.len(),
                     tick_bake_span(
                         tex.key.bake_t0,
@@ -978,22 +1008,36 @@ impl ComboLayer {
                 update_dynamic(context, &tick_buffer, &self.resident_crosses);
                 self.head = self.resident_head as u32;
                 self.count = self.resident_count as u32;
-                self.invalidate_bakes();
             }
             // prepare_combo compares the new bake-window scale with the scale actually baked.
             // A global maximum (including an evicted offscreen maximum) cannot affect that scale.
             self.volume_data_generation = self.volume_data_generation.wrapping_add(1);
             self.volume_window_cache = None;
             // New runs draw into each bitmap separately, so crosses always sit above the bars.
-            if invalidates_bake {
-                self.invalidate_bakes();
-            }
+            self.settle_append_damage(append_bake_damage(written, evicts_baked), Instant::now());
         }
     }
 
-    /// Repaint only when an append replaces the ring or erases a potentially baked row.
+    /// Apply an append's bake damage: invalidate both bakes now, or defer eviction damage.
+    fn settle_append_damage(&mut self, damage: AppendBakeDamage, now: Instant) {
+        match damage {
+            AppendBakeDamage::None => {}
+            AppendBakeDamage::Defer => self.defer_eviction_rebake(now),
+            AppendBakeDamage::Invalidate => self.invalidate_bakes(),
+        }
+    }
+
+    /// Defer eviction-only damage to one coalesced rebake [`EVICTION_REBAKE_INTERVAL`] after
+    /// the first unerased eviction; later evictions keep that earlier deadline.
+    fn defer_eviction_rebake(&mut self, now: Instant) {
+        if self.eviction_rebake_at.is_none() {
+            self.eviction_rebake_at = Some(now + EVICTION_REBAKE_INTERVAL);
+        }
+    }
+
+    /// Whether an append replaces the ring or evicts a row that may be baked in `baked_span`.
     /// Overlap with surviving/new ticks keeps the pre-existing incremental append order.
-    fn append_invalidates_bake(&self, appended: usize, baked_span: (f64, f64)) -> bool {
+    fn append_evicts_baked(&self, appended: usize, baked_span: (f64, f64)) -> bool {
         appended >= self.cross_capacity as usize
             || evicted_cross_ranges(
                 self.resident_head,

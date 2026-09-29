@@ -464,6 +464,7 @@ impl ChartDataState {
             crate::diag::bump(&crate::diag::CHART_PREPARE);
         }
         self.tick_countdown_captions(now);
+        self.tick_eviction_rebakes(now);
         self.render.borrow_mut().frame(info)
     }
 
@@ -520,6 +521,26 @@ impl ChartDataState {
             if st.refresh_pane_labels(idx) {
                 st.needs_present = true;
             }
+        }
+    }
+
+    /// Prepare the panes whose deferred tick-eviction rebake fell due. A quiet market runs no
+    /// market sync, and the rebake that erases evicted history must not wait for the next tick.
+    fn tick_eviction_rebakes(&mut self, now: Instant) {
+        if !self.scene_visible {
+            return;
+        }
+        let mut st = self.render.borrow_mut();
+        let mut due = false;
+        for pr in st.panes.iter_mut() {
+            if pr.active && pr.layers.combo_eviction_rebake_due(now) {
+                pr.gpu_prepare_dirty = true;
+                due = true;
+            }
+        }
+        if due {
+            st.base_dirty = true;
+            st.needs_present = true;
         }
     }
 
