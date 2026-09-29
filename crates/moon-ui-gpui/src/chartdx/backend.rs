@@ -183,13 +183,17 @@ impl PlatformLayers {
 
     /// Whether the combo layer holds deferred eviction damage whose full rebake is due.
     ///
-    /// Only DX11 defers eviction damage; every other backend has nothing pending.
+    /// DX11 and Metal defer eviction damage; every other backend has nothing pending.
     pub fn combo_eviction_rebake_due(&self, now: std::time::Instant) -> bool {
         #[cfg(windows)]
         {
             self.combo.eviction_rebake_due(now)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.eviction_rebake_due(now)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = now;
             false

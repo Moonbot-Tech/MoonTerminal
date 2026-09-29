@@ -427,6 +427,28 @@ pub fn cross_append_ranges(start: usize, len: usize, capacity: usize) -> [(usize
     [(start, first), (0, second)]
 }
 
+/// Queue the ring runs an append of `append_len` rows at `head` wrote for an incremental bake.
+/// Returns `false`, queuing nothing, when the queued runs would reach the whole ring: a later run
+/// would then overwrite a queued slot and draw it twice, so only a full bake can draw them.
+#[allow(dead_code)]
+pub fn queue_appended_ranges(
+    pending: &mut Vec<(usize, usize)>,
+    head: usize,
+    append_len: usize,
+    capacity: usize,
+) -> bool {
+    let queued: usize = pending.iter().map(|&(_, count)| count).sum();
+    if queued.saturating_add(append_len) >= capacity {
+        return false;
+    }
+    pending.extend(
+        cross_append_ranges(head, append_len, capacity)
+            .into_iter()
+            .filter(|&(_, count)| count > 0),
+    );
+    true
+}
+
 #[allow(dead_code)]
 pub fn evicted_cross_ranges(
     head: usize,
