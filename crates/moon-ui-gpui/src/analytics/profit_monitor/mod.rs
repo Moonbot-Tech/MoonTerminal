@@ -700,6 +700,12 @@ impl ProfitMonitorView {
             // The monitor already renders one line per core, each in its own quote, so pinning the
             // scale here would convert figures the panel deliberately keeps native.
             prefer_usdt: false,
+            core_names: moon_core::db::CoreNames::from_pairs(
+                self.live
+                    .core_names
+                    .iter()
+                    .map(|(id, name)| (*id, name.as_str())),
+            ),
         }
     }
 

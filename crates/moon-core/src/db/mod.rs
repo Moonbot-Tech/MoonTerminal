@@ -18,6 +18,7 @@
 
 pub mod analytics;
 pub mod coin_lists;
+mod core_names;
 mod dates;
 pub mod integrity;
 pub mod maint;
@@ -41,6 +42,7 @@ pub mod tuner;
 pub mod valuation;
 pub(crate) mod wal;
 
+pub use core_names::CoreNames;
 pub use dates::{fmt_unix, fmt_unix_date, fmt_unix_secs, parse_ymd};
 pub use quote::{
     AverageOrderReturn, EntrySpend, OpenPositions, ProfitScope, ProfitUnit, QuoteBreakdown,

@@ -108,6 +108,7 @@ fn populated_filter() -> ReportFilter {
         }]),
         strategy_name_mask: "EMA_".to_string(),
         valuation: Default::default(),
+        core_names: Default::default(),
     }
 }
 

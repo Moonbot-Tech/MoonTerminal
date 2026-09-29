@@ -335,6 +335,7 @@ impl ReportPanel {
             // Read from the backend at build time rather than mirrored into the panel: the rows,
             // the totals and the export all derive from this ONE filter, so they convert alike.
             valuation: backend.valuation_mode(),
+            core_names: backend.report_core_names(),
         }
     }
 

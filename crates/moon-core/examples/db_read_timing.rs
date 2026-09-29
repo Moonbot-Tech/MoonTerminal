@@ -195,6 +195,7 @@ fn query(from: i64, to: i64, metric: ProfitMetric, cores: Vec<u64>) -> Query {
         metric,
         valuation: ValuationMode::Historical,
         prefer_usdt: false,
+        core_names: Default::default(),
     }
 }
 
