@@ -353,7 +353,7 @@ impl ChartDataState {
             self.dirty_all_trade_panes();
             return TradeHoverChange::NeedsRebuild;
         }
-        // Only DX11 retains the marker buffer to patch; elsewhere the patch declines.
+        // DX11 and Metal retain the marker buffer to patch; elsewhere the patch declines.
         if self.patch_trade_hover(previous, hovered) {
             return TradeHoverChange::Patched;
         }

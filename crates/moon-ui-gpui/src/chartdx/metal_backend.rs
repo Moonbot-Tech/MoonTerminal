@@ -374,6 +374,8 @@ pub struct MetalLayers {
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
+    /// Only markers changed since the last upload, by a hover patch; zones stay in the base cache.
+    marker_buffer_dirty: bool,
     candle_buffers_dirty: bool,
     side_buffer_dirty: bool,
     hvol_buffers_dirty: bool,
@@ -440,6 +442,7 @@ impl MetalLayers {
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
+            marker_buffer_dirty: false,
             candle_buffers_dirty: true,
             side_buffer_dirty: true,
             hvol_buffers_dirty: true,
@@ -708,6 +711,28 @@ impl MetalLayers {
         self.markers = markers.iter().map(mk_of).collect();
         self.userdata_buffers_dirty = true;
         self.base_cache.valid = false;
+    }
+
+    /// Rewrites markers in place by index and re-uploads only the marker buffer. Markers draw
+    /// after the base cache, so unlike `set_userdata` this leaves the cached base valid.
+    ///
+    /// Args:
+    ///     patches: `(marker index, new instance)` pairs, indices into the last `set_userdata`.
+    ///
+    /// Returns:
+    ///     Whether every index was in range and the patch was applied; nothing changes otherwise.
+    pub fn patch_markers(&mut self, patches: &[(u32, MarkerInstance)]) -> bool {
+        if patches
+            .iter()
+            .any(|(ix, _)| *ix as usize >= self.markers.len())
+        {
+            return false;
+        }
+        for (ix, marker) in patches {
+            self.markers[*ix as usize] = mk_of(marker);
+        }
+        self.marker_buffer_dirty = true;
+        true
     }
 
     pub fn needs_base_cache(&self, gpu: &RawGpuAccess) -> bool {
@@ -1443,6 +1468,11 @@ impl MetalLayers {
             self.marker_buffer
                 .write(device, "moon_chart_markers", &self.markers);
             self.userdata_buffers_dirty = false;
+            self.marker_buffer_dirty = false;
+        } else if self.marker_buffer_dirty {
+            self.marker_buffer
+                .write(device, "moon_chart_markers", &self.markers);
+            self.marker_buffer_dirty = false;
         }
         if self.candle_buffers_dirty
             || self.candle_buffer.buffer.is_none()

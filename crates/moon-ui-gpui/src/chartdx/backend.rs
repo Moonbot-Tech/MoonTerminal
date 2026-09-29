@@ -66,9 +66,9 @@ impl PlatformLayers {
     /// Whether this backend retains the marker buffer so a hover can patch arrows in place.
     ///
     /// Returns:
-    ///     `true` on DX11, `false` on every backend whose `patch_markers` declines.
+    ///     `true` on DX11 and Metal, `false` on every backend whose `patch_markers` declines.
     pub const fn can_patch_markers() -> bool {
-        cfg!(windows)
+        cfg!(any(windows, target_os = "macos"))
     }
 
     /// Borrow tick candidates in a time window, including pending native uploads.
@@ -430,8 +430,8 @@ impl PlatformLayers {
 
     /// Rewrite already-uploaded userdata markers by index, without a full `set_userdata`.
     ///
-    /// DX11 only: it retains a CPU copy of the marker buffer. Metal and wgpu answer `false`, and
-    /// the caller then rebuilds the whole union as before.
+    /// DX11 and Metal retain a CPU copy of the marker buffer. wgpu answers `false`, and the
+    /// caller then rebuilds the whole union as before.
     ///
     /// Returns:
     ///     Whether the patch was applied.
@@ -440,7 +440,11 @@ impl PlatformLayers {
         {
             self.userdata.patch_markers(patches)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.patch_markers(patches)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = patches;
             false
