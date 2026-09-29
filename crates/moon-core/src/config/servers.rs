@@ -248,7 +248,7 @@ pub struct ServerConfig {
     pub workspace_membership: WorkspaceMembership,
     /// How this core counts toward the Assets footer and Telegram Mini App totals. Display only: it never affects the
     /// connection, the feed, or the per-core balance rows.
-    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
+    #[serde(default)]
     pub total_mode: TotalMode,
 }
 
