@@ -796,7 +796,7 @@ impl RenderState {
             // ticks still advance live scrolling, and real data/cursor dirtiness keeps its priority.
             if pr.active
                 && (camera_present || (!arrival_present && cap_due))
-                && pr.advance_camera(now_ms)
+                && pr.advance_camera(pr.live_clock.edge_ms(now_ms))
             {
                 crate::diag::bump(&crate::diag::CHART_CAM_STEP);
                 camera_moved = true;

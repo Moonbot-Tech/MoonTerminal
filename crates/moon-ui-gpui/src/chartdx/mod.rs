@@ -863,6 +863,10 @@ struct PaneRender {
     right_margin_frac: f32,
     follow: bool,
     last_edge_px: i64,
+    /// Offset of this source's trade clock from the local one; the live edge sits at `now + offset`
+    /// so the newest ticks stay inside the plot when the PC clock lags the core. Reset with the
+    /// pane when its core or market changes.
+    live_clock: moon_chart::live_clock::LiveClockOffset,
     /// Last fitted (visible left, duration, pixels/ms); resize and zoom invalidate independently
     /// of the history floor, while live motion is throttled to whole pixels.
     price_scan_window: Option<(f32, f32, f32)>,
@@ -1064,6 +1068,7 @@ impl PaneRender {
             right_margin_frac: 0.10,
             follow: false,
             last_edge_px: i64::MIN,
+            live_clock: moon_chart::live_clock::LiveClockOffset::default(),
             price_scan_window: None,
             cached_tick_price: None,
             cached_last_price: None,

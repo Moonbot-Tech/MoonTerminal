@@ -368,6 +368,9 @@ pub struct ChartView {
     pub right_time_ms: f64,
     /// Automatic following of the right time edge (live).
     pub follow: bool,
+    /// Offset of the chart source's trade clock from the local clock (see `crate::live_clock`):
+    /// the live edge is `now + live_offset_ms`, and every live anchor below is placed there.
+    live_offset_ms: f64,
     /// Fraction of the window width reserved on the right as "future" (like xRange*0.9).
     pub right_margin_frac: f32,
 
@@ -452,6 +455,7 @@ impl ChartView {
             px_per_ms: 0.05, // Approximately 20 seconds visible across 1000 px.
             right_time_ms: epoch_ms,
             follow: true,
+            live_offset_ms: 0.0,
             // "Future" area on the right, as in moonweb (xRange*0.9).
             right_margin_frac: DEFAULT_RIGHT_MARGIN_FRAC,
             center_price: 0.0,
@@ -604,9 +608,21 @@ impl ChartView {
         self.x_default_scale = false;
         self.x_init_pending = false;
         if self.follow {
-            self.right_time_ms = now_ms;
+            self.right_time_ms = self.live_edge_ms(now_ms);
         }
         true
+    }
+
+    /// Sets the source clock offset the live edge is placed by; see [`crate::live_clock`].
+    pub fn set_live_offset_ms(&mut self, offset_ms: f64) {
+        if offset_ms.is_finite() {
+            self.live_offset_ms = offset_ms;
+        }
+    }
+
+    /// Local time `now_ms` on the source's trade clock: where the live edge belongs.
+    pub fn live_edge_ms(&self, now_ms: f64) -> f64 {
+        now_ms + self.live_offset_ms
     }
 
     /// Whether the view is currently live.
@@ -637,7 +653,7 @@ impl ChartView {
     /// a much narrower pane would otherwise put the ceiling decades ahead.
     fn max_right_time_ms(&self, now_ms: f64, area_w: f32) -> f64 {
         let window_ms = self.visible_x(area_w).1.min(MAX_WINDOW_MS) as f64;
-        now_ms + window_ms * (1.0 - self.right_margin_frac as f64)
+        self.live_edge_ms(now_ms) + window_ms * (1.0 - self.right_margin_frac as f64)
     }
 
     /// Re-applies the future ceiling to the current scale and plot width, returning whether the
@@ -657,7 +673,7 @@ impl ChartView {
         // zero, so the ceiling would be `now` and the clamp would silently delete a pan the user
         // made at full size. That is not hypothetical — prepare passes `chart_w = 1.0` in
         // order-book-only mode, and a pane mid-layout can be narrower still.
-        if self.follow || self.right_time_ms <= now_ms || area_w < 1.0 {
+        if self.follow || self.right_time_ms <= self.live_edge_ms(now_ms) || area_w < 1.0 {
             return false;
         }
         let ceiling = self.max_right_time_ms(now_ms, area_w);
@@ -692,7 +708,7 @@ impl ChartView {
         // live edge, which is the opposite of a closed interval.
         self.clear_frame_request();
         self.follow = true;
-        self.right_time_ms = now_ms;
+        self.right_time_ms = self.live_edge_ms(now_ms);
         self.manual_persistent = false;
     }
 
@@ -725,7 +741,7 @@ impl ChartView {
         // ABSOLUTE distance, because a framed interval can put the anchor on either side of `now`. A
         // signed comparison reads every future anchor as "near", so a zoom on a view framed one
         // whole window ahead would snap it back to live.
-        if (now_ms - self.right_time_ms).abs() <= tolerance_ms {
+        if (self.live_edge_ms(now_ms) - self.right_time_ms).abs() <= tolerance_ms {
             self.resume_live(now_ms);
             true
         } else {
@@ -984,7 +1000,7 @@ impl ChartView {
         self.clear_frame_request();
         let before = self.right_time_ms;
         let dt_ms = dx as f64 / self.px_per_ms.max(MIN_PX_PER_MS) as f64;
-        self.right_time_ms = (before - dt_ms).min(before.max(now_ms));
+        self.right_time_ms = (before - dt_ms).min(before.max(self.live_edge_ms(now_ms)));
         self.follow = false;
         if dx < 0.0 {
             let _ = self.snap_to_live_if_near(now_ms, area_w);
@@ -1061,7 +1077,7 @@ impl ChartView {
         // zoom, so one plain notch at mid-plot left the chart paused. Ctrl, Ctrl+Shift,
         // the super-zoom hotkeys, and a chart already in history keep the cursor anchor.
         if was_follow && zoom == XZoom::Plain {
-            self.right_time_ms = now_ms;
+            self.right_time_ms = self.live_edge_ms(now_ms);
             self.follow = true;
             return;
         }
@@ -1076,7 +1092,7 @@ impl ChartView {
         // already was — nor walk a view in history past the live edge.
         self.right_time_ms =
             (self.epoch_ms + left + new_window as f64 * (1.0 - self.right_margin_frac as f64))
-                .min(right_before.max(now_ms));
+                .min(right_before.max(self.live_edge_ms(now_ms)));
         // And the general rule on top: the ceiling shrinks with the window, so zooming IN can leave
         // an anchor that was legal at the old scale above it.
         self.clamp_future_anchor(now_ms, area_w);

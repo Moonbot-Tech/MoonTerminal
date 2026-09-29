@@ -29,6 +29,7 @@ pub mod paint;
 pub mod trade_marks;
 pub use trade_marks::{build_trade_geometry, normalize_chart_graphics};
 pub mod hvol;
+pub mod live_clock;
 pub mod side_volume;
 pub mod tick_volume;
 pub mod view;
