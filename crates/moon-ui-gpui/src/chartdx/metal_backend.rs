@@ -897,8 +897,10 @@ impl MetalLayers {
         if bw <= 0.0 || bh <= 0.0 {
             return false;
         }
+        // Margin on both sides, as in the DX11 combo plan: a pan either way inside it is a UV
+        // shift only, never a full rebake.
         let margin_px = (bw * 0.2).max(128.0);
-        let tex_w = (bw + margin_px).round().max(1.0) as u32;
+        let tex_w = (bw + 2.0 * margin_px).round().max(1.0) as u32;
         let tex_h = bh.round().max(1.0) as u32;
         self.ensure_combo_texture(device, pixel_format, tex_w, tex_h, gpu.device_generation());
 
@@ -914,9 +916,15 @@ impl MetalLayers {
             }
 
             let u_left_px = (view.view_time0 - tex.bake_t0) * view.time_to_px;
-            let need_full = !tex.valid || u_left_px < 0.0 || u_left_px > margin_px;
+            let need_full = !tex.valid || !(u_left_px >= 0.0 && u_left_px <= 2.0 * margin_px - 1.0);
             let bake_t0 = if need_full {
-                texel_aligned_time0(view.view_time0, view.time_to_px)
+                let ttp = view.time_to_px;
+                let t0 = if ttp > 1e-9 {
+                    view.view_time0 - margin_px / ttp
+                } else {
+                    view.view_time0
+                };
+                texel_aligned_time0(t0, ttp)
             } else {
                 tex.bake_t0
             };
@@ -1077,7 +1085,7 @@ impl MetalLayers {
         }
         let u_left_px = ((view.view_time0 - tex.bake_t0) * view.time_to_px)
             .round()
-            .clamp(0.0, (tex.w as f32 - view.bounds[2]).max(0.0));
+            .clamp(0.0, (tex.w as f32 - view.bounds[2]).max(0.0).floor());
         let params = BackgroundParams {
             dst: view.bounds,
             resolution: view.resolution,
