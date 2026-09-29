@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     let station = cores::load(&config_path)?;
     // The terminal's window around a trade, before the recorder builds its first one.
     apply_tape(&station.tape);
-    let cfg = station.config;
+    let mut cfg = station.config;
     log_cores(&cfg);
 
     // Before any core is spawned: every feed reads it when its client is built.
@@ -113,10 +113,12 @@ fn main() -> anyhow::Result<()> {
         }
         if signals.take_reload() {
             match reload(&config_path) {
-                Ok(cfg) => {
-                    session.reconcile(&cfg, Some(&reports.tx));
+                Ok(reloaded) => {
+                    session.reconcile(&reloaded, Some(&reports.tx));
                     session.map_cores_to_themselves();
-                    groups = groups_of(&cfg);
+                    groups = groups_of(&reloaded);
+                    // Kept for the identity respawns below, which rebuild a core from it.
+                    cfg = reloaded;
                 }
                 // The running set stays as it was: a half-written file must not drop every core.
                 Err(e) => log::error!("reload of {} failed: {e:#}", config_path.display()),
@@ -124,6 +126,11 @@ fn main() -> anyhow::Result<()> {
         }
         if session.drain().identity {
             session.map_cores_to_themselves();
+        }
+        // A core whose exchange identity went stale (restart or hot exchange switch) is rebuilt on
+        // a fresh client, debounced per core by the session; its new venue then re-maps above.
+        for id in session.take_identity_respawn_requests(Instant::now()) {
+            session.reconnect(id, &cfg, Some(&reports.tx));
         }
         let now = Instant::now();
         if now.duration_since(last_diag) >= DIAG_POLL_EVERY {

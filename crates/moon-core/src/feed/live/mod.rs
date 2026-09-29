@@ -15,6 +15,7 @@ mod commands;
 mod convert;
 mod deadline;
 mod dirty;
+mod identity_refresh;
 mod market_role;
 mod report_sync;
 mod shared_config;
@@ -730,6 +731,10 @@ pub(super) fn run(
     let mut log_writer = crate::applog::DatedWriter::new(&server.name);
     let mut events = Vec::new();
     let mut lifecycle_events = Vec::new();
+    // A fresh client's first market list can report every market as new (a price row or a
+    // listing notice before it flags a refresh), so turnover counts only once this client has
+    // applied a list before the current batch.
+    let mut turnover_armed = false;
     let mut force_market_sample = false;
     // Latest lifecycle state, and whether this core has already failed one API-key check: an older
     // MoonBot never answers that method, and a warn per retry for the life of the session would be
@@ -942,6 +947,11 @@ pub(super) fn run(
                 "core {} lifecycle: {ev:?}",
                 crate::feed::core_label(server.id)
             );
+            // The restarted process may run on another exchange, and this client will never read
+            // its `ServerInfo` again: only a respawn can publish the venue it has now.
+            if let Some(cause) = identity_refresh::stale_on_lifecycle(&ev) {
+                let _ = tx.send(FeedMsg::IdentityStale(cause));
+            }
             let request_license_state = match &ev {
                 LifecycleEvent::Ready => true,
                 // Asking a core that is still coming up buys a pending timeout, not a licence, so
@@ -1197,6 +1207,30 @@ pub(super) fn run(
         // only after an actual event instead of polling continuously every 8 ms.
         events.clear();
         event_queue.drain_events_into(&mut events);
+        // Read before the station filter, which has no reason to keep market-list events: a hot
+        // exchange switch shows only as a refresh that adds most of a new venue's universe.
+        let mut list_applied = false;
+        for ev in &events {
+            let Event::Markets(markets_ev) = ev else {
+                continue;
+            };
+            list_applied |= matches!(
+                markets_ev,
+                moonproto::state::MarketsEvent::MarketsListReplaced { .. }
+            );
+            if !turnover_armed {
+                continue;
+            }
+            let total = || {
+                client
+                    .snapshot()
+                    .map_or(0, |snap| snap.markets().iter().count())
+            };
+            if let Some(cause) = identity_refresh::stale_on_markets(markets_ev, total) {
+                let _ = tx.send(FeedMsg::IdentityStale(cause));
+            }
+        }
+        turnover_armed |= list_applied;
         if station {
             events.retain(crate::feed::station::keeps);
         }

@@ -1264,6 +1264,21 @@ pub struct CoreTimeOffsetStatus {
     pub source: crate::session::core_time_offset::OffsetSource,
 }
 
+/// Why a feed reported its published exchange identity as stale ([`FeedMsg::IdentityStale`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityStaleCause {
+    /// A different MoonBot process now answers on the connection (`LifecycleEvent::ServerRestart`).
+    ServerRestart,
+    /// A market-list refresh added a large share of the core's market universe at once, which a
+    /// listing never does and an exchange switch on a live core does.
+    MarketTurnover {
+        /// Markets the refresh added.
+        added: usize,
+        /// Markets the client retains after the refresh, the added ones included.
+        total: usize,
+    },
+}
+
 /// Account updates and transient notifications delivered from one core's feed.
 // `CoreConfig` is delivered by value on the feed. Boxing it allocates on every such message.
 #[derive(Debug, Clone)]
@@ -1433,6 +1448,14 @@ pub enum FeedMsg {
     /// Sent for the same reason the store drops `server_version`: a replacement instance has to
     /// speak for itself.
     RunStateForgotten,
+    /// The exchange identity this client published may no longer describe the core, and only a
+    /// fresh client can learn the new one (#734).
+    ///
+    /// MoonProto reads `ServerInfo` once, in its init (BaseCheck), and neither an internal
+    /// reconnect nor a `ServerRestart` repeats it, so the feed cannot re-read the venue itself.
+    /// The session answers with the same respawn the Settings Reconnect button issues, debounced
+    /// per core; see `session::identity_respawn`.
+    IdentityStale(IdentityStaleCause),
     /// Whether the core's global strategy engine is running, sent on
     /// `Event::Strat(StratEvent::RuntimeState)`.
     ///

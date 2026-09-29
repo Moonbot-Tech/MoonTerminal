@@ -903,7 +903,7 @@ impl SessionManager {
     /// `CoreUpdatePhase` explicitly, with no `_` or `..` catch-all at the variant level -- a future
     /// phase must break the build here, once, instead of silently taking the wrong
     /// branch wherever this match was copied.
-    fn active_from(phase: &CoreUpdatePhase) -> Option<Option<u32>> {
+    pub(super) fn active_from(phase: &CoreUpdatePhase) -> Option<Option<u32>> {
         match phase {
             CoreUpdatePhase::Queued { .. } => None,
             CoreUpdatePhase::Sent { from, .. }

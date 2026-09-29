@@ -20,6 +20,7 @@ pub mod run_state;
 pub mod store;
 
 mod commands;
+mod identity_respawn;
 mod lifecycle;
 mod rec_ranges;
 
@@ -181,6 +182,9 @@ pub struct SessionManager {
     last_cmd: HashMap<CoreId, (bool, Vec<String>, Vec<String>)>,
     /// Per-IP core-update queue and its retained history; see `core_update`.
     core_updates: core_update::CoreUpdateQueue,
+    /// Cores whose published exchange identity went stale, awaiting a debounced respawn; see
+    /// `identity_respawn`.
+    identity_respawns: identity_respawn::IdentityRespawnGate,
 }
 
 #[derive(Clone, Debug, Default)]

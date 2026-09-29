@@ -804,7 +804,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // Deduplicated against a manual press already pending for the same core: two
                     // respawns would both bump the epoch and the predicate would still settle,
                     // but one is what was asked for.
-                    let respawns = b.session.take_update_respawn_requests();
+                    // A core whose exchange identity went stale (restart or hot exchange switch,
+                    // #734) takes the same respawn, already debounced per core by the session.
+                    let mut respawns = b.session.take_update_respawn_requests();
+                    respawns.extend(
+                        b.session
+                            .take_identity_respawn_requests(std::time::Instant::now()),
+                    );
                     for id in respawns {
                         if !b.reconnect_request.contains(&id) {
                             b.reconnect_request.push(id);
