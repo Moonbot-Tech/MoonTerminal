@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use bytemuck::Zeroable;
 use gpui::RawGpuAccess;
 use moon_chart::tick_volume::{
-    BakeColumns, LodPick, TickTimeOrder, lod_applies, pending_ring_at, reduce_crosses,
-    reduce_volume, tick_bake_span, tick_slot_runs, tick_time_range, tick_touches_bake,
+    BakeColumns, LodPick, TickTimeOrder, pending_ring_at, tick_bake_span, tick_slot_runs,
+    tick_time_range, tick_touches_bake,
 };
 use moon_core::data::PriceLinePoint;
 use windows::Win32::Graphics::Direct3D::D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -27,7 +27,7 @@ use super::gpu::{
 };
 use super::types::{
     PriceStyleGpu, TickStyleGpu, append_cross_ring, cross_append_ranges, evicted_cross_ranges,
-    reset_cross_ring,
+    lod_bake_rows, reset_cross_ring, ring_time_range,
 };
 
 mod price_ring;
@@ -45,7 +45,7 @@ mod plan;
 
 use plan::{
     AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, append_span_damage,
-    combo_tex_w, combo_v_margin_px, cross_blit_uv, lod_instance_count, plan_cross_bake,
+    combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake,
     plan_volume_bake, volume_band_px, volume_blit_uv,
 };
 
@@ -659,35 +659,20 @@ impl ComboLayer {
         cols: &BakeColumns,
         crosses: bool,
     ) -> Option<u32> {
-        let rows_in_span = runs.iter().map(|&(_, count)| count).sum();
-        if !lod_applies(rows_in_span, cols.width_px) {
+        let lod_t = crate::diag::timer();
+        let applied = lod_bake_rows(
+            &self.resident_crosses,
+            runs,
+            cols,
+            crosses,
+            &mut self.lod_pick,
+            &mut self.lod_rows,
+        );
+        if !applied {
             return None;
         }
-        let resident = &self.resident_crosses;
-        let span_rows = runs
-            .into_iter()
-            .flat_map(|(start, count)| start..start + count)
-            .map(|slot| {
-                let c = &resident[slot];
-                (slot as u32, c.time_rel, c.price, c.side, c.qty)
-            });
-        let lod_t = crate::diag::timer();
-        if crosses {
-            reduce_crosses(span_rows, cols, &mut self.lod_pick);
-        } else {
-            reduce_volume(span_rows, cols, &mut self.lod_pick);
-        }
         crate::diag::record_us(&crate::diag::CHART_COMBO_LOD_US, lod_t);
-        let picked = if crosses {
-            &self.lod_pick.cross
-        } else {
-            &self.lod_pick.volume
-        };
-        let n = lod_instance_count(rows_in_span, cols.width_px, picked.len());
-        self.lod_rows.clear();
-        self.lod_rows
-            .extend(picked.iter().map(|&slot| resident[slot as usize]));
-        let n = n as u32;
+        let n = self.lod_rows.len() as u32;
         if n == 0 {
             return Some(0);
         }
@@ -1086,18 +1071,13 @@ impl ComboLayer {
 
     /// Search resident rows without changing their physical GPU slot layout.
     fn resident_time_range(&self, from: f64, to: f64) -> std::ops::Range<usize> {
-        let capacity = self.cross_capacity as usize;
-        let origin = if self.resident_count == capacity {
-            self.resident_head
-        } else {
-            0
-        };
-        tick_time_range(
+        ring_time_range(
+            &self.resident_crosses,
+            self.resident_head,
             self.resident_count,
+            self.cross_capacity as usize,
             self.tick_time_order.max_lateness(),
-            from,
-            to,
-            |index| self.resident_crosses[(origin + index) % capacity].time_rel,
+            (from, to),
         )
     }
 

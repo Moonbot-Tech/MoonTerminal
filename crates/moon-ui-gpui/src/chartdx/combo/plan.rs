@@ -2,7 +2,7 @@
 //! which texel window of it the blit shows. The GPU wrappers in `combo.rs` (DX11) and
 //! `metal_backend.rs` (Metal) only execute them.
 
-use moon_chart::tick_volume::{lod_applies, tick_touches_bake};
+use moon_chart::tick_volume::tick_touches_bake;
 
 use super::super::types::{ChartCross, ChartViewGpu};
 
@@ -245,15 +245,6 @@ pub(super) fn append_bake_damage(written: bool, evicts_baked: bool) -> AppendBak
     }
 }
 
-/// Instances one full-bake pass draws: the reduced list's length when LOD applies, else every
-/// row in the span.
-pub(super) fn lod_instance_count(rows_in_span: usize, tex_w: u32, picked_len: usize) -> usize {
-    if lod_applies(rows_in_span, tex_w) {
-        picked_len
-    } else {
-        rows_in_span
-    }
-}
 
 /// Whether new rows, or the old rows they evict, intersect either cached span.
 ///

@@ -13,7 +13,8 @@ use metal::{
 };
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
 use moon_chart::tick_volume::{
-    TickTimeOrder, pending_ring_at, tick_bake_span, tick_time_range, tick_touches_bake,
+    BakeColumns, LodPick, TickTimeOrder, pending_ring_at, tick_bake_span, tick_time_range,
+    tick_touches_bake,
 };
 use moon_core::data::{LevelInstance, PriceLinePoint};
 use objc::{msg_send, sel, sel_impl};
@@ -24,8 +25,9 @@ use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
     SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
-    evicted_cross_ranges, hl_of, mk_of, ordered_cross_ring, queue_appended_ranges,
-    ranges_touch_volume_max, reset_cross_ring, seg_of, update_cross_volume_max, zone_of,
+    evicted_cross_ranges, hl_of, lod_bake_rows, mk_of, ordered_cross_ring, queue_appended_ranges,
+    ranges_touch_volume_max, reset_cross_ring, ring_run_slices, ring_span_runs, seg_of,
+    update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");
@@ -33,7 +35,7 @@ const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.
 const MIN_COMBO_CAPACITY: usize = 1;
 
 /// The DX11 combo's backend-free bake planner, shared so both backends decide rebakes and blit
-/// windows by one rule. Its LOD helpers have no Metal caller yet.
+/// windows by one rule.
 #[path = "combo/plan.rs"]
 #[allow(dead_code)]
 mod combo_plan;
@@ -76,40 +78,6 @@ impl BufferSlot {
                 );
             }
         }
-    }
-
-    fn write_range<T: bytemuck::Pod>(
-        &mut self,
-        device: &DeviceRef,
-        label: &str,
-        start: usize,
-        data: &[T],
-        total_len: usize,
-    ) -> bool {
-        let elem = std::mem::size_of::<T>();
-        let need = (total_len.max(1) * elem).max(4) as u64;
-        let recreated = self.buffer.as_ref().is_none() || self.size < need;
-        if recreated {
-            let buffer = device.new_buffer(
-                need.next_power_of_two(),
-                MTLResourceOptions::StorageModeShared
-                    | MTLResourceOptions::CPUCacheModeWriteCombined,
-            );
-            buffer.set_label(label);
-            self.buffer = Some(buffer);
-            self.size = need.next_power_of_two();
-        }
-        let bytes = bytemuck::cast_slice(data);
-        if !bytes.is_empty() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    (self.buffer.as_ref().unwrap().contents() as *mut u8).add(start * elem),
-                    bytes.len(),
-                );
-            }
-        }
-        recreated
     }
 
     fn buffer(&self) -> &metal::BufferRef {
@@ -325,10 +293,14 @@ pub struct MetalLayers {
     /// rows stay painted until then, so a full ring sheds history in steps, not one bake per tick.
     eviction_rebake_at: Option<Instant>,
     crosses: Vec<ChartCross>,
-    /// Lateness evidence over the ring's times, so a cursor lookup binary-searches the ring.
-    tick_time_order: TickTimeOrder,
     cross_head: usize,
     cross_count: usize,
+    /// Lateness evidence over the ring's times, so a full bake culls to its span and a cursor
+    /// lookup binary-searches the ring.
+    tick_time_order: TickTimeOrder,
+    /// Reusable LOD reduction scratch and the gathered rows a dense full bake draws.
+    lod_pick: LodPick,
+    lod_rows: Vec<ChartCross>,
     last_line: Vec<PriceLinePoint>,
     mark_line: Vec<PriceLinePoint>,
     combo_capacity: usize,
@@ -355,7 +327,6 @@ pub struct MetalLayers {
     view_uniform: BufferSlot,
     book_view_uniform: BufferSlot,
     book_style_uniform: BufferSlot,
-    cross_buffer: BufferSlot,
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
     price_style_uniform: BufferSlot,
@@ -374,7 +345,6 @@ pub struct MetalLayers {
     side_buffer: BufferSlot,
     hvol_buffer: BufferSlot,
     hvol_style_uniform: BufferSlot,
-    combo_buffers_dirty: bool,
     price_line_buffers_dirty: bool,
     book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
@@ -399,9 +369,11 @@ impl MetalLayers {
             combo_dirty_ranges: Vec::new(),
             eviction_rebake_at: None,
             crosses: Vec::new(),
-            tick_time_order: TickTimeOrder::default(),
             cross_head: 0,
             cross_count: 0,
+            tick_time_order: TickTimeOrder::default(),
+            lod_pick: LodPick::default(),
+            lod_rows: Vec::new(),
             last_line: Vec::new(),
             mark_line: Vec::new(),
             combo_capacity: MIN_COMBO_CAPACITY,
@@ -425,7 +397,6 @@ impl MetalLayers {
             view_uniform: BufferSlot::default(),
             book_view_uniform: BufferSlot::default(),
             book_style_uniform: BufferSlot::default(),
-            cross_buffer: BufferSlot::default(),
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
             price_style_uniform: BufferSlot::default(),
@@ -443,7 +414,6 @@ impl MetalLayers {
             side_buffer: BufferSlot::default(),
             hvol_buffer: BufferSlot::default(),
             hvol_style_uniform: BufferSlot::default(),
-            combo_buffers_dirty: true,
             price_line_buffers_dirty: true,
             book_buffer_dirty: true,
             userdata_buffers_dirty: true,
@@ -535,7 +505,6 @@ impl MetalLayers {
             self.mark_line = tail_vec(&self.mark_line, self.price_line_capacity);
         }
         self.recalc_volume_scale();
-        self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.combo_texture = None;
         self.volume_texture = None;
@@ -557,7 +526,6 @@ impl MetalLayers {
                 .resize(self.combo_capacity, ChartCross::zeroed());
         }
         self.recalc_volume_scale();
-        self.combo_buffers_dirty = true;
         self.invalidate_bakes();
         self.combo_dirty_ranges.clear();
     }
@@ -579,7 +547,6 @@ impl MetalLayers {
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
         let evicts_baked = full_reset || self.evicts_baked(&evicted_ranges);
-        self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -587,6 +554,11 @@ impl MetalLayers {
             self.combo_capacity,
             data,
         );
+        if full_reset {
+            self.refresh_tick_time_order();
+        } else {
+            self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
+        }
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -596,7 +568,6 @@ impl MetalLayers {
         } else {
             self.update_volume_scale(data);
         }
-        self.combo_buffers_dirty = true;
         let queued = !full_reset
             && queue_appended_ranges(
                 &mut self.combo_dirty_ranges,
@@ -738,7 +709,6 @@ impl MetalLayers {
     pub fn set_tick_style(&mut self, style: TickStyleGpu) {
         if self.tick_style != style {
             self.tick_style = style;
-            self.combo_buffers_dirty = true;
             self.invalidate_bakes();
         }
     }
@@ -819,7 +789,6 @@ impl MetalLayers {
         self.view_uniform = BufferSlot::default();
         self.book_view_uniform = BufferSlot::default();
         self.book_style_uniform = BufferSlot::default();
-        self.cross_buffer = BufferSlot::default();
         self.last_line_buffer = BufferSlot::default();
         self.mark_line_buffer = BufferSlot::default();
         self.price_style_uniform = BufferSlot::default();
@@ -834,7 +803,6 @@ impl MetalLayers {
         self.side_buffer = BufferSlot::default();
         self.hvol_buffer = BufferSlot::default();
         self.hvol_style_uniform = BufferSlot::default();
-        self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
@@ -1121,13 +1089,28 @@ impl MetalLayers {
             view_price0: view.view_price0,
             ..cross_view
         };
-        let cross_count = self.cross_count.min(self.crosses.len());
         let ranges = std::mem::take(&mut self.combo_dirty_ranges);
-        let all = [(0, cross_count)];
-        let pipelines = self.pipelines.as_ref().unwrap();
         let mut keepalive_buffers = Vec::new();
 
         if vol_plan.full || dirty {
+            let full_runs = vol_plan.full.then(|| {
+                self.full_bake_runs(
+                    &BakeColumns {
+                        time0: vol_plan.bake_t0,
+                        time_to_px: view.time_to_px,
+                        price0: view.view_price0,
+                        price_to_px: view.price_to_px,
+                        height: tex_h as f32,
+                        width_px: dims.tex_w,
+                        volume_alpha: view.volume_alpha,
+                        marker_half: view.marker_half,
+                        buy_inv: vol_view.volume_buy_inv,
+                        sell_inv: vol_view.volume_sell_inv,
+                    },
+                    false,
+                )
+            });
+            let rows = self.bake_rows(full_runs, &ranges);
             let tex = self.volume_texture.as_ref().unwrap();
             keepalive_buffers.extend(self.bake_pass(
                 device,
@@ -1136,11 +1119,35 @@ impl MetalLayers {
                 (dims.tex_w, dims.band_px),
                 vol_plan.full,
                 vol_view,
-                &pipelines.volume,
-                if vol_plan.full { &all[..] } else { &ranges[..] },
+                &self.pipelines.as_ref().unwrap().volume,
+                &rows,
             ));
         }
         if cross_plan.full || dirty {
+            let full_runs = cross_plan.full.then(|| {
+                self.full_bake_runs(
+                    &BakeColumns {
+                        time0: cross_plan.bake_t0,
+                        time_to_px: view.time_to_px,
+                        price0: cross_plan.bake_p0,
+                        price_to_px: view.price_to_px,
+                        height: dims.tex_h_total as f32,
+                        width_px: dims.tex_w,
+                        volume_alpha: view.volume_alpha,
+                        marker_half: view.marker_half,
+                        buy_inv: cross_view.volume_buy_inv,
+                        sell_inv: cross_view.volume_sell_inv,
+                    },
+                    true,
+                )
+            });
+            let rows = self.bake_rows(full_runs, &ranges);
+            if cross_plan.full {
+                crate::diag::bump_by(
+                    &crate::diag::CHART_COMBO_BAKE_INSTANCES,
+                    rows.iter().map(|r| r.len() as u64).sum(),
+                );
+            }
             let tex = self.combo_texture.as_ref().unwrap();
             keepalive_buffers.extend(self.bake_pass(
                 device,
@@ -1149,12 +1156,8 @@ impl MetalLayers {
                 (dims.tex_w, dims.tex_h_total),
                 cross_plan.full,
                 cross_view,
-                &pipelines.crosses,
-                if cross_plan.full {
-                    &all[..]
-                } else {
-                    &ranges[..]
-                },
+                &self.pipelines.as_ref().unwrap().crosses,
+                &rows,
             ));
         }
         if vol_plan.full {
@@ -1180,8 +1183,62 @@ impl MetalLayers {
         true
     }
 
+    /// Selects what a full bake over `cols` draws: the ring runs inside its time span, or `None`
+    /// when that span is dense enough to thin, with the LOD-picked rows left in `lod_rows`. Both
+    /// keep ascending ring order, so overlapping ticks blend as in an unculled draw.
+    fn full_bake_runs(
+        &mut self,
+        cols: &BakeColumns,
+        cross_pass: bool,
+    ) -> Option<[(usize, usize); 2]> {
+        let marker_half = if cross_pass { cols.marker_half } else { 0.0 };
+        let span = tick_bake_span(
+            cols.time0,
+            cols.width_px as f32,
+            cols.time_to_px,
+            marker_half,
+        );
+        let runs = ring_span_runs(
+            &self.crosses,
+            self.cross_head,
+            self.cross_count,
+            self.combo_capacity,
+            self.tick_time_order.max_lateness(),
+            span,
+        );
+        let lod_t = crate::diag::timer();
+        let thinned = lod_bake_rows(
+            &self.crosses,
+            runs,
+            cols,
+            cross_pass,
+            &mut self.lod_pick,
+            &mut self.lod_rows,
+        );
+        if thinned {
+            crate::diag::record_us(&crate::diag::CHART_COMBO_LOD_US, lod_t);
+            None
+        } else {
+            Some(runs)
+        }
+    }
+
+    /// Row slices one bake pass draws: a full bake's `full_runs` (the LOD rows when `None`), or
+    /// the appended ring `ranges` of an incremental one.
+    fn bake_rows(
+        &self,
+        full_runs: Option<Option<[(usize, usize); 2]>>,
+        ranges: &[(usize, usize)],
+    ) -> Vec<&[ChartCross]> {
+        match full_runs {
+            Some(Some(runs)) => ring_run_slices(&self.crosses, &runs),
+            Some(None) => vec![&self.lod_rows[..]],
+            None => ring_run_slices(&self.crosses, ranges),
+        }
+    }
+
     /// Encodes one render pass into a cache bitmap: cleared for a full bake, loaded for an
-    /// incremental one, drawing each ring range of `ranges` with `pipeline`. The snapshot view,
+    /// incremental one, drawing each slice of `rows` with `pipeline`. The snapshot view,
     /// tick-style and cross buffers are returned to be retained until the command buffer completes.
     #[allow(clippy::too_many_arguments)]
     fn bake_pass(
@@ -1193,7 +1250,7 @@ impl MetalLayers {
         clear: bool,
         view: ChartViewGpu,
         pipeline: &RenderPipelineState,
-        ranges: &[(usize, usize)],
+        rows: &[&[ChartCross]],
     ) -> Vec<metal::Buffer> {
         let pass = metal::RenderPassDescriptor::new();
         let color = pass.color_attachments().object_at(0).unwrap();
@@ -1220,12 +1277,10 @@ impl MetalLayers {
             snapshot_buffer(device, "moon_chart_combo_tick_style", &[self.tick_style]);
         set_uniform(encoder, 2, tick_buffer.as_ref());
         keepalive.push(tick_buffer);
-        for &(start, count) in ranges {
-            let end = start.saturating_add(count).min(self.crosses.len());
-            if start >= end {
+        for &crosses in rows {
+            if crosses.is_empty() {
                 continue;
             }
-            let crosses = &self.crosses[start..end];
             let cross_buffer = snapshot_buffer(device, "moon_chart_combo_crosses", crosses);
             set_storage(encoder, 1, cross_buffer.as_ref());
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
@@ -1474,33 +1529,6 @@ impl MetalLayers {
             .write(device, "moon_chart_book_view_uniform", &[*orderbook_view]);
         self.book_style_uniform
             .write(device, "moon_chart_book_style_uniform", &[*book_style]);
-        if self.combo_buffers_dirty || self.cross_buffer.buffer.is_none() {
-            let can_partial =
-                !self.combo_dirty_ranges.is_empty() && self.cross_buffer.buffer.is_some();
-            if can_partial {
-                let mut recreated = false;
-                for (start, count) in &self.combo_dirty_ranges {
-                    let end = start.saturating_add(*count).min(self.crosses.len());
-                    if *start < end {
-                        recreated |= self.cross_buffer.write_range(
-                            device,
-                            "moon_chart_crosses",
-                            *start,
-                            &self.crosses[*start..end],
-                            self.crosses.len(),
-                        );
-                    }
-                }
-                if recreated {
-                    self.cross_buffer
-                        .write(device, "moon_chart_crosses", &self.crosses);
-                }
-            } else {
-                self.cross_buffer
-                    .write(device, "moon_chart_crosses", &self.crosses);
-            }
-            self.combo_buffers_dirty = false;
-        }
         if self.price_line_buffers_dirty
             || self.last_line_buffer.buffer.is_none()
             || self.mark_line_buffer.buffer.is_none()

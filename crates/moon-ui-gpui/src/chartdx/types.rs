@@ -595,6 +595,99 @@ pub fn append_cross_ring<T: Copy + bytemuck::Zeroable>(
     }
 }
 
+/// Chronological index range of a physical tick ring's rows that may lie in `[from, to]`,
+/// widened by the ring's `max_lateness` evidence; the slot layout itself is untouched.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn ring_time_range(
+    ring: &[ChartCross],
+    head: usize,
+    count: usize,
+    capacity: usize,
+    max_lateness: f64,
+    (from, to): (f64, f64),
+) -> std::ops::Range<usize> {
+    let capacity = capacity.max(1);
+    let count = count.min(capacity).min(ring.len());
+    let origin = if count == capacity {
+        head % capacity
+    } else {
+        0
+    };
+    moon_chart::tick_volume::tick_time_range(count, max_lateness, from, to, |index| {
+        ring[(origin + index) % capacity].time_rel
+    })
+}
+
+/// Physical slot runs a full bake over the time `span` draws, in ascending slot (draw) order so
+/// overlapping ticks blend as in an unculled draw.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn ring_span_runs(
+    ring: &[ChartCross],
+    head: usize,
+    count: usize,
+    capacity: usize,
+    max_lateness: f64,
+    span: (f64, f64),
+) -> [(usize, usize); 2] {
+    let count = count.min(capacity.max(1)).min(ring.len());
+    moon_chart::tick_volume::tick_slot_runs(
+        ring_time_range(ring, head, count, capacity, max_lateness, span),
+        head,
+        count,
+        capacity.max(1),
+    )
+}
+
+/// Non-empty row slices of the ring `runs`, in the order given, each clamped to the ring.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn ring_run_slices<'a>(
+    ring: &'a [ChartCross],
+    runs: &[(usize, usize)],
+) -> Vec<&'a [ChartCross]> {
+    runs.iter()
+        .map(|&(start, count)| {
+            let end = start.saturating_add(count).min(ring.len());
+            &ring[start.min(end)..end]
+        })
+        .filter(|rows| !rows.is_empty())
+        .collect()
+}
+
+/// Thin a dense full bake over `runs` to what its bitmap can show, gathering the kept rows into
+/// `out` in original draw order. Returns `false`, leaving `out` untouched, when the span is too
+/// sparse to reduce and the raw runs should draw instead.
+#[allow(dead_code)] // each backend compiles its own subset of these ring helpers
+pub fn lod_bake_rows(
+    ring: &[ChartCross],
+    runs: [(usize, usize); 2],
+    cols: &moon_chart::tick_volume::BakeColumns,
+    cross_pass: bool,
+    pick: &mut moon_chart::tick_volume::LodPick,
+    out: &mut Vec<ChartCross>,
+) -> bool {
+    let rows_in_span = runs.iter().map(|&(_, count)| count).sum();
+    if !moon_chart::tick_volume::lod_applies(rows_in_span, cols.width_px) {
+        return false;
+    }
+    let span_rows = runs
+        .into_iter()
+        .flat_map(|(start, count)| start..start + count)
+        .map(|slot| {
+            let c = &ring[slot];
+            (slot as u32, c.time_rel, c.price, c.side, c.qty)
+        });
+    let picked = if cross_pass {
+        moon_chart::tick_volume::reduce_crosses(span_rows, cols, pick);
+        &pick.cross
+    } else {
+        moon_chart::tick_volume::reduce_volume(span_rows, cols, pick);
+        &pick.volume
+    };
+    out.clear();
+    out.extend(picked.iter().map(|&slot| ring[slot as usize]));
+    true
+}
+
 /// Chart transform uniform. Keep field order in sync with HLSL/MSL/WGSL.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
