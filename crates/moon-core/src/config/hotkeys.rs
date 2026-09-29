@@ -300,6 +300,8 @@ pub enum KeySlot {
     PanicSell,
     PanicSellOne,
     CancelAllBuys,
+    /// Moonbot's "Cancel buys in all bots": what `CancelAllBuys` does, on every connected core.
+    CancelAllBuysAllCores,
     JoinSells,
     SwitchCharts,
     NewLong,
@@ -341,7 +343,7 @@ impl KeySlot {
     /// unenumerated. What checks it is a test that serializes the config with every slot written a
     /// marker and looks for a stored keystroke that kept its own value: the STRUCT is the reference,
     /// never this list, because a test that walks this list to verify this list proves nothing.
-    pub const NAMED: [Self; 31] = [
+    pub const NAMED: [Self; 32] = [
         Self::CancelBuy,
         Self::PanicSell,
         Self::PanicSellOne,
@@ -373,6 +375,10 @@ impl KeySlot {
         Self::FigDelete,
         Self::FigAlert,
         Self::FigUndo,
+        // Last, like its step in the UI's key dispatch: `HotkeysConfig::action_for_gesture` walks
+        // this order, so a click bound here AND to another slot fires the other one, never the
+        // widest action there is.
+        Self::CancelAllBuysAllCores,
     ];
 
     /// Every slot the file holds a key for, presets first.
@@ -405,6 +411,7 @@ impl KeySlot {
             Self::PanicSell => "panic_sell",
             Self::PanicSellOne => "panic_sell_one",
             Self::CancelAllBuys => "cancel_all_buys",
+            Self::CancelAllBuysAllCores => "cancel_all_buys_all_cores",
             Self::JoinSells => "join_sells",
             Self::SwitchCharts => "switch_charts",
             Self::NewLong => "new_long",
@@ -713,6 +720,7 @@ impl HotkeysConfig {
             KeySlot::PanicSell => &self.panic_sell,
             KeySlot::PanicSellOne => &self.panic_sell_one,
             KeySlot::CancelAllBuys => &self.cancel_all_buys,
+            KeySlot::CancelAllBuysAllCores => &self.cancel_all_buys_all_cores,
             KeySlot::JoinSells => &self.join_sells,
             KeySlot::SwitchCharts => &self.switch_charts,
             KeySlot::NewLong => &self.new_long,
@@ -765,6 +773,7 @@ impl HotkeysConfig {
             KeySlot::PanicSell => &mut self.panic_sell,
             KeySlot::PanicSellOne => &mut self.panic_sell_one,
             KeySlot::CancelAllBuys => &mut self.cancel_all_buys,
+            KeySlot::CancelAllBuysAllCores => &mut self.cancel_all_buys_all_cores,
             KeySlot::JoinSells => &mut self.join_sells,
             KeySlot::SwitchCharts => &mut self.switch_charts,
             KeySlot::NewLong => &mut self.new_long,
@@ -978,6 +987,12 @@ pub struct HotkeysConfig {
     pub panic_sell_one: String,
     #[serde(default = "default_cancel_all_buys")]
     pub cancel_all_buys: String,
+    /// Moonbot's "Cancel buys in all bots": `cancel_all_buys` on every connected core at once.
+    ///
+    /// Unbound by default, as in Moonbot, so it needs neither a backfill nor a collision
+    /// generation: serde's default leaves it empty in every existing file.
+    #[serde(default)]
+    pub cancel_all_buys_all_cores: String,
     #[serde(default = "default_join_sells")]
     pub join_sells: String,
     #[serde(default = "default_switch_charts")]
@@ -1193,6 +1208,7 @@ impl Default for HotkeysConfig {
             panic_sell: default_panic_sell(),
             panic_sell_one: default_panic_sell_one(),
             cancel_all_buys: default_cancel_all_buys(),
+            cancel_all_buys_all_cores: String::new(),
             join_sells: default_join_sells(),
             switch_charts: default_switch_charts(),
             new_long: default_new_long(),

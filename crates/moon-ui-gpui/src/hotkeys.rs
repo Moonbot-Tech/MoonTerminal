@@ -80,6 +80,10 @@ pub enum HotkeyAction {
     CancelBuy,
     /// Cancel all pending buy orders for the active core across every market.
     CancelAllBuys,
+    /// Cancel all pending buy orders on every connected core — Moonbot's "Cancel buys in all
+    /// bots". Reads no group, target or active core, so it acts the same from every window that
+    /// routes trading keys — group windows, Auto Overview and detached charts.
+    CancelAllBuysAllCores,
     /// Toggle panic sell for the active chart's market.
     PanicSell,
     /// Immediately close the active chart market's position with a market sell.
@@ -512,6 +516,9 @@ impl HotkeyAction {
     /// ownership. A
     /// held key would do that tens of times a second and leave the clipboard thrashing.
     ///
+    /// Cancel buys on ALL cores is the one cancel held back: a repeat does not move on to anything
+    /// new, it re-sends one command per market of every online core, tens of times a second.
+    ///
     /// The ones still repeating: cancels — a repeat sweeps on to the next entry order under the
     /// pointer, and the hold's per-order dedupe refuses to resend for a line it already addressed —
     /// and the presets (setting a value twice sets it once).
@@ -526,6 +533,9 @@ impl HotkeyAction {
                 | Self::JoinSells
                 | Self::PanicSell
                 | Self::PanicSellOne
+                // One press already reaches every market of every core; a held key would only
+                // repeat that fan-out at the system rate.
+                | Self::CancelAllBuysAllCores
                 | Self::FigAlert
                 // A held key repeats at the system rate, and each repeat would take another
                 // figure: unlike `FigDelete`, which runs out after the one selected figure, this
@@ -544,7 +554,8 @@ impl HotkeyAction {
 /// Branch order defines collision precedence: configured figure actions; built-in Shift+Escape,
 /// Escape, reset, and Tab/Delete; configured scale actions and the chart shot; order-size and
 /// fixed-sell presets; active-market and active-core trading actions; configured `switch_charts`;
-/// then manual strategies. Returns `None` when no binding matches.
+/// then manual strategies; and cancel buys on all cores last of all. Returns `None` when no
+/// binding matches.
 fn resolve_binding(event: &Keystroke, hk: &HotkeysConfig) -> Option<HotkeyAction> {
     DISPATCH.iter().find_map(|step| match step {
         Step::Slot(slot) => pressed(hk.key(*slot), event).then(|| action_of(*slot, hk)),
@@ -602,7 +613,8 @@ const fn builtin(
 ///   Mac-only change to one built-in, made on purpose rather than carried as an exception;
 /// - the window-local Y scale and the chart shot sit ABOVE the preset arrays: those are
 ///   user-editable, and a Moonbot import can move one onto any key at all;
-/// - the trading actions and the manual-strategy presets close the list.
+/// - the trading actions and the manual-strategy presets close the list, all but one: cancel buys
+///   on ALL cores sits after the presets, so it loses every collision.
 pub const DISPATCH: &[Step] = &[
     Step::Slot(KeySlot::DrawHline),
     Step::Slot(KeySlot::DrawHorizontalRay),
@@ -677,6 +689,11 @@ pub const DISPATCH: &[Step] = &[
     Step::Slot(KeySlot::ManualStrategy(7)),
     Step::Slot(KeySlot::ManualStrategy(8)),
     Step::Slot(KeySlot::ManualStrategy(9)),
+    // Last on purpose: the widest action there is, and nothing guards a keystroke from landing on
+    // it twice — the Moonbot import writes keys with no clash check. On a shared key every other
+    // action wins, so a collision costs the fan-out rather than silently replacing, say, the
+    // Panic Sell the import put there.
+    Step::Slot(KeySlot::CancelAllBuysAllCores),
 ];
 
 /// Every configurable slot in [`DISPATCH`], in its order — for the tests that hold the list to
@@ -706,6 +723,7 @@ pub fn action_of(slot: KeySlot, hk: &HotkeysConfig) -> HotkeyAction {
         KeySlot::PanicSell => A::PanicSell,
         KeySlot::PanicSellOne => A::PanicSellOne,
         KeySlot::CancelAllBuys => A::CancelAllBuys,
+        KeySlot::CancelAllBuysAllCores => A::CancelAllBuysAllCores,
         KeySlot::JoinSells => A::JoinSells,
         KeySlot::SwitchCharts => A::SwitchCharts,
         KeySlot::NewLong => A::NewLong,
@@ -1148,6 +1166,12 @@ pub fn apply(
             }
             None => false,
         },
+        // Consumed even with no core online: the key is ours, and the summary line in the log
+        // says that nothing went out.
+        A::CancelAllBuysAllCores => {
+            b.cancel_all_buys_all_cores();
+            true
+        }
         // The only debounce on the Panic Sell path: an impatient re-jab within the hotkey's
         // debounce window is absorbed as a no-op. The direct chart-button path is deliberately
         // unguarded because it is an explicit click on the labelled control.

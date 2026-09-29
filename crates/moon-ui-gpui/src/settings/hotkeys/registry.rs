@@ -268,6 +268,7 @@ fn build_rows() -> Vec<Row> {
         key(G::Trading, KeySlot::PanicSell),
         key(G::Trading, KeySlot::PanicSellOne),
         key(G::Trading, KeySlot::CancelAllBuys),
+        key(G::Trading, KeySlot::CancelAllBuysAllCores),
         key(G::Trading, KeySlot::JoinSells),
         key(G::Trading, KeySlot::NewLong),
         key(G::Trading, KeySlot::NewShort),

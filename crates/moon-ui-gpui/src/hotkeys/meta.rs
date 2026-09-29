@@ -212,6 +212,12 @@ pub fn key_slot_meta(slot: KeySlot) -> SlotMeta {
         S::NewLong | S::NewShort => meta(Shared, Scope::BOOK),
         // Addresses the core, not a chart: every market of the window's active core at once.
         S::CancelAllBuys => meta(Shared, Scope::WINDOW),
+        // Every connected core, whichever chart window has the keyboard (the trade-detail window
+        // routes no trading key, as for `CenterChart`). Moonbot's `CancelBuysAll` is a different
+        // action — a Windows message to the Moonbots on its own machine — and its key rides only
+        // in the raw `UiSection` tail, so the binding here is the Terminal's: nothing imports or
+        // pulls it.
+        S::CancelAllBuysAllCores => meta(Local, Scope::APP),
         // Group-owned: the group's charts and the group's price scale.
         S::SwitchCharts | S::ScalePlus | S::ScaleMinus => meta(Shared, Scope::WINDOW),
         // The Moonbot schema has no super-zoom key slots to import.
