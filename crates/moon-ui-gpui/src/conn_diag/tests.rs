@@ -25,6 +25,7 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
         trade: None,
         transport: mode,
         workspace_membership: moon_core::config::WorkspaceMembership::default(),
+        total_mode: Default::default(),
     }
 }
 

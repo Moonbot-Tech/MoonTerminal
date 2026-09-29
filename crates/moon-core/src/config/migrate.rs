@@ -77,6 +77,7 @@ fn config_from_legacy_enc(plain: &[u8], uid_floor: Option<u64>) -> anyhow::Resul
             transport: None,
             // Left at the default: a legacy import predates this field entirely.
             workspace_membership: servers::WorkspaceMembership::default(),
+            total_mode: Default::default(),
         })
         .collect();
     let mut config = AppConfig {
@@ -139,6 +140,7 @@ fn config_from_legacy_toml(text: &str, uid_floor: Option<u64>) -> anyhow::Result
             transport: None,
             // Left at the default: a legacy import predates this field entirely.
             workspace_membership: servers::WorkspaceMembership::default(),
+            total_mode: Default::default(),
         }],
         groups: Vec::new(),
         language: super::Language::default(),

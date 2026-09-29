@@ -25,6 +25,7 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         trade: None,
         transport: None,
         workspace_membership: moon_core::config::WorkspaceMembership::default(),
+        total_mode: Default::default(),
     }
 }
 

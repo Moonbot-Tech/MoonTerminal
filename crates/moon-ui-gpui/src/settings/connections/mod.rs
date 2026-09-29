@@ -94,6 +94,7 @@ pub(super) struct ConnRowIds {
     /// [`Self::feed_tip`].
     pub(super) proto_tip: SharedString,
     pub(super) preset: SharedString,
+    pub(super) total: SharedString,
     pub(super) act: SharedString,
     pub(super) del: SharedString,
     pub(super) rec: SharedString,
@@ -139,6 +140,7 @@ impl ConnRowIds {
             proto: SharedString::from(format!("proto-{ident}")),
             proto_tip: SharedString::from(format!("proto-tip-{ident}")),
             preset: SharedString::from(format!("preset-{ident}")),
+            total: SharedString::from(format!("total-{ident}")),
             act: SharedString::from(format!("act-{ident}")),
             del: SharedString::from(format!("del-{ident}")),
             rec: SharedString::from(format!("rec-{ident}")),
@@ -464,6 +466,14 @@ impl SettingsView {
             let visible = visible_at(self.conn_entry_index(key));
             if !visible {
                 self.preset_open = None;
+                changed = true;
+            }
+        }
+
+        if let Some(key) = self.total_open {
+            let visible = visible_at(self.conn_entry_index(key));
+            if !visible {
+                self.total_open = None;
                 changed = true;
             }
         }

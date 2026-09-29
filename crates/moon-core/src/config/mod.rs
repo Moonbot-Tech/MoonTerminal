@@ -107,7 +107,7 @@ pub use schema::{TelegramConfig, UiThemeMode};
 pub use secrets::Secret;
 pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
-    StratSlot, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
+    StratSlot, TotalMode, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
 };
 pub use store::{CoreKeyEntry, read_core_keys};
 pub use tab_badges::TabBadgeSettings;
@@ -785,6 +785,7 @@ impl AppConfig {
                 trade: None,
                 transport: servers::transport_from_key(&key),
                 workspace_membership: WorkspaceMembership::default(),
+                total_mode: TotalMode::default(),
             })
             .collect();
         let mut config = Self {
@@ -1010,6 +1011,8 @@ impl AppConfig {
         // `workspace_membership` joins them for the same reason and at higher stakes: it is a
         // purely cosmetic display filter by definition (an excluded core still connects), so
         // toggling it must never reconnect the entire fleet.
+        // `total_mode` only decides how the Assets footer sums balances, so it is neutralized too:
+        // changing it must never reconnect a core.
         let servers: Vec<ServerConfig> = self
             .servers
             .iter()
@@ -1021,6 +1024,7 @@ impl AppConfig {
                 manual_strategy: None,
                 trade: None,
                 workspace_membership: WorkspaceMembership::default(),
+                total_mode: TotalMode::default(),
                 ..s.clone()
             })
             .collect();

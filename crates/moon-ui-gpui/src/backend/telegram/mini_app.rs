@@ -25,7 +25,7 @@ use moon_core::util::{display_time, fmt};
 use crate::Backend;
 use crate::core_order::{CoreOrder, exchange_sections};
 use crate::order_math::{MONEY_DECIMALS, order_pnl, order_pnl_pct, pct_to_entry, position_qty};
-use crate::panels::{BalanceFigures, aggregate_balance_figures};
+use crate::panels::{BalanceFigures, aggregate_account_figures};
 
 /// How long a finished report may answer the same chat and period without reading again.
 const REPORT_CACHE_TTL: Duration = Duration::from_secs(15);
@@ -795,7 +795,8 @@ impl Backend {
                 ),
                 None => (BalanceState::Awaiting, 0.0, 0.0),
             };
-            let show = state.has_value() && free.is_finite() && total.is_finite();
+            let reading = BalanceFigures { state, free, total };
+            let show = reading.usable();
             per_core.push(CoreBalanceDto {
                 id: *id,
                 name: name.clone(),
@@ -806,9 +807,10 @@ impl Backend {
                 free_text: show.then(|| balance_text(free)),
                 total_text: show.then(|| balance_text(total)),
             });
-            figures.push(BalanceFigures { state, free, total });
+            figures.push((*id, name.clone(), reading));
         }
-        let grand = aggregate_balance_figures(&figures);
+        // Folds cores sharing one exchange account, exactly as the Assets footer does.
+        let grand = aggregate_account_figures(self, &figures).sum;
         let mut per_exchange = Vec::new();
         for (venue, members) in exchange_sections(
             cores
@@ -816,8 +818,11 @@ impl Backend {
                 .enumerate()
                 .map(|(index, (id, _, _))| (index, venues.get(id))),
         ) {
-            let rows: Vec<BalanceFigures> = members.iter().map(|&index| figures[index]).collect();
-            let summed = aggregate_balance_figures(&rows);
+            let rows: Vec<_> = members
+                .iter()
+                .map(|&index| figures[index].clone())
+                .collect();
+            let summed = aggregate_account_figures(self, &rows).sum;
             per_exchange.push(ExchangeBalanceDto {
                 exchange: crate::controls::venue_section_label(venue),
                 total: summed.total,

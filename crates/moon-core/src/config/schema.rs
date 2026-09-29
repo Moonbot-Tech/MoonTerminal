@@ -13,7 +13,9 @@ use super::groups::{self, GroupConfig};
 use super::hotkeys::HotkeysConfig;
 use super::lang::Language;
 use super::secrets::Secret;
-use super::servers::{self, CoreSortMode, FeedFlags, TransportVersion, WorkspaceMembership};
+use super::servers::{
+    self, CoreSortMode, FeedFlags, TotalMode, TransportVersion, WorkspaceMembership,
+};
 use super::toml_io::ConfigLoad;
 use crate::db::valuation::ValuationMode;
 use crate::market::MarketDataMode;
@@ -304,6 +306,9 @@ pub struct ServerMeta {
     /// This core's workspace-preset display membership; see `ServerConfig::workspace_membership`.
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub workspace_membership: WorkspaceMembership,
+    /// How this core counts toward the Assets footer and Telegram Mini App totals; see `ServerConfig::total_mode`.
+    #[serde(default)]
+    pub total_mode: TotalMode,
 }
 
 /// Plaintext preferences; absent density is distinguished from an explicit Standard choice.

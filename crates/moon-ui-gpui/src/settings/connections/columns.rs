@@ -138,7 +138,7 @@ pub(super) struct ConnCol {
 /// Every column of the core table, left to right.
 ///
 /// Indexed by [`ConnColId`]; `tests` proves the two stay in step.
-const CONN_COLS: [ConnCol; 13] = [
+const CONN_COLS: [ConnCol; 14] = [
     // 34 holds a three-letter label. At the supported +6 Font setting the English/Spanish
     // "Act" measures about 30.6px in Geist Mono -- at 28 the HEADING itself ellipsised,
     // which is the complaint this width exists to answer.
@@ -228,6 +228,18 @@ const CONN_COLS: [ConnCol; 13] = [
         id: "h-preset",
         label: Some("conn.col.preset"),
         tip: Some("conn.tip.preset"),
+        basis: 72.0,
+        grow: false,
+        max: None,
+        width: ConnColWidth::MicroTrigger,
+        align: ConnColAlign::Center,
+        head_pad: 0.0,
+    },
+    // Sized like `h-preset` beside it: the longest option label is about as long as "Classic".
+    ConnCol {
+        id: "h-total",
+        label: Some("conn.col.total"),
+        tip: Some("conn.tip.total"),
         basis: 72.0,
         grow: false,
         max: None,
@@ -358,6 +370,7 @@ pub(super) enum ConnColId {
     Endpoint,
     Proto,
     Preset,
+    Total,
     Group,
     Bundle,
     Data,
@@ -369,13 +382,14 @@ pub(super) enum ConnColId {
 
 impl ConnColId {
     /// Every column, left to right, in the order both builders emit them.
-    pub(super) const ALL: [ConnColId; 13] = [
+    pub(super) const ALL: [ConnColId; 14] = [
         ConnColId::Act,
         ConnColId::Name,
         ConnColId::Key,
         ConnColId::Endpoint,
         ConnColId::Proto,
         ConnColId::Preset,
+        ConnColId::Total,
         ConnColId::Group,
         ConnColId::Bundle,
         ConnColId::Data,

@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 
+use crate::account::AccountIdentity;
 use crate::config::{MoveKind, MoveSide};
 use crate::data::OrderBookModel;
 use crate::feed::{
@@ -1224,6 +1225,15 @@ impl SessionManager {
     ///     One entry per core that reported an identity.
     pub fn core_venues(&self) -> &HashMap<CoreId, CoreVenue> {
         &self.core_venue
+    }
+
+    /// Return every account identity `core` stated in its own `AuthCheck` answer; which one names
+    /// the account is decided per brand by `venue::merge_key`.
+    ///
+    /// Returns:
+    ///     The identity, or `None` before the answer arrived or when the core stated none.
+    pub fn account_identity(&self, core: CoreId) -> Option<AccountIdentity> {
+        self.market_source.account_identity(core)
     }
 
     /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has

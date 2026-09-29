@@ -17,6 +17,7 @@
 //! states its own default rather than the directory guessing one; `session::orderbook_kind_for_
 //! exchange` picks the futures book, which is also moonproto's default.
 
+use crate::account::{AccountIdentity, AccountKey};
 use crate::feed::ExchangeId;
 use crate::symbol::Exchange;
 
@@ -250,6 +251,32 @@ impl Brand {
             Self::Okx => "OKX",
         }
     }
+
+    /// How far one account's wallet on this brand reaches — the one place the brand rule lives.
+    ///
+    /// Returns:
+    ///     `Shared` when spot and futures on one account report the same money, `PerMarket` when
+    ///     each market has its own wallet, `NeverFold` when the core's stated identity cannot be
+    ///     trusted to name one wallet.
+    pub const fn wallet_scope(self) -> WalletScope {
+        match self {
+            Self::Hyperliquid | Self::BitGet | Self::Bybit | Self::Okx => WalletScope::Shared,
+            Self::Binance => WalletScope::PerMarket,
+            // Their cores state only a BTC deposit address, not verified to be one wallet.
+            Self::Gate | Self::Htx => WalletScope::NeverFold,
+        }
+    }
+}
+
+/// Which cores of one brand and account report the same money.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WalletScope {
+    /// Spot and futures share one wallet: any market of the account merges.
+    Shared,
+    /// Each market has its own wallet: only cores on the same market merge.
+    PerMarket,
+    /// Never merged automatically: the stated identity is not proof of one wallet.
+    NeverFold,
 }
 
 /// Which market of a brand a core trades.
@@ -288,6 +315,64 @@ impl MarketKind {
 pub struct Venue {
     pub brand: Brand,
     pub kind: MarketKind,
+}
+
+/// Which money a core's balance is: one exchange account's wallet on one brand.
+///
+/// Two cores with equal keys report the same funds, so a total counts them once.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct AccountMergeKey {
+    brand: Brand,
+    account: AccountKey,
+    /// `None` on a brand whose spot and futures share one wallet; otherwise the market, so only
+    /// cores on the same market of a separate-wallet brand merge.
+    kind: Option<MarketKind>,
+}
+
+impl AccountMergeKey {
+    /// The brand whose wallet this key names.
+    pub const fn brand(&self) -> Brand {
+        self.brand
+    }
+}
+
+/// Build the merge key of a core from its venue and account identity.
+///
+/// The account is chosen per brand, because one `AuthCheck` field means different things on
+/// different brands: on Binance only the uid is the exchange's account number; elsewhere the
+/// `account_id`, else the address, names it — the Binance uid field is never read there (on
+/// Hyperliquid it is a checksum of the address, which is the identity itself).
+///
+/// Args:
+///     venue: The venue the core resolved to, `None` when its code is unknown.
+///     identity: What the core stated in `AuthCheck`, `None` when it stated nothing.
+///
+/// Returns:
+///     The key, or `None` when either half is missing, the brand's field is absent, or the brand
+///     never folds — such a core is never merged.
+pub fn merge_key(
+    venue: Option<Venue>,
+    identity: Option<AccountIdentity>,
+) -> Option<AccountMergeKey> {
+    let venue = venue?;
+    let identity = identity?;
+    let kind = match venue.brand.wallet_scope() {
+        WalletScope::NeverFold => return None,
+        WalletScope::Shared => None,
+        WalletScope::PerMarket => Some(venue.kind),
+    };
+    let account = match venue.brand {
+        Brand::Binance => AccountKey::BinanceUid(identity.binance_uid?),
+        _ => match identity.account_id {
+            Some(id) => AccountKey::Id(id),
+            None => AccountKey::Address(identity.address?),
+        },
+    };
+    Some(AccountMergeKey {
+        brand: venue.brand,
+        account,
+        kind,
+    })
 }
 
 /// Resolve the venue a platform ordinal names.

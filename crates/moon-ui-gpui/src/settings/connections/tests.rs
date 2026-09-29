@@ -94,6 +94,7 @@ fn server(group: &str) -> ServerConfig {
         trade: None,
         transport: None,
         workspace_membership: moon_core::config::WorkspaceMembership::default(),
+        total_mode: Default::default(),
     }
 }
 

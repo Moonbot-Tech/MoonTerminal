@@ -5,13 +5,32 @@ use super::*;
 impl AssetsView {
     /// Render-gate signature for asset, transfer, sale-marker, and balance-freshness inputs.
     pub(super) fn assets_sig(&self, b: &Backend) -> u64 {
+        use std::hash::{Hash, Hasher};
         let store = b.session.store();
-        self.query_cores(b)
+        // The footer total folds cores by account and per-core setting; neither bumps a data
+        // revision (a Settings change, or `AuthCheck` arriving after the balance), so both enter
+        // the signature directly. One pass over the configured servers, not one per core.
+        let modes: std::collections::HashMap<CoreId, moon_core::config::TotalMode> = b
+            .config
+            .servers
+            .iter()
+            .map(|sv| (sv.id, sv.total_mode))
+            .collect();
+        // One hasher for every merge key: the key holds strings, so it is hashed, but only once.
+        let mut keys = std::collections::hash_map::DefaultHasher::new();
+        let sig = self
+            .query_cores(b)
             .iter()
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
             .map(|(id, _)| (*id, store.core(*id)))
             .fold(0u64, |a, (id, core)| {
-                let a = a.wrapping_mul(31).wrapping_add(id);
+                core_merge_key(b, id).hash(&mut keys);
+                let mode = modes.get(&id).copied().unwrap_or_default();
+                let a = a
+                    .wrapping_mul(31)
+                    .wrapping_add(id)
+                    .wrapping_mul(31)
+                    .wrapping_add(mode as u64);
                 let Some(c) = core else {
                     return a;
                 };
@@ -26,7 +45,8 @@ impl AssetsView {
                     // and must therefore invalidate the rendered balance immediately.
                     .wrapping_mul(31)
                     .wrapping_add(c.balance_state().code())
-            })
+            });
+        sig.wrapping_mul(31).wrapping_add(keys.finish())
     }
 
     /// Cache identity: every input `collect`/`per_core` read, so a change to any of them forces
