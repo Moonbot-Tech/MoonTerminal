@@ -1,9 +1,10 @@
 //! Backend-free bake decisions for the combo bitmaps: when a texture must be fully rebaked and
-//! which texel window of it the blit shows. The GPU wrappers in `combo.rs` only execute them.
+//! which texel window of it the blit shows. The GPU wrappers in `combo.rs` (DX11) and
+//! `metal_backend.rs` (Metal) only execute them.
 
 use moon_chart::tick_volume::lod_applies;
 
-use super::super::gpu::ChartViewGpu;
+use super::super::types::ChartViewGpu;
 
 /// Horizontal bake margin in pixels, baked on EACH side of the visible chart width.
 pub(super) fn combo_x_margin_px(bw: f32) -> f32 {
