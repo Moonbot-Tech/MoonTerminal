@@ -28,13 +28,16 @@ const SHADER: &str = include_str!("shaders/chart_native.metal");
 const BACKGROUND_PNG: &[u8] = include_bytes!("../../../../assets/img/3Dlogo_s01.png");
 const MIN_COMBO_CAPACITY: usize = 1;
 
-#[inline]
-fn texel_aligned_time0(time0: f32, time_to_px: f32) -> f32 {
-    if !(time_to_px > 1e-9) {
-        return time0;
-    }
-    (time0 * time_to_px).floor() / time_to_px
-}
+/// The DX11 combo's backend-free bake planner, shared so both backends decide rebakes and blit
+/// windows by one rule. Its append-damage and LOD helpers have no Metal caller yet.
+#[path = "combo/plan.rs"]
+#[allow(dead_code)]
+mod combo_plan;
+
+use combo_plan::{
+    ComboBakeKey, VolumeBakeKey, combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake,
+    plan_volume_bake, volume_band_px, volume_blit_uv,
+};
 
 #[derive(Default)]
 struct BufferSlot {
@@ -175,26 +178,35 @@ struct BaseTexture {
     pixel_format: MTLPixelFormat,
 }
 
+/// Cross bitmap `(W + 2 * x_margin) x (H + 2 * v_margin)`: a pan on either axis inside the margins
+/// is a UV shift of the blit, never a rebake.
 struct ComboTexture {
     texture: metal::Texture,
     blit_uniform: BufferSlot,
-    w: u32,
-    h: u32,
     generation: u64,
     pixel_format: MTLPixelFormat,
-    bake_t0: f32,
-    last_baked_head: usize,
-    last_time_to_px: f32,
-    last_price_to_px: f32,
-    last_view_price0: f32,
-    last_marker_half: f32,
-    /// Trade-volume opacity the texture was baked with.
-    ///
-    /// Part of the cache key because the bars are baked INTO the texture. It was a
-    /// compile-time constant until `ChartGraphicsCfg` gained `trade_volume_alpha`, which is why the
-    /// other four fields were once a complete key and no longer are.
-    last_volume_alpha: f32,
-    valid: bool,
+    key: ComboBakeKey,
+}
+
+/// Volume band bitmap `(W + 2 * x_margin) x band`, baked without a price axis so Y motion never
+/// touches it; blitted at the chart's bottom.
+struct VolumeTexture {
+    texture: metal::Texture,
+    blit_uniform: BufferSlot,
+    generation: u64,
+    pixel_format: MTLPixelFormat,
+    key: VolumeBakeKey,
+}
+
+/// Sizes of the cross and volume bitmaps for one chart size.
+#[derive(Clone, Copy)]
+struct ComboDims {
+    tex_w: u32,
+    /// The chart's own height in texels, without the vertical margins.
+    tex_h: u32,
+    tex_h_total: u32,
+    v_margin: f32,
+    band_px: u32,
 }
 
 #[derive(Default)]
@@ -298,6 +310,7 @@ pub struct MetalLayers {
     background_texture: Option<BackgroundTexture>,
     base_cache: BaseCache,
     combo_texture: Option<ComboTexture>,
+    volume_texture: Option<VolumeTexture>,
     combo_dirty_ranges: Vec<(usize, usize)>,
     crosses: Vec<ChartCross>,
     cross_head: usize,
@@ -366,6 +379,7 @@ impl MetalLayers {
             background_texture: None,
             base_cache: BaseCache::default(),
             combo_texture: None,
+            volume_texture: None,
             combo_dirty_ranges: Vec::new(),
             crosses: Vec::new(),
             cross_head: 0,
@@ -504,6 +518,7 @@ impl MetalLayers {
         self.combo_buffers_dirty = true;
         self.price_line_buffers_dirty = true;
         self.combo_texture = None;
+        self.volume_texture = None;
         self.combo_dirty_ranges.clear();
     }
 
@@ -521,9 +536,7 @@ impl MetalLayers {
         }
         self.recalc_volume_scale();
         self.combo_buffers_dirty = true;
-        if let Some(tex) = self.combo_texture.as_mut() {
-            tex.valid = false;
-        }
+        self.invalidate_bakes();
         self.combo_dirty_ranges.clear();
     }
 
@@ -562,10 +575,18 @@ impl MetalLayers {
         // temporarily shifted the ENTIRE cross layer a few seconds backward until the next full bake
         // realigned `bake_t0`. A full bake linearly rebuilds `[0..count]` and samples `bake_t0` again
         // from the current view, which is correct and cheap because `cross_count` is small.
-        if let Some(tex) = self.combo_texture.as_mut() {
-            tex.valid = false;
-        }
+        self.invalidate_bakes();
         self.combo_dirty_ranges.clear();
+    }
+
+    /// Forces the next prepare to fully rebake both the cross and the volume bitmaps.
+    fn invalidate_bakes(&mut self) {
+        if let Some(tex) = self.combo_texture.as_mut() {
+            tex.key.valid = false;
+        }
+        if let Some(tex) = self.volume_texture.as_mut() {
+            tex.key.valid = false;
+        }
     }
 
     /// Idempotently sets the bottom-volume band style.
@@ -584,9 +605,7 @@ impl MetalLayers {
         if self.tick_style != style {
             self.tick_style = style;
             self.combo_buffers_dirty = true;
-            if let Some(tex) = self.combo_texture.as_mut() {
-                tex.valid = false;
-            }
+            self.invalidate_bakes();
         }
     }
 
@@ -634,6 +653,7 @@ impl MetalLayers {
         self.background_texture = None;
         self.base_cache = BaseCache::default();
         self.combo_texture = None;
+        self.volume_texture = None;
         self.combo_dirty_ranges.clear();
         self.bg_uniform = BufferSlot::default();
         self.grid_uniform = BufferSlot::default();
@@ -836,51 +856,49 @@ impl MetalLayers {
         }
     }
 
-    fn ensure_combo_texture(
+    /// Creates, or recreates on a size, device or format change, the cross and volume bitmaps.
+    fn ensure_combo_textures(
         &mut self,
         device: &DeviceRef,
         pixel_format: MTLPixelFormat,
-        tex_w: u32,
-        tex_h: u32,
+        dims: ComboDims,
         generation: u64,
     ) {
-        let recreate = self.combo_texture.as_ref().is_none_or(|tex| {
-            tex.w != tex_w
-                || tex.h != tex_h
+        if self.combo_texture.as_ref().is_none_or(|tex| {
+            tex.key.tex_w != dims.tex_w
+                || tex.key.tex_h_total != dims.tex_h_total
+                || tex.key.v_margin.to_bits() != dims.v_margin.to_bits()
                 || tex.generation != generation
                 || tex.pixel_format != pixel_format
-        });
-        if recreate {
-            let desc = TextureDescriptor::new();
-            desc.set_texture_type(metal::MTLTextureType::D2);
-            desc.set_pixel_format(pixel_format);
-            desc.set_width(tex_w as u64);
-            desc.set_height(tex_h as u64);
-            desc.set_depth(1);
-            desc.set_mipmap_level_count(1);
-            desc.set_array_length(1);
-            desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
-            desc.set_storage_mode(metal::MTLStorageMode::Private);
-            let texture = device.new_texture(&desc);
+        }) {
             self.combo_texture = Some(ComboTexture {
-                texture,
+                texture: new_cache_texture(device, pixel_format, dims.tex_w, dims.tex_h_total),
                 blit_uniform: BufferSlot::default(),
-                w: tex_w,
-                h: tex_h,
                 generation,
                 pixel_format,
-                bake_t0: 0.0,
-                last_baked_head: usize::MAX,
-                last_time_to_px: 0.0,
-                last_price_to_px: 0.0,
-                last_view_price0: 0.0,
-                last_marker_half: 0.0,
-                last_volume_alpha: f32::NAN,
-                valid: false,
+                key: ComboBakeKey::unbaked(dims.tex_w, dims.tex_h_total, dims.v_margin),
+            });
+        }
+        if self.volume_texture.as_ref().is_none_or(|tex| {
+            tex.key.tex_w != dims.tex_w
+                || tex.key.band_px != dims.band_px
+                || tex.key.chart_h != dims.tex_h
+                || tex.generation != generation
+                || tex.pixel_format != pixel_format
+        }) {
+            self.volume_texture = Some(VolumeTexture {
+                texture: new_cache_texture(device, pixel_format, dims.tex_w, dims.band_px),
+                blit_uniform: BufferSlot::default(),
+                generation,
+                pixel_format,
+                key: VolumeBakeKey::unbaked(dims.tex_w, dims.band_px, dims.tex_h),
             });
         }
     }
 
+    /// Bakes the cross and volume bitmaps. Each planner decides a full rebake when its baked
+    /// window no longer covers the view (or zoom, marker size, style or opacity changed); a pan
+    /// inside the margins bakes nothing and only moves the blit's UV window.
     fn prepare_combo_cache(
         &mut self,
         device: &DeviceRef,
@@ -897,41 +915,35 @@ impl MetalLayers {
         if bw <= 0.0 || bh <= 0.0 {
             return false;
         }
-        let margin_px = (bw * 0.2).max(128.0);
-        let tex_w = (bw + margin_px).round().max(1.0) as u32;
         let tex_h = bh.round().max(1.0) as u32;
-        self.ensure_combo_texture(device, pixel_format, tex_w, tex_h, gpu.device_generation());
-
-        let (need_full, bake_t0, combo_texture) = {
-            let tex = self.combo_texture.as_mut().unwrap();
-            if tex.last_time_to_px != view.time_to_px
-                || tex.last_price_to_px != view.price_to_px
-                || tex.last_view_price0 != view.view_price0
-                || tex.last_marker_half != view.marker_half
-                || tex.last_volume_alpha != view.volume_alpha
-            {
-                tex.valid = false;
-            }
-
-            let u_left_px = (view.view_time0 - tex.bake_t0) * view.time_to_px;
-            let need_full = !tex.valid || u_left_px < 0.0 || u_left_px > margin_px;
-            let bake_t0 = if need_full {
-                texel_aligned_time0(view.view_time0, view.time_to_px)
-            } else {
-                tex.bake_t0
-            };
-            (need_full, bake_t0, tex.texture.to_owned())
+        let v_margin = combo_v_margin_px(bh);
+        let dims = ComboDims {
+            tex_w: combo_tex_w(bw),
+            tex_h,
+            tex_h_total: tex_h + 2 * v_margin as u32,
+            v_margin,
+            band_px: volume_band_px(bh),
         };
-        if !need_full && self.combo_dirty_ranges.is_empty() {
+        self.ensure_combo_textures(device, pixel_format, dims, gpu.device_generation());
+
+        let cross_plan = plan_cross_bake(&self.combo_texture.as_ref().unwrap().key, view, bw);
+        let scale = (self.volume_buy_max, self.volume_sell_max);
+        let vol_plan =
+            plan_volume_bake(&self.volume_texture.as_ref().unwrap().key, view, bw, |_| {
+                scale
+            });
+        let dirty = !self.combo_dirty_ranges.is_empty();
+        if !cross_plan.full && !vol_plan.full && !dirty {
             return false;
         }
-        let bake_view = ChartViewGpu {
-            bounds: [0.0, 0.0, tex_w as f32, tex_h as f32],
-            resolution: [tex_w as f32, tex_h as f32],
+        let tex_w = dims.tex_w as f32;
+        let cross_view = ChartViewGpu {
+            bounds: [0.0, 0.0, tex_w, dims.tex_h_total as f32],
+            resolution: [tex_w, dims.tex_h_total as f32],
             time_to_px: view.time_to_px,
-            view_time0: bake_t0,
+            view_time0: cross_plan.bake_t0,
             price_to_px: view.price_to_px,
-            view_price0: view.view_price0,
+            view_price0: cross_plan.bake_p0,
             marker_half: view.marker_half,
             pad: 0.0,
             volume_buy_inv: 1.0 / self.volume_buy_max.max(1e-6),
@@ -939,11 +951,93 @@ impl MetalLayers {
             volume_alpha: view.volume_alpha,
             _pad2: 0.0,
         };
+        // The band keeps the chart's full height as its bounds so bar heights match a direct draw;
+        // only the bottom `band_px` rows land inside the target.
+        let vol_view = ChartViewGpu {
+            bounds: [0.0, dims.band_px as f32 - tex_h as f32, tex_w, tex_h as f32],
+            resolution: [tex_w, dims.band_px as f32],
+            view_time0: vol_plan.bake_t0,
+            view_price0: view.view_price0,
+            ..cross_view
+        };
+        let cross_count = self.cross_count.min(self.crosses.len());
+        let ranges = std::mem::take(&mut self.combo_dirty_ranges);
+        let all = [(0, cross_count)];
+        let pipelines = self.pipelines.as_ref().unwrap();
+        let mut keepalive_buffers = Vec::new();
 
+        if vol_plan.full || dirty {
+            let tex = self.volume_texture.as_ref().unwrap();
+            keepalive_buffers.extend(self.bake_pass(
+                device,
+                command_buffer,
+                &tex.texture,
+                (dims.tex_w, dims.band_px),
+                vol_plan.full,
+                vol_view,
+                &pipelines.volume,
+                if vol_plan.full { &all[..] } else { &ranges[..] },
+            ));
+        }
+        if cross_plan.full || dirty {
+            let tex = self.combo_texture.as_ref().unwrap();
+            keepalive_buffers.extend(self.bake_pass(
+                device,
+                command_buffer,
+                &tex.texture,
+                (dims.tex_w, dims.tex_h_total),
+                cross_plan.full,
+                cross_view,
+                &pipelines.crosses,
+                if cross_plan.full {
+                    &all[..]
+                } else {
+                    &ranges[..]
+                },
+            ));
+        }
+        if vol_plan.full {
+            let baked = &mut self.volume_texture.as_mut().unwrap().key;
+            baked.bake_t0 = vol_plan.bake_t0;
+            baked.time_to_px = view.time_to_px;
+            baked.volume_alpha = view.volume_alpha;
+            baked.scale = vol_plan.scale;
+            baked.valid = true;
+            crate::diag::bump(&crate::diag::CHART_COMBO_VOLUME_BAKE);
+        }
+        if cross_plan.full {
+            let baked = &mut self.combo_texture.as_mut().unwrap().key;
+            baked.bake_t0 = cross_plan.bake_t0;
+            baked.bake_p0 = cross_plan.bake_p0;
+            baked.time_to_px = view.time_to_px;
+            baked.price_to_px = view.price_to_px;
+            baked.marker_half = view.marker_half;
+            baked.valid = true;
+            crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
+        }
+        keep_buffers_alive(command_buffer, keepalive_buffers);
+        true
+    }
+
+    /// Encodes one render pass into a cache bitmap: cleared for a full bake, loaded for an
+    /// incremental one, drawing each ring range of `ranges` with `pipeline`. The snapshot view,
+    /// tick-style and cross buffers are returned to be retained until the command buffer completes.
+    #[allow(clippy::too_many_arguments)]
+    fn bake_pass(
+        &self,
+        device: &DeviceRef,
+        command_buffer: &CommandBufferRef,
+        texture: &metal::TextureRef,
+        (w, h): (u32, u32),
+        clear: bool,
+        view: ChartViewGpu,
+        pipeline: &RenderPipelineState,
+        ranges: &[(usize, usize)],
+    ) -> Vec<metal::Buffer> {
         let pass = metal::RenderPassDescriptor::new();
         let color = pass.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(combo_texture.as_ref()));
-        color.set_load_action(if need_full {
+        color.set_texture(Some(texture));
+        color.set_load_action(if clear {
             MTLLoadAction::Clear
         } else {
             MTLLoadAction::Load
@@ -954,61 +1048,9 @@ impl MetalLayers {
         encoder.set_scissor_rect(MTLScissorRect {
             x: 0,
             y: 0,
-            width: tex_w as u64,
-            height: tex_h as u64,
+            width: w as u64,
+            height: h as u64,
         });
-        let mut keepalive_buffers = Vec::new();
-        if need_full {
-            let cross_count = self.cross_count.min(self.crosses.len());
-            keepalive_buffers.extend(self.draw_combo_layers(
-                device,
-                encoder,
-                bake_view,
-                &self.crosses[..cross_count],
-            ));
-            let tex = self.combo_texture.as_mut().unwrap();
-            tex.bake_t0 = bake_t0;
-            tex.last_baked_head = self.cross_head;
-            tex.last_time_to_px = view.time_to_px;
-            tex.last_price_to_px = view.price_to_px;
-            tex.last_view_price0 = view.view_price0;
-            tex.last_marker_half = view.marker_half;
-            tex.last_volume_alpha = view.volume_alpha;
-            tex.valid = true;
-            self.combo_dirty_ranges.clear();
-            crate::diag::bump(&crate::diag::CHART_COMBO_BAKE);
-        } else {
-            let ranges = std::mem::take(&mut self.combo_dirty_ranges);
-            for (start, count) in ranges {
-                if count == 0 {
-                    continue;
-                }
-                let end = start.saturating_add(count).min(self.crosses.len());
-                if start < end {
-                    keepalive_buffers.extend(self.draw_combo_layers(
-                        device,
-                        encoder,
-                        bake_view,
-                        &self.crosses[start..end],
-                    ));
-                }
-            }
-            self.combo_texture.as_mut().unwrap().last_baked_head = self.cross_head;
-        }
-        encoder.end_encoding();
-        keep_buffers_alive(command_buffer, keepalive_buffers);
-        true
-    }
-
-    /// Draws combo history with snapshot view and tick-style buffers retained until completion.
-    fn draw_combo_layers(
-        &self,
-        device: &DeviceRef,
-        encoder: &RenderCommandEncoderRef,
-        view: ChartViewGpu,
-        crosses: &[ChartCross],
-    ) -> Vec<metal::Buffer> {
-        let pipelines = self.pipelines.as_ref().unwrap();
         let mut keepalive = Vec::new();
         let view_buffer = snapshot_buffer(device, "moon_chart_combo_view_uniform", &[view]);
         set_uniform(encoder, 0, view_buffer.as_ref());
@@ -1017,23 +1059,19 @@ impl MetalLayers {
             snapshot_buffer(device, "moon_chart_combo_tick_style", &[self.tick_style]);
         set_uniform(encoder, 2, tick_buffer.as_ref());
         keepalive.push(tick_buffer);
-        let cross_buffer = (!crosses.is_empty())
-            .then(|| snapshot_buffer(device, "moon_chart_combo_crosses", crosses));
-        if !crosses.is_empty() {
-            let cross_buffer = cross_buffer.as_ref().unwrap();
+        for &(start, count) in ranges {
+            let end = start.saturating_add(count).min(self.crosses.len());
+            if start >= end {
+                continue;
+            }
+            let crosses = &self.crosses[start..end];
+            let cross_buffer = snapshot_buffer(device, "moon_chart_combo_crosses", crosses);
             set_storage(encoder, 1, cross_buffer.as_ref());
             crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            draw(encoder, &pipelines.volume, 6, crosses.len() as u64);
-        }
-        if !crosses.is_empty() {
-            let cross_buffer = cross_buffer.as_ref().unwrap();
-            set_storage(encoder, 1, cross_buffer.as_ref());
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            draw(encoder, &pipelines.crosses, 6, crosses.len() as u64);
-        }
-        if let Some(cross_buffer) = cross_buffer {
+            draw(encoder, pipeline, 6, crosses.len() as u64);
             keepalive.push(cross_buffer);
         }
+        encoder.end_encoding();
         keepalive
     }
 
@@ -1063,38 +1101,54 @@ impl MetalLayers {
         }
     }
 
+    /// Composites the volume band at the chart's bottom, then the crosses over it, each through
+    /// its whole-texel UV window; point sampling at a fractional offset would flicker by half a
+    /// pixel. Each bitmap keeps its own blit uniform, as both draws read theirs at execution.
     fn draw_cached_combo(
         &mut self,
         device: &DeviceRef,
         encoder: &RenderCommandEncoderRef,
         view: &ChartViewGpu,
     ) {
-        let Some(tex) = self.combo_texture.as_mut() else {
-            return;
-        };
-        if !tex.valid || view.bounds[2] <= 0.0 {
+        let [x, y, bw, bh] = view.bounds;
+        if bw <= 0.0 {
             return;
         }
-        let u_left_px = ((view.view_time0 - tex.bake_t0) * view.time_to_px)
-            .round()
-            .clamp(0.0, (tex.w as f32 - view.bounds[2]).max(0.0));
-        let params = BackgroundParams {
-            dst: view.bounds,
-            resolution: view.resolution,
-            uv_off: [u_left_px / tex.w as f32, 0.0],
-            uv_scale: [view.bounds[2] / tex.w as f32, 1.0],
-            opacity: 1.0,
-            _pad: 0.0,
-            bg: [0.0, 0.0, 0.0, 0.0],
-        };
-        tex.blit_uniform
-            .write(device, "moon_chart_combo_blit_uniform", &[params]);
         let pipelines = self.pipelines.as_ref().unwrap();
-        crate::diag::bump(&crate::diag::CHART_BASE_BLIT);
-        set_uniform(encoder, 0, tex.blit_uniform.buffer());
-        encoder.set_fragment_texture(0, Some(tex.texture.as_ref()));
-        encoder.set_fragment_sampler_state(0, Some(pipelines.point_sampler.as_ref()));
-        draw(encoder, &pipelines.blit, 6, 1);
+        let blit = |slot: &mut BufferSlot,
+                    texture: &metal::TextureRef,
+                    dst: [f32; 4],
+                    (uv_off, uv_scale): ([f32; 2], [f32; 2])| {
+            let params = BackgroundParams {
+                dst,
+                resolution: view.resolution,
+                uv_off,
+                uv_scale,
+                opacity: 1.0,
+                _pad: 0.0,
+                bg: [0.0, 0.0, 0.0, 0.0],
+            };
+            slot.write(device, "moon_chart_combo_blit_uniform", &[params]);
+            crate::diag::bump(&crate::diag::CHART_BASE_BLIT);
+            set_uniform(encoder, 0, slot.buffer());
+            encoder.set_fragment_texture(0, Some(texture));
+            encoder.set_fragment_sampler_state(0, Some(pipelines.point_sampler.as_ref()));
+            draw(encoder, &pipelines.blit, 6, 1);
+        };
+        if let Some(tex) = self.volume_texture.as_mut().filter(|t| t.key.valid) {
+            let band = tex.key.band_px as f32;
+            let uv = volume_blit_uv(&tex.key, view);
+            blit(
+                &mut tex.blit_uniform,
+                &tex.texture,
+                [x, y + bh - band, bw, band],
+                uv,
+            );
+        }
+        if let Some(tex) = self.combo_texture.as_mut().filter(|t| t.key.valid) {
+            let uv = cross_blit_uv(&tex.key, view);
+            blit(&mut tex.blit_uniform, &tex.texture, view.bounds, uv);
+        }
     }
 
     fn draw_cursor_layer(
@@ -1772,6 +1826,26 @@ fn pipeline_with_blend(
     device
         .new_render_pipeline_state(&descriptor)
         .expect("chart render pipeline must build")
+}
+
+/// A private render-target bitmap the combo bakes into and the blit samples.
+fn new_cache_texture(
+    device: &DeviceRef,
+    pixel_format: MTLPixelFormat,
+    w: u32,
+    h: u32,
+) -> metal::Texture {
+    let desc = TextureDescriptor::new();
+    desc.set_texture_type(metal::MTLTextureType::D2);
+    desc.set_pixel_format(pixel_format);
+    desc.set_width(w as u64);
+    desc.set_height(h as u64);
+    desc.set_depth(1);
+    desc.set_mipmap_level_count(1);
+    desc.set_array_length(1);
+    desc.set_usage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    desc.set_storage_mode(metal::MTLStorageMode::Private);
+    device.new_texture(&desc)
 }
 
 fn create_background_texture(device: &DeviceRef) -> BackgroundTexture {
