@@ -44,6 +44,9 @@ pub enum TelegramStatus {
     },
     /// Helper or transport is down; bot commands may still be available later.
     Unavailable,
+    /// Another poller holds the token — a terminal or a station with the same bot, or a webhook.
+    /// One token serves one poller.
+    Conflict,
     /// Worker was stopped after a present-to-empty token transition.
     Stopped,
 }

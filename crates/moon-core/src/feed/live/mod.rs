@@ -496,7 +496,10 @@ pub(super) fn run(
 ) -> anyhow::Result<()> {
     let _ = tx.send(FeedMsg::Status(ConnStatus::Connecting));
     // Read once per client: the switch is set before any feed starts and never cleared.
-    let station = crate::feed::station::enabled();
+    let station = crate::feed::station::profile();
+    // The account path — orders, balances, run state, Assets: a terminal's, and the Mini App
+    // station's; the light station runs none of it.
+    let account = station.is_none_or(crate::feed::station::Profile::runs_account);
     market_role.begin_client();
     chart_text.begin_client();
 
@@ -526,19 +529,24 @@ pub(super) fn run(
 
     let client_cfg = ClientConfig::new(host, port, info.keys.master_key, info.keys.mac_key)
         .with_transport_mode(transport);
-    // The station charts nothing and elects no provider: the smallest rings, and no periodic
-    // market-list or tag refresh — the Init steps still load the catalog once.
-    let client_cfg = if station {
-        client_cfg
-            .with_market_history(MarketHistorySizing::Compact)
-            .with_refresh(moonproto::RefreshConfig {
-                update_markets_every: None,
-                check_tags_every: None,
-            })
-    } else {
-        client_cfg.with_market_history(MarketHistorySizing::auto_with_budget_percent(
+    // The station charts nothing and elects no provider: the smallest rings. The light station
+    // also drops the periodic market-list and tag refresh — the Init steps still load the catalog
+    // once; the Mini App's keeps it, since its balances are priced from those ticks.
+    let client_cfg = match station {
+        Some(profile) => {
+            let compact = client_cfg.with_market_history(MarketHistorySizing::Compact);
+            if profile.runs_account() {
+                compact
+            } else {
+                compact.with_refresh(moonproto::RefreshConfig {
+                    update_markets_every: None,
+                    check_tags_every: None,
+                })
+            }
+        }
+        None => client_cfg.with_market_history(MarketHistorySizing::auto_with_budget_percent(
             chart_memory_percent,
-        ))
+        )),
     };
 
     // 3. Initialize WITHOUT market subscriptions. The coordinator assigns the core's market role
@@ -1091,7 +1099,7 @@ pub(super) fn run(
                 // Mark the retained snapshot stale BEFORE asking for a new one, so a pre-outage
                 // QR cannot become actionable the instant the badge flips to Ready. The station
                 // runs no bot of the core's and asks nothing about it.
-                if !station {
+                if station.is_none() {
                     let _ = tx.send(FeedMsg::TelegramStale);
                     if let Err(error) = client.telegram().refresh() {
                         log::warn!(
@@ -1116,9 +1124,10 @@ pub(super) fn run(
                     }
                 }
             }
-            // The station asks the core for none of what a terminal shows — license, run state,
-            // settings, hedge mode, balances, chart alerts.
-            if request_license_state && !station {
+            // The light station asks the core for none of what a terminal shows — license, run
+            // state, settings, hedge mode, balances, chart alerts. The Mini App's asks what a
+            // terminal does; chart alerts stay behind `feed.alerts`, which it leaves off.
+            if request_license_state && account {
                 if let Err(error) = client.settings().request_kernel_license_state() {
                     log::warn!(
                         "core {} request kernel license state failed: {error}",
@@ -1231,8 +1240,8 @@ pub(super) fn run(
             }
         }
         turnover_armed |= list_applied;
-        if station {
-            events.retain(crate::feed::station::keeps);
+        if let Some(profile) = station {
+            events.retain(|event| profile.keeps(event));
         }
         let had_domain_event = !events.is_empty();
         // v4 delivers Stop/VStop changes as ordinary `OrderEvent::Updated` field
@@ -1268,7 +1277,9 @@ pub(super) fn run(
         // presentation-only order events are ignored, and authoritative full/Spot updates cancel
         // pending work.
         let account_now = Instant::now();
-        if server.feed.orders {
+        // A station plays no sound: the Mini App station takes orders, and nobody would take the
+        // sounds they ring.
+        if server.feed.orders && station.is_none() {
             let sound_snapshot = client.snapshot();
             let sounds = trade_sounds.observe(
                 &events,
@@ -1279,9 +1290,9 @@ pub(super) fn run(
                 break;
             }
         }
-        // The station never repairs an account: it shows the repairs no event, so none is ever
-        // queued and no repair deadline exists to hold the wait below at zero.
-        if !station {
+        // The light station never repairs an account: it shows the repairs no event, so none is
+        // ever queued and no repair deadline exists to hold the wait below at zero.
+        if account {
             account_reconciliation.observe_events(&events, account_now);
         }
         if account_reconciliation.balance_due(account_now) {
@@ -1379,7 +1390,7 @@ pub(super) fn run(
         // attempt is marked whether or not the request left, so a core stuck mid-connect cannot ask
         // on every wake-up.
         if account_reconciliation.api_expiry_due(account_now) {
-            if station {
+            if station.is_some() {
                 // Never asked; pushed out a full interval so the due deadline cannot hold the
                 // wait below at zero.
                 account_reconciliation.defer_api_expiry(account_now);
@@ -2741,8 +2752,11 @@ pub(super) fn run(
                 }
                 // The database cursor is separate from the UI cursor: schema defaults can arrive
                 // after an unchanged strategy set, and a full writer queue must leave the set due
-                // for retry. Dumps are incomplete until defaults are available.
-                if pending_strat_db_delivery.is_none()
+                // for retry. Dumps are incomplete until defaults are available. The strategy
+                // version archive is the terminal's: a station keeps no `strategies.sqlite`, even
+                // the one that takes strategies for the Mini App.
+                if station.is_none()
+                    && pending_strat_db_delivery.is_none()
                     && strategy_db_export_due(
                         !strat_schema_defaults.is_empty(),
                         sr,
@@ -2790,7 +2804,7 @@ pub(super) fn run(
         } else {
             Duration::from_secs(5)
         };
-        if !station && should_publish_assets(&events, last_assets.elapsed(), assets_every) {
+        if account && should_publish_assets(&events, last_assets.elapsed(), assets_every) {
             last_assets = Instant::now();
             if let Some(snap) = client.snapshot() {
                 // The account base currency (USDT/BTC/...) is required to convert `btc_balance_*`,
@@ -2815,7 +2829,7 @@ pub(super) fn run(
         // Check transfer assets on EVERY iteration rather than in the 1 Hz/domain-event block so a
         // `refresh_transfer_assets` response, requested by clicking the core in the Assets window,
         // reaches the UI immediately even when the core has no stream of market events.
-        if let Some(snap) = client.snapshot().filter(|_| !station) {
+        if let Some(snap) = client.snapshot().filter(|_| station.is_none()) {
             let tr = snap.transfer_assets();
             let rev = tr.revision();
             if rev != last_transfer_rev {

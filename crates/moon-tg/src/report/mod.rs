@@ -60,7 +60,7 @@ pub(crate) fn telegram_report(
     let zone = host.report_zone();
     let now = moon_core::util::time::now_unix_secs() as i64;
     let Some((from, to)) = request.bounds(now, zone) else {
-        report_notice(&reply, t!("telegram.report_help").to_string());
+        report_notice(&reply, crate::labels::report_help(host.kind()));
         return;
     };
     let order = CoreOrder::new(host.config());

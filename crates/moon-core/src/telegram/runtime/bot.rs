@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 /// Pause after a non-retryable `getMe` Telegram error so an unchanged invalid token does not
 /// retry every 250 ms. Shutdown and config replacement drop `alive` and interrupt this wait.
 const INVALID_CREDENTIAL_RETRY: Duration = Duration::from_secs(30);
+/// Pause after a 409: another poller holds the token, and every `getUpdates` of ours would only
+/// terminate its poll for a moment. Long enough not to fight it, short enough to take over soon
+/// after it stops.
+const CONFLICT_RETRY: Duration = Duration::from_secs(10);
 /// Poll with private-chat pairing and Mini App guards; persistence publication owns admission.
 pub(super) fn run(
     token: Secret,
@@ -30,16 +34,7 @@ pub(super) fn run(
     api.set_liveness(alive.clone());
     let status_tx = tx.clone();
     api.set_error_observer(move |error| {
-        let status = match error {
-            crate::telegram::api::ApiError::Telegram {
-                retry_after_secs: Some(seconds),
-                ..
-            } => TelegramStatus::RateLimited {
-                retry_after_secs: *seconds,
-            },
-            _ => TelegramStatus::Unavailable,
-        };
-        let _ = status_tx.try_send(Work::Status(status));
+        let _ = status_tx.try_send(Work::Status(status_of(error)));
     });
     let _ = tx.try_send(Work::Status(TelegramStatus::Starting));
     let mut username = None;
@@ -83,6 +78,11 @@ pub(super) fn run(
         }
         let updates = match api.get_updates() {
             Ok(updates) => updates,
+            Err(crate::telegram::api::ApiError::Conflict) => {
+                publish_status(&tx, &crate::telegram::api::ApiError::Conflict);
+                wait_while_alive(&alive, CONFLICT_RETRY);
+                continue;
+            }
             Err(error) => {
                 publish_error(&tx, error);
                 continue;
@@ -307,16 +307,21 @@ fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
 
 /// Map a redacted API failure onto Telegram health without sleeping.
 fn publish_status(tx: &SyncSender<Work>, error: &crate::telegram::api::ApiError) {
-    let status = match error {
+    let _ = tx.try_send(Work::Status(status_of(error)));
+}
+
+/// Telegram health for a redacted API failure.
+fn status_of(error: &crate::telegram::api::ApiError) -> TelegramStatus {
+    match error {
         crate::telegram::api::ApiError::Telegram {
             retry_after_secs: Some(retry_after_secs),
             ..
         } => TelegramStatus::RateLimited {
             retry_after_secs: *retry_after_secs,
         },
+        crate::telegram::api::ApiError::Conflict => TelegramStatus::Conflict,
         _ => TelegramStatus::Unavailable,
-    };
-    let _ = tx.try_send(Work::Status(status));
+    }
 }
 
 /// Sleep up to `total`, returning as soon as the service owner is dropped.

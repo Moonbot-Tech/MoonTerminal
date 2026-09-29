@@ -24,7 +24,7 @@ mod state;
 mod test_locale;
 
 pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
-pub use host::{Finish, Job, TgHost};
+pub use host::{Finish, HostKind, Job, TgHost};
 pub use labels::status_text;
 pub use state::TelegramState;
 
@@ -35,4 +35,12 @@ pub use state::TelegramState;
 /// calls this first thing in `main`, beside its own warm-up.
 pub fn warm_locales() {
     let _ = rust_i18n::t!("common.loading");
+}
+
+/// Answer in `language` from now on.
+///
+/// The locale is one per process for every crate's `i18n!`, so a host with a dictionary of its
+/// own (the terminal) sets it there instead; this is for a host that has none (the station).
+pub fn set_locale(language: moon_core::config::Language) {
+    rust_i18n::set_locale(language.code());
 }

@@ -806,7 +806,7 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
         html,
         keyboard,
         navigation,
-    } = super::help("<UTC>")
+    } = super::help("<UTC>", crate::HostKind::Terminal)
     else {
         panic!("expected rich help")
     };
@@ -822,6 +822,26 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
         keyboard,
         moon_core::telegram::api::ReplyMarkup::Inline(_)
     ));
+}
+
+/// A station's bot answers with the terminal off: its Help must not tell the chat to keep a
+/// terminal running, nor point it to terminal settings for the Mini App.
+#[test]
+fn station_help_does_not_ask_for_a_running_terminal() {
+    let _locale = crate::test_locale::force("en");
+    let text = |host| {
+        let Response::Rich { html, .. } = super::help("UTC", host) else {
+            panic!("expected rich help")
+        };
+        html
+    };
+    let terminal = text(crate::HostKind::Terminal);
+    let station = text(crate::HostKind::Station);
+    assert!(terminal.contains("Keep the terminal running"));
+    assert!(!station.contains("Keep the terminal running"));
+    assert!(!station.contains("terminal settings"));
+    assert!(station.contains("around the clock"));
+    assert!(!crate::labels::report_help(crate::HostKind::Station).contains("terminal"));
 }
 
 /// A renamed core is listed under its configured name; a core no longer configured keeps the

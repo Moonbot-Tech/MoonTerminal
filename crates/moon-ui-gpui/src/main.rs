@@ -366,7 +366,7 @@ struct Backend {
     /// disarm), TTL-bounded, and takes precedence over the core snapshot while fresh. Reconciled
     /// by the coordination tick, which drops an entry the moment the core agrees or the TTL
     /// elapses so a stale override can never outlive the core's truth.
-    panic_local: HashMap<(CoreId, String), crate::backend::PanicLocal>,
+    panic_local: HashMap<(CoreId, String), moon_core::session::panic_override::PanicLocal>,
     /// Bumped by every accepted panic state change from the hotkey or the button, and by the
     /// reconciliation tick. Compared by the chart panel ahead of its render throttle so the
     /// Panic Sell / Stop Panic control repaints at once.

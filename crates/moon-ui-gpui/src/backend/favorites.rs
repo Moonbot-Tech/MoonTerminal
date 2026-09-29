@@ -37,8 +37,8 @@ pub(crate) struct FavLocal {
 /// Whether an override has done its work and may be dropped: the core agrees, or the window ran
 /// out.
 ///
-/// Pure so the rule can be tested without a backend, and shaped like `panic_local_settled` beside
-/// it: settling on AGREEMENT is what stops a transient agreement being forgotten and turning the
+/// Pure so the rule can be tested without a backend, and shaped like
+/// `moon_core::session::panic_override::panic_local_settled`: settling on AGREEMENT is what stops a transient agreement being forgotten and turning the
 /// next intended press into a repeat of the last one.
 ///
 /// Args:

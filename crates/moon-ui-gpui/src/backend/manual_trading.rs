@@ -16,6 +16,9 @@ use moon_core::feed::{
 };
 use moon_core::market::MarketQuantityUnit;
 use moon_core::session::CoreId;
+use moon_core::session::panic_override::{
+    PanicLocal, effective_panic_armed, panic_local_settled, panic_snapshot_armed,
+};
 
 use crate::Backend;
 
@@ -72,15 +75,6 @@ pub(crate) const FIELD_USE_HOOK_STRATEGY: &str = "UseHookStrategy";
 /// MoonHook strategy), so the terminal offers the same list the core's own editor does.
 pub(crate) const HOOK_STRATEGY_KIND: u8 = 20;
 
-/// How long a fresh `PanicLocal` override outranks the core snapshot.
-///
-/// The override's only job is bridging one core round trip. 3 s is >= 3x the slowest in-app data
-/// cadence (the 1000 ms background-panel floor) and covers a WAN round trip to a VPS-hosted core
-/// plus one order-publish tick. Matches the in-repo `stop_overlay` TTL constant and now its
-/// lifecycle too: on expiry we prefer the core's truth over our optimistic guess, which is
-/// correct on the money path where the core is the authority.
-pub(crate) const PANIC_LOCAL_TTL: Duration = Duration::from_secs(3);
-
 /// Minimum spacing between two panic-sell hotkey presses on the same `(core, market)` before the
 /// later one is treated as a deliberate reversal rather than an impatient re-jab.
 ///
@@ -88,60 +82,6 @@ pub(crate) const PANIC_LOCAL_TTL: Duration = Duration::from_secs(3);
 /// already excluded before this point) and at or below the fastest deliberate reversal, which
 /// requires reading a changed label and choosing to undo (~500-700 ms).
 pub(crate) const PANIC_TOGGLE_DEBOUNCE: Duration = Duration::from_millis(500);
-
-/// Optimistic Panic Sell override for one `(core, market)`.
-///
-/// It records both arm and disarm requests. The reconciliation tick drops it when the core agrees
-/// or its TTL expires, returning authority to the retained core snapshot.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct PanicLocal {
-    /// The armed state this override asserts, pending core confirmation.
-    pub want: bool,
-    /// When this override was recorded, for TTL and settle comparisons.
-    pub at: Instant,
-}
-
-/// Resolve the effective armed state from an optional fresh local override and the core snapshot.
-///
-/// `local` carries `(want, age)` when a `PanicLocal` exists. While `age < PANIC_LOCAL_TTL` the
-/// override outranks the snapshot in both directions (arm and disarm); once stale, or absent, the
-/// snapshot is authoritative. `snapshot_armed` is supplied LAZILY and is not evaluated at all while
-/// a fresh override decides the answer: the caller is on the chart render path, and the snapshot
-/// walk is `order_lines.iter_market`, so skipping it on the common post-press path matters.
-///
-/// Args:
-///     local: Requested state and age for the optional local override.
-///     snapshot_armed: Deferred lookup of the retained core state.
-///
-/// Returns:
-///     The fresh local state when available, otherwise the retained core state.
-fn effective_panic_armed(
-    local: Option<(bool, Duration)>,
-    snapshot_armed: impl FnOnce() -> bool,
-) -> bool {
-    match local {
-        Some((want, age)) if age < PANIC_LOCAL_TTL => want,
-        _ => snapshot_armed(),
-    }
-}
-
-/// Whether a `PanicLocal` override has settled and may be dropped by the reconciliation tick.
-///
-/// Settled once the TTL has elapsed (the override can no longer influence `effective_panic_armed`)
-/// or the moment the core snapshot agrees with what the override asserts -- dropping it as soon as
-/// the core agrees, rather than only on the user's next press, is what stops a transient agreement
-/// from being forgotten and turning an intended re-arm into a disarm.
-///
-/// Args:
-///     want: Armed state asserted by the local override.
-///     age: Time since the override was accepted.
-///     snapshot_armed: Current state from the retained core snapshot.
-///
-/// Returns:
-///     `true` when the override cannot change the effective state any longer.
-fn panic_local_settled(want: bool, age: Duration, snapshot_armed: bool) -> bool {
-    age >= PANIC_LOCAL_TTL || snapshot_armed == want
-}
 
 /// Whether a panic-sell hotkey press arriving `now` falls inside the debounce window opened by
 /// `last`, and so must be absorbed as a no-op rather than toggling anything.
@@ -344,7 +284,7 @@ fn planned_sell_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
 /// core's own value.
 ///
 /// Settles the moment the core AGREES rather than only on the TTL, exactly like
-/// [`panic_local_settled`]: an override still asserting a value the core already holds would make
+/// `panic_override::panic_local_settled`: an override still asserting a value the core already holds would make
 /// the next click — which asks for the opposite — look like the no-op this override exists to
 /// prevent.
 ///
@@ -2383,22 +2323,6 @@ impl Backend {
         (on && id != 0).then_some(id)
     }
 
-    /// Return whether the retained order-line snapshot shows panic sell armed for `(core, market)`.
-    ///
-    /// Args:
-    ///     core: Core whose retained order lines are queried.
-    ///     market: Market whose open order lines are queried.
-    ///
-    /// Returns:
-    ///     `true` when an open retained order line has panic sell armed.
-    fn panic_snapshot_armed(&self, core: CoreId, market: &str) -> bool {
-        self.session.store().core(core).is_some_and(|data| {
-            data.order_lines
-                .iter_market(market)
-                .any(|order| order.closed_ms.is_none() && order.panic_sell)
-        })
-    }
-
     /// Return whether panic sell is armed for `(core, market)` to highlight the Panic Sell button.
     ///
     /// A fresh local override takes precedence over the retained snapshot in both directions. This
@@ -2418,7 +2342,9 @@ impl Backend {
             .iter()
             .find(|((c, m), _)| *c == core && m.as_str() == market)
             .map(|(_, l)| (l.want, l.at.elapsed()));
-        effective_panic_armed(local, || self.panic_snapshot_armed(core, market))
+        effective_panic_armed(local, || {
+            panic_snapshot_armed(self.session.store(), core, market)
+        })
     }
 
     /// Toggle panic sell for a market, recording a symmetric optimistic override on acceptance.
@@ -2498,7 +2424,7 @@ impl Backend {
                 panic_local_settled(
                     l.want,
                     l.at.elapsed(),
-                    self.panic_snapshot_armed(*core, market),
+                    panic_snapshot_armed(self.session.store(), *core, market),
                 )
             })
             .map(|(key, _)| key.clone())

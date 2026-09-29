@@ -44,3 +44,51 @@ fn the_station_file_carries_no_key() {
         "no window from the terminal leaves the station its own"
     );
 }
+
+/// Pushing the cores again must not switch the bot off: `[telegram]` rides over from the server's
+/// file, and a server without one gets none.
+#[test]
+fn a_cores_push_keeps_the_bot_section() {
+    let new = "[[core]]\nuid = 3\nname = \"A\"\n";
+    let current =
+        "[[core]]\nuid = 9\nname = \"Old\"\n\n[telegram]\nmini_app = true\nzone = \"UTC\"\n";
+    let merged: toml::Value = toml::from_str(&keep_telegram(new, Some(current)).unwrap()).unwrap();
+    assert_eq!(merged["core"][0]["uid"].as_integer(), Some(3));
+    assert_eq!(merged["core"].as_array().unwrap().len(), 1);
+    assert_eq!(merged["telegram"]["mini_app"].as_bool(), Some(true));
+    assert_eq!(keep_telegram(new, None).unwrap(), new);
+    let bare = "[[core]]\nuid = 9\nname = \"Old\"\n";
+    assert!(
+        toml::from_str::<toml::Value>(&keep_telegram(new, Some(bare)).unwrap())
+            .unwrap()
+            .get("telegram")
+            .is_none()
+    );
+}
+
+/// `telegram` changes only the fields it is given, and `--off` removes the section whole.
+#[test]
+fn a_bot_change_touches_only_its_fields() {
+    let current = "[[core]]\nuid = 3\nname = \"A\"\n\n[telegram]\nzone = \"Europe/Moscow\"\n";
+    let change = BotChange {
+        mini_app: Some(true),
+        ..BotChange::default()
+    };
+    let changed: toml::Value =
+        toml::from_str(&with_telegram(current, &change, false).unwrap()).unwrap();
+    assert_eq!(changed["telegram"]["mini_app"].as_bool(), Some(true));
+    assert_eq!(changed["telegram"]["zone"].as_str(), Some("Europe/Moscow"));
+    assert_eq!(changed["core"][0]["uid"].as_integer(), Some(3));
+
+    let off: toml::Value =
+        toml::from_str(&with_telegram(current, &BotChange::default(), true).unwrap()).unwrap();
+    assert!(off.get("telegram").is_none());
+    assert_eq!(off["core"][0]["uid"].as_integer(), Some(3));
+}
+
+/// A helper set up before the bot's commands prints no `token=`: refused before any write.
+#[test]
+fn an_old_helper_is_refused_before_anything_is_written() {
+    assert!(ensure_current_helper("active=active\nconfig=yes\ncreds=core-3\n").is_err());
+    assert!(ensure_current_helper("active=active\nconfig=yes\ncreds=core-3\ntoken=no\n").is_ok());
+}

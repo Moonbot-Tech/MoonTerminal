@@ -9,7 +9,7 @@ use crate::Backend;
 use gpui::Context;
 use moon_core::config::{AppConfig, TelegramConfig};
 use moon_core::session::{CoreId, SessionManager};
-use moon_tg::{Job, TelegramState, TgHost};
+use moon_tg::{HostKind, Job, TelegramState, TgHost};
 
 /// The Backend lent to `moon_tg` for one call on the UI thread.
 struct GuiTgHost<'a, 'b> {
@@ -18,6 +18,10 @@ struct GuiTgHost<'a, 'b> {
 }
 
 impl TgHost for GuiTgHost<'_, '_> {
+    fn kind(&self) -> HostKind {
+        HostKind::Terminal
+    }
+
     fn config(&self) -> &AppConfig {
         &self.backend.config
     }

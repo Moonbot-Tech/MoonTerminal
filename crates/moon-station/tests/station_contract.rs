@@ -1,9 +1,10 @@
 //! The station's mode, pinned in source (`docs-internal/STATION.md` §3.1, level 3).
 //!
 //! What the station may ask a core is decided by which calls exist in its code, so the guard reads
-//! the code: the station crate itself, the tape recorder it runs, and the narrow client that
-//! recorder owns. A red test here is a station that can now do something it was never meant to —
-//! subscribe to every market, trade, or hold a raw `MoonClient` past the narrow link.
+//! the code: the station crate itself, the bot and Mini App it runs (`moon-tg`, shared with the
+//! terminal), the tape recorder, and the narrow client that recorder owns. A red test here is a
+//! station that can now do something it was never meant to — subscribe to every market, trade
+//! outside the Mini App's commands, or hold a raw `MoonClient` past the narrow link.
 //!
 //! Comments are stripped before anything is searched, so a doc line that NAMES a forbidden call
 //! (explaining why it is forbidden) is not a violation.
@@ -109,8 +110,8 @@ fn methods_called_on(code: &str, receiver: &str, standalone: bool) -> BTreeSet<S
     out
 }
 
-fn station_sources() -> Vec<(PathBuf, String)> {
-    rust_files(&workspace().join("crates/moon-station/src"))
+fn sources(dir: &str) -> Vec<(PathBuf, String)> {
+    rust_files(&workspace().join(dir))
         .into_iter()
         .map(|path| {
             let code = code(&path);
@@ -119,12 +120,21 @@ fn station_sources() -> Vec<(PathBuf, String)> {
         .collect()
 }
 
+fn station_sources() -> Vec<(PathBuf, String)> {
+    sources("crates/moon-station/src")
+}
+
+/// The bot and the Mini App the station runs: its code is the station's as much as the terminal's.
+fn tg_sources() -> Vec<(PathBuf, String)> {
+    sources("crates/moon-tg/src")
+}
+
 /// Breakage guarded: a station component that talks to a core through its own `MoonClient` —
 /// and with it every call moonproto has, trading and `subscribe_all_trades` included — instead of
 /// the terminal's feed in station mode or the narrow `StationLink`.
 #[test]
 fn the_station_crate_never_touches_moonproto_directly() {
-    for (path, code) in station_sources() {
+    for (path, code) in station_sources().into_iter().chain(tg_sources()) {
         for forbidden in ["moonproto", "MoonClient", "subscribe_all_trades", "FeedCmd"] {
             assert!(
                 !names(&code, forbidden),
@@ -155,9 +165,9 @@ fn trading_stays_inside_tg_trade() {
 
 /// The `SessionManager` calls the station makes: start the feeds, drain them, map each core to
 /// itself as its market source, sum the connection status, reconcile on a reload, and rebuild a
-/// core whose exchange identity went stale on a fresh client (the same respawn the terminal's
-/// Reconnect uses; it sends the core no command). Anything else it would call on the session — a
-/// command to a core, a trading call — lands here first.
+/// core whose exchange identity went stale — or whose reconnect the Mini App asked for — on a
+/// fresh client (the terminal's Reconnect; it sends the core no command). Anything else it would
+/// call on the session — a command to a core, a trading call — lands here first.
 const SESSION_CALLS: [&str; 6] = [
     "conn_summary_group",
     "drain",
@@ -167,21 +177,85 @@ const SESSION_CALLS: [&str; 6] = [
     "take_identity_respawn_requests",
 ];
 
+/// What the station's host of the bot adds, in `tg.rs` alone: the order snapshot Panic Sell's
+/// state is read from, and Panic Sell itself — the one Mini App command `moon-tg` routes through
+/// its host (the override the host keeps must see the toggle).
+const TG_HOST_SESSION_CALLS: [&str; 2] = ["panic_sell_market", "store"];
+
 /// Breakage guarded: the station growing a call into the terminal's session beyond the ones
-/// its mode was measured with (STATION.md §7.14) — each new one is a decision, made here.
+/// its mode was measured with (STATION.md §7.14) — each new one is a decision, made here. Any
+/// receiver ending in `session` counts: `self.session.` as much as `session.`.
 #[test]
 fn the_station_calls_only_its_share_of_the_session() {
-    let allowed: BTreeSet<String> = SESSION_CALLS.iter().map(|s| s.to_string()).collect();
+    let tg_host = workspace().join("crates/moon-station/src/tg.rs");
     for (path, code) in station_sources() {
-        let called = methods_called_on(&code, "session", true);
+        let mut allowed: BTreeSet<String> = SESSION_CALLS.iter().map(|s| s.to_string()).collect();
+        if path == tg_host {
+            allowed.extend(TG_HOST_SESSION_CALLS.iter().map(|s| s.to_string()));
+        }
+        let called = methods_called_on(&code, "session", false);
         let extra: Vec<_> = called.difference(&allowed).collect();
         assert!(
             extra.is_empty(),
-            "{} calls {extra:?} on the session; the station's share is {SESSION_CALLS:?} — add \
-             a call here only as a deliberate change of the station's mode",
+            "{} calls {extra:?} on the session; the station's share is {SESSION_CALLS:?} (and \
+             {TG_HOST_SESSION_CALLS:?} in tg.rs) — add a call here only as a deliberate change \
+             of the station's mode",
             path.display()
         );
     }
+}
+
+/// What the bot and the Mini App read from the sessions, anywhere in `moon-tg`.
+const TG_READ_CALLS: [&str; 3] = ["core_venues", "sessions", "store"];
+
+/// The Mini App's owner commands (STATION.md §4.2а, §9 question 34: the Mini App as it is, what
+/// the key allows): the terminal's own session calls, from `mini_app/commands.rs` alone.
+const TG_TRADE_CALLS: [&str; 7] = [
+    "apply_strategies",
+    "cancel_all_orders",
+    "cancel_order",
+    "set_auto_detect",
+    "set_auto_detect_many",
+    "set_trading",
+    "set_trading_many",
+];
+
+/// Breakage guarded: a command to a core reaching the station from anywhere in the bot but the
+/// Mini App's owner commands — a chat report that trades, a read that switches a core off — or a
+/// call the station's mode was never measured with.
+#[test]
+fn the_bot_trades_only_from_the_mini_app_commands() {
+    let commands = workspace().join("crates/moon-tg/src/mini_app/commands.rs");
+    let reads: BTreeSet<String> = TG_READ_CALLS.iter().map(|s| s.to_string()).collect();
+    let trades: BTreeSet<String> = TG_TRADE_CALLS.iter().map(|s| s.to_string()).collect();
+    let mut traded = BTreeSet::new();
+    for (path, code) in tg_sources() {
+        let called: BTreeSet<String> = methods_called_on(&code, "session()", false)
+            .into_iter()
+            .chain(methods_called_on(&code, "session_mut()", false))
+            .collect();
+        for call in &called {
+            if reads.contains(call) {
+                continue;
+            }
+            assert!(
+                trades.contains(call),
+                "{} calls `{call}` on the session: not a read the bot makes nor a Mini App \
+                 command — a deliberate change of the station's mode",
+                path.display()
+            );
+            assert!(
+                path == commands,
+                "{} calls `{call}`: owner commands live in mini_app/commands.rs alone",
+                path.display()
+            );
+            traded.insert(call.clone());
+        }
+    }
+    assert_eq!(
+        traded, trades,
+        "the scanner lost sight of the Mini App's commands"
+    );
 }
 
 /// Breakage guarded: the tape recorder — the one station component with a client of its own —
@@ -259,27 +333,55 @@ fn the_station_link_exposes_only_the_station_mode() {
     );
 }
 
-/// Breakage guarded: the station mode's event filter letting another class of core event in —
-/// balances, orders, strategies — each of which starts a store or a queue the station was
-/// measured without (STATION.md §3.2, §7.14).
-#[test]
-fn the_station_keeps_reports_archives_and_the_log_alone() {
-    let code = code(&workspace().join("crates/moon-core/src/feed/station.rs"));
-    let keeps = code
-        .split_once("pub fn keeps(")
+/// The event classes one of `feed/station.rs`'s filters names, and its body.
+fn kept_by(code: &str, filter: &str) -> (BTreeSet<String>, String) {
+    let body = code
+        .split_once(&format!("pub fn {filter}("))
         .map(|(_, rest)| rest)
         .and_then(|rest| rest.split_once("\n}"))
-        .map(|(body, _)| body)
-        .expect("feed/station.rs must define `pub fn keeps`");
-    let kept: BTreeSet<&str> = keeps
+        .map(|(body, _)| body.to_string())
+        .unwrap_or_else(|| panic!("feed/station.rs must define `pub fn {filter}`"));
+    let kept = body
         .split("Event::")
         .skip(1)
         .filter_map(|tail| tail.split('(').next())
+        .map(str::to_string)
         .collect();
+    (kept, body)
+}
+
+/// Breakage guarded: the station mode's event filters letting another class of core event in —
+/// the light station anything past reports, the Mini App's station anything past the account its
+/// tabs show — each of which starts a store or a queue the station was measured without
+/// (STATION.md §3.2, §7.14, §7.21).
+#[test]
+fn each_station_profile_keeps_its_own_events_alone() {
+    let code = code(&workspace().join("crates/moon-core/src/feed/station.rs"));
+    let (light, _) = kept_by(&code, "keeps_reports");
     assert_eq!(
-        kept,
-        BTreeSet::from(["MarketHistory", "Report", "ServerLog"]),
-        "the station keeps reports, archive answers and the log (for the clock offset) — nothing \
-         else"
+        light,
+        BTreeSet::from(["MarketHistory", "Report", "ServerLog"].map(String::from)),
+        "the light station keeps reports, archive answers and the log (for the clock offset) — \
+         nothing else"
+    );
+    let (account, body) = kept_by(&code, "keeps_account");
+    assert!(
+        body.contains("keeps_reports(event)"),
+        "the Mini App's station keeps what the light one keeps"
+    );
+    assert_eq!(
+        account,
+        BTreeSet::from(
+            [
+                "Account",
+                "Balance",
+                "KernelHealth",
+                "Order",
+                "Settings",
+                "Strat"
+            ]
+            .map(String::from)
+        ),
+        "the Mini App's station adds the account its tabs show — nothing else"
     );
 }

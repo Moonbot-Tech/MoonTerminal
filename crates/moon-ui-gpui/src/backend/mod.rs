@@ -22,7 +22,7 @@ pub(crate) use alert_sound::AlertLeg;
 pub(crate) use favorites::FavLocal;
 pub(crate) use manual_trading::{
     FIELD_USE_HOOK_STRATEGY, IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource,
-    ManualStop, MsExitOverlay, PanicLocal, PendingStop, SettleKey, hook_of, manual_strategy_id,
+    ManualStop, MsExitOverlay, PendingStop, SettleKey, hook_of, manual_strategy_id,
     strat_field_value,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};

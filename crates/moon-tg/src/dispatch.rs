@@ -179,7 +179,7 @@ fn run_command(
         ParsedCommand::Report(request) => report::telegram_report(host, chat_id, request, reply),
         ParsedCommand::Help => {
             let zone = host.report_zone();
-            let _ = reply.try_send(report::help(&zone.to_string()));
+            let _ = reply.try_send(report::help(&zone.to_string(), host.kind()));
         }
         ParsedCommand::MiniApp => {
             let mini_app_enabled = host.config().telegram.mini_app_enabled;
@@ -191,12 +191,23 @@ fn run_command(
                 }
                 _ => None,
             };
+            // Where the Mini App is switched on differs: the terminal's Settings, or the station's
+            // administrator.
+            let station = host.kind() == crate::HostKind::Station;
             let text = if keyboard.is_some() {
                 t!("telegram.bot_ready").to_string()
             } else if !mini_app_enabled {
-                t!("telegram.bot_mini_disabled").to_string()
+                match station {
+                    true => t!("telegram.bot_mini_disabled_station"),
+                    false => t!("telegram.bot_mini_disabled"),
+                }
+                .to_string()
             } else {
-                t!("telegram.bot_mini_wait").to_string()
+                match station {
+                    true => t!("telegram.bot_mini_wait_station"),
+                    false => t!("telegram.bot_mini_wait"),
+                }
+                .to_string()
             };
             let keyboard = keyboard
                 .map(ReplyMarkup::Inline)
@@ -208,7 +219,7 @@ fn run_command(
                 text: format!(
                     "{}\n\n{}",
                     t!("telegram.invalid"),
-                    t!("telegram.report_help")
+                    crate::labels::report_help(host.kind())
                 ),
                 keyboard: Some(navigation_keyboard()),
             });

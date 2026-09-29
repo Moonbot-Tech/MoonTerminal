@@ -115,3 +115,73 @@ fn the_tape_window_comes_from_the_station_file() {
     let unknown = format!("{core}[tape]\nmargin = 180\n");
     assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }
+
+/// `[telegram]` with the Mini App switches the station to the account profile and gives every
+/// core the account feed; without the section it stays light.
+#[test]
+fn the_mini_app_turns_the_account_feed_on() {
+    let dir = creds("tg", &[(3, "k1")]);
+    std::fs::write(dir.join("telegram-token"), "123:abc\n").unwrap();
+    let core = "[[core]]\nuid = 3\nname = \"A\"\n";
+
+    let light = from_station_file(core, Some(&dir)).unwrap();
+    assert_eq!(light.profile(), Profile::Reports);
+    assert!(!light.config.servers[0].feed.orders);
+
+    let reports_bot = format!("{core}[telegram]\nzone = \"Europe/Moscow\"\nlanguage = \"ru\"\n");
+    let bot = from_station_file(&reports_bot, Some(&dir)).unwrap();
+    assert_eq!(bot.profile(), Profile::Reports, "a bot alone reads reports");
+    let telegram = bot.telegram.as_ref().unwrap();
+    assert_eq!(telegram.token.as_ref().map(Secret::expose), Some("123:abc"));
+    assert_eq!(telegram.zone, chrono_tz::Europe::Moscow);
+    assert_eq!(telegram.language, Language::Ru);
+
+    let mini =
+        from_station_file(&format!("{core}[telegram]\nmini_app = true\n"), Some(&dir)).unwrap();
+    assert_eq!(mini.profile(), Profile::Account);
+    let feed = mini.config.servers[0].feed;
+    assert!(feed.orders && feed.balance && feed.strategies && feed.reports);
+    assert!(
+        !feed.log && !feed.detects && !feed.alerts && !feed.arb,
+        "the Mini App shows none of these"
+    );
+    let telegram = mini.telegram.as_ref().unwrap();
+    assert_eq!(
+        (telegram.zone, telegram.language),
+        (chrono_tz::Tz::UTC, Language::En)
+    );
+}
+
+/// An unknown zone, language or key is refused rather than started half-configured; a missing
+/// token only keeps the bot off — the cores still run.
+#[test]
+fn a_broken_telegram_section_is_refused() {
+    let core = "[[core]]\nuid = 3\nname = \"A\"\n";
+    let no_token = creds("tg-none", &[(3, "k1")]);
+    let station = from_station_file(
+        &format!("{core}[telegram]\nmini_app = true\n"),
+        Some(&no_token),
+    )
+    .expect("the cores run without the bot's token");
+    assert!(station.telegram.as_ref().unwrap().token.is_none());
+    assert_eq!(station.config.servers.len(), 1);
+    assert_eq!(
+        station.profile(),
+        Profile::Reports,
+        "no bot, no Mini App: the account nobody reads is not fetched"
+    );
+    assert!(!station.config.servers[0].feed.orders);
+
+    let dir = creds("tg-bad", &[(3, "k1")]);
+    std::fs::write(dir.join("telegram-token"), "123:abc").unwrap();
+    for section in [
+        "[telegram]\nzone = \"Mars/Olympus\"\n",
+        "[telegram]\nlanguage = \"de\"\n",
+        "[telegram]\ntoken = \"123:abc\"\n",
+    ] {
+        assert!(
+            from_station_file(&format!("{core}{section}"), Some(&dir)).is_err(),
+            "{section}"
+        );
+    }
+}

@@ -12,6 +12,7 @@ use moon_core::{
 use rust_i18n::t;
 
 use super::Page;
+use crate::HostKind;
 use crate::labels::navigation_keyboard;
 
 /// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
@@ -218,7 +219,14 @@ pub(super) fn report_html(page: &Page) -> String {
 }
 
 /// Help is disposable rich content; a separate permanent message owns persistent navigation.
-pub(crate) fn help(zone: &str) -> Response {
+///
+/// `host` picks the lines that say what the bot depends on: a terminal must keep running, a
+/// station reports around the clock.
+pub(crate) fn help(zone: &str, host: HostKind) -> Response {
+    let (limits, mini) = match host {
+        HostKind::Terminal => ("telegram.help_limits", "telegram.help_mini"),
+        HostKind::Station => ("telegram.help_limits_station", "telegram.help_mini_station"),
+    };
     let mut html = format!(
         "<h2>MoonTerminal</h2><p>{}</p><details><summary>{}</summary>",
         escape(&t!("telegram.help_intro")),
@@ -238,7 +246,7 @@ pub(crate) fn help(zone: &str) -> Response {
         ));
     }
     html.push_str(&format!("<p><b>{}</b></p><pre>/report 2026-09-01 2026-09-10</pre><pre>/daily 2026-09-01 2026-09-10</pre><p>{}</p></details>",
-        escape(&t!("telegram.help_custom")), escape(&t!("telegram.help_limits", zone = zone))));
+        escape(&t!("telegram.help_custom")), escape(&t!(limits, zone = zone))));
     html.push_str(&format!(
         "<details><summary>{}</summary>",
         escape(&t!("telegram.report_calculation"))
@@ -252,7 +260,7 @@ pub(crate) fn help(zone: &str) -> Response {
     }
     html.push_str(&format!(
         "</details><details><summary>Mini App</summary><p>{}</p></details>",
-        escape(&t!("telegram.help_mini"))
+        escape(&t!(mini))
     ));
     Response::Rich {
         html,

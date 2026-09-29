@@ -29,6 +29,16 @@ pub(crate) fn answer(reply: &SyncSender<Response>, text: String) {
         keyboard: None,
     });
 }
+/// The period and command help a chat gets for a request it cannot run; what the bot depends on
+/// is `host`'s.
+pub(crate) fn report_help(host: crate::HostKind) -> String {
+    match host {
+        crate::HostKind::Terminal => t!("telegram.report_help"),
+        crate::HostKind::Station => t!("telegram.report_help_station"),
+    }
+    .to_string()
+}
+
 /// Render service health through the Telegram locale domain.
 pub fn status_text(status: &TelegramStatus) -> String {
     match status {
@@ -40,6 +50,7 @@ pub fn status_text(status: &TelegramStatus) -> String {
             t!("telegram.rate_limited", seconds = retry_after_secs)
         }
         TelegramStatus::Unavailable => t!("telegram.state.unavailable"),
+        TelegramStatus::Conflict => t!("telegram.state.conflict"),
         TelegramStatus::Stopped => t!("telegram.stopped"),
     }
     .to_string()

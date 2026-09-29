@@ -18,6 +18,7 @@ pub mod core_order;
 pub mod core_time_offset;
 pub mod core_update;
 pub mod order_lines;
+pub mod panic_override;
 pub mod run_state;
 pub mod store;
 

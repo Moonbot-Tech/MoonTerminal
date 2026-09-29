@@ -25,6 +25,11 @@ telegram.help_limits:
   en: "Dates are inclusive, up to 366 days. Time zone: %{zone}. Keep the terminal running."
   es: "Fechas inclusive, máximo 366 días. Zona horaria: %{zone}. Mantén el terminal abierto."
 
+telegram.help_limits_station:
+  ru: "Даты включительно, максимум 366 дней. Часовой пояс: %{zone}. Отчёты обновляются круглосуточно."
+  en: "Dates are inclusive, up to 366 days. Time zone: %{zone}. Reports update around the clock."
+  es: "Fechas inclusive, máximo 366 días. Zona horaria: %{zone}. Los informes se actualizan las 24 horas."
+
 telegram.help_custom:
   ru: "Свой период / по дням"
   en: "Custom period / by day"
@@ -34,6 +39,11 @@ telegram.help_mini:
   ru: "Для отчётов в чате Mini App не нужен. Команда /miniapp открывает приложение, если оно включено в настройках терминала."
   en: "Chat reports do not require Mini App. Use /miniapp to open it when enabled in terminal settings."
   es: "Los informes del chat no necesitan Mini App. /miniapp lo abre si está habilitado en los ajustes del terminal."
+
+telegram.help_mini_station:
+  ru: "Для отчётов в чате Mini App не нужен. Команда /miniapp открывает приложение, если оно включено на станции."
+  en: "Chat reports do not require Mini App. Use /miniapp to open it when enabled on the station."
+  es: "Los informes del chat no necesitan Mini App. /miniapp lo abre si está habilitado en la estación."
 
 telegram.report_total:
   ru: "Итого"
@@ -234,3 +244,8 @@ telegram.report_help:
   ru: "Выберите период кнопками. В отчёте доступны вид по ботам/дням — для свежих данных повторно нажмите период в нижнем меню.\n\n/hour — этот час\n/today — сегодня\n/daily — по дням за этот месяц\n/report 2026-09-01 2026-09-10 — свой период\n/daily 2026-09-01 2026-09-10 — свой период по дням\nДаты включительно, максимум 366 дней; часовой пояс — из часов терминала. Терминал должен быть запущен."
   en: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\nDates are inclusive, up to 366 days; time zone follows the terminal clock. Keep the terminal running."
   es: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\nFechas inclusive, máximo 366 días; zona del reloj del terminal. El terminal debe estar abierto."
+
+telegram.report_help_station:
+  ru: "Выберите период кнопками. В отчёте доступны вид по ботам/дням — для свежих данных повторно нажмите период в нижнем меню.\n\n/hour — этот час\n/today — сегодня\n/daily — по дням за этот месяц\n/report 2026-09-01 2026-09-10 — свой период\n/daily 2026-09-01 2026-09-10 — свой период по дням\nДаты включительно, максимум 366 дней; часовой пояс — из настроек станции. Отчёты обновляются круглосуточно."
+  en: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\nDates are inclusive, up to 366 days; time zone follows the station settings. Reports update around the clock."
+  es: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\nFechas inclusive, máximo 366 días; zona de los ajustes de la estación. Los informes se actualizan las 24 horas."

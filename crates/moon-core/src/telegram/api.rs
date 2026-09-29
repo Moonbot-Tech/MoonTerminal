@@ -89,6 +89,9 @@ pub enum ApiError {
     },
     /// The body was not a Telegram envelope this client can decode.
     Protocol,
+    /// HTTP 409: the token is polled somewhere else — another `getUpdates` took over, or a webhook
+    /// is set. One token serves one poller; this one cannot win by retrying.
+    Conflict,
 }
 
 impl std::fmt::Display for ApiError {
@@ -105,6 +108,7 @@ impl std::fmt::Display for ApiError {
                 None => write!(f, "telegram bot api: {description}"),
             },
             ApiError::Protocol => f.write_str("telegram bot api protocol error"),
+            ApiError::Conflict => f.write_str("telegram bot api: the bot is polled elsewhere"),
         }
     }
 }
@@ -553,10 +557,7 @@ impl BotApi {
                 );
                 let retry_after_secs = envelope.parameters.and_then(|p| p.retry_after);
                 Err(AttemptError {
-                    error: ApiError::Telegram {
-                        description,
-                        retry_after_secs,
-                    },
+                    error: refusal(status, description, retry_after_secs),
                     http_retry,
                 })
             }
@@ -618,6 +619,30 @@ fn is_timeout_error(err: &ureq::Error) -> bool {
     false
 }
 
+/// The status Telegram answers `getUpdates` with while another poller or a webhook holds the
+/// token: "terminated by other getUpdates request" or "can't use getUpdates method while webhook
+/// is active".
+const CONFLICT_STATUS: u16 = 409;
+
+/// Classify a decoded `ok=false` envelope by its HTTP status.
+///
+/// Args:
+///     status: HTTP status of the answer.
+///     description: Telegram `description`, already redacted.
+///     retry_after_secs: `parameters.retry_after`, when present.
+///
+/// Returns:
+///     [`ApiError::Conflict`] for 409, otherwise [`ApiError::Telegram`].
+fn refusal(status: u16, description: String, retry_after_secs: Option<u32>) -> ApiError {
+    if status == CONFLICT_STATUS {
+        return ApiError::Conflict;
+    }
+    ApiError::Telegram {
+        description,
+        retry_after_secs,
+    }
+}
+
 /// HTTP 429 and 5xx retry regardless of whether the body was a Telegram envelope.
 fn is_http_retryable_status(status: u16) -> bool {
     status == 429 || (500..600).contains(&status)
@@ -630,7 +655,7 @@ fn is_retryable(err: &ApiError) -> bool {
         ApiError::Telegram {
             retry_after_secs, ..
         } => retry_after_secs.is_some(),
-        ApiError::Protocol => false,
+        ApiError::Protocol | ApiError::Conflict => false,
     }
 }
 

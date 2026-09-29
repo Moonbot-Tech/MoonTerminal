@@ -7,10 +7,13 @@
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
+//! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | [--token] [--mini-app on|off]
+//!             [--zone <IANA zone>] [--language ru|en|es])
 //! ```
 //!
 //! Passwords are asked without echo, or taken from `MOON_REMOTE_LOGIN_PASSWORD` (the provider's
 //! login, or sudo for `--login-key`) and `MOON_REMOTE_ADMIN_PASSWORD`. None is stored anywhere.
+//! The bot token (`telegram --token`) likewise: asked without echo, or `MOON_REMOTE_BOT_TOKEN`.
 
 use std::path::PathBuf;
 
@@ -40,7 +43,7 @@ fn run() -> anyhow::Result<()> {
     );
     anyhow::ensure!(
         !args.0.is_empty(),
-        "no command: setup | station-bin | cores | status"
+        "no command: setup | station-bin | cores | status | telegram"
     );
     let command = args.0.remove(0);
     let target = Target {
@@ -161,7 +164,39 @@ fn run() -> anyhow::Result<()> {
                 print!("{}", out.stdout_text());
             }
         }
-        other => anyhow::bail!("unknown command {other:?}: setup | station-bin | cores | status"),
+        "telegram" => {
+            let off = args.flag("--off");
+            let token = args.flag("--token");
+            let change = station::BotChange {
+                mini_app: args
+                    .value("--mini-app")?
+                    .map(|v| match v.as_str() {
+                        "on" => Ok(true),
+                        "off" => Ok(false),
+                        other => Err(anyhow::anyhow!("--mini-app on|off, got {other:?}")),
+                    })
+                    .transpose()?,
+                zone: args.value("--zone")?,
+                language: args.value("--language")?,
+            };
+            args.done()?;
+            anyhow::ensure!(
+                !(off
+                    && (token
+                        || change.mini_app.is_some()
+                        || change.zone.is_some()
+                        || change.language.is_some())),
+                "--off takes no other setting"
+            );
+            let token = token
+                .then(|| secret("MOON_REMOTE_BOT_TOKEN", "bot token: "))
+                .transpose()?
+                .map(|t| Secret::new(t.trim()));
+            station::push_telegram(&target, token.as_ref(), &change, off, &mut say)?;
+        }
+        other => anyhow::bail!(
+            "unknown command {other:?}: setup | station-bin | cores | status | telegram"
+        ),
     }
     Ok(())
 }

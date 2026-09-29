@@ -17,8 +17,20 @@ pub type Finish = Box<dyn FnOnce(&mut dyn TgHost) + Send>;
 /// A blocking read run off the owner thread; its result comes back as a [`Finish`].
 pub type Job = Box<dyn FnOnce() -> Finish + Send>;
 
+/// Which process runs the bot: what a chat is told the bot depends on differs between them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKind {
+    /// The desktop terminal: the bot answers while it runs.
+    Terminal,
+    /// The station: the bot answers around the clock.
+    Station,
+}
+
 /// The host of the bot and the Mini App.
 pub trait TgHost {
+    /// Which process this is.
+    fn kind(&self) -> HostKind;
+
     /// Saved configuration: the cores (`servers`), their order (`core_sort`) and `telegram`.
     fn config(&self) -> &AppConfig;
 
