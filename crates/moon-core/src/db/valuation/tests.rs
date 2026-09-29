@@ -419,8 +419,15 @@ fn rate_cache_survives_reopen_without_network_state() {
             leg2_rate: Some(1.001),
         };
         store_rate(&conn, &rate, 1_700_000_200_000).expect("store successful rate");
-        store_rate_search(&conn, 7, 1_700_000_100, 1_700_000_160, 1_700_000_200_000)
-            .expect("store retryable search");
+        store_rate_search(
+            &conn,
+            7,
+            1_700_000_100,
+            1_700_000_160,
+            1_700_000_200_000,
+            false,
+        )
+        .expect("store retryable search");
     }
     let reopened = open_store(&path).expect("reopen rate-cache fixture");
     assert!(matches!(
@@ -588,4 +595,181 @@ fn duplicate_capable_schema_is_retired_before_reader_attachment() {
 
     drop(recovered);
     std::fs::remove_dir_all(root).expect("remove malformed-schema fixture");
+}
+
+/// Seed one rate row and one trade value priced by it.
+///
+/// Args:
+///     conn: Open valuation store.
+///     quote: Quote ordinal of the rate and trade.
+///     row_id: Trade row id, also used to spread minutes apart.
+///     legs: First-leg provider and symbol plus optional second leg.
+fn seed_priced_trade(
+    conn: &Connection,
+    quote: i64,
+    row_id: i64,
+    legs: (&str, &str, Option<(&str, &str)>),
+) {
+    let minute = 1_700_000_040 + row_id * 60;
+    let (provider, symbol, leg2) = legs;
+    conn.execute(
+        "INSERT INTO rates (
+             algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc, rate_usdt,
+             price_basis, provider, symbol, orientation, candle_open_ms, candle_close_ms,
+             leg1_rate, leg2_provider, leg2_symbol, leg2_orientation, leg2_rate, fetched_at_ms
+         ) VALUES (?1,?2,?3,?3,0.5,0,?4,?5,0,?6,?7,0.5,?8,?9,?10,?11,1)",
+        params![
+            ALGORITHM_VERSION,
+            quote,
+            minute,
+            provider,
+            symbol,
+            minute * 1_000,
+            minute * 1_000 + 59_999,
+            leg2.map(|leg| leg.0),
+            leg2.map(|leg| leg.1),
+            leg2.map(|_| 0),
+            leg2.map(|_| 1.0),
+        ],
+    )
+    .expect("seed rate");
+    conn.execute(
+        "INSERT INTO trade_values (
+             source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
+             profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt, spent_usdt,
+             valued_at_ms
+         ) VALUES (0,1,?1,?2,?3,?4,5.0,NULL,?3,0.5,2.5,NULL,1)",
+        params![row_id, ALGORITHM_VERSION, minute, quote],
+    )
+    .expect("seed trade value");
+}
+
+/// Breakage: `mod.rs:purge_hyperliquid_collisions` skipping the trade-value DELETE, widening the
+/// poison predicate to every Hyperliquid row, or re-running on every open would either keep
+/// collision-priced totals visible forever or wipe genuine USDH valuations on each restart.
+#[test]
+fn collision_purge_drops_only_poisoned_rates_and_their_values_once() {
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-collision-purge-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create purge fixture directory");
+    let path = dir.join("valuation.sqlite");
+    {
+        let conn = open_store(&path).expect("open purge fixture");
+        seed_priced_trade(
+            &conn,
+            13,
+            1,
+            (
+                "hyperliquid_spot",
+                "RUB/USDC",
+                Some(("binance_spot", "USDCUSDT")),
+            ),
+        );
+        seed_priced_trade(
+            &conn,
+            14,
+            2,
+            (
+                "binance_spot",
+                "EURUSDC",
+                Some(("hyperliquid_spot", "EUR/USDC")),
+            ),
+        );
+        seed_priced_trade(
+            &conn,
+            7,
+            3,
+            (
+                "hyperliquid_spot",
+                "USDH/USDC",
+                Some(("binance_spot", "USDCUSDT")),
+            ),
+        );
+        seed_priced_trade(&conn, 14, 4, ("binance_spot", "EURUSDT", None));
+        conn.execute_batch("PRAGMA user_version = 0")
+            .expect("rewind schema version");
+    }
+    let survivors = |conn: &Connection, table: &str, column: &str| -> Vec<i64> {
+        let mut stmt = conn
+            .prepare(&format!("SELECT {column} FROM {table} ORDER BY {column}"))
+            .expect("prepare survivor scan");
+        stmt.query_map([], |row| row.get(0))
+            .expect("scan survivors")
+            .collect::<Result<_, _>>()
+            .expect("read survivors")
+    };
+    let base = 1_700_000_040;
+
+    let conn = open_store(&path).expect("reopen migrates");
+    assert_eq!(
+        survivors(&conn, "rates", "minute_utc"),
+        vec![base + 3 * 60, base + 4 * 60]
+    );
+    assert_eq!(survivors(&conn, "trade_values", "row_id"), vec![3, 4]);
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("read schema version");
+    assert_eq!(version, 1);
+
+    seed_priced_trade(&conn, 13, 5, ("hyperliquid_spot", "RUB/USDC", None));
+    drop(conn);
+    let conn = open_store(&path).expect("second open does not purge");
+    assert_eq!(survivors(&conn, "trade_values", "row_id"), vec![3, 4, 5]);
+    drop(conn);
+    std::fs::remove_dir_all(&dir).expect("remove purge fixture directory");
+}
+
+/// Breakage: `mod.rs:store_rate_search` counting every search as an attempt, or backing off on
+/// provider outages, would stretch retries of a transient gap to an hour; never growing would keep
+/// a genuinely unpriced minute hammering public exchanges every five minutes.
+#[test]
+fn no_route_searches_back_off_and_outage_searches_stay_flat() {
+    let conn = Connection::open_in_memory().expect("open in-memory store");
+    conn.execute_batch(
+        "CREATE TABLE rate_searches (
+             algorithm_version INTEGER NOT NULL, quote_ordinal INTEGER NOT NULL,
+             minute_utc INTEGER NOT NULL, searched_through_minute INTEGER NOT NULL,
+             next_retry_at_ms INTEGER NOT NULL, attempts INTEGER NOT NULL,
+             updated_at_ms INTEGER NOT NULL,
+             PRIMARY KEY (algorithm_version, quote_ordinal, minute_utc)
+         );",
+    )
+    .expect("create rate_searches");
+    let read = |minute: i64| -> (i64, i64) {
+        conn.query_row(
+            "SELECT next_retry_at_ms, attempts FROM rate_searches WHERE minute_utc=?1",
+            [minute],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read search row")
+    };
+    const MIN: i64 = 60_000;
+    let now = 1_700_100_000_000;
+    let minute = 1_700_000_040;
+    let through = minute + 2 * 3_600;
+
+    let mut delays = Vec::new();
+    for _ in 0..6 {
+        store_rate_search(&conn, 13, minute, through, now, true).expect("store no-route search");
+        delays.push((read(minute).0 - now) / MIN);
+    }
+    assert_eq!(delays, vec![5, 10, 20, 40, 60, 60]);
+    assert_eq!(read(minute).1, 6);
+
+    let outage = minute + 60;
+    store_rate_search(&conn, 13, outage, through, now, true).expect("first no-route search");
+    for _ in 0..3 {
+        store_rate_search(&conn, 13, outage, through, now, false).expect("store outage search");
+        assert_eq!(read(outage), (now + 5 * MIN, 1));
+    }
+
+    let fresh = minute + 120;
+    for _ in 0..3 {
+        store_rate_search(&conn, 13, fresh, fresh + 600, now, true).expect("store recent search");
+        assert_eq!(read(fresh).0, now + 5 * MIN);
+    }
+    drop(conn);
 }

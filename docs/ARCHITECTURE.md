@@ -655,6 +655,14 @@ legs must have a candle of the same minute. Therefore, for example, `USDH -> USD
 add prices from different moments. `rates` stores separately the trade minute, the actual minute,
 price basis and both legs; the full source and the delay are available in the Report column tooltip.
 
+Hyperliquid legs are allow-listed to tokens that genuinely are that asset there (USDC, USDE, USDH):
+Hyperliquid spot token names are permissionless, so a token named RUB is unrelated to the ruble. A
+quote with no Binance or Bybit route (for example RUB today) stays honestly unvalued. Once the search
+has covered an hour after the trade minute, a no-route search backs off 5 -> 10 -> 20 -> 40 -> 60
+minutes (capped), while outage retries and fresh minutes stay at 5 minutes; on upgrade a one-time
+purge (`PRAGMA user_version` 1) drops cached rates priced through a Hyperliquid ticker collision together with
+their trade values, which startup reconciliation then revalues.
+
 Transport timeouts and temporary service failures permit another provider to supply the requested
 closed candle; malformed responses remain data errors. Successful fallback valuations retain their
 actual provider and market. If no fallback resolves the request, it remains retryable rather than

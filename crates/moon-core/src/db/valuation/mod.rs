@@ -1360,8 +1360,86 @@ pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
          CREATE INDEX IF NOT EXISTS idx_trade_values_inputs
              ON trade_values (algorithm_version, quote_ordinal, rate_minute_utc);",
     )?;
+    let user_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if user_version < STORE_SCHEMA_VERSION {
+        match purge_hyperliquid_collisions(&conn) {
+            Ok((values, rates)) if values > 0 || rates > 0 => log::warn!(
+                "valuation: purged {values} trade values and {rates} rates priced through a \
+                 Hyperliquid ticker collision"
+            ),
+            Ok(_) => {}
+            // user_version stays unset, so the purge retries on the next open.
+            Err(err) => {
+                log::warn!("valuation: Hyperliquid collision purge failed, retry next open: {err}")
+            }
+        }
+    }
     super::trace::install_on(&conn);
     Ok(conn)
+}
+
+/// `PRAGMA user_version` of `valuation.sqlite`.
+///
+/// Version 1 means the Hyperliquid ticker-collision purge has run on this file.
+const STORE_SCHEMA_VERSION: i64 = 1;
+
+/// Build the SQL predicate matching a rate with a Hyperliquid leg outside the allow-list.
+///
+/// Hyperliquid symbols are persisted as `BASE/QUOTE`; any such leg whose pair is not made of two
+/// distinct `resolver::HYPERLIQUID_GENUINE_TICKERS` was produced by a ticker collision.
+///
+/// Returns:
+///     SQL boolean expression over the `rates` columns.
+fn hyperliquid_poison_predicate() -> String {
+    let tickers = resolver::HYPERLIQUID_GENUINE_TICKERS;
+    let list = tickers
+        .iter()
+        .flat_map(|base| {
+            tickers
+                .iter()
+                .filter(move |quote| *quote != base)
+                .map(move |quote| format!("'{base}/{quote}'"))
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "(provider='hyperliquid_spot' AND symbol NOT IN ({list})) \
+         OR (leg2_provider='hyperliquid_spot' AND leg2_symbol NOT IN ({list}))"
+    )
+}
+
+/// Drop cached rates priced through a Hyperliquid ticker collision and their trade values.
+///
+/// Trade values go first so startup reconciliation revalues exactly those rows through the fixed
+/// router. Runs in one transaction and stamps `STORE_SCHEMA_VERSION` on success.
+///
+/// Args:
+///     conn: Open valuation store.
+///
+/// Returns:
+///     Deleted trade-value and rate row counts.
+///
+/// Errors:
+///     Returns the underlying SQLite error; the transaction then rolls back.
+fn purge_hyperliquid_collisions(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
+    let tx = conn.unchecked_transaction()?;
+    let values = tx.execute(
+        &format!(
+            "DELETE FROM trade_values
+             WHERE (algorithm_version, quote_ordinal, rate_minute_utc) IN (
+                 SELECT algorithm_version, quote_ordinal, minute_utc FROM rates WHERE {}
+             )",
+            hyperliquid_poison_predicate()
+        ),
+        [],
+    )?;
+    let rates = tx.execute(
+        &format!("DELETE FROM rates WHERE {}", hyperliquid_poison_predicate()),
+        [],
+    )?;
+    tx.execute_batch(&format!("PRAGMA user_version = {STORE_SCHEMA_VERSION}"))?;
+    tx.commit()?;
+    Ok((values, rates))
 }
 
 /// Attach an existing valuation store to a report reader.
@@ -1845,6 +1923,10 @@ pub(crate) fn store_rate(
 ///     minute_utc: UTC minute start in Unix seconds.
 ///     searched_through_minute: Latest fully closed minute checked by the resolver.
 ///     now_ms: Local verification time in Unix milliseconds.
+///     grow: True for a genuine no-route result; a repeat search backs off by
+///         `rate_search_retry_ms` once the search has covered an hour after the trade minute, and
+///         only genuine no-route searches count as attempts. False keeps the flat 5-minute pace for
+///         provider outages and transient prefetch gaps.
 ///
 /// Returns:
 ///     Number of inserted or replaced rows.
@@ -1854,28 +1936,65 @@ pub(crate) fn store_rate_search(
     minute_utc: i64,
     searched_through_minute: i64,
     now_ms: i64,
+    grow: bool,
 ) -> rusqlite::Result<usize> {
-    const RETRY_MS: i64 = 5 * 60 * 1_000;
+    let existing: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT attempts, searched_through_minute FROM rate_searches
+             WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+            params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let delay_ms = match existing {
+        Some((attempts, prior_through))
+            if grow && searched_through_minute.max(prior_through) - minute_utc >= 3_600 =>
+        {
+            rate_search_retry_ms(attempts)
+        }
+        _ => rate_search_retry_ms(0),
+    };
     conn.execute(
         "INSERT INTO rate_searches (
              algorithm_version, quote_ordinal, minute_utc, searched_through_minute,
              next_retry_at_ms, attempts, updated_at_ms
-         ) VALUES (?1,?2,?3,?4,?5,1,?6)
+         ) VALUES (?1,?2,?3,?4,?5,?7,?6)
          ON CONFLICT (algorithm_version, quote_ordinal, minute_utc) DO UPDATE SET
              searched_through_minute=MAX(rate_searches.searched_through_minute,
                                          excluded.searched_through_minute),
              next_retry_at_ms=excluded.next_retry_at_ms,
-             attempts=rate_searches.attempts+1,
+             attempts=rate_searches.attempts+?7,
              updated_at_ms=excluded.updated_at_ms",
         params![
             ALGORITHM_VERSION,
             quote_ordinal,
             minute_utc,
             searched_through_minute,
-            now_ms.saturating_add(RETRY_MS),
-            now_ms
+            now_ms.saturating_add(delay_ms),
+            now_ms,
+            i64::from(grow)
         ],
     )
+}
+
+/// Delay before re-searching a minute that already had `prior_attempts` no-route searches.
+///
+/// Capped at one hour because a successor-open route can still appear later.
+///
+/// Args:
+///     prior_attempts: Prior no-route searches persisted for the minute.
+///
+/// Returns:
+///     Retry delay in milliseconds.
+pub(crate) fn rate_search_retry_ms(prior_attempts: i64) -> i64 {
+    const MINUTE_MS: i64 = 60 * 1_000;
+    match prior_attempts {
+        ..=0 => 5 * MINUTE_MS,
+        1 => 10 * MINUTE_MS,
+        2 => 20 * MINUTE_MS,
+        3 => 40 * MINUTE_MS,
+        _ => 60 * MINUTE_MS,
+    }
 }
 
 /// Persist a prepared USDT valuation guarded by its complete source inputs.

@@ -316,3 +316,34 @@ fn historical_paths_survive_a_primary_outage_without_inventing_absence() {
         Err(FetchFailure::Unavailable(_))
     ));
 }
+
+/// Breakage: `resolver.rs:leg_routes` admitting any Hyperliquid pair again (dropping the
+/// `hyperliquid_leg_allowed` guard) prices a fiat quote through a permissionless spot token that
+/// merely shares its ticker, so RUB or EUR trades show wildly wrong USDT totals.
+#[test]
+fn hyperliquid_ticker_collision_never_prices_a_fiat_quote() {
+    let requested = 1_700_000_040;
+    let successor = requested + 60;
+    for (ordinal, symbol) in [(13, "RUB/USDC"), (14, "EUR/USDC")] {
+        let source = FixtureSource::new(&[
+            ("hyperliquid_spot", symbol, requested, 0.5, 0.5),
+            ("hyperliquid_spot", symbol, successor, 0.5, 0.5),
+            ("binance_spot", "USDCUSDT", requested, 1.001, 1.001),
+            ("binance_spot", "USDCUSDT", successor, 1.001, 1.001),
+        ]);
+
+        let result = resolve_historical_rate(
+            &source,
+            QuoteCurrency::from_report_ordinal(ordinal).expect("fiat quote"),
+            requested,
+            requested,
+            successor,
+            false,
+        );
+
+        assert!(
+            matches!(result, Err(FetchFailure::Missing)),
+            "{symbol} must not route through Hyperliquid: {result:?}"
+        );
+    }
+}
