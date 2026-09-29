@@ -4,8 +4,9 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, params};
 
 use super::{
-    QuoteCurrency, ReportFilter, ReportStrategyKey, RowScope, SideFilter, distinct_strategies,
-    query_chart_trade_history, query_chart_trade_history_for_cores, query_reports, query_totals,
+    PeriodBasis, QuoteCurrency, ReportFilter, ReportStrategyKey, RowScope, SideFilter,
+    distinct_strategies, query_chart_trade_history, query_chart_trade_history_for_cores,
+    query_reports, query_totals,
 };
 
 /// Removing the exact core, exact coin, or inclusive close-date predicate from
@@ -1479,7 +1480,7 @@ fn strategy_choices_follow_report_scope_without_self_filtering() {
         }]),
         strategy_name_mask: "ignored-catalog-mask".to_string(),
         valuation: Default::default(),
-        core_names: Default::default(),
+        ..Default::default()
     };
     let keys = distinct_strategies(&conn, &scoped)
         .expect("load scoped strategy choices")
@@ -2990,4 +2991,118 @@ fn report_core_column_shows_and_sorts_by_the_configured_name() {
         ],
         "a renamed core reads one current name and sorts under it; a removed core keeps its own"
     );
+}
+
+/// Fixture for the period-basis tests: four synthetic rows on one identity-offset core, placed
+/// relative to `now` so "today" and "yesterday" windows separate them.
+///
+/// - 1: opened yesterday, closed today;
+/// - 2: opened and closed yesterday;
+/// - 3: still open, opened yesterday;
+/// - 4: still open, opened today.
+fn period_basis_fixture(now: i64) -> Connection {
+    let yesterday = now - 86_400;
+    let today = now - 600;
+    let conn = Connection::open_in_memory().expect("open period-basis fixture");
+    conn.execute_batch(&format!(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL, buydate INTEGER,
+             closedate INTEGER, basecurrency INTEGER, profitbtc REAL, coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 1, {yesterday}, {today}, 1, 1.0, 'OPENED-Y-CLOSED-T'),
+             (1, 2, {yesterday}, {}, 1, 2.0, 'OPENED-Y-CLOSED-Y'),
+             (1, 3, {yesterday}, 0, 1, 4.0, 'OPEN-SINCE-Y'),
+             (1, 4, {today}, 0, 1, 8.0, 'OPEN-SINCE-T');",
+        yesterday + 100,
+    ))
+    .expect("seed period-basis fixture");
+    conn
+}
+
+/// Rows (by rec id, sorted) and the closed/open footer counts one filter yields.
+fn basis_summary(conn: &Connection, filter: &ReportFilter) -> (Vec<i64>, i64, i64) {
+    let table = query_reports(conn, filter, "closedate", false, 100)
+        .expect("query period-basis Report rows");
+    let totals = query_totals(conn, filter).expect("query period-basis Report totals");
+    let mut ids = table.rec_ids.clone();
+    ids.sort_unstable();
+    (ids, totals.quotes.orders, totals.open.orders)
+}
+
+/// `report_read.rs::append_open_basis_scope` -- under `PeriodBasis::OpenDate` the period bounds
+/// apply to `buydate` for every row, open positions included, in both the row query and the
+/// totals query. Bounding `closedate` there instead admits trade 1 (closed today) into "today"
+/// and loses trades 1 and 2 from "yesterday"; letting open rows bypass the window (the close-date
+/// "window reaches now" rule) admits position 3 into "today".
+#[test]
+fn open_date_basis_places_every_row_by_its_open_time_in_rows_and_totals() {
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let conn = period_basis_fixture(now);
+    let today = |basis| ReportFilter {
+        date_from: Some(now - 3_600),
+        date_to: Some(now + 3_600),
+        rows: RowScope::ClosedAndOpenIfCurrent,
+        period_basis: basis,
+        ..ReportFilter::default()
+    };
+    let yesterday = |basis| ReportFilter {
+        date_from: Some(now - 86_400 - 3_600),
+        date_to: Some(now - 86_400 + 3_600),
+        rows: RowScope::ClosedAndOpenIfCurrent,
+        period_basis: basis,
+        ..ReportFilter::default()
+    };
+
+    assert_eq!(
+        basis_summary(&conn, &today(PeriodBasis::CloseDate)),
+        (vec![1, 3, 4], 1, 2),
+        "close basis: today's close plus every open position while the window reaches now"
+    );
+    assert_eq!(
+        basis_summary(&conn, &today(PeriodBasis::OpenDate)),
+        (vec![4], 0, 1),
+        "open basis: only the position opened today belongs to today"
+    );
+    assert_eq!(
+        basis_summary(&conn, &yesterday(PeriodBasis::OpenDate)),
+        (vec![1, 2, 3], 2, 1),
+        "open basis: both trades and the position opened yesterday belong to yesterday"
+    );
+    assert_eq!(
+        basis_summary(&conn, &yesterday(PeriodBasis::CloseDate)),
+        (vec![2], 1, 2),
+        "close basis: only yesterday's close in the rows; an ended window admits no open row; the close-basis open footer stays the fleet-wide live tally"
+    );
+}
+
+/// `PeriodBasis::default()` must stay `CloseDate`: every stored filter and every caller that
+/// never names a basis has always meant the close date. Defaulting to `OpenDate` changes the
+/// default filter's rows and totals on this fixture.
+#[test]
+fn default_period_basis_is_byte_for_byte_the_close_date_result() {
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let conn = period_basis_fixture(now);
+    for (from, to) in [
+        (now - 3_600, now + 3_600),
+        (now - 86_400 - 3_600, now - 86_400 + 3_600),
+    ] {
+        let default = ReportFilter {
+            date_from: Some(from),
+            date_to: Some(to),
+            rows: RowScope::ClosedAndOpenIfCurrent,
+            ..ReportFilter::default()
+        };
+        let close = ReportFilter {
+            period_basis: PeriodBasis::CloseDate,
+            ..default.clone()
+        };
+        let default_table = query_reports(&conn, &default, "closedate", false, 100)
+            .expect("query default-basis rows");
+        let close_table =
+            query_reports(&conn, &close, "closedate", false, 100).expect("query close-basis rows");
+        assert_eq!(default_table.rows, close_table.rows);
+        assert_eq!(default_table.rec_ids, close_table.rec_ids);
+        assert_eq!(basis_summary(&conn, &default), basis_summary(&conn, &close));
+    }
 }

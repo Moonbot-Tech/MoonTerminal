@@ -5,8 +5,8 @@ use super::export::{Format, run as run_export};
 use super::state::{ReportFilterSet, applied_filters};
 use super::{
     Period, ReportKind, ReportPeriodBucket, SideFilter, apply_period_from_prefs,
-    next_prefs_for_period_pick, period_bucket_for_scope, row_scope_for, side_id,
-    strategy_name_mask_enabled,
+    next_prefs_for_period_pick, period_basis_caption_key, period_basis_for,
+    period_bucket_for_scope, row_scope_for, side_id, strategy_name_mask_enabled,
 };
 use crate::workspace::{RetainedCoreScope, resolve_group_scope};
 use chrono::{TimeZone as _, Utc};
@@ -621,6 +621,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         // The panel default is ON, so this is both the upgrade fallback and a value a hard-coded
         // false fallback cannot silently match.
         show_open: true,
+        period_basis: moon_core::db::PeriodBasis::CloseDate,
         period: Period::Today,
         strategy_name_mask: "CURRENT".to_string(),
     };
@@ -632,6 +633,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("emu".to_string()),
         deleted_only: Some(true),
         show_open: Some(false),
+        period_basis: Some("close".to_string()),
         period: Some("rp-cur-week".to_string()),
         period_overview: Some("rp-today".to_string()),
         strategy_name_mask: Some("EMA_".to_string()),
@@ -726,6 +728,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: Some("bogus".to_string()),
         deleted_only: None,
         show_open: None,
+        period_basis: None,
         period: Some("rp-nonexistent".to_string()),
         period_overview: Some("rp-overview-nonexistent".to_string()),
         strategy_name_mask: None,
@@ -763,6 +766,7 @@ fn applied_filters_prefers_stored_values_and_falls_back_to_current_per_field() {
         kind: None,
         deleted_only: Some(true),
         show_open: None,
+        period_basis: None,
         period: None,
         period_overview: None,
         strategy_name_mask: Some(String::new()),
@@ -880,6 +884,7 @@ fn period_bucket_pick_writes_only_the_live_bucket() {
             kind: ReportKind::Real,
             deleted_only: false,
             show_open: true,
+            period_basis: moon_core::db::PeriodBasis::CloseDate,
             period: Period::Today,
             strategy_name_mask: "EMA_".to_string(),
         },
@@ -901,6 +906,7 @@ fn period_bucket_pick_writes_only_the_live_bucket() {
             kind: ReportKind::Emu,
             deleted_only: true,
             show_open: false,
+            period_basis: moon_core::db::PeriodBasis::CloseDate,
             period: Period::CurYear,
             strategy_name_mask: "SINGLE".to_string(),
         },
@@ -922,6 +928,7 @@ fn period_bucket_pick_writes_only_the_live_bucket() {
             kind: ReportKind::Real,
             deleted_only: false,
             show_open: true,
+            period_basis: moon_core::db::PeriodBasis::CloseDate,
             period: Period::All,
             strategy_name_mask: "SHARED".to_string(),
         },
@@ -1298,4 +1305,97 @@ fn set_period_persists_before_the_changed_value_guard() {
         persist_at < guard_at,
         "persist_filters must run before the changed-value guard, not inside it"
     );
+}
+
+/// The period basis survives the panel's own encode (`next_prefs_for_period_pick` writing
+/// `period_basis_id`) and decode (`applied_filters` reading `period_basis_from_id`) for both
+/// values, and an id this build does not know keeps the panel's current basis.
+///
+/// Mutations: swapping the `"close"`/`"open"` ids in either direction, or dropping the stored
+/// value in `applied_filters` for `current.period_basis`, lands the opposite basis below —
+/// `current` is always the OTHER basis, so a fallback cannot pass as a round trip.
+#[test]
+fn period_basis_round_trips_through_the_panel_encoder_and_decoder() {
+    use moon_core::db::PeriodBasis;
+    let live = |period_basis| ReportFilterSet {
+        side: SideFilter::All,
+        kind: ReportKind::All,
+        deleted_only: false,
+        show_open: true,
+        period_basis,
+        period: Period::Today,
+        strategy_name_mask: String::new(),
+    };
+    for (basis, other, id) in [
+        (PeriodBasis::CloseDate, PeriodBasis::OpenDate, "close"),
+        (PeriodBasis::OpenDate, PeriodBasis::CloseDate, "open"),
+    ] {
+        let prefs =
+            next_prefs_for_period_pick(None, ReportPeriodBucket::Single, None, &live(basis));
+        assert_eq!(
+            prefs.period_basis.as_deref(),
+            Some(id),
+            "stored id for {basis:?}"
+        );
+        let restored = applied_filters(&prefs, ReportPeriodBucket::Single, live(other));
+        assert_eq!(restored.period_basis, basis, "decoded basis for id {id}");
+    }
+    let unknown = moon_core::config::ReportFilterPrefs {
+        period_basis: Some("settle".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(
+        applied_filters(
+            &unknown,
+            ReportPeriodBucket::Single,
+            live(PeriodBasis::OpenDate)
+        )
+        .period_basis,
+        PeriodBasis::OpenDate,
+        "an unknown stored id must keep the panel's current basis"
+    );
+}
+
+/// `mod.rs::period_basis_for` -- an Analytics-scoped (`closed_only`) panel is handed close-date
+/// bounds, so it must query on the close date whatever the dormant toolbar value says; an
+/// unscoped panel carries the user's pick. Dropping the `closed_only` arm, or ignoring the user's
+/// pick, reddens one of the four rows.
+#[test]
+fn analytics_scope_forces_the_close_date_basis() {
+    use moon_core::db::PeriodBasis;
+    assert_eq!(
+        period_basis_for(true, PeriodBasis::OpenDate),
+        PeriodBasis::CloseDate
+    );
+    assert_eq!(
+        period_basis_for(true, PeriodBasis::CloseDate),
+        PeriodBasis::CloseDate
+    );
+    assert_eq!(
+        period_basis_for(false, PeriodBasis::OpenDate),
+        PeriodBasis::OpenDate
+    );
+    assert_eq!(
+        period_basis_for(false, PeriodBasis::CloseDate),
+        PeriodBasis::CloseDate
+    );
+}
+
+/// `mod.rs::period_basis_caption_key` -- the basis choice lives inside the closed scope menu, so
+/// only a non-default (open-date) basis marks the trigger caption, and an Analytics-scoped panel,
+/// which queries on the close date regardless, never does. Marking the default, or honouring the
+/// dormant open-date pick under `closed_only`, reddens one of the four rows.
+#[test]
+fn only_the_effective_open_date_basis_marks_the_scope_caption() {
+    use moon_core::db::PeriodBasis;
+    assert_eq!(
+        period_basis_caption_key(false, PeriodBasis::OpenDate),
+        Some("report.period_basis.open_short")
+    );
+    assert_eq!(
+        period_basis_caption_key(false, PeriodBasis::CloseDate),
+        None
+    );
+    assert_eq!(period_basis_caption_key(true, PeriodBasis::OpenDate), None);
+    assert_eq!(period_basis_caption_key(true, PeriodBasis::CloseDate), None);
 }

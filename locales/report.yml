@@ -524,6 +524,29 @@ report.filter.emu:
   ru: "Эмулятор"
   en: "Emulator"
   es: "Emulador"
+# Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
+# naming that timestamp on the period preset.
+report.period_basis.close:
+  ru: "По закрытию"
+  en: "By close date"
+  es: "Por cierre"
+report.period_basis.open:
+  ru: "По открытию"
+  en: "By open date"
+  es: "Por apertura"
+# Scope-caption marker shown only while the period runs on the open date.
+report.period_basis.open_short:
+  ru: "откр."
+  en: "open"
+  es: "apert."
+report.period_basis.tooltip_close:
+  ru: "Период отбирает сделки по дате закрытия"
+  en: "The period selects trades by their close date"
+  es: "El periodo selecciona las operaciones por su fecha de cierre"
+report.period_basis.tooltip_open:
+  ru: "Период отбирает сделки по дате открытия"
+  en: "The period selects trades by their open date"
+  es: "El periodo selecciona las operaciones por su fecha de apertura"
 report.period.today:
   ru: "Сегодня"
   en: "Today"

@@ -101,6 +101,7 @@ fn populated_filter() -> ReportFilter {
         emulator: Some(false),
         deleted_only: false,
         rows: db::RowScope::Closed,
+        period_basis: db::PeriodBasis::CloseDate,
         axis: db::ReportAxis::identity_core_local(),
         strategies: Some(vec![ReportStrategyKey {
             core_uid: 7,

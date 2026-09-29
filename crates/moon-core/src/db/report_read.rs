@@ -392,6 +392,20 @@ pub enum RowScope {
     OpenIfCurrent,
 }
 
+/// Which timestamp a bounded Report period is measured against.
+///
+/// The default is [`Self::CloseDate`], which is what every Report query has always meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PeriodBasis {
+    /// The period bounds apply to `closedate`; open positions are admitted by the "window still
+    /// reaches the present" rule of [`RowScope::ClosedAndOpenIfCurrent`].
+    #[default]
+    CloseDate,
+    /// The period bounds apply to `buydate` for every row, open positions included: a position
+    /// enters the window by when it was opened, like any closed trade.
+    OpenDate,
+}
+
 /// Complete filter shared by Report rows, totals, export, and strategy discovery.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReportFilter {
@@ -418,6 +432,8 @@ pub struct ReportFilter {
     pub deleted_only: bool,
     /// Which trades this query returns — see [`RowScope`].
     pub rows: RowScope,
+    /// Which timestamp the period bounds apply to — see [`PeriodBasis`].
+    pub period_basis: PeriodBasis,
     /// Time axis the replicated date columns are read on.
     ///
     /// Carried on the filter rather than loaded inside each query for the same reason
@@ -814,6 +830,10 @@ fn append_row_scope(
     f: &ReportFilter,
     cols: &std::collections::HashSet<String>,
 ) {
+    if f.period_basis == PeriodBasis::OpenDate && (f.date_from.is_some() || f.date_to.is_some()) {
+        append_open_basis_scope(sql, params, f, cols);
+        return;
+    }
     // Open rows carry no `closedate`, so neither the window nor the axis reaches them: this arm
     // is offset-independent and stays exactly the single-branch shape it always was.
     if f.rows == RowScope::Open {
@@ -830,24 +850,9 @@ fn append_row_scope(
     let groups = offset_groups(f, now);
     let mut parts: Vec<GroupPredicate> = Vec::new();
     for (offset, cores) in &groups {
-        let mut guard = String::new();
-        if let Some(cores) = cores {
-            if cores.is_empty() {
-                continue;
-            }
-            let ids = cores
-                .iter()
-                .map(|uid| (*uid as i64).to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            // Leads with `core_uid` so this branch still opens `idx_rep_core_close` rather than
-            // scanning: that index is what keeps the period filter at tens of milliseconds over a
-            // half-million-row replica, and it is the whole reason the offset moves onto the
-            // BOUND instead of wrapping the column in a conversion.
-            guard.push_str(&format!("r.core_uid IN ({ids}) AND "));
-        } else if let Some(excluded) = catch_all_exclusion(f) {
-            guard.push_str(&format!("r.core_uid NOT IN ({excluded}) AND "));
-        }
+        let Some(guard) = group_guard(cores, f) else {
+            continue;
+        };
         // The bounds are true-UTC instants and the column is core-local, so the group's offset is
         // added to the BOUND. Converting the column instead would be the same arithmetic and would
         // cost the index.
@@ -959,6 +964,101 @@ fn append_row_scope(
         // other scope reaching zero branches had no predicate to apply in the first place.
         0 if f.rows == RowScope::OpenIfCurrent => sql.push_str(" AND 1=0"),
         0 => {}
+        1 => sql.push_str(&format!(" AND {}", branches[0])),
+        _ => sql.push_str(&format!(" AND (({}))", branches.join(") OR ("))),
+    }
+}
+
+/// `core_uid` guard one offset group's branches lead with.
+///
+/// Args:
+///     cores: The group's cores, or `None` for the catch-all group.
+///     f: Complete Report filter.
+///
+/// Returns:
+///     `None` when the group names no core and contributes nothing, otherwise the guard text
+///     (empty for an unguarded catch-all group).
+fn group_guard(cores: &Option<Vec<u64>>, f: &ReportFilter) -> Option<String> {
+    let mut guard = String::new();
+    if let Some(cores) = cores {
+        if cores.is_empty() {
+            return None;
+        }
+        let ids = cores
+            .iter()
+            .map(|uid| (*uid as i64).to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        // Leads with `core_uid` so this branch still opens `idx_rep_core_close` rather than
+        // scanning: that index is what keeps the period filter at tens of milliseconds over a
+        // half-million-row replica, and it is the whole reason the offset moves onto the
+        // BOUND instead of wrapping the column in a conversion.
+        guard.push_str(&format!("r.core_uid IN ({ids}) AND "));
+    } else if let Some(excluded) = catch_all_exclusion(f) {
+        guard.push_str(&format!("r.core_uid NOT IN ({excluded}) AND "));
+    }
+    Some(guard)
+}
+
+/// Append the row-scope predicate and a `buydate` window for [`PeriodBasis::OpenDate`].
+///
+/// Every row, open or closed, enters the window by its open time, so the "window still reaches
+/// the present" resolution never applies and no coarse `closedate` range is factored out. A
+/// source without `buydate` cannot place any row in the period and fails closed.
+/// The clock is read only to group cores by UTC offset; no bound is derived from it.
+///
+/// Args:
+///     sql: Predicate buffer being built.
+///     params: Ordered bound values being built.
+///     f: Complete Report filter with at least one period bound.
+///     cols: Columns available on this source.
+fn append_open_basis_scope(
+    sql: &mut String,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    f: &ReportFilter,
+    cols: &std::collections::HashSet<String>,
+) {
+    if !cols.contains("buydate") {
+        sql.push_str(" AND 1=0");
+        return;
+    }
+    let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
+    let resolved = match f.rows {
+        RowScope::ClosedAndOpenIfCurrent => RowScope::ClosedAndOpen,
+        RowScope::OpenIfCurrent => RowScope::Open,
+        other => other,
+    };
+    let mut branches: Vec<String> = Vec::new();
+    for (offset, cores) in &offset_groups(f, now) {
+        let Some(guard) = group_guard(cores, f) else {
+            continue;
+        };
+        // Same core-local axis as `closedate`, so the offset moves onto the bound the same way.
+        let mut window = String::new();
+        if let Some(from) = f.date_from {
+            window.push_str(" AND r.\"buydate\" >= ?");
+            params.push(Box::new(crate::db::ReportAxis::shift_bound(from, *offset)));
+        }
+        if let Some(to) = f.date_to {
+            window.push_str(" AND r.\"buydate\" <= ?");
+            params.push(Box::new(crate::db::ReportAxis::shift_bound(to, *offset)));
+        }
+        let state = match resolved {
+            RowScope::Closed => Some(closed_row_predicate(cols).unwrap_or_else(|| "1=0".into())),
+            RowScope::Open => Some(open_row_predicate(cols).unwrap_or_else(|| "1=0".into())),
+            _ => match (closed_row_predicate(cols), open_row_predicate(cols)) {
+                (Some(closed), Some(open)) => Some(format!("({closed}) OR {open}")),
+                // Without `closedate` there is no row state to test; the window alone applies.
+                _ => None,
+            },
+        };
+        branches.push(match state {
+            Some(state) => format!("{guard}({state}){window}"),
+            None => format!("{guard}1=1{window}"),
+        });
+    }
+    match branches.len() {
+        0 => sql.push_str(" AND 1=0"),
         1 => sql.push_str(&format!(" AND {}", branches[0])),
         _ => sql.push_str(&format!(" AND (({}))", branches.join(") OR ("))),
     }
