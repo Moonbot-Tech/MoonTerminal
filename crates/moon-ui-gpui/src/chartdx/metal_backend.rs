@@ -1716,6 +1716,14 @@ impl MetalLayers {
         tex.last_bake_at = Some(now);
     }
 
+    /// Whether queued book data waits on a data throttle that has now expired.
+    pub fn book_bake_due(&self, now: Instant) -> bool {
+        self.book_texture.as_ref().is_some_and(|tex| {
+            tex.key.baked
+                && book_data_due(tex.dirty || self.book_levels_changed, tex.last_bake_at, now)
+        })
+    }
+
     /// Blits the baked order book into its zone through a whole-texel UV window, after the base
     /// and before the price lines, as the book used to draw last in the base.
     fn draw_cached_book(

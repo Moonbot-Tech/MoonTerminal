@@ -183,6 +183,21 @@ impl PlatformLayers {
         }
     }
 
+    /// Whether a throttled order-book bake is due, so a frame must prepare it.
+    ///
+    /// Metal only: DX11 keeps its book inside the base and bakes on the next prepare.
+    pub fn book_bake_due(&self, now: std::time::Instant) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.book_bake_due(now)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = now;
+            false
+        }
+    }
+
     /// Whether the combo layer holds deferred eviction damage whose full rebake is due.
     ///
     /// DX11 and Metal defer eviction damage; every other backend has nothing pending.

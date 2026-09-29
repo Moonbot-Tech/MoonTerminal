@@ -542,6 +542,17 @@ impl ChartDataState {
             st.base_dirty = true;
             st.needs_present = true;
         }
+        // A book update held back by the data throttle bakes once the throttle expires, even when
+        // no further revision arrives; the book is outside the base, so only a present follows.
+        for pr in st.panes.iter_mut() {
+            if pr.active && pr.layers.book_bake_due(now) {
+                pr.gpu_prepare_dirty = true;
+                due = true;
+            }
+        }
+        if due {
+            st.needs_present = true;
+        }
     }
 
     pub(crate) fn observe_present_rate(&mut self, now: Instant) -> bool {
