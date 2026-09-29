@@ -27,6 +27,10 @@ core_update.phase.succeeded:
   ru: "Обновлено"
   en: "Updated"
   es: "Actualizado"
+core_update.phase.installed:
+  ru: "Установлено"
+  en: "Installed"
+  es: "Instalado"
 core_update.phase.unchanged:
   ru: "Версия не изменилась"
   en: "Version unchanged"

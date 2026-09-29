@@ -201,3 +201,24 @@ fn perpetual_api_keys_keep_an_explanatory_tooltip() {
         );
     }
 }
+
+/// A same-number Succeeded (a named build installed) reads "installed"; a moved number reads
+/// "updated". Breaks when the key ignores `from == to`.
+#[test]
+fn core_update_same_number_success_reads_installed() {
+    use moon_core::session::core_update::CoreUpdateOutcome;
+    assert_eq!(
+        super::succeeded_locale_key(&CoreUpdateOutcome::Succeeded {
+            from: Some(771),
+            to: 771
+        }),
+        "core_update.phase.installed"
+    );
+    assert_eq!(
+        super::succeeded_locale_key(&CoreUpdateOutcome::Succeeded {
+            from: Some(770),
+            to: 771
+        }),
+        "core_update.phase.succeeded"
+    );
+}

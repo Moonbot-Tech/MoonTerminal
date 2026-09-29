@@ -178,10 +178,11 @@ fn history_row(
         time_text(record.started_ms, zone),
         record.core_name.clone(),
         server,
-        format!(
-            "{} \u{2192} {}",
-            number_or_dash(record.from),
-            number_or_dash(to)
+        from_to_text(
+            record.from,
+            to,
+            matches!(record.outcome, CoreUpdateOutcome::Succeeded { .. }),
+            &record.target,
         ),
         target_text(&record.target),
         outcome,
@@ -228,6 +229,36 @@ fn cells(
     ])
 }
 
+/// `from → to`, followed by the short build label when a named/test build was confirmed.
+///
+/// A test build can carry the same number as the release, so `7.71 → 7.71` alone says nothing;
+/// `7.71 → 7.71 R2` names what was installed. Labelled only when the attempt `succeeded`: an
+/// `Unchanged` row confirmed a number, never that the requested build is what runs.
+fn from_to_text(
+    from: Option<u32>,
+    to: Option<u32>,
+    succeeded: bool,
+    target: &UpdateTarget,
+) -> String {
+    let base = format!("{} \u{2192} {}", number_or_dash(from), number_or_dash(to));
+    match target {
+        UpdateTarget::Named(name) if succeeded => format!("{base} {}", named_build_label(name)),
+        _ => base,
+    }
+}
+
+/// Short label of a named build: the part after a case-insensitive `MoonBot-` prefix
+/// (`MoonBot-R2` -> `R2`), or the whole name when it has no such prefix or nothing follows it.
+/// The one rule every cell of this list uses to show a named target.
+fn named_build_label(name: &str) -> &str {
+    const PREFIX: &str = "MoonBot-";
+    name.get(..PREFIX.len())
+        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &name[PREFIX.len()..])
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(name)
+}
+
 /// A reported build number, or a dash for "never reported".
 fn number_or_dash(v: Option<u32>) -> String {
     // The SAME formatter the MoonBot column uses (`presentation::version_text` ->
@@ -242,7 +273,9 @@ fn number_or_dash(v: Option<u32>) -> String {
 fn target_text(target: &UpdateTarget) -> String {
     match target {
         UpdateTarget::Release => t!("core_update.target.release").to_string(),
-        UpdateTarget::Named(name) => t!("core_update.target.named", name = name).to_string(),
+        UpdateTarget::Named(name) => {
+            t!("core_update.target.named", name = named_build_label(name)).to_string()
+        }
     }
 }
 
@@ -255,3 +288,6 @@ fn time_text(ms: i64, zone: chrono_tz::Tz) -> String {
     let s = moon_core::util::display_time::format_minute(ms / 1000, zone);
     if s.is_empty() { "—".to_string() } else { s }
 }
+
+#[cfg(test)]
+mod tests;

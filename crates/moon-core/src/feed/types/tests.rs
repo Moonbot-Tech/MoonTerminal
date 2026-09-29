@@ -464,3 +464,34 @@ fn a_reject_code_must_start_on_a_token_boundary() {
     assert!(super::is_core_update_rejection("(BGF-SUB4)"));
     assert!(super::is_core_update_rejection("XBGF-SUB4 then BGF-SUB4"));
 }
+
+/// Testers paste the Telegram broadcast form `InstallTestVersion MoonBot-R2 ALL`; the trailing
+/// `ALL` means "every bot" and is not part of the build name.
+///
+/// Rule: only a standalone LAST token, case-insensitive, and only when a name remains before it.
+/// `ALL` alone (with or without the command word) is kept as the name, and `ALL` inside a token
+/// (`MoonBot-ALL`, `ALLin`) is left alone. Breaks when the trailing strip is dropped: the core is
+/// asked for a build literally named `MoonBot-R2 ALL`.
+#[test]
+fn a_trailing_all_broadcast_token_is_dropped() {
+    let r2 = Some("MoonBot-R2".to_string());
+    assert_eq!(
+        super::normalize_named_build("InstallTestVersion MoonBot-R2 ALL"),
+        r2
+    );
+    assert_eq!(super::normalize_named_build("MoonBot-R2   all "), r2);
+    assert_eq!(super::normalize_named_build("MoonBot-R2"), r2);
+    assert_eq!(super::normalize_named_build("ALL"), Some("ALL".to_string()));
+    assert_eq!(
+        super::normalize_named_build("InstallTestVersion ALL"),
+        Some("ALL".to_string())
+    );
+    assert_eq!(
+        super::normalize_named_build("MoonBot-ALL"),
+        Some("MoonBot-ALL".to_string())
+    );
+    assert_eq!(
+        super::normalize_named_build("Moon ALLin"),
+        Some("Moon ALLin".to_string())
+    );
+}

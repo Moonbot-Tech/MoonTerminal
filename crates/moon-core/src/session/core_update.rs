@@ -181,9 +181,10 @@ pub enum CoreUpdatePhase {
 /// How one update attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoreUpdateOutcome {
-    /// The core came back on a different build than it left on.
+    /// The core came back on a different build than it left on, or -- for a named/test target --
+    /// restarted onto the same build number (see [`verified_outcome`]).
     Succeeded { from: Option<u32>, to: u32 },
-    /// The core came back on the SAME build it left on. This is a success for the queue --
+    /// A RELEASE attempt whose core came back on the SAME build it left on. This is a success for the queue --
     /// nothing is in flight on that IP once the core is back -- but a NEUTRAL outcome for the row,
     /// never rendered as a failure. It is also a deliberate, recorded deviation from a literal
     /// reading of "never two simultaneous updates on one IP": the invariant bought is exactly
@@ -214,6 +215,29 @@ pub enum CoreUpdateOutcome {
     Unverified(UnverifiedReason),
     /// The attempt failed; see [`UpdateFailure`] for which way.
     Failed(UpdateFailure),
+}
+
+/// Outcome of an attempt that reached `Verifying` and read `to` from a fresh client.
+///
+/// Reaching `Verifying` proves only that the connection left and came back settled -- an
+/// ordinary network reconnect to the SAME process does that too. `restarted` is the stronger
+/// proof: a different MoonBot process was observed answering since the command was sent (see
+/// `AttemptMeta::restarts0`). A named/test build may carry the SAME number as the release it
+/// replaces (the protocol reports only `server_version`, no build name), so a Named attempt that
+/// provably restarted onto an equal number is `Succeeded { from == to }` -- installed. Without
+/// that proof, and for every Release attempt, an equal number stays `Unchanged`.
+pub fn verified_outcome(
+    target: &UpdateTarget,
+    from: Option<u32>,
+    to: u32,
+    restarted: bool,
+) -> CoreUpdateOutcome {
+    let installed_same_number = restarted && matches!(target, UpdateTarget::Named(_));
+    if from == Some(to) && !installed_same_number {
+        CoreUpdateOutcome::Unchanged { version: to }
+    } else {
+        CoreUpdateOutcome::Succeeded { from, to }
+    }
 }
 
 /// Why a `Verifying` attempt could not establish the core's post-update build.
@@ -344,6 +368,11 @@ struct AttemptMeta {
     /// attempt that is closed out before ever reaching `Sent` (a `Queued` core abandoned at
     /// quit). Every other closure captures a fresher baseline at the moment it actually matters.
     from: Option<u32>,
+    /// `CoreData::report_traces_epoch` at SEND time. That counter advances only on
+    /// `FeedMsg::RunStateForgotten` -- a DIFFERENT MoonBot process answers the connection -- so a
+    /// value past this snapshot is the one proof this attempt's core process actually restarted,
+    /// as opposed to an ordinary network reconnect to the same process. See [`verified_outcome`].
+    restarts0: u64,
 }
 
 /// Per-IP update queue and its retained history, owned by [`SessionManager`].
@@ -473,6 +502,8 @@ impl SessionManager {
                 core_name,
                 target,
                 from,
+                // Re-snapshotted at send; this value only covers an attempt never sent.
+                restarts0: self.store.core(core).map_or(0, |d| d.report_traces_epoch),
             },
         );
         self.core_updates
@@ -1161,6 +1192,7 @@ impl SessionManager {
                     }
                 }
                 CoreUpdatePhase::Verifying {
+                    target,
                     from,
                     epoch1,
                     verify_at_ms,
@@ -1175,11 +1207,12 @@ impl SessionManager {
                         && data.server_version.is_some();
                     if verified {
                         let v = data.server_version.expect("verified implies Some above");
-                        let outcome = if Some(v) != *from {
-                            CoreUpdateOutcome::Succeeded { from: *from, to: v }
-                        } else {
-                            CoreUpdateOutcome::Unchanged { version: v }
-                        };
+                        let restarted = self
+                            .core_updates
+                            .attempts
+                            .get(&core)
+                            .is_some_and(|meta| data.report_traces_epoch != meta.restarts0);
+                        let outcome = verified_outcome(target, *from, v, restarted);
                         let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
                             continue;
                         };
@@ -1319,6 +1352,7 @@ impl SessionManager {
             let from = data.server_version;
             let epoch0 = data.conn_epoch;
             let rejects0 = data.update_rejects;
+            let restarts0 = data.report_traces_epoch;
 
             match current_endpoint {
                 Some(ep) if ep.address == addr => {
@@ -1449,6 +1483,9 @@ impl SessionManager {
                         Ok(()) => {
                             if let Some(lane) = self.core_updates.lanes.get_mut(&addr) {
                                 lane.active = Some(core);
+                            }
+                            if let Some(meta) = self.core_updates.attempts.get_mut(&core) {
+                                meta.restarts0 = restarts0;
                             }
                             self.core_updates.phases.insert(
                                 core,

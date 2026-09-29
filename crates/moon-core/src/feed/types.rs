@@ -1093,6 +1093,10 @@ pub enum UpdateTarget {
 /// spelling rather than drifting from the protocol convention.
 pub const CORE_UPDATE_COMMAND_WORD: &str = "InstallTestVersion";
 
+/// Trailing broadcast token of a pasted install command (`InstallTestVersion MoonBot-R2 ALL`),
+/// meaning "all bots" in the Telegram form. See [`normalize_named_build`].
+pub const CORE_UPDATE_ALL_WORD: &str = "ALL";
+
 /// Protocol error code the core answers with when it refuses a named/test build target. Machine-
 /// stable and language-independent, unlike the prose sentence that rides beside it — a core build
 /// can reword the sentence, never this code. See [`is_core_update_rejection`].
@@ -1102,7 +1106,8 @@ pub const CORE_UPDATE_REJECT_CODE: &str = "BGF-SUB4";
 /// `MoonBot-F8` and `InstallTestVersion MoonBot-F8` reach the updater as the bare version name.
 /// Trims, collapses internal whitespace runs to a single space, drops a case-insensitive leading
 /// command-word TOKEN (whitespace-delimited,
-/// so `installtestversion-foo` is one token and is left alone), then trims again. Returns `None`
+/// so `installtestversion-foo` is one token and is left alone), then drops a case-insensitive
+/// trailing [`CORE_UPDATE_ALL_WORD`] token when a name remains before it. Returns `None`
 /// when nothing remains — a value that is only the command word is refused rather than sent as an
 /// empty name.
 pub fn normalize_named_build(raw: &str) -> Option<String> {
@@ -1119,10 +1124,16 @@ pub fn normalize_named_build(raw: &str) -> Option<String> {
                 trimmed
             }
         });
-    if without_command.is_empty() {
+    // `InstallTestVersion MoonBot-R2 ALL` is the broadcast form ("every bot"); the trailing
+    // standalone token is not part of the build name. Kept when it is the only token left.
+    let without_all = without_command
+        .rsplit_once(' ')
+        .filter(|(_, tail)| tail.eq_ignore_ascii_case(CORE_UPDATE_ALL_WORD))
+        .map_or(without_command, |(head, _)| head);
+    if without_all.is_empty() {
         None
     } else {
-        Some(without_command.to_string())
+        Some(without_all.to_string())
     }
 }
 
