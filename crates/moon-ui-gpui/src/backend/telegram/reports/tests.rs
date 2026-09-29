@@ -14,9 +14,15 @@ fn viewer_membership_filters_every_report_view_and_total() {
     for (daily, by_exchange) in [(false, false), (false, true), (true, false)] {
         let mut request = ReportRequest::new(Period::Today, daily);
         request.by_exchange = by_exchange;
-        let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
-            (venues.clone(), super::TelegramReportAccess::Viewer(vec![1]))
-        })
+        let page = super::read_page_on(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            &Default::default(),
+            |_| (venues.clone(), super::TelegramReportAccess::Viewer(vec![1])),
+        )
         .unwrap();
         assert_eq!(page.total.orders, 1);
         assert_eq!(page.total.totals[0].profit, 7.0);
@@ -45,15 +51,23 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
                 moon_core::feed::ExchangeId::new(6),
             );
         }
-        let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
-            (
-                std::collections::HashMap::from([
-                    (1, moon_core::venue::CoreVenue::identify(2, "", None)),
-                    (2, moon_core::venue::CoreVenue::identify(6, "", None)),
-                ]),
-                super::TelegramReportAccess::Viewer(ids),
-            )
-        })
+        let page = super::read_page_on(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            &Default::default(),
+            |_| {
+                (
+                    std::collections::HashMap::from([
+                        (1, moon_core::venue::CoreVenue::identify(2, "", None)),
+                        (2, moon_core::venue::CoreVenue::identify(6, "", None)),
+                    ]),
+                    super::TelegramReportAccess::Viewer(ids),
+                )
+            },
+        )
         .unwrap();
         assert_eq!(page.total.orders, 0);
         assert!(page.rows.is_empty());
@@ -224,19 +238,35 @@ fn inactive_cores_do_not_consume_page_slots() {
     }
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    let first = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |rows| {
-        rows.sort_by_key(|(id, _)| *id);
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let first = super::read_page_on(
+        &conn,
+        request.clone(),
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |rows| {
+            rows.sort_by_key(|(id, _)| *id);
+            (Default::default(), super::TelegramReportAccess::Owner)
+        },
+    )
     .unwrap();
     assert_eq!(first.total.orders, 9);
     assert_eq!(first.rows.len(), 6);
     assert_eq!(first.pages, 2);
     request.page = 1;
-    let last = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |rows| {
-        rows.sort_by_key(|(id, _)| *id);
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let last = super::read_page_on(
+        &conn,
+        request,
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |rows| {
+            rows.sort_by_key(|(id, _)| *id);
+            (Default::default(), super::TelegramReportAccess::Owner)
+        },
+    )
     .unwrap();
     assert_eq!(
         last.rows
@@ -261,9 +291,15 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
         (3, CoreVenue::identify(6, "", None)),
     ]);
     let request = ReportRequest::new(Period::Today, false);
-    let page = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |_| {
-        (venues.clone(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        request.clone(),
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |_| (venues.clone(), super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert_eq!(page.total.orders, 3);
     assert_eq!(page.rows.len(), 2);
@@ -277,9 +313,15 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
     let mut scoped = request;
     scoped.scope = ReportScope::Venue(ExchangeId::new(13));
     scoped.by_exchange = false;
-    let empty = super::read_page_on(&conn, scoped, 100, 200, chrono_tz::UTC, |_| {
-        (venues, super::TelegramReportAccess::Owner)
-    })
+    let empty = super::read_page_on(
+        &conn,
+        scoped,
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |_| (venues, super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert_eq!(empty.total.orders, 0);
     assert!(empty.rows.is_empty());
@@ -299,9 +341,15 @@ fn daily_pages_include_partial_day_after_zone_change() {
     .unwrap();
     request.daily = true;
     request.page = 36;
-    let page = super::read_page_on(&conn, request, from, to, chrono_tz::Europe::Warsaw, |_| {
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        request,
+        from,
+        to,
+        chrono_tz::Europe::Warsaw,
+        &Default::default(),
+        |_| (Default::default(), super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert_eq!(page.rows.last().unwrap().0, "2025-01-01");
     assert_eq!(page.rows.len(), 1);
@@ -326,9 +374,15 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         )
         .unwrap();
     }
-    let page = super::read_page_on(&conn, daily, from, to, chrono_tz::UTC, |_| {
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        daily,
+        from,
+        to,
+        chrono_tz::UTC,
+        &Default::default(),
+        |_| (Default::default(), super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert_eq!(page.rows.len(), 31);
     assert_eq!(page.pages, 1);
@@ -365,9 +419,15 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         venues.insert(id, moon_core::venue::CoreVenue::identify(code, "", None));
     }
     let request = ReportRequest::new(Period::Today, false);
-    let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |_| {
-        (venues.clone(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        request,
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |_| (venues.clone(), super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert_eq!(page.rows.len(), 6);
     assert_eq!(page.pages, 1);
@@ -411,9 +471,15 @@ fn oversized_daily_report_still_pages() {
         )
         .unwrap();
     }
-    let page = super::read_page_on(&conn, request, from, to, chrono_tz::UTC, |_| {
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        request,
+        from,
+        to,
+        chrono_tz::UTC,
+        &Default::default(),
+        |_| (Default::default(), super::TelegramReportAccess::Owner),
+    )
     .unwrap();
     assert!(
         page.pages > 1,
@@ -496,10 +562,18 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     }
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    let first = super::read_page_on(&conn, request.clone(), 100, 200, chrono_tz::UTC, |rows| {
-        rows.sort_by_key(|(id, _)| *id);
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let first = super::read_page_on(
+        &conn,
+        request.clone(),
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |rows| {
+            rows.sort_by_key(|(id, _)| *id);
+            (Default::default(), super::TelegramReportAccess::Owner)
+        },
+    )
     .unwrap();
     assert_eq!(first.total.orders, 13);
     assert_eq!(first.total.totals[0].profit, 18.0);
@@ -507,10 +581,18 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     assert_eq!(first.rows[0].1.orders, 2);
     assert_eq!(first.rows[0].1.totals[0].profit, 7.0);
     request.page = 1;
-    let second = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, |rows| {
-        rows.sort_by_key(|(id, _)| *id);
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let second = super::read_page_on(
+        &conn,
+        request,
+        100,
+        200,
+        chrono_tz::UTC,
+        &Default::default(),
+        |rows| {
+            rows.sort_by_key(|(id, _)| *id);
+            (Default::default(), super::TelegramReportAccess::Owner)
+        },
+    )
     .unwrap();
     assert_eq!(second.total.orders, 13);
     assert_eq!(second.total.totals[0].profit, 18.0);
@@ -735,4 +817,78 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
         keyboard,
         moon_core::telegram::api::ReplyMarkup::Inline(_)
     ));
+}
+
+/// A renamed core is listed under its configured name; a core no longer configured keeps the
+/// name its rows stored.
+#[test]
+fn chat_report_names_a_renamed_core_by_its_configured_name() {
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, newrecid INTEGER, closedate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'core-a-old',1,150,7,100,0),(1,'core-a-older',2,160,1,100,0),(2,'core-b-gone',3,150,2,100,0);").unwrap();
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    let names = moon_core::db::CoreNames::from_pairs([(1, "core-a-renamed")]);
+    let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, &names, |rows| {
+        rows.sort_by_key(|(id, _)| *id);
+        (Default::default(), super::TelegramReportAccess::Owner)
+    })
+    .unwrap();
+    let labels: Vec<&str> = page.rows.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(labels, ["core-a-renamed", "core-b-gone"]);
+    let Response::Rich { html, .. } = render(&page) else {
+        panic!("expected report");
+    };
+    assert!(html.contains("core-a-renamed"));
+    assert!(!html.contains("core-a-old"));
+}
+
+/// Mini App core rows and trades name a renamed core by its configured name on every trade.
+#[test]
+fn mini_app_names_a_renamed_core_by_its_configured_name() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, id INTEGER, newrecid INTEGER, coin TEXT, closedate INTEGER, buydate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER, emulator INTEGER);
+        INSERT INTO orders_rep VALUES (1,'core-a-old',1,1,'BTC',150,120,7,100,0,0),(1,'core-a-older',2,2,'ETH',160,120,1,100,0,0),(2,'core-b-gone',3,3,'SOL',170,120,2,100,0,0);").unwrap();
+    let names = moon_core::db::CoreNames::from_pairs([(1, "core-a-renamed")]);
+
+    let report = super::read_mini_report_on(
+        &conn,
+        100,
+        200,
+        chrono_tz::UTC,
+        &names,
+        Default::default(),
+        super::TelegramReportAccess::Owner,
+        |rows| rows.sort_by_key(|(id, _)| *id),
+    )
+    .unwrap();
+    let cores: Vec<&str> = report
+        .by_core
+        .iter()
+        .map(|(_, name, _, _)| name.as_str())
+        .collect();
+    assert_eq!(cores, ["core-a-renamed", "core-b-gone"]);
+
+    let trades = super::read_mini_trades_on(
+        &conn,
+        chrono_tz::UTC,
+        super::TelegramReportAccess::Owner,
+        names,
+        10,
+    )
+    .unwrap();
+    let mut named: Vec<(u64, &str)> = trades
+        .iter()
+        .map(|trade| (trade.core_uid, trade.core_name.as_str()))
+        .collect();
+    named.sort();
+    assert_eq!(
+        named,
+        [
+            (1, "core-a-renamed"),
+            (1, "core-a-renamed"),
+            (2, "core-b-gone")
+        ]
+    );
 }

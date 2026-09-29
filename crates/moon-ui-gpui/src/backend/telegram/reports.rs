@@ -64,15 +64,16 @@ impl Backend {
             return;
         };
         let order = CoreOrder::new(&self.config);
+        let names = self.report_core_names();
         let venues = self.session.core_venues().clone();
         let read_access = access.clone();
         self.telegram.report_pending = true;
         cx.spawn(async move |this, cx| {
             let executor = cx.update(|cx| cx.background_executor().clone());
             let result = executor
-                .spawn(
-                    async move { read_page(request, from, to, zone, order, venues, read_access) },
-                )
+                .spawn(async move {
+                    read_page(request, from, to, zone, order, names, venues, read_access)
+                })
                 .await;
             cx.update(|cx| {
                 let _ = this.update(cx, |this, _| {
@@ -103,17 +104,19 @@ fn report_notice(reply: &SyncSender<Response>, text: String) {
 }
 
 /// Read only visible groups, while the headline always covers the entire requested period.
+#[allow(clippy::too_many_arguments)]
 fn read_page(
     request: ReportRequest,
     from: i64,
     to: i64,
     zone: Tz,
     order: CoreOrder,
+    names: db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
 ) -> db::ReadResult<Page> {
     let conn = db::open_reader()?;
-    read_page_on(&conn, request, from, to, zone, |cores| {
+    read_page_on(&conn, request, from, to, zone, &names, |cores| {
         order.sort_by(cores, |(id, _)| *id);
         (venues, access)
     })
@@ -126,6 +129,7 @@ fn read_page_on(
     from: i64,
     to: i64,
     zone: Tz,
+    names: &db::CoreNames,
     order: impl FnOnce(
         &mut [(u64, String)],
     ) -> (
@@ -136,6 +140,7 @@ fn read_page_on(
     request.window = Some((from, to));
     let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
+    relabel(&mut cores, names);
     let (venues, access) = order(&mut cores);
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
@@ -310,6 +315,7 @@ pub(super) struct MiniReport {
 ///     to: Inclusive window end, unix seconds.
 ///     zone: Display zone for the day buckets and the report axis.
 ///     order: Canonical core order.
+///     names: Current configured core names, shown in place of the stored ones.
 ///     venues: Live venue of each core id.
 ///     access: Chat grant captured at admission.
 ///
@@ -320,13 +326,32 @@ pub(super) fn read_mini_report(
     to: i64,
     zone: Tz,
     order: CoreOrder,
+    names: &db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
 ) -> db::ReadResult<MiniReport> {
     let conn = db::open_reader()?;
-    let snap = db::read_snapshot(&conn)?;
+    read_mini_report_on(&conn, from, to, zone, names, venues, access, |cores| {
+        order.sort_by(cores, |(id, _)| *id);
+    })
+}
+
+/// Connection-injected body of [`read_mini_report`], so fixtures exercise the production query.
+#[allow(clippy::too_many_arguments)]
+fn read_mini_report_on(
+    conn: &rusqlite::Connection,
+    from: i64,
+    to: i64,
+    zone: Tz,
+    names: &db::CoreNames,
+    venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    access: TelegramReportAccess,
+    order: impl FnOnce(&mut [(u64, String)]),
+) -> db::ReadResult<MiniReport> {
+    let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
-    order.sort_by(&mut cores, |(id, _)| *id);
+    relabel(&mut cores, names);
+    order(&mut cores);
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
     }
@@ -427,7 +452,7 @@ pub(super) struct MiniTrade {
     /// Report row id.
     pub rec_id: i64,
     pub coin: String,
-    /// Core name stored on the row.
+    /// Configured name of the core, or the name stored on the row for a core no longer configured.
     pub core_name: String,
     pub is_short: bool,
     /// Valued profit in USDT, `None` when unvalued.
@@ -457,6 +482,7 @@ pub(super) struct MiniTrade {
 /// Args:
 ///     zone: Display zone for the report axis.
 ///     access: Chat grant captured at admission.
+///     names: Current configured core names, shown in place of the stored ones.
 ///     limit: Most trades to return.
 ///
 /// Returns:
@@ -464,10 +490,22 @@ pub(super) struct MiniTrade {
 pub(super) fn read_mini_trades(
     zone: Tz,
     access: TelegramReportAccess,
+    names: db::CoreNames,
     limit: usize,
 ) -> db::ReadResult<Vec<MiniTrade>> {
     let conn = db::open_reader()?;
-    let snap = db::read_snapshot(&conn)?;
+    read_mini_trades_on(&conn, zone, access, names, limit)
+}
+
+/// Connection-injected body of [`read_mini_trades`], so fixtures exercise the production query.
+fn read_mini_trades_on(
+    conn: &rusqlite::Connection,
+    zone: Tz,
+    access: TelegramReportAccess,
+    names: db::CoreNames,
+    limit: usize,
+) -> db::ReadResult<Vec<MiniTrade>> {
+    let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
     if let TelegramReportAccess::Viewer(allowed) = &access {
         cores.retain(|(id, _)| allowed.contains(id));
@@ -484,6 +522,7 @@ pub(super) fn read_mini_trades(
         emulator: Some(false),
         rows: RowScope::Closed,
         axis: db::ReportAxis::load(&snap, zone)?,
+        core_names: names,
         ..Default::default()
     };
     let table = db::query_reports(&snap, &filter, "closedate", true, limit + 25)?;
@@ -541,6 +580,17 @@ pub(super) fn read_mini_trades(
     trades.sort_by_key(|trade| std::cmp::Reverse(trade.close_utc));
     trades.truncate(limit);
     Ok(trades)
+}
+
+/// Label each `(uid, stored name)` core with its configured name, as the desktop Report does.
+///
+/// Args:
+///     cores: Cores as `db::distinct_cores` lists them, relabelled in place.
+///     names: Current configured core names; an unconfigured uid keeps its stored name.
+fn relabel(cores: &mut [(u64, String)], names: &db::CoreNames) {
+    for (id, name) in cores {
+        *name = names.resolve(*id, name).to_string();
+    }
 }
 
 /// A stored whole number, accepting a real from an older database.
