@@ -72,7 +72,7 @@ impl PlatformLayers {
     }
 
     /// Borrow tick candidates in a time window, including pending native uploads.
-    /// DX11 bounds the lookup; other backends retain their scan until their native paths are ported.
+    /// DX11 and Metal bound the lookup; wgpu retains its scan until its native path is ported.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
         #[cfg(windows)]
         {
@@ -86,9 +86,7 @@ impl PlatformLayers {
         }
         #[cfg(target_os = "macos")]
         {
-            self.metal
-                .tick_samples()
-                .filter(move |c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to)
+            self.metal.tick_samples(from, to)
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {

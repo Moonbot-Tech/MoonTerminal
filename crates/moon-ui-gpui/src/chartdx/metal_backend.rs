@@ -12,7 +12,9 @@ use metal::{
     RenderPipelineState, SamplerDescriptor, TextureDescriptor,
 };
 use moon_chart::layers::{LineInstance, MarkerInstance, SegInstance, ZoneInstance};
-use moon_chart::tick_volume::{tick_bake_span, tick_touches_bake};
+use moon_chart::tick_volume::{
+    TickTimeOrder, pending_ring_at, tick_bake_span, tick_time_range, tick_touches_bake,
+};
 use moon_core::data::{LevelInstance, PriceLinePoint};
 use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
@@ -323,6 +325,8 @@ pub struct MetalLayers {
     /// rows stay painted until then, so a full ring sheds history in steps, not one bake per tick.
     eviction_rebake_at: Option<Instant>,
     crosses: Vec<ChartCross>,
+    /// Lateness evidence over the ring's times, so a cursor lookup binary-searches the ring.
+    tick_time_order: TickTimeOrder,
     cross_head: usize,
     cross_count: usize,
     last_line: Vec<PriceLinePoint>,
@@ -395,6 +399,7 @@ impl MetalLayers {
             combo_dirty_ranges: Vec::new(),
             eviction_rebake_at: None,
             crosses: Vec::new(),
+            tick_time_order: TickTimeOrder::default(),
             cross_head: 0,
             cross_count: 0,
             last_line: Vec::new(),
@@ -518,6 +523,7 @@ impl MetalLayers {
             self.combo_capacity,
             &ordered,
         );
+        self.refresh_tick_time_order();
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -545,6 +551,7 @@ impl MetalLayers {
             self.combo_capacity,
             &data,
         );
+        self.refresh_tick_time_order();
         if self.crosses.len() < self.combo_capacity {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
@@ -572,6 +579,7 @@ impl MetalLayers {
         let evicted_scale_max =
             ranges_touch_volume_max(&self.crosses, &evicted_ranges, before_scale);
         let evicts_baked = full_reset || self.evicts_baked(&evicted_ranges);
+        self.tick_time_order.extend(data.iter().map(|c| c.time_rel));
         append_cross_ring(
             &mut self.crosses,
             &mut self.cross_head,
@@ -1538,7 +1546,7 @@ impl MetalLayers {
     }
 
     /// Borrow the retained Metal tick ring without a per-cursor copy.
-    pub(super) fn tick_samples(&self) -> impl Iterator<Item = &ChartCross> {
+    fn ring(&self) -> impl ExactSizeIterator<Item = &ChartCross> + Clone {
         moon_chart::tick_volume::pending_ring(
             &self.crosses,
             self.cross_head,
@@ -1547,6 +1555,38 @@ impl MetalLayers {
             None,
             &[],
         )
+    }
+
+    /// Borrow tick candidates for an inclusive time window through a bounded binary search
+    /// widened by the ring's lateness; callers keep their exact per-row predicate.
+    pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
+        let samples = self.ring();
+        let range = tick_time_range(
+            samples.len(),
+            self.tick_time_order.max_lateness(),
+            from,
+            to,
+            |index| {
+                pending_ring_at(
+                    &self.crosses,
+                    self.cross_head,
+                    self.cross_count,
+                    self.combo_capacity,
+                    None,
+                    &[],
+                    index,
+                )
+                .time_rel
+            },
+        );
+        samples.skip(range.start).take(range.len())
+    }
+
+    /// Rebuilds the lateness evidence from the ring after it was replaced wholesale.
+    fn refresh_tick_time_order(&mut self) {
+        let mut order = TickTimeOrder::default();
+        order.extend(self.ring().map(|c| c.time_rel));
+        self.tick_time_order = order;
     }
 
     fn recalc_volume_scale(&mut self) {
