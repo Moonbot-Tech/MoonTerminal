@@ -204,6 +204,14 @@ make build | run | release | check | fmt
   difference. `ci_gate_contract.rs` denies the constructs that have actually bitten (`${v,,}`, an
   awk ternary, GNU `\|` alternation, bare `sha256sum`); it is a denylist, not a substitute for
   running them on a Mac.
+- **The chart has one GPU backend per platform — a behaviour change in one is checked in the
+  others in the same PR.** DX11 (`chartdx/combo.rs` and its siblings), Metal
+  (`chartdx/metal_backend.rs`) and wgpu (`chartdx/wgpu_backend/`) each own their bake, cache,
+  invalidation and draw logic, so a fix to one silently leaves the others on the old behaviour.
+  Port it, or say in the PR description why the others do not need it or which follow-up carries
+  it. Put the decision itself in a backend-free module (`chartdx/combo/plan.rs`, `moon-chart`)
+  that every backend calls, so there is one copy to keep in step. Metal does not compile on
+  Windows: the macOS CI probe is its first compile, so read its log before merging.
 - Live behaviour check is FireTest: `moonterminal --debug-script chart-smoke`
   (see [`docs/FIRETEST.md`](docs/FIRETEST.md)).
 - Unit tests inside a `moon-ui-gpui` panel module need **explicit imports**, never `use super::*`:
