@@ -1,7 +1,7 @@
-//! CPU mirror of the DX11 candle buffer: which slots a patched tail dirtied, and which instances a
-//! view can see. Free of any D3D type so it is unit-testable on its own.
+//! CPU mirror of a candle GPU buffer, shared by the DX11 and Metal backends: which slots a patched
+//! tail dirtied, and which instances a view can see. Free of any GPU type so it is unit-testable.
 
-use super::super::types::CandleGpu;
+use super::types::CandleGpu;
 
 /// What the GPU buffer must receive at the next prepare.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

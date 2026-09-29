@@ -1,11 +1,11 @@
-//! CPU mirror of one DX11 price-line ring: which slots an append must write, which logical range a
-//! view can see, and the min/max-per-column decimation drawn when that range is denser than pixels.
-//! Free of any D3D type so it is unit-testable on its own.
+//! CPU mirror of one price-line GPU ring, shared by the DX11 and Metal backends: which slots an
+//! append must write, which logical range a view can see, and the min/max-per-column decimation
+//! drawn when that range is denser than pixels. Free of any GPU type so it is unit-testable.
 
 use bytemuck::Zeroable;
 use moon_core::data::PriceLinePoint;
 
-use super::super::types::{append_cross_ring, reset_cross_ring};
+use super::types::{append_cross_ring, reset_cross_ring};
 
 /// Upload owed to one price-line GPU buffer.
 pub(crate) enum RingPending {
@@ -137,6 +137,17 @@ impl PriceRing {
         let first = partition_point(self.count, |i| self.time(i) < left);
         let past = partition_point(self.count, |i| self.time(i) <= right);
         (first.saturating_sub(1), (past + 1).min(self.count))
+    }
+
+    /// Segment runs `(first physical slot, segments)` drawing logical points `[lo, lo + n)` from a
+    /// buffer laid out as the ring plus one mirror of slot 0 past its end: the run up to the wrap
+    /// ends on that mirror, and the second run (empty when nothing wraps) starts at slot 0.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // Metal only: DX11 wraps in its shader
+    pub(crate) fn draw_runs(&self, lo: usize, n: usize) -> [(usize, usize); 2] {
+        let segments = n.saturating_sub(1);
+        let first = self.physical(lo);
+        let run = segments.min(self.cap - first);
+        [(first, run), (0, segments - run)]
     }
 
     /// Min/max-per-pixel-column decimation of the whole ring on ABSOLUTE columns

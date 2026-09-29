@@ -2,9 +2,9 @@
 //! which texel window of it the blit shows. The GPU wrappers in `combo.rs` (DX11) and
 //! `metal_backend.rs` (Metal) only execute them.
 
-use moon_chart::tick_volume::lod_applies;
+use moon_chart::tick_volume::tick_touches_bake;
 
-use super::super::types::ChartViewGpu;
+use super::super::types::{ChartCross, ChartViewGpu};
 
 /// Horizontal bake margin in pixels, baked on EACH side of the visible chart width.
 pub(super) fn combo_x_margin_px(bw: f32) -> f32 {
@@ -245,12 +245,35 @@ pub(super) fn append_bake_damage(written: bool, evicts_baked: bool) -> AppendBak
     }
 }
 
-/// Instances one full-bake pass draws: the reduced list's length when LOD applies, else every
-/// row in the span.
-pub(super) fn lod_instance_count(rows_in_span: usize, tex_w: u32, picked_len: usize) -> usize {
-    if lod_applies(rows_in_span, tex_w) {
-        picked_len
-    } else {
-        rows_in_span
-    }
+/// Whether new rows, or the old rows they evict, intersect either cached span.
+///
+/// `old` is the logical ring before the append, in chronological order. The
+/// eviction count is how far `old.len() + new_rows.len()` passes `capacity`,
+/// and it never exceeds `old.len()`. A non-finite time touches every span.
+///
+/// Args:
+///     old: Pending logical ring before this append.
+///     new_rows: Rows about to be appended.
+///     cross_span: Cached cross-bitmap time span, margins included.
+///     volume_span: Cached volume-bitmap time span, margins included.
+///     capacity: Ring capacity. Already a positive normalized value.
+///
+/// Returns:
+///     `true` when any tested time lies in either span.
+pub(super) fn append_span_damage<'a>(
+    old: impl ExactSizeIterator<Item = &'a ChartCross>,
+    new_rows: &[ChartCross],
+    cross_span: (f64, f64),
+    volume_span: (f64, f64),
+    capacity: usize,
+) -> bool {
+    let evicted = old
+        .len()
+        .saturating_add(new_rows.len())
+        .saturating_sub(capacity)
+        .min(old.len());
+    let touches =
+        |time: f32| tick_touches_bake(time, cross_span) || tick_touches_bake(time, volume_span);
+    new_rows.iter().any(|row| touches(row.time_rel))
+        || old.take(evicted).any(|row| touches(row.time_rel))
 }

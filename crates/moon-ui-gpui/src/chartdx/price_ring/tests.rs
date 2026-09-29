@@ -9,7 +9,7 @@ fn pts(times: std::ops::Range<usize>) -> Vec<PriceLinePoint> {
         .collect()
 }
 
-/// Breakage: `combo/price_ring.rs` `PriceRing::physical` drops its `% cap` (or offsets from the
+/// Breakage: `chartdx/price_ring.rs` `PriceRing::physical` drops its `% cap` (or offsets from the
 /// wrong slot). Consequence: price lines draw garbage segments across the ring wrap.
 #[test]
 fn wrapped_ring_reads_back_in_time_order_through_the_shader_offset() {
@@ -68,5 +68,25 @@ fn m4_keeps_every_column_extreme_in_at_most_four_points_per_column() {
         let inside = |p: &&PriceLinePoint| p.time_rel_ms >= t0 && p.time_rel_ms <= t1;
         assert!(out.iter().filter(inside).any(|p| p.price == lo));
         assert!(out.iter().filter(inside).any(|p| p.price == hi));
+    }
+}
+
+/// Breakage: `chartdx/price_ring.rs` `PriceRing::draw_runs` lets the first run pass the ring's
+/// end or loses the segment across the wrap. Consequence: the Metal price line reads past its
+/// mirror slot or shows a gap where the ring wraps.
+#[test]
+fn draw_runs_split_at_the_wrap_and_cover_every_segment() {
+    let mut r = PriceRing::new(8);
+    r.reset(&pts(0..5));
+    r.append(&pts(5..11));
+    // Oldest point sits in slot 3; logical 0..8 covers slots 3..8, then 0..3.
+    assert_eq!(r.draw_runs(0, 8), [(3, 5), (0, 2)]);
+    // A range that ends before the wrap is one run.
+    assert_eq!(r.draw_runs(0, 5), [(3, 4), (0, 0)]);
+    // A range that starts after the wrap is one run from its own slot.
+    assert_eq!(r.draw_runs(6, 2), [(1, 1), (0, 0)]);
+    for (lo, n) in [(0, 8), (2, 5), (4, 4), (0, 2)] {
+        let [(_, a), (_, b)] = r.draw_runs(lo, n);
+        assert_eq!(a + b, n - 1);
     }
 }

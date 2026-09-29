@@ -106,3 +106,121 @@ fn seg_of_carries_the_pin_flag_in_the_spare_slot() {
     };
     assert_eq!(seg_of(&plain).m[3], 0.0);
 }
+
+fn tick_at(time_rel: f32) -> ChartCross {
+    ChartCross {
+        time_rel,
+        price: 100.0,
+        side: 0,
+        qty: 1.0,
+    }
+}
+
+/// A full ring whose head sits mid-buffer: slots 3..6 hold times 0..3, slots 0..3 hold 3..6.
+fn wrapped_ring() -> Vec<ChartCross> {
+    [3.0, 4.0, 5.0, 0.0, 1.0, 2.0]
+        .into_iter()
+        .map(tick_at)
+        .collect()
+}
+
+#[test]
+fn span_runs_keep_only_the_span_in_ascending_slot_order() {
+    let ring = wrapped_ring();
+    // Times 2..=4 live in slot 5 (time 2) and slots 0..2 (times 3, 4); the runs start at slot 0.
+    let runs = ring_span_runs(&ring, 3, 6, 6, 0.0, (2.0, 4.0));
+    assert_eq!(runs, [(0, 2), (5, 1)]);
+    let times: Vec<f32> = ring_run_slices(&ring, &runs)
+        .into_iter()
+        .flatten()
+        .map(|c| c.time_rel)
+        .collect();
+    assert_eq!(times, [3.0, 4.0, 2.0]);
+}
+
+#[test]
+fn span_runs_widen_by_lateness_evidence() {
+    // Slot order 0, 5, 1: the row at time 1 arrives 4 late, so a search must not skip it.
+    let ring: Vec<ChartCross> = [0.0, 5.0, 1.0].into_iter().map(tick_at).collect();
+    let strict = ring_span_runs(&ring, 3, 3, 3, 0.0, (1.0, 1.0));
+    let widened = ring_span_runs(&ring, 3, 3, 3, 4.0, (1.0, 1.0));
+    let covered = |runs: [(usize, usize); 2]| {
+        ring_run_slices(&ring, &runs)
+            .into_iter()
+            .flatten()
+            .any(|c| c.time_rel == 1.0)
+    };
+    assert!(!covered(strict));
+    assert!(covered(widened));
+}
+
+#[test]
+fn run_slices_clamp_to_the_ring_and_drop_empty_runs() {
+    let ring = wrapped_ring();
+    let slices = ring_run_slices(&ring, &[(4, 10), (0, 0), (9, 2)]);
+    assert_eq!(slices.len(), 1);
+    assert_eq!(slices[0].len(), 2);
+}
+
+fn bake_columns(width_px: u32) -> moon_chart::tick_volume::BakeColumns {
+    moon_chart::tick_volume::BakeColumns {
+        time0: 0.0,
+        time_to_px: 1.0,
+        price0: 0.0,
+        price_to_px: 1.0,
+        height: 200.0,
+        width_px,
+        volume_alpha: 0.5,
+        marker_half: 3.0,
+        buy_inv: 1.0,
+        sell_inv: 1.0,
+    }
+}
+
+#[test]
+fn lod_rows_leave_a_sparse_span_to_the_raw_runs() {
+    let ring: Vec<ChartCross> = (0..4).map(|i| tick_at(i as f32)).collect();
+    let mut pick = moon_chart::tick_volume::LodPick::default();
+    let mut out = vec![tick_at(-1.0)];
+    let thinned = lod_bake_rows(
+        &ring,
+        [(0, 4), (0, 0)],
+        &bake_columns(100),
+        true,
+        &mut pick,
+        &mut out,
+    );
+    assert!(!thinned);
+    assert_eq!(
+        out.len(),
+        1,
+        "a sparse span leaves the gathered rows untouched"
+    );
+}
+
+#[test]
+fn lod_rows_thin_a_dense_span_in_draw_order() {
+    // 400 rows stacked on four texels of a 10-px bitmap: far past two rows per column.
+    let ring: Vec<ChartCross> = (0..400).map(|i| tick_at((i % 4) as f32)).collect();
+    let mut pick = moon_chart::tick_volume::LodPick::default();
+    let mut out = Vec::new();
+    let thinned = lod_bake_rows(
+        &ring,
+        [(0, 400), (0, 0)],
+        &bake_columns(10),
+        true,
+        &mut pick,
+        &mut out,
+    );
+    assert!(thinned);
+    assert!(!out.is_empty() && out.len() < 400);
+    let slots: Vec<u32> = pick.cross.clone();
+    assert!(
+        slots.windows(2).all(|w| w[0] < w[1]),
+        "picked rows keep ring order"
+    );
+    // The last row of every texel survives, so the top-most colour is the one a raw draw ends on.
+    for slot in 396..400u32 {
+        assert!(slots.contains(&slot));
+    }
+}

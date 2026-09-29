@@ -232,6 +232,8 @@ impl ChartDataState {
         // Sell-line depth labels live in the TEXT layer, so a re-measure needs a present but not
         // the base re-bake `pixels_changed` promotes to.
         let mut text_changed = false;
+        // Order-book levels, window or style: a base re-bake only where the book lives in the base.
+        let mut book_changed = false;
         // Read the two per-tab uniform fields once for the whole sync: `view_gpu` is called for the
         // plot AND the order-book glass, and the cull margin has to be computed from the same
         // marker scale the shader will use, or trades disappear a frame before their glyph reaches
@@ -1703,7 +1705,7 @@ impl ChartDataState {
                     pr.last_book_emit = (f32::NAN, f32::NAN);
                     pr.last_book_range = f32::NAN;
                     pr.gpu_prepare_dirty = true;
-                    pixels_changed = true;
+                    book_changed = true;
                 }
                 pr.orderbook_levels.clear();
                 pr.forget_book_figures();
@@ -1752,7 +1754,7 @@ impl ChartDataState {
                             pr.last_book_emit = emit;
                             pr.last_book_range = pane.view.render_range;
                             pr.gpu_prepare_dirty = true;
-                            pixels_changed = true;
+                            book_changed = true;
                         }
                         if pr.last_book_lo != lo
                             || pr.last_book_hi != hi
@@ -1764,7 +1766,7 @@ impl ChartDataState {
                             pr.last_book_lo = lo;
                             pr.last_book_hi = hi;
                             pr.gpu_prepare_dirty = true;
-                            pixels_changed = true;
+                            book_changed = true;
                         }
                         // The sell-line depth label reads the WHOLE book, so its figure spans
                         // price to the line and must not shrink when part of that span leaves the
@@ -1812,7 +1814,7 @@ impl ChartDataState {
                             pr.last_book_emit = (f32::NAN, f32::NAN);
                             pr.last_book_range = f32::NAN;
                             pr.gpu_prepare_dirty = true;
-                            pixels_changed = true;
+                            book_changed = true;
                         }
                     }
                 });
@@ -1844,7 +1846,7 @@ impl ChartDataState {
             if pr.book_style != next_book_style {
                 pr.book_style = next_book_style;
                 pr.gpu_prepare_dirty = true;
-                pixels_changed = true;
+                book_changed = true;
             }
             pr.last_device_gen = device_gen;
             pr.active = true;
@@ -2091,10 +2093,10 @@ impl ChartDataState {
                 .zip(prev_cursor_params.iter())
                 .any(|(pr, prev)| pr.cursor_params != *prev);
         st.cursor_params_scratch = prev_cursor_params;
-        if pixels_changed {
+        if pixels_changed || (book_changed && PlatformLayers::BOOK_IN_BASE) {
             st.base_dirty = true;
         }
-        if pixels_changed || cursor_changed || text_changed {
+        if pixels_changed || cursor_changed || text_changed || book_changed {
             st.needs_present = true;
         }
         drop(container);

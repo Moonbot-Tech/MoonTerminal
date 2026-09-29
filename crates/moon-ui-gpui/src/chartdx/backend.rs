@@ -63,16 +63,20 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
+    /// Whether the order book is drawn inside the cached base, so a book-only change must rebake
+    /// that base. Metal keeps its book bitmap outside it and blits it on every present.
+    pub const BOOK_IN_BASE: bool = !cfg!(target_os = "macos");
+
     /// Whether this backend retains the marker buffer so a hover can patch arrows in place.
     ///
     /// Returns:
-    ///     `true` on DX11, `false` on every backend whose `patch_markers` declines.
+    ///     `true` on DX11 and Metal, `false` on every backend whose `patch_markers` declines.
     pub const fn can_patch_markers() -> bool {
-        cfg!(windows)
+        cfg!(any(windows, target_os = "macos"))
     }
 
     /// Borrow tick candidates in a time window, including pending native uploads.
-    /// DX11 bounds the lookup; other backends retain their scan until their native paths are ported.
+    /// DX11 and Metal bound the lookup; wgpu retains its scan until its native path is ported.
     pub(super) fn tick_samples(&self, from: f64, to: f64) -> impl Iterator<Item = &ChartCross> {
         #[cfg(windows)]
         {
@@ -86,9 +90,7 @@ impl PlatformLayers {
         }
         #[cfg(target_os = "macos")]
         {
-            self.metal
-                .tick_samples()
-                .filter(move |c| f64::from(c.time_rel) >= from && f64::from(c.time_rel) <= to)
+            self.metal.tick_samples(from, to)
         }
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
@@ -181,6 +183,21 @@ impl PlatformLayers {
         }
     }
 
+    /// Whether a throttled order-book bake is due, so a frame must prepare it.
+    ///
+    /// Metal only: DX11 keeps its book inside the base and bakes on the next prepare.
+    pub fn book_bake_due(&self, now: std::time::Instant) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.book_bake_due(now)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = now;
+            false
+        }
+    }
+
     /// Whether the combo layer holds deferred eviction damage whose full rebake is due.
     ///
     /// DX11 and Metal defer eviction damage; every other backend has nothing pending.
@@ -215,20 +232,24 @@ impl PlatformLayers {
 
     /// Whether appending these rows can change a cached combo bitmap.
     ///
-    /// DX11 asks the combo layer, which knows both bake spans. Every other
-    /// backend reports damage, so it keeps the previous unconditional repaint.
+    /// DX11 and Metal ask their combo bakes, which know both bake spans. wgpu
+    /// reports damage, so it keeps the previous unconditional repaint.
     ///
     /// Args:
     ///     data: Rows about to be appended.
     ///
     /// Returns:
-    ///     `false` only when DX11 can prove neither cached span is touched.
+    ///     `false` only when DX11 or Metal can prove neither cached span is touched.
     pub fn combo_append_touches_cached_span(&self, data: &[ChartCross]) -> bool {
         #[cfg(windows)]
         {
             self.combo.append_touches_cached_span(data)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.append_touches_cached_span(data)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = data;
             true
@@ -242,19 +263,21 @@ impl PlatformLayers {
         #[cfg(target_os = "linux")]
         self.wgpu.set_candles(data.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_candles(data.to_vec());
+        self.metal.set_candles(data);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = data;
         }
     }
 
-    /// Re-applies the whole composed list's tail from `from` on. DX11 uploads only those slots;
-    /// the native backends take the whole list, exactly as a full set.
+    /// Re-applies the whole composed list's tail from `from` on. DX11 and Metal upload only those
+    /// slots; wgpu takes the whole list, exactly as a full set.
     pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
         #[cfg(windows)]
         self.candles.patch(from, full);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        self.metal.patch_candles(from, full);
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = from;
             self.set_candles(full);
@@ -364,8 +387,8 @@ impl PlatformLayers {
         }
     }
 
-    /// Appends newly drained points to the price lines. DX11 uploads only those; the native
-    /// backends take the full lines, exactly as a set.
+    /// Appends newly drained points to the price lines. DX11 and Metal upload only those; wgpu
+    /// takes the full lines, exactly as a set.
     pub fn append_price_lines(
         &mut self,
         last_new: &[PriceLinePoint],
@@ -378,7 +401,12 @@ impl PlatformLayers {
             let _ = (last_full, mark_full);
             self.combo.append_price_lines(last_new, mark_new);
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (last_full, mark_full);
+            self.metal.append_price_lines(last_new, mark_new);
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (last_new, mark_new);
             self.set_price_lines(last_full, mark_full);
@@ -405,12 +433,12 @@ impl PlatformLayers {
         #[cfg(target_os = "linux")]
         self.wgpu.set_orderbook(levels.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_orderbook(levels.to_vec());
+        self.metal.set_orderbook(levels, immediate);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = levels;
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let _ = immediate;
     }
 
@@ -421,7 +449,11 @@ impl PlatformLayers {
         {
             super::orderbook::book_v_margin_px(bh)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            super::metal_backend::book_v_margin_px(bh)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = bh;
             0.0
@@ -430,8 +462,8 @@ impl PlatformLayers {
 
     /// Rewrite already-uploaded userdata markers by index, without a full `set_userdata`.
     ///
-    /// DX11 only: it retains a CPU copy of the marker buffer. Metal and wgpu answer `false`, and
-    /// the caller then rebuilds the whole union as before.
+    /// DX11 and Metal retain a CPU copy of the marker buffer. wgpu answers `false`, and the
+    /// caller then rebuilds the whole union as before.
     ///
     /// Returns:
     ///     Whether the patch was applied.
@@ -440,7 +472,11 @@ impl PlatformLayers {
         {
             self.userdata.patch_markers(patches)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.patch_markers(patches)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = patches;
             false
