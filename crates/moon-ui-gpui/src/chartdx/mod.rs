@@ -141,6 +141,19 @@ fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
     (cur != selected).then_some(cur)
 }
 
+/// Return the whole seconds the plot spans horizontally, for the time-scale badge, or `None` when
+/// the plot has no width to measure.
+///
+/// The FULL plot width, the empty future margin right of the live edge included — the answer to
+/// "what fits on the chart", read the same on a live chart and a paused one. Taken from
+/// [`moon_chart::view::ChartView::visible_x`], the one source of X geometry the axis and the tick
+/// culling already read, so the badge cannot disagree with the labels under it.
+fn time_scale_secs(view: &moon_chart::view::ChartView, plot_w: f32) -> Option<i64> {
+    let (_, window_ms) = view.visible_x(plot_w);
+    let secs = f64::from(window_ms) / 1_000.0;
+    (plot_w > 0.0 && secs.is_finite() && secs >= 0.0).then(|| secs.round() as i64)
+}
+
 /// Whether the market channel is on (`channels.markets` in `cfg/diagnostics.toml`, or
 /// `MOON_MARKET_DIAG`/`MOON_RENDER_DIAG`). Live, so it follows an edit without a restart.
 fn chart_market_diag_enabled() -> bool {
@@ -443,6 +456,9 @@ struct PaneRender {
     /// relative to price. `None` hides it when fixed percentage matches the selected step. Computed
     /// by `sync_from_market_source` from the panel's logical `ChartView`.
     scale_badge: Option<i32>,
+    /// Current X-scale badge: the whole seconds the plot spans, from [`time_scale_secs`]. Computed
+    /// by `sync_from_market_source` beside [`Self::scale_badge`].
+    time_scale_s: Option<i64>,
     /// Finished translucent plate under the corner caption, in DEVICE pixels `[x, y, w, h]`.
     ///
     /// Computed by `prepare_text`, which owns the caption's geometry, and drawn verbatim by
@@ -922,6 +938,7 @@ impl PaneRender {
             ticker_catalog_key: 0,
             ticker_resolved: false,
             scale_badge: None,
+            time_scale_s: None,
             caption_plates: [[0.0; 4]; text::CAPTION_PLATES],
             caption_bars: Vec::new(),
             caption_bars_scratch: Vec::new(),

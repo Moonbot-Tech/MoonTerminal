@@ -413,6 +413,26 @@ impl ChartEngine {
             .and_then(|p| p.scale_badge)
     }
 
+    /// Returns the first active pane's time-scale badge: the whole seconds the plot spans.
+    ///
+    /// Same contract as [`Self::scale_badge`]: read from the value the sync cached, and `None`
+    /// whenever no drawn caption shows it, so the chart shot never burns in a figure the picture
+    /// itself does not carry.
+    pub fn time_scale_secs(&self) -> Option<i64> {
+        let state = self.state.borrow();
+        if !state
+            .chart_labels
+            .any_drawn(|field| field == moon_core::config::ChartLabelField::TimeScaleBadge)
+        {
+            return None;
+        }
+        state
+            .panes
+            .iter()
+            .find(|p| p.active)
+            .and_then(|p| p.time_scale_s)
+    }
+
     /// Returns the first active pane's last price, which the anchor supplies for neighbor deltas.
     pub fn last_price(&self) -> Option<f64> {
         self.state

@@ -201,6 +201,8 @@ impl Default for LegacySlot {
 #[derive(Default, serde::Deserialize)]
 #[serde(default)]
 struct Probe {
+    /// Revision the file was written at; absent on every file older than the first one.
+    rev: u32,
     rows: Option<Vec<RowWire>>,
     slots: Option<Vec<LegacySlot>>,
 }
@@ -230,9 +232,11 @@ impl Serialize for ChartLabelsCfg {
             .collect();
         #[derive(serde::Serialize)]
         struct CfgWire {
+            // Before `rows`: TOML wants plain values ahead of an array of tables.
+            rev: u32,
             rows: Vec<RowWire>,
         }
-        CfgWire { rows }.serialize(s)
+        CfgWire { rev: CFG_REV, rows }.serialize(s)
     }
 }
 
@@ -243,7 +247,9 @@ impl<'de> Deserialize<'de> for ChartLabelsCfg {
             if probe.slots.is_some() {
                 log::warn!("chart_labels: файл несёт и rows, и slots — читаем rows");
             }
-            return Ok(from_rows(rows));
+            let mut cfg = from_rows(rows);
+            upgrade(&mut cfg, probe.rev);
+            return Ok(cfg);
         }
         if let Some(slots) = probe.slots {
             return Ok(migrate_slots(slots));
@@ -251,6 +257,33 @@ impl<'de> Deserialize<'de> for ChartLabelsCfg {
         // Neither spelling present: the table exists but says nothing about captions, which is what
         // an absent setting means everywhere else in these files.
         Ok(Self::default())
+    }
+}
+
+/// Revision of the shipped caption set a file written by this build carries.
+///
+/// Raised when the SHIPPED modules gain a caption an existing profile should receive without
+/// setup; [`upgrade`] replays every step past the revision the file states, once, and the file is
+/// then written back at this revision so the step never repeats — a caption the user removes after
+/// it stays removed. An older build writes no revision, so a profile it saved last replays the
+/// steps once more; that re-adds the caption, it never drops one.
+const CFG_REV: u32 = 1;
+
+/// Bring a configuration read at revision `rev` up to [`CFG_REV`].
+///
+/// Revision 1: the time-scale badge joins the Y badge in every `Scale` module, which is how a
+/// profile holding the shipped module shows it. Appended, never replacing: the user's own parts,
+/// their order and styling stay as they were, and a full module simply does not grow.
+fn upgrade(cfg: &mut ChartLabelsCfg, rev: u32) {
+    if rev < 1 {
+        for row in cfg.rows.iter_mut().take_while(|r| !r.is_blank()) {
+            let has_time = row.parts[..row.used_parts()]
+                .iter()
+                .any(|p| p.field == ChartLabelField::TimeScaleBadge);
+            if row.preset == Some(LabelPreset::Scale) && !has_time {
+                row.push_part(ChartLabelField::TimeScaleBadge);
+            }
+        }
     }
 }
 

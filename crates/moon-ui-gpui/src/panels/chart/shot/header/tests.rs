@@ -16,6 +16,7 @@ fn inputs() -> HeaderInputs {
         zone: UTC,
         tf_min: 15,
         scale_pct: Some(7),
+        time_scale_s: None,
         delta_3h: Some(3.1),
         delta_1h: Some(2.2),
         delta_15m: Some(1.3),
@@ -319,4 +320,25 @@ fn an_empty_run_uses_the_inset_instead_of_the_strip_midpoint() {
         ),
         23
     );
+}
+
+/// `header.rs:time_field` must print the chart's time-scale badge right after the Y scale, through
+/// the chart's own duration formatter, and omit it when the chart shows none; otherwise the shared
+/// picture states a span the chart inside it does not.
+#[test]
+fn the_time_scale_follows_the_y_scale_in_the_chart_spelling() {
+    let mut shown = inputs();
+    shown.time_scale_s = Some(6_720);
+
+    let tail: Vec<String> = header_strip(&shown).tail.iter().map(field_text).collect();
+    let hidden: Vec<String> = header_strip(&inputs())
+        .tail
+        .iter()
+        .map(field_text)
+        .collect();
+
+    assert_eq!(tail[2], "7%");
+    assert_eq!(tail[3], crate::display_text::fmt_duration_short(6_720.0));
+    assert_eq!(tail[4], "3h 3.1%");
+    assert_eq!(tail.len(), hidden.len() + 1);
 }

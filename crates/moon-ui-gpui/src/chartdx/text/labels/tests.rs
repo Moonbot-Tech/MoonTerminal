@@ -893,6 +893,24 @@ fn the_scale_badge_states_a_sub_percent_range_rather_than_zero() {
     assert_eq!(text.as_deref(), Some("<1%"));
 }
 
+/// The time-scale badge prints the plot's span through the shared compact duration, and nothing at
+/// all while the pane has no plot to measure.
+#[test]
+fn the_time_scale_badge_prints_the_span_as_a_compact_duration() {
+    let text = one_field(
+        ChartLabelField::TimeScaleBadge,
+        LabelInputs {
+            time_scale_s: Some(6_720),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        text.as_deref(),
+        Some(crate::display_text::fmt_duration_short(6_720.0).as_str())
+    );
+    assert!(one_field(ChartLabelField::TimeScaleBadge, LabelInputs::default()).is_none());
+}
+
 /// An empty position prints no percentage: a confident `0.00%` would claim a flat position where
 /// there is none at all.
 #[test]
