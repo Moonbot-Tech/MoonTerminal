@@ -76,6 +76,8 @@ MoonTerminal is a Rust virtual workspace built around a UI-agnostic core with th
 | [`moon-core`](crates/moon-core) | UI-agnostic kernel — connections, config, sessions, market state, reports. |
 | [`moon-chart`](crates/moon-chart) | Chart math — time/price view, default scale, pan/zoom, axes (wgpu-free). |
 | [`moon-ui-gpui`](crates/moon-ui-gpui) | The `moonterminal` binary — GPUI shell, panels, debug tooling, chart integration. |
+| [`moon-station`](crates/moon-station) | Headless server binary — report replica, order traces, and the trade tape, with no window. |
+| [`moon-remote`](crates/moon-remote) | Prepares a Linux server for `moon-station` over SSH, from the terminal's machine. |
 | [`Moonbot-Tech/MoonUI`](https://github.com/Moonbot-Tech/MoonUI) | External Git dependency — standalone GPUI runtime + Moon UI components. |
 
 **Rendering.** The chart draws through a dedicated GPU pass on top of MoonUI/GPUI — DX11/HLSL on Windows, Metal on macOS, the native GPUI `wgpu`/WGSL backend on Linux. The chart decides whether a frame is needed and prepares its data for that same frame, so the shell and order panels never repaint at live-scroll or mouse-move frequency.

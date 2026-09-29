@@ -76,6 +76,8 @@ MoonTerminal — виртуальный workspace на Rust: UI-независи
 | [`moon-core`](crates/moon-core) | UI-независимое ядро — подключения, конфиг, сессии, market state, отчёты. |
 | [`moon-chart`](crates/moon-chart) | Математика графика — time/price view, дефолтный масштаб, pan/zoom, оси (без wgpu). |
 | [`moon-ui-gpui`](crates/moon-ui-gpui) | Бинарь `moonterminal` — GPUI shell, панели, debug-инструменты, интеграция графика. |
+| [`moon-station`](crates/moon-station) | Серверный бинарь без окна — реплика отчётов, трассы ордеров и лента сделок. |
+| [`moon-remote`](crates/moon-remote) | Готовит Linux-сервер для `moon-station` по SSH, с машины терминала. |
 | [`Moonbot-Tech/MoonUI`](https://github.com/Moonbot-Tech/MoonUI) | Внешняя Git-зависимость — standalone GPUI runtime + компоненты Moon UI. |
 
 **Рендер.** График рисуется отдельным GPU-проходом поверх MoonUI/GPUI — DX11/HLSL под Windows, Metal под macOS, нативный `wgpu`/WGSL-бэкенд GPUI под Linux. График сам решает, нужен ли кадр, и готовит данные к этому же кадру, поэтому оболочка и панели ордеров не перерисовываются на частоте live-скролла или движения мыши.
