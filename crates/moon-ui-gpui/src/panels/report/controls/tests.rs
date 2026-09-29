@@ -169,3 +169,22 @@ fn compact_caption_is_the_bare_title() {
     let labels = ["Short".to_string(), "emu".to_string()];
     assert_eq!(super::scope_caption("Filters", &labels, true), "Filters");
 }
+
+/// The row signature is read from the choices alone — `of` takes no fit state, which is what keeps
+/// the fit from feeding itself — and follows them, so a changed pick re-resolves the fit.
+#[test]
+fn row_labels_follow_the_scope_choices() {
+    let period = super::super::Period::Today;
+    let changed = super::ScopeChoices {
+        deleted_only: true,
+        ..default_choices()
+    };
+    assert_eq!(
+        super::FilterRowLabels::of(&period, &default_choices()),
+        super::FilterRowLabels::of(&period, &default_choices())
+    );
+    assert_ne!(
+        super::FilterRowLabels::of(&period, &default_choices()),
+        super::FilterRowLabels::of(&period, &changed)
+    );
+}

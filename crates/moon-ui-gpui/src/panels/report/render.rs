@@ -451,7 +451,7 @@ impl Render for ReportPanel {
                     self.detached,
                     strategy_mask_present,
                     core_fit.full_w,
-                    controls::FilterRowLabels::of(self, &scope_choices, compact),
+                    controls::FilterRowLabels::of(&self.period, &scope_choices),
                 ),
             },
             |panel, fit| panel.wrap_fit = fit,
