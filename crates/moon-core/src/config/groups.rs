@@ -48,6 +48,17 @@ impl TakeProfitMode {
             }
     }
 
+    /// Return the first known mode whose persisted range holds `pct`, Scalp when none does.
+    ///
+    /// Scalp first because it is the neutral default; where ranges overlap either mode keeps the
+    /// value, and a `pct` no mode accepts is corrupt and reset by `canonicalize` either way.
+    fn accepting(pct: f64) -> Self {
+        [Self::Scalp, Self::Normal, Self::Extended]
+            .into_iter()
+            .find(|mode| mode.accepts_persisted_take_profit_pct(pct))
+            .unwrap_or(Self::Scalp)
+    }
+
     /// Quantize a fixed-sell percentage to the protocol float without permitting overflow or NaN.
     pub fn canonical_fixed_sell_pct(self, pct: f64) -> Option<f64> {
         if !(pct.is_finite() && pct >= 0.0) {
@@ -63,8 +74,10 @@ impl TakeProfitMode {
 }
 
 /// Visible exit controls shared by every manual chart in one group.
+///
+/// Read through [`StoredExitSettings`], so a TP mode this build cannot name costs only the mode.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "StoredExitSettings")]
 pub struct GroupExitSettings {
     /// Main TP value displayed by the toolbar.
     pub take_profit_pct: f64,
@@ -93,6 +106,52 @@ impl Default for GroupExitSettings {
             stop_loss_pct: 0.0,
             stop_loss_enabled: false,
             use_stop_market: false,
+        }
+    }
+}
+
+/// On-disk shape of [`GroupExitSettings`], told apart from it only by how the TP mode reads.
+///
+/// A mode this build has no name for (written by a newer one) cannot fall back to a fixed
+/// variant: the stored `take_profit_pct` is in that newer mode's range, and a mode that rejects
+/// it makes `canonicalize` reset the group's whole exit generation. So the fallback is picked
+/// from the stored value instead - see [`TakeProfitMode::accepting`].
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct StoredExitSettings {
+    take_profit_pct: f64,
+    /// `None` when absent, `Some(None)` when present but unreadable by this build.
+    #[serde(deserialize_with = "tolerant_take_profit_mode")]
+    take_profit_mode: Option<Option<TakeProfitMode>>,
+    fixed_sell_pcts: [f64; 6],
+    fixed_sell_slot: Option<usize>,
+    stop_loss_pct: f32,
+    stop_loss_enabled: bool,
+    use_stop_market: bool,
+}
+
+/// Read a present TP mode, keeping an unknown one apart from an absent one.
+fn tolerant_take_profit_mode<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<TakeProfitMode>>, D::Error> {
+    super::tolerant::or_default(d).map(Some)
+}
+
+impl From<StoredExitSettings> for GroupExitSettings {
+    fn from(s: StoredExitSettings) -> Self {
+        let take_profit_mode = match s.take_profit_mode {
+            Some(Some(mode)) => mode,
+            None => Self::default().take_profit_mode,
+            Some(None) => TakeProfitMode::accepting(s.take_profit_pct),
+        };
+        Self {
+            take_profit_pct: s.take_profit_pct,
+            take_profit_mode,
+            fixed_sell_pcts: s.fixed_sell_pcts,
+            fixed_sell_slot: s.fixed_sell_slot,
+            stop_loss_pct: s.stop_loss_pct,
+            stop_loss_enabled: s.stop_loss_enabled,
+            use_stop_market: s.use_stop_market,
         }
     }
 }

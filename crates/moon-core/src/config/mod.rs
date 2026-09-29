@@ -51,6 +51,7 @@ mod migrate;
 mod reconcile;
 mod schema;
 mod store;
+mod tolerant;
 pub(crate) mod toml_io;
 mod uid_counter;
 mod wire_id;

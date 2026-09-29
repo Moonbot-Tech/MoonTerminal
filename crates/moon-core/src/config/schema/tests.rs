@@ -152,7 +152,7 @@ fn a_core_issued_strategy_id_cannot_break_the_whole_settings_file() {
     }
 }
 
-/// Catches dropping `serde(other)` from `config/schema.rs:UiThemeMode::Dark`. A theme value only
+/// Catches dropping the `config::tolerant` adapter from `SettingsFile::ui_theme_mode`. A theme value only
 /// a newer build knows must load as Dark with every other setting intact, not fail the whole
 /// file — the loader quarantines a failed file to `.bak` and the downgrade loses all settings.
 #[test]
