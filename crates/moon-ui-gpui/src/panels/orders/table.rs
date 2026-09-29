@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::controls::{CoinMenuCtx, CoinMenuOrigin};
-use crate::order_math::MONEY_DECIMALS;
 use moon_core::feed::OrderStopKind;
+use moon_core::feed::order_math::{self, MONEY_DECIMALS};
 use moon_core::session::CoreId;
 use moon_core::util::fmt;
 use rust_i18n::t;
@@ -334,7 +334,7 @@ pub(super) fn side_label(r: &OrderRow) -> (String, MoonTone) {
 
 /// Build the PNL TP cell as a signed colored delta, or a dash without a position or target.
 fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
-    match crate::order_math::order_pnl_at_tp(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
+    match order_math::order_pnl_at_tp(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
         Some((text, sign)) => MoonDataCell::text(text)
             .tone(design::delta_tone(sign))
             .weight(500.0),
@@ -346,7 +346,7 @@ fn pnl_tp_cell(r: &OrderRow) -> MoonDataCell {
 fn pnl_cell(r: &OrderRow) -> MoonDataCell {
     // Fixed decimals without `$`; this is a currency amount in a right-aligned column, not an
     // adaptive price — `fmt::signed_amount` would trim `12.00` to `12` and break the alignment.
-    match crate::order_math::order_pnl(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
+    match order_math::order_pnl(r).and_then(|v| fmt::signed_fixed(v, MONEY_DECIMALS)) {
         Some((text, sign)) => MoonDataCell::text(text)
             .tone(design::delta_tone(sign))
             .weight(500.0),
@@ -356,7 +356,7 @@ fn pnl_cell(r: &OrderRow) -> MoonDataCell {
 
 /// Build the PnL-percent cell as a signed green or red value with two decimals, or a dash.
 fn pnl_pct_cell(r: &OrderRow) -> MoonDataCell {
-    match crate::order_math::order_pnl_pct(r).and_then(|v| fmt::signed_pct(v, MONEY_DECIMALS)) {
+    match order_math::order_pnl_pct(r).and_then(|v| fmt::signed_pct(v, MONEY_DECIMALS)) {
         Some((text, sign)) => MoonDataCell::text(text)
             .tone(design::delta_tone(sign))
             .weight(500.0),

@@ -21,7 +21,7 @@ fn empty_core_visibility_depends_on_row_filters_only() {
     ] {
         let mut state = filter(search, kind, dir, active);
         assert_eq!(state.prepare().narrows(), narrows);
-        state.exchange = Some(crate::core_order::ExchangeSection::Unidentified);
+        state.exchange = Some(moon_core::session::core_order::ExchangeSection::Unidentified);
         assert_eq!(state.prepare().narrows(), narrows);
         assert!(state.narrows());
     }

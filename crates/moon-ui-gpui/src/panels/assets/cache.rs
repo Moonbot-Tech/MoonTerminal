@@ -24,7 +24,7 @@ impl AssetsView {
             // Include CoreId so canonical reordering invalidates the cache when state is unchanged.
             .map(|(id, _)| (*id, store.core(*id)))
             .fold(0u64, |a, (id, core)| {
-                core_merge_key(b, id).hash(&mut keys);
+                b.session.account_merge_key(id).hash(&mut keys);
                 let mode = modes.get(&id).copied().unwrap_or_default();
                 let a = a
                     .wrapping_mul(31)

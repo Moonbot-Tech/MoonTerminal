@@ -13,7 +13,7 @@
 use moon_core::feed::StrategyRow;
 use moon_core::venue::CoreVenue;
 
-use crate::core_order::{ExchangeSection, section_of};
+use moon_core::session::core_order::{ExchangeSection, section_of};
 
 /// Editable strategy-filter state retained by the Strategies window.
 #[derive(Default)]

@@ -1068,7 +1068,7 @@ impl Shell {
         let (roster, prefs) = {
             let backend = self.backend.read(cx);
             let mut servers = backend.config.servers.clone();
-            crate::core_order::CoreOrder::new(&backend.config)
+            moon_core::session::core_order::CoreOrder::new(&backend.config)
                 .sort_by(&mut servers, |server| server.id);
             let venues = backend.session.core_venues();
             let store = backend.session.store();

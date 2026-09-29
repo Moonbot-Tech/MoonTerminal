@@ -760,7 +760,7 @@ pub(crate) fn derive_workspace_roster(
         configured_total,
         ..WorkspaceRosterSummary::default()
     };
-    let exchange_sections = crate::core_order::exchange_sections(
+    let exchange_sections = moon_core::session::core_order::exchange_sections(
         inputs
             .iter()
             .enumerate()

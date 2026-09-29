@@ -1,6 +1,6 @@
 //! Unit checks for the shared open-order PnL estimates.
 
-use moon_core::feed::OrderRow;
+use crate::feed::OrderRow;
 
 use super::{order_pnl, pct_to_entry, pct_to_exit, position_qty};
 

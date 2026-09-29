@@ -5,12 +5,12 @@ use super::sync_groups_from_servers;
 use super::tab::{
     ServerRowMeta, apply_group_transport, pending_server_indices, visible_group_rows,
 };
-use crate::core_order::CoreOrder;
 use crate::settings::draft_dirty;
 use moon_core::config::{
     AppConfig, CoreGroup, FeedFlags, GroupConfig, GroupExitSettings, GroupTradeSettings, Secret,
     ServerConfig, TakeProfitMode, TransportVersion,
 };
+use moon_core::session::core_order::CoreOrder;
 use moon_core::venue::CoreVenue;
 
 /// Build one identified core's venue from its platform ordinal.

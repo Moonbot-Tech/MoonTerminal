@@ -11,7 +11,7 @@ use moon_core::session::CoreId;
 use moon_core::venue::CoreVenue;
 
 use super::tab::{GroupRowMeta, ServerRowMeta, member_counts, pending_server_indices};
-use crate::core_order::CoreOrder;
+use moon_core::session::core_order::CoreOrder;
 
 /// Partition saved draft rows by group name in ONE pass.
 ///
@@ -136,7 +136,7 @@ pub(in crate::settings) fn flatten_entries(
             .get(name.as_str())
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let sections = crate::core_order::exchange_sections(
+        let sections = moon_core::session::core_order::exchange_sections(
             group_members.iter().map(|&i| (i, servers[i].4.as_ref())),
         );
         for (exchange_index, (venue, mut members)) in sections.into_iter().enumerate() {

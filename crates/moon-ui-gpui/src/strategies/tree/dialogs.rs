@@ -8,6 +8,7 @@ use super::ops;
 use super::ui::{TreeNote, TreeOp};
 use anyhow::Result;
 use moon_core::feed::NewStrategySpec;
+use moon_core::feed::strategy_path;
 use moon_ui::{MoonListItem, MoonNotification, MoonText, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -406,7 +407,7 @@ fn op_dialog_body(
                         cd.folders
                             .paths
                             .iter()
-                            .map(|path| ops::split_path(path))
+                            .map(|path| strategy_path::split_path(path))
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
@@ -451,7 +452,7 @@ fn op_dialog_body(
                 list = list.child(
                     MoonListItem::new(SharedString::from(format!(
                         "mv-{depth}-{}",
-                        ops::join_path(&parts)
+                        strategy_path::join_path(&parts)
                     )))
                     .on_click(move |_, window: &mut Window, app: &mut App| {
                         let target = target.clone();
@@ -639,7 +640,7 @@ impl StrategiesView {
             let paths: Vec<Vec<String>> = folders
                 .iter()
                 .filter(|(_, path)| !path.is_empty())
-                .map(|(_, path)| ops::split_path(path))
+                .map(|(_, path)| strategy_path::split_path(path))
                 .collect();
             if paths.is_empty() {
                 // Only core roots were selected, and a core root has no parent to move into.
@@ -1069,7 +1070,7 @@ impl StrategiesView {
             .say(window, cx);
             return;
         }
-        self.request_delete_folder(core, ops::split_path(&path), window, cx);
+        self.request_delete_folder(core, strategy_path::split_path(&path), window, cx);
     }
 
     pub(super) fn request_delete_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1328,7 +1329,10 @@ impl StrategiesView {
         self.backend.read(cx).session.move_strategies(
             core,
             moves,
-            Some((ops::join_path(old_path), ops::join_path(&new_path))),
+            Some((
+                strategy_path::join_path(old_path),
+                strategy_path::join_path(&new_path),
+            )),
         )?;
         // Rename an empty UI-only folder locally only after the move command succeeds.
         self.rename_ui_folder(core, old_path, new_name);
@@ -1453,8 +1457,10 @@ impl StrategiesView {
             match by_omission {
                 true => backend
                     .session
-                    .remove_core_folder(core, ops::join_path(path))?,
-                false => backend.session.delete_folder(core, ops::join_path(path))?,
+                    .remove_core_folder(core, strategy_path::join_path(path))?,
+                false => backend
+                    .session
+                    .delete_folder(core, strategy_path::join_path(path))?,
             }
         }
         let deleted: HashSet<Key> = current_targets.iter().map(|(id, _)| (core, *id)).collect();

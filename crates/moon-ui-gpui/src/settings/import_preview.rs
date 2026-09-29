@@ -91,7 +91,7 @@ impl SettingsView {
             let d = b.preview.as_ref().unwrap_or(&b.config);
             // Rank first, then choose the default target from canonical order so group-local
             // imports initially address the same top-row core the user sees.
-            let order = crate::core_order::CoreOrder::new(d);
+            let order = moon_core::session::core_order::CoreOrder::new(d);
             let mut ranked: Vec<&moon_core::config::ServerConfig> = d.servers.iter().collect();
             order.sort_by(&mut ranked, |s| s.id);
             let first_active = ranked

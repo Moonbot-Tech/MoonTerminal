@@ -583,7 +583,7 @@ impl<'de> Deserialize<'de> for TotalMode {
 
 /// User-selected order for every core list in the application.
 ///
-/// The choice is stored globally; the UI crate's `core_order` module performs ranking.
+/// The choice is stored globally; `session::core_order` performs ranking.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum CoreSortMode {
     /// Lexicographic order by lowercase Unicode name, with uid as a tie-breaker.

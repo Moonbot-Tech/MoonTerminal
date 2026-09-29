@@ -25,11 +25,9 @@
 //! the 3 wallet containers and the drag&drop transfer dialog in [`wallets`].
 
 mod balances;
-pub(crate) use balances::{BalanceFigures, aggregate_account_figures};
 mod cache;
 mod collect;
 mod columns;
-mod dedupe;
 mod render;
 mod roster_width;
 mod settings;
@@ -40,7 +38,7 @@ mod tests;
 mod wallets;
 mod window;
 
-use collect::{AssetEntry, WalletColumnSnapshot, core_merge_key, core_total_mode, money};
+use collect::{AssetEntry, WalletColumnSnapshot, money};
 use columns::AssetCol;
 pub use window::open;
 use window::{ASSETS_HEADER_H, assets_header};
@@ -58,13 +56,13 @@ use moon_ui::{
 };
 
 use crate::Backend;
-use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
 use crate::workspace::scope_marker::ScopeMarker;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::{AssetRow, TransferAssetRow, WalletKind};
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 use moon_core::util::fmt;
 use rust_i18n::t;
 

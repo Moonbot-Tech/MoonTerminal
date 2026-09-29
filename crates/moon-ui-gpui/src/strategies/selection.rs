@@ -1,6 +1,7 @@
 //! Selection and expansion state transitions for the strategy tree.
 
 use super::*;
+use moon_core::feed::strategy_path;
 
 impl StrategiesView {
     /// Apply a strategy click with selection modifiers.
@@ -158,7 +159,7 @@ impl StrategiesView {
         };
         self.focus_strategy(key);
         self.expanded_cores.insert(core);
-        self.expand_path(core, tree::ops::path_segments(&folder_path));
+        self.expand_path(core, strategy_path::path_segments(&folder_path));
         // Expansion makes the row eligible for layout; render still needs this key to center the
         // corresponding item because only render owns the tree's item index.
         self.pending_scroll = Some(key);
@@ -335,7 +336,7 @@ impl StrategiesView {
         // delayed echo steal the selection after this navigation completes.
         self.pending_select = None;
         self.expanded_cores.insert(core);
-        self.expand_path(core, tree::ops::path_segments(&row.folder_path));
+        self.expand_path(core, strategy_path::path_segments(&row.folder_path));
         self.focus_strategy(key);
         if let Some(vf) = version {
             self.reveal_version(key, vf, cx);
@@ -457,7 +458,7 @@ impl StrategiesView {
                 .map(|r| r.folder_path.clone())
                 .collect();
             for path in paths {
-                self.expand_path(*c, tree::ops::path_segments(&path));
+                self.expand_path(*c, strategy_path::path_segments(&path));
             }
         }
     }

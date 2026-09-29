@@ -4700,9 +4700,12 @@ name = "moon-station"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono-tz",
  "log",
  "moon-core",
+ "moon-tg",
  "serde",
+ "serde_json",
  "signal-hook",
  "toml 0.8.23",
  "zeroize",
@@ -4717,6 +4720,18 @@ dependencies = [
  "log",
  "rayon",
  "tracing",
+]
+
+[[package]]
+name = "moon-tg"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "log",
+ "moon-core",
+ "rusqlite",
+ "rust-i18n",
 ]
 
 [[package]]
@@ -4827,6 +4842,7 @@ dependencies = [
  "moon-core",
  "moon-gpui",
  "moon-gpui-platform",
+ "moon-tg",
  "moon-ui",
  "objc",
  "qrcode",

@@ -17,6 +17,21 @@ pub enum LocalBoundary {
     Upper,
 }
 
+/// Resolve a persisted IANA zone id into the display zone, UTC when it is absent or unknown.
+///
+/// Any valid IANA id is kept exactly, including zones outside the header clock's curated city
+/// list: a first-run system zone must not turn into UTC after a restart. Every surface that states
+/// civil time from a saved zone id resolves it here, so the desktop and the Telegram reports agree.
+///
+/// Args:
+///     zone_id: Persisted IANA zone id, if one was selected.
+///
+/// Returns:
+///     The exact zone, or UTC.
+pub fn zone_or_utc(zone_id: Option<&str>) -> Tz {
+    zone_id.and_then(|id| id.parse().ok()).unwrap_or(Tz::UTC)
+}
+
 /// Convert UTC Unix seconds into the selected IANA zone.
 ///
 /// Args:

@@ -774,10 +774,10 @@ impl AnalyticsView {
         })
         .detach();
         let display_zone =
-            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+            moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
-            let zone = crate::chrome::clock::resolved_header_clock_zone(
+            let zone = moon_core::util::display_time::zone_or_utc(
                 this.backend.read(cx).header_clock_zone(),
             );
             if zone == this.display_zone {

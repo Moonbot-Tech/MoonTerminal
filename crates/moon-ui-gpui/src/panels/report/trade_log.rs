@@ -150,14 +150,14 @@ pub(super) fn open_trade_log(
     }
     let display_time_revision = backend.read(cx).display_time_revision.clone();
     let display_zone =
-        crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+        moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
     let zone_backend = backend.clone();
     let dialog_request = request.clone();
     let entity = cx.new(move |cx| {
         cx.observe(
             &display_time_revision,
             move |this: &mut TradeLog, _revision, cx| {
-                let zone = crate::chrome::clock::resolved_header_clock_zone(
+                let zone = moon_core::util::display_time::zone_or_utc(
                     zone_backend.read(cx).header_clock_zone(),
                 );
                 if zone == this.display_zone {

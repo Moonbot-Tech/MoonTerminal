@@ -5,12 +5,12 @@
 //! the Orders table's PNL / PNL % / PNL TP cells, the Orders sort comparator, the chart's
 //! open-order overlay, and the Mini App order row.
 //!
-//! The estimates live in the UI crate rather than beside [`OrderRow`] in `moon-core` on purpose:
-//! the wire carries no server PnL, so this is what the TERMINAL computes to match what the Assets
-//! panel shows. That is a presentation-consistency contract between UI surfaces, not a core
-//! invariant, and no `moon-core` consumer wants it.
+//! The wire carries no server PnL, so this is what the TERMINAL computes to match what the Assets
+//! panel shows. That is a presentation-consistency contract between the surfaces that state it,
+//! not a core invariant. It lives beside [`OrderRow`] because two crates render those surfaces:
+//! the desktop panels and the Telegram Mini App, and both must quote one copy of the arithmetic.
 
-use moon_core::feed::OrderRow;
+use crate::feed::OrderRow;
 
 /// Decimal places every surface states an unrealized-PnL amount or percent to.
 ///
@@ -53,7 +53,7 @@ fn usable_price(v: f64) -> bool {
 /// arrives as a trace point on the order-LINE path. `r.price` is therefore as old as the last order
 /// change, which for a resting take-profit can be minutes. The order's own prices below are safe to
 /// read from the row, because those change only when the order does.
-pub(crate) fn pct_to_exit(r: &OrderRow, last: f64) -> Option<f64> {
+pub fn pct_to_exit(r: &OrderRow, last: f64) -> Option<f64> {
     let exit = r.sell_price;
     if !usable_price(last) || !usable_price(exit) {
         return None;
@@ -66,7 +66,7 @@ pub(crate) fn pct_to_exit(r: &OrderRow, last: f64) -> Option<f64> {
 ///
 /// The direction flips once more. A long's entry waits BELOW the market and a short's ABOVE it, so
 /// what counts down is `last - entry` for the one and `entry - last` for the other.
-pub(crate) fn pct_to_entry(r: &OrderRow, last: f64) -> Option<f64> {
+pub fn pct_to_entry(r: &OrderRow, last: f64) -> Option<f64> {
     let entry = r.buy_price;
     if !usable_price(last) || !usable_price(entry) {
         return None;
@@ -85,7 +85,7 @@ pub(crate) fn pct_to_entry(r: &OrderRow, last: f64) -> Option<f64> {
 /// and otherwise the original `size`. This preserves positions such as a sale from an already-held
 /// asset whose `fill_pct` is zero. Before that state, use the filled entry quantity
 /// (`size * fill_pct`). Return `None` when the resulting quantity is not positive.
-pub(crate) fn position_qty(r: &OrderRow) -> Option<f64> {
+pub fn position_qty(r: &OrderRow) -> Option<f64> {
     let qty = if r.filled {
         if r.remaining_size > 0.0 {
             r.remaining_size
@@ -114,7 +114,7 @@ pub(crate) fn position_qty(r: &OrderRow) -> Option<f64> {
 /// `sell_price` is the exit target; for a profitable short it lies below entry. Treating it as a
 /// short entry previously calculated PnL from the exit price and diverged from Assets, for example
 /// VELVET showed -3.96 from `sell_price` versus about zero from the resolved entry.
-pub(crate) fn order_pnl(r: &OrderRow) -> Option<f64> {
+pub fn order_pnl(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
     let mark = r.price as f64;
@@ -135,7 +135,7 @@ pub(crate) fn order_pnl(r: &OrderRow) -> Option<f64> {
 /// This uses the same formula as [`order_pnl`] with the take target in place of the current mark,
 /// which shows the expected profit from a split grid of sell orders. Return `None` without a
 /// position, entry price, or take-profit price.
-pub(crate) fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
+pub fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
     let qty = position_qty(r)?;
     let entry = r.buy_price;
     let tp = r.sell_price;
@@ -153,7 +153,7 @@ pub(crate) fn order_pnl_at_tp(r: &OrderRow) -> Option<f64> {
 ///
 /// Return `None` under the same conditions as [`order_pnl`]. `buy_price` is the entry for both
 /// directions.
-pub(crate) fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
+pub fn order_pnl_pct(r: &OrderRow) -> Option<f64> {
     position_qty(r)?; // Apply the same in-position gate as `order_pnl`.
     let entry = r.buy_price;
     let mark = r.price as f64;

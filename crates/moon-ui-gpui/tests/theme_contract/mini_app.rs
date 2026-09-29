@@ -1,14 +1,16 @@
 //! Source contracts for Mini App owner commands, the report-cache grant, viewer
 //! isolation, and the page's label keys.
 //!
-//! `moon-ui-gpui` is a binary, so these tests cannot construct `Backend`. Each
+//! These read the Telegram crate (`moon-tg`) as text, beside the page they serve. Each
 //! oracle is the other side of a seam: the page's literal keys against the label
 //! table and `locales/telegram.yml`, and the control-flow text a dropped guard
 //! would delete. A string the test itself invented and then found is not an oracle.
 
 use std::collections::BTreeSet;
 
-use super::support::{assert_locale_key_in_three_languages, braced_body, read_core_src, read_src};
+use super::support::{
+    assert_locale_key_in_three_languages, braced_body, read_core_src, read_tg_src,
+};
 
 /// Quoted `mini_*` keys in `app.js` that are whole label names.
 ///
@@ -64,7 +66,7 @@ fn quoted_strings(block: &str) -> BTreeSet<String> {
 fn mini_label_keys(telegram_rs: &str) -> BTreeSet<String> {
     let start = telegram_rs
         .find("const MINI_LABEL_KEYS: &[&str] = &[")
-        .expect("backend/telegram.rs defines MINI_LABEL_KEYS");
+        .expect("moon-tg labels.rs defines MINI_LABEL_KEYS");
     let end = telegram_rs[start..]
         .find("];")
         .expect("MINI_LABEL_KEYS is a closed array");
@@ -94,7 +96,7 @@ fn inserted_mini_keys(telegram_rs: &str) -> BTreeSet<String> {
     keys
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_owner` must refuse a viewer and a
+/// `moon-tg mini_app/mod.rs:mini_owner` must refuse a viewer and a
 /// chat with no grant.
 ///
 /// Mutation: the viewer arm returns `Ok(())`. A report viewer can then cancel
@@ -102,7 +104,7 @@ fn inserted_mini_keys(telegram_rs: &str) -> BTreeSet<String> {
 /// an unpaired chat that still reached this function.
 #[test]
 fn mini_owner_rejects_viewer_and_absent_grant() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/mod.rs");
     let body = braced_body(&source, "fn mini_owner(");
     assert!(
         body.contains("Some(TelegramReportAccess::Viewer(_)) => Err(MiniAppApiError::Forbidden)"),
@@ -118,14 +120,14 @@ fn mini_owner_rejects_viewer_and_absent_grant() {
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_cancel_order` must return NotFound
+/// `moon-tg mini_app/commands.rs:mini_cancel_order` must return NotFound
 /// for an unlisted uid before `session.cancel_order`.
 ///
 /// Mutation: delete the `order.uid == uid` miss. The uid is then sent to the
 /// core even though the open-order list the page showed did not contain it.
 #[test]
 fn mini_cancel_unlisted_uid_is_not_sent() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/commands.rs");
     let body = braced_body(&source, "fn mini_cancel_order(");
     let listed = body
         .find("order.uid == uid")
@@ -133,21 +135,21 @@ fn mini_cancel_unlisted_uid_is_not_sent() {
     let miss = body[listed..]
         .find("return Ok(command_miss(CommandErrorDto::NotFound))")
         .map(|offset| listed + offset);
-    let send = body.find("self.session.cancel_order(");
+    let send = body.find("host.session_mut().cancel_order(");
     assert!(
         miss.is_some() && send.is_some() && miss.unwrap() < send.unwrap(),
         "an unlisted uid must return NotFound before session.cancel_order, so nothing is sent"
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_panic_sell` must return NotFound
+/// `moon-tg mini_app/commands.rs:mini_panic_sell` must return NotFound
 /// when the market is not on that core's open orders, before any toggle.
 ///
 /// Mutation: delete the `order.market == market` miss. Panic Sell is then
 /// toggled for a market the page did not list.
 #[test]
 fn mini_panic_unlisted_market_is_not_sent() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/commands.rs");
     let body = braced_body(&source, "fn mini_panic_sell(");
     let listed = body
         .find("order.market == market")
@@ -155,14 +157,14 @@ fn mini_panic_unlisted_market_is_not_sent() {
     let miss = body[listed..]
         .find("return Ok(command_miss(CommandErrorDto::NotFound))")
         .map(|offset| listed + offset);
-    let toggle = body.find("self.toggle_panic_sell(");
+    let toggle = body.find("host.toggle_panic_sell(");
     assert!(
         miss.is_some() && toggle.is_some() && miss.unwrap() < toggle.unwrap(),
         "a market with no order must return NotFound before toggle_panic_sell"
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_panic_sell` must return success
+/// `moon-tg mini_app/commands.rs:mini_panic_sell` must return success
 /// without toggling when the market is already in the asked state.
 ///
 /// Mutation: delete the `is_panic_armed(core, &market) == on` return. A second
@@ -170,22 +172,22 @@ fn mini_panic_unlisted_market_is_not_sent() {
 /// state the page just showed.
 #[test]
 fn mini_panic_already_armed_does_not_toggle() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/commands.rs");
     let body = braced_body(&source, "fn mini_panic_sell(");
     let already = body
-        .find("self.is_panic_armed(core, &market) == on")
+        .find("host.is_panic_armed(core, &market) == on")
         .expect("panic must compare the asked state with the armed state");
     let hit = body[already..]
         .find("return Ok(command_hit(Some(on)))")
         .map(|offset| already + offset);
-    let toggle = body.find("self.toggle_panic_sell(");
+    let toggle = body.find("host.toggle_panic_sell(");
     assert!(
         hit.is_some() && toggle.is_some() && hit.unwrap() < toggle.unwrap(),
         "an already-matching Panic Sell state must return ok before toggle_panic_sell"
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_report` must serve a cached report
+/// `moon-tg mini_app/reads.rs:mini_report` must serve a cached report
 /// only when the cached grant still equals the chat's current grant.
 ///
 /// Mutation: replace `(cached_access == &access, cached_access != &access)` with
@@ -193,7 +195,7 @@ fn mini_panic_already_armed_does_not_toggle() {
 /// chat is narrowed, for the rest of the minute.
 #[test]
 fn mini_report_cache_requires_same_grant() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/reads.rs");
     let body = braced_body(&source, "fn mini_report(");
     assert!(
         body.contains("(cached_access == &access, cached_access != &access)"),
@@ -201,14 +203,14 @@ fn mini_report_cache_requires_same_grant() {
     );
 }
 
-/// `backend/telegram/mini_app.rs:visible_cores` must keep an empty viewer list empty.
+/// `moon-tg mini_app/mod.rs:visible_cores` must keep an empty viewer list empty.
 ///
 /// Mutation: the viewer arm returns `true` instead of `ids.contains(&session.id)`.
 /// A viewer whose grant lists no cores then sees every core's orders, balances,
 /// and status.
 #[test]
 fn visible_cores_empty_viewer_grant_matches_nothing() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/mod.rs");
     let body = braced_body(&source, "fn visible_cores(");
     assert!(
         body.contains("TelegramReportAccess::Viewer(ids) => ids.contains(&session.id)"),
@@ -221,32 +223,32 @@ fn visible_cores_empty_viewer_grant_matches_nothing() {
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_cancel_order` must send through
+/// `moon-tg mini_app/commands.rs:mini_cancel_order` must send through
 /// `session.cancel_order`.
 ///
-/// Mutation: replace `self.session.cancel_order(core, uid)` with `Ok(())`. The
+/// Mutation: replace `host.session_mut().cancel_order(core, uid)` with `Ok(())`. The
 /// page reports the order cancelled and the core never receives the cancel.
 #[test]
 fn mini_cancel_goes_through_session_cancel_order() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/commands.rs");
     let body = braced_body(&source, "fn mini_cancel_order(");
     assert!(
-        body.contains("self.session.cancel_order("),
+        body.contains("host.session_mut().cancel_order("),
         "Mini App cancel must call session.cancel_order"
     );
 }
 
-/// `backend/telegram/mini_app.rs:Backend::mini_panic_sell` must send through
+/// `moon-tg mini_app/commands.rs:mini_panic_sell` must send through
 /// `toggle_panic_sell`.
 ///
-/// Mutation: replace `self.toggle_panic_sell(core, market.clone())` with `true`.
+/// Mutation: replace `host.toggle_panic_sell(core, market.clone())` with `true`.
 /// The page reports Panic Sell changed and the market's armed state does not.
 #[test]
 fn mini_panic_goes_through_toggle_panic_sell() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/commands.rs");
     let body = braced_body(&source, "fn mini_panic_sell(");
     assert!(
-        body.contains("self.toggle_panic_sell("),
+        body.contains("host.toggle_panic_sell("),
         "Mini App panic must call toggle_panic_sell"
     );
 }
@@ -261,7 +263,7 @@ fn mini_panic_goes_through_toggle_panic_sell() {
 #[test]
 fn mini_page_literals_are_wired_and_translated() {
     let page = page_label_keys(&read_core_src("telegram/web/app.js"));
-    let telegram_rs = read_src("backend/telegram.rs");
+    let telegram_rs = read_tg_src("labels.rs");
     let wired: BTreeSet<String> = mini_label_keys(&telegram_rs)
         .into_iter()
         .chain(inserted_mini_keys(&telegram_rs))
@@ -317,7 +319,7 @@ fn mini_core_units_come_from_labels() {
 /// same helper, so the tab cannot keep a single width.
 #[test]
 fn mini_balance_text_uses_fixed_cents() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/dto.rs");
     let body = braced_body(&source, "fn balance_text(");
     assert!(
         body.contains("fmt::usd_grouped_cents("),
@@ -464,7 +466,7 @@ fn mini_collapsed_groups_carry_their_summary() {
 /// the orders table for the same order.
 #[test]
 fn mini_order_change_percent_matches_the_desktop_table() {
-    let source = read_src("backend/telegram/mini_app.rs");
+    let source = read_tg_src("mini_app/dto.rs");
     let body = braced_body(&source, "fn order_dto(");
     assert!(
         body.contains("order_pnl_pct(") && body.contains("fmt::signed_pct("),

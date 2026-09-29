@@ -158,3 +158,28 @@ fn unavailable_deletion_is_scoped_and_does_not_hide_rate_limits() {
         &unauthorized
     ));
 }
+
+/// Two pollers on one token answer each other with 409 forever; the status must name that rather
+/// than a transport outage, and the error must not be retried in place.
+#[test]
+fn a_409_is_a_conflict_and_is_not_retried() {
+    let conflict = super::refusal(
+        409,
+        "Conflict: terminated by other getUpdates request; make sure that only one bot instance \
+         is running"
+            .into(),
+        None,
+    );
+    assert_eq!(conflict, super::ApiError::Conflict);
+    assert!(!super::is_retryable(&conflict));
+    let webhook = super::refusal(
+        409,
+        "Conflict: can't use getUpdates method while webhook is active".into(),
+        None,
+    );
+    assert_eq!(webhook, super::ApiError::Conflict);
+    assert!(matches!(
+        super::refusal(400, "Bad Request".into(), None),
+        super::ApiError::Telegram { .. }
+    ));
+}

@@ -650,7 +650,7 @@ impl SettingsView {
                 .collect::<Vec<_>>();
             let groups = sorted_group_rows(&servers, &d.groups);
             (
-                crate::core_order::CoreOrder::new(d),
+                moon_core::session::core_order::CoreOrder::new(d),
                 servers,
                 groups,
                 super::endpoints::endpoint_cells(&d.servers),

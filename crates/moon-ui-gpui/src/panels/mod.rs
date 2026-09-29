@@ -20,7 +20,6 @@
 
 mod alerts;
 mod assets;
-pub(crate) use assets::{BalanceFigures, aggregate_account_figures};
 pub(crate) mod chart;
 /// The desktop capture the chart shot is built on, reached by the UI-atlas run too.
 ///

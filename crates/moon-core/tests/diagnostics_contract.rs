@@ -71,7 +71,7 @@ fn crate_sources() -> Vec<PathBuf> {
         .parent()
         .expect("crates/");
     let mut out = Vec::new();
-    for krate in ["moon-core", "moon-ui-gpui"] {
+    for krate in ["moon-core", "moon-tg", "moon-ui-gpui"] {
         collect(&root.join(krate).join("src"), &mut out);
     }
     assert!(

@@ -24,6 +24,7 @@
 //! screen reverts silently rather than saying why. Closing that would take a result path from the
 //! feed back to the view, which no strategy command has today.
 
+use moon_core::feed::strategy_path;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -146,7 +147,7 @@ fn folder_subject(
     if !super::super::logic::strategy_core_is_visible(workspace, *core) {
         return None;
     }
-    let parts = ops::split_path(path);
+    let parts = strategy_path::split_path(path);
     (!parts.is_empty()).then_some((*core, parts))
 }
 
@@ -199,7 +200,7 @@ impl StrategiesView {
             for depth in 1..folder.len() {
                 if !self
                     .expanded_folders
-                    .contains(&(core, ops::join_path(&folder[..depth])))
+                    .contains(&(core, strategy_path::join_path(&folder[..depth])))
                 {
                     return None;
                 }

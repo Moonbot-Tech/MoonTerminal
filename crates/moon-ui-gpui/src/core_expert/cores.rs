@@ -21,7 +21,7 @@ use moon_core::session::CoreId;
 use crate::Backend;
 use crate::controls::row_selection::RowSelection;
 use crate::controls::{core_menu_sections, venue_section_label};
-use crate::core_order::CoreOrder;
+use moon_core::session::core_order::CoreOrder;
 
 /// One core row of the list.
 #[derive(Debug, Clone, PartialEq, Eq)]

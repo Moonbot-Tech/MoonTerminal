@@ -36,6 +36,25 @@ impl TelegramConfig {
                 .all(|chat| self.report_access(*chat) == other.report_access(*chat))
     }
 
+    /// Add a chat to the paired set.
+    ///
+    /// Returns:
+    ///     `true` when the chat was not paired before.
+    pub fn pair_chat(&mut self, chat_id: i64) -> bool {
+        let newly_paired = !self.authorized_chat_ids.contains(&chat_id);
+        if newly_paired {
+            self.authorized_chat_ids.push(chat_id);
+        }
+        newly_paired
+    }
+
+    /// Forget every pairing: no chats, no owner, no grants.
+    pub fn clear_pairing(&mut self) {
+        self.authorized_chat_ids.clear();
+        self.owner_chat_id = None;
+        self.chat_access.clear();
+    }
+
     /// Resolve one owner while preserving the first pairing on upgrades from the flat chat list.
     pub fn owner(&self) -> Option<i64> {
         self.owner_chat_id

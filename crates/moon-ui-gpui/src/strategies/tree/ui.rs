@@ -3,6 +3,7 @@
 //! [`super::dnd`], context menus in [`super::menu`], and pure path and collection logic
 //! in [`super::ops`].
 
+use moon_core::feed::strategy_path;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -86,7 +87,7 @@ pub(super) fn resolve_paste_target(
 /// Returns:
 ///     `false` once a live row represents the folder or any of its descendants.
 fn keep_ui_folder(path: &str, rows: Option<&[StrategyRow]>) -> bool {
-    let prefix = ops::split_path(path);
+    let prefix = strategy_path::split_path(path);
     rows.is_none_or(|rows| prefix.is_empty() || !ops::has_row_under(rows, &prefix))
 }
 
@@ -586,7 +587,7 @@ impl StrategiesView {
     pub(super) fn default_target(
         &self,
         store: &CoreStore,
-        cores: &crate::core_order::OrderedCores,
+        cores: &moon_core::session::core_order::OrderedCores,
     ) -> (CoreId, String) {
         let from_row = selected_key(self)
             .and_then(|(core, id)| row(store, core, id).map(|r| (core, r.folder_path.clone())));
@@ -629,9 +630,9 @@ impl StrategiesView {
         name: &str,
         cx: &mut Context<Self>,
     ) {
-        let mut parts = ops::split_path(parent);
+        let mut parts = strategy_path::split_path(parent);
         parts.push(name.to_string());
-        let key = ops::join_path(&parts);
+        let key = strategy_path::join_path(&parts);
 
         if let Err(error) = self
             .backend
@@ -651,7 +652,7 @@ impl StrategiesView {
     }
 
     pub(super) fn remove_ui_folder(&mut self, core: CoreId, path: &[String]) {
-        let key = ops::join_path(path);
+        let key = strategy_path::join_path(path);
         self.ui_folders
             .retain(|(c, p)| !(*c == core && (p == &key || p.starts_with(&format!("{key}/")))));
     }
@@ -662,7 +663,11 @@ impl StrategiesView {
         }
         let mut np = old_path.to_vec();
         *np.last_mut().unwrap() = new_name.to_string();
-        self.rebase_ui_folder(core, &ops::join_path(old_path), &ops::join_path(&np));
+        self.rebase_ui_folder(
+            core,
+            &strategy_path::join_path(old_path),
+            &strategy_path::join_path(&np),
+        );
     }
 
     /// Move every UI-only folder at or below `old_key` to sit under `new_key` instead.
@@ -708,7 +713,7 @@ impl StrategiesView {
             .ui_folders
             .iter()
             .filter(|(c, _)| *c == core)
-            .map(|(_, p)| ops::split_path(p))
+            .map(|(_, p)| strategy_path::split_path(p))
             .collect();
         paths.sort_by_cached_key(|parts| {
             let joined = parts.join("/");
@@ -1082,7 +1087,9 @@ impl StrategiesView {
             match path.is_empty() {
                 // A core's name belongs to its connection settings, not to this tree.
                 true => TreeNote::CoreRenamedInSettings.say(window, cx),
-                false => self.open_rename_folder(core, ops::split_path(&path), window, cx),
+                false => {
+                    self.open_rename_folder(core, strategy_path::split_path(&path), window, cx)
+                }
             }
             return;
         }

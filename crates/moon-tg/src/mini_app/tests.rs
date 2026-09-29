@@ -11,12 +11,10 @@ use moon_core::telegram::web::dto::StrategyPendingDto;
 
 use moon_core::feed::OrderRow;
 
-use super::{
-    by_section, distance_text, natural_cmp, order_to_entry_pct, scope_targets, strategy_pending,
-    trade_strategy,
-};
+use super::dto::{distance_text, order_to_entry_pct, strategy_pending, trade_strategy};
+use super::{by_section, natural_cmp, scope_targets};
 
-/// `mini_app.rs:scope_targets` keeps only visible cores, in visible order, once each.
+/// `mini_app/mod.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
 /// Mutation: return the requested ids unfiltered or skip the dedupe. A mass
 /// trading switch then commands a core the owner does not see, or the same core
@@ -27,7 +25,7 @@ fn scope_targets_drops_unknown_and_duplicate_cores() {
     assert_eq!(scope_targets(&[99], &[1, 2, 3]), Vec::<u64>::new());
 }
 
-/// `mini_app.rs:natural_cmp` reads digit runs as numbers and ignores letter case.
+/// `mini_app/mod.rs:natural_cmp` reads digit runs as numbers and ignores letter case.
 ///
 /// Mutation: compare the raw strings. "Account № 10" then sorts before "№ 9".
 #[test]
@@ -40,7 +38,7 @@ fn natural_cmp_orders_numbers_by_value() {
     assert_eq!(natural_cmp("x", "x"), Ordering::Equal);
 }
 
-/// `mini_app.rs:by_section` groups by the terminal's exchange sections and natural-sorts names.
+/// `mini_app/mod.rs:by_section` groups by the terminal's exchange sections and natural-sorts names.
 ///
 /// Mutation: skip the in-section sort, or keep the input order across sections. Oracle: the
 /// unidentified core leads (the terminal's unknown-first rule), each venue's cores stay together,
@@ -64,7 +62,10 @@ fn by_section_groups_by_exchange_then_natural_name() {
     let ids: Vec<u64> = ordered.iter().map(|(_, (id, _))| *id).collect();
     assert_eq!(ids[0], 5, "the unidentified core leads, as in the terminal");
     // Section order oracle: the terminal's own partition of the two venues.
-    let terminal = crate::core_order::exchange_sections([(2, venues.get(&2)), (6, venues.get(&1))]);
+    let terminal = moon_core::session::core_order::exchange_sections([
+        (2, venues.get(&2)),
+        (6, venues.get(&1)),
+    ]);
     let first_is_code_2 = terminal[0].1 == [2];
     let expected: [u64; 4] = if first_is_code_2 {
         [4, 2, 3, 1]
@@ -80,7 +81,7 @@ fn by_section_groups_by_exchange_then_natural_name() {
     assert_ne!(ordered[2].0, ordered[3].0);
 }
 
-/// `mini_app.rs:strategy_pending` keeps a toggle Pending inside the 45 s window, then TimedOut
+/// `mini_app/dto.rs:strategy_pending` keeps a toggle Pending inside the 45 s window, then TimedOut
 /// only while the row disagrees AND no fresh strategy list arrived.
 ///
 /// Mutation: `if checked == wanted || rev_now != rev_before {` -> `if checked == wanted {`.
@@ -156,7 +157,7 @@ fn resting_order(entry: f64, mark: f32) -> OrderRow {
     }
 }
 
-/// `mini_app.rs:order_to_entry_pct` states the distance to a resting entry, by side, and only
+/// `mini_app/dto.rs:order_to_entry_pct` states the distance to a resting entry, by side, and only
 /// while the order holds no position.
 ///
 /// Mutation: drop the position gate, or ignore the side. A filled order then shows a distance
@@ -182,7 +183,7 @@ fn order_to_entry_pct_measures_resting_entries_only() {
 #[test]
 fn the_telegram_log_prefix_still_matches_this_module() {
     // moon-core raises this prefix to `info` by default but cannot verify it from its own side;
-    // a module move or a `[[bin]]` rename would mute the owner-command lines again.
+    // renaming the crate would mute the owner-command lines again.
     let prefix = moon_core::diagnostics::TELEGRAM_TARGET;
     assert!(
         module_path!().starts_with(prefix),
@@ -197,7 +198,7 @@ fn distance_to_entry_text_carries_no_sign() {
     assert_eq!(distance_text(-1.5).as_deref(), Some("1.50%"));
 }
 
-/// `mini_app.rs:trade_strategy` names strategy trades, marks only `0` manual, and leaves a missing
+/// `mini_app/dto.rs:trade_strategy` names strategy trades, marks only `0` manual, and leaves a missing
 /// id unknown.
 ///
 /// Mutation: drop negative ids (`u64::try_from`), treat a missing id as manual, or skip the stored

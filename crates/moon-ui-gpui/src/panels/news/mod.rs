@@ -40,10 +40,10 @@ use rust_i18n::t;
 
 use crate::Backend;
 use crate::controls::coin_search;
-use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use moon_core::config::NewsTagSettings;
 use moon_core::feed::NewsItem;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 // The tag filter is shared with the chart's news marks so hiding a topic clears it from both.
 use moon_core::feed::news_marks::tag_visible;
 use moon_core::session::CoreId;
@@ -182,7 +182,7 @@ impl NewsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let display_zone =
-            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+            moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
         // Rebuild + repaint only when the scoped cores' news revision changes. News is event-driven
         // and low-volume, so no periodic idle refresh is needed.
         //
@@ -228,7 +228,7 @@ impl NewsView {
 
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
-            let zone = crate::chrome::clock::resolved_header_clock_zone(
+            let zone = moon_core::util::display_time::zone_or_utc(
                 this.backend.read(cx).header_clock_zone(),
             );
             if zone != this.display_zone {

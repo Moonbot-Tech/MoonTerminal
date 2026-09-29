@@ -1,5 +1,6 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
-use super::{Page, profit, render};
+use super::Page;
+use super::render::{profit, render};
 
 /// A viewer never receives another client's rows or money, including daily and exchange totals.
 #[test]
@@ -151,7 +152,8 @@ fn inline_buttons_keep_the_current_period() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&page) else {
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+    else {
         panic!("expected inline navigation")
     };
     for button in markup.inline_keyboard.into_iter().flatten() {
@@ -196,7 +198,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         excluded = 2
     )
     .to_string();
-    assert!(html.contains(&super::escape(&coverage)));
+    assert!(html.contains(&super::render::escape(&coverage)));
 }
 
 /// Dollar-denominated subtotals should not expose eight-decimal replica noise.
@@ -211,7 +213,7 @@ fn detail_money_uses_readable_currency_precision() {
         orders: 158,
         ..Default::default()
     };
-    assert_eq!(super::native(&total), "+47.58 USDT");
+    assert_eq!(super::render::native(&total), "+47.58 USDT");
     let btc = QuoteBreakdown {
         totals: vec![moon_core::db::QuoteTotal {
             currency: moon_core::db::QuoteCurrency::btc(),
@@ -221,7 +223,7 @@ fn detail_money_uses_readable_currency_precision() {
         orders: 1,
         ..Default::default()
     };
-    assert_eq!(super::native(&btc), "+0.00001234 BTC");
+    assert_eq!(super::render::native(&btc), "+0.00001234 BTC");
 }
 
 /// Idle rows interleaved with zero-profit activity must neither consume page slots nor disappear from totals.
@@ -393,7 +395,7 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         super::rich_message_fits(&html),
         "chars={} blocks={}",
         html.chars().count(),
-        super::rich_message_blocks(&html)
+        super::render::rich_message_blocks(&html)
     );
     assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
@@ -438,7 +440,7 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         super::rich_message_fits(&html),
         "chars={} blocks={}",
         html.chars().count(),
-        super::rich_message_blocks(&html)
+        super::render::rich_message_blocks(&html)
     );
     assert!(!html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
@@ -669,7 +671,8 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
         scope_label: None,
     };
-    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&page) else {
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+    else {
         panic!("expected inline navigation")
     };
     assert_eq!(
@@ -708,7 +711,8 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
 
     let mut expanded = page;
     expanded.request.exchanges_open = true;
-    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&expanded) else {
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&expanded)
+    else {
         panic!("expected inline navigation")
     };
     assert_eq!(markup.inline_keyboard[0].len(), 2, "two exchanges per row");
@@ -755,7 +759,8 @@ fn today_omits_daily_navigation() {
             drilldowns: Vec::new(),
             scope_label: None,
         };
-        let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::keyboard(&page) else {
+        let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+        else {
             panic!("expected inline navigation")
         };
         assert!(markup.inline_keyboard.iter().all(|row| !row.is_empty()));
@@ -801,7 +806,7 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
         html,
         keyboard,
         navigation,
-    } = super::help("<UTC>")
+    } = super::help("<UTC>", crate::HostKind::Terminal)
     else {
         panic!("expected rich help")
     };
@@ -817,6 +822,26 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
         keyboard,
         moon_core::telegram::api::ReplyMarkup::Inline(_)
     ));
+}
+
+/// A station's bot answers with the terminal off: its Help must not tell the chat to keep a
+/// terminal running, nor point it to terminal settings for the Mini App.
+#[test]
+fn station_help_does_not_ask_for_a_running_terminal() {
+    let _locale = crate::test_locale::force("en");
+    let text = |host| {
+        let Response::Rich { html, .. } = super::help("UTC", host) else {
+            panic!("expected rich help")
+        };
+        html
+    };
+    let terminal = text(crate::HostKind::Terminal);
+    let station = text(crate::HostKind::Station);
+    assert!(terminal.contains("Keep the terminal running"));
+    assert!(!station.contains("Keep the terminal running"));
+    assert!(!station.contains("terminal settings"));
+    assert!(station.contains("around the clock"));
+    assert!(!crate::labels::report_help(crate::HostKind::Station).contains("terminal"));
 }
 
 /// A renamed core is listed under its configured name; a core no longer configured keeps the

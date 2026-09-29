@@ -12,9 +12,10 @@ use moon_core::session::{CoreId, CoreStore};
 
 use super::filter::PreparedFilter;
 use super::rules::{Rules, Values};
-use super::tree::ops::{self, path_segments};
+use super::tree::ops;
 use super::{Key, StrategiesView};
 use crate::Backend;
+use moon_core::feed::strategy_path::path_segments;
 
 /// Return whether one core belongs to the singleton's effective Strategies scope.
 ///
@@ -55,8 +56,8 @@ pub(super) fn selected_key(st: &StrategiesView) -> Option<Key> {
 pub(super) fn visible_strategy_cores(
     st: &StrategiesView,
     backend: &Backend,
-) -> crate::core_order::OrderedCores {
-    crate::core_order::CoreOrder::new(&backend.config)
+) -> moon_core::session::core_order::OrderedCores {
+    moon_core::session::core_order::CoreOrder::new(&backend.config)
         .from_sessions(backend.session.sessions(), |session| {
             strategy_core_is_visible(st.workspace_cores.as_deref(), session.id)
         })

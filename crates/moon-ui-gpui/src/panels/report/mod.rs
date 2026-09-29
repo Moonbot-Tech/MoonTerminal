@@ -66,7 +66,6 @@ use rusqlite::types::Value;
 use rust_i18n::t;
 
 use crate::controls::date_range::{self, Bound};
-use crate::core_order::CoreOrder;
 use crate::load_state::{LoadState, Note, note_el};
 use crate::workspace::scope_marker::ScopeMarker;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope, query_core_ids};
@@ -76,6 +75,7 @@ use moon_core::db::{
     self, ReadResult, ReportAxis, ReportFilter, ReportStrategy, ReportStrategyKey, SideFilter,
 };
 use moon_core::session::CoreId;
+use moon_core::session::core_order::CoreOrder;
 
 pub use window::open_scoped;
 

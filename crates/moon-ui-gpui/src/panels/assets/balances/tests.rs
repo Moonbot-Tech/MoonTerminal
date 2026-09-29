@@ -255,7 +255,7 @@ fn on_account(
     }
 }
 
-/// Breakage: `balances.rs::scope_totals` summing the raw rows instead of `aggregate_members` —
+/// Breakage: `balances.rs::scope_totals` summing the raw rows instead of `aggregate_accounts` —
 /// two cores on one account would show that account twice in the footer. The folded count must
 /// reach the facts and the tooltip must name which core was folded into which.
 #[test]

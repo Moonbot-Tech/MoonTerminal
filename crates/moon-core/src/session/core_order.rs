@@ -6,15 +6,15 @@
 
 use std::collections::HashMap;
 
-use moon_core::config::{AppConfig, CoreSortMode};
-use moon_core::feed::ExchangeId;
-use moon_core::session::CoreId;
-use moon_core::venue::CoreVenue;
+use crate::config::{AppConfig, CoreSortMode};
+use crate::feed::ExchangeId;
+use crate::session::CoreId;
+use crate::venue::CoreVenue;
 
 /// Cores in canonical order, paired with the name to display.
 ///
 /// Its private field prevents callers from presenting an unranked pair list as canonical.
-pub(crate) struct OrderedCores(Vec<(CoreId, String)>);
+pub struct OrderedCores(Vec<(CoreId, String)>);
 
 // Expose the slice API while keeping construction inside this module.
 impl std::ops::Deref for OrderedCores {
@@ -43,9 +43,9 @@ impl IntoIterator for OrderedCores {
 /// and a `&CoreVenue` cannot outlive that. Identity alone is enough to name the bucket, and
 /// [`venue_id_label`] can caption it after every member has disconnected.
 ///
-/// [`venue_id_label`]: crate::controls::venue_id_label
+/// [`venue_id_label`]: crate::venue::caption::venue_id_label
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ExchangeSection {
+pub enum ExchangeSection {
     /// Every core no venue could be named for, which share one section.
     Unidentified,
     /// One identified venue, keyed exactly as [`exchange_sections`] groups on.
@@ -62,7 +62,7 @@ pub(crate) enum ExchangeSection {
 ///
 /// Returns:
 ///     The core's section.
-pub(crate) fn section_of(venue: Option<&CoreVenue>) -> ExchangeSection {
+pub fn section_of(venue: Option<&CoreVenue>) -> ExchangeSection {
     match nameable(venue) {
         Some(venue) => ExchangeSection::Venue(venue.id),
         None => ExchangeSection::Unidentified,
@@ -100,7 +100,7 @@ fn nameable(venue: Option<&CoreVenue>) -> Option<&CoreVenue> {
 ///
 /// Returns:
 ///     Venues and the source indices belonging to each section, the unidentified one first.
-pub(crate) fn exchange_sections<'a>(
+pub fn exchange_sections<'a>(
     rows: impl IntoIterator<Item = (usize, Option<&'a CoreVenue>)>,
 ) -> Vec<(Option<&'a CoreVenue>, Vec<usize>)> {
     let mut unknown = Vec::new();
@@ -167,14 +167,14 @@ fn section_order(venue: &CoreVenue) -> (u8, &str, u8, u8, &str) {
 /// ties between several unsaved rows, which makes the key INJECTIVE: distinct servers always get
 /// distinct keys, so `Reverse` produces an exact mirror rather than something that depends on
 /// whether the sort happens to be stable.
-fn insertion_key(s: &moon_core::config::ServerConfig) -> (u64, u64) {
+fn insertion_key(s: &crate::config::ServerConfig) -> (u64, u64) {
     (if s.uid == 0 { u64::MAX } else { s.uid }, s.id)
 }
 
 /// A rank table built from the current config for one render pass.
 ///
 /// Rebuilding is cheap for these short lists and prevents stale order.
-pub(crate) struct CoreOrder {
+pub struct CoreOrder {
     rank: HashMap<CoreId, u32>,
 }
 
@@ -183,7 +183,7 @@ impl CoreOrder {
     ///
     /// Inactive cores are ranked too: they hold their place so that switching one off and
     /// back on returns it to the same position instead of the end of the list.
-    pub(crate) fn new(cfg: &AppConfig) -> Self {
+    pub fn new(cfg: &AppConfig) -> Self {
         Self::from_parts(&cfg.servers, cfg.core_sort)
     }
 
@@ -191,8 +191,8 @@ impl CoreOrder {
     ///
     /// Production callers use [`CoreOrder::new`]; this private seam accepts exactly the config
     /// data consumed by the ordering algorithm.
-    fn from_parts(servers: &[moon_core::config::ServerConfig], sort: CoreSortMode) -> Self {
-        let mut ordered: Vec<&moon_core::config::ServerConfig> = servers.iter().collect();
+    fn from_parts(servers: &[crate::config::ServerConfig], sort: CoreSortMode) -> Self {
+        let mut ordered: Vec<&crate::config::ServerConfig> = servers.iter().collect();
         match sort {
             // Lexicographic order of lowercase Unicode names, matching the group sort. Cache
             // each key on render; uid makes equal names independent of the servers Vec order.
@@ -226,13 +226,13 @@ impl CoreOrder {
     /// The predicate controls membership; this method only canonicalizes the retained rows.
     // The name matches the other ordering entry points. Dropping `self` would lose the rank table.
     #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn from_sessions<F>(
+    pub fn from_sessions<F>(
         &self,
-        sessions: &[moon_core::session::CoreSession],
+        sessions: &[crate::session::CoreSession],
         keep: F,
     ) -> OrderedCores
     where
-        F: Fn(&moon_core::session::CoreSession) -> bool,
+        F: Fn(&crate::session::CoreSession) -> bool,
     {
         let mut cores: Vec<(CoreId, String)> = sessions
             .iter()
@@ -250,7 +250,7 @@ impl CoreOrder {
     /// keep the query order — `sort_by_key` is a STABLE sort.
     // Same rank table as `from_sessions`. A `from_*` rename would churn every caller.
     #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn from_db(&self, mut rows: Vec<(CoreId, String)>) -> OrderedCores {
+    pub fn from_db(&self, mut rows: Vec<(CoreId, String)>) -> OrderedCores {
         rows.sort_by_key(|(id, _)| self.rank(*id));
         OrderedCores(rows)
     }
@@ -258,7 +258,7 @@ impl CoreOrder {
     /// Sort any slice whose items carry a `CoreId` into canonical order.
     ///
     /// Use this for row shapes that cannot be represented as [`OrderedCores`].
-    pub(crate) fn sort_by<T>(&self, rows: &mut [T], key: impl Fn(&T) -> CoreId) {
+    pub fn sort_by<T>(&self, rows: &mut [T], key: impl Fn(&T) -> CoreId) {
         rows.sort_by_key(|row| self.rank(key(row)));
     }
 }

@@ -33,7 +33,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::Backend;
-use crate::order_math::{pct_to_entry, pct_to_exit};
+use moon_core::feed::order_math::{pct_to_entry, pct_to_exit};
 
 /// Which of an order's two prices an alert is watching.
 ///

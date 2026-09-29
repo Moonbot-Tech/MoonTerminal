@@ -1,8 +1,8 @@
 use super::{BalanceFigures, TotalMember, fold_accounts};
-use moon_core::account::AccountIdentity;
-use moon_core::config::TotalMode;
-use moon_core::session::BalanceState;
-use moon_core::venue::{AccountMergeKey, Brand, MarketKind, Venue, merge_key};
+use crate::account::AccountIdentity;
+use crate::config::TotalMode;
+use crate::session::BalanceState;
+use crate::venue::{AccountMergeKey, Brand, MarketKind, Venue, merge_key};
 
 /// Merge key of a core on `brand`/`kind` logged into `account`.
 fn key(brand: Brand, kind: MarketKind, account: &str) -> Option<AccountMergeKey> {
@@ -46,7 +46,7 @@ fn totals(members: &[TotalMember]) -> Vec<f64> {
         .collect()
 }
 
-/// Breakage: `dedupe.rs::fold_accounts` never matching an existing group — two cores on one
+/// Breakage: `fold.rs::fold_accounts` never matching an existing group — two cores on one
 /// account would both be summed and the footer would double that account's money. Also pins
 /// which reading is counted: the larger total, the earlier one on a tie.
 #[test]

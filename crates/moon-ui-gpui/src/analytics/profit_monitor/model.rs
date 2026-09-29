@@ -199,17 +199,6 @@ impl MonitorPeriod {
     }
 }
 
-/// Resolve a saved header-clock zone through the same exact-IANA policy as the visible clock.
-///
-/// Args:
-///     zone_id: Persisted IANA zone id from the shared header clock.
-///
-/// Returns:
-///     Display zone, or UTC when no valid saved selection exists.
-pub(super) fn monitor_zone(zone_id: Option<&str>) -> Tz {
-    crate::chrome::clock::resolved_header_clock_zone(zone_id)
-}
-
 /// Effect of a non-report Backend update on the open monitor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ContextChange {

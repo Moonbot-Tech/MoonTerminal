@@ -22,7 +22,7 @@ pub(crate) use alert_sound::AlertLeg;
 pub(crate) use favorites::FavLocal;
 pub(crate) use manual_trading::{
     FIELD_USE_HOOK_STRATEGY, IgnoreSellLocal, MANUAL_STRATEGY_KIND, ManualOrderTerms, ManualSource,
-    ManualStop, MsExitOverlay, PanicLocal, PendingStop, SettleKey, hook_of, manual_strategy_id,
+    ManualStop, MsExitOverlay, PendingStop, SettleKey, hook_of, manual_strategy_id,
     strat_field_value,
 };
 pub(crate) use open_request::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
@@ -37,12 +37,12 @@ use gpui::{App, Context, WindowId};
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
-use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{CoreGroup, WorkspaceMode};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::{StrategyEditOutcome, StrategyEditResult, StrategyFieldChange};
 use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 use moon_ui::{DockAreaState, DockTopologyByName};
 
 /// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
@@ -2037,9 +2037,9 @@ impl Backend {
         offset_min: i32,
         cx: &mut Context<Self>,
     ) {
-        crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
-            Some(zone),
-        ));
+        crate::chartdx::axes::set_display_zone(moon_core::util::display_time::zone_or_utc(Some(
+            zone,
+        )));
         let zone_changed = self.layout.header_clock_zone.as_deref() != Some(zone);
         if zone_changed || self.layout.header_clock_offset_min != offset_min {
             self.layout.header_clock_zone = Some(zone.to_string());
@@ -2103,18 +2103,9 @@ impl Backend {
         self.config.report_valuation_mode
     }
 
-    /// Current name of every configured core, which report reads show in place of the name each
-    /// trade stored when it was downloaded.
-    ///
-    /// Returns:
-    ///     The uid-to-name map; a core no longer configured keeps its stored name.
+    /// Current name of every configured core ([`moon_core::db::CoreNames::from_servers`]).
     pub(crate) fn report_core_names(&self) -> moon_core::db::CoreNames {
-        moon_core::db::CoreNames::from_pairs(
-            self.config
-                .servers
-                .iter()
-                .map(|server| (server.id, server.name.as_str())),
-        )
+        moon_core::db::CoreNames::from_servers(&self.config.servers)
     }
 
     /// The time axis every replicated report timestamp is DISPLAYED on.

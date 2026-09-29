@@ -515,7 +515,7 @@ impl ScreenerView {
             let b = self.backend.read(cx);
             let preset = b.display_preset(crate::workspace::DisplayOwner::Singleton);
             (
-                crate::core_order::CoreOrder::new(&b.config)
+                moon_core::session::core_order::CoreOrder::new(&b.config)
                     .from_sessions(b.session.sessions(), |s| b.core_displayed(preset, s.id)),
                 b.session.core_venues(),
             )

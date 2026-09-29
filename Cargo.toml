@@ -6,7 +6,7 @@
 # offscreen→readback; rendering now uses an own-pass DX11 implementation (chartdx). See
 # docs/ARCHITECTURE.md (the "Rendering" section).
 [workspace]
-members = ["crates/moon-core", "crates/moon-chart", "crates/moon-ui-gpui", "crates/moon-station", "crates/moon-remote"]
+members = ["crates/moon-core", "crates/moon-chart", "crates/moon-tg", "crates/moon-ui-gpui", "crates/moon-station", "crates/moon-remote"]
 resolver = "2"
 
 [profile.release]

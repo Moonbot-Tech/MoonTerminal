@@ -713,10 +713,10 @@ fn stage_outbox(
     row_id: i64,
     action: OutboxAction,
 ) -> rusqlite::Result<()> {
-    // No valuation worker runs on the station to drain the outbox, so every row would only grow
-    // the replica. Valuing trades on the station later (its Telegram report) has to decide how
-    // the worker learns the rows staged nowhere before it.
-    if crate::feed::station::enabled() {
+    // No valuation worker runs on the light station to drain the outbox, so every row would only
+    // grow the replica. The Mini App's station runs one; the rows a light station replicated
+    // before it are staged nowhere, and the worker's startup reconciliation walk values them.
+    if !crate::feed::station::runs_account() {
         return Ok(());
     }
     conn.execute(

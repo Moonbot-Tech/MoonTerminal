@@ -1,6 +1,7 @@
 //! Row execution predicates, the sort comparator, and the table change-signature.
 
 use super::*;
+use moon_core::feed::order_math;
 
 /// Return whether the entry has executed, using the authoritative worker status rather than a
 /// leg's `fill_pct`.
@@ -113,18 +114,18 @@ pub(super) fn sort_entries(
                     ascending,
                 ),
                 OrdCol::Pnl => optional_f64_order(
-                    crate::order_math::order_pnl(&a.row),
-                    crate::order_math::order_pnl(&b.row),
+                    order_math::order_pnl(&a.row),
+                    order_math::order_pnl(&b.row),
                     ascending,
                 ),
                 OrdCol::PnlPct => optional_f64_order(
-                    crate::order_math::order_pnl_pct(&a.row),
-                    crate::order_math::order_pnl_pct(&b.row),
+                    order_math::order_pnl_pct(&a.row),
+                    order_math::order_pnl_pct(&b.row),
                     ascending,
                 ),
                 OrdCol::PnlTp => optional_f64_order(
-                    crate::order_math::order_pnl_at_tp(&a.row),
-                    crate::order_math::order_pnl_at_tp(&b.row),
+                    order_math::order_pnl_at_tp(&a.row),
+                    order_math::order_pnl_at_tp(&b.row),
                     ascending,
                 ),
                 OrdCol::Sl | OrdCol::Ts | OrdCol::Vstop => {
@@ -167,8 +168,8 @@ pub(super) fn sort_entries(
     // last, with UID as the newest/oldest tie-breaker just like the other modes.
     if view.primary == PrimarySort::ProfitFirst {
         entries.sort_by(|a, b| {
-            let pa = crate::order_math::order_pnl(&a.row);
-            let pb = crate::order_math::order_pnl(&b.row);
+            let pa = order_math::order_pnl(&a.row);
+            let pb = order_math::order_pnl(&b.row);
             // Treat `None` as negative infinity so it sorts at the bottom.
             let key = |v: Option<f64>| v.unwrap_or(f64::NEG_INFINITY);
             key(pb)

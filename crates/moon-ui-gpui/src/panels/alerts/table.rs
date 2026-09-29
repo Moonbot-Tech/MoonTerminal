@@ -75,7 +75,7 @@ impl AlertsPanel {
             cols: cols.clone(),
             open_settings: self.settings_for.clone(),
             action_gap: design::ui_px(cx, 2.0),
-            display_zone: crate::chrome::clock::resolved_header_clock_zone(
+            display_zone: moon_core::util::display_time::zone_or_utc(
                 self.backend.read(cx).header_clock_zone(),
             ),
             p,

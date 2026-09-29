@@ -82,15 +82,26 @@ pub fn assert_locale_key_in_three_languages(file: &str, key: &str) {
     }
 }
 
+/// Read one `moon-tg` source file for a static contract on the bot and Mini App, normalizing line
+/// endings for the same reason as [`read_src`].
+pub fn read_tg_src(rel: &str) -> String {
+    read_sibling_src("moon-tg", rel)
+}
+
 /// Read one `moon-core` source file for a cross-crate static contract, normalizing line endings.
 ///
 /// `moon-ui-gpui` has no library target, so this integration target owns static contracts that
 /// span the UI binary and its sibling core crate. Normalize here for the same reason as
 /// [`read_src`]: a CRLF checkout must not make a line-based source assertion silently miss.
 pub fn read_core_src(rel: &str) -> String {
+    read_sibling_src("moon-core", rel)
+}
+
+/// Read one source file of a sibling crate, line endings normalized.
+fn read_sibling_src(krate: &str, rel: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
-        .join("moon-core")
+        .join(krate)
         .join("src")
         .join(rel);
     let text = fs::read_to_string(&path)

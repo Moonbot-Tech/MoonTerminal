@@ -11,11 +11,14 @@
 //! The coordinator (see `coordinator.rs`) learns each core's exchange from `Identity`, selects
 //! providers according to the active mode, and assigns market roles with the `SetMarket` command.
 
+pub mod balances;
 pub mod clock_skew;
 pub mod coordinator;
+pub mod core_order;
 pub mod core_time_offset;
 pub mod core_update;
 pub mod order_lines;
+pub mod panic_override;
 pub mod run_state;
 pub mod store;
 

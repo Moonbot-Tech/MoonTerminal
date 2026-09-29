@@ -90,19 +90,6 @@ pub(crate) fn system_zone() -> Option<chrono_tz::Tz> {
     guard.1
 }
 
-/// Resolve the exact IANA zone represented by the visible header clock.
-///
-/// Args:
-///     zone_id: Persisted IANA zone id, if the user selected one.
-///
-/// Returns:
-///     Saved curated or uncurated IANA zone, or UTC under the header's fallback policy.
-pub(crate) fn resolved_header_clock_zone(zone_id: Option<&str>) -> chrono_tz::Tz {
-    zone_id
-        .and_then(cities::zone_by_id)
-        .unwrap_or(chrono_tz::Tz::UTC)
-}
-
 /// Resolve the saved zone shown by the header clock.
 ///
 /// Args:
@@ -112,7 +99,7 @@ pub(crate) fn resolved_header_clock_zone(zone_id: Option<&str>) -> chrono_tz::Tz
 /// Returns:
 ///     Matching curated or uncurated zone, or UTC when the saved value is invalid.
 fn selected_zone(backend: &Entity<Backend>, cx: &App) -> chrono_tz::Tz {
-    resolved_header_clock_zone(backend.read(cx).header_clock_zone())
+    moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone())
 }
 
 /// Gap between the time and the city code.

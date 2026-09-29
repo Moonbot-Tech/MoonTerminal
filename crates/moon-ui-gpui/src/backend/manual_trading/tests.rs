@@ -8,12 +8,12 @@ use moon_core::config::{
 use moon_core::feed::{ClientSettingsEdit, ConnStatus, OrderRow, StrategyRow};
 
 use super::{
-    HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL,
-    PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit, cancel_all_buys_markets, effective_ignore_sell,
-    effective_manual_strat_state, effective_panic_armed, exit_source, manual_selection_is_broken,
-    manual_strat_seed, manual_strategy_id, panic_local_settled, panic_press_absorbed,
-    planned_sell_price, ready_cores, resolve_manual_selection, seed_on_enable, stop_price,
-    stop_write_is_redundant, update_group_trade_pair, usd_to_base_amount,
+    HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_TOGGLE_DEBOUNCE,
+    apply_group_exit_edit, cancel_all_buys_markets, effective_ignore_sell,
+    effective_manual_strat_state, exit_source, manual_selection_is_broken, manual_strat_seed,
+    manual_strategy_id, panic_press_absorbed, planned_sell_price, ready_cores,
+    resolve_manual_selection, seed_on_enable, stop_price, stop_write_is_redundant,
+    update_group_trade_pair, usd_to_base_amount,
 };
 
 /// Regression target, three times over in one session: the rule deciding whether the per-order stop
@@ -633,22 +633,10 @@ fn panic_hotkey_bursts_restart_the_debounce_window_after_every_press() {
 
 /// Regression target: removing `panic_rev`'s reconciliation bump in
 /// `backend::manual_trading::Backend::tick_panic_local` leaves a stale Stop Panic label on a quiet
-/// market, where clicking that label recomputes from the core snapshot and arms panic sell.
+/// market, where clicking that label recomputes from the core snapshot and arms panic sell. The
+/// settle rule itself is `moon_core::session::panic_override`'s, tested there.
 #[test]
-fn panic_reconciliation_settles_overrides_and_repaints_from_the_slow_tick() {
-    assert!(
-        panic_local_settled(true, PANIC_LOCAL_TTL, false),
-        "an expired override must stop outranking a disagreeing snapshot"
-    );
-    assert!(
-        panic_local_settled(false, Duration::ZERO, false),
-        "a matching snapshot settles an override before its TTL"
-    );
-    assert!(
-        !panic_local_settled(true, Duration::ZERO, false),
-        "a fresh disagreement must retain the optimistic override"
-    );
-
+fn panic_reconciliation_repaints_from_the_slow_tick() {
     let source = include_str!("../manual_trading.rs");
     let tick = source
         .split("fn tick_panic_local(")
@@ -671,28 +659,6 @@ fn panic_reconciliation_settles_overrides_and_repaints_from_the_slow_tick() {
             && coordination.contains("if b.tick_panic_local() {")
             && coordination.contains("b.mark_backend_dirty(cx);"),
         "reconciliation must run on the unconditional 100 ms coordination loop and mark a repaint"
-    );
-}
-
-/// Regression target: changing `backend::manual_trading::effective_panic_armed` to union a fresh
-/// local disarm with an armed snapshot keeps Stop Panic visible and invites a re-press that re-arms
-/// panic sell while the trader believes it is off.
-#[test]
-fn fresh_panic_disarm_override_precedes_an_armed_snapshot() {
-    assert!(
-        !effective_panic_armed(Some((false, Duration::ZERO)), || true),
-        "a fresh local disarm must outrank an armed core snapshot"
-    );
-}
-
-/// Regression target: changing `backend::manual_trading::effective_panic_armed` to reject a fresh
-/// local arm when the core has not echoed it yet makes Panic Sell look inactive after an accepted
-/// command and encourages an unsafe repeat press.
-#[test]
-fn fresh_panic_arm_override_precedes_a_disarmed_snapshot() {
-    assert!(
-        effective_panic_armed(Some((true, Duration::ZERO)), || false),
-        "a fresh local arm must outrank a disarmed core snapshot"
     );
 }
 

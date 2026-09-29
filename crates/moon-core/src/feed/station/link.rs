@@ -10,8 +10,8 @@
 //! names `MoonClient` instead.
 //!
 //! The report replica, the order traces and the core's identity still reach the station through
-//! the terminal's own feed (`feed::live`) in station mode ([`super::keeps`]); they move behind a
-//! link of this kind when the station gets a core link of its own (phases 2–3).
+//! the terminal's own feed (`feed::live`) in station mode ([`super::Profile::keeps`]); they move
+//! behind a link of this kind when the station gets a core link of its own (phases 2–3).
 
 use std::time::Duration;
 

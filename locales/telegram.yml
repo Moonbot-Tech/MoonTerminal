@@ -71,6 +71,14 @@ telegram.bot_mini_wait:
   ru: "Mini App пока недоступно. Проверьте его состояние в «Настройки → Telegram» и повторите /miniapp, когда оно будет готово."
   en: "Mini App is not available yet. Check its status in Settings → Telegram and send /miniapp again when ready."
   es: "Mini App aún no está disponible. Comprueba su estado en Ajustes → Telegram y vuelve a enviar /miniapp cuando esté lista."
+telegram.bot_mini_disabled_station:
+  ru: "Mini App на станции выключено. Его включает администратор станции — командой telegram программы moon-remote. Затем отправьте /miniapp."
+  en: "Mini App is off on the station. The station's administrator turns it on with moon-remote's telegram command. Then send /miniapp."
+  es: "Mini App está desactivada en la estación. La activa el administrador de la estación con el comando telegram de moon-remote. Después envía /miniapp."
+telegram.bot_mini_wait_station:
+  ru: "Mini App пока недоступно: станция ещё открывает к нему доступ. Повторите /miniapp через минуту."
+  en: "Mini App is not available yet: the station is still opening access to it. Send /miniapp again in a minute."
+  es: "Mini App aún no está disponible: la estación todavía está abriendo el acceso. Vuelve a enviar /miniapp en un minuto."
 
 telegram.tab:
   ru: "Telegram"
@@ -134,6 +142,10 @@ telegram.state.unavailable:
   ru: "Нет соединения с Telegram. Проверьте токен и подключение к интернету."
   en: "Cannot connect to Telegram. Check the token and your internet connection."
   es: "No se puede conectar con Telegram. Comprueba el token y tu conexión a internet."
+telegram.state.conflict:
+  ru: "Этот бот уже работает в другом месте (другой терминал или станция). Один токен — один бот: выключите его там или задайте здесь другой токен."
+  en: "This bot is already running elsewhere (another terminal or a station). One token runs one bot: turn it off there or set another token here."
+  es: "Este bot ya funciona en otro lugar (otro terminal o una estación). Un token, un bot: apágalo allí o indica aquí otro token."
 
 telegram.pair_success:
   ru: "Чат подключён к MoonTerminal.\n\nВыберите период в нижнем меню для отчёта. Mini App открывается командой /miniapp."

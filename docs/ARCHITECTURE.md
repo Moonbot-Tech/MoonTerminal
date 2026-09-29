@@ -9,6 +9,8 @@ experimental migration plans.
 
 - `moon-core` — UI-agnostic core: connections, config, sessions, market state, reports.
 - `moon-chart` — chart math: time/price view, phase-clean default scale, pan/zoom, axes.
+- `moon-tg` — the Telegram bot and Mini App over `moon-core`'s transport: chat reports, labels,
+  Mini App routes, pairing. The terminal and the station each host it through `TgHost`.
 - `moon-ui-gpui` — the `moonterminal` binary: GPUI shell, panels, debug-tools, chart integration.
 - `Moonbot-Tech/MoonUI` — external git dependency: standalone GPUI runtime + Moon UI components.
 
@@ -131,7 +133,7 @@ mode**), By insertion — oldest first, or By insertion — newest first; stored
 
 Rules that are easy to break unnoticed:
 
-- **Every core list is built through `core_order`** (`moon-ui-gpui/src/core_order.rs`):
+- **Every core list is built through `core_order`** (`moon-core/src/session/core_order.rs`, shared with the Telegram code):
   `CoreOrder::{from_sessions, from_db}` return `OrderedCores`, whose field is private — assembling
   such a list around the module is impossible. If the list rows are richer than the pair `(id, name)` —
   `CoreOrder::sort_by`. The rank function is private on purpose: with it public, the order could be forgotten
@@ -788,8 +790,8 @@ returns `None` before a channel, thread, path, listener, or helper process.**
 
 - **Two threads.** `telegram-bot` blocking-polls `getUpdates`. `telegram-miniapp-owner`
   separately holds the loopback server and the tunnel, otherwise one delayed poll would block HTTP.
-  The GPUI `Backend` talks only through typed `Work` / `Response` channels and drains them in the
-  100 ms loop (`Backend::tick_telegram`).
+  The host talks only through typed `Work` / `Response` channels: `moon_tg::tick` drains them on
+  the host's owner loop — in the terminal the Backend's 100 ms loop (`Backend::tick_telegram`).
 - **The token lives in a `Secret` inside `servers.enc`, not in `settings.toml`.** `TelegramConfig`
   is serialized only into the encrypted aggregate; `Secret` in `Debug` is `Secret(***)`, `ApiError` carries
   neither the token nor the Bot API URL. Settings masks the field and hashes only the token's emptiness.
@@ -802,7 +804,7 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   `cloudflared` (verified-download via the self-updater path, SHA-256) raises a tunnel to that
   port. The only authenticated request is `POST /api/session`: HMAC `initData`, then
   `authorize_paired_identity`, then a live re-check of `mini_app_enabled` and chat membership in
-  `Backend::telegram_mini_request`. Authenticity of a Telegram launch is not terminal authorization.
+  `moon_tg` (`dispatch.rs:mini_request`). Authenticity of a Telegram launch is not terminal authorization.
 - **Native Mini App menu follows the tunnel.** The Mini App owner publishes the latest URL and
   localized label; the bot worker reconciles per-chat `setChatMenuButton` between long polls.
   Only paired private chats receive a web-app menu. Disabled, unavailable, or revoked targets
@@ -830,7 +832,7 @@ returns `None` before a channel, thread, path, listener, or helper process.**
 - **Chat reports without Mini App.** `/report`, `/today`, `/hour`, `/yesterday`, `/month`,
   `/lastmonth`, and `/daily` read closed real trades from permitted cores in local history. Custom
   `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
-  days. `backend/telegram/reports.rs` uses a background executor, a pinned SQLite snapshot,
+  days. `moon-tg/src/report/` reads on the host's background worker, a pinned SQLite snapshot,
   `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
   Core groups use `CoreOrder`, six active groups per page, with the complete-scope total on every page.
   Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership

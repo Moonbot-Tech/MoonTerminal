@@ -12,6 +12,8 @@ CONF=/etc/moon-station/station.toml
 CREDS=/etc/moon-station/creds
 DROPIN_DIR=/etc/systemd/system/moon-station.service.d
 DROPIN=$DROPIN_DIR/credentials.conf
+# The bot token's credential, beside the cores' keys.
+TOKEN=telegram-token
 UNIT=moon-station.service
 # How long a station just (re)started must stay up to count as healthy: longer than its slowest
 # start-up check (the report replica's integrity pass, ~11 s on 1 vCPU).
@@ -46,7 +48,7 @@ valid_uid() {
 write_dropin() {
     tmp=$(mktemp)
     echo "[Service]" >"$tmp"
-    for f in "$CREDS"/core-*.cred; do
+    for f in "$CREDS"/core-*.cred "$CREDS/$TOKEN.cred"; do
         [ -e "$f" ] || continue
         echo "LoadCredentialEncrypted=$(basename "$f" .cred):$f" >>"$tmp"
     done
@@ -77,6 +79,28 @@ cmd_drop_cred() {
     rm -f "$CREDS/core-$uid.cred"
     write_dropin
     echo "dropped=core-$uid"
+}
+
+# put-token; stdin: the bot token. Encrypted straight from stdin, like a core key.
+cmd_put_token() {
+    tmp="$CREDS/.$TOKEN.new"
+    systemd-creds encrypt --name="$TOKEN" - "$tmp"
+    mv -f "$tmp" "$CREDS/$TOKEN.cred"
+    write_dropin
+    echo "cred=$TOKEN"
+}
+
+cmd_drop_token() {
+    rm -f "$CREDS/$TOKEN.cred"
+    write_dropin
+    echo "dropped=$TOKEN"
+}
+
+# get-config: station.toml as it is, so a change to one section keeps the others. It carries no
+# key: put-config refuses one.
+cmd_get_config() {
+    [ -f "$CONF" ] || die "no station.toml"
+    cat "$CONF"
 }
 
 # put-config; stdin: station.toml. Refused if it carries a key: keys live in credentials only.
@@ -215,6 +239,7 @@ cmd_status() {
     [ -f "$CONF" ] && echo "config=yes" || echo "config=no"
     creds=$( (cd "$CREDS" && ls core-*.cred 2>/dev/null | sed 's/\.cred$//' | tr '\n' ' ') || true)
     echo "creds=${creds% }"
+    [ -f "$CREDS/$TOKEN.cred" ] && echo "token=yes" || echo "token=no"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -233,6 +258,9 @@ cmd=${1:-}
 case "$cmd" in
 put-cred) cmd_put_cred "$@" ;;
 drop-cred) cmd_drop_cred "$@" ;;
+put-token) cmd_put_token ;;
+drop-token) cmd_drop_token ;;
+get-config) cmd_get_config ;;
 put-config) cmd_put_config ;;
 install-bin)
     lock

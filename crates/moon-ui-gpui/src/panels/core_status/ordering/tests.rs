@@ -3,6 +3,7 @@
 //! Explicit imports (no `use super::*`) per the crate's test convention: the panel's parent module
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
 
+use moon_core::session::core_order;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -347,10 +348,10 @@ fn flat_lines_partitions_each_input_row_once_by_venue_identity() {
     assert_eq!(
         sections,
         vec![
-            (crate::core_order::ExchangeSection::Unidentified, 2),
-            (crate::core_order::ExchangeSection::Venue(venues[&2].id), 2,),
-            (crate::core_order::ExchangeSection::Venue(venues[&4].id), 1,),
-            (crate::core_order::ExchangeSection::Venue(venues[&5].id), 1,),
+            (core_order::ExchangeSection::Unidentified, 2),
+            (core_order::ExchangeSection::Venue(venues[&2].id), 2,),
+            (core_order::ExchangeSection::Venue(venues[&4].id), 1,),
+            (core_order::ExchangeSection::Venue(venues[&5].id), 1,),
         ],
         "unidentified cores lead, shared venue identities merge, and HIP-3 DEX identities stay distinct"
     );

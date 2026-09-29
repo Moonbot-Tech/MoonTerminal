@@ -43,7 +43,8 @@ use super::AnalyticsView;
 use super::refresh::RefreshUrgency;
 use crate::design;
 use crate::design::{moon, moon_alpha};
-use crate::strategies::tree::ops::{has_row_under, join_path, split_path};
+use crate::strategies::tree::ops::has_row_under;
+use moon_core::feed::strategy_path::{join_path, split_path};
 
 /// How often a wait re-checks its evidence.
 const POLL: Duration = Duration::from_millis(300);

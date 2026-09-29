@@ -6,10 +6,12 @@
 //! A folder exists only as a prefix of strategy paths; the data model has no empty folders.
 //! Every operation therefore edits `folder_path` or a row set. That prefix arrives as ONE flat,
 //! unescaped string, so where its segment boundaries fall is decided in exactly one place —
-//! [`path_segments`]. Nothing else in the window may split a `folder_path` by hand.
+//! [`path_segments`] in `moon_core::feed::strategy_path`. Nothing else in the window may split a
+//! `folder_path` by hand.
 
 use std::collections::HashSet;
 
+use moon_core::feed::strategy_path::{join_path, path_segments, split_path};
 use moon_core::feed::{SchemaKind, StrategyRow};
 use moon_core::session::CoreId;
 
@@ -44,56 +46,6 @@ pub fn resolve_clipboard(
 
 /// Field name through which moonproto stores `StrategySnapshot::strategy_name`.
 pub const STRATEGY_NAME_FIELD: &str = "StrategyName";
-
-/// Iterates nonempty path segments without allocating. This is the window-wide source of path
-/// splitting for trees, counts, expansion, and operations.
-///
-/// A slash separates two folders only when NEITHER neighbouring character is whitespace. MoonProto
-/// delivers a strategy's placement as ONE flat `StrategySnapshot::path` joined with `/` and with no
-/// escaping, while MoonBot allows a `/` INSIDE a folder name — `"EMA / ORGANIC WAVE STRUCTURE
-/// STRATEGIES LLM"` is a single folder there. Splitting on every slash therefore invents folders
-/// that exist nowhere, and the invented ones are recognisable: they carry a leading or trailing
-/// space. This rule is what keeps the window's tree agreeing with MoonBot's.
-///
-/// The edges follow the same rule, the missing neighbour counting as non-whitespace: `"/a"` splits
-/// and its empty leading segment is filtered, while `"/ a"` stays one segment named `"/ a"`.
-///
-/// [`join_path`] inverts this only for canonical paths: nonempty segments joined with `/`.
-/// It does not restore doubled, leading, or trailing separators or replace an input `\`.
-pub fn path_segments(path: &str) -> impl Iterator<Item = &str> {
-    let mut start = 0usize;
-    path.match_indices(['/', '\\'])
-        .filter(|&(i, _)| {
-            !path[..i]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_whitespace)
-                && !path[i + 1..]
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-        })
-        .map(|(i, _)| i)
-        // The tail after the last separator, which has no separator to announce it.
-        .chain(std::iter::once(path.len()))
-        .map(move |i| {
-            let seg = &path[start..i];
-            start = i + 1;
-            seg
-        })
-        .filter(|s| !s.is_empty())
-}
-
-/// Splits a folder path into owned segments through [`path_segments`].
-pub fn split_path(path: &str) -> Vec<String> {
-    path_segments(path).map(str::to_string).collect()
-}
-
-/// Joins path segments with `/`; for nonempty segments, this inverts [`path_segments`] on
-/// canonical paths.
-pub fn join_path(parts: &[String]) -> String {
-    parts.join("/")
-}
 
 /// Return distinct folder names the core will split, in first-seen order.
 /// Paths are planned destinations; only separators retained INSIDE a `path_segments` segment

@@ -40,11 +40,11 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::core_order::CoreOrder;
 use crate::workspace::{EffectiveScopeLabel, RetainedCoreScope};
 use moon_core::applog::{self, LogLine};
 use moon_core::feed::ExchangeId;
 use moon_core::session::CoreId;
+use moon_core::session::core_order::CoreOrder;
 use std::collections::HashSet;
 
 /// Maximum number of recent rows retained in a normal live or file snapshot.
@@ -256,10 +256,10 @@ impl LogPanel {
         })
         .detach();
         let display_zone =
-            crate::chrome::clock::resolved_header_clock_zone(backend.read(cx).header_clock_zone());
+            moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
-            let zone = crate::chrome::clock::resolved_header_clock_zone(
+            let zone = moon_core::util::display_time::zone_or_utc(
                 this.backend.read(cx).header_clock_zone(),
             );
             this.buf.rezone(zone);

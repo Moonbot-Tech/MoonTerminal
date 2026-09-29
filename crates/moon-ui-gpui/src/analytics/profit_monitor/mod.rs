@@ -44,15 +44,15 @@ use super::refresh::{
     BusyRetryBudget, RefreshGate, RefreshPlan, RefreshUrgency, report_result_is_stale,
 };
 use crate::controls::core_run::{RunSlots, run_scope_rev};
-use crate::core_order::CoreOrder;
 use crate::design::{moon, moon_alpha};
 use crate::{Backend, design};
 use format::{ColumnFloor, ProfitColumn};
 use model::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn, context_change,
-    duration_until_period_refresh, duration_until_wall_clock_boundary, monitor_zone, next_sort,
+    duration_until_period_refresh, duration_until_wall_clock_boundary, next_sort,
     retain_last_known_venues, scoped_query_core_ids, sort_rows,
 };
+use moon_core::session::core_order::CoreOrder;
 use rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use sections::{MonitorEntry, SectionLabels};
 use settings::MonitorPrefs;
@@ -415,7 +415,7 @@ impl ProfitMonitorView {
             .as_deref()
             .and_then(MonitorPeriod::from_id)
             .unwrap_or_default();
-        let zone = monitor_zone(backend.read(cx).header_clock_zone());
+        let zone = moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone());
         let group = backend
             .read(cx)
             .layout
@@ -555,7 +555,7 @@ impl ProfitMonitorView {
         let backend = self.backend.read(cx);
         let next = retain_last_known_venues(&self.live, capture_live_context(backend));
         let valuation = backend.valuation_mode();
-        let zone = monitor_zone(backend.header_clock_zone());
+        let zone = moon_core::util::display_time::zone_or_utc(backend.header_clock_zone());
         let zone_changed = self.zone != zone;
         match context_change(&self.live, &next, self.valuation != valuation, zone_changed) {
             ContextChange::None => {}

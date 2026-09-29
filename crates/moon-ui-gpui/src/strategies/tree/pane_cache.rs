@@ -33,6 +33,7 @@
 //! by `the_tree_cache_signature_covers_every_input_the_build_reads` in
 //! `tests/theme_contract/strategies.rs`.
 
+use moon_core::session::core_order;
 use std::rc::Rc;
 
 use super::super::actions::StartStopPlan;
@@ -49,7 +50,7 @@ const FOOTER_LABEL_WEIGHT: f32 = 400.0;
 pub(in crate::strategies) type KindList = Rc<Vec<(u8, String)>>;
 
 /// Exchange sections present across the visible cores, as `(section, caption)` in section order.
-pub(in crate::strategies) type ExchangeList = Rc<Vec<(crate::core_order::ExchangeSection, String)>>;
+pub(in crate::strategies) type ExchangeList = Rc<Vec<(core_order::ExchangeSection, String)>>;
 
 /// What the left pane needs each frame that costs a whole-account walk or a font measurement.
 pub(in crate::strategies) struct LeftPaneFrame {
@@ -130,7 +131,7 @@ impl StrategiesView {
     pub(in crate::strategies) fn left_pane_frame(
         &mut self,
         sig: TreeSig,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         cx: &App,
     ) -> LeftPaneFrame {
         // Counted once and handed on: the footer measures against this number and also renders it.
@@ -189,7 +190,7 @@ impl StrategiesView {
     fn pane_kinds(
         &mut self,
         store_sig: u64,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         cx: &App,
     ) -> KindList {
         if let Some((key, kinds)) = &self.pane_cache.kinds
@@ -227,7 +228,7 @@ impl StrategiesView {
     fn pane_exchanges(
         &mut self,
         store_sig: u64,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         cx: &App,
     ) -> ExchangeList {
         let locale = rust_i18n::locale();
@@ -258,7 +259,7 @@ impl StrategiesView {
     fn pane_plan(
         &mut self,
         sig: TreeSig,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         cx: &App,
     ) -> Arc<StartStopPlan> {
         let key = PlanKey {
@@ -356,8 +357,8 @@ fn kinds_present(cores: &[(CoreId, String)], store: &CoreStore) -> Vec<(u8, Stri
 fn exchanges_present(
     cores: &[(CoreId, String)],
     venues: &std::collections::HashMap<CoreId, moon_core::venue::CoreVenue>,
-) -> Vec<(crate::core_order::ExchangeSection, String)> {
-    crate::core_order::exchange_sections(
+) -> Vec<(core_order::ExchangeSection, String)> {
+    core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
@@ -366,7 +367,7 @@ fn exchanges_present(
     .into_iter()
     .map(|(venue, _)| {
         (
-            crate::core_order::section_of(venue),
+            core_order::section_of(venue),
             crate::controls::venue_section_label(venue),
         )
     })

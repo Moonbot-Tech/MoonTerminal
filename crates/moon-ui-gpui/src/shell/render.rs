@@ -175,7 +175,7 @@ impl Render for Shell {
             let mut conn = b.session.conn_summary_group(&self.group);
             // The disconnected-cores tooltip is a core list like any other — rank it the same
             // way, or it reads in a different order than the header pill right above it.
-            let order = crate::core_order::CoreOrder::new(&b.config);
+            let order = moon_core::session::core_order::CoreOrder::new(&b.config);
             order.sort_by(&mut conn.down, |row| row.id);
             order.sort_by(&mut conn.report_sync, |row| row.id);
             let license = b.session.license_summary_group(&self.group);

@@ -196,7 +196,7 @@ impl SessionManager {
         // An existing session may now rank differently — a server was added, removed, or the
         // import rewrote the list — and reordering touches no feed thread. This is CONFIG
         // order, which decides where a reactivated session is inserted; the order the user
-        // sees is applied separately by the UI's `core_order` module.
+        // sees is applied separately by `session::core_order`.
         let order = self.config_order.clone();
         self.sessions.sort_by_key(|s| rank_of(&order, s.id));
         let desired: Vec<ServerConfig> = config

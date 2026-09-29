@@ -37,7 +37,7 @@ use super::config::DiagCfg;
 /// be read instead of guessed. [`TELEGRAM_TARGET`] is the third: the Mini App's owner commands (a
 /// strategy toggle, an order action) are rare, and each is exactly the line a support case needs.
 pub const DEFAULT_BASE_FILTER: &str = "warn,moonterminal::panels::chart=info,\
-    moonterminal::analytics::tuner::ticks=info,moonterminal::backend::telegram=info,\
+    moonterminal::analytics::tuner::ticks=info,moon_tg=info,\
     moon_gpui=info,moon_core=info";
 
 /// Module prefix carrying balance-repair tracing (`feed::live` and its children).
@@ -152,7 +152,8 @@ mod tests;
 /// module moved.
 pub const TICKS_AXIS_TARGET: &str = "moonterminal::analytics::tuner::ticks";
 
-/// Module prefix of the terminal's Telegram backend, the Mini App's command handlers included —
-/// raised to `info` by [`DEFAULT_BASE_FILTER`] so an owner command leaves a line in the app log.
-/// Public so the binary can check it against its own `module_path!()`.
-pub const TELEGRAM_TARGET: &str = "moonterminal::backend::telegram";
+/// Module prefix of the Telegram crate, the Mini App's command handlers included — raised to
+/// `info` by [`DEFAULT_BASE_FILTER`] so an owner command leaves a line in the app log, on the
+/// terminal and on the station alike. Public so that crate can check it against its own
+/// `module_path!()`.
+pub const TELEGRAM_TARGET: &str = "moon_tg";

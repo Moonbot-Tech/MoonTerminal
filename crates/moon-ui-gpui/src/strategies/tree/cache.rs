@@ -124,7 +124,7 @@ impl TreeCache {
 pub(crate) fn data_sig(
     view: &StrategiesView,
     store: &CoreStore,
-    cores: &crate::core_order::OrderedCores,
+    cores: &moon_core::session::core_order::OrderedCores,
     venues: &HashMap<CoreId, CoreVenue>,
 ) -> TreeSig {
     let mut h = DefaultHasher::new();
