@@ -4,15 +4,115 @@ use super::columns::column_menu_label;
 use super::*;
 use rust_i18n::t;
 
-/// Compact word for the trade-kind filter inside the scope trigger.
+/// Design-reference lower bound the scope trigger fits its caption from.
+const SCOPE_TRIGGER_MIN_W: f32 = 102.0;
+
+/// Design-reference upper bound, wide enough for the title plus every difference at once: the
+/// caption must never ellipsize — a row too narrow for it sheds the differences instead.
+const SCOPE_TRIGGER_MAX_W: f32 = 460.0;
+
+/// The scope-menu choices that narrow the Report's rows, as the trigger caption reads them.
 ///
-/// Abbreviated ("реал." for "Реальные") so the two-part summary fits the field width.
-fn kind_short(kind: ReportKind) -> String {
-    match kind {
-        ReportKind::All => t!("report.kind.all_short").to_string(),
-        ReportKind::Real => t!("report.kind.real_short").to_string(),
-        ReportKind::Emu => t!("report.kind.emu_short").to_string(),
+/// The comment pane is absent on purpose: it changes what is DRAWN, not which rows are shown, so
+/// it never counts as a filter difference.
+#[derive(Clone, Copy)]
+pub(super) struct ScopeChoices {
+    pub(super) side: SideFilter,
+    pub(super) kind: ReportKind,
+    /// Locale key of the effective period-basis marker, `None` at the default close date.
+    pub(super) basis_key: Option<&'static str>,
+    pub(super) deleted_only: bool,
+    /// Whether the USER switched still-running positions off. A host forcing closed rows offers
+    /// no such switch, so its forced state never reads as a user difference.
+    pub(super) open_rows_hidden: bool,
+}
+
+/// Locale keys of every choice that differs from its default, in menu order.
+///
+/// Reuses the short labels the old summary caption carried; only "closed only" is new.
+///
+/// Args:
+///     choices: The scope filter state.
+///
+/// Returns:
+///     One key per non-default choice; empty when everything is default.
+pub(super) fn scope_difference_keys(choices: &ScopeChoices) -> Vec<&'static str> {
+    let mut keys = Vec::new();
+    match choices.side {
+        SideFilter::All => {}
+        SideFilter::Long => keys.push("report.side.long"),
+        SideFilter::Short => keys.push("report.side.short"),
     }
+    match choices.kind {
+        ReportKind::All => {}
+        ReportKind::Real => keys.push("report.kind.real_short"),
+        ReportKind::Emu => keys.push("report.kind.emu_short"),
+    }
+    keys.extend(choices.basis_key);
+    if choices.deleted_only {
+        keys.push("report.filter.deleted_short");
+    }
+    if choices.open_rows_hidden {
+        keys.push("report.filter.closed_only_short");
+    }
+    keys
+}
+
+/// Localized short labels of [`scope_difference_keys`].
+pub(super) fn scope_differences(choices: &ScopeChoices) -> Vec<String> {
+    scope_difference_keys(choices)
+        .into_iter()
+        .map(|key| t!(key).to_string())
+        .collect()
+}
+
+/// Caption of the scope trigger: the fixed title, then the differences unless the row is compact.
+///
+/// A compact row drops the differences entirely rather than clipping them halfway; the trigger's
+/// tooltip carries them instead.
+///
+/// Args:
+///     title: Localized "Filters" word.
+///     differences: Short labels from [`scope_differences`].
+///     compact: Whether the filter row is in its compact state.
+///
+/// Returns:
+///     `title`, or `title · a · b` when the row has room and something differs.
+pub(super) fn scope_caption(title: &str, differences: &[String], compact: bool) -> String {
+    let mut caption = title.to_string();
+    if !compact {
+        for difference in differences {
+            caption.push_str(" · ");
+            caption.push_str(difference);
+        }
+    }
+    caption
+}
+
+/// Rendered width the scope trigger gives back when a compact row drops its differences.
+///
+/// Part of the row's compaction saving: leaving it out would under-state the margin a
+/// re-expansion waits on, and the row would flip back into a width it overflows at once.
+///
+/// Args:
+///     cx: Application context supplying the active font scale.
+///     differences: Short labels the full caption carries.
+///
+/// Returns:
+///     The saving in logical pixels, never negative.
+pub(super) fn scope_compact_saving(cx: &App, differences: &[String]) -> f32 {
+    let width = |caption: &str| {
+        MoonDropdown::fitted_trigger_label(
+            cx,
+            caption,
+            MoonButtonSize::density(cx),
+            SCOPE_TRIGGER_MIN_W,
+            SCOPE_TRIGGER_MAX_W,
+        )
+        .1
+    };
+    let title = t!("report.filter.title");
+    (width(&scope_caption(&title, differences, false)) - width(&title)).max(0.0)
 }
 
 /// Lightweight retained host for the Report's composite scope dropdown.
@@ -190,24 +290,16 @@ impl Render for ReportScopeControl {
         let no_comment_column =
             !panel.cols.is_empty() && !panel.cols.iter().any(|column| column == "comment");
 
-        let mut label = if matches!(side, SideFilter::All) && matches!(kind, ReportKind::All) {
-            t!("report.filter.all").to_string()
-        } else {
-            let mut label = crate::panels::side_label(side);
-            label.push('/');
-            label.push_str(&kind_short(kind));
-            label
-        };
-        if deleted_only {
-            label.push('/');
-            label.push_str(&t!("report.filter.deleted_short"));
-        }
-        // The basis section sits inside the closed menu, so a non-default basis must show on the
-        // caption; an Analytics-scoped panel pins the close date and offers no basis at all.
         let period_basis = panel.period_basis;
-        if let Some(key) = super::period_basis_caption_key(lifecycle_forced_closed, period_basis) {
-            label.push('/');
-            label.push_str(&t!(key));
+        let differences = scope_differences(&panel.scope_choices());
+        let compact = panel.wrap_fit.compact();
+        let title = t!("report.filter.title");
+        let label = scope_caption(&title, &differences, compact);
+        // A compact row drops the differences from the caption, so the tooltip carries them: a
+        // non-default scope stays discoverable without opening the menu.
+        let mut tip = t!("report.filter.scope_tip").to_string();
+        if !differences.is_empty() {
+            tip = format!("{}\n\n{tip}", scope_caption(&title, &differences, false));
         }
 
         let side_owner = self.owner.clone();
@@ -310,16 +402,14 @@ impl Render for ReportScopeControl {
         let control = cx.entity();
         div()
             .id("rep-scope-tip")
-            .tooltip(crate::panels::common::text_tooltip(
-                t!("report.filter.scope_tip").to_string(),
-            ))
+            .tooltip(crate::panels::common::text_tooltip(tip))
             .child(
                 MoonDropdown::new("rep-scope")
                     .label(label)
                     .trigger_caret(true)
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::density(cx))
-                    .fit_trigger_width(102.0, 170.0)
+                    .fit_trigger_width(SCOPE_TRIGGER_MIN_W, SCOPE_TRIGGER_MAX_W)
                     .menu_width_scaled(210.0)
                     .close_on_select(false)
                     .open(self.menu_open)
@@ -388,44 +478,37 @@ pub(super) fn filter_row_signature(
             detached,
             mask,
             core_full_w.to_bits(),
-            labels.side,
-            labels.kind,
-            labels.deleted_only,
             labels.period,
-            labels.period_basis_marked,
+            labels.scope_keys,
         ),
     )
 }
 
 /// The filter choices whose LABELS decide how wide the row's other fitted triggers stand.
 ///
-/// The scope trigger fits itself between 102 and 170, the period one between 100 and 150, and both
+/// The scope trigger fits its title and differences, the period one between 100 and 150, and both
 /// resolve from these: their combined swing outgrows what compacting saves, so a row that ignored
-/// them could stay compact after a shorter label made the full row fit again. Discriminants rather
-/// than the localized strings — the width follows the CHOICE, and hashing it costs no allocation.
-#[derive(Clone, Copy)]
+/// them could stay compact after a shorter label made the full row fit again. The width follows the
+/// CHOICE, so the period is a discriminant and the scope caption its difference keys.
 pub(super) struct FilterRowLabels {
-    side: std::mem::Discriminant<SideFilter>,
-    kind: std::mem::Discriminant<ReportKind>,
-    deleted_only: bool,
     period: std::mem::Discriminant<Period>,
-    /// Whether the scope caption carries the open-date marker, which widens that trigger.
-    period_basis_marked: bool,
+    /// The scope caption's difference keys, `None` on a compact row: its caption is the bare title
+    /// whatever differs, so a pick made from the open menu must not retire the compact state and
+    /// flash the full row for a frame.
+    scope_keys: Option<Vec<&'static str>>,
 }
 
 impl FilterRowLabels {
     /// Read the label-bearing filter choices off the panel.
-    pub(super) fn of(panel: &ReportPanel) -> Self {
+    ///
+    /// Args:
+    ///     panel: Report panel whose period and scope choices label the row's triggers.
+    ///     choices: The panel's scope choices, snapshotted once per frame by the caller.
+    ///     compact: Whether the row is compact, where the scope caption carries no differences.
+    pub(super) fn of(panel: &ReportPanel, choices: &ScopeChoices, compact: bool) -> Self {
         Self {
-            side: std::mem::discriminant(&panel.side),
-            kind: std::mem::discriminant(&panel.kind),
-            deleted_only: panel.deleted_only,
             period: std::mem::discriminant(&panel.period),
-            period_basis_marked: super::period_basis_caption_key(
-                panel.closed_only,
-                panel.period_basis,
-            )
-            .is_some(),
+            scope_keys: (!compact).then(|| scope_difference_keys(choices)),
         }
     }
 }
@@ -461,6 +544,8 @@ fn all_strategies_short() -> String {
 ///     strategy_full_w: Rendered width of the strategy selector at full size, from
 ///         `strategy_full_width` — content-sized like the core one, so the shared constant would
 ///         under-state the saving for any summary longer than it.
+///     scope_saving: Width the scope trigger gives back by dropping its differences, from
+///         `scope_compact_saving`.
 ///
 /// Returns:
 ///     The saving in logical pixels, never negative.
@@ -469,12 +554,13 @@ pub(super) fn compact_row_saving(
     core_full_w: f32,
     core_compact_w: f32,
     strategy_full_w: f32,
+    scope_saving: f32,
 ) -> f32 {
     let all_short = all_strategies_short();
     let core = core_full_w - core_compact_w;
     let strategy = strategy_full_w
         - crate::controls::wrap_fit::compact_trigger_width(cx, &all_short, &all_short);
-    (core + strategy).max(0.0)
+    (core + strategy).max(0.0) + scope_saving
 }
 
 /// Resolve one selected core's current display name, with report history only as a fallback.
@@ -502,6 +588,17 @@ pub(super) fn selected_auto_core_name(
 }
 
 impl ReportPanel {
+    /// Snapshot the scope-menu choices the trigger caption compares with their defaults.
+    pub(super) fn scope_choices(&self) -> ScopeChoices {
+        ScopeChoices {
+            side: self.side,
+            kind: self.kind,
+            basis_key: super::period_basis_caption_key(self.closed_only, self.period_basis),
+            deleted_only: self.deleted_only,
+            open_rows_hidden: !self.show_open && !self.closed_only,
+        }
+    }
+
     /// Render the shared core combo under the panel's current scope authority.
     ///
     /// Standalone and Classic group Reports expose the retained multi-selection. Group Auto mode

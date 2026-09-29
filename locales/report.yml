@@ -281,6 +281,16 @@ report.filter.deleted_short:
   ru: "удал."
   en: "del."
   es: "elim."
+# Fixed title of the scope trigger; the non-default choices follow it after a middle dot.
+report.filter.title:
+  ru: "Фильтры"
+  en: "Filters"
+  es: "Filtros"
+# Difference appended to the scope trigger while "Open positions" is off.
+report.filter.closed_only_short:
+  ru: "закр."
+  en: "closed"
+  es: "cerr."
 # First row of the scope field's direction group. Named "all sides" rather than a bare "all" so it
 # does not read as the same option as the kind group's own first row.
 report.filter.all_sides:
@@ -627,11 +637,7 @@ report.kind.emu:
   ru: "Эмуляторные"
   en: "Emulator"
   es: "Emulador"
-# Abbreviations for the scope trigger — the full words do not fit the field ("Все/реал.").
-report.kind.all_short:
-  ru: "все"
-  en: "all"
-  es: "todas"
+# Abbreviations the scope trigger lists after its title when the kind differs ("Фильтры · реал.").
 report.kind.real_short:
   ru: "реал."
   en: "real"
