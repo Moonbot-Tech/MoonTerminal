@@ -16,9 +16,9 @@ use super::ChartPanel;
 use crate::Backend;
 use crate::backend::ChartHistoryScope;
 use crate::chartdx::trade_history_sync::TradeHistoryCores;
-use crate::core_order::{ExchangeSection, section_of};
 use crate::load_state::{db_read_failed_hint, db_read_failed_retryable};
 use crate::workspace::RetainedCoreScope;
+use moon_core::session::core_order::{ExchangeSection, section_of};
 
 /// Maximum durable rows drawn for one Main chart.
 const HISTORY_LIMIT: usize = 1_000;

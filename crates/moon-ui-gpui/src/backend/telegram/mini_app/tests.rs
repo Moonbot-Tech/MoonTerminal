@@ -64,7 +64,10 @@ fn by_section_groups_by_exchange_then_natural_name() {
     let ids: Vec<u64> = ordered.iter().map(|(_, (id, _))| *id).collect();
     assert_eq!(ids[0], 5, "the unidentified core leads, as in the terminal");
     // Section order oracle: the terminal's own partition of the two venues.
-    let terminal = crate::core_order::exchange_sections([(2, venues.get(&2)), (6, venues.get(&1))]);
+    let terminal = moon_core::session::core_order::exchange_sections([
+        (2, venues.get(&2)),
+        (6, venues.get(&1)),
+    ]);
     let first_is_code_2 = terminal[0].1 == [2];
     let expected: [u64; 4] = if first_is_code_2 {
         [4, 2, 3, 1]

@@ -170,25 +170,15 @@ fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
 
     // A CLOSED rule, not a list: the caption is presentation and the platform code is identity, so
     // `CoreVenue::reported` — the one field carrying a core build's own spelling — may be read only
-    // inside the formatter that displays it. Sweeping the whole crate means a panel added tomorrow
-    // is covered by default, which an enumerated list cannot promise.
+    // inside the formatter that displays it (`moon_core::venue::caption`); in this crate, nothing.
+    // Sweeping the whole crate means a panel added tomorrow is covered by default, which an
+    // enumerated list cannot promise. `moon-core` is outside this sweep.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);
     let mut readers = Vec::new();
     for path in sources {
         let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
-        // The formatter itself and its sibling tests — that exact module, not any file that
-        // happens to be named `venue_label.rs`. Compared component by component because a literal
-        // `"controls/venue_label"` never matches on Windows, where the separator is a backslash,
-        // and an exemption that silently covers nothing reports PASS forever.
-        let parts: Vec<_> = rel.components().map(|part| part.as_os_str()).collect();
-        let exempt = matches!(parts.as_slice(), [first, second, ..]
-            if *first == "controls"
-                && (*second == "venue_label" || *second == "venue_label.rs"));
-        if exempt {
-            continue;
-        }
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
         for line in text.lines() {
@@ -203,7 +193,7 @@ fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
     }
     assert!(
         readers.is_empty(),
-        "a venue's reported caption belongs to controls/venue_label.rs alone, but it is read in \
+        "a venue's reported caption belongs to moon_core::venue::caption alone, but it is read in \
          {readers:?}"
     );
 

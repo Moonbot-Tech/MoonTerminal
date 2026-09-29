@@ -7,7 +7,7 @@ use moon_core::db::{ReportStrategy, ReportStrategyKey};
 use moon_ui::MoonComponentIndexPath;
 
 use super::{ReportStrategyChoice, ReportStrategyGroup, ReportStrategyItem};
-use crate::core_order::{CoreOrder, OrderedCores};
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 
 /// Merge Report metadata into the application's canonical core order.
 ///

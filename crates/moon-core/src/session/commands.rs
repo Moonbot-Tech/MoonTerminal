@@ -14,7 +14,7 @@ use crate::feed::{
     WalletKind,
 };
 use crate::market::{MarketDataMode, MarketDataSource};
-use crate::venue::CoreVenue;
+use crate::venue::{AccountMergeKey, CoreVenue};
 
 use super::{CoreId, CoreSession, CoreStore, SessionManager};
 
@@ -1234,6 +1234,15 @@ impl SessionManager {
     ///     The identity, or `None` before the answer arrived or when the core stated none.
     pub fn account_identity(&self, core: CoreId) -> Option<AccountIdentity> {
         self.market_source.account_identity(core)
+    }
+
+    /// Return which exchange account and wallet the core's balance is, or `None` when unknown.
+    ///
+    /// The key every balance total folds shared accounts by ([`super::balances`]), decided per
+    /// brand by `venue::merge_key` from the core's venue and its stated account identity.
+    pub fn account_merge_key(&self, core: CoreId) -> Option<AccountMergeKey> {
+        let venue = self.core_venue.get(&core).and_then(|v| v.resolved());
+        crate::venue::merge_key(venue, self.account_identity(core))
     }
 
     /// Return the core account's base currency, such as `USDT` or `BTC`, once `CoreBase` has

@@ -7,14 +7,15 @@
 //!
 //! Trust itself is not decided here: [`moon_core::session::BalanceState`] is classified by the
 //! core that owns the data, so this panel, the shell header and any future consumer agree. This
-//! module aggregates and renders it. The sum itself is [`aggregate_balance_figures`], which takes
-//! plain figures and no GPUI types; [`aggregate_account_figures`] folds shared accounts before it and
-//! is what the Assets footer and the Mini App both call.
+//! module renders it. The sum itself is [`moon_core::session::balances`], shared with the Telegram
+//! Mini App: it folds cores sharing an exchange account, then adds up what the trust state allows.
 
-use super::dedupe::{FoldedGroup, TotalMember, fold_accounts};
 use super::*;
 use moon_core::config::TotalMode;
 use moon_core::session::BalanceState;
+use moon_core::session::balances::{
+    AccountAggregate, BalanceFigures, FoldedGroup, TotalMember, aggregate_accounts,
+};
 use moon_core::venue::{AccountMergeKey, Brand};
 use rust_i18n::t;
 
@@ -190,157 +191,14 @@ pub(super) fn figure_width(a: Option<&CoreAgg>, cx: &App) -> f32 {
     width
 }
 
-/// One core's free and total USDT plus the store's trust classification.
-///
-/// The caller decides which cores are in scope. An empty slice is an empty account reading,
-/// not "every core".
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct BalanceFigures {
-    /// Store-owned trust classification for `free` and `total`.
-    pub state: BalanceState,
-    /// Free balance in USDT.
-    pub free: f64,
-    /// Total balance in USDT, including unrealized PnL.
-    pub total: f64,
-}
-
-impl BalanceFigures {
-    /// Whether this reading can be added to a sum: a value-bearing state and finite figures.
-    ///
-    /// The one test the footer sum, the account fold and the Mini App share, so a reading is
-    /// never shown by one and dropped by another.
-    pub(crate) fn usable(&self) -> bool {
-        self.state.has_value() && self.free.is_finite() && self.total.is_finite()
-    }
-}
-
-/// Sum of usable balances. `free` and `total` are `None` when `counted == 0`.
-///
-/// `stale` counts cores inside `counted`. `excluded` is `awaiting + unpriced`, including a
-/// non-finite figure whatever its state says.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct BalanceAggregate {
-    /// Sum of usable free balances, or `None` when nothing was counted.
-    pub free: Option<f64>,
-    /// Sum of usable total balances, or `None` when nothing was counted.
-    pub total: Option<f64>,
-    /// Cores that contributed a finite figure the state allows into the sum.
-    pub counted: u32,
-    /// Cores inside `counted` whose state is [`BalanceState::Stale`].
-    pub stale: u32,
-    /// Cores left out of the sum: awaiting, unpriced, or a non-finite figure.
-    pub excluded: u32,
-    /// Cores with [`BalanceState::Awaiting`], including a non-finite awaiting figure.
-    pub awaiting: u32,
-    /// Cores left out for any reason other than awaiting.
-    pub unpriced: u32,
-}
-
-/// Sum usable balances. Awaiting and unpriced cores are excluded; stale cores are included.
-///
-/// A non-finite free or total is not a contribution. `Awaiting` still counts as awaiting; every
-/// other unusable figure counts as unpriced. `free` and `total` are `None` when `counted == 0`
-/// so an empty sum is not reported as zero.
-///
-/// Args:
-///     rows: Per-core figures already limited to the caller's scope.
-///
-/// Returns:
-///     The scope sum and the trust counts. An empty `rows` has `counted == 0` and `None` totals.
-pub(crate) fn aggregate_balance_figures(rows: &[BalanceFigures]) -> BalanceAggregate {
-    let mut free = 0.0;
-    let mut total = 0.0;
-    let mut counted = 0u32;
-    let mut stale = 0u32;
-    let mut awaiting = 0u32;
-    let mut unpriced = 0u32;
-    for row in rows {
-        // A figure that cannot be added is not a contribution, whatever its state says. The
-        // producer validates these values, but keeping the check structural prevents a malformed
-        // aggregate from being counted while its arithmetic is silently skipped.
-        if !row.usable() {
-            if row.state == BalanceState::Awaiting {
-                awaiting = awaiting.saturating_add(1);
-            } else {
-                unpriced = unpriced.saturating_add(1);
-            }
-            continue;
-        }
-        counted = counted.saturating_add(1);
-        if row.state == BalanceState::Stale {
-            stale = stale.saturating_add(1);
-        }
-        free += row.free;
-        total += row.total;
-    }
-    let summed = counted > 0;
-    BalanceAggregate {
-        free: summed.then_some(free),
-        total: summed.then_some(total),
-        counted,
-        stale,
-        excluded: awaiting.saturating_add(unpriced),
-        awaiting,
-        unpriced,
-    }
-}
-
-/// A total with cores sharing one exchange account counted once.
-pub(crate) struct AccountAggregate {
-    /// The sum over the folded rows.
-    pub(crate) sum: BalanceAggregate,
-    /// Account groups where only one of several reporting cores was counted.
-    pub(crate) folded: Vec<FoldedGroup>,
-    /// Names of the cores the user set to stay out of the total.
-    pub(crate) excluded_by_user: Vec<String>,
-}
-
-/// Fold members sharing an account ([`fold_accounts`]), then sum ([`aggregate_balance_figures`]).
-///
-/// The one path every account-aware total takes, so the Assets footer and the Mini App agree.
-fn aggregate_members(members: &[TotalMember]) -> AccountAggregate {
-    let outcome = fold_accounts(members);
-    AccountAggregate {
-        sum: aggregate_balance_figures(&outcome.rows),
-        folded: outcome.folded,
-        excluded_by_user: outcome.excluded_by_user,
-    }
-}
-
-/// Sum per-core figures, counting cores that share one exchange account once.
-///
-/// Looks up each core's total setting and account key in `b`, as the Assets footer does.
-///
-/// Args:
-///     b: Backend holding the per-core settings and account identities.
-///     rows: `(core, display name, figures)` already limited to the caller's scope.
-///
-/// Returns:
-///     The folded sum, the folds made and the user exclusions.
-pub(crate) fn aggregate_account_figures(
-    b: &Backend,
-    rows: &[(CoreId, String, BalanceFigures)],
-) -> AccountAggregate {
-    let members: Vec<TotalMember> = rows
-        .iter()
-        .map(|(id, name, figures)| TotalMember {
-            name: name.clone(),
-            figures: *figures,
-            merge: core_merge_key(b, *id),
-            mode: core_total_mode(b, *id),
-        })
-        .collect();
-    aggregate_members(&members)
-}
-
 /// Scope total with trust metadata.
 ///
 /// Cores without a usable figure are NOT summed: their balance is unknown, and a silent zero
 /// would understate the total. They are counted as awaiting or unpriced so the caller can say the
 /// total is partial instead of presenting it as complete. The arithmetic is
-/// [`aggregate_balance_figures`]; this wrapper keeps the panel's empty-selection-means-all filter
-/// and, after it, folds cores sharing one exchange account into one contribution
-/// ([`fold_accounts`]) so that account's money is counted once.
+/// [`moon_core::session::balances::aggregate_accounts`]; this wrapper keeps the panel's
+/// empty-selection-means-all filter, and the aggregate folds cores sharing one exchange account
+/// into one contribution so that account's money is counted once.
 fn scope_totals(aggs: &[CoreAgg], sel: &HashSet<CoreId>) -> ScopeTotals {
     let members: Vec<TotalMember> = aggs
         .iter()
@@ -360,7 +218,7 @@ fn scope_totals(aggs: &[CoreAgg], sel: &HashSet<CoreId>) -> ScopeTotals {
         sum: summed,
         folded,
         excluded_by_user,
-    } = aggregate_members(&members);
+    } = aggregate_accounts(&members);
     ScopeTotals {
         free: summed.free.unwrap_or(0.0),
         total: summed.total.unwrap_or(0.0),

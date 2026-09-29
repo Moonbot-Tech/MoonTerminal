@@ -71,10 +71,9 @@ pub enum ConnDto {
 
 /// Live status of one core.
 ///
-/// `fault`, when present, is one of the closed kind keys derived from
-/// [`crate::feed::ConnFaultKind`]: `key_empty`, `key_unparsable`, `local_bind_failed`,
-/// `aborted`, `connect_timed_out`, `not_authenticated`, `init_step_timed_out`,
-/// `startup_stalled`, `init_step_failed`. It is not localized text.
+/// `fault`, when present, is one of the closed kind keys [`crate::feed::fault_keys::fault_kind`]
+/// derives from [`crate::feed::ConnFaultKind`] (`key_empty`, `connect_timed_out`, ...). It is not
+/// localized text.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CoreStatusDto {
     pub id: u64,

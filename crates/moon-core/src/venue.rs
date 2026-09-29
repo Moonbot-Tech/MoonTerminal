@@ -21,6 +21,8 @@ use crate::account::{AccountIdentity, AccountKey};
 use crate::feed::ExchangeId;
 use crate::symbol::Exchange;
 
+pub mod caption;
+
 /// What one core is connected to, as every consumer of a core list needs it.
 ///
 /// [`Self::id`] is the grouping key — two cores on one venue share it, and two Hyperliquid cores on

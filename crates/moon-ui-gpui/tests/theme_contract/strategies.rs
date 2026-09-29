@@ -16,9 +16,9 @@ fn empty_core_roots_remain_available_without_row_filters() {
 /// A strategy copy goes to the core root, sits beside its source, and is revealed to the user.
 ///
 /// Plausible edits this catches: inheriting `row.folder_path` lets the receiving core reinterpret
-/// the flat path described by `strategies::tree::ops::path_segments`; dropping the reveal hides
-/// the copy from an open Strategies window, while dropping the notification leaves its destination
-/// unstated in this trade-derived view.
+/// the flat path described by `moon_core::feed::strategy_path::path_segments`; dropping the
+/// reveal hides the copy from an open Strategies window, while dropping the notification leaves
+/// its destination unstated in this trade-derived view.
 #[test]
 fn analytics_copy_places_and_reveals_the_new_strategy() {
     let save = read_src("analytics/tuner/save.rs");
@@ -40,7 +40,7 @@ fn analytics_copy_places_and_reveals_the_new_strategy() {
     );
 }
 
-/// A `folder_path` is split only by `strategies::tree::ops::path_segments`.
+/// A `folder_path` is split only by `moon_core::feed::strategy_path::path_segments`.
 ///
 /// Plausible edit this catches: a second hand-written split can disagree with the owning helper
 /// and address a folder the tree does not show.
@@ -53,10 +53,9 @@ fn folder_paths_are_split_only_by_path_segments() {
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);
 
-    let owner = Path::new("strategies").join("tree").join("ops.rs");
     let mut violations = Vec::new();
     for path in sources {
-        if path.ends_with(&owner) || path.ends_with("tests.rs") {
+        if path.ends_with("tests.rs") {
             continue;
         }
         let text = fs::read_to_string(&path)
@@ -75,7 +74,7 @@ fn folder_paths_are_split_only_by_path_segments() {
 
     assert!(
         violations.is_empty(),
-        "a folder path must be split through tree::ops::path_segments, never by hand:\n{}",
+        "a folder path must be split through strategy_path::path_segments, never by hand:\n{}",
         violations.join("\n")
     );
 }
@@ -475,7 +474,7 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
     let tree = read_src("strategies/tree/moon.rs");
     let build = code_only(braced_body(&tree, "pub(crate) fn build("));
     let grouped = braced_body(&build, "if view.prefs.group_by_venue {");
-    assert!(grouped.contains("crate::core_order::exchange_sections("));
+    assert!(grouped.contains("moon_core::session::core_order::exchange_sections("));
     assert!(grouped.contains("crate::controls::venue_section_label("));
     assert!(grouped.contains("section_children.is_empty()"));
     assert!(

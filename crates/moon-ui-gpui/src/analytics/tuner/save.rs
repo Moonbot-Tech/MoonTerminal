@@ -280,7 +280,7 @@ impl AnalyticsView {
     ///
     /// The dialog name is made unique per core; an empty name reuses the source name as its base.
     /// Each copy is sent to the core root because the receiver re-splits nonempty flat paths; see
-    /// [`crate::strategies::tree::ops::path_segments`] for the path ambiguity. That covers THIS
+    /// [`moon_core::feed::strategy_path::path_segments`] for the path ambiguity. That covers THIS
     /// COPY and no more: a create is applied by resending the core's whole strategy set
     /// (`rebuild_sync`), so every existing strategy's flat path travels along either way.
     ///

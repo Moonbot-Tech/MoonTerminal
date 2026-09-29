@@ -106,26 +106,7 @@ fn step_label_opt(step: Option<CoreInitStep>) -> String {
 /// Returns:
 ///     A short localized label.
 pub(crate) fn fault_short(class: &FailureClass) -> String {
-    match class {
-        FailureClass::KeyUnparsable { empty: true } => t!("core_status.fault.short.key_empty"),
-        FailureClass::KeyUnparsable { empty: false } => {
-            t!("core_status.fault.short.key_unparsable")
-        }
-        FailureClass::LocalPort { .. } => t!("core_status.fault.short.local_port"),
-        FailureClass::NoResponse {
-            packets_received: 0,
-            bytes: 0,
-            ..
-        } => t!("core_status.fault.short.no_response"),
-        FailureClass::NoResponse { .. } => t!("core_status.fault.short.unparsed"),
-        FailureClass::Access { .. } => t!("core_status.fault.short.access"),
-        FailureClass::CoreUnidentified { .. } => t!("core_status.fault.short.unidentified"),
-        FailureClass::Syncing { stalled: false, .. } => t!("core_status.fault.short.syncing"),
-        FailureClass::Syncing { stalled: true, .. } => t!("core_status.fault.short.stalled"),
-        FailureClass::Aborted => t!("core_status.fault.short.aborted"),
-        FailureClass::Undetermined { .. } => t!("core_status.fault.short.unknown"),
-    }
-    .to_string()
+    t!(moon_core::feed::fault_keys::failure_short_key(class)).to_string()
 }
 
 /// The localized REASON for a verdict: what the terminal observed, in one sentence.

@@ -37,13 +37,13 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::panels::{RenderGate, num};
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use moon_core::feed::OrderRow;
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 
 /// One order-table row associated with its source core, ported from `OrderEntry`.
 ///

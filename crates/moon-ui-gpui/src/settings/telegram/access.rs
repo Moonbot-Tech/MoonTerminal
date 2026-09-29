@@ -6,7 +6,8 @@ use moon_ui::{MoonButton, MoonGroupBox, MoonInput, MoonPalette, h_flex, rgba_fro
 use rust_i18n::t;
 
 use super::SettingsView;
-use crate::{core_order::CoreOrder, design};
+use crate::design;
+use moon_core::session::core_order::CoreOrder;
 
 impl SettingsView {
     /// Load archived candidates off GPUI without deriving the catalog from mutable checkbox state.

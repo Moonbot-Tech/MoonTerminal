@@ -10,7 +10,7 @@ use chrono_tz::Tz;
 use gpui::Context;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::QuoteBreakdown;
-use moon_core::feed::{ConnFaultKind, ConnStatus, CoreSysStatus, OrderRow};
+use moon_core::feed::{ConnStatus, CoreSysStatus, OrderRow, fault_keys};
 use moon_core::session::{BalanceState, CoreId, CoreRunState};
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::web::dto::{
@@ -23,28 +23,17 @@ use moon_core::telegram::web::{MiniAppApiError, MiniAppApiRequest};
 use moon_core::util::{display_time, fmt};
 
 use crate::Backend;
-use crate::core_order::{CoreOrder, exchange_sections};
-use crate::order_math::{MONEY_DECIMALS, order_pnl, order_pnl_pct, pct_to_entry, position_qty};
-use crate::panels::{BalanceFigures, aggregate_account_figures};
+use moon_core::feed::order_math::{
+    MONEY_DECIMALS, order_pnl, order_pnl_pct, pct_to_entry, position_qty,
+};
+use moon_core::session::balances::{BalanceFigures, aggregate_account_figures};
+use moon_core::session::core_order::{CoreOrder, exchange_sections};
 
 /// How long a finished report may answer the same chat and period without reading again.
 const REPORT_CACHE_TTL: Duration = Duration::from_secs(15);
 
 /// How long a strategy toggle stays `Pending` before it is reported as `TimedOut`.
 const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
-
-/// Kind key paired with the existing Core Status short label. No new locale values.
-pub(super) const FAULT_LABELS: &[(&str, &str)] = &[
-    ("key_empty", "core_status.fault.short.key_empty"),
-    ("key_unparsable", "core_status.fault.short.key_unparsable"),
-    ("local_bind_failed", "core_status.fault.short.local_port"),
-    ("aborted", "core_status.fault.short.aborted"),
-    ("connect_timed_out", "core_status.fault.short.no_response"),
-    ("not_authenticated", "core_status.fault.short.access"),
-    ("init_step_timed_out", "core_status.fault.short.stalled"),
-    ("startup_stalled", "core_status.fault.short.stalled"),
-    ("init_step_failed", "core_status.fault.short.unknown"),
-];
 
 /// Answer one Mini App request. The live session check is handled by the caller.
 pub(super) fn dispatch(
@@ -142,25 +131,6 @@ pub(super) fn dispatch(
         MiniAppApiRequest::Session { reply, .. } => {
             let _ = reply.try_send(Err(MiniAppApiError::Rejected));
         }
-    }
-}
-
-/// Stable snake_case kind for one [`ConnFaultKind`].
-///
-/// `KeyUnparsable` splits on `empty` because the Core Status panel already words those two
-/// facts apart. The other variants keep one key each; step and packet-count forks stay in the
-/// desktop verdict and are not part of this closed set.
-pub(super) fn fault_kind(kind: &ConnFaultKind) -> &'static str {
-    match kind {
-        ConnFaultKind::KeyUnparsable { empty: true } => "key_empty",
-        ConnFaultKind::KeyUnparsable { empty: false } => "key_unparsable",
-        ConnFaultKind::LocalBindFailed { .. } => "local_bind_failed",
-        ConnFaultKind::Aborted => "aborted",
-        ConnFaultKind::ConnectTimedOut { .. } => "connect_timed_out",
-        ConnFaultKind::NotAuthenticated => "not_authenticated",
-        ConnFaultKind::InitStepTimedOut { .. } => "init_step_timed_out",
-        ConnFaultKind::StartupStalled => "startup_stalled",
-        ConnFaultKind::InitStepFailed { .. } => "init_step_failed",
     }
 }
 
@@ -417,7 +387,7 @@ impl Backend {
             let _ = reply.try_send(Err(MiniAppApiError::Busy));
             return;
         }
-        let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let zone = moon_core::util::display_time::zone_or_utc(self.header_clock_zone());
         let now = moon_core::util::time::now_unix_secs() as i64;
         // Same `Period` values the Today / Yesterday / Month / Last month buttons construct.
         let request = ReportRequest::new(report_period(period), false);
@@ -510,7 +480,7 @@ impl Backend {
             let _ = reply.try_send(Err(MiniAppApiError::Busy));
             return;
         }
-        let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let zone = moon_core::util::display_time::zone_or_utc(self.header_clock_zone());
         let names = self.report_core_names();
         let read_access = access.clone();
         self.telegram.mini_trades_pending = true;
@@ -574,7 +544,8 @@ impl Backend {
             let mut folders: Vec<StrategyFolderDto> = Vec::new();
             if let Some(data) = store.core(id) {
                 for row in &data.strategies {
-                    let path = crate::strategies::tree::ops::split_path(&row.folder_path).join("/");
+                    let path =
+                        moon_core::feed::strategy_path::split_path(&row.folder_path).join("/");
                     let entry = self.telegram.mini_strategy_wanted.get(&(id, row.id));
                     let pending = entry.and_then(|entry| {
                         strategy_pending(
@@ -765,7 +736,7 @@ impl Backend {
                 cpu_sys: sys.system_cpu_percent.map(f32::from),
                 fault: fault
                     .as_ref()
-                    .map(|fault| fault_kind(&fault.kind).to_string()),
+                    .map(|fault| fault_keys::fault_kind(&fault.kind).to_string()),
                 trading: run.trading,
                 auto_detect: run.auto_detect,
                 version: core
@@ -810,7 +781,7 @@ impl Backend {
             figures.push((*id, name.clone(), reading));
         }
         // Folds cores sharing one exchange account, exactly as the Assets footer does.
-        let grand = aggregate_account_figures(self, &figures).sum;
+        let grand = aggregate_account_figures(&self.session, &self.config.servers, &figures).sum;
         let mut per_exchange = Vec::new();
         for (venue, members) in exchange_sections(
             cores
@@ -822,7 +793,7 @@ impl Backend {
                 .iter()
                 .map(|&index| figures[index].clone())
                 .collect();
-            let summed = aggregate_account_figures(self, &rows).sum;
+            let summed = aggregate_account_figures(&self.session, &self.config.servers, &rows).sum;
             per_exchange.push(ExchangeBalanceDto {
                 exchange: crate::controls::venue_section_label(venue),
                 total: summed.total,

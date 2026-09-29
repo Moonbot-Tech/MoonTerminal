@@ -36,7 +36,7 @@ fn quiet_zone(
     use_local
         .then(system)
         .flatten()
-        .unwrap_or_else(|| crate::chrome::clock::resolved_header_clock_zone(header_zone_id))
+        .unwrap_or_else(|| moon_core::util::display_time::zone_or_utc(header_zone_id))
 }
 
 impl Backend {

@@ -39,8 +39,8 @@ use super::core_quick::{exchange_state_label, group_check_state, section_core_id
 use super::venue_label::venue_section_label;
 use crate::controls::CORE_COMBO_TRIGGER_W;
 use crate::controls::wrap_fit;
-use crate::core_order::OrderedCores;
 use moon_core::config::CoreGroup;
+use moon_core::session::core_order::OrderedCores;
 use moon_core::venue::CoreVenue;
 use moon_ui::{MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem};
 
@@ -124,7 +124,7 @@ pub(crate) fn core_menu_sections<'a>(
     cores: &'a [(u64, String)],
     venues: &'a HashMap<u64, CoreVenue>,
 ) -> Vec<CoreMenuSection<'a>> {
-    crate::core_order::exchange_sections(
+    moon_core::session::core_order::exchange_sections(
         cores
             .iter()
             .enumerate()

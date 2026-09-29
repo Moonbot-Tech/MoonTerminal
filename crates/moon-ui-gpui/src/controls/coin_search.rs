@@ -27,11 +27,11 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::core_order::ExchangeSection;
 use crate::design;
 use moon_core::config::ChartBucket;
 use moon_core::market::MarketLabel;
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{self, ExchangeSection};
 use moon_core::venue::CoreVenue;
 
 mod ranking;
@@ -76,7 +76,7 @@ fn cores_for(b: &Backend, group: &str, bucket: Option<&ChartBucket>) -> Vec<Core
             .map(|s| s.id)
             .collect::<Vec<_>>()
     };
-    let order = crate::core_order::CoreOrder::new(&b.config);
+    let order = core_order::CoreOrder::new(&b.config);
     let mut ids = match bucket {
         None | Some(ChartBucket::Shared) => group_cores(),
         // Already the caller's own resolved bucket — not an enumeration, so it stays unfiltered.
@@ -583,7 +583,7 @@ pub(crate) fn group_starts_expanded(members: usize) -> bool {
 /// user must be able to tell apart. Nothing is removed or deduplicated: the members ARE the cores,
 /// each still openable on its own.
 ///
-/// Sections come from [`crate::core_order::exchange_sections`], the same bucketing the left rail
+/// Sections come from [`core_order::exchange_sections`], the same bucketing the left rail
 /// and the Strategies tree use, so a coin list and a core list can never disagree about which
 /// exchange a core belongs to. Ordering is stable in both directions — groups appear in the order
 /// their first hit did (canonical core order), and members keep their arrival order inside a
@@ -598,19 +598,13 @@ pub(crate) fn group_hits(hits: Vec<CoinHit>) -> Vec<CoinSection> {
     // Resolve the sections while the hits are still borrowable, and take OWNED keys out of that
     // borrow so the hits can be consumed below.
     let plan: Vec<(ExchangeSection, Option<CoreVenue>, Vec<usize>)> =
-        crate::core_order::exchange_sections(
+        core_order::exchange_sections(
             hits.iter()
                 .enumerate()
                 .map(|(ix, hit)| (ix, hit.venue.as_ref())),
         )
         .into_iter()
-        .map(|(venue, members)| {
-            (
-                crate::core_order::section_of(venue),
-                venue.cloned(),
-                members,
-            )
-        })
+        .map(|(venue, members)| (core_order::section_of(venue), venue.cloned(), members))
         .collect();
     // Moved out by index below: `exchange_sections` hands back POSITIONS, and a coin's members are
     // scattered across them, so the hits cannot simply be drained in order.

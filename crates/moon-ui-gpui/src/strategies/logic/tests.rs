@@ -13,7 +13,7 @@ use super::{
     visible_strategy_keys,
 };
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
-use crate::strategies::tree::ops::path_segments;
+use moon_core::feed::strategy_path::path_segments;
 
 /// Returns whether one row sits at or below a folder prefix, spelled out segment by segment.
 ///

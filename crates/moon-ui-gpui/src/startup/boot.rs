@@ -139,7 +139,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     // switched the rule on would see invented crowd cards in a panel measuring something else.
     let crowd_rule = crate::chart_tabs::crowd_rule_for_run(&layout);
     let crowd = cx.new(|cx| crate::crowd::service::CrowdService::new(crowd_live, crowd_rule, cx));
-    crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
+    crate::chartdx::axes::set_display_zone(moon_core::util::display_time::zone_or_utc(
         layout.header_clock_zone.as_deref(),
     ));
     // Check the complete replica once because individual reads only detect

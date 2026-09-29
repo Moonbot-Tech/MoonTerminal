@@ -5,6 +5,7 @@
 //! data, and renders rows and decorators. Callbacks outside `Context<Self>` mutate through
 //! `Entity::update`.
 
+use moon_core::feed::strategy_path;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -316,7 +317,7 @@ pub(crate) struct MoonTreeBuild {
 pub(crate) fn build(
     view: &StrategiesView,
     store: &CoreStore,
-    cores: &crate::core_order::OrderedCores,
+    cores: &moon_core::session::core_order::OrderedCores,
     venues: &HashMap<CoreId, CoreVenue>,
 ) -> MoonTreeBuild {
     let filter = view.filter.prepare();
@@ -328,7 +329,7 @@ pub(crate) fn build(
     let mut nav: Vec<ops::NavNode> = Vec::new();
 
     if view.prefs.group_by_venue {
-        let sections = crate::core_order::exchange_sections(
+        let sections = moon_core::session::core_order::exchange_sections(
             cores
                 .iter()
                 .enumerate()
@@ -610,7 +611,7 @@ fn empty_folder_paths(
             // adds the split halves as parent folders, so the tree reports `"EMA "`. Drawn, that is
             // a folder which exists on no core and which no edit could ever name.
             .filter(|path| moon_core::feed::folder_tree::sendable([path.as_str()].into_iter()))
-            .map(|path| ops::split_path(path))
+            .map(|path| strategy_path::split_path(path))
             .collect(),
     };
     if marks.is_empty() && reported.is_empty() {
@@ -622,7 +623,7 @@ fn empty_folder_paths(
     let mut occupied: std::collections::HashSet<String> = std::collections::HashSet::new();
     for row in &cd.strategies {
         let mut key = String::new();
-        for segment in ops::path_segments(&row.folder_path) {
+        for segment in strategy_path::path_segments(&row.folder_path) {
             if !key.is_empty() {
                 key.push('/');
             }
@@ -720,7 +721,7 @@ fn build_core_subtree(
             .folders
             .paths
             .iter()
-            .map(|path| ops::join_path(&ops::split_path(path)).to_lowercase())
+            .map(|path| strategy_path::join_path(&strategy_path::split_path(path)).to_lowercase())
             .collect(),
     };
     let mut prefix: Vec<String> = Vec::new();
@@ -1228,7 +1229,7 @@ impl StrategiesView {
 fn menu_folder_key(target: &MenuTarget, core: CoreId) -> Option<(CoreId, String)> {
     match target {
         MenuTarget::Core => Some((core, String::new())),
-        MenuTarget::Folder(path) => Some((core, ops::join_path(path))),
+        MenuTarget::Folder(path) => Some((core, strategy_path::join_path(path))),
         MenuTarget::Strategy(_) | MenuTarget::DeletedFolder | MenuTarget::DeletedStrategy(_) => {
             None
         }

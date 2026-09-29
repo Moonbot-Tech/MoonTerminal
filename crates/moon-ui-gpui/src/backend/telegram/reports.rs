@@ -1,8 +1,9 @@
 //! Localized rich reports over the same snapshot, time axis, and money reader as Report.
-use crate::{Backend, core_order::CoreOrder};
+use crate::Backend;
 use chrono::Days;
 use chrono_tz::Tz;
 use gpui::Context;
+use moon_core::session::core_order::CoreOrder;
 use moon_core::{
     config::telegram_access::TelegramReportAccess,
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
@@ -57,7 +58,7 @@ impl Backend {
             report_notice(&reply, t!("telegram.report_busy").to_string());
             return;
         }
-        let zone = crate::chrome::clock::resolved_header_clock_zone(self.header_clock_zone());
+        let zone = moon_core::util::display_time::zone_or_utc(self.header_clock_zone());
         let now = moon_core::util::time::now_unix_secs() as i64;
         let Some((from, to)) = request.bounds(now, zone) else {
             report_notice(&reply, t!("telegram.report_help").to_string());
@@ -209,7 +210,7 @@ fn read_page_on(
             }
         }
     } else if request.by_exchange {
-        for (venue, members) in crate::core_order::exchange_sections(
+        for (venue, members) in moon_core::session::core_order::exchange_sections(
             cores
                 .iter()
                 .enumerate()
@@ -373,7 +374,7 @@ fn read_mini_report_on(
     };
     let total = db::query_totals(&snap, &filter)?.quotes;
     let mut by_exchange = Vec::new();
-    for (venue, members) in crate::core_order::exchange_sections(
+    for (venue, members) in moon_core::session::core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
@@ -640,7 +641,7 @@ fn exchange_drilldowns(
     filter: &ReportFilter,
 ) -> db::ReadResult<Vec<(String, ReportScope)>> {
     let mut drilldowns = Vec::new();
-    for (venue, members) in crate::core_order::exchange_sections(
+    for (venue, members) in moon_core::session::core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
@@ -903,9 +904,9 @@ pub(super) fn help(zone: &str) -> Response {
 
 /// Resolve exactly the same venue identity used by the terminal's core lists.
 fn scope_of(venue: Option<&moon_core::venue::CoreVenue>) -> ReportScope {
-    match crate::core_order::section_of(venue) {
-        crate::core_order::ExchangeSection::Unidentified => ReportScope::Unidentified,
-        crate::core_order::ExchangeSection::Venue(id) => ReportScope::Venue(id),
+    match moon_core::session::core_order::section_of(venue) {
+        moon_core::session::core_order::ExchangeSection::Unidentified => ReportScope::Unidentified,
+        moon_core::session::core_order::ExchangeSection::Venue(id) => ReportScope::Venue(id),
     }
 }
 

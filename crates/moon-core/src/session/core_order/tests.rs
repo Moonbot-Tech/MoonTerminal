@@ -1,8 +1,8 @@
 //! Canonical-order edge-case tests.
 
 use super::*;
-use moon_core::config::Secret;
-use moon_core::config::{FeedFlags, ServerConfig};
+use crate::config::Secret;
+use crate::config::{FeedFlags, ServerConfig};
 
 /// Build a server fixture with explicit runtime and durable ids.
 fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
@@ -24,7 +24,7 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         manual_strategy: None,
         trade: None,
         transport: None,
-        workspace_membership: moon_core::config::WorkspaceMembership::default(),
+        workspace_membership: crate::config::WorkspaceMembership::default(),
         total_mode: Default::default(),
     }
 }

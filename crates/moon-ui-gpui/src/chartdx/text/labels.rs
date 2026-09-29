@@ -24,7 +24,7 @@ use moon_core::market::{
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
 
-use crate::order_math::{MONEY_DECIMALS, order_pnl, position_qty};
+use moon_core::feed::order_math::{MONEY_DECIMALS, order_pnl, position_qty};
 
 /// Everything the configured captions can read, in the form they are read in.
 ///
@@ -1438,7 +1438,7 @@ fn caption_prefix(part: &ChartLabelPart, on: bool, chart_tf_ms: i64) -> String {
 
 /// Collect the open-position figures for every basis in ONE pass over a market's orders.
 ///
-/// The arithmetic is [`crate::order_math`]'s, not this module's: the Orders table, the Assets panel
+/// The arithmetic is [`moon_core::feed::order_math`]'s, not this module's: the Orders table, the Assets panel
 /// and the chart's own overlay all state this number, and a second formula here would be a fourth
 /// answer to the same question. In particular the entry price is the one the feed RESOLVED — the
 /// raw `buy_price` is a break-even including round-trip commission — and every price flows through

@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime};
 use moon_core::config::WorkspaceMode;
 use moon_core::session::CoreId;
 
-use crate::core_order::ExchangeSection;
+use moon_core::session::core_order::ExchangeSection;
 
 use super::{
     STRATEGIES_IDLE_COLLAPSE, StrategiesSessionState, collapse_strategies_expansion,

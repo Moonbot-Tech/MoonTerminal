@@ -7,6 +7,7 @@ use super::super::*;
 use super::ops;
 use super::ui::{FolderDrag, StratDrag};
 use moon_core::feed::NewStrategySpec;
+use moon_core::feed::strategy_path;
 
 #[cfg(test)]
 mod tests;
@@ -121,7 +122,7 @@ impl StrategiesView {
                 .collect();
             let paths: Vec<(CoreId, Vec<String>)> = folders
                 .iter()
-                .map(|(core, path)| (*core, ops::split_path(path)))
+                .map(|(core, path)| (*core, strategy_path::split_path(path)))
                 .collect();
             ops::copy_folders(&borrowed, &paths)
         };
@@ -190,7 +191,7 @@ impl StrategiesView {
         self.clipboard.as_ref()?;
         let marks: Vec<(CoreId, Vec<String>)> = folders
             .iter()
-            .map(|(core, path)| (*core, ops::split_path(path)))
+            .map(|(core, path)| (*core, strategy_path::split_path(path)))
             .collect();
         let marked = marks.len();
         self.cut = Some(ops::CutOrigin {
@@ -264,7 +265,7 @@ impl StrategiesView {
                     .filter(|(c, _)| *c == core)
                     .map(|(_, n)| n.clone()),
             );
-            let plan = ops::paste_plan(&clip, &ops::split_path(&target), &taken);
+            let plan = ops::paste_plan(&clip, &strategy_path::split_path(&target), &taken);
             specs_from(plan)
         };
         let new_names: Vec<String> = specs
@@ -322,7 +323,7 @@ impl StrategiesView {
         let Some(cut) = self.cut.clone() else {
             return 0;
         };
-        let segments = ops::split_path(target);
+        let segments = strategy_path::split_path(target);
         let generation = self.action_workspace_generation(cx);
 
         // Planned inside one store borrow, dispatched outside it.
@@ -509,7 +510,11 @@ impl StrategiesView {
                     // empty shell. Conditional rather than the bare `delete_folder`: the core
                     // refuses a populated folder either way, but this one also fails closed when
                     // a row added after the copy — never carried — has landed in it meanwhile.
-                    match session.delete_empty_folder(src, ops::join_path(folder), Vec::new()) {
+                    match session.delete_empty_folder(
+                        src,
+                        strategy_path::join_path(folder),
+                        Vec::new(),
+                    ) {
                         Ok(()) => cleared.push(folder.clone()),
                         Err(error) => log::warn!("cut source folder cleanup failed: {error}"),
                     }
@@ -700,7 +705,10 @@ impl StrategiesView {
             if let Err(error) = self.backend.read(cx).session.move_strategies(
                 target_core,
                 moves,
-                Some((ops::join_path(&path), ops::join_path(&moved_to))),
+                Some((
+                    strategy_path::join_path(&path),
+                    strategy_path::join_path(&moved_to),
+                )),
             ) {
                 log::warn!("move strategy folder failed: {error}");
                 return;

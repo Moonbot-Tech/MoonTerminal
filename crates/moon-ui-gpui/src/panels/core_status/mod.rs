@@ -50,12 +50,12 @@ use moon_ui::{
 
 use crate::Backend;
 use crate::controls::row_selection::RowSelection;
-use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design;
 use crate::workspace::scope_marker::{self, ScopeMarker};
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use model::{CoreStatusRow, ServerKey, ServerStatusGroup};
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 use moon_core::session::core_update::CoreUpdatePhase;
 use rust_i18n::t;
 
@@ -1145,7 +1145,7 @@ impl Render for CoreStatusView {
                         core_names,
                         scope,
                         picked,
-                        crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                        moon_core::util::display_time::zone_or_utc(b.header_clock_zone()),
                     )
                 };
                 // A pick whose core left the scope is dropped for good, not just for this frame:
@@ -1207,7 +1207,7 @@ impl Render for CoreStatusView {
                     Rc::new(server_names),
                     Rc::new(core_names),
                     &self.warn_table_state,
-                    crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                    moon_core::util::display_time::zone_or_utc(b.header_clock_zone()),
                     cx,
                 )
                 .into_any_element()
@@ -1288,7 +1288,7 @@ impl Render for CoreStatusView {
                     Rc::new(history),
                     Rc::new(server_names),
                     &self.updates_table_state,
-                    crate::chrome::clock::resolved_header_clock_zone(b.header_clock_zone()),
+                    moon_core::util::display_time::zone_or_utc(b.header_clock_zone()),
                     now_ms,
                     cx,
                 )

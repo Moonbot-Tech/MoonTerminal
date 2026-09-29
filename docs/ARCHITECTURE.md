@@ -131,7 +131,7 @@ mode**), By insertion — oldest first, or By insertion — newest first; stored
 
 Rules that are easy to break unnoticed:
 
-- **Every core list is built through `core_order`** (`moon-ui-gpui/src/core_order.rs`):
+- **Every core list is built through `core_order`** (`moon-core/src/session/core_order.rs`, shared with the Telegram code):
   `CoreOrder::{from_sessions, from_db}` return `OrderedCores`, whose field is private — assembling
   such a list around the module is impossible. If the list rows are richer than the pair `(id, name)` —
   `CoreOrder::sort_by`. The rank function is private on purpose: with it public, the order could be forgotten

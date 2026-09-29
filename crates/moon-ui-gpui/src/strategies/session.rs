@@ -48,7 +48,7 @@ pub(crate) struct StrategiesSessionState {
     /// Direction filter: `None` both, `Some(true)` short, `Some(false)` long.
     pub(crate) dir: Option<bool>,
     /// Exchange section filter, or `None` for every exchange.
-    pub(crate) exchange: Option<crate::core_order::ExchangeSection>,
+    pub(crate) exchange: Option<moon_core::session::core_order::ExchangeSection>,
     /// Empty UI folders that are tree structure without live strategies.
     pub(crate) ui_folders: HashSet<(CoreId, String)>,
 }

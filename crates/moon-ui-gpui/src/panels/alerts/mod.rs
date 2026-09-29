@@ -37,11 +37,11 @@ use moon_ui::{
 use moon_core::session::CoreId;
 use rust_i18n::t;
 
-use crate::core_order::{CoreOrder, OrderedCores};
 use crate::design::moon;
 use crate::panels::RenderGate;
 use crate::workspace::{EffectiveCoreScope, RetainedCoreScope};
 use crate::{Backend, design};
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 
 /// MoonProto ordinal for the `Alerts` strategy kind, the only kind assignable here.
 ///

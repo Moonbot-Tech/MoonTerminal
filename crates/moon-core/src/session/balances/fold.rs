@@ -1,34 +1,34 @@
-//! Folding cores that report one exchange account into one contribution to the footer total.
+//! Folding cores that report one exchange account into one contribution to a balance total.
 //!
 //! Several cores often trade on one account, and each reports the whole account's balance; a
 //! plain sum would count that money once per core. This module decides which figures reach the
 //! sum. It takes plain values and no GPUI types, so the rule is testable on its own.
 
-use super::balances::BalanceFigures;
-use moon_core::config::TotalMode;
-use moon_core::venue::{AccountMergeKey, Brand};
+use super::BalanceFigures;
+use crate::config::TotalMode;
+use crate::venue::{AccountMergeKey, Brand};
 
 /// One in-scope core as the fold sees it.
-pub(crate) struct TotalMember {
+pub struct TotalMember {
     /// Display name, used to explain a fold in the tooltip.
-    pub(crate) name: String,
+    pub name: String,
     /// The core's own balance reading.
-    pub(crate) figures: BalanceFigures,
+    pub figures: BalanceFigures,
     /// Which account and wallet the balance is, or `None` when unknown (never merged).
-    pub(crate) merge: Option<AccountMergeKey>,
+    pub merge: Option<AccountMergeKey>,
     /// The core's persisted total setting.
-    pub(crate) mode: TotalMode,
+    pub mode: TotalMode,
 }
 
 /// Cores left out of the sum because another core already counts their account.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FoldedGroup {
+pub struct FoldedGroup {
     /// Name of the core whose reading was counted.
-    pub(crate) kept: String,
+    pub kept: String,
     /// Names of the cores dropped in its favour, in input order.
-    pub(crate) folded: Vec<String>,
+    pub folded: Vec<String>,
     /// Brand of the shared account, which decides caveats the tooltip must add.
-    pub(crate) brand: Option<Brand>,
+    pub brand: Option<Brand>,
 }
 
 /// What reaches the sum, and what was left out and why.

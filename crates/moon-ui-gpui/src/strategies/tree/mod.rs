@@ -19,6 +19,7 @@ pub(crate) mod ui;
 mod tests;
 
 use super::*;
+use moon_core::session::core_order;
 
 use moon_ui::{MoonButtonIconSlot, MoonDisclosureDirection};
 use rust_i18n::t;
@@ -78,7 +79,7 @@ impl StrategiesView {
     pub(super) fn tree_panel(
         &self,
         store: &CoreStore,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         node_data: std::rc::Rc<std::collections::HashMap<SharedString, moon::NodeData>>,
         pane: &LeftPaneFrame,
         cx: &Context<Self>,
@@ -143,10 +144,8 @@ impl StrategiesView {
                 .find(|(section, _)| *section == selected)
                 .map(|(_, label)| label.clone())
                 .unwrap_or_else(|| match selected {
-                    crate::core_order::ExchangeSection::Venue(id) => {
-                        crate::controls::venue_id_label(id)
-                    }
-                    crate::core_order::ExchangeSection::Unidentified => {
+                    core_order::ExchangeSection::Venue(id) => crate::controls::venue_id_label(id),
+                    core_order::ExchangeSection::Unidentified => {
                         crate::controls::venue_section_label(None)
                     }
                 }),
@@ -466,10 +465,10 @@ impl StrategiesView {
     fn combo_exchange(
         &self,
         current: String,
-        exchanges: &[(crate::core_order::ExchangeSection, String)],
+        exchanges: &[(core_order::ExchangeSection, String)],
         cx: &Context<Self>,
     ) -> AnyElement {
-        use crate::core_order::ExchangeSection;
+        use moon_core::session::core_order::ExchangeSection;
 
         let view = cx.entity();
         let selected_exchange = self.filter.exchange;
@@ -542,7 +541,7 @@ impl StrategiesView {
     ///     Bottom action bar whose delayed callbacks refuse stale target plans atomically.
     fn action_bar(
         &self,
-        cores: &crate::core_order::OrderedCores,
+        cores: &core_order::OrderedCores,
         store: &CoreStore,
         pane: &LeftPaneFrame,
         cx: &Context<Self>,

@@ -177,3 +177,16 @@ fn short_minute_drops_the_date_only_for_today_in_the_zone() {
     assert_eq!(format_short_minute(close, Warsaw, next_day), "10.03 23:30");
     assert_eq!(format_short_minute(0, Warsaw, next_day), "");
 }
+
+/// Restricting resolution to the header clock's curated city list turns a valid first-run system
+/// zone outside the picker into UTC, so every panel disagrees with the operating system after
+/// restart.
+#[test]
+fn uncurated_persisted_iana_zone_remains_exact() {
+    assert_eq!(
+        zone_or_utc(Some("Europe/Prague")),
+        chrono_tz::Europe::Prague
+    );
+    assert_eq!(zone_or_utc(Some("Europe/Atlantis")), chrono_tz::UTC);
+    assert_eq!(zone_or_utc(None), chrono_tz::UTC);
+}

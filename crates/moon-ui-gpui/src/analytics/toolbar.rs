@@ -726,7 +726,7 @@ impl AnalyticsView {
                 }
             };
             (
-                crate::core_order::CoreOrder::new(&backend.config).from_db(db_cores),
+                moon_core::session::core_order::CoreOrder::new(&backend.config).from_db(db_cores),
                 backend.session.core_venues(),
             )
         };

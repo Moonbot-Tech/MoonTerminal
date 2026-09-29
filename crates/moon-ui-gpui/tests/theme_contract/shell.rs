@@ -557,7 +557,7 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
         );
     }
     for needle in [
-        "crate::core_order::exchange_sections(",
+        "moon_core::session::core_order::exchange_sections(",
         "crate::controls::venue_section_label(venue)",
         ".then_some(venue)",
         ".and_then(|venue| venue.brand())",

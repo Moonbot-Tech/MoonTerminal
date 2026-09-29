@@ -12,7 +12,7 @@ use moon_core::session::{CoreId, CoreSysStatus};
 use moon_core::venue::{Brand, CoreVenue};
 use rust_i18n::t;
 
-use crate::core_order::ExchangeSection;
+use moon_core::session::core_order::{self, ExchangeSection};
 
 use super::model::{CoreStatusRow, GroupVersion, ServerStatusGroup, TzOffsetGroup};
 use super::startup::{StartupCell, startup_cell};
@@ -481,7 +481,7 @@ pub(super) struct FlatSection {
 /// (or the default attention-first order) to `rows` first, and this function only cuts the result
 /// into sections — so a descending click reverses rows WITHIN each section and never moves a
 /// section. Section order comes from the shared directory ordering in
-/// [`crate::core_order::exchange_sections`], the same one the left rail, the Strategies tree and
+/// [`core_order::exchange_sections`], the same one the left rail, the Strategies tree and
 /// the Assets panel already use, so a sort click here can never make this panel disagree with them
 /// about where an exchange sits.
 ///
@@ -499,18 +499,17 @@ pub(super) fn flat_lines(
     rows: &[CoreStatusRow],
     venues: &HashMap<CoreId, CoreVenue>,
 ) -> Vec<FlatLine> {
-    let sections =
-        crate::core_order::exchange_sections(rows.iter().enumerate().map(|(index, row)| {
-            let venue = venues.get(&row.id);
-            (index, venue)
-        }));
+    let sections = core_order::exchange_sections(rows.iter().enumerate().map(|(index, row)| {
+        let venue = venues.get(&row.id);
+        (index, venue)
+    }));
     // One heading plus every member, so the exact final length is known up front.
     let mut lines = Vec::with_capacity(rows.len() + sections.len());
     for (venue, members) in sections {
         lines.push(FlatLine::Section(FlatSection {
             // Through the shared bucketing rule rather than re-deciding here what "unidentified"
             // means, so the heading and the partition it heads cannot drift apart.
-            section: crate::core_order::section_of(venue),
+            section: core_order::section_of(venue),
             label: stable_section_label(venue, &members, rows, venues),
             // Identity, not caption: every member of one section shares an `ExchangeId`, so the
             // brand is the same whichever member the partition handed back.
@@ -527,7 +526,7 @@ pub(super) fn flat_lines(
 /// A venue the directory NAMES captions from the directory, so every member spells it identically.
 /// A venue nothing names falls back to the core's own wire text, and members of one ordinal can
 /// disagree about it — two cores on the same unknown platform can report two spellings.
-/// [`crate::core_order::exchange_sections`] hands back the FIRST member's venue, and "first" moves
+/// [`core_order::exchange_sections`] hands back the FIRST member's venue, and "first" moves
 /// with the active column sort, so captioning from it would make such a heading rename itself when
 /// the user clicks a sort arrow.
 ///

@@ -354,7 +354,7 @@ impl DetectsPanel {
         // reverse insertion order — so this order is what decides how detects of the same instant
         // read on screen. The one exception is a replay (below), which re-fills the queue out of
         // order and re-sorts it stably to put that right; nothing on the normal path re-sorts.
-        let order = crate::core_order::CoreOrder::new(&b.config);
+        let order = moon_core::session::core_order::CoreOrder::new(&b.config);
         let mut cores: Vec<(CoreId, String, [u8; 3])> = b
             .session
             .sessions()

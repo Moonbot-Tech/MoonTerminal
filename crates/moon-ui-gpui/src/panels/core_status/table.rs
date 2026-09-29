@@ -4,6 +4,7 @@
 //! least once; the build column does the same until the core reports its build. Header clicks sort
 //! through the panel, like every other data table.
 
+use moon_core::session::core_order;
 use std::collections::HashMap;
 
 use super::model::{ApiKeyState, ServerKey};
@@ -507,8 +508,10 @@ fn section_row(
     // changes with the interface language and with a core build's spelling, which makes GPUI treat
     // one heading as a different element and drop its hover state.
     let key = match section.section {
-        crate::core_order::ExchangeSection::Venue(id) => format!("{}-{}", id.code, id.dex),
-        crate::core_order::ExchangeSection::Unidentified => "unknown".to_string(),
+        core_order::ExchangeSection::Venue(id) => {
+            format!("{}-{}", id.code, id.dex)
+        }
+        core_order::ExchangeSection::Unidentified => "unknown".to_string(),
     };
     let logo = logos_ready
         .then_some(section.brand)

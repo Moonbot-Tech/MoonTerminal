@@ -19,7 +19,7 @@ use super::model::scoped_query_core_ids;
 use super::rows::{GroupMode, LiveContext, MonitorRow, RowLabels, fold_total, grouped_rows};
 use super::{
     ContextChange, MonitorLayout, MonitorPeriod, MonitorSort, MonitorSortColumn,
-    duration_until_period_refresh, monitor_zone, next_sort, retain_last_known_venues, sort_rows,
+    duration_until_period_refresh, next_sort, retain_last_known_venues, sort_rows,
 };
 
 /// Every part printed: the form a column takes whenever the room allows it.
@@ -478,16 +478,6 @@ fn today_includes_the_early_warsaw_hour() {
         MonitorPeriod::Today.range_at(now, Tz::UTC),
         "the selected city must change the calendar query bounds"
     );
-}
-
-/// `profit_monitor/model.rs:monitor_zone` must share the header clock's exact-IANA policy; restricting
-/// it to the curated city table makes this assertion red and sends a Detroit system profile back
-/// to UTC calendar bounds after restart.
-#[test]
-fn monitor_zone_matches_the_visible_header_exact_iana_policy() {
-    assert_eq!(monitor_zone(Some("Europe/Warsaw")), Warsaw);
-    assert_eq!(monitor_zone(Some("America/Detroit")), Tz::America__Detroit);
-    assert_eq!(monitor_zone(None), Tz::UTC);
 }
 
 /// `display_time::day_start` must advance across a fully skipped civil date; restoring a short gap

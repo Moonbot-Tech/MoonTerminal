@@ -37,12 +37,12 @@ use gpui::{App, Context, WindowId};
 use crate::Backend;
 use crate::backend::core_warn::axis_has_series;
 use crate::chartdx::ChartDataHandle;
-use crate::core_order::{CoreOrder, OrderedCores};
 use moon_core::config::{CoreGroup, WorkspaceMode};
 use moon_core::db::valuation::ValuationMode;
 use moon_core::feed::{StrategyEditOutcome, StrategyEditResult, StrategyFieldChange};
 use moon_core::market::MarketLimits;
 use moon_core::session::CoreId;
+use moon_core::session::core_order::{CoreOrder, OrderedCores};
 use moon_ui::{DockAreaState, DockTopologyByName};
 
 /// Milliseconds of history kept on each side of a warning start for its persisted graphs (±30 s, a
@@ -2037,9 +2037,9 @@ impl Backend {
         offset_min: i32,
         cx: &mut Context<Self>,
     ) {
-        crate::chartdx::axes::set_display_zone(crate::chrome::clock::resolved_header_clock_zone(
-            Some(zone),
-        ));
+        crate::chartdx::axes::set_display_zone(moon_core::util::display_time::zone_or_utc(Some(
+            zone,
+        )));
         let zone_changed = self.layout.header_clock_zone.as_deref() != Some(zone);
         if zone_changed || self.layout.header_clock_offset_min != offset_min {
             self.layout.header_clock_zone = Some(zone.to_string());

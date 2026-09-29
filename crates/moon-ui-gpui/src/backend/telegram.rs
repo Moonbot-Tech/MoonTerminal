@@ -325,7 +325,7 @@ impl Backend {
                             self.telegram_report(chat_id, request, reply, cx)
                         }
                         ParsedCommand::Help => {
-                            let zone = crate::chrome::clock::resolved_header_clock_zone(
+                            let zone = moon_core::util::display_time::zone_or_utc(
                                 self.header_clock_zone(),
                             );
                             let _ = reply.try_send(reports::help(&zone.to_string()));
@@ -520,7 +520,7 @@ fn telegram_labels() -> std::collections::BTreeMap<String, String> {
         let path = format!("telegram.{key}");
         labels.insert((*key).to_string(), t!(&path).to_string());
     }
-    for (kind, panel_key) in mini_app::FAULT_LABELS {
+    for (kind, panel_key) in moon_core::feed::fault_keys::FAULT_KIND_SHORT_KEYS {
         let path = (*panel_key).to_string();
         labels.insert(format!("mini_fault_{kind}"), t!(&path).to_string());
     }

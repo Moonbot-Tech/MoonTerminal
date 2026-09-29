@@ -4,6 +4,7 @@
 use super::super::*;
 use super::ops;
 use super::ui::{ContextMenu, MenuTarget};
+use moon_core::feed::strategy_path;
 use moon_ui::{MoonContextMenuWindowExt as _, MoonWindowExt as _};
 use rust_i18n::t;
 
@@ -167,10 +168,10 @@ impl StrategiesView {
                 items.push(paste_here_item(
                     &view,
                     core,
-                    ops::join_path(path),
+                    strategy_path::join_path(path),
                     paste_ready,
                 ));
-                let t = ops::join_path(path);
+                let t = strategy_path::join_path(path);
                 items.push(
                     MoonMenuItem::with_key(
                         "new-strategy-here",
@@ -186,7 +187,7 @@ impl StrategiesView {
                         }
                     }),
                 );
-                let t = ops::join_path(path);
+                let t = strategy_path::join_path(path);
                 items.push(
                     MoonMenuItem::with_key(
                         "new-folder-here",

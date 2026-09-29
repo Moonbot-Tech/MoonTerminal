@@ -515,7 +515,7 @@ impl SettingsView {
             })
             .collect();
         let groups = sorted_group_rows(&servers, &config.groups);
-        let order = crate::core_order::CoreOrder::new(config);
+        let order = moon_core::session::core_order::CoreOrder::new(config);
         let labels = EntryLabels {
             pending: "",
             exchange: &|venue| crate::controls::venue_section_label(venue),

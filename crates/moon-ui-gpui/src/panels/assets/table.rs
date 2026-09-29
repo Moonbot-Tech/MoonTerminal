@@ -722,7 +722,7 @@ impl AssetsView {
         let mut list = v_flex().w_full().gap_0();
         if self.group_by_venue(cx) {
             let venues = self.backend.read(cx).session.core_venues();
-            let sections = crate::core_order::exchange_sections(
+            let sections = moon_core::session::core_order::exchange_sections(
                 aggs.iter()
                     .enumerate()
                     .map(|(index, agg)| (index, venues.get(&agg.id))),
@@ -1067,7 +1067,7 @@ fn pnl_cell(e: &AssetEntry, p: MoonPalette) -> MoonDataCell {
     // owns the `-0.0` case this cell used to special-case by hand: it classifies the sign from the
     // ROUNDED value, so a short resting exactly at its entry renders an unsigned `0.00`.
     match super::columns::pnl_display(e)
-        .and_then(|v| fmt::signed_fixed(v, crate::order_math::MONEY_DECIMALS))
+        .and_then(|v| fmt::signed_fixed(v, moon_core::feed::order_math::MONEY_DECIMALS))
     {
         Some((text, sign)) => MoonDataCell::text(text)
             .tone(design::delta_tone(sign))
