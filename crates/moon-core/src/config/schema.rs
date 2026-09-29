@@ -307,7 +307,7 @@ pub struct ServerMeta {
     #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub workspace_membership: WorkspaceMembership,
     /// How this core counts toward the Assets footer and Telegram Mini App totals; see `ServerConfig::total_mode`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::config::tolerant::or_default")]
     pub total_mode: TotalMode,
 }
 
