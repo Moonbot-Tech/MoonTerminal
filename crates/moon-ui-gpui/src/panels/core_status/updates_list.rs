@@ -178,7 +178,12 @@ fn history_row(
         time_text(record.started_ms, zone),
         record.core_name.clone(),
         server,
-        from_to_text(record.from, to, &record.target),
+        from_to_text(
+            record.from,
+            to,
+            matches!(record.outcome, CoreUpdateOutcome::Succeeded { .. }),
+            &record.target,
+        ),
         target_text(&record.target),
         outcome,
         duration,
@@ -227,11 +232,17 @@ fn cells(
 /// `from → to`, followed by the short build label when a named/test build was confirmed.
 ///
 /// A test build can carry the same number as the release, so `7.71 → 7.71` alone says nothing;
-/// `7.71 → 7.71 R2` names what was installed. No label without a confirmed `to`.
-fn from_to_text(from: Option<u32>, to: Option<u32>, target: &UpdateTarget) -> String {
+/// `7.71 → 7.71 R2` names what was installed. Labelled only when the attempt `succeeded`: an
+/// `Unchanged` row confirmed a number, never that the requested build is what runs.
+fn from_to_text(
+    from: Option<u32>,
+    to: Option<u32>,
+    succeeded: bool,
+    target: &UpdateTarget,
+) -> String {
     let base = format!("{} \u{2192} {}", number_or_dash(from), number_or_dash(to));
-    match (to, target) {
-        (Some(_), UpdateTarget::Named(name)) => format!("{base} {}", named_build_label(name)),
+    match target {
+        UpdateTarget::Named(name) if succeeded => format!("{base} {}", named_build_label(name)),
         _ => base,
     }
 }

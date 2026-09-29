@@ -14,19 +14,22 @@ fn core_update_named_build_label_drops_the_moonbot_prefix() {
 }
 
 /// A test build installed on the release's own number names itself in the row, a Release row and
-/// an unconfirmed row do not.
+/// an `Unchanged` row do not.
 ///
 /// Breaks when the label is dropped: the row reads `7.71 -> 7.71` and looks like nothing happened.
 #[test]
 fn core_update_from_to_names_an_installed_test_build() {
     let named = UpdateTarget::Named("MoonBot-R2".to_string());
     assert_eq!(
-        from_to_text(Some(771), Some(771), &named),
+        from_to_text(Some(771), Some(771), true, &named),
         "7.71 \u{2192} 7.71 R2"
     );
     assert_eq!(
-        from_to_text(Some(771), Some(771), &UpdateTarget::Release),
+        from_to_text(Some(771), Some(771), true, &UpdateTarget::Release),
         "7.71 \u{2192} 7.71"
     );
-    assert_eq!(from_to_text(Some(771), None, &named), "7.71 \u{2192} —");
+    assert_eq!(
+        from_to_text(Some(771), Some(771), false, &named),
+        "7.71 \u{2192} 7.71"
+    );
 }
