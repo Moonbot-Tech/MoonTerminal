@@ -181,9 +181,10 @@ pub enum CoreUpdatePhase {
 /// How one update attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoreUpdateOutcome {
-    /// The core came back on a different build than it left on.
+    /// The core came back on a different build than it left on, or -- for a named/test target --
+    /// restarted onto the same build number (see [`verified_outcome`]).
     Succeeded { from: Option<u32>, to: u32 },
-    /// The core came back on the SAME build it left on. This is a success for the queue --
+    /// A RELEASE attempt whose core came back on the SAME build it left on. This is a success for the queue --
     /// nothing is in flight on that IP once the core is back -- but a NEUTRAL outcome for the row,
     /// never rendered as a failure. It is also a deliberate, recorded deviation from a literal
     /// reading of "never two simultaneous updates on one IP": the invariant bought is exactly
@@ -214,6 +215,21 @@ pub enum CoreUpdateOutcome {
     Unverified(UnverifiedReason),
     /// The attempt failed; see [`UpdateFailure`] for which way.
     Failed(UpdateFailure),
+}
+
+/// Outcome of an attempt that reached `Verifying` and read `to` from a fresh client.
+///
+/// Reaching `Verifying` already proves the core departed and came back settled, so the process
+/// restarted. A named/test build may carry the SAME number as the release it replaces (the
+/// protocol reports only `server_version`, no build name), so a Named attempt that restarted onto
+/// an equal number is `Succeeded { from == to }` — installed — rather than `Unchanged`. A Release
+/// attempt keeps the plain number comparison.
+pub fn verified_outcome(target: &UpdateTarget, from: Option<u32>, to: u32) -> CoreUpdateOutcome {
+    if from == Some(to) && *target == UpdateTarget::Release {
+        CoreUpdateOutcome::Unchanged { version: to }
+    } else {
+        CoreUpdateOutcome::Succeeded { from, to }
+    }
 }
 
 /// Why a `Verifying` attempt could not establish the core's post-update build.
@@ -1161,6 +1177,7 @@ impl SessionManager {
                     }
                 }
                 CoreUpdatePhase::Verifying {
+                    target,
                     from,
                     epoch1,
                     verify_at_ms,
@@ -1175,11 +1192,7 @@ impl SessionManager {
                         && data.server_version.is_some();
                     if verified {
                         let v = data.server_version.expect("verified implies Some above");
-                        let outcome = if Some(v) != *from {
-                            CoreUpdateOutcome::Succeeded { from: *from, to: v }
-                        } else {
-                            CoreUpdateOutcome::Unchanged { version: v }
-                        };
+                        let outcome = verified_outcome(target, *from, v);
                         let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
                             continue;
                         };

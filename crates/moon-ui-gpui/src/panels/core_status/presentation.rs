@@ -631,10 +631,10 @@ pub(super) fn update_badge(phase: Option<&CoreUpdatePhase>) -> Option<UpdateBadg
             level: LoadLevel::Notice,
             locale_key: "core_update.phase.verifying",
         }),
-        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => Some(UpdateBadge {
+        CoreUpdatePhase::Done(outcome @ CoreUpdateOutcome::Succeeded { .. }) => Some(UpdateBadge {
             glyph: "\u{2713}", // ✓
             level: LoadLevel::Normal,
-            locale_key: "core_update.phase.succeeded",
+            locale_key: succeeded_locale_key(outcome),
         }),
         // NO badge. "The build did not move" is the one outcome that says nothing about the core
         // as it stands now, and this badge sits permanently beside the build number -- so on a
@@ -691,6 +691,18 @@ pub(super) fn update_badge_for_group(update: GroupUpdate) -> Option<UpdateBadge>
     }
 }
 
+/// Locale key for a `Succeeded` outcome: "installed" when the core restarted onto the same build
+/// number (only a named/test target produces that, see `core_update::verified_outcome`), else
+/// "updated".
+fn succeeded_locale_key(outcome: &CoreUpdateOutcome) -> &'static str {
+    match outcome {
+        CoreUpdateOutcome::Succeeded { from, to } if *from == Some(*to) => {
+            "core_update.phase.installed"
+        }
+        _ => "core_update.phase.succeeded",
+    }
+}
+
 /// Full localized hover text for one core's own update-queue phase.
 ///
 /// Args:
@@ -705,8 +717,8 @@ pub(super) fn update_tooltip(phase: &CoreUpdatePhase) -> String {
         CoreUpdatePhase::Sent { .. } => t!("core_update.phase.sent").to_string(),
         CoreUpdatePhase::Waiting { .. } => t!("core_update.phase.waiting").to_string(),
         CoreUpdatePhase::Verifying { .. } => t!("core_update.phase.verifying").to_string(),
-        CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded { .. }) => {
-            t!("core_update.phase.succeeded").to_string()
+        CoreUpdatePhase::Done(outcome @ CoreUpdateOutcome::Succeeded { .. }) => {
+            t!(succeeded_locale_key(outcome)).to_string()
         }
         CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => {
             t!("core_update.phase.unchanged").to_string()

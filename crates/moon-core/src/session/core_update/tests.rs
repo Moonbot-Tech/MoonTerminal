@@ -529,3 +529,53 @@ fn reconnect_backoff_counts_as_one_connection_departure() {
         "one Ready-to-down transition is one departure even when reconnect backoff reports twice"
     );
 }
+
+/// A test build can carry the release's own number, and the protocol reports no build name, so a
+/// Named attempt that restarted (it reached `Verifying`) onto the same number is installed.
+///
+/// Breaks when `verified_outcome` compares numbers alone for every target: the tester's
+/// campaign then reads "version did not change" on every core although the build was installed.
+#[test]
+fn a_named_build_on_the_same_number_is_installed() {
+    let named = UpdateTarget::Named("MoonBot-R2".to_string());
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(771),
+            to: 771
+        }
+    );
+    assert_eq!(
+        verified_outcome(&named, Some(770), 771),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(770),
+            to: 771
+        }
+    );
+}
+
+/// A Release attempt keeps the number comparison: an equal number is `Unchanged`.
+///
+/// Breaks when the Named rule leaks onto Release: an already-current core would read "updated".
+#[test]
+fn a_release_on_the_same_number_stays_unchanged() {
+    let release = UpdateTarget::Release;
+    assert_eq!(
+        verified_outcome(&release, Some(771), 771),
+        CoreUpdateOutcome::Unchanged { version: 771 }
+    );
+    assert_eq!(
+        verified_outcome(&release, Some(770), 771),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(770),
+            to: 771
+        }
+    );
+    assert_eq!(
+        verified_outcome(&release, None, 771),
+        CoreUpdateOutcome::Succeeded {
+            from: None,
+            to: 771
+        }
+    );
+}
