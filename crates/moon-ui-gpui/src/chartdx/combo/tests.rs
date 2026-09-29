@@ -21,13 +21,13 @@ fn offscreen_eviction_with_overlapping_append_keeps_incremental_bake() {
         layer.resident_head = head;
         layer.append(&[cross(100.0, 0, 1.0), cross(100.0, 1, 1.0)]);
         let span = (50.0, 250.0);
-        assert!(!layer.append_invalidates_bake(layer.pending_append.len(), span));
+        assert!(!layer.append_evicts_baked(layer.pending_append.len(), span));
         assert!(
-            layer.append_invalidates_bake(3, span),
+            layer.append_evicts_baked(3, span),
             "visible eviction must repaint"
         );
         assert!(
-            layer.append_invalidates_bake(4, span),
+            layer.append_evicts_baked(4, span),
             "full replacement must repaint"
         );
     }
@@ -192,13 +192,13 @@ fn commit_cross(
 #[test]
 fn live_follow_inside_the_margin_never_rebakes_and_slides_the_blit() {
     use super::plan::{
-        ComboBakeKey, VolumeBakeKey, combo_v_margin_px, combo_x_margin_px, cross_blit_uv,
+        ComboBakeKey, VolumeBakeKey, combo_tex_w, combo_v_margin_px, cross_blit_uv,
         plan_cross_bake, plan_volume_bake,
     };
     let (mut view, area, mut now) = follow_pane();
     let (bw, bh) = (area.w, area.h);
     let v_margin = combo_v_margin_px(bh);
-    let tex_w = (bw + combo_x_margin_px(bw)).round() as u32;
+    let tex_w = combo_tex_w(bw);
     let tex_h_total = bh as u32 + 2 * v_margin as u32;
     let mut key = ComboBakeKey::unbaked(tex_w, tex_h_total, v_margin);
     let mut vkey = VolumeBakeKey::unbaked(tex_w, 72, bh as u32);
@@ -487,4 +487,133 @@ fn pending_append_keeps_newest_capacity() {
         order.max_lateness() >= 40.0,
         "fixture lateness is 50 minus 10"
     );
+}
+
+/// `combo/plan.rs:full_bake_t0` / `x_margin_exhausted`: a bake that starts at the view's left
+/// edge again (a right-only margin) fully rebakes both bitmaps on the first pixel of a drag
+/// toward history; a pan either way inside the margin must only slide the blit.
+#[test]
+fn horizontal_pan_inside_the_margin_either_way_never_rebakes() {
+    use super::plan::{
+        ComboBakeKey, VolumeBakeKey, combo_tex_w, combo_v_margin_px, combo_x_margin_px,
+        cross_blit_uv, plan_cross_bake, plan_volume_bake, volume_blit_uv,
+    };
+    let (view, area, _) = follow_pane();
+    let (bw, bh) = (area.w, area.h);
+    let margin = combo_x_margin_px(bw);
+    let tex_w = combo_tex_w(bw);
+    assert_eq!(tex_w, (bw + 2.0 * margin).round() as u32);
+    let v_margin = combo_v_margin_px(bh);
+    let mut key = ComboBakeKey::unbaked(tex_w, bh as u32 + 2 * v_margin as u32, v_margin);
+    let mut vkey = VolumeBakeKey::unbaked(tex_w, 72, bh as u32);
+    let g0 = gpu_of(&view, area);
+    let first = plan_cross_bake(&key, &g0, bw);
+    assert!(first.full);
+    commit_cross(&mut key, first, &g0);
+    let vfirst = plan_volume_bake(&vkey, &g0, bw, |_| (1.0, 1.0));
+    assert!(vfirst.full);
+    assert_eq!(vfirst.bake_t0.to_bits(), first.bake_t0.to_bits());
+    vkey.bake_t0 = vfirst.bake_t0;
+    vkey.time_to_px = g0.time_to_px;
+    vkey.volume_alpha = g0.volume_alpha;
+    vkey.scale = vfirst.scale;
+    vkey.valid = true;
+
+    // The bake leaves a whole margin of history to the left of the view.
+    let left_px = (g0.view_time0 - first.bake_t0) * g0.time_to_px;
+    assert!(
+        left_px >= margin - 1.0 && left_px <= margin + 1.0,
+        "left margin {left_px} px, want {margin}"
+    );
+    let u0 = cross_blit_uv(&key, &g0).0[0] * tex_w as f32;
+    let reach = (margin - 2.0).floor() as i32;
+    for px in [-reach, -40, -1, 1, 40, reach] {
+        let mut g = g0;
+        g.view_time0 = g0.view_time0 + px as f32 / g0.time_to_px;
+        assert!(
+            !plan_cross_bake(&key, &g, bw).full,
+            "{px} px pan rebakes crosses"
+        );
+        assert!(
+            !plan_volume_bake(&vkey, &g, bw, |_| (1.0, 1.0)).full,
+            "{px} px pan rebakes volume"
+        );
+        let u = cross_blit_uv(&key, &g).0[0] * tex_w as f32;
+        assert!(
+            ((u - u0) - px as f32).abs() <= 1.0,
+            "{px} px pan moved the blit {}",
+            u - u0
+        );
+        let vu = volume_blit_uv(&vkey, &g).0[0] * tex_w as f32;
+        assert!((vu - u).abs() < 1e-3, "volume and crosses blit apart");
+    }
+    for px in [-(margin as i32) - 4, margin as i32 + 4] {
+        let mut g = g0;
+        g.view_time0 = g0.view_time0 + px as f32 / g0.time_to_px;
+        assert!(
+            plan_cross_bake(&key, &g, bw).full,
+            "{px} px pan past the margin"
+        );
+        assert!(plan_volume_bake(&vkey, &g, bw, |_| (1.0, 1.0)).full);
+    }
+}
+
+/// `ComboLayer::defer_eviction_rebake` / `flush_due_eviction`: arming the rebake on every
+/// eviction, or pushing the deadline back on each one, either rebakes per tick or never.
+#[test]
+fn eviction_damage_waits_for_one_coalesced_rebake() {
+    use std::time::{Duration, Instant};
+    let mut layer = ComboLayer::new();
+    let t0 = Instant::now();
+    assert!(!layer.eviction_rebake_due(t0 + Duration::from_secs(60)));
+    layer.defer_eviction_rebake(t0);
+    assert!(!layer.eviction_rebake_due(t0));
+    layer.defer_eviction_rebake(t0 + Duration::from_millis(600));
+    let almost = t0 + super::EVICTION_REBAKE_INTERVAL - Duration::from_millis(1);
+    assert!(
+        !layer.eviction_rebake_due(almost),
+        "due before the interval"
+    );
+    layer.flush_due_eviction(almost);
+    assert!(
+        layer.eviction_rebake_at.is_some(),
+        "flushed before the interval"
+    );
+    let due = t0 + super::EVICTION_REBAKE_INTERVAL;
+    assert!(
+        layer.eviction_rebake_due(due),
+        "a later eviction pushed the deadline"
+    );
+    layer.flush_due_eviction(due);
+    assert!(
+        !layer.eviction_rebake_due(due + Duration::from_secs(5)),
+        "flush kept the deadline"
+    );
+
+    // Eviction alone defers; a refused write or a capacity-sized batch re-uploads the ring and
+    // invalidates at once, which also drops a pending deadline.
+    use super::plan::{AppendBakeDamage, append_bake_damage};
+    assert_eq!(append_bake_damage(true, false), AppendBakeDamage::None);
+    assert_eq!(append_bake_damage(true, true), AppendBakeDamage::Defer);
+    assert_eq!(
+        append_bake_damage(false, false),
+        AppendBakeDamage::Invalidate
+    );
+    assert_eq!(
+        append_bake_damage(false, true),
+        AppendBakeDamage::Invalidate
+    );
+    layer.settle_append_damage(AppendBakeDamage::Defer, due);
+    assert!(layer.eviction_rebake_due(due + super::EVICTION_REBAKE_INTERVAL));
+    layer.settle_append_damage(AppendBakeDamage::Invalidate, due);
+    assert_eq!(layer.eviction_rebake_at, None);
+
+    // Any other immediate invalidation (here a style change) erases it too.
+    layer.defer_eviction_rebake(due);
+    let style = super::TickStyleGpu {
+        buy: [0.5; 4],
+        ..Default::default()
+    };
+    layer.set_tick_style(style);
+    assert_eq!(layer.eviction_rebake_at, None);
 }

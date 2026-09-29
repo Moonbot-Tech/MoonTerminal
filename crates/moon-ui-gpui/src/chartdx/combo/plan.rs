@@ -5,9 +5,25 @@ use moon_chart::tick_volume::lod_applies;
 
 use super::super::gpu::ChartViewGpu;
 
-/// Horizontal bake margin in pixels on the right of the visible chart width.
+/// Horizontal bake margin in pixels, baked on EACH side of the visible chart width.
 pub(super) fn combo_x_margin_px(bw: f32) -> f32 {
     (bw * 0.2).max(128.0)
+}
+
+/// Bitmap width in texels: the visible width plus a margin on the left and on the right.
+pub(super) fn combo_tex_w(bw: f32) -> u32 {
+    (bw + 2.0 * combo_x_margin_px(bw)).round().max(1.0) as u32
+}
+
+/// Left time edge of a full bake: one margin left of the view, snapped to the texel phase.
+fn full_bake_t0(view: &ChartViewGpu, bw: f32) -> f32 {
+    let ttp = view.time_to_px;
+    let t0 = if ttp > 1e-9 {
+        view.view_time0 - combo_x_margin_px(bw) / ttp
+    } else {
+        view.view_time0
+    };
+    texel_aligned_time0(t0, ttp)
 }
 
 /// Vertical bake margin in pixels above and below the visible chart height.
@@ -65,10 +81,10 @@ impl ComboBakeKey {
     }
 }
 
-/// Whether the view has left the horizontal margin a bake starting at `bake_t0` covers.
+/// Whether the view has left the margins a bake starting at `bake_t0` covers on either side.
 fn x_margin_exhausted(bake_t0: f32, view: &ChartViewGpu, bw: f32) -> bool {
     let u_left_px = (view.view_time0 - bake_t0) * view.time_to_px;
-    !(u_left_px >= 0.0 && u_left_px <= combo_x_margin_px(bw))
+    !(u_left_px >= 0.0 && u_left_px <= 2.0 * combo_x_margin_px(bw) - 1.0)
 }
 
 /// Whole-texel left edge of the view inside a bitmap baked from `bake_t0`, as a U coordinate.
@@ -112,7 +128,7 @@ pub(super) fn plan_cross_bake(key: &ComboBakeKey, view: &ChartViewGpu, bw: f32) 
     };
     CrossBakePlan {
         full,
-        bake_t0: texel_aligned_time0(view.view_time0, ttp),
+        bake_t0: full_bake_t0(view, bw),
         bake_p0,
     }
 }
@@ -182,7 +198,7 @@ pub(super) fn plan_volume_bake(
         || key.volume_alpha.to_bits() != view.volume_alpha.to_bits()
         || x_margin_exhausted(key.bake_t0, view, bw);
     let bake_t0 = if full {
-        texel_aligned_time0(view.view_time0, ttp)
+        full_bake_t0(view, bw)
     } else {
         key.bake_t0
     };
@@ -203,6 +219,29 @@ pub(super) fn volume_blit_uv(key: &VolumeBakeKey, view: &ChartViewGpu) -> ([f32;
         [x_blit_u(key.bake_t0, key.tex_w, view), 0.0],
         [view.bounds[2] / key.tex_w as f32, 1.0],
     )
+}
+
+/// What an applied tick append does to the baked bitmaps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AppendBakeDamage {
+    /// Only new rows land; the incremental pass draws them.
+    None,
+    /// Rows evicted from a baked span stay painted until one coalesced rebake.
+    Defer,
+    /// The ring was re-uploaded whole, so both bitmaps rebake on the next prepare.
+    Invalidate,
+}
+
+/// Classify an append: a refused in-place write or a capacity-sized batch (`written == false`)
+/// invalidates at once; eviction of possibly baked rows alone is deferred.
+pub(super) fn append_bake_damage(written: bool, evicts_baked: bool) -> AppendBakeDamage {
+    if !written {
+        AppendBakeDamage::Invalidate
+    } else if evicts_baked {
+        AppendBakeDamage::Defer
+    } else {
+        AppendBakeDamage::None
+    }
 }
 
 /// Instances one full-bake pass draws: the reduced list's length when LOD applies, else every
