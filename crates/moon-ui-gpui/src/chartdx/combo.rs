@@ -44,9 +44,9 @@ const BLIT_HLSL: &str = include_str!("shaders/blit.hlsl");
 mod plan;
 
 use plan::{
-    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, combo_tex_w,
-    combo_v_margin_px, cross_blit_uv, lod_instance_count, plan_cross_bake, plan_volume_bake,
-    volume_band_px, volume_blit_uv,
+    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, append_span_damage,
+    combo_tex_w, combo_v_margin_px, cross_blit_uv, lod_instance_count, plan_cross_bake,
+    plan_volume_bake, volume_band_px, volume_blit_uv,
 };
 
 /// Cross-rendering pipeline and resident VRAM tick ring.
@@ -1342,39 +1342,6 @@ fn draw_price_ring(
         context.PSSetShader(ps, None);
         context.DrawInstanced(6, segments, 0, 0);
     }
-}
-
-/// Whether new rows, or the old rows they evict, intersect either cached span.
-///
-/// `old` is the logical ring before the append, in chronological order. The
-/// eviction count is how far `old.len() + new_rows.len()` passes `capacity`,
-/// and it never exceeds `old.len()`. A non-finite time touches every span.
-///
-/// Args:
-///     old: Pending logical ring before this append.
-///     new_rows: Rows about to be appended.
-///     cross_span: Cached cross-bitmap time span, margins included.
-///     volume_span: Cached volume-bitmap time span, margins included.
-///     capacity: Ring capacity. Already a positive normalized value.
-///
-/// Returns:
-///     `true` when any tested time lies in either span.
-fn append_span_damage<'a>(
-    old: impl ExactSizeIterator<Item = &'a ChartCross>,
-    new_rows: &[ChartCross],
-    cross_span: (f64, f64),
-    volume_span: (f64, f64),
-    capacity: usize,
-) -> bool {
-    let evicted = old
-        .len()
-        .saturating_add(new_rows.len())
-        .saturating_sub(capacity)
-        .min(old.len());
-    let touches =
-        |time: f32| tick_touches_bake(time, cross_span) || tick_touches_bake(time, volume_span);
-    new_rows.iter().any(|row| touches(row.time_rel))
-        || old.take(evicted).any(|row| touches(row.time_rel))
 }
 
 fn sanitize_capacity(capacity: usize) -> u32 {

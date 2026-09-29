@@ -213,20 +213,24 @@ impl PlatformLayers {
 
     /// Whether appending these rows can change a cached combo bitmap.
     ///
-    /// DX11 asks the combo layer, which knows both bake spans. Every other
-    /// backend reports damage, so it keeps the previous unconditional repaint.
+    /// DX11 and Metal ask their combo bakes, which know both bake spans. wgpu
+    /// reports damage, so it keeps the previous unconditional repaint.
     ///
     /// Args:
     ///     data: Rows about to be appended.
     ///
     /// Returns:
-    ///     `false` only when DX11 can prove neither cached span is touched.
+    ///     `false` only when DX11 or Metal can prove neither cached span is touched.
     pub fn combo_append_touches_cached_span(&self, data: &[ChartCross]) -> bool {
         #[cfg(windows)]
         {
             self.combo.append_touches_cached_span(data)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            self.metal.append_touches_cached_span(data)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = data;
             true

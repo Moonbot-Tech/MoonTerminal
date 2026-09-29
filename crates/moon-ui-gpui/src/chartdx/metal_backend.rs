@@ -39,9 +39,9 @@ const MIN_COMBO_CAPACITY: usize = 1;
 mod combo_plan;
 
 use combo_plan::{
-    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, combo_tex_w,
-    combo_v_margin_px, cross_blit_uv, plan_cross_bake, plan_volume_bake, volume_band_px,
-    volume_blit_uv,
+    AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, append_span_damage,
+    combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake, plan_volume_bake,
+    volume_band_px, volume_blit_uv,
 };
 
 /// How long eviction damage alone may wait before it forces a full rebake of both bitmaps.
@@ -616,6 +616,49 @@ impl MetalLayers {
                 self.combo_dirty_ranges.clear();
             }
         }
+    }
+
+    /// Whether appending these rows can change a pixel in either cached bitmap.
+    ///
+    /// An empty batch cannot. A missing or invalid cross or volume bake is damage, because
+    /// there is no span that proves the rows are offscreen. Otherwise both bake spans, margins
+    /// included, are tested against the new times and against the oldest rows this append would
+    /// evict. The ring is read before any mutation.
+    ///
+    /// Args:
+    ///     data: Rows about to be appended.
+    ///
+    /// Returns:
+    ///     `true` when either cached bitmap may change.
+    pub fn append_touches_cached_span(&self, data: &[ChartCross]) -> bool {
+        if data.is_empty() {
+            return false;
+        }
+        let Some(cross) = self.combo_texture.as_ref().filter(|tex| tex.key.valid) else {
+            return true;
+        };
+        let Some(volume) = self.volume_texture.as_ref().filter(|tex| tex.key.valid) else {
+            return true;
+        };
+        let cross_span = tick_bake_span(
+            cross.key.bake_t0,
+            cross.key.tex_w as f32,
+            cross.key.time_to_px,
+            cross.key.marker_half,
+        );
+        let volume_span = tick_bake_span(
+            volume.key.bake_t0,
+            volume.key.tex_w as f32,
+            volume.key.time_to_px,
+            0.0,
+        );
+        append_span_damage(
+            self.ring(),
+            data,
+            cross_span,
+            volume_span,
+            self.combo_capacity,
+        )
     }
 
     /// Whether any row in the evicted ring `ranges` may be painted inside either baked span.
