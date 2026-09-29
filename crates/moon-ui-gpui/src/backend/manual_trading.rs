@@ -11,7 +11,7 @@ use moon_core::config::{
     ManualStratState, StratSlot, TakeProfitMode,
 };
 use moon_core::feed::{
-    ClientSettingsEdit, FieldMask, OrderRow, StrategyRow, percentage_stop_price,
+    ClientSettingsEdit, ConnStatus, FieldMask, OrderRow, StrategyRow, percentage_stop_price,
     percentage_take_price,
 };
 use moon_core::market::MarketQuantityUnit;
@@ -2534,6 +2534,26 @@ impl Backend {
         n
     }
 
+    /// Moonbot's "Cancel buys in all bots": [`Self::cancel_all_buys_for_core`] on every core that
+    /// is online.
+    ///
+    /// Online means `ConnStatus::Ready` ([`ready_cores`]); a core still connecting, failed or
+    /// disconnected is skipped rather than handed a command its feed cannot act on. No window
+    /// group or active core is read, so the key does the same thing from every window that routes
+    /// trading keys, Auto Overview included. The return value is the number of requests accepted.
+    pub(crate) fn cancel_all_buys_all_cores(&self) -> usize {
+        let (ready, offline) = ready_cores(self.session.store().statuses());
+        let requests: usize = ready
+            .iter()
+            .map(|core| self.cancel_all_buys_for_core(*core))
+            .sum();
+        log::info!(
+            "cancel buys on all cores: {requests} market request(s) to {} online core(s), {offline} offline skipped",
+            ready.len()
+        );
+        requests
+    }
+
     /// Return the market position side for `join_sells`, where `true` means short.
     ///
     /// The first matching order in the retained snapshot determines the side; absent a match, the
@@ -2570,6 +2590,30 @@ impl Backend {
             }
         }
     }
+}
+
+/// Cores a "cancel buys on all cores" press addresses, and how many it skipped as offline.
+///
+/// Args:
+///     statuses: Every core the store holds, with its connection status.
+///
+/// Returns:
+///     The `Ready` cores, sorted so the requests go out in a stable order, and the count of the rest.
+pub(super) fn ready_cores(
+    statuses: impl Iterator<Item = (CoreId, ConnStatus)>,
+) -> (Vec<CoreId>, usize) {
+    let mut offline = 0;
+    let mut ready: Vec<CoreId> = statuses
+        .filter_map(|(core, status)| match status {
+            ConnStatus::Ready => Some(core),
+            _ => {
+                offline += 1;
+                None
+            }
+        })
+        .collect();
+    ready.sort_unstable();
+    (ready, offline)
 }
 
 /// Markets a "cancel all buys" press addresses: every market of the snapshot that still carries an

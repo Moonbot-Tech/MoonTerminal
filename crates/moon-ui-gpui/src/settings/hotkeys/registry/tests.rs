@@ -331,6 +331,27 @@ fn center_chart_is_a_local_application_wide_chart_row() {
     assert!(!slots_the_pull_writes().contains(&KeySlot::CenterChart));
 }
 
+/// Cancel buys on all cores (#767) is the Terminal's own binding: Moonbot's `CancelBuysAll` only
+/// reaches the Moonbots on its machine and its key is not a named `SharedConfig` field, so reading
+/// the row as imported would let the pull clear the user's binding, and a window scope would hide
+/// that one press reaches every core.
+#[test]
+fn cancel_buys_on_all_cores_is_a_local_application_wide_trading_row() {
+    let row = slots()
+        .find(|row| row.key() == Some(KeySlot::CancelAllBuysAllCores))
+        .expect("cancel buys on all cores row");
+    assert_eq!(row.group, HotkeyGroup::Trading);
+    assert_eq!(row.meta().origin, Origin::Local);
+    assert_eq!(row.meta().scope, Scope::APP);
+    assert!(
+        HotkeysConfig::default()
+            .key(KeySlot::CancelAllBuysAllCores)
+            .is_empty(),
+        "unbound by default, as in Moonbot"
+    );
+    assert!(!slots_the_pull_writes().contains(&KeySlot::CancelAllBuysAllCores));
+}
+
 /// Live/Pause is Terminal-only: reading it as imported would let the pull overwrite the user's
 /// Space binding with nothing, and a window scope would hide that the flag is application-wide.
 #[test]

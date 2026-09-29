@@ -1091,6 +1091,55 @@ fn horizontal_ray_binding_is_optional_and_survives_config_roundtrip() {
     );
 }
 
+/// A file written before the all-cores cancel existed (#767) must load with the slot empty — no
+/// generation fills it — and a key bound to it must survive a save and a load.
+#[test]
+fn cancel_buys_on_all_cores_loads_unbound_and_persists() {
+    let mut config: HotkeysConfig = toml::from_str("schema = 7").unwrap();
+    assert!(config.key(KeySlot::CancelAllBuysAllCores).is_empty());
+    assert!(
+        !config.fill_unbound_slots(),
+        "a current file needs no migration"
+    );
+    assert!(config.key(KeySlot::CancelAllBuysAllCores).is_empty());
+    config.set_key(KeySlot::CancelAllBuysAllCores, "ctrl-shift-f11".into());
+    let saved = toml::to_string(&config).unwrap();
+    let restored: HotkeysConfig = toml::from_str(&saved).unwrap();
+    assert_eq!(
+        restored.key(KeySlot::CancelAllBuysAllCores),
+        "ctrl-shift-f11"
+    );
+}
+
+/// The all-cores cancel is the widest action a click can carry, so a click it shares with any other
+/// slot must fire the other one — the same rule its step at the end of the key dispatch keeps.
+#[test]
+fn a_shared_click_never_resolves_to_cancel_buys_on_all_cores() {
+    let mut cfg = HotkeysConfig::default();
+    let is = |wanted: MouseGestureBinding| move |g: MouseGestureBinding| g == wanted;
+    cfg.set_gesture(
+        GestureSlot::ForKey(KeySlot::CancelAllBuysAllCores),
+        MouseGestureBinding::MiddleAlt,
+    );
+    assert_eq!(
+        cfg.action_for_gesture(is(MouseGestureBinding::MiddleAlt)),
+        Some(KeySlot::CancelAllBuysAllCores),
+        "alone on the click, it fires"
+    );
+    for other in KeySlot::all()
+        .into_iter()
+        .filter(|slot| *slot != KeySlot::CancelAllBuysAllCores && slot.has_mouse_half())
+    {
+        let mut shared = cfg.clone();
+        shared.set_gesture(GestureSlot::ForKey(other), MouseGestureBinding::MiddleAlt);
+        assert_eq!(
+            shared.action_for_gesture(is(MouseGestureBinding::MiddleAlt)),
+            Some(other),
+            "{other:?} must win the shared click"
+        );
+    }
+}
+
 /// Removing serde defaults breaks old layouts; aliasing the slots loses one saved direction.
 #[test]
 fn super_zoom_slots_load_unbound_and_persist_independently() {

@@ -5,14 +5,14 @@ use std::time::{Duration, Instant};
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
-use moon_core::feed::{ClientSettingsEdit, OrderRow, StrategyRow};
+use moon_core::feed::{ClientSettingsEdit, ConnStatus, OrderRow, StrategyRow};
 
 use super::{
     HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_LOCAL_TTL,
     PANIC_TOGGLE_DEBOUNCE, apply_group_exit_edit, cancel_all_buys_markets, effective_ignore_sell,
     effective_manual_strat_state, effective_panic_armed, exit_source, manual_selection_is_broken,
     manual_strat_seed, manual_strategy_id, panic_local_settled, panic_press_absorbed,
-    planned_sell_price, resolve_manual_selection, seed_on_enable, stop_price,
+    planned_sell_price, ready_cores, resolve_manual_selection, seed_on_enable, stop_price,
     stop_write_is_redundant, update_group_trade_pair, usd_to_base_amount,
 };
 
@@ -779,4 +779,24 @@ fn cancel_all_buys_addresses_every_market_with_an_unfinished_order() {
         cancel_all_buys_markets(&[]).is_empty(),
         "an empty snapshot names no market"
     );
+}
+
+/// The all-cores key (#767) must reach every online core and nothing else: a core that is still
+/// connecting, failed or dropped gets no command, and is counted so the log line can say so.
+#[test]
+fn cancel_buys_on_all_cores_addresses_only_the_online_ones() {
+    let statuses = [
+        (7, ConnStatus::Ready),
+        (3, ConnStatus::Disconnected),
+        (2, ConnStatus::Ready),
+        (5, ConnStatus::Connecting),
+        (9, ConnStatus::Stage("auth".into())),
+        (4, ConnStatus::Failed("refused".into())),
+    ];
+    let (ready, offline) = ready_cores(statuses.into_iter());
+    assert_eq!(ready, vec![2, 7], "the online cores, in a stable order");
+    assert_eq!(offline, 4, "every other status is skipped and counted");
+
+    let (ready, offline) = ready_cores(std::iter::empty());
+    assert!(ready.is_empty() && offline == 0, "no cores, no requests");
 }

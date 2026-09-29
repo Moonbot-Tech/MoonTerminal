@@ -231,6 +231,14 @@ hotkeys.cancel_all_buys_hint:
   ru: "Снять все buy активного ядра по всем рынкам. Moonbot-дефолт: Alt+A."
   en: "Cancel every buy of the active core across all markets. Moonbot default: Alt+A."
   es: "Cancela todas las compras del núcleo activo en todos los mercados. Valor por defecto de Moonbot: Alt+A."
+hotkeys.cancel_all_buys_all_cores:
+  ru: "Cancel buys in all bots"
+  en: "Cancel buys in all bots"
+  es: "Cancel buys in all bots"
+hotkeys.cancel_all_buys_all_cores_hint:
+  ru: "Снять все buy и отложенные buy на всех подключённых ядрах сразу, из любого окна с торговыми клавишами (окно сделки их не принимает). Sell не трогает, офлайн-ядра пропускает, без подтверждения. По умолчанию не назначено."
+  en: "Cancel every buy and pending buy on all connected cores at once, from any window that takes trading keys (the trade window does not). Sells stay; offline cores are skipped; no confirmation. Unbound by default."
+  es: "Cancela todas las compras y compras pendientes en todos los núcleos conectados a la vez, desde cualquier ventana que acepte teclas de trading (la ventana de la operación no). Las ventas se mantienen; los núcleos desconectados se omiten; sin confirmación. Sin asignar por defecto."
 hotkeys.join_sells:
   ru: "Join Sells"
   en: "Join Sells"

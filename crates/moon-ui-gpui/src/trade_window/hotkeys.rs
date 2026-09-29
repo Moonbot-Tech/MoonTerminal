@@ -53,6 +53,7 @@ pub(super) fn route(action: crate::hotkeys::HotkeyAction) -> Option<TradeHotkey>
         | A::ManualStrategy(_)
         | A::CancelBuy
         | A::CancelAllBuys
+        | A::CancelAllBuysAllCores
         | A::PanicSell
         | A::PanicSellOne
         | A::JoinSells
