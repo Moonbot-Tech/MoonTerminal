@@ -1393,3 +1393,36 @@ fn history_manual_y_and_explicit_center_snap_remain_exact() {
     assert_eq!(view.render_center, (990.01 + 1010.01) * 0.5);
     assert!(!view.center_snap_pending);
 }
+
+/// A source whose trade clock runs ahead of the PC clock (#727): every live anchor must use it.
+const SOURCE_AHEAD_MS: f64 = 2_000.0;
+
+#[test]
+fn live_anchors_follow_the_source_clock_offset() {
+    let mut view = live_view(NOW, WIDTH);
+    view.set_live_offset_ms(SOURCE_AHEAD_MS);
+    view.resume_live(NOW);
+    assert_eq!(view.right_time_ms, NOW + SOURCE_AHEAD_MS);
+
+    // A small drag toward the corrected edge rejoins live, measured against that edge.
+    view.pan_x_px(20.0, NOW, WIDTH);
+    assert!(!view.follow);
+    view.pan_x_px(-15.0, NOW, WIDTH);
+    assert!(
+        view.follow,
+        "a drag back to the corrected edge must rejoin live"
+    );
+    assert_eq!(view.right_time_ms, NOW + SOURCE_AHEAD_MS);
+}
+
+#[test]
+fn the_future_ceiling_is_measured_from_the_corrected_edge() {
+    let mut plain = parked_at_the_future_limit(NOW, WIDTH);
+    let mut shifted = live_view(NOW, WIDTH);
+    shifted.set_live_offset_ms(SOURCE_AHEAD_MS);
+    shifted.follow = false;
+    shifted.right_time_ms = NOW + 1.0e12;
+    shifted.clamp_future_anchor(NOW, WIDTH);
+    plain.clamp_future_anchor(NOW, WIDTH);
+    assert_eq!(shifted.right_time_ms, plain.right_time_ms + SOURCE_AHEAD_MS);
+}

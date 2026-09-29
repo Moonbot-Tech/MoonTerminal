@@ -363,6 +363,13 @@ impl ChartDataState {
             if pane.view.apply_frame_request(chart_area.w) {
                 pixels_changed = true;
             }
+            // The live edge runs on the core's trade clock, not the local one: a lagging PC clock would
+            // otherwise leave the newest ticks past the edge and under the order book at deep zoom.
+            let newest_trade = source
+                .latest_trade_ms(pane.core, &pane.market)
+                .map(|ms| ms as f64);
+            pane.view
+                .set_live_offset_ms(pr.live_clock.observe(newest_trade, now));
             // Prepare is the only place that knows the anchor, the scale AND the width at once, so
             // the future ceiling is re-applied here rather than in each mutator that can break it.
             // Not while the pane shows only its order book: `chart_w` is floored at 1 px there, and
@@ -371,7 +378,7 @@ impl ChartDataState {
             if !pr.orderbook_only {
                 pane.view.clamp_future_anchor(now, chart_area.w);
             }
-            pane.view.follow_edge(now, now);
+            pane.view.follow_edge(pane.view.live_edge_ms(now), now);
             let (view_time0, window_ms) = pane.view.visible_x(chart_area.w);
             let cam_px = ((pane.view.right_time_ms - pane.view.epoch_ms)
                 * pane.view.px_per_ms.max(1e-9) as f64)

@@ -250,6 +250,28 @@ impl MarketDataSource {
         Ok(price)
     }
 
+    /// Return the core's time of the newest retained trade on `market`, in Unix milliseconds.
+    ///
+    /// Reads the ring directly rather than a chart's windowed copy, so a trade stamped ahead of
+    /// the local clock is still seen. `None` when the provider, snapshot or trade store is missing
+    /// or holds no trade yet.
+    pub fn latest_trade_ms(&self, core: CoreId, market: &str) -> Option<i64> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        let readers = snapshot.market_history_readers(market)?;
+        let reader = readers.futures_trades.or(readers.spot_trades)?;
+        let mut trades = Vec::new();
+        reader.copy_last(1, &mut trades);
+        trades.last().map(|row| row.unix_millis())
+    }
+
     /// Return the USD rate for `currency`.
     ///
     /// A USD stablecoin maps to 1; otherwise this uses `p_last` for the coin's USDT market,
