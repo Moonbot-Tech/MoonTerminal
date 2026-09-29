@@ -1637,6 +1637,7 @@ impl RenderState {
             trade: self.trade_labels.clone(),
             last_price: pr.cached_last_price,
             scale_badge: pr.scale_badge,
+            time_scale_s: pr.time_scale_s,
             compare_pct,
             delta_1h: pr.delta_1h,
             delta_24h: pr.delta_24h,

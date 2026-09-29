@@ -2155,6 +2155,10 @@ chart_labels.field.scale_badge:
   ru: "Масштаб Y"
   en: "Y scale"
   es: "Escala Y"
+chart_labels.field.time_scale_badge:
+  ru: "Масштаб X"
+  en: "Time scale"
+  es: "Escala de tiempo"
 chart_labels.field.compare_delta:
   ru: "Дельта сравнения"
   en: "Comparison delta"

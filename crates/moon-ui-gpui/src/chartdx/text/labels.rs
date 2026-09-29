@@ -66,6 +66,8 @@ pub(in crate::chartdx) struct LabelInputs {
     pub last_price: Option<f32>,
     /// Y-scale badge as a whole percentage; `None` while it is hidden.
     pub scale_badge: Option<i32>,
+    /// Time-scale badge: the whole seconds the plot spans; `None` while there is no plot to measure.
+    pub time_scale_s: Option<i64>,
     /// Comparison-mode difference from the locked anchor, in percent.
     pub compare_pct: Option<f32>,
     /// Signed one-hour and 24-hour changes, from the readout the header ticker uses.
@@ -571,6 +573,10 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             };
             (text, None)
         }),
+        // The shared compact duration, the same one the chart shot's header prints for this figure.
+        ChartLabelField::TimeScaleBadge => inputs
+            .time_scale_s
+            .map(|secs| (crate::display_text::fmt_duration_short(secs as f64), None)),
         // Deliberately the chart's own percentage formatter and not `fmt::signed_pct`: this figure
         // sits at the price the reader is comparing against, where a deviation that rounds to zero
         // still carries the DIRECTION, and the shared formatter drops the sign there on purpose.
@@ -1688,6 +1694,7 @@ fn sample_inputs() -> LabelInputs {
         })),
         last_price: Some(51234.5),
         scale_badge: Some(12),
+        time_scale_s: Some(6_720),
         compare_pct: Some(1.2),
         delta_1h: Some(3.8),
         delta_24h: Some(-2.1),

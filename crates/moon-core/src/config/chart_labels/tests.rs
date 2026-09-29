@@ -50,7 +50,7 @@ fn the_default_is_the_shipped_working_layout() {
                 Fl::Row,
                 Fl::Column,
                 0,
-                vec![F::ScaleBadge]
+                vec![F::ScaleBadge, F::TimeScaleBadge]
             ),
             (
                 Some(P::CoinDeltas),
@@ -346,7 +346,8 @@ fn sanitize_drops_a_blank_row_and_keeps_the_order() {
     for row in &mut cfg.rows {
         row.name.clear();
     }
-    // The badge module, whose single caption is what makes it blank once removed.
+    // The badge module, whose two scale captions are what make it blank once removed.
+    cfg.rows[1].remove_part(0);
     cfg.rows[1].remove_part(0);
     cfg.sanitize();
     let fields: Vec<_> = cfg.rows[..cfg.used_rows()]
@@ -1529,4 +1530,57 @@ fn strategy_filter_collapse_round_trips_and_defaults_expanded() {
     let restored: ChartLabelsCfg =
         serde_json::from_str(&serde_json::to_string(&cfg).unwrap()).unwrap();
     assert!(!restored.rows[0].collapsed);
+}
+
+/// `wire.rs:upgrade` must append the time-scale badge to a `Scale` module a pre-revision file
+/// holds, keeping the user's own parts first; otherwise a profile saved before the badge existed
+/// never shows it without setup.
+#[test]
+fn a_file_older_than_the_time_badge_receives_it_in_its_scale_module() {
+    let old = r#"
+        [[rows]]
+        preset = "scale"
+        zone = "chart_top"
+        align = "right"
+        [[rows.parts]]
+        field = "scale_badge"
+        [[rows.parts]]
+        field = "coin"
+    "#;
+    let cfg: ChartLabelsCfg = toml::from_str(old).expect("the old profile parses");
+    let fields: Vec<_> = cfg.rows[0].parts[..cfg.rows[0].used_parts()]
+        .iter()
+        .map(|p| p.field)
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ChartLabelField::ScaleBadge,
+            ChartLabelField::Coin,
+            ChartLabelField::TimeScaleBadge
+        ]
+    );
+}
+
+/// `wire.rs:upgrade` must run once: a file written at the current revision whose user removed the
+/// time badge keeps it removed; otherwise the caption returns on every start.
+#[test]
+fn a_removed_time_badge_stays_removed_after_a_round_trip() {
+    let mut cfg = ChartLabelsCfg::default();
+    let scale = cfg
+        .rows
+        .iter_mut()
+        .find(|r| r.preset == Some(LabelPreset::Scale))
+        .expect("the shipped set has a scale module");
+    let ix = scale.parts[..scale.used_parts()]
+        .iter()
+        .position(|p| p.field == ChartLabelField::TimeScaleBadge)
+        .expect("the shipped scale module carries the time badge");
+    scale.remove_part(ix);
+
+    let wire = toml::to_string(&cfg).expect("the profile serializes");
+    let back: ChartLabelsCfg = toml::from_str(&wire).expect("the profile reads back");
+
+    assert!(!back.contains(ChartLabelField::TimeScaleBadge));
+    assert!(back.contains(ChartLabelField::ScaleBadge));
 }

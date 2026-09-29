@@ -152,6 +152,9 @@ pub(crate) struct ShotInputs {
     /// the chart is hiding the badge, which is not the same fact as a zero — see
     /// `header::scale_field`.
     pub(crate) scale_pct: Option<i32>,
+    /// The chart's own time-scale badge: the whole seconds the plot spans. Read from the renderer
+    /// for the same reason as [`Self::scale_pct`]; `None` when the chart prints no such badge.
+    pub(crate) time_scale_s: Option<i64>,
 }
 
 /// Copy the active chart of `window` to the clipboard and tell the user what happened.
@@ -367,6 +370,7 @@ fn capture_windows(
             zone,
             tf_min: inputs.tf_min,
             scale_pct: inputs.scale_pct,
+            time_scale_s: inputs.time_scale_s,
             delta_3h: inputs.delta_3h,
             delta_1h: inputs.delta_1h,
             delta_15m: inputs.delta_15m,

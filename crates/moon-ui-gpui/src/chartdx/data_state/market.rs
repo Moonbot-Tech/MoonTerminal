@@ -1220,6 +1220,19 @@ impl ChartDataState {
                 pr.scale_badge = next_badge;
                 pixels_changed = true;
             }
+            // The time counterpart, off the same plot width the axis labels are laid out on. Pulled
+            // here with the Y badge, so every zoom path — wheel, super zoom, pinch, synced panes —
+            // reaches it without a repaint source of its own.
+            // A book-only pane has a one-pixel plot and no time span worth stating.
+            let next_time = if pr.orderbook_only {
+                None
+            } else {
+                time_scale_secs(&pane.view, chart_area.w)
+            };
+            if pr.time_scale_s != next_time {
+                pr.time_scale_s = next_time;
+                pixels_changed = true;
+            }
             let area_win = Rect {
                 x: self.origin.0 + chart_area.x,
                 y: self.origin.1 + chart_area.y,

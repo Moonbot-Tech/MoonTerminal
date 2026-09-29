@@ -1257,10 +1257,11 @@ impl Default for ChartLabelsCfg {
         // The instrument, in the control strip pushed right: coin, core, venue stacked as a block.
         cfg.rows[0] = instrument_row(true);
 
-        // The Y-scale badge on the plot's top-right corner.
+        // The two scale badges on the plot's top-right corner: the price span, then the time span.
         let mut scale = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Right);
         scale.preset = Some(LabelPreset::Scale);
         scale.push_part(ChartLabelField::ScaleBadge);
+        scale.push_part(ChartLabelField::TimeScaleBadge);
         cfg.rows[1] = scale;
 
         // The coin's own movement: a block of two, standing BESIDE the badge rather than under it,

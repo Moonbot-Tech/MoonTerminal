@@ -31,6 +31,11 @@ pub enum ChartLabelField {
     Quote,
     /// Current Y-scale badge as a whole percentage of the visible range.
     ScaleBadge,
+    /// Current X-scale badge: how much time the whole visible plot spans, as a compact duration.
+    ///
+    /// The FULL plot width, the empty future margin right of the live edge included: the figure
+    /// answers "what fits on the chart", and a live chart and a paused one then read alike.
+    TimeScaleBadge,
     /// Comparison-mode difference from the locked anchor's price, signed.
     CompareDelta,
     /// Last traded price.
@@ -230,7 +235,7 @@ pub enum ChartLabelField {
 
 impl ChartLabelField {
     /// Every assignable field, in the order the "add label" menu offers them.
-    pub const ALL: [ChartLabelField; 60] = [
+    pub const ALL: [ChartLabelField; 61] = [
         ChartLabelField::Coin,
         ChartLabelField::Core,
         ChartLabelField::Venue,
@@ -240,6 +245,7 @@ impl ChartLabelField {
         ChartLabelField::Delta1h,
         ChartLabelField::Delta24h,
         ChartLabelField::ScaleBadge,
+        ChartLabelField::TimeScaleBadge,
         ChartLabelField::CompareDelta,
         ChartLabelField::OpenPnlPct,
         ChartLabelField::OpenPnlMoney,
@@ -302,7 +308,7 @@ impl ChartLabelField {
             | ChartLabelField::Quote
             | ChartLabelField::CoinTags
             | ChartLabelField::None => ChartLabelGroup::Instrument,
-            ChartLabelField::TfCloseIn => ChartLabelGroup::Time,
+            ChartLabelField::TfCloseIn | ChartLabelField::TimeScaleBadge => ChartLabelGroup::Time,
             ChartLabelField::LastPrice => ChartLabelGroup::Price,
             ChartLabelField::Delta1h
             | ChartLabelField::Delta24h
@@ -369,6 +375,7 @@ impl ChartLabelField {
             ChartLabelField::Venue => "chart_labels.field.venue",
             ChartLabelField::Quote => "chart_labels.field.quote",
             ChartLabelField::ScaleBadge => "chart_labels.field.scale_badge",
+            ChartLabelField::TimeScaleBadge => "chart_labels.field.time_scale_badge",
             ChartLabelField::CompareDelta => "chart_labels.field.compare_delta",
             ChartLabelField::LastPrice => "chart_labels.field.last_price",
             ChartLabelField::Delta1h => "chart_labels.field.delta_1h",
@@ -680,7 +687,7 @@ impl ChartLabelField {
                 size_mult: LABEL_SIZE_MULT_DEFAULT,
                 caption: false,
             },
-            ChartLabelField::ScaleBadge => ResolvedLabelStyle {
+            ChartLabelField::ScaleBadge | ChartLabelField::TimeScaleBadge => ResolvedLabelStyle {
                 value_only: true,
                 color_min_pct: 0.0,
                 color: LabelColor::Theme,

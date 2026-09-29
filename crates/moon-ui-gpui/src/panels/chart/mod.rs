@@ -1146,6 +1146,7 @@ impl ChartPanel {
             // a decision `chartdx::scale_badge_pct` makes, and a second copy of that decision would
             // be free to disagree with the badge inside the picture.
             scale_pct: self.chart.scale_badge(),
+            time_scale_s: self.chart.time_scale_secs(),
         }
     }
 
