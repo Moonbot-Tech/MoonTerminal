@@ -43,8 +43,8 @@ mod plan;
 
 use plan::{
     AppendBakeDamage, ComboBakeKey, VolumeBakeKey, append_bake_damage, append_span_damage,
-    combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake,
-    plan_volume_bake, volume_band_px, volume_blit_uv,
+    combo_tex_w, combo_v_margin_px, cross_blit_uv, plan_cross_bake, plan_volume_bake,
+    volume_band_px, volume_blit_uv,
 };
 
 /// Cross-rendering pipeline and resident VRAM tick ring.

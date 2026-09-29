@@ -29,8 +29,7 @@ use super::types::{
     SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges,
     cross_volume_max, evicted_cross_ranges, hl_of, lod_bake_rows, mk_of, ordered_cross_ring,
     queue_appended_ranges, ranges_touch_volume_max, reset_cross_ring, ring_run_slices,
-    ring_span_runs, seg_of,
-    update_cross_volume_max, zone_of,
+    ring_span_runs, seg_of, update_cross_volume_max, zone_of,
 };
 
 const SHADER: &str = include_str!("shaders/chart_native.metal");

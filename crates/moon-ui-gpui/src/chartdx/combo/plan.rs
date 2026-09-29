@@ -245,7 +245,6 @@ pub(super) fn append_bake_damage(written: bool, evicts_baked: bool) -> AppendBak
     }
 }
 
-
 /// Whether new rows, or the old rows they evict, intersect either cached span.
 ///
 /// `old` is the logical ring before the append, in chronological order. The
