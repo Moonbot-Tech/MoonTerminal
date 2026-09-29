@@ -21,12 +21,15 @@ use objc::{msg_send, sel, sel_impl};
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
+use super::candle_window::{CandleUpload, CandleWindow};
+use super::price_ring::{PriceRing, RingPending};
 use super::types::{
     BackgroundParams, BookStyle, CandleGpu, CandleStyleGpu, ChartCross, ChartViewGpu, CursorParams,
     GridParams, HLineGpu, HvolRowGpu, HvolStyleGpu, MarkerGpu, PriceStyleGpu, ReadoutRect, SegGpu,
-    SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_volume_max,
-    evicted_cross_ranges, hl_of, lod_bake_rows, mk_of, ordered_cross_ring, queue_appended_ranges,
-    ranges_touch_volume_max, reset_cross_ring, ring_run_slices, ring_span_runs, seg_of,
+    SideVolumeGpu, TickStyleGpu, VolumeStyleGpu, ZoneGpu, append_cross_ring, cross_append_ranges,
+    cross_volume_max, evicted_cross_ranges, hl_of, lod_bake_rows, mk_of, ordered_cross_ring,
+    queue_appended_ranges, ranges_touch_volume_max, reset_cross_ring, ring_run_slices,
+    ring_span_runs, seg_of,
     update_cross_volume_max, zone_of,
 };
 
@@ -78,6 +81,40 @@ impl BufferSlot {
                 );
             }
         }
+    }
+
+    fn write_range<T: bytemuck::Pod>(
+        &mut self,
+        device: &DeviceRef,
+        label: &str,
+        start: usize,
+        data: &[T],
+        total_len: usize,
+    ) -> bool {
+        let elem = std::mem::size_of::<T>();
+        let need = (total_len.max(1) * elem).max(4) as u64;
+        let recreated = self.buffer.as_ref().is_none() || self.size < need;
+        if recreated {
+            let buffer = device.new_buffer(
+                need.next_power_of_two(),
+                MTLResourceOptions::StorageModeShared
+                    | MTLResourceOptions::CPUCacheModeWriteCombined,
+            );
+            buffer.set_label(label);
+            self.buffer = Some(buffer);
+            self.size = need.next_power_of_two();
+        }
+        let bytes = bytemuck::cast_slice(data);
+        if !bytes.is_empty() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    (self.buffer.as_ref().unwrap().contents() as *mut u8).add(start * elem),
+                    bytes.len(),
+                );
+            }
+        }
+        recreated
     }
 
     fn buffer(&self) -> &metal::BufferRef {
@@ -301,12 +338,14 @@ pub struct MetalLayers {
     /// Reusable LOD reduction scratch and the gathered rows a dense full bake draws.
     lod_pick: LodPick,
     lod_rows: Vec<ChartCross>,
-    last_line: Vec<PriceLinePoint>,
-    mark_line: Vec<PriceLinePoint>,
+    /// Price lines as rings whose slot layout equals their GPU buffers', plus one mirror slot.
+    last_ring: PriceRing,
+    mark_ring: PriceRing,
     combo_capacity: usize,
     price_line_capacity: usize,
-    /// Candles as a complete series replaced on revision changes, plus layer style.
-    candles: Vec<CandleGpu>,
+    /// Candles mirrored with the tail a live patch dirtied, plus layer style. Keeps every row, as
+    /// figure snaps expect of the native backends.
+    candles: CandleWindow,
     candle_style: CandleStyleGpu,
     /// The sides band's buckets, replaced as a unit when its series is re-read.
     sides: Vec<SideVolumeGpu>,
@@ -329,6 +368,9 @@ pub struct MetalLayers {
     book_style_uniform: BufferSlot,
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
+    /// Min/max-per-column decimation of each line, drawn when it is denser than pixels.
+    last_decim_buffer: BufferSlot,
+    mark_decim_buffer: BufferSlot,
     price_style_uniform: BufferSlot,
     price_style: PriceStyleGpu,
     /// Trade-tick style retained across resource recreation and compared before rebaking.
@@ -374,11 +416,11 @@ impl MetalLayers {
             tick_time_order: TickTimeOrder::default(),
             lod_pick: LodPick::default(),
             lod_rows: Vec::new(),
-            last_line: Vec::new(),
-            mark_line: Vec::new(),
+            last_ring: PriceRing::new(MIN_COMBO_CAPACITY),
+            mark_ring: PriceRing::new(MIN_COMBO_CAPACITY),
             combo_capacity: MIN_COMBO_CAPACITY,
             price_line_capacity: MIN_COMBO_CAPACITY,
-            candles: Vec::new(),
+            candles: CandleWindow::new(usize::MAX),
             candle_style: CandleStyleGpu::default(),
             sides: Vec::new(),
             hvol: Vec::new(),
@@ -399,6 +441,8 @@ impl MetalLayers {
             book_style_uniform: BufferSlot::default(),
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
+            last_decim_buffer: BufferSlot::default(),
+            mark_decim_buffer: BufferSlot::default(),
             price_style_uniform: BufferSlot::default(),
             price_style: PriceStyleGpu::default(),
             tick_style: TickStyleGpu::default(),
@@ -454,9 +498,16 @@ impl MetalLayers {
     /// Replace the complete candle set when the series revision changes.
     ///
     /// Candles live in the base cache, which must be rebaked.
-    pub fn set_candles(&mut self, data: Vec<CandleGpu>) {
-        self.candles = data;
-        self.candle_buffers_dirty = true;
+    pub fn set_candles(&mut self, data: &[CandleGpu]) {
+        self.candles.set(data);
+        self.base_cache.valid = false;
+    }
+
+    /// Re-apply the composed list's tail from `from` on; only those slots are uploaded.
+    ///
+    /// Candles live in the base cache, which must be rebaked.
+    pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
+        self.candles.patch(from, full);
         self.base_cache.valid = false;
     }
 
@@ -464,6 +515,7 @@ impl MetalLayers {
     /// candle boundaries, up/down/neutral colors and fill alpha, outline thickness, wick visibility,
     /// and neutral-zone behavior.
     pub fn set_candle_style(&mut self, style: CandleStyleGpu) {
+        self.candles.set_style_tf(style.tf_rel_ms);
         if self.candle_style != style {
             self.candle_style = style;
             self.candle_buffers_dirty = true;
@@ -498,12 +550,9 @@ impl MetalLayers {
             self.crosses
                 .resize(self.combo_capacity, ChartCross::zeroed());
         }
-        if self.last_line.len() > self.price_line_capacity {
-            self.last_line = tail_vec(&self.last_line, self.price_line_capacity);
-        }
-        if self.mark_line.len() > self.price_line_capacity {
-            self.mark_line = tail_vec(&self.mark_line, self.price_line_capacity);
-        }
+        // The data state re-sets both lines after a capacity change, as it does for DX11.
+        self.last_ring = PriceRing::new(self.price_line_capacity);
+        self.mark_ring = PriceRing::new(self.price_line_capacity);
         self.recalc_volume_scale();
         self.price_line_buffers_dirty = true;
         self.combo_texture = None;
@@ -722,9 +771,14 @@ impl MetalLayers {
     }
 
     pub fn set_price_lines(&mut self, last: &[PriceLinePoint], mark: &[PriceLinePoint]) {
-        self.last_line = tail_vec(last, self.price_line_capacity);
-        self.mark_line = tail_vec(mark, self.price_line_capacity);
-        self.price_line_buffers_dirty = true;
+        self.last_ring.reset(last);
+        self.mark_ring.reset(mark);
+    }
+
+    /// Appends newly drained points to each price line; only those slots are uploaded.
+    pub fn append_price_lines(&mut self, last_new: &[PriceLinePoint], mark_new: &[PriceLinePoint]) {
+        self.last_ring.append(last_new);
+        self.mark_ring.append(mark_new);
     }
 
     pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
@@ -791,6 +845,10 @@ impl MetalLayers {
         self.book_style_uniform = BufferSlot::default();
         self.last_line_buffer = BufferSlot::default();
         self.mark_line_buffer = BufferSlot::default();
+        self.last_decim_buffer = BufferSlot::default();
+        self.mark_decim_buffer = BufferSlot::default();
+        self.last_ring.invalidate_gpu();
+        self.mark_ring.invalidate_gpu();
         self.price_style_uniform = BufferSlot::default();
         self.volume_style_uniform = BufferSlot::default();
         self.level_buffer = BufferSlot::default();
@@ -800,6 +858,7 @@ impl MetalLayers {
         self.marker_buffer = BufferSlot::default();
         self.candle_buffer = BufferSlot::default();
         self.candle_style_uniform = BufferSlot::default();
+        self.candles.invalidate_gpu();
         self.side_buffer = BufferSlot::default();
         self.hvol_buffer = BufferSlot::default();
         self.hvol_style_uniform = BufferSlot::default();
@@ -844,10 +903,10 @@ impl MetalLayers {
         if self.base_cache.is_valid_for(gpu, pixel_format) {
             self.draw_cached_base(device, encoder, view, orderbook_view, gpu);
         } else {
-            self.draw_base_layers(encoder, sc);
+            self.draw_base_layers(encoder, sc, view);
             self.draw_cached_combo(device, encoder, view);
         }
-        self.draw_price_lines_layer(encoder);
+        self.draw_price_lines_layer(device, encoder, view);
         // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
         // the whole pane, as the crosshair and the volume readout live in the zone.
         let pane_sc = bounds_scissor(pane_bounds, gpu.width(), gpu.height());
@@ -860,7 +919,12 @@ impl MetalLayers {
 
     /// `base_sc` is the pass's own scissor, restored after the horizontal volumes draw under the
     /// scissor of their zone alone; see the wgpu backend's `draw_base_layers` for why.
-    fn draw_base_layers(&self, encoder: &RenderCommandEncoderRef, base_sc: MTLScissorRect) {
+    fn draw_base_layers(
+        &self,
+        encoder: &RenderCommandEncoderRef,
+        base_sc: MTLScissorRect,
+        view: &ChartViewGpu,
+    ) {
         let pipelines = self.pipelines.as_ref().unwrap();
         let bg = self.background_texture.as_ref().unwrap();
 
@@ -912,25 +976,43 @@ impl MetalLayers {
             encoder.set_scissor_rect(base_sc);
         }
 
-        // Candles render beneath trade crosses because combo blits over the base cache.
-        if !self.candles.is_empty() {
+        // Candles render beneath trade crosses because combo blits over the base cache. Only the
+        // instances in view are submitted, with a two-pixel margin either side; the buffer is
+        // bound from the slice's first row, so the shader's `candles[iid]` needs no offset.
+        let (left, right) = if view.time_to_px > 0.0 {
+            (
+                view.view_time0 - 2.0 / view.time_to_px,
+                view.view_time0 + (view.bounds[2] + 2.0) / view.time_to_px,
+            )
+        } else {
+            (f32::NAN, f32::NAN)
+        };
+        let slice = self.candles.draw_slice(left, right);
+        if slice.candles > 0 {
             crate::diag::bump(&crate::diag::CHART_CANDLE_DRAW);
             set_uniform(encoder, 0, self.view_uniform.buffer());
             set_uniform(encoder, 1, self.candle_style_uniform.buffer());
-            set_storage(encoder, 2, self.candle_buffer.buffer());
+            encoder.set_vertex_buffer(
+                2,
+                Some(self.candle_buffer.buffer()),
+                (slice.start as usize * std::mem::size_of::<CandleGpu>()) as u64,
+            );
             set_uniform(encoder, 3, self.volume_style_uniform.buffer());
             // The band draws BEFORE the bodies so the candles sit on top. The shader culls the
             // candles past the split boundary, and the sides layer below draws the band's scale
             // bracket for both halves.
             if self.volume_style.m[0] >= 0.5 {
                 crate::diag::bump(&crate::diag::CHART_CANDLE_VOLUME_DRAW);
-                // Hills read `candles[iid + 1]`, so they take one instance fewer.
-                let bars = self.candles.len().saturating_sub(1);
-                if bars > 0 {
-                    draw(encoder, &pipelines.volume_bars, 6, bars as u64);
+                // Hills read `candles[iid + 1]`, so the slice gives them one instance fewer.
+                if slice.hills > 0 {
+                    draw(encoder, &pipelines.volume_bars, 6, u64::from(slice.hills));
                 }
             }
-            draw(encoder, &pipelines.candles, 18, self.candles.len() as u64);
+            crate::diag::bump_by(
+                &crate::diag::CHART_CANDLE_DRAW_INSTANCES,
+                u64::from(slice.candles),
+            );
+            draw(encoder, &pipelines.candles, 18, u64::from(slice.candles));
         }
         // The bought/sold half AFTER the candle layer: it covers the candle band's bucket that
         // straddles the split boundary, and draws the shared scale whether or not samples exist.
@@ -1291,30 +1373,35 @@ impl MetalLayers {
         keepalive
     }
 
-    fn draw_price_lines_layer(&self, encoder: &RenderCommandEncoderRef) {
+    fn draw_price_lines_layer(
+        &mut self,
+        device: &DeviceRef,
+        encoder: &RenderCommandEncoderRef,
+        view: &ChartViewGpu,
+    ) {
         let pipelines = self.pipelines.as_ref().unwrap();
         set_uniform(encoder, 0, self.view_uniform.buffer());
         set_uniform(encoder, 2, self.price_style_uniform.buffer());
-        if self.last_line.len() > 1 {
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            set_storage(encoder, 1, self.last_line_buffer.buffer());
-            draw(
-                encoder,
-                &pipelines.price_last,
-                6,
-                (self.last_line.len() - 1) as u64,
-            );
-        }
-        if self.mark_line.len() > 1 {
-            crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
-            set_storage(encoder, 1, self.mark_line_buffer.buffer());
-            draw(
-                encoder,
-                &pipelines.price_mark,
-                6,
-                (self.mark_line.len() - 1) as u64,
-            );
-        }
+        draw_price_ring(
+            device,
+            encoder,
+            &pipelines.price_last,
+            view,
+            &mut self.last_ring,
+            &self.last_line_buffer,
+            &mut self.last_decim_buffer,
+            "moon_chart_last_decim",
+        );
+        draw_price_ring(
+            device,
+            encoder,
+            &pipelines.price_mark,
+            view,
+            &mut self.mark_ring,
+            &self.mark_line_buffer,
+            &mut self.mark_decim_buffer,
+            "moon_chart_mark_decim",
+        );
     }
 
     /// Composites the volume band at the chart's bottom, then the crosses over it, each through
@@ -1494,7 +1581,7 @@ impl MetalLayers {
         let encoder = command_buffer.new_render_command_encoder(pass);
         let sc = scissor_rect(view, orderbook_view, gpu.width(), gpu.height());
         encoder.set_scissor_rect(sc);
-        self.draw_base_layers(encoder, sc);
+        self.draw_base_layers(encoder, sc, view);
         self.draw_cached_combo(device, encoder, view);
         encoder.end_encoding();
         self.base_cache.valid = true;
@@ -1529,15 +1616,19 @@ impl MetalLayers {
             .write(device, "moon_chart_book_view_uniform", &[*orderbook_view]);
         self.book_style_uniform
             .write(device, "moon_chart_book_style_uniform", &[*book_style]);
-        if self.price_line_buffers_dirty
-            || self.last_line_buffer.buffer.is_none()
-            || self.mark_line_buffer.buffer.is_none()
-            || self.price_style_uniform.buffer.is_none()
-        {
-            self.last_line_buffer
-                .write(device, "moon_chart_last_line", &self.last_line);
-            self.mark_line_buffer
-                .write(device, "moon_chart_mark_line", &self.mark_line);
+        upload_price_ring(
+            device,
+            "moon_chart_last_line",
+            &mut self.last_ring,
+            &mut self.last_line_buffer,
+        );
+        upload_price_ring(
+            device,
+            "moon_chart_mark_line",
+            &mut self.mark_ring,
+            &mut self.mark_line_buffer,
+        );
+        if self.price_line_buffers_dirty || self.price_style_uniform.buffer.is_none() {
             self.price_style_uniform
                 .write(device, "moon_chart_price_style", &[self.price_style]);
             self.price_line_buffers_dirty = false;
@@ -1567,13 +1658,30 @@ impl MetalLayers {
                 .write(device, "moon_chart_markers", &self.markers);
             self.marker_buffer_dirty = false;
         }
+        if self.candle_buffer.buffer.is_none() {
+            self.candles.invalidate_gpu();
+        }
+        let (upload, rows, _dropped) = self.candles.take_upload();
+        match upload {
+            CandleUpload::None => {}
+            CandleUpload::Full => self.candle_buffer.write(device, "moon_chart_candles", rows),
+            CandleUpload::Range { first, len } => {
+                let recreated = self.candle_buffer.write_range(
+                    device,
+                    "moon_chart_candles",
+                    first,
+                    &rows[first..first + len],
+                    rows.len(),
+                );
+                if recreated {
+                    self.candle_buffer.write(device, "moon_chart_candles", rows);
+                }
+            }
+        }
         if self.candle_buffers_dirty
-            || self.candle_buffer.buffer.is_none()
             || self.candle_style_uniform.buffer.is_none()
             || self.volume_style_uniform.buffer.is_none()
         {
-            self.candle_buffer
-                .write(device, "moon_chart_candles", &self.candles);
             self.candle_style_uniform.write(
                 device,
                 "moon_chart_candle_style",
@@ -1695,6 +1803,110 @@ fn set_uniform(encoder: &RenderCommandEncoderRef, index: u64, buffer: &metal::Bu
 
 fn set_storage(encoder: &RenderCommandEncoderRef, index: u64, buffer: &metal::BufferRef) {
     encoder.set_vertex_buffer(index, Some(buffer), 0);
+}
+
+/// Writes the upload a price-line ring owes into its buffer: `cap` slots plus one mirror of slot 0
+/// past the end, so a run of segments ending at the last slot reads its end point contiguously.
+fn upload_price_ring(device: &DeviceRef, label: &str, ring: &mut PriceRing, slot: &mut BufferSlot) {
+    if slot.buffer.is_none() {
+        ring.invalidate_gpu();
+    }
+    let cap = ring.slots.len();
+    let write_all = |slot: &mut BufferSlot, ring: &PriceRing| {
+        slot.write_range(device, label, 0, &ring.slots, cap + 1);
+        slot.write_range(device, label, cap, &ring.slots[..1], cap + 1);
+    };
+    match std::mem::replace(&mut ring.pending, RingPending::None) {
+        RingPending::None => {}
+        RingPending::Reset => write_all(slot, ring),
+        RingPending::Append { start, rows } => {
+            let mut recreated = false;
+            let mut done = 0usize;
+            for (first, n) in cross_append_ranges(start, rows.len(), cap) {
+                if n > 0 {
+                    recreated |=
+                        slot.write_range(device, label, first, &rows[done..done + n], cap + 1);
+                    done += n;
+                }
+            }
+            if recreated {
+                write_all(slot, ring);
+            } else {
+                slot.write_range(device, label, cap, &ring.slots[..1], cap + 1);
+            }
+        }
+    }
+}
+
+/// Draws one price line: the segments in view, or their min/max-per-column decimation when there
+/// are more than four points per pixel column, the rule the DX11 combo draws by. A view range that
+/// wraps the ring is drawn as two runs; the mirror slot carries the segment across the wrap.
+#[allow(clippy::too_many_arguments)] // one line's ring, buffers and pipeline, passed apart to borrow
+fn draw_price_ring(
+    device: &DeviceRef,
+    encoder: &RenderCommandEncoderRef,
+    pipeline: &RenderPipelineState,
+    view: &ChartViewGpu,
+    ring: &mut PriceRing,
+    line_buffer: &BufferSlot,
+    decim_buffer: &mut BufferSlot,
+    decim_label: &str,
+) {
+    if ring.count <= 1 || !(view.time_to_px > 0.0) || line_buffer.buffer.is_none() {
+        return;
+    }
+    let left = view.view_time0 - 2.0 / view.time_to_px;
+    let right = view.view_time0 + (view.bounds[2] + 2.0) / view.time_to_px;
+    let (lo, hi) = ring.visible(left, right);
+    let n = hi.saturating_sub(lo);
+    if n < 2 {
+        return;
+    }
+    crate::diag::bump(&crate::diag::CHART_COMBO_DRAW);
+    let columns = view.bounds[2].max(0.0).ceil() as usize;
+    if n > 4 * columns {
+        // Decimated over the whole ring on absolute columns, so a scroll without a new point
+        // reuses it; only a new point or a zoom recomputes.
+        let key = (ring.head, ring.count, view.time_to_px.to_bits());
+        if ring.decim_key != Some(key) {
+            let mut decim = std::mem::take(&mut ring.decim);
+            ring.m4(view.time_to_px, &mut decim);
+            ring.decim = decim;
+            decim_buffer.write(device, decim_label, &ring.decim);
+            ring.decim_len = ring.decim.len() as u32;
+            ring.decim_key = Some(key);
+        }
+        let (dlo, dhi) = ring.decim_visible(left, right);
+        if dhi.saturating_sub(dlo) >= 2 {
+            draw_price_segments(encoder, pipeline, decim_buffer, dlo, dhi - dlo - 1);
+            return;
+        }
+    }
+    for (first, segments) in ring.draw_runs(lo, n) {
+        if segments > 0 {
+            draw_price_segments(encoder, pipeline, line_buffer, first, segments);
+        }
+    }
+}
+
+/// Draws `segments` price-line segments whose first point is element `first` of `buffer`.
+fn draw_price_segments(
+    encoder: &RenderCommandEncoderRef,
+    pipeline: &RenderPipelineState,
+    buffer: &BufferSlot,
+    first: usize,
+    segments: usize,
+) {
+    encoder.set_vertex_buffer(
+        1,
+        Some(buffer.buffer()),
+        (first * std::mem::size_of::<PriceLinePoint>()) as u64,
+    );
+    crate::diag::bump_by(
+        &crate::diag::CHART_PRICE_LINE_DRAW_SEGMENTS,
+        segments as u64,
+    );
+    draw(encoder, pipeline, 6, segments as u64);
 }
 
 fn draw(
@@ -2104,11 +2316,6 @@ fn create_background_texture(device: &DeviceRef) -> BackgroundTexture {
         image.width() as u64 * 4,
     );
     BackgroundTexture { texture }
-}
-
-fn tail_vec<T: Clone>(data: &[T], cap: usize) -> Vec<T> {
-    let start = data.len().saturating_sub(cap);
-    data[start..].to_vec()
 }
 
 fn sanitize_capacity(capacity: usize) -> usize {

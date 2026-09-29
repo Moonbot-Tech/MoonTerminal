@@ -14,6 +14,8 @@ mod backend;
 pub mod background;
 #[cfg(windows)]
 mod base;
+#[cfg(any(windows, target_os = "macos"))]
+mod candle_window;
 #[cfg(windows)]
 pub mod candles;
 pub mod input;
@@ -56,6 +58,8 @@ mod text;
 /// The caption editor formats its sample line with the chart's OWN formatter, never a second
 /// spelling of it.
 pub(crate) use text::preview_row;
+#[cfg(any(windows, target_os = "macos"))]
+mod price_ring;
 #[cfg(test)]
 mod tests;
 pub mod types;

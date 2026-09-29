@@ -30,9 +30,7 @@ use super::types::{
     lod_bake_rows, reset_cross_ring, ring_time_range,
 };
 
-mod price_ring;
-
-use price_ring::{PriceRing, RingPending};
+use super::price_ring::{PriceRing, RingPending};
 
 const MIN_COMBO_CAPACITY: u32 = 1;
 /// Price-line ring capacity ceiling: slot offsets and the ring length travel to the shader as f32

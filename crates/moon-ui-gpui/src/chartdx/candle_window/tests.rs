@@ -16,7 +16,7 @@ fn series(from: usize, to: usize) -> Vec<CandleGpu> {
     (from..to).map(|i| row(i as f32, 1.0)).collect()
 }
 
-/// Breakage: `candles/window.rs` `CandleWindow::draw_slice` starts at the first visible row
+/// Breakage: `chartdx/candle_window.rs` `CandleWindow::draw_slice` starts at the first visible row
 /// instead of one before it. Consequence: the volume hill into the first visible candle vanishes
 /// at the left edge. Numbers: 2880 rows, a 100-candle view submitted 2880 candles + 2879 hills
 /// before, 101 + 101 now.
@@ -50,7 +50,7 @@ fn draw_slice_keeps_a_wide_filler_reaching_into_the_view() {
     assert!(s.start as usize + s.candles as usize > 900);
 }
 
-/// Breakage: `candles/window.rs` `CandleWindow::patch` owes a full upload for a tail patch.
+/// Breakage: `chartdx/candle_window.rs` `CandleWindow::patch` owes a full upload for a tail patch.
 /// Consequence: every live batch rewrites the whole 4096-instance GPU buffer. Numbers: slots
 /// written per same-bucket batch were min(N, 4096) before, 1 now.
 #[test]

@@ -244,19 +244,21 @@ impl PlatformLayers {
         #[cfg(target_os = "linux")]
         self.wgpu.set_candles(data.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_candles(data.to_vec());
+        self.metal.set_candles(data);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = data;
         }
     }
 
-    /// Re-applies the whole composed list's tail from `from` on. DX11 uploads only those slots;
-    /// the native backends take the whole list, exactly as a full set.
+    /// Re-applies the whole composed list's tail from `from` on. DX11 and Metal upload only those
+    /// slots; wgpu takes the whole list, exactly as a full set.
     pub fn patch_candles(&mut self, from: usize, full: &[CandleGpu]) {
         #[cfg(windows)]
         self.candles.patch(from, full);
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        self.metal.patch_candles(from, full);
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = from;
             self.set_candles(full);
@@ -366,8 +368,8 @@ impl PlatformLayers {
         }
     }
 
-    /// Appends newly drained points to the price lines. DX11 uploads only those; the native
-    /// backends take the full lines, exactly as a set.
+    /// Appends newly drained points to the price lines. DX11 and Metal upload only those; wgpu
+    /// takes the full lines, exactly as a set.
     pub fn append_price_lines(
         &mut self,
         last_new: &[PriceLinePoint],
@@ -380,7 +382,12 @@ impl PlatformLayers {
             let _ = (last_full, mark_full);
             self.combo.append_price_lines(last_new, mark_new);
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (last_full, mark_full);
+            self.metal.append_price_lines(last_new, mark_new);
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = (last_new, mark_new);
             self.set_price_lines(last_full, mark_full);
