@@ -63,6 +63,10 @@ pub struct PlatformLayers {
 }
 
 impl PlatformLayers {
+    /// Whether the order book is drawn inside the cached base, so a book-only change must rebake
+    /// that base. Metal keeps its book bitmap outside it and blits it on every present.
+    pub const BOOK_IN_BASE: bool = !cfg!(target_os = "macos");
+
     /// Whether this backend retains the marker buffer so a hover can patch arrows in place.
     ///
     /// Returns:
@@ -414,12 +418,12 @@ impl PlatformLayers {
         #[cfg(target_os = "linux")]
         self.wgpu.set_orderbook(levels.to_vec());
         #[cfg(target_os = "macos")]
-        self.metal.set_orderbook(levels.to_vec());
+        self.metal.set_orderbook(levels, immediate);
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         {
             let _ = levels;
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let _ = immediate;
     }
 
@@ -430,7 +434,11 @@ impl PlatformLayers {
         {
             super::orderbook::book_v_margin_px(bh)
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            super::metal_backend::book_v_margin_px(bh)
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         {
             let _ = bh;
             0.0

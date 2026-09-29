@@ -49,6 +49,14 @@ use combo_plan::{
     volume_band_px, volume_blit_uv,
 };
 
+/// The DX11 order book's backend-free bake planner, shared so both backends throttle book data and
+/// move the bitmap inside its vertical margin by one rule.
+#[path = "orderbook/plan.rs"]
+mod book_plan;
+
+pub(super) use book_plan::book_v_margin_px;
+use book_plan::{BookBakeKey, book_blit_uv, book_data_due, book_tex_dims, plan_book_bake};
+
 /// How long eviction damage alone may wait before it forces a full rebake of both bitmaps.
 const EVICTION_REBAKE_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -211,6 +219,23 @@ struct VolumeTexture {
     key: VolumeBakeKey,
 }
 
+/// Order-book bitmap `bw x (bh + 2 * v_margin)`, the analogue of Moonbot's `bmGlass` and of the
+/// DX11 `BookTex`: a price shift inside the margin is a UV shift of its blit, and new book data
+/// rebakes it at most once per throttle interval. It lives OUTSIDE the base cache, so a book
+/// change never rebakes the base.
+struct BookTexture {
+    texture: metal::Texture,
+    blit_uniform: BufferSlot,
+    generation: u64,
+    pixel_format: MTLPixelFormat,
+    tex_w: u32,
+    key: BookBakeKey,
+    last_style: BookStyle,
+    /// Whether levels or style changed since the previous bake.
+    dirty: bool,
+    last_bake_at: Option<Instant>,
+}
+
 /// Sizes of the cross and volume bitmaps for one chart size.
 #[derive(Clone, Copy)]
 struct ComboDims {
@@ -324,6 +349,7 @@ pub struct MetalLayers {
     base_cache: BaseCache,
     combo_texture: Option<ComboTexture>,
     volume_texture: Option<VolumeTexture>,
+    book_texture: Option<BookTexture>,
     /// Ring runs appended since the last bake, drawn incrementally into both bitmaps.
     combo_dirty_ranges: Vec<(usize, usize)>,
     /// When rows evicted from inside a baked span are finally erased by a full rebake. Evicted
@@ -353,6 +379,10 @@ pub struct MetalLayers {
     hvol: Vec<HvolRowGpu>,
     hvol_style: HvolStyleGpu,
     levels: Vec<LevelInstance>,
+    /// Levels queued by `set_orderbook` and not yet seen by a book prepare.
+    book_levels_changed: bool,
+    /// Whether a queued level upload came from leaving the emitted window and must bake at once.
+    book_pending_immediate: bool,
     zones: Vec<ZoneGpu>,
     hlines: Vec<HLineGpu>,
     segs: Vec<SegGpu>,
@@ -364,8 +394,6 @@ pub struct MetalLayers {
     cursor_uniform: BufferSlot,
     readout_rect_buffer: BufferSlot,
     view_uniform: BufferSlot,
-    book_view_uniform: BufferSlot,
-    book_style_uniform: BufferSlot,
     last_line_buffer: BufferSlot,
     mark_line_buffer: BufferSlot,
     /// Min/max-per-column decimation of each line, drawn when it is denser than pixels.
@@ -377,7 +405,6 @@ pub struct MetalLayers {
     tick_style: TickStyleGpu,
     volume_style_uniform: BufferSlot,
     volume_style: VolumeStyleGpu,
-    level_buffer: BufferSlot,
     zone_buffer: BufferSlot,
     hline_buffer: BufferSlot,
     seg_buffer: BufferSlot,
@@ -388,7 +415,6 @@ pub struct MetalLayers {
     hvol_buffer: BufferSlot,
     hvol_style_uniform: BufferSlot,
     price_line_buffers_dirty: bool,
-    book_buffer_dirty: bool,
     userdata_buffers_dirty: bool,
     /// Only markers changed since the last upload, by a hover patch; zones stay in the base cache.
     marker_buffer_dirty: bool,
@@ -408,6 +434,7 @@ impl MetalLayers {
             base_cache: BaseCache::default(),
             combo_texture: None,
             volume_texture: None,
+            book_texture: None,
             combo_dirty_ranges: Vec::new(),
             eviction_rebake_at: None,
             crosses: Vec::new(),
@@ -426,6 +453,8 @@ impl MetalLayers {
             hvol: Vec::new(),
             hvol_style: HvolStyleGpu::default(),
             levels: Vec::new(),
+            book_levels_changed: false,
+            book_pending_immediate: false,
             zones: Vec::new(),
             hlines: Vec::new(),
             segs: Vec::new(),
@@ -437,8 +466,6 @@ impl MetalLayers {
             cursor_uniform: BufferSlot::default(),
             readout_rect_buffer: BufferSlot::default(),
             view_uniform: BufferSlot::default(),
-            book_view_uniform: BufferSlot::default(),
-            book_style_uniform: BufferSlot::default(),
             last_line_buffer: BufferSlot::default(),
             mark_line_buffer: BufferSlot::default(),
             last_decim_buffer: BufferSlot::default(),
@@ -448,7 +475,6 @@ impl MetalLayers {
             tick_style: TickStyleGpu::default(),
             volume_style_uniform: BufferSlot::default(),
             volume_style: VolumeStyleGpu::default(),
-            level_buffer: BufferSlot::default(),
             zone_buffer: BufferSlot::default(),
             hline_buffer: BufferSlot::default(),
             seg_buffer: BufferSlot::default(),
@@ -459,7 +485,6 @@ impl MetalLayers {
             hvol_buffer: BufferSlot::default(),
             hvol_style_uniform: BufferSlot::default(),
             price_line_buffers_dirty: true,
-            book_buffer_dirty: true,
             userdata_buffers_dirty: true,
             marker_buffer_dirty: false,
             candle_buffers_dirty: true,
@@ -785,10 +810,13 @@ impl MetalLayers {
         self.mark_ring.append(mark_new);
     }
 
-    pub fn set_orderbook(&mut self, levels: Vec<LevelInstance>) {
-        self.levels = levels;
-        self.book_buffer_dirty = true;
-        self.base_cache.valid = false;
+    /// Queue order-book levels for the book bitmap. `immediate` bakes them this frame instead of
+    /// behind the data throttle. The book is not in the base cache, so the cache stays valid.
+    pub fn set_orderbook(&mut self, levels: &[LevelInstance], immediate: bool) {
+        self.levels.clear();
+        self.levels.extend_from_slice(levels);
+        self.book_levels_changed = true;
+        self.book_pending_immediate |= immediate;
     }
 
     pub fn set_userdata(
@@ -838,6 +866,7 @@ impl MetalLayers {
         self.base_cache = BaseCache::default();
         self.combo_texture = None;
         self.volume_texture = None;
+        self.book_texture = None;
         self.combo_dirty_ranges.clear();
         self.eviction_rebake_at = None;
         self.bg_uniform = BufferSlot::default();
@@ -845,8 +874,6 @@ impl MetalLayers {
         self.cursor_uniform = BufferSlot::default();
         self.readout_rect_buffer = BufferSlot::default();
         self.view_uniform = BufferSlot::default();
-        self.book_view_uniform = BufferSlot::default();
-        self.book_style_uniform = BufferSlot::default();
         self.last_line_buffer = BufferSlot::default();
         self.mark_line_buffer = BufferSlot::default();
         self.last_decim_buffer = BufferSlot::default();
@@ -855,7 +882,6 @@ impl MetalLayers {
         self.mark_ring.invalidate_gpu();
         self.price_style_uniform = BufferSlot::default();
         self.volume_style_uniform = BufferSlot::default();
-        self.level_buffer = BufferSlot::default();
         self.zone_buffer = BufferSlot::default();
         self.hline_buffer = BufferSlot::default();
         self.seg_buffer = BufferSlot::default();
@@ -867,7 +893,6 @@ impl MetalLayers {
         self.hvol_buffer = BufferSlot::default();
         self.hvol_style_uniform = BufferSlot::default();
         self.price_line_buffers_dirty = true;
-        self.book_buffer_dirty = true;
         self.userdata_buffers_dirty = true;
         self.candle_buffers_dirty = true;
         self.side_buffer_dirty = true;
@@ -892,7 +917,6 @@ impl MetalLayers {
         self.upload_frame_uniforms(
             device,
             view,
-            orderbook_view,
             background_params,
             grid_params,
             cursor_params,
@@ -910,6 +934,7 @@ impl MetalLayers {
             self.draw_base_layers(encoder, sc, view);
             self.draw_cached_combo(device, encoder, view);
         }
+        self.draw_cached_book(device, encoder, orderbook_view);
         self.draw_price_lines_layer(device, encoder, view);
         // Order lines and trade marks stop at the horizontal-volume zone; the cursor pass keeps
         // the whole pane, as the crosshair and the volume readout live in the zone.
@@ -1034,16 +1059,6 @@ impl MetalLayers {
                 6,
                 moon_chart::volume_bars::VOLUME_SCALE_INSTANCES as u64,
             );
-        }
-
-        crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
-        set_uniform(encoder, 0, self.book_view_uniform.buffer());
-        encoder.set_vertex_buffer(1, Some(self.book_style_uniform.buffer()), 0);
-        encoder.set_fragment_buffer(1, Some(self.book_style_uniform.buffer()), 0);
-        set_storage(encoder, 2, self.level_buffer.buffer());
-        draw(encoder, &pipelines.book_bg, 6, 1);
-        if !self.levels.is_empty() {
-            draw(encoder, &pipelines.book_bars, 6, self.levels.len() as u64);
         }
     }
 
@@ -1539,13 +1554,13 @@ impl MetalLayers {
             self.pipelines = Some(create_pipelines(device, pixel_format));
             self.background_texture = Some(create_background_texture(device));
         }
-        self.upload_common(
+        self.upload_common(device, view, background_params, grid_params, cursor_params);
+        self.prepare_book(
             device,
-            view,
+            command_buffer,
+            gpu.device_generation(),
+            pixel_format,
             orderbook_view,
-            background_params,
-            grid_params,
-            cursor_params,
             book_style,
         );
         let combo_changed =
@@ -1593,15 +1608,155 @@ impl MetalLayers {
         Ok(())
     }
 
+    /// Bakes the order-book bitmap when the shared planner says so: at once for a zoom, a hard
+    /// style change, a drift past the margin, the first bake or a level rebuild caused by leaving
+    /// the emitted window; new levels or live edges only once per data throttle interval.
+    fn prepare_book(
+        &mut self,
+        device: &DeviceRef,
+        command_buffer: &CommandBufferRef,
+        generation: u64,
+        pixel_format: MTLPixelFormat,
+        view: &ChartViewGpu,
+        style: &BookStyle,
+    ) {
+        let bw = view.bounds[2];
+        let bh = view.bounds[3];
+        if bw <= 0.0 || bh <= 0.0 {
+            return;
+        }
+        let levels_changed = std::mem::take(&mut self.book_levels_changed);
+        let window_rebuilt = levels_changed && std::mem::take(&mut self.book_pending_immediate);
+        let (tex_w, v_margin, tex_h_total) = book_tex_dims(bw, bh);
+        if self.book_texture.as_ref().is_none_or(|tex| {
+            tex.tex_w != tex_w
+                || tex.key.tex_h_total != tex_h_total
+                || tex.generation != generation
+                || tex.pixel_format != pixel_format
+        }) {
+            self.book_texture = Some(BookTexture {
+                texture: new_cache_texture(device, pixel_format, tex_w, tex_h_total),
+                blit_uniform: BufferSlot::default(),
+                generation,
+                pixel_format,
+                tex_w,
+                key: BookBakeKey::unbaked(tex_h_total, v_margin),
+                last_style: BookStyle::default(),
+                dirty: false,
+                last_bake_at: None,
+            });
+        }
+        let tex = self.book_texture.as_mut().unwrap();
+        if levels_changed || *style != tex.last_style {
+            tex.dirty = true;
+        }
+        // Live bid and ask edges move on every book tick and wait for the throttle like level
+        // data; any other style field bakes at once.
+        let style_hard_changed = !style.eq_ignore_edges(&tex.last_style);
+        let now = Instant::now();
+        let data_due = book_data_due(tex.dirty, tex.last_bake_at, now);
+        let plan = plan_book_bake(&tex.key, view, style_hard_changed, data_due, window_rebuilt);
+        if !plan.bake {
+            return;
+        }
+        crate::diag::bump(&crate::diag::CHART_BOOK_BAKE);
+        let bake_p0 = tex.key.centred_p0(view);
+        let (w, h) = (tex_w as f32, tex_h_total as f32);
+        // The bake view spans the whole bitmap, margins included.
+        let bake_view = ChartViewGpu {
+            bounds: [0.0, 0.0, w, h],
+            resolution: [w, h],
+            time_to_px: view.time_to_px,
+            view_time0: view.view_time0,
+            price_to_px: view.price_to_px,
+            view_price0: bake_p0,
+            marker_half: view.marker_half,
+            pad: 0.0,
+            volume_buy_inv: 0.0,
+            volume_sell_inv: 0.0,
+            volume_alpha: 0.0,
+            _pad2: 0.0,
+        };
+        let pipelines = self.pipelines.as_ref().unwrap();
+        let pass = metal::RenderPassDescriptor::new();
+        let color = pass.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(tex.texture.as_ref()));
+        color.set_load_action(MTLLoadAction::Clear);
+        color.set_store_action(MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+        let encoder = command_buffer.new_render_command_encoder(pass);
+        encoder.set_scissor_rect(MTLScissorRect {
+            x: 0,
+            y: 0,
+            width: u64::from(tex_w),
+            height: u64::from(tex_h_total),
+        });
+        // Snapshots, not the retained slots: the bake executes after this frame's later writes.
+        let view_buffer = snapshot_buffer(device, "moon_chart_book_view_uniform", &[bake_view]);
+        let style_buffer = snapshot_buffer(device, "moon_chart_book_style_uniform", &[*style]);
+        let level_buffer = snapshot_buffer(device, "moon_chart_book_levels", &self.levels);
+        set_uniform(encoder, 0, view_buffer.as_ref());
+        set_uniform(encoder, 1, style_buffer.as_ref());
+        set_storage(encoder, 2, level_buffer.as_ref());
+        // Always the opaque zone background, even for an empty book, then fills and level lines.
+        draw(encoder, &pipelines.book_bg, 6, 1);
+        if !self.levels.is_empty() {
+            draw(encoder, &pipelines.book_bars, 6, self.levels.len() as u64);
+        }
+        encoder.end_encoding();
+        keep_buffers_alive(
+            command_buffer,
+            vec![view_buffer, style_buffer, level_buffer],
+        );
+        tex.key.bake_p0 = bake_p0;
+        tex.key.price_to_px = view.price_to_px;
+        tex.key.baked = true;
+        tex.last_style = *style;
+        tex.dirty = false;
+        tex.last_bake_at = Some(now);
+    }
+
+    /// Blits the baked order book into its zone through a whole-texel UV window, after the base
+    /// and before the price lines, as the book used to draw last in the base.
+    fn draw_cached_book(
+        &mut self,
+        device: &DeviceRef,
+        encoder: &RenderCommandEncoderRef,
+        view: &ChartViewGpu,
+    ) {
+        if view.bounds[2] <= 0.0 || view.bounds[3] <= 0.0 {
+            return;
+        }
+        let Some(tex) = self.book_texture.as_mut().filter(|t| t.key.baked) else {
+            return;
+        };
+        let pipelines = self.pipelines.as_ref().unwrap();
+        let (uv_off, uv_scale) = book_blit_uv(&tex.key, view);
+        let params = BackgroundParams {
+            dst: view.bounds,
+            resolution: view.resolution,
+            uv_off,
+            uv_scale,
+            opacity: 1.0,
+            _pad: 0.0,
+            bg: [0.0, 0.0, 0.0, 0.0],
+        };
+        tex.blit_uniform
+            .write(device, "moon_chart_book_blit_uniform", &[params]);
+        crate::diag::bump(&crate::diag::CHART_BOOK_DRAW);
+        set_uniform(encoder, 0, tex.blit_uniform.buffer());
+        encoder.set_fragment_texture(0, Some(tex.texture.as_ref()));
+        encoder.set_fragment_sampler_state(0, Some(pipelines.point_sampler.as_ref()));
+        draw(encoder, &pipelines.blit, 6, 1);
+    }
+
     fn upload_common(
         &mut self,
         device: &DeviceRef,
         view: &ChartViewGpu,
-        orderbook_view: &ChartViewGpu,
         background_params: &BackgroundParams,
         grid_params: &GridParams,
         cursor_params: &CursorParams,
-        book_style: &BookStyle,
     ) {
         let mut view = *view;
         view.volume_buy_inv = 1.0 / self.volume_buy_max.max(1e-6);
@@ -1616,10 +1771,6 @@ impl MetalLayers {
             .write(device, "moon_chart_readout_rects", &[] as &[ReadoutRect]);
         self.view_uniform
             .write(device, "moon_chart_view_uniform", &[view]);
-        self.book_view_uniform
-            .write(device, "moon_chart_book_view_uniform", &[*orderbook_view]);
-        self.book_style_uniform
-            .write(device, "moon_chart_book_style_uniform", &[*book_style]);
         upload_price_ring(
             device,
             "moon_chart_last_line",
@@ -1636,11 +1787,6 @@ impl MetalLayers {
             self.price_style_uniform
                 .write(device, "moon_chart_price_style", &[self.price_style]);
             self.price_line_buffers_dirty = false;
-        }
-        if self.book_buffer_dirty || self.level_buffer.buffer.is_none() {
-            self.level_buffer
-                .write(device, "moon_chart_book_levels", &self.levels);
-            self.book_buffer_dirty = false;
         }
         if self.userdata_buffers_dirty
             || self.zone_buffer.buffer.is_none()
@@ -1719,7 +1865,6 @@ impl MetalLayers {
         &mut self,
         device: &DeviceRef,
         view: &ChartViewGpu,
-        orderbook_view: &ChartViewGpu,
         background_params: &BackgroundParams,
         grid_params: &GridParams,
         cursor_params: &CursorParams,
@@ -1738,8 +1883,6 @@ impl MetalLayers {
             .write(device, "moon_chart_readout_rects", readout_rects);
         self.view_uniform
             .write(device, "moon_chart_view_uniform", &[view]);
-        self.book_view_uniform
-            .write(device, "moon_chart_book_view_uniform", &[*orderbook_view]);
     }
 
     /// Borrow the retained Metal tick ring without a per-cursor copy.
