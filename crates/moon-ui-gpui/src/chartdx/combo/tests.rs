@@ -617,3 +617,143 @@ fn eviction_damage_waits_for_one_coalesced_rebake() {
     layer.set_tick_style(style);
     assert_eq!(layer.eviction_rebake_at, None);
 }
+
+/// Append `data` the way `apply_uploads` does for an in-place ring write, carrying the scale.
+fn append_carrying_scale(layer: &mut ComboLayer, data: &[ChartCross]) -> bool {
+    let carried = layer.carry_volume_window_scale(data);
+    crate::chartdx::types::append_cross_ring(
+        &mut layer.resident_crosses,
+        &mut layer.resident_head,
+        &mut layer.resident_count,
+        layer.cross_capacity as usize,
+        data,
+    );
+    layer
+        .tick_time_order
+        .extend(data.iter().map(|c| c.time_rel));
+    layer.volume_data_generation = layer.volume_data_generation.wrapping_add(1);
+    layer.volume_window_cache = carried.map(|(key, scale)| {
+        (
+            super::VolumeScaleKey {
+                data_generation: layer.volume_data_generation,
+                ..key
+            },
+            scale,
+        )
+    });
+    carried.is_some()
+}
+
+/// The scale a fresh full scan of the current mirror gives for the window.
+fn full_scan_scale(layer: &mut ComboLayer, bake_t0: f32, tex_w: f32, ttp: f32) -> (f32, f32) {
+    layer.volume_window_cache = None;
+    layer.volume_scale_for_bake_window(bake_t0, tex_w, ttp)
+}
+
+/// Dropping the carry rescans the whole ring for every live tick batch.
+#[test]
+fn in_window_append_raises_scale_without_rescan() {
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(8, 1);
+    resident(&mut layer, &[cross(10.0, 0, 3.0), cross(11.0, 1, 2.0)]);
+    assert_eq!(
+        layer.volume_scale_for_bake_window(10.0, 20.0, 2.0),
+        (3.0, 2.0)
+    );
+    assert!(append_carrying_scale(
+        &mut layer,
+        &[
+            cross(12.0, 0, 5.0),
+            cross(13.0, 1, 1.0),
+            cross(14.0, 2, 99.0)
+        ]
+    ));
+    let carried = layer.volume_scale_for_bake_window(10.0, 20.0, 2.0);
+    assert_eq!(carried, (5.0, 2.0));
+    assert_eq!(full_scan_scale(&mut layer, 10.0, 20.0, 2.0), carried);
+}
+
+/// Treating every eviction as a lost maximum rescans a full ring on every tick.
+#[test]
+fn evicting_a_non_max_row_keeps_the_carried_scale() {
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(3, 1);
+    resident(
+        &mut layer,
+        &[
+            cross(10.0, 0, 1.0),
+            cross(11.0, 0, 7.0),
+            cross(12.0, 1, 4.0),
+        ],
+    );
+    assert_eq!(
+        layer.volume_scale_for_bake_window(10.0, 20.0, 2.0),
+        (7.0, 4.0)
+    );
+    assert!(append_carrying_scale(&mut layer, &[cross(13.0, 1, 2.0)]));
+    let carried = layer.volume_scale_for_bake_window(10.0, 20.0, 2.0);
+    assert_eq!(carried, (7.0, 4.0));
+    assert_eq!(full_scan_scale(&mut layer, 10.0, 20.0, 2.0), carried);
+}
+
+/// Keeping a carried maximum after its row left the ring leaves bars scaled to a ghost.
+#[test]
+fn evicting_the_max_row_forces_the_full_scan_answer() {
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(3, 1);
+    resident(
+        &mut layer,
+        &[
+            cross(10.0, 0, 9.0),
+            cross(11.0, 0, 7.0),
+            cross(12.0, 1, 4.0),
+        ],
+    );
+    assert_eq!(
+        layer.volume_scale_for_bake_window(10.0, 20.0, 2.0),
+        (9.0, 4.0)
+    );
+    assert!(!append_carrying_scale(&mut layer, &[cross(13.0, 0, 2.0)]));
+    assert_eq!(
+        layer.volume_scale_for_bake_window(10.0, 20.0, 2.0),
+        (7.0, 4.0)
+    );
+}
+
+/// Serving the old window's cached scale for a moved window sizes bars to the wrong rows.
+#[test]
+fn window_change_rescans() {
+    let mut layer = ComboLayer::new();
+    layer.set_capacity(8, 1);
+    resident(&mut layer, &[cross(10.0, 0, 3.0), cross(30.0, 0, 8.0)]);
+    assert_eq!(
+        layer.volume_scale_for_bake_window(10.0, 4.0, 2.0),
+        (3.0, 1e-6)
+    );
+    assert!(append_carrying_scale(&mut layer, &[cross(31.0, 1, 2.0)]));
+    assert_eq!(
+        layer.volume_scale_for_bake_window(25.0, 20.0, 2.0),
+        (8.0, 2.0)
+    );
+}
+
+/// The carry must see the same window edges and filters as the full scan.
+#[test]
+fn carry_rule_matches_full_scan_filters() {
+    use super::volume_scale::carry_volume_scale;
+    let evicted_edge = [cross(9.0, 0, 5.0)];
+    let evicted_outside = [
+        cross(8.0, 0, 5.0),
+        cross(10.0, 2, 50.0),
+        cross(10.0, 0, 0.0),
+    ];
+    let appended = [cross(8.9, 1, 6.0), cross(9.0, 1, 3.0), cross(10.0, 0, -1.0)];
+    assert_eq!(
+        carry_volume_scale((5.0, 1e-6), &evicted_edge, &appended, 9.0, 21.0),
+        None
+    );
+    assert_eq!(
+        carry_volume_scale((5.0, 1e-6), &evicted_outside, &appended, 9.0, 21.0),
+        Some((5.0, 3.0))
+    );
+}
