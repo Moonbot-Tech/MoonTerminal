@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Construct only the account and routing state needed by the production drain.
-fn fixture() -> (SessionManager, FeedTx) {
+pub(super) fn fixture() -> (SessionManager, FeedTx) {
     let market = MarketStore::shared(0.0);
     let (tx, handle) = crate::feed::trade_sound_test_feed();
     let mut store = CoreStore::default();
@@ -41,6 +41,7 @@ fn fixture() -> (SessionManager, FeedTx) {
         pending_ob_drop: HashMap::new(),
         last_cmd: HashMap::new(),
         core_updates: Default::default(),
+        identity_respawns: Default::default(),
     };
     (session, tx)
 }

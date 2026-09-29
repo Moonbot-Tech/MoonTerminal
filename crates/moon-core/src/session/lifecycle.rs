@@ -18,6 +18,8 @@ use super::{
 };
 
 #[cfg(test)]
+mod identity_stale_tests;
+#[cfg(test)]
 mod order_tests;
 #[cfg(test)]
 mod trade_sound_tests;
@@ -87,6 +89,7 @@ impl SessionManager {
             pending_ob_drop: HashMap::new(),
             last_cmd: HashMap::new(),
             core_updates: crate::session::core_update::CoreUpdateQueue::default(),
+            identity_respawns: Default::default(),
         };
         for s in config
             .servers
@@ -326,6 +329,7 @@ impl SessionManager {
         self.pending_drop.retain(|(core, _), _| *core != id);
         self.wanted_orderbook.remove(&id);
         self.pending_ob_drop.retain(|(core, _), _| *core != id);
+        self.identity_respawns.forget(id);
         crate::market::tape_recorder::core_down(id);
         log::info!("session down: core={}", crate::feed::core_label(id));
         // Release the name AFTER the line above, so the last line still names the core; a later id
@@ -386,6 +390,30 @@ impl SessionManager {
                         self.market_source
                             .set_orderbook_kind(sess.id, orderbook_kind_for_exchange(id));
                         stats.ui_state = true;
+                    }
+                    FeedMsg::IdentityStale(cause)
+                        if self
+                            .core_update_phase(sess.id)
+                            .and_then(Self::active_from)
+                            .is_some() =>
+                    {
+                        // A live update attempt restarts the core on purpose and its `Verifying`
+                        // phase respawns the client itself; a second respawn would only double
+                        // the teardown and the provider handoff.
+                        log::info!(
+                            "core {} identity stale ({cause:?}) during an update, left to it",
+                            crate::feed::core_label(sess.id)
+                        );
+                    }
+                    FeedMsg::IdentityStale(cause) => {
+                        // The venue stays until the respawn clears it: dropping it now would
+                        // strip the core's provider role for the whole debounce window, while the
+                        // fresh client replaces it within one connect.
+                        log::info!(
+                            "core {} identity stale ({cause:?}), respawn requested",
+                            crate::feed::core_label(sess.id)
+                        );
+                        self.identity_respawns.request(sess.id);
                     }
                     FeedMsg::CoreBase { base } => {
                         self.core_base.insert(sess.id, base);
@@ -886,6 +914,8 @@ impl SessionManager {
         // Refresh ranks because reconnect may insert a missing session without reconciliation.
         self.config_order = config.servers.iter().map(|s| s.id).collect();
         let sig = conn_sig(&server);
+        // Any respawn reads the identity afresh, so a deferred identity request is now moot.
+        self.identity_respawns.fulfilled(id);
         self.respawn_session(
             server,
             sig,

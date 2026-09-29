@@ -1437,6 +1437,7 @@ impl CoreData {
             // one core's retained state, while a venue and a base currency belong to the session
             // manager's cross-core coordination.
             FeedMsg::Identity { .. }
+            | FeedMsg::IdentityStale(_)
             | FeedMsg::CoreBase { .. }
             | FeedMsg::MarketDataChanged(_)
             | FeedMsg::ChartArchiveAnswered { .. }

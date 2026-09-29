@@ -33,6 +33,7 @@ fn manager() -> SessionManager {
         pending_ob_drop: HashMap::new(),
         last_cmd: HashMap::new(),
         core_updates: CoreUpdateQueue::default(),
+        identity_respawns: Default::default(),
     }
 }
 
