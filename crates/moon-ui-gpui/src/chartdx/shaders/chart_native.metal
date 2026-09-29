@@ -669,8 +669,9 @@ vertex CrossOut crosses_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                constant ChartView& cv [[buffer(0)]],
                                const device Cross* crosses [[buffer(1)]]) {
     Cross c = crosses[iid];
-    float sx = round(cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px);
-    float sy = round(cv.bounds.y + cv.bounds.w - (c.price - cv.view_price0) * cv.price_to_px);
+    // rint ties to even like HLSL round(), the rule the LOD reducers key texels by.
+    float sx = rint(cv.bounds.x + (c.time_rel - cv.view_time0) * cv.time_to_px);
+    float sy = rint(cv.bounds.y + cv.bounds.w - (c.price - cv.view_price0) * cv.price_to_px);
     float cull_margin = max(8.0, cv.marker_half + 1.0);
     if (sx < cv.bounds.x - cull_margin || sx > cv.bounds.x + cv.bounds.z + cull_margin ||
         sy < cv.bounds.y - cull_margin || sy > cv.bounds.y + cv.bounds.w + cull_margin) {
@@ -706,7 +707,7 @@ vertex VolumeOut volume_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float h = max(1.0, sqrt(saturate(c.qty * inv)) * min(cv.bounds.w * 0.18, 72.0));
     float base = cv.bounds.y + cv.bounds.w - 1.0;
     float bar_w = clamp(cv.time_to_px * 0.35, 1.0, 3.0);
-    float2 px = float2(round(sx) - bar_w * 0.5, base - h) + CORNERS_01[vid] * float2(bar_w, h);
+    float2 px = float2(rint(sx) - bar_w * 0.5, base - h) + CORNERS_01[vid] * float2(bar_w, h);
     return { to_clip(px, cv.resolution), c.side };
 }
 
