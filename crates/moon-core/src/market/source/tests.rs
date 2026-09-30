@@ -394,3 +394,14 @@ fn the_venue_minimum_is_one_money_figure_for_both_units() {
         "overflow is not a floor"
     );
 }
+
+/// Regression target: `market/source/mod.rs:position_cap` must hide a zero or non-finite
+/// `bn_max_value` rather than state a cap of nothing.
+#[test]
+fn position_cap_hides_zero_and_non_finite() {
+    assert_eq!(position_cap(0.0), None);
+    assert_eq!(position_cap(-5.0), None);
+    assert_eq!(position_cap(f64::NAN), None);
+    assert_eq!(position_cap(f64::INFINITY), None);
+    assert_eq!(position_cap(25_000.0), Some(25_000.0));
+}

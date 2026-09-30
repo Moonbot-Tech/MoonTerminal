@@ -2,7 +2,8 @@
 
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro re-exported by the parent,
 // and `#[test]` would expand into itself (recursion limit).
-use super::{MetricTarget, TradeMetric};
+use super::{MetricTarget, TradeMetric, position_cap_text};
+use moon_core::market::MarketLimits;
 
 /// First distinct core identity used by target-comparison tests.
 const CORE_A: u64 = 7;
@@ -67,4 +68,31 @@ fn availability_gates_each_metric_on_its_own_condition() {
     // leverage is a different account setting and TP is governed by the sell-price flag.
     assert!(!TradeMetric::Sl.available_with(true, true, true, true));
     assert!(TradeMetric::Lev.available_with(true, true, true, true));
+}
+
+/// Limits carrying only a position cap, for the position-cap readout tests.
+fn with_cap(cap: Option<f64>) -> Option<MarketLimits> {
+    Some(MarketLimits {
+        position_cap: cap,
+        ..MarketLimits::default()
+    })
+}
+
+/// Regression: an unknown position cap must hide the row, never print `0`.
+#[test]
+fn an_unknown_position_cap_hides_its_row() {
+    assert_eq!(position_cap_text(None, "USDT"), None);
+    assert_eq!(position_cap_text(with_cap(None), "USDT"), None);
+}
+
+/// Regression: a known position cap is grouped like the per-order MAX and carries its quote.
+#[test]
+fn a_known_position_cap_is_grouped_with_its_quote() {
+    let cap = 1_250_000.0;
+    let grouped = moon_core::util::fmt::usd_grouped(cap);
+    assert_eq!(
+        position_cap_text(with_cap(Some(cap)), "USDT"),
+        Some(format!("{grouped} USDT"))
+    );
+    assert_eq!(position_cap_text(with_cap(Some(cap)), ""), Some(grouped));
 }

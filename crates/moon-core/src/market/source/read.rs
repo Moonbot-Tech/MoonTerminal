@@ -3,7 +3,9 @@
 use crate::account::AccountIdentity;
 use crate::data::OrderBookModel;
 use crate::feed::SharedMoonClient;
-use crate::market::source::{MarketLabel, MarketLimits, max_order_notional, session_usdt};
+use crate::market::source::{
+    MarketLabel, MarketLimits, max_order_notional, position_cap, session_usdt,
+};
 use crate::session::CoreId;
 
 use super::{
@@ -973,6 +975,7 @@ impl MarketDataSource {
                 m.contract_size(),
             ),
             max_leverage: m.max_leverage,
+            position_cap: position_cap(m.max_value()),
         }))
     }
 

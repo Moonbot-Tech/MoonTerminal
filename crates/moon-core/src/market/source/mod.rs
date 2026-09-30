@@ -219,6 +219,26 @@ pub struct MarketLimits {
     pub max_order: MaxOrder,
     /// Maximum market leverage; `0` means spot or unknown.
     pub max_leverage: i32,
+    /// The exchange's cap on the WHOLE position in this coin at the CURRENT leverage, in the quote
+    /// currency (MoonBot's `<max. N>`), or `None` when the core has not stated one.
+    ///
+    /// Unlike `max_order` it is leverage-dependent: lowering leverage raises it. See
+    /// [`position_cap`].
+    pub position_cap: Option<f64>,
+}
+
+/// The leverage-dependent position cap as it may be shown, from the core's raw `bn_max_value`.
+///
+/// Zero and non-finite both mean the core stated nothing, so they map to `None` — the UI hides the
+/// row rather than print a `0` that reads as "you may hold nothing".
+///
+/// Args:
+///     raw: The market's `max_value()` as the core reports it.
+///
+/// Returns:
+///     The cap in quote currency, or `None` when it is unknown.
+pub(crate) fn position_cap(raw: f64) -> Option<f64> {
+    (raw.is_finite() && raw > 0.0).then_some(raw)
 }
 
 /// What one unit of a market's `quantity` field IS.
