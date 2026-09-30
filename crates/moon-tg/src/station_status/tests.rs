@@ -108,7 +108,10 @@ fn the_update_button_comes_only_with_a_newer_release() {
     assert!(text.ends_with("A new version of the station is out: v0.52.0."));
     let mut updated = status(None);
     updated.last_update = Some("2026-09-30T14:02Z health=ok".into());
-    assert!(station_status_text(&updated).contains("\nLast update: 2026-09-30T14:02Z health=ok\n"));
+    assert!(
+        station_status_text(&updated)
+            .contains("\nLast update: 2026-09-30T14:02Z Updated; the service is healthy.\n")
+    );
     let Some(ReplyMarkup::Inline(markup)) = keyboard else {
         panic!("a newer release brings the inline Update button");
     };
@@ -121,8 +124,10 @@ fn the_update_button_comes_only_with_a_newer_release() {
     for (check, tail) in [
         (ReleaseCheck::Current, None),
         (
-            ReleaseCheck::Failed("GitHub releases returned HTTP 403".into()),
-            Some("Could not check for a new version: GitHub releases returned HTTP 403"),
+            ReleaseCheck::Failed(ReleaseFailure::Unavailable(
+                "GitHub releases returned HTTP 403".into(),
+            )),
+            Some("Details: GitHub releases returned HTTP 403"),
         ),
         (
             ReleaseCheck::Unversioned,
@@ -149,4 +154,37 @@ fn uptime_takes_the_largest_two_units() {
     assert_eq!(duration(59), "0 min");
     assert_eq!(duration(3_600), "1 h 0 min");
     assert_eq!(duration(2 * 86_400 + 5 * 3_600 + 59 * 60), "2 d 5 h");
+}
+
+/// Restoring raw helper verdicts would put health=ok in Russian and Spanish bot headlines.
+#[test]
+fn old_helper_verdicts_and_refusals_are_localized() {
+    for (locale, health, tab) in [
+        ("ru", "служба работает", "вкладке «Станция»"),
+        ("en", "service is healthy", "Station tab"),
+        ("es", "servicio funciona", "pestaña Estación"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        let verdict = update_verdict("2026-09-30T14:02Z update: health=ok");
+        assert!(verdict.contains(health), "{verdict}");
+        assert!(verdict.starts_with("2026-09-30T14:02Z "));
+        assert!(!verdict.contains("health=ok"));
+        assert_eq!(
+            update_verdict("2026-09-30T14:02Z update from release: health=ok"),
+            verdict
+        );
+        assert!(UpdateRefusal::UpdaterMissing.text().contains(tab));
+        let failure = ReleaseFailure::Unavailable("HTTP 403".into()).text();
+        assert!(!failure.lines().next().unwrap().contains("HTTP 403"));
+        assert!(failure.lines().nth(1).unwrap().contains("HTTP 403"));
+        let unknown = update_verdict("future=unrecognized");
+        assert!(!unknown.lines().next().unwrap().contains("future="));
+        assert!(
+            unknown
+                .lines()
+                .nth(1)
+                .unwrap()
+                .contains("future=unrecognized")
+        );
+    }
 }

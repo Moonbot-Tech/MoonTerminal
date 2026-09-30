@@ -194,7 +194,12 @@ impl StationTg {
             );
             let taken = slot.lock().ok().and_then(|mut slot| slot.take());
             if let Some((asks, answer)) = taken {
-                answer(asks, moon_tg::ReleaseCheck::Failed(error.to_string()));
+                answer(
+                    asks,
+                    moon_tg::ReleaseCheck::Failed(moon_tg::ReleaseFailure::Unavailable(
+                        error.to_string(),
+                    )),
+                );
             }
         }
     }
@@ -473,7 +478,7 @@ impl TgHost for StationHost<'_> {
         true
     }
 
-    fn request_station_update(&mut self) -> Option<Result<(), String>> {
+    fn request_station_update(&mut self) -> Option<Result<(), moon_tg::UpdateRefusal>> {
         Some(release::request_update(&self.tg.data_root))
     }
 }

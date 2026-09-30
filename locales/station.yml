@@ -1,0 +1,309 @@
+_version: 2
+station.detail:
+  ru: "Подробности: %{detail}"
+  en: "Details: %{detail}"
+  es: "Detalles: %{detail}"
+station.error.failed:
+  ru: "Не удалось выполнить действие на станции. Проверьте адрес и журнал на вкладке «Станция»."
+  en: "The station action failed. Check the address and log in the Station tab."
+  es: "La acción de la estación falló. Comprueba la dirección y el registro en la pestaña Estación."
+station.error.login_refused:
+  ru: "Сервер отклонил вход. Проверьте логин, пароль или ключ на вкладке «Станция»."
+  en: "The server refused the login. Check the login, password or key in the Station tab."
+  es: "El servidor rechazó el acceso. Comprueba el usuario, la contraseña o la clave en la pestaña Estación."
+station.error.host_key_changed:
+  ru: "Ключ сервера изменился. Проверьте адрес на вкладке «Станция»; если сервер переустановлен и адрес верен, нажмите «Забыть сервер» и настройте его заново."
+  en: "The server key changed. Check the address in the Station tab; if the server was reinstalled and the address is correct, use Forget the server and set it up again."
+  es: "La clave del servidor cambió. Comprueba la dirección en la pestaña Estación; si se reinstaló el servidor y la dirección es correcta, usa Olvidar el servidor y configúralo de nuevo."
+station.error.unreachable:
+  ru: "Сервер недоступен. Проверьте адрес, порт SSH и сеть на вкладке «Станция»."
+  en: "The server is unreachable. Check the address, SSH port and network in the Station tab."
+  es: "El servidor no está accesible. Comprueba la dirección, el puerto SSH y la red en la pestaña Estación."
+station.error.may_poll:
+  ru: "Станция ещё может опрашивать бота. Уберите бота со станции на вкладке «Станция», прежде чем запускать его в терминале."
+  en: "The station may still poll the bot. Remove the bot from the station in the Station tab before starting it in the terminal."
+  es: "La estación aún puede consultar al bot. Retira el bot de la estación en la pestaña Estación antes de iniciarlo en el terminal."
+station.error.EmptyPassword:
+  ru: "Введите пароль сервера на вкладке «Станция»."
+  en: "Enter the server password in the Station tab."
+  es: "Introduce la contraseña del servidor en la pestaña Estación."
+station.error.PasswordOneLine:
+  ru: "Пароль не должен содержать перенос строки. Введите его заново."
+  en: "The password must be one line. Enter it again."
+  es: "La contraseña debe ocupar una sola línea. Introdúcela de nuevo."
+station.error.NoCorePicked:
+  ru: "Выберите хотя бы одно ядро для станции."
+  en: "Pick at least one core for the station."
+  es: "Selecciona al menos un núcleo para la estación."
+station.error.CoreMissing:
+  ru: "Ядра %{uid} нет в servers.enc. Проверьте список ядер в настройках подключений."
+  en: "Core %{uid} is missing from servers.enc. Check the cores in Connections settings."
+  es: "El núcleo %{uid} no está en servers.enc. Comprueba los núcleos en Conexiones."
+station.error.CoreWithoutKey:
+  ru: "У ядра «%{name}» нет ключа. Добавьте ключ в настройках подключений."
+  en: "Core “%{name}” has no key. Add its key in Connections settings."
+  es: "El núcleo «%{name}» no tiene clave. Añádela en Conexiones."
+station.error.HelperTooOld:
+  ru: "Помощник станции устарел. Нажмите «Настроить заново» на вкладке «Станция»."
+  en: "The station helper is too old. Press Set up again in the Station tab."
+  es: "El asistente de la estación es antiguo. Pulsa Configurar de nuevo en la pestaña Estación."
+station.error.ServiceTooOld:
+  ru: "Служба станции устарела. Нажмите «Обновить службу» на вкладке «Станция»."
+  en: "The station service is too old. Press Update the service in the Station tab."
+  es: "El servicio de la estación es antiguo. Pulsa Actualizar el servicio en la pestaña Estación."
+station.error.TerminalTooOld:
+  ru: "Станция использует более новую версию API. Обновите терминал."
+  en: "The station uses a newer API version. Update the terminal."
+  es: "La estación usa una versión más reciente de la API. Actualiza el terminal."
+station.error.Timeout:
+  ru: "Сервер не ответил вовремя. Проверьте сеть и состояние сервера, затем повторите действие."
+  en: "The server did not answer in time. Check the network and server state, then try again."
+  es: "El servidor no respondió a tiempo. Comprueba la red y el estado del servidor y vuelve a intentarlo."
+station.error.SystemdMissing:
+  ru: "На сервере нет systemd. Выберите Linux-сервер с systemd 250 или новее."
+  en: "The server has no systemd. Choose a Linux server with systemd 250 or newer."
+  es: "El servidor no tiene systemd. Elige un servidor Linux con systemd 250 o posterior."
+station.error.SystemdTooOld:
+  ru: "Версия systemd слишком старая для шифрованных ключей. Обновите ОС сервера до systemd 250 или новее."
+  en: "systemd is too old for encrypted credentials. Upgrade the server OS to systemd 250 or newer."
+  es: "systemd es demasiado antiguo para credenciales cifradas. Actualiza el sistema del servidor a systemd 250 o posterior."
+station.error.PasswordStillOffered:
+  ru: "Сервер всё ещё предлагает вход по паролю. Проверьте настройки SSH и повторите настройку станции."
+  en: "The server still offers password logins. Check SSH settings and set up the station again."
+  es: "El servidor aún ofrece acceso por contraseña. Comprueba SSH y configura la estación de nuevo."
+station.error.PasswordStillWorks:
+  ru: "Вход по паролю всё ещё работает. Проверьте настройки SSH и повторите настройку станции."
+  en: "Password login still works. Check SSH settings and set up the station again."
+  es: "El acceso por contraseña aún funciona. Comprueba SSH y configura la estación de nuevo."
+station.error.BotTokenMissing:
+  ru: "На станции нет токена бота. Укажите его на вкладке «Станция»."
+  en: "The station has no bot token. Enter it in the Station tab."
+  es: "La estación no tiene token del bot. Introdúcelo en la pestaña Estación."
+station.error.ConfigMissing:
+  ru: "На станции ещё нет настроек. Сначала отправьте ядра на вкладке «Станция»."
+  en: "The station has no configuration yet. Send its cores first in the Station tab."
+  es: "La estación aún no tiene configuración. Envía primero sus núcleos en la pestaña Estación."
+station.error.BotAlreadyPresent:
+  ru: "На станции уже есть бот. Сначала уберите его со станции."
+  en: "The station already has a bot. Remove it before handing another bot over."
+  es: "La estación ya tiene un bot. Retíralo antes de transferir otro."
+station.error.BotStopped:
+  ru: "Станция остановилась после передачи бота. Проверьте её журнал на вкладке «Станция»."
+  en: "The station stopped after the bot handover. Check its log in the Station tab."
+  es: "La estación se detuvo tras transferir el bot. Comprueba su registro en la pestaña Estación."
+station.error.BotNotReady:
+  ru: "Бот станции не начал опрос вовремя. Проверьте состояние и журнал станции."
+  en: "The station bot did not start polling in time. Check the station status and log."
+  es: "El bot de la estación no comenzó a consultar a tiempo. Comprueba el estado y el registro de la estación."
+station.progress.Login:
+  ru: "Вход на сервер выполнен."
+  en: "Logged in to the server."
+  es: "Acceso al servidor completado."
+station.progress.Pin:
+  ru: "Ключ сервера сохранён."
+  en: "Server key saved."
+  es: "Clave del servidor guardada."
+station.progress.Probe:
+  ru: "Параметры сервера проверены."
+  en: "Server requirements checked."
+  es: "Requisitos del servidor comprobados."
+station.progress.Admin:
+  ru: "Доступ администратора по ключу настроен."
+  en: "Administrator key access configured."
+  es: "Acceso del administrador por clave configurado."
+station.progress.Helper:
+  ru: "Помощник станции установлен."
+  en: "Station helper installed."
+  es: "Asistente de la estación instalado."
+station.progress.Service:
+  ru: "Служба станции настроена."
+  en: "Station service configured."
+  es: "Servicio de la estación configurado."
+station.progress.Harden:
+  ru: "SSH защищён: вход только по ключу, без root."
+  en: "SSH secured: key login only, no root login."
+  es: "SSH protegido: acceso solo por clave, sin acceso root."
+station.progress.Firewall:
+  ru: "Межсетевой экран настроен."
+  en: "Firewall configured."
+  es: "Cortafuegos configurado."
+station.progress.Extras:
+  ru: "Дополнительные параметры сервера настроены."
+  en: "Additional server settings configured."
+  es: "Ajustes adicionales del servidor configurados."
+station.progress.Install:
+  ru: "Служба станции установлена."
+  en: "Station binary installed."
+  es: "Programa de la estación instalado."
+station.progress.Download:
+  ru: "Загрузка службы станции из релиза."
+  en: "Downloading the station from a release."
+  es: "Descargando la estación desde una versión publicada."
+station.progress.TapePending:
+  ru: "Окно ленты будет настроено при отправке ядер."
+  en: "The tape window will be configured when cores are sent."
+  es: "La ventana de la cinta se configurará al enviar los núcleos."
+station.progress.TapeWritten:
+  ru: "Окно ленты сохранено; станция применит его при следующем запуске."
+  en: "Tape window saved; the station applies it at its next start."
+  es: "Ventana de la cinta guardada; se aplicará al iniciar la estación."
+station.progress.TapeReload:
+  ru: "Окно ленты сохранено, станция перечитывает настройки. Обновите службу, чтобы она подтверждала окно."
+  en: "Tape window saved and reload requested. Update the service so it can confirm its window."
+  es: "Ventana guardada y recarga solicitada. Actualiza el servicio para que confirme su ventana."
+station.progress.TapeApplied:
+  ru: "Станция подтвердила новое окно ленты."
+  en: "The station confirmed the new tape window."
+  es: "La estación confirmó la nueva ventana de la cinta."
+station.progress.TokenWritten:
+  ru: "Токен бота сохранён в шифрованных данных."
+  en: "Bot token saved as an encrypted credential."
+  es: "Token del bot guardado como credencial cifrada."
+station.progress.TokenDropped:
+  ru: "Токен бота удалён со станции."
+  en: "Bot token removed from the station."
+  es: "Token del bot retirado de la estación."
+station.progress.ChatsDropped:
+  ru: "Привязки чатов бота удалены."
+  en: "Bot chat pairings removed."
+  es: "Vinculaciones de chats del bot eliminadas."
+station.progress.CoreWritten:
+  ru: "Ключ ядра сохранён в шифрованных данных."
+  en: "Core key saved as an encrypted credential."
+  es: "Clave del núcleo guardada como credencial cifrada."
+station.progress.CoreDropped:
+  ru: "Ключ исключённого ядра удалён со станции."
+  en: "An excluded core key was removed from the station."
+  es: "Clave de un núcleo excluido retirada de la estación."
+station.progress.Status:
+  ru: "Состояние станции прочитано."
+  en: "Station state read."
+  es: "Estado de la estación leído."
+station.progress.Update:
+  ru: "Запрос обновления службы завершён."
+  en: "Service update request finished."
+  es: "Solicitud de actualización del servicio finalizada."
+station.progress.NoNewRelease:
+  ru: "Ничего не установлено: более нового релиза службы нет."
+  en: "Nothing installed: no newer service release is available."
+  es: "No se instaló nada: no hay una versión más reciente del servicio."
+station.progress.Unversioned:
+  ru: "Ничего не установлено: сборка станции не из релиза."
+  en: "Nothing installed: this station build is not from a release."
+  es: "No se instaló nada: esta compilación no procede de una versión publicada."
+station.progress.ValuationSend:
+  ru: "Отправка кеша оценки в USDT."
+  en: "Sending the USDT valuation cache."
+  es: "Enviando la caché de valoración en USDT."
+station.progress.ValuationKept:
+  ru: "Станция сохранила собственный кеш оценки."
+  en: "The station kept its own valuation cache."
+  es: "La estación conservó su propia caché de valoración."
+station.progress.ValuationWritten:
+  ru: "Кеш оценки отправлен на станцию."
+  en: "Valuation cache sent to the station."
+  es: "Caché de valoración enviada a la estación."
+station.progress.ChatsTransferred:
+  ru: "Привязки чатов переданы на станцию."
+  en: "Chat pairings transferred to the station."
+  es: "Vinculaciones de chats transferidas a la estación."
+station.progress.BotStarted:
+  ru: "Станция запущена с ботом."
+  en: "Station started with the bot."
+  es: "Estación iniciada con el bot."
+station.progress.UndoHandover:
+  ru: "Передача не удалась: убираем бота со станции."
+  en: "Handover failed: removing the bot from the station."
+  es: "La transferencia falló: retirando el bot de la estación."
+station.progress.BotRemoved:
+  ru: "Бот станции выключен; токен и привязки чатов удалены."
+  en: "Station bot stopped; its token and chat pairings removed."
+  es: "Bot de la estación detenido; token y vinculaciones eliminados."
+station.progress.BotReady:
+  ru: "Бот станции готов."
+  en: "Station bot ready."
+  es: "Bot de la estación listo."
+station.progress.pair_issued:
+  ru: "Код привязки выдан: /pair %{code}"
+  en: "Pairing code issued: /pair %{code}"
+  es: "Código de vinculación emitido: /pair %{code}"
+station.progress.chats_saved:
+  ru: "Привязанных чатов на станции: %{count}"
+  en: "Paired chats on the station: %{count}"
+  es: "Chats vinculados en la estación: %{count}"
+station.progress.bot_settling:
+  ru: "Изменение сохранено; бот ещё не готов. %{reason}"
+  en: "The change is saved; the bot is not ready yet. %{reason}"
+  es: "El cambio está guardado; el bot aún no está listo. %{reason}"
+station.progress.valuation_none:
+  ru: "Кеша оценки в терминале нет; станция рассчитает оценку сама."
+  en: "The terminal has no valuation cache; the station will calculate it."
+  es: "El terminal no tiene caché de valoración; la estación la calculará."
+station.progress.valuation_failed:
+  ru: "Кеш оценки не отправлен; станция рассчитает оценку сама. %{reason}"
+  en: "Valuation cache not sent; the station will calculate it. %{reason}"
+  es: "Caché de valoración no enviada; la estación la calculará. %{reason}"
+station.progress.logs:
+  ru: "Журнал станции сохранён в журнале приложения."
+  en: "Station journal copied to the application log."
+  es: "Registro de la estación copiado al registro de la aplicación."
+station.update.updater_missing:
+  ru: "На сервере ещё нет помощника обновления. Нажмите «Обновить службу» на вкладке «Станция» в настройках терминала."
+  en: "The server has no updater yet. Press Update the service in the Station tab of the terminal Settings."
+  es: "El servidor aún no tiene actualizador. Pulsa Actualizar el servicio en la pestaña Estación de los ajustes del terminal."
+station.update.request_stale:
+  ru: "Предыдущий запрос не обработан. Нажмите «Обновить службу» на вкладке «Станция» в настройках терминала."
+  en: "The previous request was not handled. Press Update the service in the Station tab of the terminal Settings."
+  es: "La solicitud anterior no se atendió. Pulsa Actualizar el servicio en la pestaña Estación de los ajustes del terminal."
+station.update.running:
+  ru: "Обновление уже выполняется."
+  en: "An update is already running."
+  es: "Ya hay una actualización en curso."
+station.update.write_failed:
+  ru: "Не удалось сохранить запрос обновления. Проверьте место на диске и права службы."
+  en: "Could not save the update request. Check disk space and service permissions."
+  es: "No se pudo guardar la solicitud. Comprueba el espacio en disco y los permisos del servicio."
+station.update.release_timeout:
+  ru: "GitHub не ответил вовремя. Повторите проверку позже."
+  en: "GitHub did not answer in time. Check again later."
+  es: "GitHub no respondió a tiempo. Vuelve a comprobarlo más tarde."
+station.update.release_failed:
+  ru: "Не удалось прочитать релизы. Проверьте сеть и повторите проверку позже."
+  en: "Could not read releases. Check the network and try again later."
+  es: "No se pudieron leer las versiones. Comprueba la red y vuelve a intentarlo más tarde."
+station.update.arch:
+  ru: "Для архитектуры %{arch} нет релиза станции."
+  en: "No station release is available for architecture %{arch}."
+  es: "No hay una versión de la estación para la arquitectura %{arch}."
+station.update.healthy:
+  ru: "Обновлено; служба работает."
+  en: "Updated; the service is healthy."
+  es: "Actualizado; el servicio funciona."
+station.update.rolled_back:
+  ru: "Возвращена прежняя версия; служба работает."
+  en: "Previous version restored; the service is healthy."
+  es: "Versión anterior restaurada; el servicio funciona."
+station.update.next_start:
+  ru: "Установлено; будет применено при следующем запуске службы."
+  en: "Installed; applies at the next service start."
+  es: "Instalado; se aplicará al iniciar el servicio."
+station.update.health_failed:
+  ru: "Новая версия не удержалась. Проверьте журнал станции."
+  en: "The new version did not stay up. Check the station log."
+  es: "La nueva versión no se mantuvo activa. Comprueba el registro de la estación."
+station.update.refused:
+  ru: "Обновление отклонено. Проверьте журнал станции."
+  en: "The update was refused. Check the station log."
+  es: "La actualización fue rechazada. Comprueba el registro de la estación."
+station.update.current:
+  ru: "Более нового релиза службы нет."
+  en: "No newer service release is available."
+  es: "No hay una versión más reciente del servicio."
+station.update.failed:
+  ru: "Обновление не удалось. Проверьте сеть и журнал станции."
+  en: "The update failed. Check the network and station log."
+  es: "La actualización falló. Comprueba la red y el registro de la estación."
+station.update.unknown:
+  ru: "Результат обновления не распознан. Проверьте журнал станции."
+  en: "The update result is not recognized. Check the station log."
+  es: "No se reconoce el resultado de la actualización. Comprueba el registro de la estación."

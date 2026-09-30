@@ -252,7 +252,10 @@ fn run_command(
             let text = match host.request_station_update() {
                 None => return cannot_run(host, chat_id, &reply),
                 Some(Ok(())) => t!("telegram.station.update_requested"),
-                Some(Err(reason)) => t!("telegram.station.update_not_requested", reason = reason),
+                Some(Err(reason)) => t!(
+                    "telegram.station.update_not_requested",
+                    reason = reason.text()
+                ),
             };
             let _ = reply.try_send(Response::Text {
                 text: text.to_string(),

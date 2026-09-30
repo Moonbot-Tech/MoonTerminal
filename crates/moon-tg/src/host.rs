@@ -161,7 +161,7 @@ pub trait TgHost {
     /// Returns:
     ///     `None` from a host with no station — the terminal; `Err` with why the request could
     ///     not be filed.
-    fn request_station_update(&mut self) -> Option<Result<(), String>> {
+    fn request_station_update(&mut self) -> Option<Result<(), crate::UpdateRefusal>> {
         None
     }
 }

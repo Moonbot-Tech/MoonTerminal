@@ -18,7 +18,57 @@ pub enum ReleaseCheck {
     /// This build carries no release version: it is updated only by a binary from the terminal.
     Unversioned,
     /// The releases could not be read; why.
-    Failed(String),
+    Failed(ReleaseFailure),
+}
+
+/// Why release discovery could not finish; raw diagnostics are secondary only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReleaseFailure {
+    Timeout,
+    Unavailable(String),
+    UnsupportedArchitecture(String),
+}
+
+/// Why the station did not file an update, localized by the bot rather than its host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateRefusal {
+    UpdaterMissing,
+    RequestStale,
+    AlreadyRunning,
+    WriteFailed(String),
+}
+
+impl UpdateRefusal {
+    /// Render the action before any underlying file-system diagnostic.
+    pub fn text(&self) -> String {
+        match self {
+            Self::UpdaterMissing => t!("station.update.updater_missing").to_string(),
+            Self::RequestStale => t!("station.update.request_stale").to_string(),
+            Self::AlreadyRunning => t!("station.update.running").to_string(),
+            Self::WriteFailed(detail) => format!(
+                "{}\n{}",
+                t!("station.update.write_failed"),
+                t!("station.detail", detail = detail)
+            ),
+        }
+    }
+}
+
+impl ReleaseFailure {
+    /// Render a localized release-check reason with diagnostics on a separate line.
+    fn text(&self) -> String {
+        match self {
+            Self::Timeout => t!("station.update.release_timeout").to_string(),
+            Self::UnsupportedArchitecture(arch) => {
+                t!("station.update.arch", arch = arch).to_string()
+            }
+            Self::Unavailable(detail) => format!(
+                "{}\n{}",
+                t!("station.update.release_failed"),
+                t!("station.detail", detail = detail)
+            ),
+        }
+    }
 }
 
 /// The chat's answer to "Status": the station's status, a line on the latest release, and — only
@@ -32,9 +82,10 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
         }
         ReleaseCheck::Current => None,
         ReleaseCheck::Unversioned => Some(t!("telegram.station.release_unversioned")),
-        ReleaseCheck::Failed(error) => {
-            Some(t!("telegram.station.release_unreadable", error = error))
-        }
+        ReleaseCheck::Failed(error) => Some(t!(
+            "telegram.station.release_unreadable",
+            error = error.text()
+        )),
     };
     if let Some(line) = line {
         text.push_str("\n\n");
@@ -89,7 +140,13 @@ pub fn station_status_text(status: &Status) -> String {
         lines.push(tape_line(tape));
     }
     if let Some(verdict) = &status.last_update {
-        lines.push(t!("telegram.station.last_update", verdict = verdict).to_string());
+        lines.push(
+            t!(
+                "telegram.station.last_update",
+                verdict = update_verdict(verdict)
+            )
+            .to_string(),
+        );
     }
     match &status.host {
         Some(host) => host_lines(host, &mut lines),
@@ -98,6 +155,56 @@ pub fn station_status_text(status: &Status) -> String {
     lines.join("\n")
 }
 
+/// Translate known helper verdicts from current and older stations without changing the wire.
+fn update_verdict(raw: &str) -> String {
+    let (time, verdict) = match raw.split_once(' ') {
+        Some((time, rest)) if time.contains('T') && time.ends_with('Z') => (Some(time), rest),
+        _ => (None, raw),
+    };
+    let (rollback, verdict) = match verdict.strip_prefix("rollback: ") {
+        Some(verdict) => (true, verdict),
+        None => (
+            false,
+            verdict
+                .strip_prefix("update from release: ")
+                .or_else(|| verdict.strip_prefix("update: "))
+                .unwrap_or(verdict),
+        ),
+    };
+    let text = match verdict {
+        "health=ok" if rollback => t!("station.update.rolled_back"),
+        "health=ok" => t!("station.update.healthy"),
+        "health=not-started" => t!("station.update.next_start"),
+        "health=failed" => t!("station.update.health_failed"),
+        "update=running" | "rollback=running" => t!("station.update.running"),
+        "update=refused" => t!("station.update.refused"),
+        "update=none release=current" => t!("station.update.current"),
+        "update=none release=unversioned" => t!("telegram.station.release_unversioned"),
+        _ if verdict.starts_with("update=failed:") => t!("station.update.failed"),
+        _ => t!("station.update.unknown"),
+    };
+    let text = match time {
+        Some(time) => format!("{time} {text}"),
+        None => text.to_string(),
+    };
+    if matches!(
+        verdict,
+        "health=ok"
+            | "health=not-started"
+            | "health=failed"
+            | "update=running"
+            | "rollback=running"
+            | "update=refused"
+            | "update=none release=current"
+            | "update=none release=unversioned"
+    ) {
+        text
+    } else {
+        format!("{text}\n{}", t!("station.detail", detail = verdict))
+    }
+}
+
+/// Localize the station's trade window in the same units as Settings.
 fn tape_line(tape: TapeWindow) -> String {
     let margin = match tape.margin_s.is_multiple_of(60) {
         true => t!("storage.trades_min", min = tape.margin_s / 60),
@@ -111,6 +218,7 @@ fn tape_line(tape: TapeWindow) -> String {
     .to_string()
 }
 
+/// Append available host measurements and actionable missing-reading guidance.
 fn host_lines(host: &Host, lines: &mut Vec<String>) {
     for window in &host.cpu {
         lines.push(cpu_line(window));
@@ -154,6 +262,7 @@ fn host_lines(host: &Host, lines: &mut Vec<String>) {
     }
 }
 
+/// Render a measured processor window with localized duration units.
 fn cpu_line(window: &CpuWindow) -> String {
     let over = match window.minutes {
         60 => t!("telegram.station.cpu_hour"),

@@ -5,6 +5,8 @@ use std::sync::mpsc;
 
 use moon_core::config::Secret;
 use moon_core::station_api::Access;
+use moon_remote::error::StationError;
+use moon_remote::progress::Progress;
 use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::{self, BotState};
@@ -126,8 +128,10 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
         .name("station-setup".into())
         .spawn(move || {
             let lines = tx.clone();
-            let mut say = move |line: &str| {
-                let _ = lines.send(Event::Line(line.to_owned()));
+            let mut say = move |event: Progress| {
+                if let Some(line) = super::text::progress(event) {
+                    let _ = lines.send(Event::Line(line));
+                }
             };
             let mut remember = |returned| {
                 let _ = tx.send(Event::Returned(returned));
@@ -141,7 +145,7 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
                     station_may_poll: e
                         .downcast_ref::<moon_remote::station::bot::StationMayStillPoll>()
                         .is_some(),
-                    reason: job_error(&e),
+                    reason: super::text::error(&e),
                 },
             };
             let _ = tx.send(Event::Done(done));
@@ -151,24 +155,11 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
     rx
 }
 
-/// Localize return-read failures without exposing remote credential output.
-fn job_error(error: &anyhow::Error) -> String {
-    match error.downcast_ref::<bot::BotReturnError>() {
-        Some(bot::BotReturnError::OldHelper) => {
-            rust_i18n::t!("telegram.server.return_old_helper").to_string()
-        }
-        Some(bot::BotReturnError::ReadFailed) => {
-            rust_i18n::t!("telegram.server.return_read_failed").to_string()
-        }
-        None => format!("{error:#}"),
-    }
-}
-
 /// Execute one queued station job; return bot data only after server polling has stopped.
 fn run(
     job: Job,
     remember: &mut dyn FnMut(bot::ReturnedBot),
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Done> {
     match job {
         Job::Install { setup, cores, bot } => {
@@ -240,7 +231,9 @@ fn run(
         }),
         Job::PairIssue { target } => {
             let code = station::api::issue_pairing(&target)?;
-            say(&format!("pairing code issued: /pair {}", code.code));
+            say(Progress::Text(
+                rust_i18n::t!("station.progress.pair_issued", code = code.code).to_string(),
+            ));
             Ok(Done::Ok {
                 transferred: false,
                 bot: Some(bot::bot_state(&target)?),
@@ -253,9 +246,12 @@ fn run(
             access,
         } => {
             let saved = station::api::set_access(&target, &base, &access)?;
-            say(&format!(
-                "paired chats on the station: {}",
-                saved.authorized_chat_ids.len()
+            say(Progress::Text(
+                rust_i18n::t!(
+                    "station.progress.chats_saved",
+                    count = saved.authorized_chat_ids.len()
+                )
+                .to_string(),
             ));
             // Changed permissions restart the bot's transport: its state once it polls again. The
             // change is saved either way, so a bot slow to come back is a line, not a failure.
@@ -286,16 +282,16 @@ fn run(
                 moon_remote::script::STEP_TIMEOUT,
             )?)?;
             for line in out.stdout_text().lines() {
-                say(line);
+                say(Progress::Diagnostic(line.to_owned()));
             }
             // The station's own figures, in the words meant for the bot's chat "Status" too.
             let state = bot::bot_state(&target)?;
             if let Some(station) = &state.station {
                 for line in moon_tg::station_status_text(station).lines() {
-                    say(line);
+                    say(Progress::Text(line.to_owned()));
                 }
                 if let Some(line) = older_service(&station.station_version) {
-                    say(&line);
+                    say(Progress::Text(line));
                 }
             }
             Ok(Done::Ok {
@@ -312,8 +308,11 @@ fn run(
                 moon_remote::script::STEP_TIMEOUT,
             )?)?;
             for line in out.stdout_text().lines() {
-                say(line);
+                say(Progress::Diagnostic(line.to_owned()));
             }
+            say(Progress::Text(
+                rust_i18n::t!("station.progress.logs").to_string(),
+            ));
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,
@@ -323,7 +322,8 @@ fn run(
     }
 }
 
-fn set_bot(target: &Target, plan: BotPlan, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
+/// Apply the selected bot plan without changing ownership decisions.
+fn set_bot(target: &Target, plan: BotPlan, say: &mut dyn FnMut(Progress)) -> anyhow::Result<Done> {
     match plan {
         BotPlan::Keep => Ok(Done::Ok {
             transferred: false,
@@ -350,11 +350,15 @@ fn set_bot(target: &Target, plan: BotPlan, say: &mut dyn FnMut(&str)) -> anyhow:
 fn settled(
     target: &Target,
     waited: anyhow::Result<BotState>,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<BotState> {
     waited.or_else(|e| {
-        say(&format!(
-            "the change is saved; the bot has not settled yet: {e:#}"
+        say(Progress::Text(
+            rust_i18n::t!(
+                "station.progress.bot_settling",
+                reason = super::text::error(&e)
+            )
+            .to_string(),
         ));
         bot::bot_state(target)
     })
@@ -380,24 +384,30 @@ fn older_service(station_version: &str) -> Option<String> {
 
 /// The picked cores' keys from the terminal's `servers.enc`, read here — never held by the view.
 fn core_keys(picked: &[u64]) -> anyhow::Result<Vec<CoreKey>> {
-    anyhow::ensure!(!picked.is_empty(), "no core is picked");
+    anyhow::ensure!(!picked.is_empty(), StationError::NoCorePicked);
     let all = moon_core::config::read_core_keys()?;
     picked
         .iter()
-        .map(|uid| {
-            let entry = all
-                .iter()
-                .find(|e| e.uid == *uid)
-                .ok_or_else(|| anyhow::anyhow!("core {uid} is not in servers.enc"))?;
-            anyhow::ensure!(!entry.key.is_empty(), "core {:?} has no key", entry.name);
-            Ok(CoreKey {
-                uid: entry.uid,
-                name: entry.name.clone(),
-                transport: entry.transport,
-                key: entry.key.clone(),
-            })
-        })
+        .map(|uid| picked_core_key(&all, *uid))
         .collect()
+}
+
+/// Resolve a picked core without allowing missing or empty keys into an install.
+fn picked_core_key(all: &[moon_core::config::CoreKeyEntry], uid: u64) -> anyhow::Result<CoreKey> {
+    let entry = all
+        .iter()
+        .find(|e| e.uid == uid)
+        .ok_or_else(|| anyhow::anyhow!(StationError::CoreMissing(uid)))?;
+    anyhow::ensure!(
+        !entry.key.is_empty(),
+        StationError::CoreWithoutKey(entry.name.clone())
+    );
+    Ok(CoreKey {
+        uid: entry.uid,
+        name: entry.name.clone(),
+        transport: entry.transport,
+        key: entry.key.clone(),
+    })
 }
 
 /// How the user gets in the first time.
@@ -418,7 +428,7 @@ pub(crate) fn first_access(
             })
         }
         None => Ok(FirstAccess::Password {
-            password: password.ok_or_else(|| anyhow::anyhow!("the password is empty"))?,
+            password: password.ok_or_else(|| anyhow::anyhow!(StationError::EmptyPassword))?,
             user: login,
         }),
     }
@@ -428,10 +438,12 @@ pub(crate) fn first_access(
 /// the writer keeps running) sent before the station first starts. Only a speed-up — the station
 /// values everything itself without it, in hours rather than minutes — so a failure is a line in
 /// the progress, not a failed install.
-fn send_valuation(target: &Target, say: &mut dyn FnMut(&str)) {
+fn send_valuation(target: &Target, say: &mut dyn FnMut(Progress)) {
     let source = moon_core::config::paths::valuation_db_path();
     if !source.exists() {
-        say("valuation cache: none in this terminal, the station values from scratch");
+        say(Progress::Text(
+            rust_i18n::t!("station.progress.valuation_none").to_string(),
+        ));
         return;
     }
     let snapshot = std::env::temp_dir().join(format!(
@@ -443,8 +455,15 @@ fn send_valuation(target: &Target, say: &mut dyn FnMut(&str)) {
         .and_then(|()| station::put_valuation(target, &snapshot, say));
     let _ = std::fs::remove_file(&snapshot);
     if let Err(e) = sent {
-        say(&format!(
-            "valuation cache: not sent ({e:#}); the station values from scratch"
+        say(Progress::Text(
+            rust_i18n::t!(
+                "station.progress.valuation_failed",
+                reason = super::text::error(&e)
+            )
+            .to_string(),
         ));
     }
 }
+
+#[cfg(test)]
+mod tests;

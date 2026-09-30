@@ -862,9 +862,9 @@ telegram.station.files:
   en: "Files:"
   es: "Archivos:"
 telegram.station.no_readings:
-  ru: "Процессор и память: служба их не видит — нажми «Настроить заново» в разделе станции."
-  en: "Processor and memory: the service cannot see them — press “Set up again” in the station's section."
-  es: "Procesador y memoria: el servicio no los ve; pulsa «Configurar de nuevo» en la sección de la estación."
+  ru: "Процессор и память: служба их не видит — нажми «Настроить заново» на вкладке «Станция»."
+  en: "Processor and memory: the service cannot see them — press “Set up again” in the Station tab."
+  es: "Procesador y memoria: el servicio no los ve; pulsa «Configurar de nuevo» en la pestaña Estación."
 telegram.station.no_host:
   ru: "Показатели сервера: служба станции старше этого терминала — обнови её."
   en: "Server figures: the station's service is older than this terminal — update it."

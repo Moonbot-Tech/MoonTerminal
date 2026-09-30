@@ -63,6 +63,8 @@ pub enum OpenError {
         pinned: String,
         presented: String,
     },
+    /// TCP connection or SSH handshake failed before login.
+    Unreachable(anyhow::Error),
     Other(anyhow::Error),
 }
 
@@ -74,7 +76,7 @@ impl std::fmt::Display for OpenError {
                 f,
                 "the host key changed: pinned {pinned}, presented {presented} — refusing to connect"
             ),
-            Self::Other(e) => write!(f, "{e:#}"),
+            Self::Other(e) | Self::Unreachable(e) => write!(f, "{e:#}"),
         }
     }
 }
@@ -176,17 +178,19 @@ impl Conn {
                         pinned: pin.to_owned(),
                         presented: seen,
                     },
-                    _ => OpenError::Other(
+                    _ => OpenError::Unreachable(
                         anyhow::Error::new(e).context(format!("connect to {}", target.addr())),
                     ),
                 });
             }
             Err(_) => {
-                return Err(OpenError::Other(anyhow::anyhow!(
-                    "connect to {}: no answer within {}s",
-                    target.addr(),
-                    CONNECT_TIMEOUT.as_secs()
-                )));
+                return Err(OpenError::Other(
+                    anyhow::anyhow!(crate::error::StationError::Timeout).context(format!(
+                        "connect to {}: no answer within {}s",
+                        target.addr(),
+                        CONNECT_TIMEOUT.as_secs()
+                    )),
+                ));
             }
         };
         let fingerprint = presented
@@ -258,7 +262,10 @@ impl Conn {
         self.rt.block_on(async {
             tokio::time::timeout(timeout, self.run_async(command, stdin))
                 .await
-                .map_err(|_| anyhow::anyhow!("no end within {}s", timeout.as_secs()))?
+                .map_err(|_| {
+                    anyhow::anyhow!(crate::error::StationError::Timeout)
+                        .context(format!("no end within {}s", timeout.as_secs()))
+                })?
         })
     }
 

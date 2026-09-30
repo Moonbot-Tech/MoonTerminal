@@ -10,6 +10,8 @@
 //! which `setup` writes only after its key login and sudo rule were verified. A key goes on the
 //! SSH channel's stdin straight into `systemd-creds encrypt` — never argv, never a file.
 
+use crate::error::StationError;
+use crate::progress::{Progress, Step};
 use anyhow::Context;
 use moon_core::config::{Secret, TransportVersion};
 use moon_core::station_api::{Answer, Request};
@@ -186,7 +188,7 @@ pub fn with_tape(current: &str, tape: TapeWindow) -> anyhow::Result<Option<Strin
 pub fn push_tape(
     target: &Target,
     tape: TapeWindow,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     // On the steps the station records with, so what it reports back can equal what was sent.
     let tape = TapeWindow {
@@ -198,7 +200,10 @@ pub fn push_tape(
     let conn = admin_conn(target)?;
     let status = current_helper_status(&conn)?;
     if script::value(&status, "config") != Some("yes") {
-        say("tape window: the station has no station.toml yet, it comes with the cores");
+        say(Progress::step(
+            Step::TapePending,
+            "tape window: the station has no station.toml yet, it comes with the cores",
+        ));
         return Ok(());
     }
     let wrote = edit_config(&conn, true, |current| match current {
@@ -213,22 +218,28 @@ pub fn push_tape(
     let status = script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
         .stdout_text();
     if script::value(&status, "active") != Some("active") {
-        say(&format!(
-            "tape window {}; the station is not running and takes it at its next start: {window}",
-            if wrote {
-                "written"
-            } else {
-                "already in its file"
-            }
+        say(Progress::step(
+            Step::TapeWritten,
+            format!(
+                "tape window {}; the station is not running and takes it at its next start: {window}",
+                if wrote {
+                    "written"
+                } else {
+                    "already in its file"
+                }
+            ),
         ));
         return Ok(());
     }
     // A service without the control API cannot say what it records with.
     if script::value(&status, "api") != Some("yes") {
         script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
-        say(&format!(
-            "tape window written, the station asked to re-read it (its service does not report \
+        say(Progress::step(
+            Step::TapeReload,
+            format!(
+                "tape window written, the station asked to re-read it (its service does not report \
              the window: update it): {window}"
+            ),
         ));
         return Ok(());
     }
@@ -258,20 +269,26 @@ fn confirm_tape(
     conn: &Conn,
     tape: TapeWindow,
     window: &str,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     let deadline = std::time::Instant::now() + TAPE_APPLIED_WITHIN;
     loop {
         let last_chance = std::time::Instant::now() >= deadline;
         match reported_tape(conn) {
             Ok(Some(applied)) if applied == tape => {
-                say(&format!("tape window on the station: {window}"));
+                say(Progress::step(
+                    Step::TapeApplied,
+                    format!("tape window on the station: {window}"),
+                ));
                 return Ok(());
             }
             Ok(None) => {
-                say(&format!(
-                    "tape window written, the station asked to re-read it (its service does not \
+                say(Progress::step(
+                    Step::TapeReload,
+                    format!(
+                        "tape window written, the station asked to re-read it (its service does not \
                      report the window: update it): {window}"
+                    ),
                 ));
                 return Ok(());
             }
@@ -371,15 +388,9 @@ fn current_helper_status(conn: &crate::ssh::Conn) -> anyhow::Result<String> {
         script::HELPER.as_bytes(),
         STEP_TIMEOUT,
     )?;
-    script::checked(out).context(
-        "the server's moon-station-admin is older than this terminal and sudo there still asks \
-         for a password: re-run the setup once to move the server over",
-    )?;
+    script::checked(out).context(StationError::HelperTooOld)?;
     let text = status(conn)?;
-    anyhow::ensure!(
-        helper_is_current(&text),
-        "the helper on the server was updated but still answers as the old one"
-    );
+    anyhow::ensure!(helper_is_current(&text), StationError::HelperTooOld);
     Ok(text)
 }
 
@@ -391,7 +402,7 @@ pub fn push_telegram(
     token: Option<&Secret>,
     change: &BotChange,
     off: bool,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     let conn = admin_conn(target)?;
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<String> {
@@ -401,17 +412,20 @@ pub fn push_telegram(
     let has_token = script::value(&status, "token") == Some("yes");
     anyhow::ensure!(
         off || token.is_some() || has_token,
-        "the station has no bot token yet: give --token"
+        StationError::BotTokenMissing
     );
     anyhow::ensure!(
         script::value(&status, "config") == Some("yes"),
-        "the station has no station.toml yet: send its cores first"
+        StationError::ConfigMissing
     );
     if let Some(token) = token {
         anyhow::ensure!(!token.is_empty(), "the token is empty");
         run(script::helper("put-token", &[]), token.expose().as_bytes())
             .context("token credential")?;
-        say("bot token: credential written");
+        say(Progress::step(
+            Step::TokenWritten,
+            "bot token: credential written",
+        ));
     }
     edit_config(&conn, true, |current| {
         let current = current.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
@@ -420,17 +434,18 @@ pub fn push_telegram(
     if off {
         if has_token {
             run(script::helper("drop-token", &[]), &[])?;
-            say("bot token: dropped");
+            say(Progress::step(Step::TokenDropped, "bot token: dropped"));
         }
         // The chats belonged to that bot: the next one starts unpaired.
         run(script::helper("drop-pairing", &[]), &[])?;
-        say("paired chats: dropped");
+        say(Progress::step(Step::ChatsDropped, "paired chats: dropped"));
     }
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;
     for line in status.lines() {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
+    say(Progress::step(Step::Status, "station state read"));
     Ok(())
 }
 
@@ -441,14 +456,17 @@ pub fn push_cores(
     target: &Target,
     cores: &[CoreKey],
     tape: Option<TapeWindow>,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(!cores.is_empty(), "no cores to send");
+    anyhow::ensure!(!cores.is_empty(), StationError::NoCorePicked);
     let mut seen = std::collections::HashSet::new();
     for core in cores {
         anyhow::ensure!(core.uid != 0, "core {:?} has no uid", core.name);
         anyhow::ensure!(seen.insert(core.uid), "uid {} twice", core.uid);
-        anyhow::ensure!(!core.key.is_empty(), "core {:?} has no key", core.name);
+        anyhow::ensure!(
+            !core.key.is_empty(),
+            StationError::CoreWithoutKey(core.name.clone())
+        );
     }
     let conn = admin_conn(target)?;
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<String> {
@@ -474,9 +492,9 @@ pub fn push_cores(
             core.key.expose().as_bytes(),
         )
         .with_context(|| format!("credential of {}", core.name))?;
-        say(&format!(
-            "core {} ({}): credential written",
-            core.name, core.uid
+        say(Progress::step(
+            Step::CoreWritten,
+            format!("core {} ({}): credential written", core.name, core.uid),
         ));
     }
     commit_cores_config(
@@ -496,7 +514,10 @@ pub fn push_cores(
             {
                 let uid = stale.trim_start_matches("core-");
                 run(script::helper("drop-cred", &[uid]), &[])?;
-                say(&format!("{stale}: dropped, not in the set"));
+                say(Progress::step(
+                    Step::CoreDropped,
+                    format!("{stale}: dropped, not in the set"),
+                ));
             }
             Ok(())
         },
@@ -504,8 +525,9 @@ pub fn push_cores(
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;
     for line in status.lines() {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
+    say(Progress::step(Step::Status, "station state read"));
     Ok(())
 }
 
@@ -523,7 +545,7 @@ fn commit_cores_config(
 /// `update-from-release` has the installed binary find the release and download it, checked
 /// against its immutable digest, then installs it as `update` does — a restart that must stay up,
 /// or the previous binary back. The same the bot's "Update" starts through its request file.
-pub fn update_from_release(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
+pub fn update_from_release(target: &Target, say: &mut dyn FnMut(Progress)) -> anyhow::Result<()> {
     let conn = admin_conn(target)?;
     let status = current_helper_status(&conn)?;
     anyhow::ensure!(
@@ -562,14 +584,22 @@ pub fn update_from_release(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow
     };
     let text = script::checked(out)?.stdout_text();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
+    say(Progress::step(Step::Update, "update request finished"));
     // Not a failure, and not an update either: said in words, not only as the helper's token.
     if let Some(none) = text.lines().find(|l| l.starts_with("update=none")) {
-        say(match none.contains("unversioned") {
-            true => "nothing installed: this station build is not from a release",
-            false => "nothing installed: no release newer than the station carries its binary",
-        });
+        say(Progress::step(
+            if none.contains("unversioned") {
+                Step::Unversioned
+            } else {
+                Step::NoNewRelease
+            },
+            match none.contains("unversioned") {
+                true => "nothing installed: this station build is not from a release",
+                false => "nothing installed: no release newer than the station carries its binary",
+            },
+        ));
     }
     Ok(())
 }
@@ -582,22 +612,28 @@ pub fn update_from_release(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow
 pub fn put_valuation(
     target: &Target,
     snapshot: &std::path::Path,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     use std::io::Write;
     let plain = std::fs::read(snapshot).with_context(|| format!("read {}", snapshot.display()))?;
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
     gz.write_all(&plain)?;
     let packed = gz.finish()?;
-    say(&format!(
-        "valuation cache: {} MB, {} MB to send",
-        plain.len() / 1_000_000,
-        packed.len() / 1_000_000
+    say(Progress::step(
+        Step::ValuationSend,
+        format!(
+            "valuation cache: {} MB, {} MB to send",
+            plain.len() / 1_000_000,
+            packed.len() / 1_000_000
+        ),
     ));
     let conn = admin_conn(target)?;
     // A station already valuing on its own (a server set up anew over a running one) keeps it.
     if script::value(&current_helper_status(&conn)?, "valuation") == Some("yes") {
-        say("valuation cache: the station has its own, kept");
+        say(Progress::step(
+            Step::ValuationKept,
+            "valuation cache: the station has its own, kept",
+        ));
         return Ok(());
     }
     let out = script::checked(conn.run(
@@ -606,8 +642,12 @@ pub fn put_valuation(
         script::APT_TIMEOUT,
     )?)?;
     for line in out.stdout_text().lines() {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
+    say(Progress::step(
+        Step::ValuationWritten,
+        "valuation cache written",
+    ));
     Ok(())
 }
 
