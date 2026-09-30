@@ -4,6 +4,7 @@
 //! the systemd credential `core-<uid>`: the unit loads it with `LoadCredentialEncrypted=`, and
 //! the station reads it from `$CREDENTIALS_DIRECTORY` — a per-service ramfs, so the key is never a
 //! file on the server's disk in the clear. `moon-remote cores` writes both halves.
+//! An unavailable credential skips only its core; status keeps that core in the not-ready total.
 //!
 //! ```toml
 //! [[core]]
@@ -115,6 +116,8 @@ pub struct Station {
     pub config: AppConfig,
     pub tape: Tape,
     pub telegram: Option<Telegram>,
+    /// Active cores skipped because their credentials are unavailable, for status reporting.
+    pub skipped_cores: Vec<String>,
 }
 
 impl Station {
@@ -184,7 +187,7 @@ fn default_true() -> bool {
 }
 
 /// The station's configuration: every core of `station.toml` at `path`, or of the terminal's own
-/// files when there is none.
+/// files when there is none. Unavailable core credentials skip only that core, with a warning.
 pub fn load(path: &Path) -> anyhow::Result<Station> {
     if path.exists() {
         let text =
@@ -196,7 +199,8 @@ pub fn load(path: &Path) -> anyhow::Result<Station> {
     terminal_config(path)
 }
 
-/// `creds` is the credentials directory; `None` when the process was not given one.
+/// `creds` is the credentials directory; `None` when the process was not given one. Keep the
+/// station running when one credential cannot be read, while rejecting malformed configuration.
 fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station> {
     let file: StationFile = toml::from_str(text)?;
     anyhow::ensure!(!file.cores.is_empty(), "no [[core]] entries");
@@ -212,24 +216,32 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
             entry.uid
         );
     }
-    let servers = file
-        .cores
-        .into_iter()
-        .map(|entry| {
-            // Every other field keeps the terminal's own default for a new server.
-            // `id` alone has no serde default; it is set from the uid below.
-            let mut server: ServerConfig = toml::from_str("id = 0")?;
-            server.uid = entry.uid;
-            if entry.active {
-                server.key =
-                    core_key(creds, entry.uid).with_context(|| format!("core {:?}", entry.name))?;
+    let mut skipped_cores = Vec::new();
+    let mut servers = Vec::new();
+    for entry in file.cores {
+        // Every other field keeps the terminal's own default for a new server.
+        // `id` alone has no serde default; it is set from the uid below.
+        let mut server: ServerConfig = toml::from_str("id = 0")?;
+        server.uid = entry.uid;
+        if entry.active {
+            match core_key(creds, entry.uid) {
+                Ok(key) => server.key = key,
+                Err(e) => {
+                    let skipped = format!(
+                        "core {} ({:?}): credential unavailable, skipped",
+                        entry.uid, entry.name
+                    );
+                    log::warn!("{skipped}: {e:#}");
+                    skipped_cores.push(skipped);
+                    continue;
+                }
             }
-            server.name = entry.name;
-            server.active = entry.active;
-            server.transport = entry.transport;
-            Ok(server)
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        }
+        server.name = entry.name;
+        server.active = entry.active;
+        server.transport = entry.transport;
+        servers.push(server);
+    }
     let telegram = file
         .telegram
         .map(|section| telegram(section, creds))
@@ -239,6 +251,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         config: AppConfig::headless(servers),
         tape: file.tape,
         telegram,
+        skipped_cores,
     };
     let profile = station.profile();
     set_feed(&mut station.config, profile);
@@ -297,6 +310,7 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         config: AppConfig::load(None, false)?,
         tape: Tape::default(),
         telegram: None,
+        skipped_cores: Vec::new(),
     })
 }
 

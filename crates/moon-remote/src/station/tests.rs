@@ -1,5 +1,46 @@
 use super::*;
 
+/// Dropping credentials before a failed config commit strands the old referenced core on restart.
+#[test]
+fn a_failed_config_write_never_drops_credentials() {
+    let dropped = std::cell::Cell::new(false);
+    let result = commit_cores_config(
+        || anyhow::bail!("synthetic CAS or SSH failure"),
+        || {
+            dropped.set(true);
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert!(
+        !dropped.get(),
+        "all previously referenced keys must survive"
+    );
+}
+
+/// Reversing the callbacks makes cleanup observe the old config; a cleanup error must leave
+/// the new references committed and the extra unused credential harmless.
+#[test]
+fn credential_cleanup_failure_keeps_the_new_config() {
+    let referenced = std::cell::Cell::new(9);
+    let result = commit_cores_config(
+        || {
+            referenced.set(3);
+            Ok(true)
+        },
+        || {
+            assert_eq!(
+                referenced.get(),
+                3,
+                "the stale core must be unreferenced first"
+            );
+            anyhow::bail!("synthetic credential cleanup failure")
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(referenced.get(), 3);
+}
+
 /// The file that goes to the server names each core and never carries its key.
 #[test]
 fn the_station_file_carries_no_key() {
