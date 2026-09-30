@@ -381,7 +381,7 @@ impl SettingsView {
             .by_key
             .then(|| (text(&ed.key_path, cx), secret(&ed.passphrase, cx)));
         job::first_access(text(&ed.login, cx), secret(&ed.password, cx), key)
-            .map_err(|e| format!("{e:#}"))
+            .map_err(|e| crate::backend::station::text::error(&e))
     }
 
     /// "Install": prepare the server, install the station, send every active core, move the bot.
@@ -443,7 +443,7 @@ impl SettingsView {
                 self.telegram.server.known = known_server();
                 Ok(t!("telegram.server.forgotten", addr = target.addr()).to_string())
             }
-            Err(e) => Err(format!("{e:#}")),
+            Err(e) => Err(crate::backend::station::text::error(&e)),
         };
         let ed = &mut self.telegram.server;
         ed.local_bot = None;

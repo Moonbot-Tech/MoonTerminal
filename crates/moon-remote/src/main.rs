@@ -58,7 +58,7 @@ fn run() -> anyhow::Result<()> {
             .transpose()?
             .unwrap_or(22),
     };
-    let mut say = |line: &str| println!("{line}");
+    let mut say = |line: moon_remote::progress::Progress| println!("{line}");
     match command.as_str() {
         "setup" => {
             let login = args

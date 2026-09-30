@@ -4,6 +4,8 @@
 
 use std::time::{Duration, Instant};
 
+use crate::error::StationError;
+use crate::progress::{Progress, Step};
 use anyhow::Context;
 use moon_core::config::Secret;
 use moon_core::station_api::{Access, Answer, BotStatus, Request, Status, TapeWindow};
@@ -83,7 +85,7 @@ pub fn return_bot(
     restore: bool,
     recovered: Option<ReturnedBot>,
     remember: &mut dyn FnMut(ReturnedBot),
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Option<ReturnedBot>> {
     read_then_remove(
         restore,
@@ -277,13 +279,16 @@ pub fn set_token(
     target: &Target,
     token: &Secret,
     change: &BotChange,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<BotState> {
     anyhow::ensure!(!token.is_empty(), "the token is empty");
     if bot_state(target)?.has_token {
         let conn = admin_conn(target)?;
         script::checked(conn.run(&script::helper("drop-pairing", &[]), &[], STEP_TIMEOUT)?)?;
-        say("paired chats of the previous bot: dropped");
+        say(Progress::step(
+            Step::ChatsDropped,
+            "paired chats of the previous bot: dropped",
+        ));
     }
     // Restarts the station: the new token and the empty pairing take effect together.
     super::push_telegram(target, Some(token), change, false, say)?;
@@ -313,7 +318,7 @@ pub fn transfer_bot(
     token: &Secret,
     pairing: &Access,
     change: &BotChange,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<BotState> {
     anyhow::ensure!(!token.is_empty(), "the token is empty");
     let conn = admin_conn(target)?;
@@ -323,12 +328,12 @@ pub fn transfer_bot(
     let status = current_helper_status(&conn)?;
     anyhow::ensure!(
         script::value(&status, "config") == Some("yes"),
-        "the station has no station.toml yet: send its cores first"
+        StationError::ConfigMissing
     );
     // A bot already there has its own chats; handing another over would drop them.
     anyhow::ensure!(
         script::value(&status, "token") != Some("yes"),
-        "the station already runs a bot: take it off before handing another one over"
+        StationError::BotAlreadyPresent
     );
     let current =
         run(script::helper("get-config", &[]), &[]).context("read the server's station.toml")?;
@@ -339,28 +344,43 @@ pub fn transfer_bot(
     let handed = (|| -> anyhow::Result<BotState> {
         run(script::helper("put-token", &[]), token.expose().as_bytes())
             .context("token credential")?;
-        say("bot token: credential written");
+        say(Progress::step(
+            Step::TokenWritten,
+            "bot token: credential written",
+        ));
         // Stops the station: it owns the file and would overwrite it on a /pair.
         run(script::helper("put-pairing", &[]), &pairing_json).context("telegram.json")?;
-        say(&format!(
-            "paired chats: {} handed over",
-            pairing.authorized_chat_ids.len()
+        say(Progress::step(
+            Step::ChatsTransferred,
+            format!(
+                "paired chats: {} handed over",
+                pairing.authorized_chat_ids.len()
+            ),
         ));
         edit_config(&conn, true, |now| {
             let now = now.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
             with_telegram(now, change, false).map(Some)
         })?;
         run(script::helper("start", &[]), &[])?;
-        say("station started with the bot");
+        say(Progress::step(
+            Step::BotStarted,
+            "station started with the bot",
+        ));
         wait_polling(target, !pairing.authorized_chat_ids.is_empty(), say)
     })();
     let Err(e) = handed else {
         return handed;
     };
-    say("hand-over failed: taking the bot off the station");
+    say(Progress::step(
+        Step::UndoHandover,
+        "hand-over failed: taking the bot off the station",
+    ));
     match take_bot_off(target, &current) {
         Ok(()) => {
-            say("the station's bot is off again: token and chats dropped");
+            say(Progress::step(
+                Step::BotRemoved,
+                "the station's bot is off again: token and chats dropped",
+            ));
             Err(e)
         }
         Err(undo) => Err(e
@@ -373,7 +393,7 @@ pub fn transfer_bot(
 
 /// Wait until the station's bot polls again after its transport restarted (a change of the
 /// chats' permissions): paired or offering a code, either will do.
-pub fn wait_bot(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow::Result<BotState> {
+pub fn wait_bot(target: &Target, say: &mut dyn FnMut(Progress)) -> anyhow::Result<BotState> {
     wait_polling(target, false, say)
 }
 
@@ -382,7 +402,7 @@ pub fn wait_bot(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow::Result<Bo
 pub fn wait_mini_app(
     target: &Target,
     on: bool,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<BotState> {
     use moon_core::telegram::runtime::mini_app::MiniAppStatus;
     wait_until(target, say, |state| {
@@ -417,7 +437,7 @@ impl std::fmt::Display for StationMayStillPoll {
 fn wait_polling(
     target: &Target,
     with_chats: bool,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<BotState> {
     wait_until(target, say, |state| match with_chats {
         true => state.paired(),
@@ -429,7 +449,7 @@ fn wait_polling(
 /// that stays stopped, or the deadline, ends it with an error.
 fn wait_until(
     target: &Target,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
     done: impl Fn(&BotState) -> bool,
 ) -> anyhow::Result<BotState> {
     let deadline = Instant::now() + PAIRED_WITHIN;
@@ -441,14 +461,14 @@ fn wait_until(
         match look(target) {
             Ok(state) => {
                 if done(&state) {
-                    say(&format!("bot: {}", state.summary()));
+                    say(Progress::step(
+                        Step::BotReady,
+                        format!("bot: {}", state.summary()),
+                    ));
                     return Ok(state);
                 }
                 stopped_looks = if state.stopped { stopped_looks + 1 } else { 0 };
-                anyhow::ensure!(
-                    stopped_looks < STOPPED_LOOKS,
-                    "the station is not running (it stopped after the bot was handed over)"
-                );
+                anyhow::ensure!(stopped_looks < STOPPED_LOOKS, StationError::BotStopped);
                 last = Some(state);
             }
             Err(e) => last_error = Some(format!("{e:#}")),
@@ -458,10 +478,7 @@ fn wait_until(
                 .map(|s| s.summary())
                 .or(last_error)
                 .unwrap_or_else(|| "nothing".into());
-            anyhow::bail!(
-                "the station's bot did not start polling within {} s (last: {seen})",
-                PAIRED_WITHIN.as_secs()
-            );
+            return Err(anyhow::anyhow!(StationError::BotNotReady).context(format!("last: {seen}")));
         }
     }
 }

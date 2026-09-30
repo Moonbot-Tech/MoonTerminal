@@ -18,7 +18,7 @@ use anyhow::Context;
 use moon_core::update::{
     BuildIdentity, GitHubReleaseClient, ReleaseDiscovery, UpdateEligibility, station_asset_name,
 };
-use moon_tg::ReleaseCheck;
+use moon_tg::{ReleaseCheck, ReleaseFailure, UpdateRefusal};
 
 /// The update request's name in the data root; the path unit watches for it.
 pub const UPDATE_REQUEST: &str = "update.request";
@@ -67,23 +67,20 @@ impl ReleaseWatch {
                 let _ = tx.send(watch.check());
             });
         if let Err(error) = started {
-            return ReleaseCheck::Failed(format!("no thread for the check: {error}"));
+            return ReleaseCheck::Failed(ReleaseFailure::Unavailable(format!(
+                "no thread for the check: {error}"
+            )));
         }
-        rx.recv_timeout(CHECK_WAIT).unwrap_or_else(|_| {
-            ReleaseCheck::Failed(format!(
-                "GitHub did not answer within {} s",
-                CHECK_WAIT.as_secs()
-            ))
-        })
+        rx.recv_timeout(CHECK_WAIT)
+            .unwrap_or(ReleaseCheck::Failed(ReleaseFailure::Timeout))
     }
 
     /// Whether a newer release carries this station's binary. Blocking — GitHub is asked — so it
     /// runs off the main loop.
     pub fn check(&self) -> ReleaseCheck {
         let Some(asset) = station_asset_name() else {
-            return ReleaseCheck::Failed(format!(
-                "no station binary is released for {}",
-                std::env::consts::ARCH
+            return ReleaseCheck::Failed(ReleaseFailure::UnsupportedArchitecture(
+                std::env::consts::ARCH.into(),
             ));
         };
         let identity = BuildIdentity::from_release_base(release_base());
@@ -91,7 +88,9 @@ impl ReleaseWatch {
             return ReleaseCheck::Unversioned;
         }
         let Ok(mut discovery) = self.discovery.lock() else {
-            return ReleaseCheck::Failed("the release check failed earlier".into());
+            return ReleaseCheck::Failed(ReleaseFailure::Unavailable(
+                "the release check failed earlier".into(),
+            ));
         };
         let discovery =
             discovery.get_or_insert_with(|| ReleaseDiscovery::for_asset(identity, asset));
@@ -103,7 +102,7 @@ impl ReleaseWatch {
                 UpdateEligibility::Current => ReleaseCheck::Current,
                 UpdateEligibility::Unsupported => ReleaseCheck::Unversioned,
             },
-            Err(error) => ReleaseCheck::Failed(error.to_string()),
+            Err(error) => ReleaseCheck::Failed(ReleaseFailure::Unavailable(error.to_string())),
         }
     }
 }
@@ -116,14 +115,16 @@ impl ReleaseWatch {
 /// Returns:
 ///     Why the request was not filed: the server has no updater enabled (set up by an older
 ///     terminal), one is already filed, or the file could not be written.
-pub fn request_update(data_root: &Path) -> Result<(), String> {
+pub fn request_update(data_root: &Path) -> Result<(), UpdateRefusal> {
     if !Path::new(UPDATE_PATH_ENABLED).exists() {
-        return Err(
-            "the server has no updater yet: press «Update the service» once in the station's \
-             section of the terminal's Settings"
-                .into(),
-        );
+        return Err(UpdateRefusal::UpdaterMissing);
     }
+    request_update_file(data_root)
+}
+
+/// File a request without replacing one already waiting for the updater.
+/// Returns a typed refusal; the file operations and stale deadline are unchanged.
+fn request_update_file(data_root: &Path) -> Result<(), UpdateRefusal> {
     let request = data_root.join(UPDATE_REQUEST);
     match std::fs::OpenOptions::new()
         .write(true)
@@ -141,15 +142,14 @@ pub fn request_update(data_root: &Path) -> Result<(), String> {
                 .and_then(|at| SystemTime::now().duration_since(at).ok());
             // A watcher that runs takes the file at once: one this old was never taken.
             match age.is_some_and(|age| age >= STALE_REQUEST) {
-                true => Err(
-                    "an earlier request was never taken — the server's updater is stopped: press \
-                     «Update the service» once in the station's section of the terminal's Settings"
-                        .into(),
-                ),
-                false => Err("an update is already under way".into()),
+                true => Err(UpdateRefusal::RequestStale),
+                false => Err(UpdateRefusal::AlreadyRunning),
             }
         }
-        Err(e) => Err(format!("{}: {e}", request.display())),
+        Err(e) => Err(UpdateRefusal::WriteFailed(format!(
+            "{}: {e}",
+            request.display()
+        ))),
     }
 }
 
@@ -201,3 +201,6 @@ pub fn fetch(mut args: impl Iterator<Item = String>) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

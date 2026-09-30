@@ -32,6 +32,7 @@ use crate::Backend;
 pub(crate) mod job;
 pub(crate) mod pull;
 mod recovery;
+pub(crate) mod text;
 
 /// How often the backend drains a running job's channel.
 const POLL: Duration = Duration::from_millis(150);

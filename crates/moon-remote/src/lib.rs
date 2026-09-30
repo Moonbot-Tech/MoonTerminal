@@ -6,8 +6,10 @@
 //! crate so the binary that runs a setup is the one whose scripts run on the server.
 
 pub mod app_key;
+pub mod error;
 pub mod hosts;
 pub mod keys;
+pub mod progress;
 pub mod release;
 pub mod script;
 pub mod setup;

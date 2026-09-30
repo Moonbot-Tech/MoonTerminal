@@ -2,6 +2,7 @@
 //! `ctl`: the request goes on the SSH channel's stdin, the station's own binary relays it to the
 //! service's socket and prints the reply.
 
+use crate::error::StationError;
 use anyhow::Context;
 use moon_core::station_api::{Access, Answer, Hello, PROTO_VERSION, PairingCode, Reply, Request};
 
@@ -24,13 +25,10 @@ pub(crate) fn call(conn: &Conn, request: &Request) -> anyhow::Result<Answer> {
     // fixed by updating it again.
     anyhow::ensure!(
         hello.proto_version == PROTO_VERSION,
-        "the station's service {} speaks API version {}, this terminal {PROTO_VERSION}: update {}",
-        hello.station_version,
-        hello.proto_version,
         if hello.proto_version > PROTO_VERSION {
-            "this terminal"
+            StationError::TerminalTooOld
         } else {
-            "the service"
+            StationError::ServiceTooOld
         }
     );
     match serde_json::from_value(output["reply"].clone()).context("read the station's reply")? {

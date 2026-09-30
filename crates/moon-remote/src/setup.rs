@@ -8,6 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::error::StationError;
+use crate::progress::{Progress, Step};
 use anyhow::Context;
 use russh::keys::PrivateKey;
 use sha2::{Digest, Sha256};
@@ -78,8 +80,8 @@ pub struct Setup {
     pub station: StationBinary,
 }
 
-/// Prepare the server. `say` receives one line per thing done or found.
-pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
+/// Prepare the server. `say` receives typed steps and separate helper diagnostics.
+pub fn run(setup: &Setup, say: &mut dyn FnMut(Progress)) -> anyhow::Result<()> {
     // A password is the first stdin line of `sudo -S`: a second line would spill into the
     // script's own input.
     let first_password = match &setup.first {
@@ -91,7 +93,7 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
             .into_iter()
             .chain(&setup.legacy_admin_password)
             .all(|p| !p.contains('\n')),
-        "a password must be one line"
+        StationError::PasswordOneLine
     );
     let hosts_path = Hosts::path();
     let mut hosts = Hosts::load(&hosts_path)?;
@@ -114,7 +116,10 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
             pin.as_deref(),
         ) {
             Ok(conn) => {
-                say(&format!("in as {admin} by the app key"));
+                say(Progress::step(
+                    Step::Login,
+                    format!("in as {admin} by the app key"),
+                ));
                 // Only a sudo that answered "a password is needed" asks for the old one; a dropped
                 // connection or a timeout is its own error, not a question about a password.
                 let sudo_free = conn.run("sudo -n true", &[], STEP_TIMEOUT)?.ok();
@@ -137,7 +142,10 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     if pin.is_none() {
         hosts.pin(&addr, lifeline.fingerprint())?;
         hosts.save(&hosts_path)?;
-        say(&format!("host key pinned: {}", lifeline.fingerprint()));
+        say(Progress::step(
+            Step::Pin,
+            format!("host key pinned: {}", lifeline.fingerprint()),
+        ));
     }
     let pin = Some(lifeline.fingerprint().to_owned());
     let root =
@@ -146,15 +154,13 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     // 2. What is there.
     let probe = root(script::bootstrap("probe", &[]), &[])?.stdout_text();
     for line in probe.lines() {
-        say(&format!("probe: {line}"));
+        say(Progress::Diagnostic(format!("probe: {line}")));
     }
+    say(Progress::step(Step::Probe, "server probed"));
     let systemd: u32 = script::value(&probe, "systemd")
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| anyhow::anyhow!("no systemd on this server"))?;
-    anyhow::ensure!(
-        systemd >= MIN_SYSTEMD,
-        "systemd {systemd} is older than {MIN_SYSTEMD}: no encrypted credentials"
-    );
+        .ok_or_else(|| anyhow::anyhow!(StationError::SystemdMissing))?;
+    anyhow::ensure!(systemd >= MIN_SYSTEMD, StationError::SystemdTooOld);
     // The release's binary is fetched now, before anything on the server changes: no release for
     // its architecture, or GitHub out of reach, stops the setup here rather than after the server
     // was closed.
@@ -186,18 +192,21 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         script::HELPER.as_bytes(),
     )?;
     say_values(say, &out.stdout_text());
+    say(Progress::step(Step::Helper, "step complete"));
     admin_works(&setup.target, &admin, &app, pin.as_deref())
         .context("the new administrator does not work")?;
     hosts.set_admin(&addr, &admin)?;
     hosts.save(&hosts_path)?;
-    say(&format!(
-        "{admin} logs in by the app key; sudo without a password and {HELPER_PATH} work"
+    say(Progress::step(
+        Step::Admin,
+        format!("{admin} logs in by the app key; sudo without a password and {HELPER_PATH} work"),
     ));
 
     // 4. The station's account, directories and unit — before closing, so a failure here still
     // leaves every way in open.
     let out = root(script::bootstrap("service", &[]), script::UNIT.as_bytes())?;
     say_values(say, &out.stdout_text());
+    say(Progress::step(Step::Service, "step complete"));
 
     // 5. Close the server. Verified from outside when sshd changed, rolled back through the
     // lifeline. Unchanged, `sshd -T` in the step already vouched for it, and the refused password
@@ -219,10 +228,13 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
             )),
         });
     }
-    say(match changed {
-        true => "sshd: keys only, no root; a password login is refused",
-        false => "sshd: already keys only, no root",
-    });
+    say(Progress::step(
+        Step::Harden,
+        match changed {
+            true => "sshd: keys only, no root; a password login is refused",
+            false => "sshd: already keys only, no root",
+        },
+    ));
 
     // May install ufw first: the package deadline, not a step's.
     let out = privilege.run(
@@ -232,8 +244,9 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         APT_TIMEOUT,
     )?;
     for line in out.stdout_text().lines() {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
+    say(Progress::step(Step::Firewall, "firewall configured"));
     if let Err(e) = admin_works(&setup.target, &admin, &app, pin.as_deref()) {
         let undo = root(script::bootstrap("firewall-off", &[]), &[]);
         return Err(match undo {
@@ -250,6 +263,7 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         APT_TIMEOUT,
     )?;
     say_values(say, &out.stdout_text());
+    say(Progress::step(Step::Extras, "step complete"));
 
     // 6. The binary — through the helper's `update`, as every later one will.
     match &setup.station {
@@ -279,7 +293,7 @@ impl Drop for DropDir {
 fn first_login(
     setup: &Setup,
     pin: Option<&str>,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<(Conn, Privilege)> {
     let (conn, sudo_password) = match &setup.first {
         FirstAccess::Password { user, password } => {
@@ -295,7 +309,10 @@ fn first_login(
             (conn, sudo_password.clone())
         }
     };
-    say(&format!("in as {} with the provider's login", conn.user()));
+    say(Progress::step(
+        Step::Login,
+        format!("in as {} with the provider's login", conn.user()),
+    ));
     let privilege = Privilege::detect(&conn, sudo_password.as_ref())?;
     Ok((conn, privilege))
 }
@@ -348,8 +365,8 @@ fn must_refuse(
         }) => Ok(()),
         Err(OpenError::Refused {
             password_offered: true,
-        }) => anyhow::bail!("{user} was refused, but the server still offers password logins"),
-        Ok(_) => anyhow::bail!("a password login as {user} still works"),
+        }) => anyhow::bail!(StationError::PasswordStillOffered),
+        Ok(_) => anyhow::bail!(StationError::PasswordStillWorks),
         Err(e) => Err(anyhow::Error::new(e).context(format!("checking that {user} is refused"))),
     }
 }
@@ -363,7 +380,7 @@ pub fn install_station(
     app: &PrivateKey,
     pin: Option<&str>,
     path: &std::path::Path,
-    say: &mut dyn FnMut(&str),
+    say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let digest = format!("{:x}", Sha256::digest(&bytes));
@@ -397,6 +414,7 @@ pub fn install_station(
     };
     let out = script::checked(out)?;
     say_values(say, &out.stdout_text());
+    say(Progress::step(Step::Install, "station binary installed"));
     Ok(())
 }
 
@@ -423,8 +441,9 @@ fn last_update(
     script::value(&out.stdout_text(), "last_update").map(str::to_owned)
 }
 
-fn say_values(say: &mut dyn FnMut(&str), text: &str) {
+/// Retain helper output as diagnostics without putting protocol tokens in UI progress.
+fn say_values(say: &mut dyn FnMut(Progress), text: &str) {
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
-        say(line);
+        say(Progress::Diagnostic(line.to_owned()));
     }
 }

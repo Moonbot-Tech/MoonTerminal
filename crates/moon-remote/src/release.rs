@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::progress::{Progress, Step};
 use anyhow::Context;
 use moon_core::update::{
     BuildIdentity, GitHubReleaseClient, ReleaseDiscovery, UpdateEligibility,
@@ -22,7 +23,11 @@ use moon_core::update::{
 ///
 /// Returns:
 ///     The downloaded file, checked against the release's SHA-256 digest.
-pub fn fetch_station(arch: &str, dir: &Path, say: &mut dyn FnMut(&str)) -> anyhow::Result<PathBuf> {
+pub fn fetch_station(
+    arch: &str,
+    dir: &Path,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<PathBuf> {
     let asset = station_asset_name_for_arch(arch)
         .with_context(|| format!("no station binary is released for a {arch} server"))?;
     // The newest release that carries it, whichever it is: a server with no station compares
@@ -35,10 +40,13 @@ pub fn fetch_station(arch: &str, dir: &Path, say: &mut dyn FnMut(&str)) -> anyho
     let UpdateEligibility::Available(release) = scan.eligibility else {
         anyhow::bail!("no MoonTerminal release carries {asset} with a published digest yet");
     };
-    say(&format!(
-        "station: {asset} from release {} ({} MB)",
-        release.release_tag(),
-        release.asset_size() / 1_000_000
+    say(Progress::step(
+        Step::Download,
+        format!(
+            "station: {asset} from release {} ({} MB)",
+            release.release_tag(),
+            release.asset_size() / 1_000_000
+        ),
     ));
     GitHubReleaseClient::new()
         .download_verified_to(&release, &dir.join(asset))
