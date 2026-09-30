@@ -33,6 +33,14 @@ use crate::market::ArbVenue;
 /// from the caption rebuild, several times a second.
 pub const ARB_MAX_ROWS: usize = 32;
 
+/// How many rows stay on screen when a label column is scrolled to its end (Moonbot's rule).
+pub const LABEL_SCROLL_TAIL: usize = 2;
+
+/// The largest first row a label column of `total` rows may scroll to.
+pub fn label_scroll_first_max(total: usize) -> usize {
+    total.saturating_sub(LABEL_SCROLL_TAIL)
+}
+
 /// What one row of the column prints beside the venue's name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -227,7 +235,9 @@ impl ArbViewCfg {
     ///     quotes: What the core reports for this market, in any order.
     ///
     /// Returns:
-    ///     Rows to print, each paired with the venue's configured label and colour.
+    ///     Rows to print, each paired with the venue's configured label and colour. Untruncated:
+    ///     the chart windows this list into [`ARB_MAX_ROWS`] lines itself, so a scrolled column
+    ///     can reach every row.
     pub fn arrange<'a>(&'a self, quotes: &'a [crate::market::ArbQuote]) -> Vec<ArbRow<'a>> {
         let mut out: Vec<ArbRow<'a>> = Vec::new();
         // The floor, asked once per quote wherever a quote is considered.
@@ -261,11 +271,6 @@ impl ArbViewCfg {
                 color: None,
             });
         }
-        // Silently, and that is deliberate: this runs on every caption rebuild, and the venue
-        // count comes from the CORE's watch mask — a deployer-heavy core would otherwise write the
-        // same warning to the log several times a second. The ceiling is a guard against a column
-        // taller than a pane, not a condition worth reporting.
-        out.truncate(ARB_MAX_ROWS);
         out
     }
 }

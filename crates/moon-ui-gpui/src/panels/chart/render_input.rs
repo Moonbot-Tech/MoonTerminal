@@ -286,6 +286,57 @@ fn replay_book_zone_order_click(
     )
 }
 
+/// Logical pixels of trackpad travel that scroll a label column by one row: about one caption line.
+const LABEL_WHEEL_LINE_PX: f32 = 16.0;
+
+/// Scroll the strategy-filter or arbitrage column under the pointer when the wheel carries the
+/// binding configured for it; `true` when the event was over such a column and is consumed.
+///
+/// Over a column the event is consumed even when the column is already at its end, so the chart
+/// behind it never pans by surprise; everywhere else the caller's zoom/pan path runs unchanged.
+/// One repaint per step that moved the column, never one per event that did not.
+fn scroll_label_column(
+    this: &mut ChartPanel,
+    e: &ScrollWheelEvent,
+    pos: (f32, f32),
+    dy: f32,
+    precise: bool,
+    cx: &mut Context<ChartPanel>,
+) -> bool {
+    let bound = {
+        let b = this.backend.read(cx);
+        let hk = &b.preview.as_ref().unwrap_or(&b.config).hotkeys;
+        hk.label_scroll_wheel
+            .matches(e.modifiers.control, e.modifiers.shift, e.modifiers.alt)
+    };
+    if !bound {
+        return false;
+    }
+    let Some(pane) = this.input.pane_at(pos.0, pos.1) else {
+        return false;
+    };
+    let Some((origin, scale, _)) = this.chart_origin_logical() else {
+        return false;
+    };
+    let Some(row) =
+        this.chart
+            .label_column_at(pane, pos.0 / scale + origin.0, pos.1 / scale + origin.1)
+    else {
+        return false;
+    };
+    if this.label_wheel_target != Some((pane, row)) {
+        this.label_wheel_target = Some((pane, row));
+        this.label_wheel_accum = 0.0;
+    }
+    let line_px = LABEL_WHEEL_LINE_PX * this.last_ppp;
+    let steps = crate::chartdx::notch_steps(dy, !precise, &mut this.label_wheel_accum, line_px);
+    if steps != 0 && this.chart.scroll_label_column(pane, row, steps) {
+        cx.notify();
+    }
+    cx.stop_propagation();
+    true
+}
+
 /// Routes a wheel event to chart zoom/pan or leaves it for the surrounding stack to scroll.
 pub(super) fn scroll_wheel(
     this: &mut ChartPanel,
@@ -336,6 +387,9 @@ pub(super) fn scroll_wheel(
     this.input.cursor = if within { Some(pos) } else { None };
     this.input.hovered_pane = this.input.pane_at(pos.0, pos.1);
     this.sync_native_cursor(cx);
+    if within && scroll_label_column(this, e, pos, dy, precise, cx) {
+        return;
+    }
     let fb = this.chart.slot_dev_width();
     let changed = {
         let input = &mut this.input;

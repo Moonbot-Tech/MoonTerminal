@@ -2495,6 +2495,14 @@ chart_labels.field.strategy_filters:
   ru: "Фильтры стратегий"
   en: "Strategy filters"
   es: "Filtros de estrategias"
+chart_labels.column.more_above:
+  ru: "^ ещё %{n} выше"
+  en: "^ %{n} above"
+  es: "^ %{n} más arriba"
+chart_labels.column.more_below:
+  ru: "... ещё %{n}"
+  en: "... %{n} more"
+  es: "... %{n} más"
 chart_labels.preset.scale:
   ru: "Масштаб"
   en: "Scale"

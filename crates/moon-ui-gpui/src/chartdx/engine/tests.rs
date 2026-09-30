@@ -250,3 +250,39 @@ fn reveal_after_a_hidden_book_update_refreshes_center_and_live_edge() {
          (quantized {q_before}..{q_after})"
     );
 }
+
+/// `engine.rs:ChartEngine::scroll_label_column` clamping the stored offset against `total`
+/// instead of `label_scroll_first_max(total)` (or not re-clamping a stale offset at all): after
+/// the column shrinks from 20 rows to 5, the offset stored for the long column (20) is stale, and
+/// one wheel notch up must land two rows from the top of the SHORT column (max 3, minus one) —
+/// not on a stale row past the tail, which would draw the column empty.
+#[test]
+fn a_stale_label_offset_is_reclamped_before_the_wheel_moves_it() {
+    use std::rc::Rc;
+
+    let epoch = 1_700_000_000_000.0;
+    let mut engine = ChartEngine::new(epoch, ChartTheme::default());
+
+    let mut cfg = moon_core::config::ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    let lines = |n: usize| (0..n).map(|i| format!("line{i}")).collect::<Vec<_>>();
+    {
+        let data = engine.data.borrow();
+        let mut st = data.render.borrow_mut();
+        // Panes are only created by a market sync, which needs a live source: build one directly.
+        st.panes.push(crate::chartdx::PaneRender::new());
+        st.chart_labels = Rc::new(cfg);
+        st.panes[0].filter_lines = lines(20);
+        st.panes[0].label_scroll = vec![(0, 20)];
+        st.refresh_pane_labels(0);
+        // The column shrinks: the stored offset now points past its tail.
+        st.panes[0].filter_lines = lines(5);
+        st.refresh_pane_labels(0);
+    }
+
+    assert!(engine.scroll_label_column(0, 0, -1), "the offset moved");
+    let data = engine.data.borrow();
+    let st = data.render.borrow();
+    assert_eq!(st.panes[0].label_scroll, vec![(0, 2)]);
+}

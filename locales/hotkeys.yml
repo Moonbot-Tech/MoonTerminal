@@ -756,3 +756,31 @@ hotkeys.builtin.wheel_super_zoom:
   ru: "[Ctrl+Shift + Колёсико] супер-зум по времени до 3 секунд"
   en: "[Ctrl+Shift + Wheel] super zooms time down to 3 seconds"
   es: "[Ctrl+Shift + Rueda] superzoom temporal hasta 3 segundos"
+hotkeys.label_scroll:
+  ru: "Прокрутка колонки подписей"
+  en: "Scroll label column"
+  es: "Desplazar columna de etiquetas"
+hotkeys.label_scroll_hint:
+  ru: "Колесо мыши с этим модификатором над колонкой фильтров стратегий или арбитража прокручивает её на одну строку за щелчок. Над колонкой это заменяет собственное действие чарта для того же модификатора и колеса."
+  en: "Mouse wheel with this modifier over the strategy-filters or arbitrage column scrolls it one row per notch. Over the column it replaces the chart's own action for that modifier and wheel."
+  es: "La rueda del ratón con este modificador sobre la columna de filtros de estrategias o de arbitraje la desplaza una fila por paso. Sobre la columna sustituye la acción propia del gráfico para ese modificador y la rueda."
+hotkeys.wheel.none:
+  ru: "Выкл"
+  en: "Off"
+  es: "Desactivado"
+hotkeys.wheel.plain:
+  ru: "Колесо"
+  en: "Wheel"
+  es: "Rueda"
+hotkeys.wheel.alt:
+  ru: "Alt + колесо"
+  en: "Alt + wheel"
+  es: "Alt + rueda"
+hotkeys.wheel.ctrl:
+  ru: "Ctrl + колесо"
+  en: "Ctrl + wheel"
+  es: "Ctrl + rueda"
+hotkeys.wheel.shift:
+  ru: "Shift + колесо"
+  en: "Shift + wheel"
+  es: "Shift + rueda"

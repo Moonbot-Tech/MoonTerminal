@@ -29,7 +29,7 @@ mod data_state;
 mod engine;
 mod figure_snap;
 mod filter_headers;
-use filter_headers::FilterHeaderHit;
+use filter_headers::{ColumnBand, FilterHeaderHit};
 mod archived_lines;
 mod figures_sync;
 mod news_sync;
@@ -57,7 +57,7 @@ pub(crate) use render_state::arrival_flash_enabled;
 mod text;
 /// The caption editor formats its sample line with the chart's OWN formatter, never a second
 /// spelling of it.
-pub(crate) use text::preview_row;
+pub(crate) use text::{notch_steps, preview_row};
 #[cfg(any(windows, target_os = "macos"))]
 mod price_ring;
 #[cfg(test)]
@@ -486,6 +486,8 @@ struct PaneRender {
     pub(super) volume_hits: Vec<VolumeHit>,
     /// Measured strategy-filter header targets from the last successful caption pass.
     filter_header_hits: Vec<FilterHeaderHit>,
+    /// Where each scrollable label column was drawn, rebuilt with [`Self::filter_header_hits`].
+    column_bands: Vec<ColumnBand>,
     /// Where each pressable caption reserved its room, on the same terms as [`Self::volume_hits`]:
     /// rebuilt every frame, because the panel places a control at what the LAST frame laid out.
     pub(super) action_rects: Vec<ActionPlacement>,
@@ -527,6 +529,11 @@ struct PaneRender {
     label_detect_msg: String,
     /// Core-built strategy-filter skip lines for this pane's market.
     filter_lines: Vec<String>,
+    /// First visible line of each scrolled label column, as `(label row, first)`.
+    ///
+    /// Transient: never saved, and gone with the rest of this struct when the pane switches core or
+    /// market (the reset in `data_state/orders.rs`).
+    label_scroll: Vec<(usize, u32)>,
     /// Open-position figures per basis, from the same sync.
     label_basis: [text::BasisStats; 3],
     /// Signed one-hour and 24-hour changes, refreshed with the market snapshot.
@@ -945,6 +952,7 @@ impl PaneRender {
             volume_boxes: Vec::new(),
             volume_hits: Vec::new(),
             filter_header_hits: Vec::new(),
+            column_bands: Vec::new(),
             action_rects: Vec::new(),
             action_draws: Vec::new(),
             labels: text::LabelState::default(),
@@ -959,6 +967,7 @@ impl PaneRender {
             label_detect_strategy: String::new(),
             label_detect_msg: String::new(),
             filter_lines: Vec::new(),
+            label_scroll: Vec::new(),
             label_context: None,
             label_figures: None,
             label_windows: None,

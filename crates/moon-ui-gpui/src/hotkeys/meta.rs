@@ -175,6 +175,9 @@ const fn meta(origin: Origin, scope: Scope) -> SlotMeta {
 /// writes it, and it decides whether the four short rows follow the long ones at all.
 pub const SAME_FOR_MOVE: SlotMeta = meta(Origin::Shared, Scope::BOOK);
 
+/// The label-column scroll wheel's facts: a terminal-only binding read over the chart's own column.
+pub const LABEL_SCROLL: SlotMeta = meta(Origin::Local, Scope::CURSOR);
+
 /// The two facts about one keyboard slot.
 ///
 /// Surfaces are read off the routers, not chosen here. The one that decides most rows is

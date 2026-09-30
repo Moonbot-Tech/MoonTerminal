@@ -276,6 +276,48 @@ impl MouseGestureBinding {
     }
 }
 
+/// Which modifier turns the mouse wheel over a chart label column into a scroll of that column.
+///
+/// Not a keyboard slot and not a click gesture: the wheel reaches the chart through one entry
+/// point, so the binding is read there directly instead of going through the hotkey resolver.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WheelModifier {
+    /// Never scrolls the column.
+    None,
+    /// The wheel with no modifier held.
+    Plain,
+    #[default]
+    Alt,
+    Ctrl,
+    Shift,
+}
+
+impl WheelModifier {
+    pub const ALL: [Self; 5] = [Self::None, Self::Plain, Self::Alt, Self::Ctrl, Self::Shift];
+
+    pub fn config_value(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Plain => "plain",
+            Self::Alt => "alt",
+            Self::Ctrl => "ctrl",
+            Self::Shift => "shift",
+        }
+    }
+
+    /// Whether a wheel event carrying exactly these modifiers is this binding; `None` never is.
+    pub fn matches(self, ctrl: bool, shift: bool, alt: bool) -> bool {
+        match self {
+            Self::None => false,
+            Self::Plain => !ctrl && !shift && !alt,
+            Self::Alt => alt && !ctrl && !shift,
+            Self::Ctrl => ctrl && !shift && !alt,
+            Self::Shift => shift && !ctrl && !alt,
+        }
+    }
+}
+
 /// One editable keyboard slot of [`HotkeysConfig`].
 ///
 /// The slot identity lives HERE, beside the struct it addresses, and not in the settings page that
@@ -1208,6 +1250,12 @@ pub struct HotkeysConfig {
         deserialize_with = "crate::config::tolerant::map_values"
     )]
     pub action_clicks: BTreeMap<String, MouseGestureBinding>,
+    /// The modifier that makes the wheel scroll a chart label column instead of the chart.
+    #[serde(
+        default = "default_label_scroll_wheel",
+        deserialize_with = "tolerant_label_scroll_wheel"
+    )]
+    pub label_scroll_wheel: WheelModifier,
 }
 
 impl Default for HotkeysConfig {
@@ -1271,6 +1319,7 @@ impl Default for HotkeysConfig {
             short_buy_move_click2: MouseGestureBinding::None,
             short_sell_move_click2: MouseGestureBinding::None,
             action_clicks: BTreeMap::new(),
+            label_scroll_wheel: default_label_scroll_wheel(),
         }
     }
 }
@@ -1889,6 +1938,10 @@ fn default_left_ctrl() -> MouseGestureBinding {
     MouseGestureBinding::LeftCtrl
 }
 
+fn default_label_scroll_wheel() -> WheelModifier {
+    WheelModifier::Alt
+}
+
 fn default_same_hotkeys_for_move() -> bool {
     true
 }
@@ -1917,4 +1970,10 @@ fn tolerant_left_ctrl<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<MouseGestureBinding, D::Error> {
     super::tolerant::or_else(d, default_left_ctrl)
+}
+
+fn tolerant_label_scroll_wheel<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<WheelModifier, D::Error> {
+    super::tolerant::or_else(d, default_label_scroll_wheel)
 }

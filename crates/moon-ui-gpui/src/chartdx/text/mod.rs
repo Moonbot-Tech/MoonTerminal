@@ -689,6 +689,7 @@ fn nearest_orderbook_notional(
 // the ghost cursor; prepare contains the main prepare_text implementation.
 mod caption;
 mod captions;
+mod column_scroll;
 mod labels;
 mod prepare;
 mod runs;
@@ -700,6 +701,8 @@ mod tests;
 pub(in crate::chartdx) use caption::CaptionBox;
 use caption::book_zone_left;
 pub(in crate::chartdx) use captions::{ActionDraw, CAPTION_PLATES, CaptionBar, CaptionGeomInput};
+pub(crate) use column_scroll::notch_steps;
+pub(in crate::chartdx) use column_scroll::{clamp_first, first_of};
 /// The caption editor lives outside the chart and needs exactly one thing from the text pass:
 /// the real formatter, applied to sample values.
 pub(crate) use labels::preview_row;

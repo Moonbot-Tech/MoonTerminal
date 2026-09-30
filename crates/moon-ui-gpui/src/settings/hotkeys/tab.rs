@@ -17,7 +17,7 @@ use gpui::*;
 use moon_core::config::moonbot_import::shortcut;
 use moon_core::config::{
     GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKind, MoveKindSlot,
-    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    SPLIT_PARTS_MAX, SPLIT_PARTS_MIN, WheelModifier,
 };
 use moon_core::feed::CoreConfigState;
 use moon_core::session::CoreId;
@@ -144,6 +144,7 @@ fn scope_column_px(cx: &App) -> Pixels {
         .filter_map(|row| match row {
             Row::Slot(spec) => Some(spec.meta().scope),
             Row::SameForMove => Some(meta::SAME_FOR_MOVE.scope),
+            Row::LabelScroll => Some(meta::LABEL_SCROLL.scope),
             Row::CorePull => None,
         })
         .map(|scope| width(&scope.label()))
@@ -306,6 +307,7 @@ impl SettingsView {
             match *row {
                 Row::Slot(spec) => out.push(self.slot_row(spec, hotkeys, &clashes, scope_w, cx)),
                 Row::SameForMove => out.push(self.same_move_row(hotkeys, scope_w, cx)),
+                Row::LabelScroll => out.push(self.label_scroll_row(hotkeys, scope_w, cx)),
                 Row::CorePull => out.extend(self.core_pull_section(hotkeys, cx)),
             }
         }
@@ -878,6 +880,61 @@ impl SettingsView {
         )
     }
 
+    /// The label-column scroll row: which wheel modifier scrolls the chart's strategy-filters or
+    /// arbitrage column, picked in the mouse cell.
+    fn label_scroll_row(
+        &self,
+        hotkeys: &HotkeysConfig,
+        scope_w: Pixels,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        self.table_row(
+            TableRow {
+                id: "label-scroll".to_string(),
+                title: t!("hotkeys.label_scroll").to_string(),
+                hint: Some(t!("hotkeys.label_scroll_hint").to_string()),
+                meta: Some(meta::LABEL_SCROLL),
+                mono_title: false,
+                muted: false,
+                notes: Vec::new(),
+                key: None,
+                mouse: Some(self.wheel_dropdown(hotkeys, cx).into_any_element()),
+                param: None,
+            },
+            scope_w,
+            cx,
+        )
+    }
+
+    /// The wheel-modifier editor of the label-scroll row.
+    fn wheel_dropdown(&self, hotkeys: &HotkeysConfig, cx: &App) -> MoonDropdown {
+        let current = hotkeys.label_scroll_wheel;
+        let backend = self.backend.clone();
+        let items = WheelModifier::ALL.into_iter().map(move |wheel| {
+            let backend = backend.clone();
+            MoonMenuItem::with_key(wheel.config_value(), wheel_label(wheel))
+                .checked(wheel == current)
+                .on_click(move |_, _, cx| {
+                    backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut()
+                            && p.hotkeys.label_scroll_wheel != wheel
+                        {
+                            p.hotkeys.label_scroll_wheel = wheel;
+                            bcx.notify();
+                        }
+                    });
+                })
+        });
+        Self::row_dropdown("label-scroll-wheel".to_string(), wheel_label(current), cx)
+            .trigger_variant(if current == WheelModifier::None {
+                MoonButtonVariant::Neutral
+            } else {
+                MoonButtonVariant::Blue
+            })
+            .menu_width_scaled(228.0)
+            .items(items)
+    }
+
     fn set_hotkey(&mut self, slot: KeySlot, value: String, cx: &mut Context<Self>) {
         let changed = self.backend.update(cx, |b, bcx| {
             let mut changed = false;
@@ -1298,4 +1355,10 @@ impl SettingsView {
             .child(text)
             .into_any_element()
     }
+}
+
+/// The localized name of a label-scroll wheel binding.
+fn wheel_label(wheel: WheelModifier) -> String {
+    let key = format!("hotkeys.wheel.{}", wheel.config_value());
+    t!(&key).to_string()
 }

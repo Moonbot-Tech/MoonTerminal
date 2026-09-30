@@ -30,7 +30,52 @@ impl FilterHeaderHit {
     }
 }
 
+/// Where one strategy-filter or arbitrage column was drawn, for the wheel that scrolls it.
+///
+/// The union of the column's lines, plus its collapse header when it has lines: a collapsed column
+/// registers no band, so the wheel over its header keeps panning the chart.
+pub(super) struct ColumnBand {
+    /// Window logical pixels, `[left, top, width, height]`, like [`FilterHeaderHit::rect`].
+    pub rect: [f32; 4],
+    /// Label row the column belongs to.
+    pub row: usize,
+}
+
+impl ColumnBand {
+    /// Grow the band of `row` in `bands` to cover one drawn run, opening it on the first.
+    pub(super) fn grow(bands: &mut Vec<ColumnBand>, row: usize, rect: [f32; 4]) {
+        let [x, y, w, h] = rect;
+        if w <= 0.0 || h <= 0.0 {
+            return;
+        }
+        let Some(band) = bands.iter_mut().find(|band| band.row == row) else {
+            bands.push(ColumnBand { rect, row });
+            return;
+        };
+        let [left, top, width, height] = band.rect;
+        let (l, t) = (left.min(x), top.min(y));
+        let (r, b) = ((left + width).max(x + w), (top + height).max(y + h));
+        band.rect = [l, t, r - l, b - t];
+    }
+
+    fn contains(&self, x: f32, y: f32) -> bool {
+        let [left, top, width, height] = self.rect;
+        x >= left && x <= left + width && y >= top && y <= top + height
+    }
+}
+
 impl ChartEngine {
+    /// The label row whose scrollable column was drawn under this point, in window logical pixels.
+    pub(crate) fn label_column_at(&self, pane: usize, x: f32, y: f32) -> Option<usize> {
+        let data = self.data.borrow();
+        let render = data.render.borrow();
+        let pane = render.panes.get(pane).filter(|pane| pane.active)?;
+        pane.column_bands
+            .iter()
+            .find(|band| band.contains(x, y))
+            .map(|band| band.row)
+    }
+
     /// Resolve a header press in window logical pixels against the current editable profile.
     pub(crate) fn filter_header_at(
         &self,
