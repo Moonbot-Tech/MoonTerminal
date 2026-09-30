@@ -650,3 +650,123 @@ fn an_adjustment_names_the_field_that_differs_and_ignores_a_default() {
     assert_eq!(kind_change[0].sent, "Drops");
     assert_eq!(kind_change[0].saved, "Waves");
 }
+
+fn log_change(name: &str, sent: &str, saved: &str) -> StrategyFieldChange {
+    StrategyFieldChange {
+        name: name.to_string(),
+        sent: sent.to_string(),
+        saved: saved.to_string(),
+    }
+}
+
+fn snapshot_at(strategy_id: u64, fields: &[(&str, FieldValue)]) -> StrategySnapshot {
+    let mut built = StrategyFields::new();
+    for (name, value) in fields {
+        built.insert(*name, value.clone());
+    }
+    StrategySnapshot::new(
+        strategy_id,
+        1,
+        0,
+        false,
+        StrategyKind::DROPS,
+        "folder",
+        built,
+    )
+}
+
+/// The Adjusted log line splices this text in after the revision pair. No differences must stay
+/// an empty splice: a leading space with nothing after it would read as a trailing blank on a
+/// line that did not change.
+#[test]
+fn an_empty_adjustment_log_is_blank() {
+    assert_eq!(format_adjustment_log(&[]), "");
+}
+
+/// Under the preview cap the whole list is named and the remainder counter stays off. A counter
+/// that fires at zero would print `+0` on every ordinary one- or two-field adjustment.
+#[test]
+fn an_adjustment_log_under_the_preview_cap_has_no_remainder() {
+    let changes = [log_change("a", "1", "2"), log_change("b", "3", "4")];
+    assert_eq!(format_adjustment_log(&changes), " a: 1 -> 2, b: 3 -> 4");
+}
+
+/// Past the cap the log keeps the first three differences and replaces the rest with a count.
+/// The fourth name must not appear: the cap exists so a wide paste does not dump every field
+/// into the log line.
+#[test]
+fn an_adjustment_log_past_the_preview_cap_names_the_remainder() {
+    let changes = [
+        log_change("a", "1", "2"),
+        log_change("b", "3", "4"),
+        log_change("c", "5", "6"),
+        log_change("hidden", "7", "8"),
+    ];
+    assert_eq!(
+        format_adjustment_log(&changes),
+        " a: 1 -> 2, b: 3 -> 4, c: 5 -> 6 +1"
+    );
+}
+
+/// A dump the database stores is the kind's schema defaults with the snapshot's explicit fields
+/// laid on top. The server omits a field that still equals its default, so a dump that kept only
+/// explicit fields would record a vanished stop as "never set", and a dump that let defaults
+/// paint last would throw away the price the user actually sent.
+#[test]
+fn a_dump_keeps_a_default_the_snapshot_omitted_and_lets_an_explicit_field_win() {
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert(
+        StrategyKind::DROPS.ordinal(),
+        vec![
+            ("buyPrice".to_string(), FieldValue::Double(0.0)),
+            ("stopLoss".to_string(), FieldValue::Double(-1.0)),
+        ],
+    );
+    let snapshot = snapshot_at(
+        7,
+        &[
+            ("buyPrice", FieldValue::Double(0.4)),
+            ("Short", FieldValue::Bool(true)),
+        ],
+    );
+    let dump = strat_db_dump(&snapshot, &defaults, true);
+    let expect = serde_json::json!({
+        "Short": true,
+        "buyPrice": 0.4,
+        "stopLoss": -1.0,
+    });
+    assert_eq!(dump.fields, expect.as_object().unwrap().clone());
+}
+
+/// Defaults are per kind. A map that only knows another kind must not leak that kind's fields
+/// into a Drops dump, or every strategy would inherit a neighbour's parameters.
+#[test]
+fn a_dump_does_not_borrow_another_kinds_defaults() {
+    let mut defaults = std::collections::HashMap::new();
+    defaults.insert(
+        StrategyKind::DROPS.ordinal().wrapping_add(1),
+        vec![("onlyOther".to_string(), FieldValue::Bool(true))],
+    );
+    let snapshot = snapshot_at(7, &[("buyPrice", FieldValue::Double(1.0))]);
+    let dump = strat_db_dump(&snapshot, &defaults, false);
+    let expect = serde_json::json!({ "buyPrice": 1.0 });
+    assert_eq!(dump.fields, expect.as_object().unwrap().clone());
+}
+
+/// Orders join `strategyid` as the Delphi signed value the core writes. The high bit of the
+/// server's u64 id is a negative i64, not zero and not the unsigned magnitude.
+#[test]
+fn a_dump_keeps_the_delphi_signed_strategy_id() {
+    let high = strat_db_dump(
+        &snapshot_at(1u64 << 63, &[]),
+        &std::collections::HashMap::new(),
+        false,
+    );
+    assert_eq!(high.strategy_id, i64::MIN);
+    let small = strat_db_dump(
+        &snapshot_at(42, &[]),
+        &std::collections::HashMap::new(),
+        false,
+    );
+    assert_eq!(small.strategy_id, 42);
+}
