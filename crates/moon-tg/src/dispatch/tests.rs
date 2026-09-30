@@ -97,7 +97,7 @@ impl crate::TgHost for StationHost {
         true
     }
     /// Count updater requests without touching a server.
-    fn request_station_update(&mut self) -> Option<Result<(), String>> {
+    fn request_station_update(&mut self) -> Option<Result<(), crate::UpdateRefusal>> {
         self.update_calls += 1;
         Some(Ok(()))
     }
