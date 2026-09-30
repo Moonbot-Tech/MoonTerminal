@@ -363,8 +363,35 @@ fn limit_row(
         .gap(design::ui_px(cx, 6.0))
         .text_size(design::t_caption(cx))
         .child(div().text_color(rgb(p.text_muted)).child(label))
-        .child(div().text_color(rgb(p.text)).child(value))
+        .child(
+            div()
+                .font_family(design::mono())
+                .text_color(rgb(p.text))
+                .child(value),
+        )
         .tooltip(crate::panels::common::text_tooltip(tooltip))
+}
+
+/// The position-cap figure the leverage popover prints, or `None` when the row is hidden.
+///
+/// Hidden rather than dashed: an unknown cap is the common case on venues that never state one,
+/// and a `0` would read as "you may hold nothing". The quote token follows the per-order MAX's
+/// rule in [`MaxOrderReadout::format`] — omitted when the market name carried none.
+///
+/// Args:
+///     limits: Loaded market limits, or `None` before they arrive.
+///     quote: Quote token to append, or empty.
+///
+/// Returns:
+///     The formatted cap, or `None` when it is unknown.
+fn position_cap_text(limits: Option<MarketLimits>, quote: &str) -> Option<String> {
+    let cap = limits?.position_cap?;
+    let value = fmt::usd_grouped(cap);
+    Some(if quote.is_empty() {
+        value
+    } else {
+        format!("{value} {quote}")
+    })
 }
 
 /// A wrapped caption stating something the numbers above cannot say for themselves.
@@ -602,6 +629,17 @@ pub fn metric_popup_content(
                 p,
                 cx,
             ))
+            // The whole-position cap at the CURRENT leverage, beside the coin's maximum leverage
+            // because it moves with it. Hidden when the core stated none.
+            .children(position_cap_text(limits, quote).map(|text| {
+                limit_row(
+                    t!("toolbar.position_cap").to_string(),
+                    text,
+                    t!("toolbar.position_cap_tip").to_string(),
+                    p,
+                    cx,
+                )
+            }))
             // Said out loud rather than left to be inferred from a slider that happens to end at
             // 125: without a stated maximum the range is a TERMINAL DEFAULT, not this coin's limit.
             //

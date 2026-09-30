@@ -401,6 +401,16 @@ toolbar.lev_max:
   ru: "Макс. плечо"
   en: "Max leverage"
   es: "Apalancamiento máx."
+# Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
+toolbar.position_cap:
+  ru: "Лимит позиции"
+  en: "Position cap"
+  es: "Límite de posición"
+# Hover text for the position cap row.
+toolbar.position_cap_tip:
+  ru: "Предел биржи на ВСЮ позицию по этой монете при ПРИМЕНЁННОМ плече. Меньше плечо — выше предел. Макс. ордер — отдельный предел на одну заявку."
+  en: "The exchange's cap on the WHOLE position in this coin at the APPLIED leverage (updates after Apply). Lower leverage raises it. Max order is a separate per-order limit."
+  es: "Límite del exchange para TODA la posición en esta moneda con el apalancamiento APLICADO. Menos apalancamiento lo eleva. Orden máx. es un límite aparte por orden."
 # Hover text when the exchange stated the order cap directly: a fixed figure that does not drift.
 toolbar.max_order_tip:
   ru: "Максимальный размер ордера по правилам биржи. Не зависит от выбранного плеча."
