@@ -89,14 +89,70 @@ fn a_key_in_the_station_file_is_refused() {
     assert!(format!("{err:#}").contains("key"), "{err:#}");
 }
 
+/// Restoring the fatal `core_key(...)?` makes a missing key crash-loop the whole station.
 #[test]
-fn an_active_core_without_its_credential_is_refused() {
+fn an_active_core_without_its_credential_is_skipped() {
     let dir = creds("missing", &[]);
     let text = "[[core]]\nuid = 3\nname = \"A\"\n";
-    assert!(from_station_file(text, Some(&dir)).is_err());
-    assert!(
-        from_station_file(text, None).is_err(),
-        "no credentials directory at all"
+    for directory in [Some(dir.as_path()), None] {
+        let station = from_station_file(text, directory).expect("the station stays up");
+        assert!(station.config.servers.is_empty());
+        assert_eq!(
+            station.skipped_cores,
+            ["core 3 (\"A\"): credential unavailable, skipped"]
+        );
+    }
+}
+
+/// Returning an error or stopping the loop at a bad credential prevents healthy later cores
+/// from loading; the skipped identity must remain available to status without any key material.
+#[test]
+fn unavailable_credentials_do_not_hide_healthy_or_inactive_cores() {
+    let dir = creds("partial", &[(3, "synthetic-healthy-key"), (5, " \n")]);
+    std::fs::create_dir(dir.join("core-6")).unwrap();
+    let text = r#"
+        [[core]]
+        uid = 4
+        name = "Missing"
+        [[core]]
+        uid = 5
+        name = "Empty"
+        [[core]]
+        uid = 6
+        name = "Unreadable"
+        [[core]]
+        uid = 3
+        name = "Healthy"
+        transport = "v1"
+        [[core]]
+        uid = 9
+        name = "Off"
+        active = false
+        [tape]
+        margin_s = 300
+    "#;
+    let station = from_station_file(text, Some(&dir)).unwrap();
+    assert_eq!(station.config.servers.len(), 2);
+    assert_eq!(station.config.servers[0].uid, 3);
+    assert_eq!(
+        station.config.servers[0].key.expose(),
+        "synthetic-healthy-key"
+    );
+    assert_eq!(
+        station.config.servers[0].transport,
+        Some(TransportVersion::V1)
+    );
+    assert!(station.config.servers[0].active && station.config.servers[0].feed.reports);
+    assert_eq!(station.config.servers[1].uid, 9);
+    assert!(!station.config.servers[1].active);
+    assert_eq!(station.tape.margin_s, Some(300));
+    assert_eq!(
+        station.skipped_cores,
+        [
+            "core 4 (\"Missing\"): credential unavailable, skipped",
+            "core 5 (\"Empty\"): credential unavailable, skipped",
+            "core 6 (\"Unreadable\"): credential unavailable, skipped",
+        ]
     );
 }
 

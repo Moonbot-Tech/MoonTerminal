@@ -435,7 +435,8 @@ pub fn push_telegram(
 }
 
 /// Make `cores` the station's whole set: credentials for these, none for any other, the matching
-/// `station.toml`, and the service (re)started. The bot's `[telegram]` stays as it was.
+/// `station.toml`, and the service (re)started. Commit the config before dropping credentials,
+/// so a failed push leaves only unused credentials. The bot's `[telegram]` stays as it was.
 pub fn push_cores(
     target: &Target,
     cores: &[CoreKey],
@@ -478,27 +479,44 @@ pub fn push_cores(
             core.name, core.uid
         ));
     }
-    let status = run(script::helper("status", &[]), &[])?;
-    let wanted: std::collections::HashSet<String> =
-        cores.iter().map(|c| format!("core-{}", c.uid)).collect();
-    for stale in script::value(&status, "creds")
-        .unwrap_or_default()
-        .split_whitespace()
-        .filter(|name| !wanted.contains(*name))
-    {
-        let uid = stale.trim_start_matches("core-");
-        run(script::helper("drop-cred", &[uid]), &[])?;
-        say(&format!("{stale}: dropped, not in the set"));
-    }
-    edit_config(&conn, exists, |current| {
-        keep_server_sections(&new, current).map(Some)
-    })?;
+    commit_cores_config(
+        || {
+            edit_config(&conn, exists, |current| {
+                keep_server_sections(&new, current).map(Some)
+            })
+        },
+        || {
+            let status = run(script::helper("status", &[]), &[])?;
+            let wanted: std::collections::HashSet<String> =
+                cores.iter().map(|c| format!("core-{}", c.uid)).collect();
+            for stale in script::value(&status, "creds")
+                .unwrap_or_default()
+                .split_whitespace()
+                .filter(|name| !wanted.contains(*name))
+            {
+                let uid = stale.trim_start_matches("core-");
+                run(script::helper("drop-cred", &[uid]), &[])?;
+                say(&format!("{stale}: dropped, not in the set"));
+            }
+            Ok(())
+        },
+    )?;
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;
     for line in status.lines() {
         say(line);
     }
     Ok(())
+}
+
+/// Commit the new core references before cleanup; any write failure keeps every old credential.
+/// A cleanup failure is returned after the config is safely committed.
+fn commit_cores_config(
+    write_config: impl FnOnce() -> anyhow::Result<bool>,
+    drop_stale: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    write_config()?;
+    drop_stale()
 }
 
 /// Update the station from the latest release (the Settings' "Update the service"): the helper's

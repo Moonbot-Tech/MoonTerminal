@@ -68,6 +68,7 @@ const STATUS_EVERY: Duration = Duration::from_secs(60);
 /// before it kills.
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
+/// Run the station, keeping unavailable core credentials visible without blocking other cores.
 fn main() -> anyhow::Result<()> {
     // The API's client: no log, no data root — one exchange with the running station.
     if std::env::args().nth(1).as_deref() == Some("ctl") {
@@ -116,6 +117,7 @@ fn main() -> anyhow::Result<()> {
     apply_tape(&station.tape);
     let profile = station.profile();
     let telegram = station.telegram;
+    let mut skipped_cores = station.skipped_cores;
     let mut cfg = station.config;
     log_cores(&cfg);
     log::info!("profile: {profile:?}");
@@ -195,6 +197,7 @@ fn main() -> anyhow::Result<()> {
         if signals.take_reload() {
             match reload(&config_path) {
                 Ok(reloaded) => {
+                    skipped_cores = reloaded.skipped_cores;
                     if !same_bot(reloaded.telegram.as_ref(), telegram.as_ref()) {
                         log::warn!(
                             "[telegram] changed: it takes effect on the next start, not a reload"
@@ -233,6 +236,7 @@ fn main() -> anyhow::Result<()> {
             groups: &groups,
             host: &host,
             data_root: &data_root,
+            skipped_cores: &skipped_cores,
         };
         if let Some(bot) = bot.as_mut() {
             // The chats' "Status" asked during the tick above.
@@ -261,7 +265,7 @@ fn main() -> anyhow::Result<()> {
         }
         if now.duration_since(last_status) >= STATUS_EVERY {
             last_status = now;
-            let (ready, total, down) = cores_summary(&session, &groups);
+            let (ready, total, down) = cores_summary(&session, &groups, &skipped_cores);
             match down.is_empty() {
                 true => log::info!("status: {ready}/{total} cores ready"),
                 false => log::info!(
@@ -274,9 +278,13 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// How many cores are ready of how many, and each one that is not, in words.
-fn cores_summary(session: &SessionManager, groups: &[String]) -> (usize, usize, Vec<String>) {
-    let (mut ready, mut total, mut down) = (0, 0, Vec::new());
+/// How many cores are ready of how many, including cores skipped at load, and why others are not.
+fn cores_summary(
+    session: &SessionManager,
+    groups: &[String],
+    skipped_cores: &[String],
+) -> (usize, usize, Vec<String>) {
+    let (mut ready, mut total, mut down) = (0, skipped_cores.len(), skipped_cores.to_vec());
     for summary in groups.iter().map(|g| session.conn_summary_group(g)) {
         ready += summary.ready;
         total += summary.total;
@@ -297,18 +305,21 @@ fn api_socket(data_root: &Path) -> PathBuf {
         .join(moon_core::station_api::SOCKET_FILE)
 }
 
-/// What `status` reads besides the bot, borrowed from the main loop.
+/// What `status` reads besides the bot, including skipped cores, borrowed from the main loop.
 struct StationNow<'a> {
     session: &'a SessionManager,
     groups: &'a [String],
     host: &'a host::HostWatch,
     data_root: &'a Path,
+    /// Load failures remain in the total even though they have no connection session.
+    skipped_cores: &'a [String],
 }
 
 impl StationNow<'_> {
     /// The station now, with `bot` — what the API's `status` and the chat's "Status" answer.
     fn status(&self, bot: Option<BotStatus>) -> Status {
-        let (cores_ready, cores_total, _) = cores_summary(self.session, self.groups);
+        let (cores_ready, cores_total, _) =
+            cores_summary(self.session, self.groups, self.skipped_cores);
         Status {
             station_version: release::version(),
             cores_ready,
