@@ -19,6 +19,8 @@ TOKEN=telegram-token
 PAIRING=/var/lib/moon-station/telegram.json
 # The USDT valuation cache, the station's own file once written.
 VALUATION=/var/lib/moon-station/valuation.sqlite
+# The running station's control API (moon_core::station_api), in its runtime directory.
+API_SOCKET=/run/moon-station/api.sock
 UNIT=moon-station.service
 # How long a station just (re)started must stay up to count as healthy: longer than its slowest
 # start-up check (the report replica's integrity pass, ~11 s on 1 vCPU).
@@ -247,6 +249,7 @@ cmd_status() {
     [ -f "$CREDS/$TOKEN.cred" ] && echo "token=yes" || echo "token=no"
     [ -f "$PAIRING" ] && echo "pairing=yes" || echo "pairing=no"
     [ -f "$VALUATION" ] && echo "valuation=yes" || echo "valuation=no"
+    [ -S "$API_SOCKET" ] && echo "api=yes" || echo "api=no"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -267,21 +270,11 @@ cmd_put_pairing() {
     echo "pairing=written"
 }
 
-# tg-state: the running station's own lines about its bot — its status and the pairing code it
-# offers while no chat is paired. Only the current process: an old code is no answer.
-cmd_tg_state() {
-    pid=$(systemctl show -p MainPID --value "$UNIT")
-    [ "$pid" != 0 ] || {
-        echo "tg=stopped"
-        return 0
-    }
-    # The last code, then the last status: a status after the code is the newer word on it. Two
-    # streamed passes rather than one held copy: a station up for weeks has a long journal.
-    journalctl -u "$UNIT" _PID="$pid" --no-pager -o cat |
-        grep -a 'telegram: no chat is paired' | tail -n 1 || true
-    journalctl -u "$UNIT" _PID="$pid" --no-pager -o cat |
-        grep -a 'telegram: bot ' | tail -n 1 || true
-    return 0
+# ctl; stdin: one API request (JSON) — relayed to the running station by its own binary, the
+# reply printed as one JSON line. The station checks the request; this only carries it.
+cmd_ctl() {
+    [ -S "$API_SOCKET" ] || die "the station is not running (no $API_SOCKET)"
+    exec "$BIN" ctl --socket "$API_SOCKET"
 }
 
 # put-valuation; stdin: the terminal's valuation.sqlite, gzipped — its cached USDT rates, so a new
@@ -363,7 +356,7 @@ put-pairing)
     lock
     cmd_put_pairing
     ;;
-tg-state) cmd_tg_state ;;
+ctl) cmd_ctl ;;
 put-valuation)
     lock
     cmd_put_valuation

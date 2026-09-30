@@ -1,34 +1,62 @@
+use moon_core::config::telegram_access::TelegramChatAccess;
+use moon_core::station_api::PairingCode;
+use moon_core::telegram::runtime::mini_app::MiniAppStatus;
+
 use super::*;
 
-#[test]
-fn reads_an_unpaired_bot_and_its_code() {
-    let text = "telegram: bot starting, 0 chat(s) paired, Mini App on, zone UTC\n\
-                telegram: no chat is paired — send /pair 482913 to the bot within 10 minutes\n\
-                telegram: bot Unpaired, Mini App Tunneling { port: 33137, url: \"https://x.trycloudflare.com\" }\n";
-    let state = BotState::parse(text);
-    assert!(!state.stopped && !state.paired());
-    assert_eq!(state.pairing_code.as_deref(), Some("482913"));
-    assert!(state.status.unwrap().starts_with("Unpaired"));
+fn running(status: TelegramStatus, code: Option<&str>) -> BotState {
+    BotState {
+        has_token: true,
+        bot: Some(BotStatus {
+            status,
+            mini_app_on: false,
+            mini_app: MiniAppStatus::Stopped,
+            pairing: code.map(|code| PairingCode {
+                code: code.into(),
+                expires_in_s: 600,
+            }),
+        }),
+        pairing_until: code.map(|_| Instant::now() + Duration::from_secs(600)),
+        ..BotState::default()
+    }
 }
 
 #[test]
-fn a_paired_bot_offers_no_code_any_more() {
-    let text = "telegram: no chat is paired — send /pair 482913 to the bot within 10 minutes\n\
-                telegram: bot Paired { chat_count: 1 }, Mini App Tunneling { port: 1, url: \"u\" }\n";
-    let state = BotState::parse(text);
-    assert!(state.paired());
-    assert_eq!(state.pairing_code, None);
+fn an_unpaired_bot_polls_and_offers_its_code() {
+    let state = running(TelegramStatus::Unpaired, Some("482913"));
+    assert!(state.polling() && !state.paired());
+    assert_eq!(state.pairing_code(), Some("482913"));
 }
 
 #[test]
-fn a_stopped_station_says_so() {
-    let state = BotState::parse("tg=stopped\n");
-    assert!(state.stopped && !state.paired() && state.status.is_none());
+fn a_paired_bot_polls() {
+    let state = running(TelegramStatus::Paired { chat_count: 1 }, None);
+    assert!(state.paired() && state.polling());
+    assert_eq!(state.pairing_code(), None);
+}
+
+#[test]
+fn a_starting_or_conflicting_bot_does_not_poll() {
+    assert!(!running(TelegramStatus::Starting, None).polling());
+    assert!(!running(TelegramStatus::Conflict, None).polling());
+    let stopped = BotState {
+        stopped: true,
+        ..BotState::default()
+    };
+    assert!(!stopped.polling() && stopped.summary().contains("stopped"));
+}
+
+/// A code past its time is not offered: the bot would refuse it.
+#[test]
+fn an_expired_code_is_not_offered() {
+    let mut state = running(TelegramStatus::Unpaired, Some("482913"));
+    state.pairing_until = Some(Instant::now() - Duration::from_secs(1));
+    assert_eq!(state.pairing_code(), None);
 }
 
 #[test]
 fn the_pairing_file_is_what_the_station_reads() {
-    let pairing = Pairing {
+    let pairing = Access {
         authorized_chat_ids: vec![42],
         owner_chat_id: Some(42),
         chat_access: vec![TelegramChatAccess {
@@ -41,15 +69,4 @@ fn the_pairing_file_is_what_the_station_reads() {
     assert_eq!(json["authorized_chat_ids"][0], 42);
     assert_eq!(json["owner_chat_id"], 42);
     assert_eq!(json["chat_access"][0]["core_uids"][1], 3);
-}
-
-#[test]
-fn an_unpaired_bot_polls_and_a_starting_one_does_not() {
-    let unpaired = BotState::parse("telegram: bot Unpaired, Mini App Stopped\n");
-    assert!(unpaired.polling() && !unpaired.paired());
-    let starting =
-        BotState::parse("telegram: bot starting, 0 chat(s) paired, Mini App on, zone UTC\n");
-    assert!(!starting.polling());
-    let conflict = BotState::parse("telegram: bot Conflict, Mini App Stopped\n");
-    assert!(!conflict.polling());
 }

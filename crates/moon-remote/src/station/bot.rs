@@ -1,57 +1,51 @@
 //! The station's bot seen from the terminal: hand the terminal's bot over, and read how the
-//! station's bot is doing.
-//!
-//! Until the station has its API (`docs-internal/STATION.md` §4.5) the only place it tells about
-//! its bot is its journal: `telegram: bot …` on every change and `send /pair <code>` while no chat
-//! is paired. The helper's `tg-state` hands over those lines of the running process only.
+//! station's bot is doing — from the station's control API (`super::api`), with whether the
+//! station holds a token from the helper's `status`.
 
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use moon_core::config::Secret;
-use moon_core::config::telegram_access::TelegramChatAccess;
-use serde::Serialize;
+use moon_core::station_api::{Access, Answer, BotStatus, Request};
+use moon_core::telegram::TelegramStatus;
 
-use super::{BotChange, admin_conn, current_helper_status, with_telegram};
+use super::{BotChange, admin_conn, api, current_helper_status, with_telegram};
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::Target;
 
 /// How long a handed-over bot may take to come up paired: the station restarts, checks its
 /// replica, connects the bot — ~30 s on one vCPU (STATION.md §7.7).
 const PAIRED_WITHIN: Duration = Duration::from_secs(90);
-/// How often the journal is asked while waiting.
+/// How often the station is asked while waiting.
 const ASK_EVERY: Duration = Duration::from_secs(3);
 /// Looks in a row that find the station stopped before a hand-over gives up (~15 s): systemd
 /// restarts a crash after 5 s, so a stop that lasts is not a restart.
 const STOPPED_LOOKS: u32 = 5;
 
-/// The terminal's pairing, as the station keeps it in `telegram.json`.
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct Pairing {
-    pub authorized_chat_ids: Vec<i64>,
-    pub owner_chat_id: Option<i64>,
-    pub chat_access: Vec<TelegramChatAccess>,
-}
-
-/// What the station's journal says about its bot.
+/// How the station's bot is doing, read at one moment.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BotState {
     /// The station is not running.
     pub stopped: bool,
-    /// The last `telegram: bot …` line, without the prefix: `Paired { chat_count: 1 }, Mini App …`.
-    pub status: Option<String>,
-    /// The code to send as `/pair <code>`, while no chat is paired.
-    pub pairing_code: Option<String>,
+    /// The station runs but its API does not answer yet: it is starting, or its binary predates
+    /// the API and needs an update.
+    pub no_api: bool,
     /// The station holds a bot token (its credential exists); `false` runs no bot.
     pub has_token: bool,
+    /// The running bot as the station tells it; `None` while it runs none.
+    pub bot: Option<BotStatus>,
+    /// Until when the bot's pairing code is accepted, counted from this read.
+    pub pairing_until: Option<Instant>,
+    /// The paired chats, the owner and the viewers' grants, while a bot runs.
+    pub access: Option<Access>,
 }
 
 impl BotState {
     /// Whether the bot runs with at least one paired chat.
     pub fn paired(&self) -> bool {
-        self.status
-            .as_deref()
-            .is_some_and(|s| s.starts_with("Paired"))
+        self.bot
+            .as_ref()
+            .is_some_and(|b| matches!(b.status, TelegramStatus::Paired { .. }))
     }
 
     /// Whether the bot polls Telegram: paired, or waiting for a chat to pair. Both are published
@@ -59,38 +53,61 @@ impl BotState {
     pub fn polling(&self) -> bool {
         self.paired()
             || self
-                .status
-                .as_deref()
-                .is_some_and(|s| s.starts_with("Unpaired"))
+                .bot
+                .as_ref()
+                .is_some_and(|b| b.status == TelegramStatus::Unpaired)
     }
 
-    /// Read the helper's `tg-state` answer.
-    pub fn parse(text: &str) -> Self {
-        let mut state = Self::default();
-        for line in text.lines() {
-            if line.trim() == "tg=stopped" {
-                state.stopped = true;
-            } else if let Some(rest) = line.split("telegram: bot ").nth(1) {
-                state.status = Some(rest.trim().to_owned());
-                // A status line after a code is newer: a bot that paired no longer offers one.
-                if rest.starts_with("Paired") {
-                    state.pairing_code = None;
-                }
-            } else if let Some(rest) = line.split("send /pair ").nth(1) {
-                state.pairing_code = rest.split_whitespace().next().map(str::to_owned);
-            }
+    /// The state in a few words, for a progress line.
+    pub fn summary(&self) -> String {
+        match &self.bot {
+            _ if self.stopped => "station stopped".into(),
+            _ if self.no_api => "station not answering yet".into(),
+            None => "no bot".into(),
+            Some(bot) => format!("{:?}, Mini App {:?}", bot.status, bot.mini_app),
         }
-        state
+    }
+
+    /// The code to send as `/pair <code>`, while it is still accepted.
+    pub fn pairing_code(&self) -> Option<&str> {
+        let code = self.bot.as_ref()?.pairing.as_ref()?;
+        self.pairing_until
+            .is_some_and(|until| Instant::now() < until)
+            .then_some(code.code.as_str())
     }
 }
 
-/// How the station's bot is doing now.
+/// How the station's bot is doing now, with its chats.
 pub fn bot_state(target: &Target) -> anyhow::Result<BotState> {
     let conn = admin_conn(target)?;
     let status = current_helper_status(&conn)?;
-    let out = script::checked(conn.run(&script::helper("tg-state", &[]), &[], STEP_TIMEOUT)?)?;
-    let mut state = BotState::parse(&out.stdout_text());
-    state.has_token = script::value(&status, "token") == Some("yes");
+    let mut state = BotState {
+        has_token: script::value(&status, "token") == Some("yes"),
+        ..BotState::default()
+    };
+    if script::value(&status, "active") != Some("active") {
+        state.stopped = true;
+        return Ok(state);
+    }
+    if script::value(&status, "api") != Some("yes") {
+        state.no_api = true;
+        return Ok(state);
+    }
+    let read_at = Instant::now();
+    let Answer::Status(station) = api::call(&conn, &Request::Status)? else {
+        anyhow::bail!("the station answered a status request with something else");
+    };
+    if let Some(bot) = &station.bot {
+        state.pairing_until = bot
+            .pairing
+            .as_ref()
+            .map(|p| read_at + Duration::from_secs(p.expires_in_s));
+        state.access = match api::call(&conn, &Request::AccessGet)? {
+            Answer::Access(access) => Some(access),
+            other => anyhow::bail!("the station answered an access request with {other:?}"),
+        };
+    }
+    state.bot = station.bot;
     Ok(state)
 }
 
@@ -136,7 +153,7 @@ pub fn set_token(
 pub fn transfer_bot(
     target: &Target,
     token: &Secret,
-    pairing: &Pairing,
+    pairing: &Access,
     change: &BotChange,
     say: &mut dyn FnMut(&str),
 ) -> anyhow::Result<BotState> {
@@ -192,6 +209,35 @@ pub fn transfer_bot(
     }
 }
 
+/// Wait until the station's bot polls again after its transport restarted (a change of the
+/// chats' permissions): paired or offering a code, either will do.
+pub fn wait_bot(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow::Result<BotState> {
+    wait_polling(target, false, say)
+}
+
+/// Wait until the station, restarted with its Mini App switched `on` or off, polls again and its
+/// Mini App has settled: published or failed when on, stopped when off.
+pub fn wait_mini_app(
+    target: &Target,
+    on: bool,
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<BotState> {
+    use moon_core::telegram::runtime::mini_app::MiniAppStatus;
+    wait_until(target, say, |state| {
+        state.polling()
+            && state.bot.as_ref().is_some_and(|bot| {
+                bot.mini_app_on == on
+                    && match on {
+                        true => matches!(
+                            bot.mini_app,
+                            MiniAppStatus::Tunneling { .. } | MiniAppStatus::Failed { .. }
+                        ),
+                        false => bot.mini_app == MiniAppStatus::Stopped,
+                    }
+            })
+    })
+}
+
 /// A failed hand-over whose undo failed too: the station may still poll the token, so the
 /// terminal's own bot must stay down until the user takes the bot off the station.
 #[derive(Debug)]
@@ -211,6 +257,19 @@ fn wait_polling(
     with_chats: bool,
     say: &mut dyn FnMut(&str),
 ) -> anyhow::Result<BotState> {
+    wait_until(target, say, |state| match with_chats {
+        true => state.paired(),
+        false => state.polling(),
+    })
+}
+
+/// Ask the station every few seconds until `done` holds, for up to [`PAIRED_WITHIN`]; a station
+/// that stays stopped, or the deadline, ends it with an error.
+fn wait_until(
+    target: &Target,
+    say: &mut dyn FnMut(&str),
+    done: impl Fn(&BotState) -> bool,
+) -> anyhow::Result<BotState> {
     let deadline = Instant::now() + PAIRED_WITHIN;
     let mut last: Option<BotState> = None;
     let mut last_error = None;
@@ -219,15 +278,8 @@ fn wait_polling(
         std::thread::sleep(ASK_EVERY);
         match look(target) {
             Ok(state) => {
-                let polls = match with_chats {
-                    true => state.paired(),
-                    false => state.polling(),
-                };
-                if polls {
-                    say(&format!(
-                        "bot: {}",
-                        state.status.as_deref().unwrap_or_default()
-                    ));
+                if done(&state) {
+                    say(&format!("bot: {}", state.summary()));
                     return Ok(state);
                 }
                 stopped_looks = if state.stopped { stopped_looks + 1 } else { 0 };
@@ -241,7 +293,7 @@ fn wait_polling(
         }
         if Instant::now() >= deadline {
             let seen = last
-                .and_then(|s| s.status)
+                .map(|s| s.summary())
                 .or(last_error)
                 .unwrap_or_else(|| "nothing".into());
             anyhow::bail!(
@@ -253,7 +305,7 @@ fn wait_polling(
 }
 
 fn look(target: &Target) -> anyhow::Result<BotState> {
-    // `bot_state`, not the journal alone: the answer also says whether the station holds a token.
+    // `bot_state`, not the API alone: the answer also says whether the station holds a token.
     bot_state(target)
 }
 

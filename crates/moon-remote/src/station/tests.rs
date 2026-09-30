@@ -86,15 +86,27 @@ fn a_bot_change_touches_only_its_fields() {
     assert_eq!(off["core"][0]["uid"].as_integer(), Some(3));
 }
 
-/// A helper older than the valuation cache's transfer prints no `valuation=`: it is replaced
-/// before any write.
+/// A helper older than the control API prints no `api=`: it is replaced before any write.
 #[test]
 fn an_old_helper_is_told_by_its_status() {
-    // The helper of 2026-09-30 night printed `pairing=` but had no `put-valuation`.
+    // The helper of 2026-09-30 morning had `put-valuation` but no `ctl`.
     assert!(!helper_is_current(
-        "active=active\nconfig=yes\ncreds=core-3\ntoken=no\npairing=no\n"
+        "active=active
+config=yes
+creds=core-3
+token=no
+pairing=no
+valuation=no
+"
     ));
     assert!(helper_is_current(
-        "active=active\nconfig=yes\ncreds=core-3\ntoken=no\npairing=no\nvaluation=no\n"
+        "active=active
+config=yes
+creds=core-3
+token=no
+pairing=no
+valuation=no
+api=no
+"
     ));
 }

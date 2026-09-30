@@ -1,3 +1,5 @@
+use moon_core::config::telegram_access::TelegramChatAccess;
+
 use super::*;
 
 fn scratch(name: &str) -> PathBuf {
@@ -15,7 +17,7 @@ fn a_saved_pairing_reads_back_whole() {
         load_pairing(&path).unwrap().authorized_chat_ids.is_empty(),
         "no file yet is no pairing, not an error"
     );
-    let pairing = Pairing {
+    let pairing = Access {
         authorized_chat_ids: vec![7, 9],
         owner_chat_id: Some(7),
         chat_access: vec![TelegramChatAccess {

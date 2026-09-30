@@ -31,6 +31,7 @@ pub mod order_diag;
 pub mod palette;
 pub mod session;
 pub mod settings_diag;
+pub mod station_api;
 pub mod strat_db;
 pub mod symbol;
 pub mod telegram;

@@ -22,10 +22,12 @@ fn fixture(window: &mut Window, cx: &mut Context<EditorFixture>) -> EditorFixtur
     EditorFixture(TelegramEd {
         segment: TelegramSegment::default(),
         token: input.clone(),
-        active_chat: Some(19),
-        pending_owner: Some(23),
-        name: input.clone(),
-        search: input.clone(),
+        chats: {
+            let mut chats = super::access::ChatEd::new(window, cx);
+            chats.active_chat = Some(19);
+            chats.pending_owner = Some(23);
+            chats
+        },
         history_cores: vec![(71, "archived fixture".into())],
         history_loaded: true,
         history_loading: false,
@@ -71,8 +73,8 @@ fn segment_switch_retains_core_selection_and_bot_editor(cx: &mut gpui::TestAppCo
                 assert_eq!(ed.core.proxy_kind, 1);
                 assert_eq!(ed.token.entity_id(), token);
                 assert_eq!(ed.token.read(cx).value().to_string(), "unsaved fixture");
-                assert_eq!(ed.active_chat, Some(19));
-                assert_eq!(ed.pending_owner, Some(23));
+                assert_eq!(ed.chats.active_chat, Some(19));
+                assert_eq!(ed.chats.pending_owner, Some(23));
                 assert_eq!(ed.history_cores, vec![(71, "archived fixture".into())]);
                 assert_eq!(ed.core.terms_accepted, Some((71, "fixture terms".into())));
                 assert!(ed.core.pending.is_none());

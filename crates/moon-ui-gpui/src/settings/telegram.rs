@@ -1,5 +1,7 @@
 //! Telegram Settings navigation between the terminal bot and the core reader. The bot's segment
-//! also installs the station on a Linux server and hands the bot over to it (`server_bot`).
+//! also installs the station on a Linux server and hands the bot over to it (`server_bot`); with a
+//! station the bot on the server gets the same sections as the terminal's own — access, chats and
+//! their cores, the Mini App — and the terminal's bot is an extra below.
 //!
 //! Edits stay on `Backend.preview` and persist through the existing Save transaction. Live
 //! service status and pairing come from the live service, independently of unsaved edits.
@@ -36,12 +38,8 @@ enum TelegramSegment {
 pub(super) struct TelegramEd {
     segment: TelegramSegment,
     token: Entity<MoonInputState>,
-    /// One expanded chat keeps long client lists compact.
-    active_chat: Option<i64>,
-    /// Ownership transfer requires a second explicit click within the selected chat.
-    pending_owner: Option<i64>,
-    name: Entity<MoonInputState>,
-    search: Entity<MoonInputState>,
+    /// The terminal bot's chat editor; one expanded chat keeps long client lists compact.
+    chats: access::ChatEd,
     /// History candidates are independent of the draft grants so deselection is reversible.
     history_cores: Vec<(u64, String)>,
     history_loaded: bool,
@@ -97,48 +95,20 @@ pub(super) fn build(
         }
     })
     .detach();
-    let name = cx.new(|cx| MoonInputState::new(window, cx));
-    cx.subscribe(&name, |this, emitter, ev: &MoonInputEvent, cx| {
-        if matches!(ev, MoonInputEvent::Change) {
-            let Some(chat) = this.telegram.active_chat else {
-                return;
-            };
-            let value = emitter.read(cx).value().to_string();
-            this.backend.update(cx, |b, bcx| {
-                if let Some(draft) = b.preview.as_mut()
-                    && draft.telegram.authorized_chat_ids.contains(&chat)
-                {
-                    let profile = draft.telegram.chat_profile_mut(chat);
-                    if profile.name != value {
-                        profile.name = value;
-                        bcx.notify();
-                    }
-                }
-            });
-        }
-    })
-    .detach();
-    let search = cx.new(|cx| MoonInputState::new(window, cx));
-    cx.subscribe(&search, |_, _, ev: &MoonInputEvent, cx| {
-        if matches!(ev, MoonInputEvent::Change) {
-            cx.notify();
-        }
-    })
-    .detach();
-    TelegramEd {
+    let ed = TelegramEd {
         segment: TelegramSegment::default(),
         token,
-        active_chat: None,
-        pending_owner: None,
-        name,
-        search,
+        chats: access::ChatEd::new(window, cx),
         history_cores: Vec::new(),
         history_loaded: false,
         history_loading: false,
         history_failed: false,
         core: core_section::build(window, cx),
         server: server_bot::build(window, cx, server_bot::known_server()),
-    }
+    };
+    ed.chats.wire(access::ChatsOf::Terminal, cx);
+    ed.server.chats.wire(access::ChatsOf::Station, cx);
+    ed
 }
 
 impl SettingsView {
@@ -197,8 +167,8 @@ impl SettingsView {
     }
 
     /// Render the bot's segment: without a station, the terminal bot's four sections and the
-    /// station's install form; with one, the server's bot on top, "Also a bot in the terminal"
-    /// opening those four sections, and the station's own actions.
+    /// station's install form; with one, the server's bot on top with the same sections of its
+    /// own, "Also a bot in the terminal" opening the terminal's four, and the station's actions.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -394,7 +364,16 @@ impl SettingsView {
                         )
                     }),
             )
-            .child(self.telegram_chat_access(cx))
+            .child(
+                self.telegram_chat_access(
+                    access::ChatsOf::Terminal,
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.access_save_hint").to_string())
+                        .into_any_element(),
+                    cx,
+                ),
+            )
             .child(
                 MoonGroupBox::new("telegram-mini-section")
                     .title(t!("telegram.section_mini_app").to_string())
@@ -443,6 +422,7 @@ impl SettingsView {
             })
             .when(station_known, |s| {
                 s.child(self.server_bot_block(cx))
+                    .children(self.server_bot_sections(cx))
                     .child(self.server_bot_local_toggle(cx))
             })
             .when(local_on, |s| s.child(local))

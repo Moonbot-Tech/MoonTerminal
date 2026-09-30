@@ -5,9 +5,10 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use moon_core::config::Secret;
+use moon_core::station_api::Access;
 use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
 use moon_remote::ssh::Target;
-use moon_remote::station::bot::{self, BotState, Pairing};
+use moon_remote::station::bot::{self, BotState};
 use moon_remote::station::{self, BotChange, CoreKey, TapeWindow};
 use zeroize::Zeroizing;
 
@@ -18,7 +19,7 @@ pub(crate) enum BotPlan {
     /// Hand the terminal's bot over: its token and its paired chats.
     Transfer {
         token: Secret,
-        pairing: Pairing,
+        pairing: Access,
         change: BotChange,
     },
 }
@@ -48,8 +49,19 @@ pub(crate) enum Job {
         token: Secret,
         change: BotChange,
     },
-    /// Read the station's bot quietly: no lines, no outcome — the bot's status and pairing code.
+    /// Read the station's bot quietly: no lines, no outcome — its status, code and chats.
     BotState { target: Target },
+    /// A pairing code from the station's bot, for one more chat.
+    PairIssue { target: Target },
+    /// Replace the station's paired chats, only while they are still `base` (as read).
+    Access {
+        target: Target,
+        base: Access,
+        access: Access,
+    },
+    /// Switch the station's Mini App on or off: `[telegram] mini_app`, then a restart — the
+    /// station picks its profile at start.
+    MiniApp { target: Target, on: bool },
     /// Read the station's state.
     Status { target: Target },
     /// Read the tail of the station's journal.
@@ -174,6 +186,46 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
             bot: Some(bot::bot_state(&target)?),
             bot_off: false,
         }),
+        Job::PairIssue { target } => {
+            let code = station::api::issue_pairing(&target)?;
+            say(&format!("pairing code issued: /pair {}", code.code));
+            Ok(Done::Ok {
+                transferred: false,
+                bot: Some(bot::bot_state(&target)?),
+                bot_off: false,
+            })
+        }
+        Job::Access {
+            target,
+            base,
+            access,
+        } => {
+            let saved = station::api::set_access(&target, &base, &access)?;
+            say(&format!(
+                "paired chats on the station: {}",
+                saved.authorized_chat_ids.len()
+            ));
+            // Changed permissions restart the bot's transport: its state once it polls again. The
+            // change is saved either way, so a bot slow to come back is a line, not a failure.
+            let state = settled(&target, bot::wait_bot(&target, say), say)?;
+            Ok(Done::Ok {
+                transferred: false,
+                bot: Some(state),
+                bot_off: false,
+            })
+        }
+        Job::MiniApp { target, on } => {
+            let change = BotChange {
+                mini_app: Some(on),
+                ..BotChange::default()
+            };
+            station::push_telegram(&target, None, &change, false, say)?;
+            Ok(Done::Ok {
+                transferred: false,
+                bot: Some(settled(&target, bot::wait_mini_app(&target, on, say), say)?),
+                bot_off: false,
+            })
+        }
         Job::Status { target } => {
             let conn = station::admin_conn(&target)?;
             let out = moon_remote::script::checked(conn.run(
@@ -229,6 +281,21 @@ fn set_bot(target: &Target, plan: BotPlan, say: &mut dyn FnMut(&str)) -> anyhow:
             })
         }
     }
+}
+
+/// The bot's state after a change the station has already taken: what the wait saw, or — when it
+/// did not see the bot settle — why, as a line, and the state as it is now.
+fn settled(
+    target: &Target,
+    waited: anyhow::Result<BotState>,
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<BotState> {
+    waited.or_else(|e| {
+        say(&format!(
+            "the change is saved; the bot has not settled yet: {e:#}"
+        ));
+        bot::bot_state(target)
+    })
 }
 
 /// The administrator and the pinned host key of a server this terminal set up.

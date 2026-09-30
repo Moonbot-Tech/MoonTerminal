@@ -10,8 +10,9 @@
 //! viewers' grants — the station keeps in `telegram.json` in its data root: its own state, which
 //! it rewrites on every pairing. The token is a systemd credential and never lands there.
 //!
-//! No settings page issues a pairing code here: while no chat is paired, the station issues one
-//! itself and logs it, and `moon-remote status --logs` shows it to the administrator.
+//! While no chat is paired the station keeps a pairing code issued itself and logs it. The
+//! terminal's Settings reach the rest through the control API (`api.rs`): the bot's state, a code
+//! for one more chat, and the chats' access read and replaced ([`StationTg::set_access`]).
 
 use std::collections::HashMap;
 use std::io::Write as _;
@@ -23,15 +24,14 @@ use std::time::Instant;
 use anyhow::Context;
 use chrono_tz::Tz;
 use moon_core::config::AppConfig;
-use moon_core::config::telegram_access::TelegramChatAccess;
 use moon_core::session::panic_override::{
     PanicLocal, effective_panic_armed, panic_local_settled, panic_snapshot_armed,
 };
 use moon_core::session::{CoreId, SessionManager};
+use moon_core::station_api::{Access, BotStatus, PairingCode};
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 use moon_tg::{Finish, HostKind, Job, TelegramState, TgHost};
-use serde::{Deserialize, Serialize};
 
 use crate::cores::Telegram;
 
@@ -39,20 +39,6 @@ use crate::cores::Telegram;
 const PAIRING_FILE: &str = "telegram.json";
 /// How often a lasting `Conflict` is warned about again.
 const CONFLICT_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
-
-/// Who may talk to the bot: what pairing changes, saved as the station's state.
-///
-/// Unknown fields are ignored, not refused: a binary rolled back after a newer one wrote the file
-/// must still start its bot. Nothing secret is ever written here — the token is a credential.
-#[derive(Default, Serialize, Deserialize)]
-struct Pairing {
-    #[serde(default)]
-    authorized_chat_ids: Vec<i64>,
-    #[serde(default)]
-    owner_chat_id: Option<i64>,
-    #[serde(default)]
-    chat_access: Vec<TelegramChatAccess>,
-}
 
 /// The bot, the Mini App, and what the station keeps for them between two ticks.
 pub struct StationTg {
@@ -68,8 +54,9 @@ pub struct StationTg {
     finished_rx: Receiver<Finish>,
     /// The pairing code last written to the log, so each is logged once.
     logged_code: Option<String>,
-    /// The bot's and the Mini App's state last written to the log: the journal is the only place
-    /// the station shows them — a 409 from a second poller of the token above all.
+    /// The bot's and the Mini App's state last written to the log, so a change is logged once: the
+    /// administrator's record of them beside the API's live answer — a 409 from a second poller of
+    /// the token above all.
     logged_status: Option<(TelegramStatus, MiniAppStatus)>,
     /// When the last `Conflict` was warned about.
     conflict_logged_at: Option<Instant>,
@@ -150,6 +137,65 @@ impl StationTg {
         tg.offer_pairing(config);
         tg.log_status();
         std::mem::take(&mut tg.reconnect)
+    }
+
+    /// The bot now, for the control API.
+    pub fn status(&self, config: &AppConfig) -> BotStatus {
+        BotStatus {
+            status: self.state.status.clone(),
+            mini_app_on: config.telegram.mini_app_enabled,
+            mini_app: self.state.mini_status.clone(),
+            pairing: self.pairing_code(),
+        }
+    }
+
+    /// A fresh ten-minute code for one more chat; `None` while the bot's transport is not up —
+    /// then the code offered so far stays.
+    pub fn issue_pairing(&mut self) -> Option<PairingCode> {
+        let offered = self.state.pairing.clone();
+        moon_tg::issue_pairing(&mut self.state);
+        if self.state.pairing.is_none() {
+            self.state.pairing = offered;
+            return None;
+        }
+        self.pairing_code()
+    }
+
+    /// Replace the paired chats with `access`, only while they are still `base` — what the
+    /// terminal read before its user edited them; a chat paired here since is not dropped. Saved
+    /// before it is adopted, then applied to the running bot as a terminal's Save applies it: a
+    /// change of permissions restarts the transport, a caption alone does not.
+    pub fn set_access(
+        &mut self,
+        config: &mut AppConfig,
+        base: &Access,
+        access: Access,
+    ) -> Result<Access, String> {
+        if Access::of(&config.telegram) != *base {
+            return Err(
+                "the chats changed on the station after these edits began: discard the edits and make them again".into(),
+            );
+        }
+        access.check()?;
+        write_pairing(&self.pairing_path, &access).map_err(|e| format!("{e:#}"))?;
+        let before = config.telegram.clone();
+        access.apply_to(&mut config.telegram);
+        moon_tg::reconcile(&mut self.state, &config.telegram, &before);
+        log::info!(
+            "telegram: chats replaced by the terminal, {} paired",
+            access.authorized_chat_ids.len()
+        );
+        Ok(access)
+    }
+
+    /// The code the bot accepts now, while it is still accepted.
+    fn pairing_code(&self) -> Option<PairingCode> {
+        let (code, until) = self.state.pairing.as_ref()?;
+        let left = until.saturating_duration_since(Instant::now());
+        (!left.is_zero()).then(|| PairingCode {
+            code: code.clone(),
+            expires_in_s: left.as_secs(),
+        })
     }
 
     /// Ask the bot's transport to stop without waiting: a long poll winds down while the caller
@@ -240,12 +286,7 @@ impl StationHost<'_> {
     ) -> bool {
         let mut candidate = self.config.telegram.clone();
         change(&mut candidate);
-        let pairing = Pairing {
-            authorized_chat_ids: candidate.authorized_chat_ids.clone(),
-            owner_chat_id: candidate.owner_chat_id,
-            chat_access: candidate.chat_access.clone(),
-        };
-        if let Err(e) = write_pairing(&self.tg.pairing_path, &pairing) {
+        if let Err(e) = write_pairing(&self.tg.pairing_path, &Access::of(&candidate)) {
             log::error!("telegram: pairing not saved: {e:#}");
             return false;
         }
@@ -363,19 +404,19 @@ impl TgHost for StationHost<'_> {
 }
 
 /// The saved pairing; none yet is an empty one.
-fn load_pairing(path: &Path) -> anyhow::Result<Pairing> {
+fn load_pairing(path: &Path) -> anyhow::Result<Access> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
             serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Pairing::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Access::default()),
         Err(e) => Err(e).with_context(|| format!("read {}", path.display())),
     }
 }
 
 /// Replace the saved pairing whole: a new file beside it, flushed, then renamed over it — a crash
 /// leaves the old pairing or the new, never half of one.
-fn write_pairing(path: &Path, pairing: &Pairing) -> anyhow::Result<()> {
+fn write_pairing(path: &Path, pairing: &Access) -> anyhow::Result<()> {
     let tmp = path.with_extension("json.new");
     let mut file =
         std::fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;

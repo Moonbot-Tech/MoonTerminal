@@ -20,8 +20,8 @@ const MINI_APP_RETRY_INITIAL: Duration = Duration::from_secs(1);
 /// Cap for Mini App restart backoff on unchanged desired configuration.
 const MINI_APP_RETRY_CAP: Duration = Duration::from_secs(32);
 
-/// Typed Mini App runtime status for Settings and the UI adapter.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Typed Mini App runtime status for Settings, the UI adapter and the station's control API.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MiniAppStatus {
     /// Owner exists but neither listener nor tunnel is running.
     Stopped,
@@ -47,7 +47,7 @@ pub enum MiniAppStatus {
 }
 
 /// Why Mini App start rolled back.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MiniAppFailReason {
     /// Loopback bind or listener thread failed.
     Server,

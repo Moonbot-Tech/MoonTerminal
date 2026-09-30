@@ -139,11 +139,11 @@ pub fn with_telegram(current: &str, change: &BotChange, off: bool) -> anyhow::Re
     Ok(toml::to_string_pretty(&file)?)
 }
 
-/// Whether a helper's `status` comes from this crate's helper: the newest line it prints,
-/// `valuation=` (with `put-valuation`), is the marker. An older helper answers "unknown command"
-/// halfway through a push.
+/// Whether a helper's `status` comes from this crate's helper: the newest line it prints, `api=`
+/// (with `ctl`, the station's control API), is the marker. An older helper answers "unknown
+/// command" halfway through a push.
 fn helper_is_current(status: &str) -> bool {
-    script::value(status, "valuation").is_some()
+    script::value(status, "api").is_some()
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -330,6 +330,7 @@ pub fn put_valuation(
     Ok(())
 }
 
+pub mod api;
 pub mod bot;
 
 #[cfg(test)]

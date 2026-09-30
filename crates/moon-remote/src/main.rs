@@ -177,12 +177,11 @@ fn run() -> anyhow::Result<()> {
             if args.flag("--state") {
                 args.done()?;
                 let state = station::bot::bot_state(&target)?;
-                println!("stopped={}", state.stopped);
-                println!("status={}", state.status.as_deref().unwrap_or("-"));
-                println!(
-                    "pairing_code={}",
-                    state.pairing_code.as_deref().unwrap_or("-")
-                );
+                println!("status={}", state.summary());
+                println!("pairing_code={}", state.pairing_code().unwrap_or("-"));
+                if let Some(access) = &state.access {
+                    println!("chats={:?}", access.authorized_chat_ids);
+                }
                 return Ok(());
             }
             let off = args.flag("--off");
