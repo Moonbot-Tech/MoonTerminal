@@ -23,6 +23,7 @@ pub enum ReleaseCheck {
 
 /// The chat's answer to "Status": the station's status, a line on the latest release, and — only
 /// while a newer release carries the station's binary — the "Update" button under it.
+/// The dispatcher admits only the owner before the host produces this response.
 pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response {
     let mut text = station_status_text(status);
     let line = match release {
@@ -46,7 +47,7 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
                 STATION_UPDATE_CALLBACK,
             )],
         ])),
-        _ => crate::labels::navigation_keyboard(crate::HostKind::Station),
+        _ => crate::labels::navigation_keyboard(crate::HostKind::Station, true),
     };
     Response::Text {
         text,

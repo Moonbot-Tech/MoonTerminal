@@ -4,6 +4,7 @@ use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 use moon_core::config::TelegramConfig;
+use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::commands::ParsedCommand;
 use moon_core::telegram::report::{Period, ReportRequest};
@@ -155,7 +156,12 @@ fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
         t!("telegram.refusal")
     }
     .to_string();
-    let keyboard = saved.then(|| navigation_keyboard(host.kind()));
+    let keyboard = saved.then(|| {
+        navigation_keyboard(
+            host.kind(),
+            host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+        )
+    });
     let _ = reply.try_send(Response::PairSaved {
         saved,
         text,
@@ -163,7 +169,7 @@ fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
     });
 }
 
-/// Answer one chat command from a paired chat.
+/// Answer paired-chat commands; station status and updates require the current owner grant.
 fn run_command(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -183,6 +189,15 @@ fn run_command(
         answer(&reply, t!("telegram.refusal").to_string());
         return;
     }
+    let owner = host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner);
+    if matches!(
+        command,
+        ParsedCommand::StationStatus | ParsedCommand::StationUpdate
+    ) && !owner
+    {
+        answer(&reply, t!("telegram.refusal").to_string());
+        return;
+    }
     match command {
         ParsedCommand::Start => report::telegram_report(
             host,
@@ -193,7 +208,7 @@ fn run_command(
         ParsedCommand::Report(request) => report::telegram_report(host, chat_id, request, reply),
         ParsedCommand::Help => {
             let zone = host.report_zone();
-            let _ = reply.try_send(report::help(&zone.to_string(), host.kind()));
+            let _ = reply.try_send(report::help(&zone.to_string(), host.kind(), owner));
         }
         ParsedCommand::MiniApp => {
             let mini_app_enabled = host.config().telegram.mini_app_enabled;
@@ -225,38 +240,45 @@ fn run_command(
             };
             let keyboard = keyboard
                 .map(ReplyMarkup::Inline)
-                .or_else(|| Some(navigation_keyboard(host.kind())));
+                .or_else(|| Some(navigation_keyboard(host.kind(), owner)));
             let _ = reply.try_send(Response::Text { text, keyboard });
         }
         ParsedCommand::StationStatus => {
             if !host.station_status(reply.clone()) {
-                cannot_run(host, &reply);
+                cannot_run(host, chat_id, &reply);
             }
         }
         ParsedCommand::StationUpdate => {
             let text = match host.request_station_update() {
-                None => return cannot_run(host, &reply),
+                None => return cannot_run(host, chat_id, &reply),
                 Some(Ok(())) => t!("telegram.station.update_requested"),
                 Some(Err(reason)) => t!("telegram.station.update_not_requested", reason = reason),
             };
             let _ = reply.try_send(Response::Text {
                 text: text.to_string(),
-                keyboard: Some(navigation_keyboard(host.kind())),
+                keyboard: Some(navigation_keyboard(
+                    host.kind(),
+                    host.config().telegram.report_access(chat_id)
+                        == Some(TelegramReportAccess::Owner),
+                )),
             });
         }
-        _ => cannot_run(host, &reply),
+        _ => cannot_run(host, chat_id, &reply),
     }
 }
 
-/// A request this bot cannot run: why, and what it can.
-fn cannot_run(host: &dyn TgHost, reply: &SyncSender<Response>) {
+/// Explain an unsupported request with navigation limited to the chat's current role.
+fn cannot_run(host: &dyn TgHost, chat_id: i64, reply: &SyncSender<Response>) {
     let _ = reply.try_send(Response::Text {
         text: format!(
             "{}\n\n{}",
             t!("telegram.invalid"),
             crate::labels::report_help(host.kind())
         ),
-        keyboard: Some(navigation_keyboard(host.kind())),
+        keyboard: Some(navigation_keyboard(
+            host.kind(),
+            host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+        )),
     });
 }
 

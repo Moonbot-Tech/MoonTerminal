@@ -74,8 +74,8 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
-/// `host` words the failure a chat sees when the report does not fit one message.
-pub(super) fn render(page: &Page, host: HostKind) -> Response {
+/// `host` words delivery failures; `owner` limits the persistent station navigation.
+pub(super) fn render(page: &Page, host: HostKind, owner: bool) -> Response {
     let html = report_html(page);
     if !rich_message_fits(&html) {
         return Response::Text {
@@ -88,7 +88,7 @@ pub(super) fn render(page: &Page, host: HostKind) -> Response {
         keyboard: keyboard(page),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host),
+            navigation_keyboard(host, owner),
         ),
     }
 }
@@ -223,8 +223,8 @@ pub(super) fn report_html(page: &Page) -> String {
 /// Help is disposable rich content; a separate permanent message owns persistent navigation.
 ///
 /// `host` picks the lines that say what the bot depends on: a terminal must keep running, a
-/// station reports around the clock.
-pub(crate) fn help(zone: &str, host: HostKind) -> Response {
+/// station reports around the clock. `owner` controls station command help and navigation.
+pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
     let (limits, mini) = match host {
         HostKind::Terminal => ("telegram.help_limits", "telegram.help_mini"),
         HostKind::Station => ("telegram.help_limits_station", "telegram.help_mini_station"),
@@ -247,7 +247,7 @@ pub(crate) fn help(zone: &str, host: HostKind) -> Response {
             escape(&t!(key))
         ));
     }
-    if host == HostKind::Station {
+    if host == HostKind::Station && owner {
         html.push_str(&format!(
             "<p><code>/status</code> &#183; {}</p>",
             escape(&t!("telegram.help_status_station"))
@@ -279,7 +279,7 @@ pub(crate) fn help(zone: &str, host: HostKind) -> Response {
         keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host),
+            navigation_keyboard(host, owner),
         ),
     }
 }

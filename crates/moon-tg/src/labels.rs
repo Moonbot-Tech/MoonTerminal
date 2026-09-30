@@ -58,7 +58,7 @@ pub fn status_text(status: &TelegramStatus) -> String {
 
 /// Global navigation owns periods and help — and on a station its status; report actions remain
 /// inline.
-pub(crate) fn navigation_keyboard(host: crate::HostKind) -> ReplyMarkup {
+pub(crate) fn navigation_keyboard(host: crate::HostKind, owner: bool) -> ReplyMarkup {
     let locale = rust_i18n::locale();
     let button = |(name, icon): (&str, &str)| {
         let key = format!("telegram.button_{name}");
@@ -69,7 +69,7 @@ pub(crate) fn navigation_keyboard(host: crate::HostKind) -> ReplyMarkup {
     };
     let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(button);
     let mut months = vec![month, lastmonth];
-    if host == crate::HostKind::Station {
+    if host == crate::HostKind::Station && owner {
         months.push(button(STATION_STATUS_BUTTON));
     }
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
