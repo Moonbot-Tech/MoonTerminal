@@ -20,9 +20,9 @@ station.error.unreachable:
   en: "The server is unreachable. Check the address, SSH port and network in the Station tab."
   es: "El servidor no está accesible. Comprueba la dirección, el puerto SSH y la red en la pestaña Estación."
 station.error.may_poll:
-  ru: "Станция ещё может опрашивать бота. Уберите бота со станции на вкладке «Станция», прежде чем запускать его в терминале."
-  en: "The station may still poll the bot. Remove the bot from the station in the Station tab before starting it in the terminal."
-  es: "La estación aún puede consultar al bot. Retira el bot de la estación en la pestaña Estación antes de iniciarlo en el terminal."
+  ru: "Станция ещё может опрашивать бота. Нажмите «Снять бота с сервера» на вкладке Telegram, прежде чем запускать его в терминале."
+  en: "The station may still poll the bot. Press Take the bot off the server in the Telegram tab before starting it in the terminal."
+  es: "La estación aún puede consultar al bot. Pulsa Quitar el bot del servidor en la pestaña Telegram antes de iniciarlo en el terminal."
 station.error.EmptyPassword:
   ru: "Введите пароль сервера на вкладке «Станция»."
   en: "Enter the server password in the Station tab."
@@ -244,9 +244,9 @@ station.progress.valuation_failed:
   en: "Valuation cache not sent; the station will calculate it. %{reason}"
   es: "Caché de valoración no enviada; la estación la calculará. %{reason}"
 station.progress.logs:
-  ru: "Журнал станции сохранён в журнале приложения."
-  en: "Station journal copied to the application log."
-  es: "Registro de la estación copiado al registro de la aplicación."
+  ru: "Журнал станции:"
+  en: "Station journal:"
+  es: "Registro de la estación:"
 station.update.updater_missing:
   ru: "На сервере ещё нет помощника обновления. Нажмите «Обновить службу» на вкладке «Станция» в настройках терминала."
   en: "The server has no updater yet. Press Update the service in the Station tab of the terminal Settings."
@@ -283,6 +283,10 @@ station.update.rolled_back:
   ru: "Возвращена прежняя версия; служба работает."
   en: "Previous version restored; the service is healthy."
   es: "Versión anterior restaurada; el servicio funciona."
+station.update.auto_rolled_back:
+  ru: "Новая версия не удержалась; прежняя версия восстановлена и работает."
+  en: "The new version failed; previous version restored and healthy."
+  es: "La nueva versión falló; versión anterior restaurada y funcionando."
 station.update.next_start:
   ru: "Установлено; будет применено при следующем запуске службы."
   en: "Installed; applies at the next service start."

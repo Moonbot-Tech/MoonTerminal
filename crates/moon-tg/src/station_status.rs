@@ -174,6 +174,9 @@ fn update_verdict(raw: &str) -> String {
     let text = match verdict {
         "health=ok" if rollback => t!("station.update.rolled_back"),
         "health=ok" => t!("station.update.healthy"),
+        "error: the new binary did not stay up; the previous one is back" => {
+            t!("station.update.auto_rolled_back")
+        }
         "health=not-started" => t!("station.update.next_start"),
         "health=failed" => t!("station.update.health_failed"),
         "update=running" | "rollback=running" => t!("station.update.running"),
@@ -190,6 +193,7 @@ fn update_verdict(raw: &str) -> String {
     if matches!(
         verdict,
         "health=ok"
+            | "error: the new binary did not stay up; the previous one is back"
             | "health=not-started"
             | "health=failed"
             | "update=running"

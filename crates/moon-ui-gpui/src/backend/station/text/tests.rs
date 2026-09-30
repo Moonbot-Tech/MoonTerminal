@@ -4,6 +4,7 @@ use super::{error, progress};
 use moon_remote::error::StationError;
 use moon_remote::progress::{Progress, Step};
 use moon_remote::ssh::OpenError;
+use moon_remote::station::bot::StationMayStillPoll;
 
 /// Flattening anyhow context into English hides the action in Russian and Spanish Settings.
 #[test]
@@ -45,6 +46,9 @@ fn ssh_headlines_preserve_actions_and_deadlines() {
         password_offered: true,
     });
     assert!(error(&refused).starts_with("The server refused the login."));
+    let held = anyhow::anyhow!(StationError::BotNotReady).context(StationMayStillPoll);
+    let headline = error(&held).lines().next().unwrap().to_owned();
+    assert!(headline.contains("Take the bot off the server in the Telegram tab"));
 }
 
 /// Forwarding helper diagnostics to Event::Line leaks admin= and rmem_max= into progress.

@@ -286,14 +286,7 @@ fn run(
             }
             // The station's own figures, in the words meant for the bot's chat "Status" too.
             let state = bot::bot_state(&target)?;
-            if let Some(station) = &state.station {
-                for line in moon_tg::station_status_text(station).lines() {
-                    say(Progress::Text(line.to_owned()));
-                }
-                if let Some(line) = older_service(&station.station_version) {
-                    say(Progress::Text(line));
-                }
-            }
+            show_status(&state, say);
             Ok(Done::Ok {
                 transferred: false,
                 bot: Some(state),
@@ -307,18 +300,45 @@ fn run(
                 &[],
                 moon_remote::script::STEP_TIMEOUT,
             )?)?;
-            for line in out.stdout_text().lines() {
-                say(Progress::Diagnostic(line.to_owned()));
-            }
-            say(Progress::Text(
-                rust_i18n::t!("station.progress.logs").to_string(),
-            ));
+            show_journal(&out.stdout_text(), say);
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,
                 bot_off: false,
             })
         }
+    }
+}
+
+/// Preserve readable Status feedback even before the service exposes its control API.
+fn show_status(state: &BotState, say: &mut dyn FnMut(Progress)) {
+    if let Some(station) = &state.station {
+        for line in moon_tg::station_status_text(station).lines() {
+            say(Progress::Text(line.to_owned()));
+        }
+        if let Some(line) = older_service(&station.station_version) {
+            say(Progress::Text(line));
+        }
+    } else {
+        let text = if state.stopped {
+            rust_i18n::t!("telegram.server.bot_stopped")
+        } else {
+            rust_i18n::t!("telegram.server.bot_no_api")
+        };
+        say(Progress::Text(text.to_string()));
+    }
+}
+
+/// The explicitly requested journal stays visible beneath a localized heading as details.
+/// This is diagnostic content, distinct from the helper's hidden status/progress tokens.
+fn show_journal(text: &str, say: &mut dyn FnMut(Progress)) {
+    say(Progress::Text(
+        rust_i18n::t!("station.progress.logs").to_string(),
+    ));
+    for line in text.lines() {
+        say(Progress::Text(
+            rust_i18n::t!("station.detail", detail = line).to_string(),
+        ));
     }
 }
 

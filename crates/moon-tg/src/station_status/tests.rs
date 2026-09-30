@@ -188,3 +188,21 @@ fn old_helper_verdicts_and_refusals_are_localized() {
         );
     }
 }
+
+/// The helper publishes its final error line after successful automatic rollback, not health=ok.
+#[test]
+fn automatic_rollback_verdict_describes_the_restored_service() {
+    for (locale, expected) in [
+        ("ru", "прежняя версия восстановлена"),
+        ("en", "previous version restored"),
+        ("es", "versión anterior restaurada"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        let shown = update_verdict(
+            "2026-09-30T14:02Z update from release: error: the new binary did not stay up; the previous one is back",
+        );
+        assert!(shown.contains(expected), "{shown}");
+        assert!(!shown.contains("error:"));
+        assert!(shown.starts_with("2026-09-30T14:02Z "));
+    }
+}
