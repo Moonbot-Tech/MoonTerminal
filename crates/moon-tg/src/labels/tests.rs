@@ -10,7 +10,7 @@ use moon_core::telegram::{
 fn persistent_keyboard_fits_in_two_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Terminal)
+        super::navigation_keyboard(crate::HostKind::Terminal, true)
     else {
         panic!("expected persistent keyboard")
     };
@@ -43,7 +43,7 @@ fn persistent_keyboard_fits_in_two_rows() {
 fn persistent_navigation_buttons_have_recognized_commands() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Terminal)
+        super::navigation_keyboard(crate::HostKind::Terminal, true)
     else {
         panic!("expected persistent keyboard")
     };
@@ -66,7 +66,7 @@ fn persistent_navigation_buttons_have_recognized_commands() {
 fn only_the_station_keyboard_has_its_status() {
     let labels = super::telegram_labels(crate::HostKind::Station);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Station)
+        super::navigation_keyboard(crate::HostKind::Station, true)
     else {
         panic!("expected persistent keyboard")
     };

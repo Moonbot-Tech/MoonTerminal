@@ -2,10 +2,15 @@
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 
-/// Preserve keyboard owners separately from disposable reports and Help.
+use crate::telegram::api::ReplyMarkup;
+
+/// Preserve keyboard messages and their last delivered markup separately from disposable answers.
 #[derive(Default, Serialize, Deserialize)]
 pub(super) struct History {
     pub navigation: BTreeMap<i64, i64>,
+    /// Missing in old history: refresh once so an upgrade replaces role-unaware keyboards.
+    #[serde(default)]
+    pub navigation_markup: BTreeMap<i64, ReplyMarkup>,
     pub answers: BTreeMap<i64, Answer>,
 }
 
@@ -28,6 +33,14 @@ impl Answer {
 }
 
 impl History {
+    /// Replace missing or changed navigation, including after a role or locale change.
+    /// An explicit Start still installs navigation even when its markup is unchanged.
+    pub fn needs_navigation(&self, chat: i64, markup: &ReplyMarkup, start: bool) -> bool {
+        start
+            || !self.navigation.contains_key(&chat)
+            || self.navigation_markup.get(&chat) != Some(markup)
+    }
+
     /// Missing, damaged, or oversized metadata fails closed to no cleanup targets.
     pub fn load(path: &Path) -> Self {
         let read = || -> anyhow::Result<Self> {

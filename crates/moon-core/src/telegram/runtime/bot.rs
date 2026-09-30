@@ -21,6 +21,7 @@ const INVALID_CREDENTIAL_RETRY: Duration = Duration::from_secs(30);
 /// after it stops.
 const CONFLICT_RETRY: Duration = Duration::from_secs(10);
 /// Poll with private-chat pairing and Mini App guards; persistence publication owns admission.
+/// Refresh persisted navigation when the host's current role-filtered keyboard changes.
 pub(super) fn run(
     token: Secret,
     alive: Weak<()>,
@@ -199,10 +200,11 @@ pub(super) fn run(
                     navigation,
                 } => {
                     // Keyboard owners are permanent and never enter answer cleanup tracking.
-                    if is_start || !history.navigation.contains_key(&chat_id) {
+                    if history.needs_navigation(chat_id, &navigation.1, is_start) {
                         match api.send_message(chat_id, &navigation.0, Some(&navigation.1)) {
                             Ok(sent) => {
                                 history.navigation.insert(chat_id, sent.message_id);
+                                history.navigation_markup.insert(chat_id, navigation.1);
                                 if let Some(path) = &history_path {
                                     if let Err(error) = history.save(path) {
                                         log::warn!(

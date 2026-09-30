@@ -49,22 +49,34 @@ pub(crate) fn telegram_report(
         answer(&reply, t!("telegram.refusal").to_string());
         return;
     };
+    let owner = access == TelegramReportAccess::Owner;
     if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         report_notice(
             &reply,
             t!("telegram.access_no_cores").to_string(),
             host.kind(),
+            owner,
         );
         return;
     }
     if host.state().report_pending {
-        report_notice(&reply, t!("telegram.report_busy").to_string(), host.kind());
+        report_notice(
+            &reply,
+            t!("telegram.report_busy").to_string(),
+            host.kind(),
+            owner,
+        );
         return;
     }
     let zone = host.report_zone();
     let now = moon_core::util::time::now_unix_secs() as i64;
     let Some((from, to)) = request.bounds(now, zone) else {
-        report_notice(&reply, crate::labels::report_help(host.kind()), host.kind());
+        report_notice(
+            &reply,
+            crate::labels::report_help(host.kind()),
+            host.kind(),
+            owner,
+        );
         return;
     };
     let order = CoreOrder::new(host.config());
@@ -82,23 +94,24 @@ pub(crate) fn telegram_report(
             }
             match result {
                 Ok(page) => {
-                    let _ = reply.try_send(render(&page, host.kind()));
+                    let _ = reply.try_send(render(&page, host.kind(), owner));
                 }
                 Err(_) => report_notice(
                     &reply,
                     t!("telegram.report_failed").to_string(),
                     host.kind(),
+                    owner,
                 ),
             }
         })
     }));
 }
 
-/// A report read failure still exposes global navigation, including during first /start.
-fn report_notice(reply: &SyncSender<Response>, text: String, host: crate::HostKind) {
+/// A report notice exposes navigation limited to the admission grant, including on /start.
+fn report_notice(reply: &SyncSender<Response>, text: String, host: crate::HostKind, owner: bool) {
     let _ = reply.try_send(Response::Text {
         text,
-        keyboard: Some(navigation_keyboard(host)),
+        keyboard: Some(navigation_keyboard(host, owner)),
     });
 }
 
