@@ -713,7 +713,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                     // cleanup: a switch read and a clock compare each on every tick, a
                     // background pass when one is due.
                     crate::settings::trades_cleanup_startup::tick(b, cx);
-                    crate::analytics::tape_autoload::tick(b, cx);
+                    crate::analytics::tape_autoload::tick(b);
+                    // The station's order traces, once per run a minute after start.
+                    crate::backend::station::pull::tick(b, cx);
                     // A core removed from the session cannot answer what was asked of it; the
                     // drain edge does not fire for a removal, so the slow tick settles those.
                     // Nothing to walk while no ask is out.

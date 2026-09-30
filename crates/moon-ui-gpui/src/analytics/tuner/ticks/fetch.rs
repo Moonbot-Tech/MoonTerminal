@@ -24,6 +24,7 @@ use moon_core::market::trade_replay::{long_position_ms, margin_ms};
 
 pub(crate) mod autoload;
 pub(in crate::analytics::tuner) mod job;
+mod station;
 
 /// How long one blocking receive holds a background-pool thread before checking back.
 const LISTEN_SLICE: Duration = Duration::from_secs(2);

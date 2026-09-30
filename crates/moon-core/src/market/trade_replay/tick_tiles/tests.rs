@@ -200,11 +200,12 @@ fn read_by_source_keeps_each_tile_with_its_source() {
     assert_eq!(times(&runs[0].1), vec![150]);
     assert_eq!(runs[1].0, TileSource::Core);
     assert_eq!(times(&runs[1].1), vec![250]);
-    assert_eq!(
-        TileSource::from_code(TileSource::Core.code()),
-        TileSource::Core
-    );
-    assert_eq!(TileSource::from_code(7), TileSource::Venue);
+    for source in [TileSource::Venue, TileSource::Core, TileSource::Station] {
+        assert_eq!(TileSource::from_code(source.code()), source);
+    }
+    // A newer build's source is neither guessed nor lost: it keeps its code.
+    assert_eq!(TileSource::from_code(7), TileSource::Unknown(7));
+    assert_eq!(TileSource::from_code(7).code(), 7);
 }
 
 fn plan(slices: &[(i64, i64)], trade_len: usize, focus_len: usize) -> TickPlan {

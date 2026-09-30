@@ -64,6 +64,11 @@ pub enum TileSource {
     Venue,
     /// A core's retained trade archive, copied when the trade closed.
     Core,
+    /// The station's recording of the live stream around the trade (STATION.md §4.9).
+    Station,
+    /// A code this build does not know — a newer build's source. Kept as its code, so a row this
+    /// build moves or rewrites keeps the provenance it was filed with.
+    Unknown(i64),
 }
 
 impl TileSource {
@@ -72,14 +77,18 @@ impl TileSource {
         match self {
             Self::Venue => 0,
             Self::Core => 1,
+            Self::Station => 2,
+            Self::Unknown(code) => code,
         }
     }
 
-    /// Inverse of [`Self::code`]; an unknown code reads as the venue, the older of the two.
+    /// Inverse of [`Self::code`].
     pub const fn from_code(code: i64) -> Self {
         match code {
+            0 => Self::Venue,
             1 => Self::Core,
-            _ => Self::Venue,
+            2 => Self::Station,
+            code => Self::Unknown(code),
         }
     }
 }

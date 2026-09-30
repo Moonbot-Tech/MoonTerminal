@@ -63,6 +63,7 @@
 //! garbage — and writes its prints there; the next newer build moves them over.
 
 mod codec;
+mod remote;
 mod trim;
 
 use std::path::PathBuf;
@@ -74,6 +75,7 @@ use rusqlite::OptionalExtension;
 
 use super::tick_tiles::TileSource;
 use crate::feed::types::Tick;
+pub use remote::{TapeFile, decode_prints, encode_prints};
 pub use trim::{Inventory, KeepMap, TrimReport};
 
 /// The two tables prints live in — see the module header's "Layout".
@@ -698,14 +700,20 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
             reply,
         } => {
             let mut dropped = 0i64;
-            let spans =
-                match read_spans_dropping(conn, &exchange, &market, from_ms, to_ms, &mut dropped) {
-                    Ok(spans) => spans,
-                    Err(e) => {
-                        log::warn!("trade cache read failed {exchange}/{market}: {e}");
-                        Vec::new()
-                    }
-                };
+            let spans = match read_spans_dropping(
+                conn,
+                &exchange,
+                &market,
+                from_ms,
+                to_ms,
+                Some(&mut dropped),
+            ) {
+                Ok(spans) => spans,
+                Err(e) => {
+                    log::warn!("trade cache read failed {exchange}/{market}: {e}");
+                    Vec::new()
+                }
+            };
             // A row that did not decode left the file: the ceiling must not keep counting it.
             *held -= dropped;
             let _ = reply.send(spans);
@@ -1001,18 +1009,19 @@ fn read_spans(
     from_ms: i64,
     to_ms: i64,
 ) -> rusqlite::Result<Vec<StoredSpan>> {
-    read_spans_dropping(conn, exchange, market, from_ms, to_ms, &mut 0)
+    read_spans_dropping(conn, exchange, market, from_ms, to_ms, Some(&mut 0))
 }
 
 /// [`read_spans`], adding the blob bytes of every row it deleted to `dropped` — the worker
-/// carries the file's byte count and must take them off it.
+/// carries the file's byte count and must take them off it. `None`: a reader that does not own
+/// the file ([`remote::TapeFile`]) leaves a broken row where it is and only skips it.
 fn read_spans_dropping(
     conn: &rusqlite::Connection,
     exchange: &str,
     market: &str,
     from_ms: i64,
     to_ms: i64,
-    dropped: &mut i64,
+    mut dropped: Option<&mut i64>,
 ) -> rusqlite::Result<Vec<StoredSpan>> {
     let mut out = Vec::new();
     for table in Table::ALL {
@@ -1038,6 +1047,15 @@ fn read_spans_dropping(
                 }
             }
         }
+        let Some(dropped) = dropped.as_deref_mut() else {
+            for (_, _, e) in broken {
+                log::warn!(
+                    "trade cache: a {} span of {exchange}/{market} does not decode ({e}); skipped",
+                    table.name()
+                );
+            }
+            continue;
+        };
         for (rowid, bytes, e) in broken {
             log::warn!(
                 "trade cache: a {} span of {exchange}/{market} does not decode ({e}); dropped to be fetched again",

@@ -1,9 +1,10 @@
 //! The station's control API (`moon_core::station_api`, STATION.md §4.5): a Unix socket in the
 //! runtime directory, and `moon-station ctl`, its client for the helper.
 //!
-//! The socket's thread only moves frames: each request goes to the main loop over a channel and
-//! is answered there, between two drains — the bot's state and the configuration have one owner,
-//! and no lock is taken on them. One exchange per connection, one connection at a time, each read
+//! The socket's thread moves frames: a request about the bot, the configuration or the cores goes
+//! to the main loop over a channel and is answered there, between two drains — they have one
+//! owner, and no lock is taken on them. A read of the station's own files (the terminal's pull,
+//! [`Direct`]) is answered on this thread, so it never holds up the loop. One exchange per connection, one connection at a time, each read
 //! and write bounded by a timeout, so a client that stalls holds the socket for seconds, never
 //! the loop.
 
@@ -36,6 +37,9 @@ struct Call {
     deadline: Instant,
 }
 
+/// The requests this thread answers itself, from files alone; `None` sends one to the main loop.
+pub type Direct = fn(&Request) -> Option<Reply>;
+
 /// The listening socket's side the main loop holds: the requests waiting for an answer.
 pub struct Api {
     calls: Receiver<Call>,
@@ -46,7 +50,7 @@ impl Api {
     /// Listen on `path`, group-readable (`0660`, the service's group); a socket a previous run
     /// left behind is replaced.
     #[cfg(unix)]
-    pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+    pub fn start(path: PathBuf, direct: Direct) -> anyhow::Result<Self> {
         use std::os::unix::fs::PermissionsExt;
         use std::os::unix::net::UnixListener;
 
@@ -61,13 +65,13 @@ impl Api {
         let (tx, calls) = mpsc::channel();
         std::thread::Builder::new()
             .name("api".into())
-            .spawn(move || serve(listener, tx))?;
+            .spawn(move || serve(listener, tx, direct))?;
         Ok(Self { calls, path })
     }
 
     /// No Unix socket off Unix: the station's Windows build is for tests only.
     #[cfg(not(unix))]
-    pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+    pub fn start(path: PathBuf, _direct: Direct) -> anyhow::Result<Self> {
         anyhow::bail!(
             "the control API needs a Unix socket ({} not created)",
             path.display()
@@ -93,7 +97,7 @@ impl Drop for Api {
 }
 
 #[cfg(unix)]
-fn serve(listener: std::os::unix::net::UnixListener, calls: Sender<Call>) {
+fn serve(listener: std::os::unix::net::UnixListener, calls: Sender<Call>, direct: Direct) {
     for stream in listener.incoming() {
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -109,7 +113,7 @@ fn serve(listener: std::os::unix::net::UnixListener, calls: Sender<Call>) {
             .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)));
         if let Err(e) = bounded
             .map_err(anyhow::Error::from)
-            .and_then(|()| exchange(&mut stream, &calls, ANSWER_WITHIN))
+            .and_then(|()| exchange(&mut stream, &calls, ANSWER_WITHIN, direct))
         {
             log::warn!("api: {e:#}");
         }
@@ -122,6 +126,7 @@ fn exchange(
     stream: &mut (impl Read + Write),
     calls: &Sender<Call>,
     within: Duration,
+    direct: Direct,
 ) -> anyhow::Result<()> {
     write_frame(
         stream,
@@ -138,6 +143,9 @@ fn exchange(
             return Err(e.context("read the request"));
         }
     };
+    if let Some(reply) = direct(&request) {
+        return write_frame(stream, &reply);
+    }
     let (reply_tx, reply_rx) = mpsc::sync_channel(1);
     let call = Call {
         request,

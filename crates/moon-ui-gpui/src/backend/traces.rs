@@ -316,6 +316,30 @@ impl TraceResolver {
         self.rev != before
     }
 
+    /// Lines the station answered for a row (STATION.md §4.4): a row this session met without
+    /// lines takes them — settled empty or failed, an ask out or not made, an archive read in
+    /// flight (it no longer speaks for the row). A row not met yet reads them from the archive
+    /// when it is shown (the station's pull names thousands, and slots are for what is on
+    /// screen); a row with lines keeps its own.
+    ///
+    /// Returns:
+    ///     Whether the row changed.
+    pub(crate) fn adopt_pulled(
+        &mut self,
+        core: CoreId,
+        uid: i64,
+        lines: Arc<[ArchivedOrderTrace]>,
+    ) -> bool {
+        if matches!(
+            self.state(core, uid),
+            TraceState::Unknown | TraceState::Lines(_)
+        ) {
+            return false;
+        }
+        self.set(core, uid, TraceState::Lines(lines), 0);
+        true
+    }
+
     /// [`Self::adopt`] for every core in the store, then fail what is pending on a core the store
     /// no longer holds: removed from the session (not merely disconnected — a reconnect keeps its
     /// data), nothing can answer it.
@@ -476,6 +500,21 @@ impl Backend {
     /// on a core's removal; cheap when nothing is pending.
     pub(crate) fn adopt_traces(&mut self, cx: &mut Context<Self>) {
         if self.traces.adopt_all(self.session.store()) {
+            self.notify_traces(cx);
+        }
+    }
+
+    /// Show the lines the station's pull filed on rows already on screen.
+    pub(crate) fn traces_pulled(
+        &mut self,
+        pulled: Vec<(CoreId, i64, Arc<[ArchivedOrderTrace]>)>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        for (core, uid, lines) in pulled {
+            changed |= self.traces.adopt_pulled(core, uid, lines);
+        }
+        if changed {
             self.notify_traces(cx);
         }
     }
