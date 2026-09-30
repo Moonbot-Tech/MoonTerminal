@@ -24,6 +24,7 @@
 //! so a proven core is never examined a second time.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rusqlite::Connection;
 
@@ -51,6 +52,36 @@ struct Knowledge {
     legacy_swept: bool,
     /// Cores proven to own COIN-M rows.
     coin_m: BTreeSet<i64>,
+}
+
+/// Advanced whenever the proven set changes: money SQL built before and after it may differ.
+static REVISION: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the last pass left rows unexamined because a scan failed, so the next pass would
+/// examine them and might prove a core.
+static UNSETTLED: AtomicBool = AtomicBool::new(false);
+
+/// Run `act` and advance [`REVISION`] if it changed the proven set.
+fn tracking<R>(known: &mut Knowledge, act: impl FnOnce(&mut Knowledge) -> R) -> R {
+    let before = known.coin_m.clone();
+    let out = act(known);
+    if known.coin_m != before {
+        REVISION.fetch_add(1, Ordering::AcqRel);
+    }
+    out
+}
+
+/// What money SQL is built from right now, as a revision a caller can compare later.
+///
+/// Returns:
+///     `None` while a later read could still build different SQL with no change a caller could
+///     see: a scan failed and left rows unexamined, or the writer queued an invalidation that the
+///     next read will apply.
+pub(in crate::db) fn knowledge_revision() -> Option<u64> {
+    let before = REVISION.load(Ordering::Acquire);
+    let doubtful = UNSETTLED.load(Ordering::Acquire) || with_pending(|queue| !queue.is_empty());
+    let after = REVISION.load(Ordering::Acquire);
+    (!doubtful && before == after).then_some(before)
 }
 
 /// Run `act` against the process-wide knowledge.
@@ -188,10 +219,12 @@ pub(in crate::db) fn reexamine_core(core: u64) {
 ///     The proven set, empty until [`learn`] finds one.
 pub(super) fn cores() -> BTreeSet<i64> {
     with(|known| {
-        // A wiped core must lose its verdict before the next statement is built, not merely before
-        // the next scan: the SQL this feeds rewrites money.
-        drain_pending(known);
-        known.coin_m.clone()
+        tracking(known, |known| {
+            // A wiped core must lose its verdict before the next statement is built, not merely
+            // before the next scan: the SQL this feeds rewrites money.
+            drain_pending(known);
+            known.coin_m.clone()
+        })
     })
 }
 
@@ -213,21 +246,25 @@ pub(super) fn learn(
     guards: impl Fn(&ReadSource) -> Vec<String>,
 ) {
     with(|known| {
-        drain_pending(known);
-        for src in sources {
-            if !src.cols.contains("core_uid") {
-                continue;
+        tracking(known, |known| {
+            drain_pending(known);
+            let mut settled = true;
+            for src in sources {
+                if !src.cols.contains("core_uid") {
+                    continue;
+                }
+                let predicates = guards(src);
+                if predicates.is_empty() {
+                    continue;
+                }
+                settled &= if src.legacy {
+                    learn_legacy(conn, src, &predicates, known)
+                } else {
+                    learn_replica(conn, src, &predicates, known)
+                };
             }
-            let predicates = guards(src);
-            if predicates.is_empty() {
-                continue;
-            }
-            if src.legacy {
-                learn_legacy(conn, src, &predicates, known);
-            } else {
-                learn_replica(conn, src, &predicates, known);
-            }
-        }
+            UNSETTLED.store(!settled, Ordering::Release);
+        })
     });
 }
 
@@ -241,15 +278,24 @@ pub(super) fn learn(
 ///     src: The legacy source.
 ///     predicates: COIN-M guards over the alias `d`.
 ///     known: Knowledge to extend.
-fn learn_legacy(conn: &Connection, src: &ReadSource, predicates: &[String], known: &mut Knowledge) {
+///
+/// Returns:
+///     `false` when the sweep failed and the table stays unexamined.
+fn learn_legacy(
+    conn: &Connection,
+    src: &ReadSource,
+    predicates: &[String],
+    known: &mut Knowledge,
+) -> bool {
     if known.legacy_swept {
-        return;
+        return true;
     }
     let Some(found) = sweep(conn, src.table, predicates, "1") else {
-        return;
+        return false;
     };
     known.coin_m.extend(found);
     known.legacy_swept = true;
+    true
 }
 
 /// Examine the replica rows that fall outside every examined span.
@@ -262,15 +308,18 @@ fn learn_legacy(conn: &Connection, src: &ReadSource, predicates: &[String], know
 ///     src: The typed replica source.
 ///     predicates: COIN-M guards over the alias `d`.
 ///     known: Knowledge to extend.
+///
+/// Returns:
+///     `false` when a scan failed and some rows stay unexamined.
 fn learn_replica(
     conn: &Connection,
     src: &ReadSource,
     predicates: &[String],
     known: &mut Knowledge,
-) {
+) -> bool {
     let bounded = src.cols.contains("newrecid");
     let Some(present) = cores_present(conn, src.table, bounded) else {
-        return;
+        return false;
     };
     let mut scopes = Vec::new();
     let mut examined = Vec::new();
@@ -315,7 +364,7 @@ fn learn_replica(
         examined.push((core, span));
     }
     if scopes.is_empty() {
-        return; // The whole point: the steady state asks nothing further of the replica.
+        return true; // The whole point: the steady state asks nothing further of the replica.
     }
     let Some(found) = sweep(
         conn,
@@ -323,10 +372,11 @@ fn learn_replica(
         predicates,
         &format!("({})", scopes.join(" OR ")),
     ) else {
-        return;
+        return false;
     };
     known.coin_m.extend(found);
     known.examined.extend(examined);
+    true
 }
 
 /// List the cores a source holds and the row ids each of them spans.

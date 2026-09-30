@@ -46,6 +46,17 @@ impl TgHost for GuiTgHost<'_, '_> {
         moon_core::util::display_time::zone_or_utc(self.backend.header_clock_zone())
     }
 
+    fn report_revision(&self) -> Option<moon_tg::ReportRevision> {
+        let reports = self.backend.reports.as_ref()?;
+        moon_tg::ReportRevision::current(
+            &reports.generation,
+            self.backend
+                .valuation
+                .as_ref()
+                .map(|valuation| &*valuation.generation),
+        )
+    }
+
     fn save_paired_chat(&mut self, chat_id: i64) -> bool {
         let backend = &mut *self.backend;
         let mut candidate = backend.config.clone();

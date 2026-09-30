@@ -5,6 +5,7 @@
 //! [`crate::tick`] — so no method needs to be thread-safe; the only work that leaves that thread
 //! is a [`Job`], and its result comes back through [`Finish`] on the same owner thread.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 
 use chrono_tz::Tz;
@@ -29,6 +30,53 @@ pub enum HostKind {
     Station,
 }
 
+/// The revision of everything a Mini App report or trades read reads besides its request, the
+/// model Analytics refreshes on: a commit of the report replica or of the valuation cache moves it,
+/// and so does any change of whether readers attach the valuation cache or of the process state
+/// report money is built from (`moon_core::db::read_state_revision`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReportRevision {
+    reports: u64,
+    valuation: u64,
+    attach: u64,
+    state: u64,
+}
+
+impl ReportRevision {
+    /// The revision now.
+    ///
+    /// Args:
+    ///     reports: The report writer's generation (`ReportsHandle::generation`).
+    ///     valuation: The valuation worker's generation (`ValuationHandle::generation`), absent
+    ///         where no worker runs and so nothing writes the cache.
+    ///
+    /// Returns:
+    ///     `None` while readers do not attach the valuation cache, or while a read now might not
+    ///     read what an earlier one did (`moon_core::db::read_state_revision`): a read then
+    ///     differs from a later one with no generation to say so.
+    pub fn current(reports: &AtomicU64, valuation: Option<&AtomicU64>) -> Option<Self> {
+        let attach = moon_core::db::valuation::attach_epoch()?;
+        let state = moon_core::db::read_state_revision()?;
+        Some(Self {
+            reports: reports.load(Ordering::Acquire),
+            valuation: valuation.map_or(0, |generation| generation.load(Ordering::Acquire)),
+            attach,
+            state,
+        })
+    }
+
+    /// A revision of given parts, for tests.
+    #[cfg(test)]
+    pub(crate) fn from_parts(reports: u64, valuation: u64, attach: u64, state: u64) -> Self {
+        Self {
+            reports,
+            valuation,
+            attach,
+            state,
+        }
+    }
+}
+
 /// The host of the bot and the Mini App.
 pub trait TgHost {
     /// Which process this is.
@@ -51,6 +99,16 @@ pub trait TgHost {
 
     /// Zone every report and Mini App time is shown in.
     fn report_zone(&self) -> Tz;
+
+    /// The revision of the report data, taken before a Mini App read so a later request can tell
+    /// whether reading again would answer anything new.
+    ///
+    /// Returns:
+    ///     `None` from a host that cannot name it, whose finished reads then answer only for the
+    ///     plain cache TTL.
+    fn report_revision(&self) -> Option<ReportRevision> {
+        None
+    }
 
     /// Persist `chat_id` as paired and adopt the saved configuration.
     ///

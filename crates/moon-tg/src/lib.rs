@@ -26,7 +26,7 @@ mod units;
 mod test_locale;
 
 pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
-pub use host::{Finish, HostKind, Job, TgHost};
+pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::status_text;
 pub use state::TelegramState;
 pub use station_status::{ReleaseCheck, station_status_reply, station_status_text};

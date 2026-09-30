@@ -773,3 +773,16 @@ fn no_route_searches_back_off_and_outage_searches_stay_flat() {
     }
     drop(conn);
 }
+
+/// Every change of attachability moves the epoch, and an unattachable cache has none.
+#[test]
+fn attach_epoch_moves_with_every_health_change() {
+    let _health = test_health_guard();
+    mark_healthy();
+    let healthy = attach_epoch().expect("a healthy cache is attachable");
+    begin_store_validation();
+    assert_eq!(attach_epoch(), None);
+    mark_healthy();
+    let again = attach_epoch().expect("healthy again");
+    assert!(again > healthy, "the round trip must not read as unchanged");
+}

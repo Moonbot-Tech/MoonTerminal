@@ -1,7 +1,7 @@
 //! The Mini App's reads: report, trades, strategies, core status, balances, open orders.
 
 use std::sync::mpsc::SyncSender;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::CoreNames;
@@ -24,17 +24,17 @@ use super::dto::{
 };
 use super::{mini_access, visible_cores};
 
-/// How long a finished report may answer the same chat and period without reading again.
-const REPORT_CACHE_TTL: Duration = Duration::from_secs(15);
+use super::cache::{CachedReport, CachedTrades, ReportInputs, Reuse, TradesInputs, Window, reuse};
 use crate::TgHost;
 use crate::labels::section_label;
 
 /// Read one period off the owner thread, then re-check the grant before replying.
 ///
-/// A finished read is kept for [`REPORT_CACHE_TTL`] so a request that already received
-/// `504` can still pick the result up, but only while the stored admission grant still
-/// equals this chat's current one. A mismatch drops the entry instead of serving it. A request
-/// without a valid cache hit while a read is in flight is `Busy`, even for the same period.
+/// A finished read answers again within the cache TTL, and past it while its inputs are
+/// unchanged (`super::cache`), so a request that already received `504` can still pick the result
+/// up — but only while the stored admission grant still equals this chat's current one. A
+/// mismatch drops the entry instead of serving it. A request without a valid cache hit while a
+/// read is in flight is `Busy`, even for the same period.
 pub(super) fn mini_report(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -45,45 +45,78 @@ pub(super) fn mini_report(
         let _ = reply.try_send(Err(MiniAppApiError::Rejected));
         return;
     };
-    let (serve_cached, drop_cached) = match &host.state().mini_report_last {
-        Some((cached_chat, cached_period, cached_access, at, _))
-            if *cached_chat == chat_id
-                && *cached_period == period
-                && at.elapsed() < REPORT_CACHE_TTL =>
-        {
-            (cached_access == &access, cached_access != &access)
-        }
-        _ => (false, false),
+    // Taken before anything is read: a commit that lands while the read runs moves the revision
+    // past the one the answer is filed under, so that answer is read again rather than kept.
+    let revision = host.report_revision();
+    let zone = host.report_zone();
+    let now = moon_core::util::time::now_unix_secs() as i64;
+    // Same `Period` values the Today / Yesterday / Month / Last month buttons construct.
+    let request = ReportRequest::new(report_period(period), false);
+    let bounds = request.bounds(now, zone);
+    let order = CoreOrder::new(host.config());
+    let names = CoreNames::from_servers(&host.config().servers);
+    let venues = host.session().core_venues().clone();
+    let window = bounds.and_then(|(from, to)| Window::of(from, to, now, zone));
+    let inputs = revision.zip(window).map(|(revision, window)| ReportInputs {
+        revision,
+        window,
+        zone,
+        locale: rust_i18n::locale().to_string(),
+        names: names.clone(),
+        venues: venues.clone(),
+        order: order.clone(),
+    });
+    let verdict = match &host.state().mini_report_last {
+        Some(cached) => reuse(
+            cached.chat == chat_id && cached.period == period,
+            cached.at.elapsed(),
+            cached.access == access,
+            cached.inputs.as_ref(),
+            inputs.as_ref(),
+        ),
+        None => Reuse::Read,
     };
-    if serve_cached {
-        if let Some((_, _, _, _, dto)) = &host.state().mini_report_last {
-            let _ = reply.try_send(Ok(dto.clone()));
+    match verdict {
+        Reuse::Serve => {
+            if let Some(cached) = &host.state().mini_report_last {
+                let _ = reply.try_send(Ok(cached.dto.clone()));
+            }
+            return;
         }
-        return;
-    }
-    if drop_cached {
-        host.state_mut().mini_report_last = None;
+        Reuse::Rebuild => {
+            if let (Some(cached), Some((_, to))) = (&host.state().mini_report_last, bounds) {
+                // The rows as read, answered with the window's end as a read now would carry it.
+                let mut report = cached.report.clone();
+                report.to = to;
+                let _ = reply.try_send(report_dto(report));
+            }
+            return;
+        }
+        Reuse::Drop => host.state_mut().mini_report_last = None,
+        Reuse::Read => {}
     }
     if host.state().mini_report_pending {
         let _ = reply.try_send(Err(MiniAppApiError::Busy));
         return;
     }
-    let zone = host.report_zone();
-    let now = moon_core::util::time::now_unix_secs() as i64;
-    // Same `Period` values the Today / Yesterday / Month / Last month buttons construct.
-    let request = ReportRequest::new(report_period(period), false);
-    let Some((from, to)) = request.bounds(now, zone) else {
+    let Some((from, to)) = bounds else {
         let _ = reply.try_send(Err(MiniAppApiError::ReadFailed));
         return;
     };
-    let order = CoreOrder::new(host.config());
-    let names = CoreNames::from_servers(&host.config().servers);
-    let venues = host.session().core_venues().clone();
     let read_access = access.clone();
+    let ends_now = window.is_some_and(Window::ends_now);
     host.state_mut().mini_report_pending = true;
     host.spawn(Box::new(move || {
-        let result =
-            crate::report::read_mini_report(from, to, zone, order, &names, venues, read_access);
+        let result = crate::report::read_mini_report(
+            from,
+            to,
+            zone,
+            order,
+            &names,
+            venues,
+            read_access,
+            ends_now,
+        );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().mini_report_pending = false;
             if mini_access(host, chat_id).as_ref() != Some(&access) {
@@ -92,10 +125,24 @@ pub(super) fn mini_report(
                 return;
             }
             match result {
-                Ok(report) => match report_dto(report) {
+                Ok(report) => match report_dto(report.clone()) {
                     Ok(dto) => {
-                        host.state_mut().mini_report_last =
-                            Some((chat_id, period, access, Instant::now(), dto.clone()));
+                        let rows_after_to = report.rows_after_to;
+                        // The captions were drawn during the read: a language switched meanwhile
+                        // leaves them in neither language the key could name.
+                        let locale = rust_i18n::locale().to_string();
+                        let inputs = inputs.filter(|inputs| {
+                            inputs.window.holds(rows_after_to) && inputs.locale == locale
+                        });
+                        host.state_mut().mini_report_last = Some(CachedReport {
+                            chat: chat_id,
+                            period,
+                            access,
+                            at: Instant::now(),
+                            inputs,
+                            report,
+                            dto: dto.clone(),
+                        });
                         let _ = reply.try_send(Ok(dto));
                     }
                     Err(error) => {
@@ -112,9 +159,9 @@ pub(super) fn mini_report(
 
 /// Read the latest closed trades off the owner thread, then re-check the grant before replying.
 ///
-/// Same cache and busy rules as [`mini_report`]: a finished read answers the same chat
-/// and grant for [`REPORT_CACHE_TTL`], and a request without a cache hit while a read is in
-/// flight is `Busy`. A read failure is `ReadFailed`, never an empty list.
+/// Same cache and busy rules as [`mini_report`]: a finished read answers the same chat and grant
+/// within the cache TTL, and past it while its inputs are unchanged, and a request without a cache
+/// hit while a read is in flight is `Busy`. A read failure is `ReadFailed`, never an empty list.
 pub(super) fn mini_trades(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -124,29 +171,47 @@ pub(super) fn mini_trades(
         let _ = reply.try_send(Err(MiniAppApiError::Rejected));
         return;
     };
-    let (serve_cached, drop_cached) = match &host.state().mini_trades_last {
-        Some((cached_chat, cached_access, at, _))
-            if *cached_chat == chat_id && at.elapsed() < REPORT_CACHE_TTL =>
-        {
-            (cached_access == &access, cached_access != &access)
-        }
-        _ => (false, false),
+    // Before the read, for the same reason as in `mini_report`.
+    let revision = host.report_revision();
+    let zone = host.report_zone();
+    let names = CoreNames::from_servers(&host.config().servers);
+    let inputs = revision.map(|revision| TradesInputs {
+        revision,
+        zone,
+        names: names.clone(),
+    });
+    let verdict = match &host.state().mini_trades_last {
+        Some(cached) => reuse(
+            cached.chat == chat_id,
+            cached.at.elapsed(),
+            cached.access == access,
+            cached.inputs.as_ref(),
+            inputs.as_ref(),
+        ),
+        None => Reuse::Read,
     };
-    if serve_cached {
-        if let Some((_, _, _, dto)) = &host.state().mini_trades_last {
-            let _ = reply.try_send(Ok(dto.clone()));
+    match verdict {
+        Reuse::Serve => {
+            if let Some(cached) = &host.state().mini_trades_last {
+                let _ = reply.try_send(Ok(cached.dto.clone()));
+            }
+            return;
         }
-        return;
-    }
-    if drop_cached {
-        host.state_mut().mini_trades_last = None;
+        Reuse::Rebuild => {
+            if let Some(cached) = &host.state().mini_trades_last {
+                // The same rows built again: their strategy names, exchanges and "today" are read
+                // from live state, as a new read would read them.
+                let _ = reply.try_send(Ok(trades_dto(&*host, zone, &cached.trades)));
+            }
+            return;
+        }
+        Reuse::Drop => host.state_mut().mini_trades_last = None,
+        Reuse::Read => {}
     }
     if host.state().mini_trades_pending {
         let _ = reply.try_send(Err(MiniAppApiError::Busy));
         return;
     }
-    let zone = host.report_zone();
-    let names = CoreNames::from_servers(&host.config().servers);
     let read_access = access.clone();
     host.state_mut().mini_trades_pending = true;
     host.spawn(Box::new(move || {
@@ -165,16 +230,15 @@ pub(super) fn mini_trades(
             }
             match result {
                 Ok(trades) => {
-                    let now_secs = moon_core::util::now_unix_ms_i64() / 1000;
-                    let dto = TradesDto {
-                        trades: trades
-                            .iter()
-                            .map(|trade| trade_dto(host, zone, now_secs, trade))
-                            .collect(),
-                        limit: u32::try_from(crate::report::MINI_TRADES_LIMIT).unwrap_or(u32::MAX),
-                    };
-                    host.state_mut().mini_trades_last =
-                        Some((chat_id, access, Instant::now(), dto.clone()));
+                    let dto = trades_dto(&*host, zone, &trades);
+                    host.state_mut().mini_trades_last = Some(CachedTrades {
+                        chat: chat_id,
+                        access,
+                        at: Instant::now(),
+                        inputs,
+                        trades,
+                        dto: dto.clone(),
+                    });
                     let _ = reply.try_send(Ok(dto));
                 }
                 Err(_) => {
@@ -183,6 +247,22 @@ pub(super) fn mini_trades(
             }
         })
     }));
+}
+
+/// The Trades tab's answer for rows read from the report, with the page's fields from live state.
+fn trades_dto(
+    host: &dyn TgHost,
+    zone: chrono_tz::Tz,
+    trades: &[crate::report::MiniTrade],
+) -> TradesDto {
+    let now_secs = moon_core::util::now_unix_ms_i64() / 1000;
+    TradesDto {
+        trades: trades
+            .iter()
+            .map(|trade| trade_dto(host, zone, now_secs, trade))
+            .collect(),
+        limit: u32::try_from(crate::report::MINI_TRADES_LIMIT).unwrap_or(u32::MAX),
+    }
 }
 
 /// Strategies of the chat's cores, grouped by folder, with unconfirmed toggles marked.

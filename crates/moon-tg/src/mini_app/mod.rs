@@ -15,6 +15,7 @@ use moon_core::venue::CoreVenue;
 use crate::TgHost;
 use crate::labels::section_label;
 
+pub(crate) mod cache;
 mod commands;
 mod dto;
 mod reads;

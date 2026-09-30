@@ -275,3 +275,25 @@ fn a_wipe_re_arms_the_legacy_sweep() {
         "the legacy rows prove it again"
     );
 }
+
+#[test]
+fn a_changed_proven_set_advances_the_knowledge_revision() {
+    reset();
+    let before = REVISION.load(Ordering::Acquire);
+    with(|known| tracking(known, |known| known.coin_m.insert(9)));
+    // Other tests only ever advance it too, so a strictly later value is all that can be asserted.
+    assert!(REVISION.load(Ordering::Acquire) > before);
+}
+
+#[test]
+fn a_queued_invalidation_withholds_the_knowledge_revision_until_applied() {
+    reset();
+    forget_core(9);
+    assert_eq!(
+        knowledge_revision(),
+        None,
+        "the next read drains it and may build other SQL"
+    );
+    let _ = cores();
+    assert!(with_pending(|queue| queue.is_empty()));
+}

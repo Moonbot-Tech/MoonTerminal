@@ -5,14 +5,13 @@ use std::thread::JoinHandle;
 use std::time::Instant;
 
 use moon_core::config::TelegramConfig;
-use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::session::CoreId;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
-use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto, TradesDto};
 use moon_core::telegram::{TelegramService, TelegramStatus};
 
 use crate::HostKind;
 use crate::labels::telegram_labels;
+use crate::mini_app::cache::{CachedReport, CachedTrades};
 
 /// Process-only service state; no credential is rendered by Debug.
 pub struct TelegramState {
@@ -22,23 +21,18 @@ pub struct TelegramState {
     pub(crate) mini_report_pending: bool,
     /// Last finished Mini App report for one chat, period, and admission grant.
     ///
-    /// A read that outlives the 5 s HTTP wait stays here for 60 s so the page retry can still
-    /// receive it. A hit is served only when the stored grant still equals the chat's current
-    /// admission. Service restart, a failed admission recheck, and a grant mismatch all clear it.
-    pub(crate) mini_report_last: Option<(
-        i64,
-        ReportPeriodDto,
-        TelegramReportAccess,
-        Instant,
-        ReportDto,
-    )>,
+    /// A read that outlives the 5 s HTTP wait stays here so the page retry can still receive it,
+    /// and past the TTL it answers while its inputs are unchanged (`mini_app::cache`). A hit is
+    /// served only when the stored grant still equals the chat's current admission. Service
+    /// restart, a failed admission recheck, and a grant mismatch all clear it.
+    pub(crate) mini_report_last: Option<CachedReport>,
     /// At most one Mini App trades read is computed at a time, including timed-out requests.
     pub(crate) mini_trades_pending: bool,
     /// Last finished Mini App trades read for one chat and admission grant.
     ///
     /// Same lifetime rules as `mini_report_last`: served only to the same grant, cleared on
     /// service restart.
-    pub(crate) mini_trades_last: Option<(i64, TelegramReportAccess, Instant, TradesDto)>,
+    pub(crate) mini_trades_last: Option<CachedTrades>,
     /// Unconfirmed Mini App strategy toggles by `(core, strategy id)`.
     ///
     /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on

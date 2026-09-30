@@ -888,6 +888,7 @@ fn mini_app_names_a_renamed_core_by_its_configured_name() {
         &names,
         Default::default(),
         super::TelegramReportAccess::Owner,
+        false,
         |rows| rows.sort_by_key(|(id, _)| *id),
     )
     .unwrap();
@@ -919,4 +920,40 @@ fn mini_app_names_a_renamed_core_by_its_configured_name() {
             (2, "core-b-gone")
         ]
     );
+}
+
+/// A window ending now learns whether any closed row lies past its end, on the production query.
+#[test]
+fn a_window_ending_now_learns_whether_rows_lie_past_its_end() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER, core_name TEXT, id INTEGER, newrecid INTEGER, coin TEXT, closedate INTEGER, buydate INTEGER, profitbtc REAL, spentbtc REAL, basecurrency INTEGER, emulator INTEGER);
+        INSERT INTO orders_rep VALUES (1,'a',1,1,'BTC',150,120,7,100,0,0),(1,'a',2,2,'ETH',160,120,1,100,0,0),(2,'b',3,3,'SOL',170,120,2,100,0,0);").unwrap();
+    let names = moon_core::db::CoreNames::default();
+    let read = |to, ends_now| {
+        super::read_mini_report_on(
+            &conn,
+            100,
+            to,
+            chrono_tz::UTC,
+            &names,
+            Default::default(),
+            super::TelegramReportAccess::Owner,
+            ends_now,
+            |rows| rows.sort_by_key(|(id, _)| *id),
+        )
+        .unwrap()
+        .rows_after_to
+    };
+    assert_eq!(
+        read(160, true),
+        Some(true),
+        "the row closed at 170 lies past 160"
+    );
+    assert_eq!(
+        read(170, true),
+        Some(false),
+        "the edge itself is inside the window"
+    );
+    assert_eq!(read(200, true), Some(false));
+    assert_eq!(read(160, false), None, "a fixed window does not ask");
 }
