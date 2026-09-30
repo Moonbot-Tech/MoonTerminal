@@ -84,6 +84,8 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) access_base: Option<Access>,
     /// The server's chats as edited here; `None` until read.
     pub(super) access_draft: Option<TelegramConfig>,
+    /// The station's window around a trade, as read and as edited.
+    pub(super) tape: super::server_tape::TapeEd,
 }
 
 impl ServerBotEd {
@@ -138,6 +140,7 @@ pub(in crate::settings) fn build<T: 'static>(
         access_seen: None,
         access_base: None,
         access_draft: None,
+        tape: Default::default(),
     }
 }
 
@@ -256,6 +259,8 @@ impl SettingsView {
             ed.seen_line_seq = line_seq;
             ed.lines_scroll.scroll_to_bottom();
         }
+        self.server_tape_sync(cx);
+        let ed = &mut self.telegram.server;
         // "Also a bot in the terminal" is fixed on first sight of a station: following the draft
         // token live would hide the block while its token is being retyped.
         if ed.known.is_some() && ed.local_bot.is_none() {
@@ -342,7 +347,7 @@ impl SettingsView {
     }
 
     /// Hand `job` to the backend, or show why it cannot start.
-    fn server_bot_run(&mut self, job: Result<Job, String>, cx: &mut Context<Self>) {
+    pub(super) fn server_bot_run(&mut self, job: Result<Job, String>, cx: &mut Context<Self>) {
         match job {
             Ok(job) => {
                 let hand_over = matches!(
@@ -1085,6 +1090,7 @@ impl SettingsView {
                 cx,
             ))
             .child(actions)
+            .child(self.server_tape_block(target, cx))
     }
 
     fn server_bot_progress(&self, cx: &Context<Self>) -> impl IntoElement {

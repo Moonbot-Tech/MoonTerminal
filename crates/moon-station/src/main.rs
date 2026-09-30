@@ -65,6 +65,9 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("ctl") {
         return api::ctl(std::env::args().skip(2));
     }
+    // First of all: until the handlers are in, a SIGHUP (`systemctl reload` right after a start)
+    // would kill the process.
+    let signals = signals::Signals::install()?;
     // The bot's dictionary, built at the base of the stack before anything can reach a `t!`.
     moon_tg::warm_locales();
     let (data_root, config) = args()?;
@@ -93,10 +96,9 @@ fn main() -> anyhow::Result<()> {
         data_root.display()
     );
 
-    let signals = signals::Signals::install()?;
     let config_path = config.unwrap_or_else(|| data_root.join("station.toml"));
     let station = cores::load(&config_path)?;
-    // The terminal's window around a trade, before the recorder builds its first one.
+    // The station's window around a trade (`[tape]`), before the recorder builds its first one.
     apply_tape(&station.tape);
     let profile = station.profile();
     let telegram = station.telegram;
@@ -279,6 +281,11 @@ fn answer(
                 cores_ready,
                 cores_total,
                 bot: bot.map(|bot| bot.status(cfg)),
+                tape: Some(moon_core::station_api::TapeWindow {
+                    margin_s: (moon_core::market::trade_replay::margin_ms() / 1_000) as u32,
+                    long_position_min: (moon_core::market::trade_replay::long_position_ms()
+                        / 60_000) as u32,
+                }),
             }))
         }
         Request::PairIssue => match bot {
@@ -322,7 +329,7 @@ fn same_bot(a: Option<&cores::Telegram>, b: Option<&cores::Telegram>) -> bool {
     }
 }
 
-/// The terminal's window around a trade; absent fields keep what is in force.
+/// The station's window around a trade (`[tape]`); absent fields keep what is in force.
 fn apply_tape(tape: &cores::Tape) {
     if let Some(secs) = tape.margin_s {
         moon_core::market::trade_replay::set_margin_s(secs);

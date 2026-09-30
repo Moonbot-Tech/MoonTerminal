@@ -49,9 +49,19 @@ fn a_status_reads_back_whole() {
                 expires_in_s: 540,
             }),
         }),
+        tape: Some(TapeWindow {
+            margin_s: 180,
+            long_position_min: 10,
+        }),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
+    // A station older than the window answers without it.
+    let old = r#"{"ok":{"status":{"station_version":"0.1.0","cores_ready":1,"cores_total":1,"bot":null}}}"#;
+    let Reply::Ok(Answer::Status(old)) = serde_json::from_str::<Reply>(old).unwrap() else {
+        panic!("not a status");
+    };
+    assert_eq!(old.tape, None);
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
 }

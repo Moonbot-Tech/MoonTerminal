@@ -12,8 +12,8 @@
 //! transport = "v1"   # optional; the key's own mode when absent
 //! ```
 //!
-//! `[tape]` carries the terminal's `[trade_replay]` window, so a trade's tape is recorded as far
-//! around it as the terminal asks for:
+//! `[tape]` is the station's window around a trade — its own, set from the terminal's Settings by
+//! hand (a new station starts with the installing terminal's `[trade_replay]` window):
 //!
 //! ```toml
 //! [tape]
@@ -65,7 +65,7 @@ struct StationFile {
     telegram: Option<TelegramSection>,
 }
 
-/// `[tape]`: the terminal's window around a trade. Absent fields keep the station's own
+/// `[tape]`: the station's window around a trade. Absent fields keep the station's own
 /// `storage.toml` values.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]

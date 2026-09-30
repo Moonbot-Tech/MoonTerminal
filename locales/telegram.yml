@@ -791,6 +791,22 @@ telegram.server.bot_pair:
   ru: "Отправьте боту: /pair %{code}"
   en: "Send the bot: /pair %{code}"
   es: "Envía al bot: /pair %{code}"
+telegram.server.tape_title:
+  ru: "Лента вокруг сделок на станции"
+  en: "The station's tape around trades"
+  es: "La cinta de la estación alrededor de las operaciones"
+telegram.server.tape_hint:
+  ru: "У станции свои значения — те, с которыми она пишет сейчас. Терминал сам их не меняет: поменяй и нажми «Установить»."
+  en: "The station has values of its own — the ones it records with now. The terminal never changes them by itself: change them and press “Set”."
+  es: "La estación tiene sus propios valores: los que usa ahora. El terminal no los cambia por su cuenta: cámbialos y pulsa «Establecer»."
+telegram.server.tape_unknown:
+  ru: "Значения станции ещё не прочитаны: станция не запущена или её служба старше этого терминала («Обновить службу»)."
+  en: "The station's values are not read yet: the station is not running, or its service is older than this terminal (“Update the service”)."
+  es: "Aún no se leyeron los valores de la estación: no está en marcha o su servicio es anterior a este terminal («Actualizar el servicio»)."
+telegram.server.tape_set:
+  ru: "Установить"
+  en: "Set"
+  es: "Establecer"
 telegram.server.status:
   ru: "Статус"
   en: "Status"

@@ -52,18 +52,39 @@ fn a_cores_push_keeps_the_bot_section() {
     let new = "[[core]]\nuid = 3\nname = \"A\"\n";
     let current =
         "[[core]]\nuid = 9\nname = \"Old\"\n\n[telegram]\nmini_app = true\nzone = \"UTC\"\n";
-    let merged: toml::Value = toml::from_str(&keep_telegram(new, Some(current)).unwrap()).unwrap();
+    let merged: toml::Value =
+        toml::from_str(&keep_server_sections(new, Some(current)).unwrap()).unwrap();
     assert_eq!(merged["core"][0]["uid"].as_integer(), Some(3));
     assert_eq!(merged["core"].as_array().unwrap().len(), 1);
     assert_eq!(merged["telegram"]["mini_app"].as_bool(), Some(true));
-    assert_eq!(keep_telegram(new, None).unwrap(), new);
+    assert_eq!(keep_server_sections(new, None).unwrap(), new);
     let bare = "[[core]]\nuid = 9\nname = \"Old\"\n";
     assert!(
-        toml::from_str::<toml::Value>(&keep_telegram(new, Some(bare)).unwrap())
+        toml::from_str::<toml::Value>(&keep_server_sections(new, Some(bare)).unwrap())
             .unwrap()
             .get("telegram")
             .is_none()
     );
+}
+
+/// A cores push never replaces the station's window: the terminal's only starts a station that
+/// has none. The window is set by hand (`push_tape`), never behind the user's back.
+#[test]
+fn a_cores_push_never_replaces_the_stations_window() {
+    let current =
+        "[[core]]\nuid = 9\nname = \"Old\"\n\n[tape]\nmargin_s = 300\nlong_position_min = 20\n";
+    let with_window =
+        "[[core]]\nuid = 3\nname = \"A\"\n\n[tape]\nmargin_s = 180\nlong_position_min = 10\n";
+    let merged: toml::Value =
+        toml::from_str(&keep_server_sections(with_window, Some(current)).unwrap()).unwrap();
+    assert_eq!(merged["tape"]["margin_s"].as_integer(), Some(300));
+    assert_eq!(merged["tape"]["long_position_min"].as_integer(), Some(20));
+    assert_eq!(merged["core"][0]["uid"].as_integer(), Some(3));
+
+    let bare_server = "[[core]]\nuid = 9\nname = \"Old\"\n";
+    let merged: toml::Value =
+        toml::from_str(&keep_server_sections(with_window, Some(bare_server)).unwrap()).unwrap();
+    assert_eq!(merged["tape"]["margin_s"].as_integer(), Some(180));
 }
 
 /// `telegram` changes only the fields it is given, and `--off` removes the section whole.
@@ -86,7 +107,8 @@ fn a_bot_change_touches_only_its_fields() {
     assert_eq!(off["core"][0]["uid"].as_integer(), Some(3));
 }
 
-/// A helper older than the control API prints no `api=`: it is replaced before any write.
+/// A helper older than the compare-and-swap `put-config` prints no `config_cas=`: it is replaced
+/// before any write — it would overwrite what another terminal wrote.
 #[test]
 fn an_old_helper_is_told_by_its_status() {
     // The helper of 2026-09-30 morning had `put-valuation` but no `ctl`.
@@ -99,7 +121,8 @@ pairing=no
 valuation=no
 "
     ));
-    assert!(helper_is_current(
+    // The helper of PR #799/#800: `ctl`, but `put-config` without a base.
+    assert!(!helper_is_current(
         "active=active
 config=yes
 creds=core-3
@@ -109,4 +132,53 @@ valuation=no
 api=no
 "
     ));
+    assert!(helper_is_current(
+        "active=active
+config=yes
+creds=core-3
+token=no
+pairing=no
+valuation=no
+api=no
+config_cas=yes
+"
+    ));
+}
+
+/// The helper's status really prints the marker the terminal looks for.
+#[test]
+fn the_helper_prints_its_marker() {
+    assert!(crate::script::HELPER.contains("echo \"config_cas=yes\""));
+}
+
+/// A changed window rewrites only `[tape]` — the cores and the bot stay as the server has them —
+/// and the window the station already has changes nothing, so no reload is sent.
+#[test]
+fn a_tape_push_changes_only_the_tape_section() {
+    let current = "[[core]]\nuid = 9\nname = \"Old\"\n\n[tape]\nmargin_s = 180\nlong_position_min = 10\n\n[telegram]\nmini_app = true\n";
+    let same = TapeWindow {
+        margin_s: 180,
+        long_position_min: 10,
+    };
+    assert!(with_tape(current, same).unwrap().is_none());
+
+    let moved = TapeWindow {
+        margin_s: 300,
+        long_position_min: 10,
+    };
+    let text = with_tape(current, moved)
+        .unwrap()
+        .expect("a changed window");
+    let back: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(back["tape"]["margin_s"].as_integer(), Some(300));
+    assert_eq!(back["tape"]["long_position_min"].as_integer(), Some(10));
+    assert_eq!(back["core"][0]["uid"].as_integer(), Some(9));
+    assert_eq!(back["telegram"]["mini_app"].as_bool(), Some(true));
+
+    let bare = "[[core]]\nuid = 9\nname = \"Old\"\n";
+    let text = with_tape(bare, same)
+        .unwrap()
+        .expect("a file without [tape] gets one");
+    let back: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
 }

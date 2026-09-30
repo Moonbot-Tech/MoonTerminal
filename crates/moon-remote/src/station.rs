@@ -1,6 +1,10 @@
 //! The station's cores on a prepared server: each core's key into its own encrypted credential,
 //! `station.toml` without a key, a restart. And its bot: the token into the credential
-//! `telegram-token`, `[telegram]` into `station.toml`.
+//! `telegram-token`, `[telegram]` into `station.toml`. And the terminal's window around a trade:
+//! `[tape]` into `station.toml`, a reload.
+//!
+//! Each push rewrites `station.toml` from what the server holds (`edit_config`), and only while
+//! the file is still the one read: several terminals may share one station.
 //!
 //! Only to a server `setup` closed: the administrator must already be recorded in `hosts.toml`,
 //! which `setup` writes only after its key login and sudo rule were verified. A key goes on the
@@ -8,7 +12,9 @@
 
 use anyhow::Context;
 use moon_core::config::{Secret, TransportVersion};
+use moon_core::station_api::{Answer, Request};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 use crate::app_key;
 use crate::hosts::Hosts;
@@ -23,11 +29,20 @@ pub struct CoreKey {
     pub key: Secret,
 }
 
-/// The terminal's window around a trade (`[trade_replay]`), sent as the station's `[tape]`.
-#[derive(Clone, Copy, Serialize)]
-pub struct TapeWindow {
-    pub margin_s: u32,
-    pub long_position_min: u32,
+pub use moon_core::station_api::TapeWindow;
+
+/// This terminal's window around a trade, from its `storage.toml` (Settings -> Storage): what a
+/// new station starts with. Read only when the file exists: loading a missing one would write a
+/// default into the terminal's folder.
+pub fn terminal_tape() -> Option<TapeWindow> {
+    if !moon_core::config::paths::storage_path().exists() {
+        return None;
+    }
+    let cfg = moon_core::config::storage::load().trade_replay;
+    Some(TapeWindow {
+        margin_s: cfg.margin_s,
+        long_position_min: cfg.long_position_min,
+    })
 }
 
 /// `station.toml` as the station reads it: no key, the credential is `core-<uid>`.
@@ -83,23 +98,31 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
     )?)
 }
 
-/// `new` with the `[telegram]` of `current` carried over: the cores and the tape are the
-/// terminal's to push whole, the bot's section is set by its own command.
+/// `new` with the server's own sections carried over from `current`: `[telegram]` (set by the
+/// bot's own command) and `[tape]` (set by hand, `push_tape`) — the window `new` brings is only
+/// what a station without one starts with. The cores are the terminal's to push whole.
 ///
 /// Args:
 ///     new: A freshly built `station.toml`, without `[telegram]`.
 ///     current: The server's `station.toml`, when it has one.
-pub fn keep_telegram(new: &str, current: Option<&str>) -> anyhow::Result<String> {
+pub fn keep_server_sections(new: &str, current: Option<&str>) -> anyhow::Result<String> {
     let Some(current) = current else {
         return Ok(new.to_owned());
     };
     let current: toml::Table = toml::from_str(current).context("the server's station.toml")?;
-    let Some(telegram) = current.get("telegram") else {
-        return Ok(new.to_owned());
-    };
     let mut merged: toml::Table = toml::from_str(new)?;
-    merged.insert("telegram".to_owned(), telegram.clone());
-    Ok(toml::to_string_pretty(&merged)?)
+    let mut changed = false;
+    for section in ["telegram", "tape"] {
+        let Some(value) = current.get(section) else {
+            continue;
+        };
+        merged.insert(section.to_owned(), value.clone());
+        changed = true;
+    }
+    match changed {
+        true => Ok(toml::to_string_pretty(&merged)?),
+        false => Ok(new.to_owned()),
+    }
 }
 
 /// What `moon-remote telegram` changes in `[telegram]`; `None` keeps the server's value.
@@ -139,11 +162,194 @@ pub fn with_telegram(current: &str, change: &BotChange, off: bool) -> anyhow::Re
     Ok(toml::to_string_pretty(&file)?)
 }
 
-/// Whether a helper's `status` comes from this crate's helper: the newest line it prints, `api=`
-/// (with `ctl`, the station's control API), is the marker. An older helper answers "unknown
-/// command" halfway through a push.
+/// `current` with its `[tape]` set to `tape`, or `None` when it already says exactly that — the
+/// other sections (the cores, the bot) as they were.
+///
+/// Args:
+///     current: The server's `station.toml`.
+///     tape: The terminal's window around a trade.
+pub fn with_tape(current: &str, tape: TapeWindow) -> anyhow::Result<Option<String>> {
+    let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
+    let wanted = toml::Value::try_from(tape)?;
+    if file.get("tape") == Some(&wanted) {
+        return Ok(None);
+    }
+    file.insert("tape".to_owned(), wanted);
+    Ok(Some(toml::to_string_pretty(&file)?))
+}
+
+/// Set the station's window around a trade (the user's "Set" in the station's section): `[tape]`
+/// in its `station.toml`, then a reload (SIGHUP) — the station applies the window without a
+/// restart, its cores and bot stay connected. A station already on that window is not touched; a
+/// stopped one takes it at its next start. A server without `station.toml` yet gets a window with
+/// its first cores.
+pub fn push_tape(
+    target: &Target,
+    tape: TapeWindow,
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<()> {
+    // On the steps the station records with, so what it reports back can equal what was sent.
+    let tape = TapeWindow {
+        margin_s: moon_core::config::storage::snap_trade_margin_s(tape.margin_s),
+        long_position_min: moon_core::config::storage::clamp_long_position_min(
+            tape.long_position_min,
+        ),
+    };
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    if script::value(&status, "config") != Some("yes") {
+        say("tape window: the station has no station.toml yet, it comes with the cores");
+        return Ok(());
+    }
+    let wrote = edit_config(&conn, true, |current| match current {
+        Some(current) => with_tape(current, tape),
+        None => Ok(None),
+    })?;
+    let window = format!(
+        "margin {} s, long position from {} min",
+        tape.margin_s, tape.long_position_min
+    );
+    // Asked after the write: a station started meanwhile may have read the file before it.
+    let status = script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
+        .stdout_text();
+    if script::value(&status, "active") != Some("active") {
+        say(&format!(
+            "tape window {}; the station is not running and takes it at its next start: {window}",
+            if wrote {
+                "written"
+            } else {
+                "already in its file"
+            }
+        ));
+        return Ok(());
+    }
+    // A service without the control API cannot say what it records with.
+    if script::value(&status, "api") != Some("yes") {
+        script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
+        say(&format!(
+            "tape window written, the station asked to re-read it (its service does not report \
+             the window: update it): {window}"
+        ));
+        return Ok(());
+    }
+    // The file may already say it while the station does not: an earlier re-read that failed.
+    if wrote || reported_tape(&conn)? != Some(tape) {
+        script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
+    }
+    confirm_tape(&conn, tape, &window, say)
+}
+
+/// The window the running station reports; `None` from a service older than the report.
+fn reported_tape(conn: &Conn) -> anyhow::Result<Option<TapeWindow>> {
+    match api::call(conn, &Request::Status)? {
+        Answer::Status(status) => Ok(status.tape),
+        other => anyhow::bail!("the station answered a status request with {other:?}"),
+    }
+}
+
+/// How long a reloaded station has to report the new window: its main loop takes a reload within
+/// 100 ms, the re-read of `station.toml` is quick.
+const TAPE_APPLIED_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Wait until the running station reports `tape` as the window it records with. A station whose
+/// re-read failed (its log says why) keeps the old window: that is an error here, not a success.
+/// A failed look is only one look until the deadline.
+fn confirm_tape(
+    conn: &Conn,
+    tape: TapeWindow,
+    window: &str,
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + TAPE_APPLIED_WITHIN;
+    loop {
+        let last_chance = std::time::Instant::now() >= deadline;
+        match reported_tape(conn) {
+            Ok(Some(applied)) if applied == tape => {
+                say(&format!("tape window on the station: {window}"));
+                return Ok(());
+            }
+            Ok(None) => {
+                say(&format!(
+                    "tape window written, the station asked to re-read it (its service does not \
+                     report the window: update it): {window}"
+                ));
+                return Ok(());
+            }
+            Ok(Some(applied)) => anyhow::ensure!(
+                !last_chance,
+                "the station still records with margin {} s, long position from {} min: it did \
+                 not take the new window (its journal says why)",
+                applied.margin_s,
+                applied.long_position_min
+            ),
+            Err(e) if last_chance => {
+                return Err(e.context("the window is written; the station did not confirm it"));
+            }
+            Err(_) => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// How many times a push reads `station.toml` again after another terminal changed it meanwhile.
+const CONFIG_TRIES: usize = 3;
+
+/// Rewrite the server's `station.toml` from what it holds now: `build` gets the current text
+/// (`None` before the first push) and returns the new one, or `None` to leave the file as it is.
+/// The helper writes only while the file is still the one read (its sha256), so what another
+/// terminal wrote in between is read again and built on, not overwritten. Whether it wrote.
+///
+/// Args:
+///     conn: The administrator's connection.
+///     exists: Whether the server has the file, as its helper's `status` said.
+///     build: The new file from the current one.
+fn edit_config(
+    conn: &Conn,
+    mut exists: bool,
+    mut build: impl FnMut(Option<&str>) -> anyhow::Result<Option<String>>,
+) -> anyhow::Result<bool> {
+    for _ in 0..CONFIG_TRIES {
+        // The digest of the bytes as the helper hashes them, not of a decoded copy.
+        let current = match exists {
+            true => {
+                let out = script::checked(conn.run(
+                    &script::helper("get-config", &[]),
+                    &[],
+                    STEP_TIMEOUT,
+                )?)
+                .context("read the server's station.toml")?;
+                Some((
+                    out.stdout_text(),
+                    format!("{:x}", Sha256::digest(&out.stdout)),
+                ))
+            }
+            false => None,
+        };
+        let Some(new) = build(current.as_ref().map(|(text, _)| text.as_str()))? else {
+            return Ok(false);
+        };
+        let base = current.map_or_else(|| "none".to_owned(), |(_, digest)| digest);
+        let out = conn.run(
+            &script::helper("put-config", &[&base]),
+            new.as_bytes(),
+            STEP_TIMEOUT,
+        )?;
+        if script::value(&out.stdout_text(), "config") == Some("changed") {
+            exists = true;
+            continue;
+        }
+        script::checked(out)?;
+        return Ok(true);
+    }
+    anyhow::bail!("station.toml kept changing under this push: another terminal is writing it")
+}
+
+/// Whether a helper's `status` comes from this crate's helper: the line added last,
+/// `config_cas=` (`put-config` writes only over the file it was given the digest of), is the
+/// marker. An older helper answers "unknown command" halfway through a push, or overwrites what
+/// another terminal wrote.
 fn helper_is_current(status: &str) -> bool {
-    script::value(status, "api").is_some()
+    script::value(status, "config_cas").is_some()
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -202,16 +408,16 @@ pub fn push_telegram(
         script::value(&status, "config") == Some("yes"),
         "the station has no station.toml yet: send its cores first"
     );
-    let current =
-        run(script::helper("get-config", &[]), &[]).context("read the server's station.toml")?;
-    let config = with_telegram(&current, change, off)?;
     if let Some(token) = token {
         anyhow::ensure!(!token.is_empty(), "the token is empty");
         run(script::helper("put-token", &[]), token.expose().as_bytes())
             .context("token credential")?;
         say("bot token: credential written");
     }
-    run(script::helper("put-config", &[]), config.as_bytes())?;
+    edit_config(&conn, true, |current| {
+        let current = current.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
+        with_telegram(current, change, off).map(Some)
+    })?;
     if off {
         if has_token {
             run(script::helper("drop-token", &[]), &[])?;
@@ -251,14 +457,15 @@ pub fn push_cores(
     // Read before anything is written: an old helper or an unreadable file stops the push here,
     // not between the credentials and the configuration. No file yet is the first push.
     let status = current_helper_status(&conn)?;
-    let current = match script::value(&status, "config") {
-        Some("yes") => Some(
-            run(script::helper("get-config", &[]), &[])
-                .context("read the server's station.toml")?,
-        ),
-        _ => None,
-    };
-    let config = keep_telegram(&station_toml(cores, tape)?, current.as_deref())?;
+    let new = station_toml(cores, tape)?;
+    let exists = script::value(&status, "config") == Some("yes");
+    // A dry run of the merge before any credential is written; the real one below reads the file
+    // again, as it is by then.
+    if exists {
+        let current = run(script::helper("get-config", &[]), &[])
+            .context("read the server's station.toml")?;
+        keep_server_sections(&new, Some(&current))?;
+    }
 
     for core in cores {
         let uid = core.uid.to_string();
@@ -284,7 +491,9 @@ pub fn push_cores(
         run(script::helper("drop-cred", &[uid]), &[])?;
         say(&format!("{stale}: dropped, not in the set"));
     }
-    run(script::helper("put-config", &[]), config.as_bytes())?;
+    edit_config(&conn, exists, |current| {
+        keep_server_sections(&new, current).map(Some)
+    })?;
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;
     for line in status.lines() {

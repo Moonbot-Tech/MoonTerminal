@@ -148,7 +148,7 @@ fn run() -> anyhow::Result<()> {
             };
             let tape = if from_terminal {
                 confirm_keys(&target, &cores)?;
-                terminal_tape()
+                station::terminal_tape()
             } else {
                 None
             };
@@ -260,19 +260,6 @@ fn terminal_cores(picks: &[String]) -> anyhow::Result<Vec<CoreKey>> {
         });
     }
     Ok(cores)
-}
-
-/// The terminal's `[trade_replay]` window for the station's tape. Read only when the file exists:
-/// loading a missing one would write a default into the terminal's folder.
-fn terminal_tape() -> Option<station::TapeWindow> {
-    if !moon_core::config::paths::storage_path().exists() {
-        return None;
-    }
-    let cfg = moon_core::config::storage::load().trade_replay;
-    Some(station::TapeWindow {
-        margin_s: cfg.margin_s,
-        long_position_min: cfg.long_position_min,
-    })
 }
 
 /// A stand-in key: tests the path end to end without any real key leaving this machine.
