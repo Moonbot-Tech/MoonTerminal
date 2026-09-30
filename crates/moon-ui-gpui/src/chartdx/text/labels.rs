@@ -24,6 +24,8 @@ use moon_core::market::{
 use moon_core::util::fmt::{self, DeltaSign};
 use rust_i18n::t;
 
+use super::column_scroll;
+
 use moon_core::feed::order_math::{MONEY_DECIMALS, order_pnl, position_qty};
 
 /// Everything the configured captions can read, in the form they are read in.
@@ -132,6 +134,11 @@ pub(in crate::chartdx) struct LabelInputs {
     pub basis: [BasisStats; 3],
     /// What the pane's market BUTTONS state right now.
     pub actions: ActionInputs,
+    /// First visible line of each scrolled label column, as `(label row, first)`.
+    ///
+    /// Absent means unscrolled. An input like the rest so a scroll re-formats the column through
+    /// the same comparison every other change goes through.
+    pub column_scroll: Vec<(usize, u32)>,
 }
 
 /// What a pressable caption prints, and whether pressing it does anything.
@@ -364,6 +371,34 @@ pub(in crate::chartdx) struct LabelState {
 }
 
 impl LabelState {
+    /// How many lines the scrollable column of label row `row_ix` holds, unwindowed.
+    ///
+    /// `None` when that row draws no column under the configuration last formatted. Read from the
+    /// same inputs and roster the column was built from, so the scroll range and the drawn window
+    /// agree.
+    pub(in crate::chartdx) fn column_len(&self, row_ix: usize) -> Option<usize> {
+        let row = self.cfg.as_ref()?.rows.get(row_ix)?;
+        let part = row
+            .parts
+            .iter()
+            .find(|part| part.is_drawn() && part.field.is_column())?;
+        match part.field {
+            ChartLabelField::ArbColumn => {
+                Some(self.arb_view.as_ref()?.arrange(&self.inputs.arb).len())
+            }
+            ChartLabelField::StrategyFilters => Some(
+                self.inputs
+                    .filter_lines
+                    .iter()
+                    .filter(|line| !line.is_empty())
+                    .count(),
+            ),
+            _ => None,
+        }
+    }
+}
+
+impl LabelState {
     /// Re-format the captions when anything they read has changed.
     ///
     /// Args:
@@ -442,6 +477,7 @@ impl LabelState {
                     // frame. The drawing pass resolves a column's style the same way — first one
                     // wins — so this is the same rule stated once on each side.
                     if !column_drawn {
+                        let first = super::first_of(&self.inputs.column_scroll, row_ix);
                         match part.field {
                             ChartLabelField::ArbColumn => push_arb_rows(
                                 &mut scratch,
@@ -449,12 +485,14 @@ impl LabelState {
                                 &self.inputs,
                                 self.arb_view.as_deref(),
                                 part.resolved_style(),
+                                first,
                             ),
                             ChartLabelField::StrategyFilters => push_filter_rows(
                                 &mut scratch,
                                 row_ix,
                                 row,
                                 &self.inputs.filter_lines,
+                                first,
                             ),
                             _ => {}
                         }
@@ -864,13 +902,15 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
 ///
 /// One line per venue the roster shows, in the roster's order, addressed from [`ARB_PART_BASE`] so
 /// a venue that stops reporting cannot hand its retained run to the venue below it — which would
-/// reshape every line under the gap on every frame.
+/// reshape every line under the gap on every frame. Only the window from `first` is emitted, with
+/// indicator lines for the venues scrolled out of it.
 fn push_arb_rows(
     out: &mut Vec<LabelText>,
     row_ix: usize,
     inputs: &LabelInputs,
     view: Option<&ArbViewCfg>,
     style: moon_core::config::ResolvedLabelStyle,
+    first: u32,
 ) {
     let Some(view) = view else {
         return;
@@ -878,7 +918,8 @@ fn push_arb_rows(
     // Every line of the column shares the caption's style, so the threshold is read once.
     let min_pct = style.color_min_pct;
     // Formatted for the WHOLE column before anything is padded: a column is aligned against its
-    // own widest cell, which cannot be known one line at a time.
+    // own widest cell, which cannot be known one line at a time. Measured over ALL rows, not just
+    // the scrolled window, on purpose: the columns keep their widths while the window scrolls.
     let cells: Vec<ArbCell> = view
         .arrange(&inputs.arb)
         .into_iter()
@@ -929,7 +970,17 @@ fn push_arb_rows(
         .map(|c| c.pct.chars().count())
         .max()
         .unwrap_or(0);
-    for (n, cell) in cells.into_iter().enumerate() {
+    let window = column_scroll::visible_window(cells.len(), first, moon_core::config::ARB_MAX_ROWS);
+    let mut n = 0;
+    if window.above > 0 {
+        out.push(plain_column_line(row_ix, n, more_above(window.above)));
+        n += 1;
+    }
+    for cell in cells
+        .into_iter()
+        .skip(window.range.start)
+        .take(window.range.len())
+    {
         // The venue's NAME is this line's prefix: it is the word, the rest is the figure, and a
         // value-only colour then paints the price and the spread while the venue stays readable.
         let prefix = format!("{:<name_w$} ", cell.label);
@@ -967,6 +1018,37 @@ fn push_arb_rows(
             volume_menu: false,
             action: None,
         });
+        n += 1;
+    }
+    if window.below > 0 {
+        out.push(plain_column_line(row_ix, n, more_below(window.below)));
+    }
+}
+
+/// The "N above" line of a scrolled column.
+fn more_above(n: usize) -> String {
+    t!("chart_labels.column.more_above", n = n).to_string()
+}
+
+/// The "N more" line of a column with rows below its window.
+fn more_below(n: usize) -> String {
+    t!("chart_labels.column.more_below", n = n).to_string()
+}
+
+/// A plain line at column slot `n` (a filter line or an indicator): no venue to click, no action.
+fn plain_column_line(row_ix: usize, n: usize, text: String) -> LabelText {
+    LabelText {
+        row: row_ix,
+        part: ARB_PART_BASE + n,
+        text,
+        prefix: String::new(),
+        sign: None,
+        reachable: false,
+        venue: None,
+        color: None,
+        bar: None,
+        volume_menu: false,
+        action: None,
     }
 }
 
@@ -976,11 +1058,7 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
     let title = crate::controls::row_title(row)
         .unwrap_or_else(|| t!("chart_labels.field.strategy_filters").to_string());
     if row.collapsed {
-        let count = lines
-            .iter()
-            .filter(|line| !line.is_empty())
-            .take(moon_core::config::ARB_MAX_ROWS)
-            .count();
+        let count = lines.iter().filter(|line| !line.is_empty()).count();
         format!("> {title} \u{b7} {count}")
     } else {
         format!("v {title}")
@@ -989,13 +1067,15 @@ fn filter_header(row: &moon_core::config::ChartLabelRow, lines: &[String]) -> St
 
 /// Build the strategy-filter column with its control immediately before the skip reasons.
 ///
-/// The header has its own run; entries are capped at [`moon_core::config::ARB_MAX_ROWS`] in
-/// the shared column range. Folding omits only these entries, preserving ordinary row captions.
+/// The header has its own run; entries share [`moon_core::config::ARB_MAX_ROWS`] lines of the
+/// column range with the indicators of a scrolled window starting at `first`. Folding omits only
+/// these entries, preserving ordinary row captions.
 fn push_filter_rows(
     out: &mut Vec<LabelText>,
     row_ix: usize,
     row: &moon_core::config::ChartLabelRow,
     lines: &[String],
+    first: u32,
 ) {
     out.push(LabelText {
         row: row_ix,
@@ -1014,25 +1094,23 @@ fn push_filter_rows(
     if row.collapsed {
         return;
     }
-    for (n, line) in lines
+    let lines: Vec<&str> = lines
         .iter()
+        .map(String::as_str)
         .filter(|line| !line.is_empty())
-        .take(moon_core::config::ARB_MAX_ROWS)
-        .enumerate()
-    {
-        out.push(LabelText {
-            row: row_ix,
-            part: ARB_PART_BASE + n,
-            text: line.clone(),
-            prefix: String::new(),
-            sign: None,
-            reachable: false,
-            venue: None,
-            color: None,
-            bar: None,
-            volume_menu: false,
-            action: None,
-        });
+        .collect();
+    let window = column_scroll::visible_window(lines.len(), first, moon_core::config::ARB_MAX_ROWS);
+    let mut n = 0;
+    if window.above > 0 {
+        out.push(plain_column_line(row_ix, n, more_above(window.above)));
+        n += 1;
+    }
+    for line in &lines[window.range.clone()] {
+        out.push(plain_column_line(row_ix, n, (*line).to_owned()));
+        n += 1;
+    }
+    if window.below > 0 {
+        out.push(plain_column_line(row_ix, n, more_below(window.below)));
     }
 }
 
@@ -1589,9 +1667,9 @@ pub(crate) fn preview_row(
             let mut lines = Vec::new();
             match part.field {
                 ChartLabelField::StrategyFilters => {
-                    push_filter_rows(&mut lines, 0, row, &inputs.filter_lines)
+                    push_filter_rows(&mut lines, 0, row, &inputs.filter_lines, 0)
                 }
-                _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base),
+                _ => push_arb_rows(&mut lines, 0, &inputs, Some(&preview_roster), base, 0),
             }
             out.extend(lines.into_iter().map(|line| PreviewCaption {
                 column: true,
@@ -1787,6 +1865,7 @@ fn sample_inputs() -> LabelInputs {
             ban_until_ms: Some(4 * 3_600_000 + 12 * 60_000),
             favorite: None,
         },
+        column_scroll: Vec::new(),
     }
 }
 

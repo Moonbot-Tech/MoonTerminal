@@ -1102,6 +1102,36 @@ impl ChartEngine {
         changed
     }
 
+    /// Scroll one label column of a pane by `steps` lines; positive shows the next rows.
+    ///
+    /// The offset is clamped to the column's current length, so a notch past either end changes
+    /// nothing. Returns whether the drawn captions changed: `false` asks for no repaint.
+    pub(crate) fn scroll_label_column(&mut self, pane: usize, row: usize, steps: i32) -> bool {
+        let data = self.data.borrow();
+        let mut st = data.render.borrow_mut();
+        let Some(pr) = st.panes.get_mut(pane) else {
+            return false;
+        };
+        let Some(total) = pr.labels.column_len(row) else {
+            return false;
+        };
+        let cur = crate::chartdx::text::first_of(&pr.label_scroll, row);
+        let cur_c = crate::chartdx::text::clamp_first(i64::from(cur), total);
+        let first = crate::chartdx::text::clamp_first(i64::from(cur_c) + i64::from(steps), total);
+        if first == cur_c && cur_c == cur {
+            return false;
+        }
+        pr.label_scroll.retain(|(r, _)| *r != row);
+        if first > 0 {
+            pr.label_scroll.push((row, first));
+        }
+        let changed = st.refresh_pane_labels(pane);
+        if changed {
+            st.needs_present = true;
+        }
+        changed
+    }
+
     /// The buttons one pane laid out: where each goes, what it does, and the label it was
     /// measured at.
     ///

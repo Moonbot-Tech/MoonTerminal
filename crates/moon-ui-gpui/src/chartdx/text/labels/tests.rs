@@ -69,8 +69,47 @@ fn collapsed_filter_count_uses_the_column_limit_and_handles_empty_data() {
     state.update(&cfg, &view, inputs);
     assert_eq!(
         state.texts[0].text,
-        format!("> Filters \u{b7} {}", moon_core::config::ARB_MAX_ROWS)
+        format!("> Filters \u{b7} {}", moon_core::config::ARB_MAX_ROWS + 1)
     );
+}
+
+/// The filter column of 40 lines through `push_filter_rows`: the unscrolled window dropping
+/// `window.below` (or spending `ARB_MAX_ROWS` on rows alone) hides the "... 9 more" line; the
+/// tail window dropping the "N above" line leaves the reader unable to tell the column is
+/// scrolled. The collapsed header keeps counting the true total, never the drawn window.
+#[test]
+fn a_long_filter_column_shows_its_window_indicators_and_the_true_total() {
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    cfg.rows[0].name = "Filters".into();
+    let lines: Vec<String> = (0..40).map(|i| format!("line{i}")).collect();
+    let view = Rc::new(ArbViewCfg::default());
+    let build = |first: u32, cfg: &ChartLabelsCfg| {
+        let inputs = LabelInputs {
+            filter_lines: lines.clone(),
+            column_scroll: vec![(0, first)],
+            ..Default::default()
+        };
+        let mut state = LabelState::default();
+        state.update(&Rc::new(cfg.clone()), &view, inputs);
+        state
+            .texts
+            .iter()
+            .map(|t| format!("{}{}", t.prefix, t.text))
+            .collect::<Vec<_>>()
+    };
+
+    let top = build(0, &cfg);
+    assert_eq!(top.len(), 1 + 31 + 1, "header, 31 rows, the indicator");
+    assert_eq!(top[1], "line0");
+    assert_eq!(top[31], "line30");
+    assert_eq!(top[32], "... 9 more");
+
+    let tail = build(38, &cfg);
+    assert_eq!(tail, ["v Filters", "^ 38 above", "line38", "line39"]);
+
+    cfg.rows[0].collapsed = true;
+    assert_eq!(build(38, &cfg), ["> Filters \u{b7} 40"]);
 }
 
 /// Emitting the control as the row name reorders mixed captions; folding the row hides its

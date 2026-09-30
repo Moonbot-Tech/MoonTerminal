@@ -313,6 +313,10 @@ pub struct ChartPanel {
     /// Last window scale factor recorded during rendering. The data-prepare path has no `Window`, so
     /// it reuses this value between infrequent DPI changes.
     last_ppp: f32,
+    /// Wheel travel over a label column not yet paid out as a whole scroll step.
+    label_wheel_accum: f32,
+    /// The (pane, label row) `label_wheel_accum` was gathered over; another target starts it afresh.
+    label_wheel_target: Option<(usize, usize)>,
     /// Whether a one-shot timer is armed for the nearest unpinned pane TTL deadline in a numbered
     /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
     /// expiry must not depend on backend data observations.
@@ -767,6 +771,8 @@ impl ChartPanel {
             camera_dirty: false,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
+            label_wheel_accum: 0.0,
+            label_wheel_target: None,
             ttl_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,
@@ -992,6 +998,8 @@ impl ChartPanel {
             camera_dirty: false,
             last_adaptive_notify_at: None,
             last_ppp: 1.0,
+            label_wheel_accum: 0.0,
+            label_wheel_target: None,
             ttl_timer_armed: false,
             order_drag: None,
             pending_order_drag: None,

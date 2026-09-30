@@ -209,6 +209,8 @@ pub(super) enum Row {
     Slot(SlotSpec),
     /// The mirror switch, between the long move rows and the short ones it owns.
     SameForMove,
+    /// The wheel modifier that scrolls the chart's label column.
+    LabelScroll,
     /// The "pull layout from core" preview — the whole of its own page.
     CorePull,
 }
@@ -219,6 +221,7 @@ impl Row {
         match self {
             Self::Slot(spec) => spec.group,
             Self::SameForMove => HotkeyGroup::Mouse,
+            Self::LabelScroll => HotkeyGroup::Chart,
             Self::CorePull => HotkeyGroup::CorePull,
         }
     }
@@ -283,6 +286,7 @@ fn build_rows() -> Vec<Row> {
         key(G::Chart, KeySlot::CenterChart),
         key(G::Chart, KeySlot::ToggleLive),
         key(G::Chart, KeySlot::ChartShot),
+        Row::LabelScroll,
         key(G::Draw, KeySlot::SwitchFigure),
         key(G::Draw, KeySlot::DrawHline),
         key(G::Draw, KeySlot::DrawHorizontalRay),

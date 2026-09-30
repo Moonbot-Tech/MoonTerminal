@@ -418,6 +418,7 @@ impl RenderState {
         // would otherwise keep a button standing where nothing was drawn.
         self.panes[idx].action_rects.clear();
         self.panes[idx].filter_header_hits.clear();
+        self.panes[idx].column_bands.clear();
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -441,12 +442,23 @@ impl RenderState {
         self.panes[idx].arb_hits = hits;
         if let Err(error) = result {
             self.panes[idx].filter_header_hits.clear();
+            self.panes[idx].column_bands.clear();
             // Nothing was drawn: the rectangles cleared before the pass stay cleared, so a press
             // cannot land on a button from a frame that was thrown away, and the build buffer goes
             // back rather than being dropped.
             act_draws.clear();
             self.panes[idx].action_draws = act_draws;
             return Err(error);
+        }
+        // A column's header joins its band only once the column has lines: a collapsed column keeps
+        // no band, so the wheel over its header still pans the chart.
+        {
+            let pane = &mut self.panes[idx];
+            for hit in &pane.filter_header_hits {
+                if pane.column_bands.iter().any(|band| band.row == hit.row) {
+                    crate::chartdx::ColumnBand::grow(&mut pane.column_bands, hit.row, hit.rect);
+                }
+            }
         }
         for bar in &mut bars {
             let sf = geom.scale_factor;
@@ -1354,6 +1366,14 @@ impl RenderState {
                             cfg: self.chart_labels.clone(),
                         });
                 }
+                // A scrollable column's wheel target grows with every line it drew.
+                if item.part >= ARB_PART_BASE {
+                    crate::chartdx::ColumnBand::grow(
+                        &mut self.panes[idx].column_bands,
+                        item.row,
+                        [box_left, y, w, line_h],
+                    );
+                }
                 // The module's right-click target grows with every line of it — the heading, the
                 // figures and the bars beside them — so the menu opens from anywhere on the block.
                 // Independent of the plate: a module with its backing switched off is still a
@@ -1655,6 +1675,7 @@ impl RenderState {
             // Pushed by the panel rather than read here: whether panic is armed and whether the
             // workspace rail is open are the terminal's answers, not the engine's.
             actions: pr.label_actions,
+            column_scroll: pr.label_scroll.clone(),
         };
         let arb_view = self.arb_view.clone();
         let changed = self.panes[idx].labels.update(&cfg, &arb_view, inputs);

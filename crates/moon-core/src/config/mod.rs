@@ -59,7 +59,10 @@ mod wire_id;
 #[cfg(test)]
 mod tests;
 
-pub use arb_view::{ARB_MAX_ROWS, ArbRow, ArbShow, ArbVenueCfg, ArbViewCfg};
+pub use arb_view::{
+    ARB_MAX_ROWS, ArbRow, ArbShow, ArbVenueCfg, ArbViewCfg, LABEL_SCROLL_TAIL,
+    label_scroll_first_max,
+};
 pub use badges::{BadgeEntry, BadgesConfig};
 pub use chart_defaults::{ChartTabDefaults, ChartTabKind};
 pub use chart_labels::{
@@ -88,6 +91,7 @@ pub use hotkeys::{
     GestureSlot, HotkeysConfig, KeySlot, MANUAL_STRATEGY_KEYS, MouseGestureBinding,
     MoveGestureCommand, MoveHalf, MoveKind, MoveKindSlot, MoveSide, ORDER_SIZE_KEYS, Placement,
     SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
+    WheelModifier,
 };
 pub use key_endpoint::endpoint_from_key;
 pub(crate) use key_endpoint::endpoint_from_network;

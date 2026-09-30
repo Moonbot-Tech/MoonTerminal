@@ -506,9 +506,11 @@ fn the_shipped_figure_delete_gesture_is_the_middle_click() {
 /// looking — and because being explicit is the point: a new keystroke field has nowhere to hide.
 /// Adding a gesture without adding it here fails the test too, which is the right direction to
 /// fail in.
-const NOT_KEYSTROKES: [&str; 18] = [
+const NOT_KEYSTROKES: [&str; 19] = [
     // Not a binding at all: the tools excluded from the switch cycle.
     "switch_figure_skip",
+    // A wheel modifier (`WheelModifier`), read at the chart's one wheel entry point.
+    "label_scroll_wheel",
     "fig_delete_click",
     "buy_set_click",
     "short_set_click",
@@ -1153,4 +1155,84 @@ fn super_zoom_slots_load_unbound_and_persist_independently() {
     restored.fill_unbound_slots();
     assert_eq!(restored.key(KeySlot::SuperZoomIn), "ctrl-alt-i");
     assert_eq!(restored.key(KeySlot::SuperZoomOut), "ctrl-alt-o");
+}
+
+/// `WheelModifier::matches` accepting extra modifiers scrolls the label column on a chart zoom or
+/// pan gesture (Alt+Shift, Ctrl+Alt), and `None` matching anything makes a disabled binding steal
+/// the wheel. Oracle: the literal modifier triples below, not the implementation's boolean form.
+#[test]
+fn a_wheel_modifier_matches_only_its_exact_modifier_set() {
+    // (ctrl, shift, alt)
+    let none_held = (false, false, false);
+    let alt = (false, false, true);
+    let alt_shift = (false, true, true);
+    let ctrl = (true, false, false);
+    let shift = (false, true, false);
+    let ctrl_alt = (true, false, true);
+    let all = [none_held, alt, alt_shift, ctrl, shift, ctrl_alt];
+    let cases = [
+        (WheelModifier::Alt, vec![alt]),
+        (WheelModifier::Ctrl, vec![ctrl]),
+        (WheelModifier::Shift, vec![shift]),
+        (WheelModifier::Plain, vec![none_held]),
+        (WheelModifier::None, vec![]),
+    ];
+    for (binding, expected) in cases {
+        let matched: Vec<_> = all
+            .iter()
+            .copied()
+            .filter(|(c, s, a)| binding.matches(*c, *s, *a))
+            .collect();
+        assert_eq!(matched, expected, "{binding:?}");
+    }
+}
+
+/// `HotkeysConfig::label_scroll_wheel` losing its serde default or its tolerant reader makes an
+/// old `hotkeys.toml` fail to load (every hotkey resets) or a value a newer build wrote reset the
+/// user's whole binding set; the default must stay Alt so the wheel keeps panning the chart.
+#[test]
+fn the_label_scroll_wheel_defaults_to_alt_and_survives_a_round_trip() {
+    assert_eq!(
+        HotkeysConfig::default().label_scroll_wheel,
+        WheelModifier::Alt
+    );
+    let empty: HotkeysConfig = toml::from_str("").unwrap();
+    assert_eq!(empty.label_scroll_wheel, WheelModifier::Alt);
+
+    let cfg = HotkeysConfig {
+        label_scroll_wheel: WheelModifier::Ctrl,
+        ..Default::default()
+    };
+    let text = toml::to_string(&cfg).unwrap();
+    assert!(text.contains("label_scroll_wheel = \"ctrl\""), "{text}");
+    let back: HotkeysConfig = toml::from_str(&text).unwrap();
+    assert_eq!(back.label_scroll_wheel, WheelModifier::Ctrl);
+
+    let unknown: HotkeysConfig =
+        toml::from_str("new_long = \"f9\"\nlabel_scroll_wheel = \"hyper\"\n").unwrap();
+    assert_eq!(unknown.label_scroll_wheel, WheelModifier::Alt);
+    assert_eq!(
+        unknown.new_long, "f9",
+        "other fields survive an unknown wheel value"
+    );
+}
+
+/// Downgrade: an older build's struct has no `label_scroll_wheel`. If the new key were written in
+/// a shape an older reader rejects, downgrading would drop the user's whole hotkeys file. A
+/// serde struct without the field and without `deny_unknown_fields` must still parse it.
+#[test]
+fn an_older_reader_without_the_field_still_parses_the_new_file() {
+    #[derive(serde::Deserialize)]
+    struct Old {
+        new_long: String,
+    }
+    let cfg = HotkeysConfig {
+        new_long: "f9".into(),
+        label_scroll_wheel: WheelModifier::Shift,
+        ..Default::default()
+    };
+    let text = toml::to_string(&cfg).unwrap();
+    assert!(text.contains("label_scroll_wheel = \"shift\""), "{text}");
+    let old: Old = toml::from_str(&text).expect("an older build ignores the new key");
+    assert_eq!(old.new_long, "f9");
 }
