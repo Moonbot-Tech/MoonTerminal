@@ -45,9 +45,9 @@ fn malformed_or_unreadable_journal_never_means_no_handover() {
     std::fs::remove_dir(&dir).unwrap();
 }
 
-/// Resuming for a stopped/starting/older station with a token creates conflicting pollers on restart.
+/// Erasing on polling alone loses a different local bot when the server already held a token.
 #[test]
-fn interrupted_transfer_holds_until_polling_or_proven_token_absence() {
+fn interrupted_transfer_holds_even_while_an_unidentified_station_bot_polls() {
     let pending = Pending::new(&Target {
         host: "192.0.2.7".into(),
         port: 22,
@@ -70,9 +70,9 @@ fn interrupted_transfer_holds_until_polling_or_proven_token_absence() {
     });
     assert_eq!(decide(&pending, &state), Decision::Hold);
     state.bot.as_mut().unwrap().status = TelegramStatus::Unpaired;
-    assert_eq!(decide(&pending, &state), Decision::Erase);
+    assert_eq!(decide(&pending, &state), Decision::Hold);
     state.bot.as_mut().unwrap().status = TelegramStatus::Paired { chat_count: 2 };
-    assert_eq!(decide(&pending, &state), Decision::Erase);
+    assert_eq!(decide(&pending, &state), Decision::Hold);
     state.bot = None;
     state.has_token = false;
     assert_eq!(decide(&pending, &state), Decision::Resume);
@@ -80,15 +80,25 @@ fn interrupted_transfer_holds_until_polling_or_proven_token_absence() {
     assert_eq!(decide(&pending, &state), Decision::Resume);
 }
 
-/// Losing erase_pending after the confirmed transfer can resurrect a bot whose disk erase failed.
+/// Prioritizing erase_pending over proven absence deletes the local bot after "Take bot off".
 #[test]
-fn confirmed_transfer_retries_erasure_even_when_bot_is_now_absent() {
+fn taking_bot_off_returns_ownership_after_a_failed_local_erase() {
     let mut pending = Pending::new(&Target {
         host: "192.0.2.7".into(),
         port: 22,
     });
     pending.erase_pending = true;
-    assert_eq!(decide(&pending, &BotState::default()), Decision::Erase);
+    assert_eq!(decide(&pending, &BotState::default()), Decision::Resume);
+    assert_eq!(
+        decide(
+            &pending,
+            &BotState {
+                has_token: true,
+                ..BotState::default()
+            }
+        ),
+        Decision::Erase
+    );
     assert_eq!(
         decide(
             &pending,

@@ -46,13 +46,15 @@ pub(super) enum Decision {
 
 /// A token on a stopped/older/starting station is still ownership, never permission to poll locally.
 pub(super) fn decide(pending: &Pending, state: &BotState) -> Decision {
-    if state.has_token && (state.stopped || state.no_api) {
-        Decision::Hold
-    } else if pending.erase_pending || state.polling() {
-        Decision::Erase
-    } else if !state.has_token && state.bot.is_none() {
+    if !state.has_token && state.bot.is_none() {
+        // Taking the bot off the server returns ownership even after a failed local erase.
         Decision::Resume
+    } else if state.has_token && (state.stopped || state.no_api) {
+        Decision::Hold
+    } else if pending.erase_pending {
+        Decision::Erase
     } else {
+        // Polling alone cannot distinguish this transfer from a different bot already on the server.
         Decision::Hold
     }
 }
