@@ -148,9 +148,21 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let (feed_wake_tx, feed_wake_rx) = std::sync::mpsc::channel::<()>();
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
+    // Read ownership BEFORE creating TelegramState: its constructor starts saved transport.
+    let station = crate::backend::station::StationJobs::load();
+    let telegram = if station.holds_bot() {
+        let mut state = moon_tg::TelegramState::new(
+            &moon_core::config::TelegramConfig::default(),
+            moon_tg::HostKind::Terminal,
+        );
+        state.suspend();
+        state
+    } else {
+        moon_tg::TelegramState::new(&cfg.telegram, moon_tg::HostKind::Terminal)
+    };
     let backend = cx.new(|_| Backend {
-        telegram: moon_tg::TelegramState::new(&cfg.telegram, moon_tg::HostKind::Terminal),
-        station: Default::default(),
+        telegram,
+        station,
         updater: updater.clone(),
         session: SessionManager::start(
             &cfg,
@@ -338,6 +350,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategy_edit_watches: Vec::new(),
         strategy_edit_note_cursor: HashMap::new(),
     });
+    backend.update(cx, |b, cx| b.station_recover(cx));
     backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
     // The user's sounds folder, read off-thread and swapped in whole; the embedded set answers
     // until it lands. Here rather than earlier because the data-directory override (a fixture

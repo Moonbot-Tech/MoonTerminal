@@ -74,6 +74,24 @@ pub(crate) enum Job {
     Logs { target: Target },
 }
 
+impl Job {
+    /// The destination of an actual hand-over; a caller flag alone cannot create ownership.
+    pub(super) fn handover_target(&self) -> Option<&Target> {
+        match self {
+            Self::Install {
+                setup,
+                bot: BotPlan::Transfer { .. },
+                ..
+            } => Some(&setup.target),
+            Self::Bot {
+                target,
+                bot: BotPlan::Transfer { .. },
+            } => Some(target),
+            _ => None,
+        }
+    }
+}
+
 /// What a finished job reports.
 pub(crate) enum Done {
     /// The station stopped polling and removed its bot; recovered data may be saved locally.

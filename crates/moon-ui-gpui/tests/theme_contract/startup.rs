@@ -2,6 +2,48 @@
 
 use super::support::*;
 
+/// Moving saved transport construction before the ownership check briefly starts a second poller.
+#[test]
+fn station_handover_gates_saved_transport_before_startup() {
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let load = boot.find("StationJobs::load()").unwrap();
+    let gate = boot.find("if station.holds_bot()").unwrap();
+    let saved = boot
+        .find("moon_tg::TelegramState::new(&cfg.telegram")
+        .unwrap();
+    assert!(load < gate && gate < saved);
+    let held = braced_body(&boot, "if station.holds_bot()");
+    assert!(held.contains("TelegramConfig::default()") && held.contains("state.suspend()"));
+    assert!(!held.contains("&cfg.telegram"));
+    assert!(boot.contains("b.station_recover(cx)"));
+}
+
+/// Publishing after suspension or launching after write failure loses ownership when the app dies.
+#[test]
+fn station_handover_publishes_before_suspend_and_remote_work() {
+    let station = code_only(&read_src("backend/station.rs"));
+    let begin = braced_body(&station, "fn station_begin(");
+    let publish = begin.find("recovery::save(").unwrap();
+    let refused = begin.find("if saved.is_err()").unwrap();
+    let suspend = begin.find("self.telegram.suspend()").unwrap();
+    let start = begin.find("job::start(job)").unwrap();
+    assert!(publish < refused && refused < suspend && suspend < start);
+    assert!(braced_body(begin, "if saved.is_err()").contains("return;"));
+    let erase = braced_body(&station, "fn station_erase_local_bot(");
+    assert!(
+        erase.find("pending.erase_pending = true").unwrap()
+            < erase.find("candidate.save_telegram()").unwrap()
+    );
+    assert!(
+        erase.find("candidate.save_telegram()").unwrap()
+            < erase.find("self.station_clear_handover()?").unwrap()
+    );
+    assert!(
+        erase.find("self.station_clear_handover()?").unwrap()
+            < erase.find("self.telegram.resume(").unwrap()
+    );
+}
+
 /// Removing startup reconciliation, the setter's dirty write, or the background snapshot dispatch
 /// would leave first-run and upgraded profiles on UTC after the next reboot even though detection
 /// worked.

@@ -1005,6 +1005,10 @@ telegram.server.erase_failed:
   ru: "Бот работает на сервере, но токен в терминале удалить не удалось"
   en: "The bot runs on the server, but deleting the terminal's token failed"
   es: "El bot funciona en el servidor, pero no se pudo borrar el token del terminal"
+telegram.server.handover_save_failed:
+  ru: "Не удалось сохранить передачу бота. Задача не запущена; сначала устраните ошибку записи или завершите предыдущую передачу."
+  en: "Could not save the bot hand-over. The job was not started; resolve the write failure or the previous hand-over first."
+  es: "No se pudo guardar la transferencia del bot. La tarea no se inició; resuelve el error de escritura o la transferencia anterior."
 telegram.server.need_host:
   ru: "Укажите IP сервера (можно с портом: 1.2.3.4:2222)."
   en: "Enter the server IP (a port may follow: 1.2.3.4:2222)."
