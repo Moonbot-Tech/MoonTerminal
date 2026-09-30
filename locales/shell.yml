@@ -1476,6 +1476,16 @@ chart.coin.cores:
   ru: "Ядер: %{n}"
   en: "Cores: %{n}"
   es: "Núcleos: %{n}"
+# The same count when some of those cores already hold an open order or position on the coin.
+chart.coin.cores_in_trade:
+  ru: "Ядер: %{n}, в торговле: %{k}"
+  en: "Cores: %{n}, in trade: %{k}"
+  es: "Núcleos: %{n}, operando: %{k}"
+# Tooltip of the dot marking a core that already trades the coin.
+chart.coin.in_trade_tip:
+  ru: "На этом ядре уже есть открытый ордер или позиция по этому рынку"
+  en: "This core already has an open order or position on this market"
+  es: "Este núcleo ya tiene una orden o posición abierta en este mercado"
 # The only line under the logo of an empty Main chart stack. It names the ONE gesture that exists:
 # there is no double-click on a core row that opens a chart.
 chart.empty.hint:

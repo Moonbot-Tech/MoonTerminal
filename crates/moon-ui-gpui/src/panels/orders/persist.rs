@@ -17,6 +17,13 @@ impl OrdersPanel {
     ) -> Self {
         let mut this = Self::new(backend, group, window, cx);
         this.view = view_from_info(info);
+        // The coin filter persists beside the view's other filters. `set_value` emits no Change, so
+        // the mirror is set by hand; the rebuild below then filters by it.
+        if let Some(coin) = coin_from_info(info) {
+            this.coin_input
+                .update(cx, |input, cx| input.set_value(coin.clone(), window, cx));
+            this.coin_query = coin;
+        }
         // A per-context visible-column set in shared storage overrides the legacy `docks.json` set.
         // Without one, the legacy set remains as a migration seed until the first column toggle
         // writes it to shared storage.
@@ -197,6 +204,17 @@ fn view_from_info(info: &PanelInfo) -> OrdersViewState {
 ///
 /// Ignoring unknown keys tolerates stale or malformed persistence data. An empty result leaves the
 /// table's default [`OrdCol::ALL`] order in effect.
+/// The saved coin filter, trimmed, or `None` when there is none to restore.
+fn coin_from_info(info: &PanelInfo) -> Option<String> {
+    let PanelInfo::Panel(j) = info else {
+        return None;
+    };
+    j.get("coin")
+        .and_then(|x| x.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 fn column_order_from_info(info: &PanelInfo) -> Vec<SharedString> {
     let PanelInfo::Panel(j) = info else {
         return Vec::new();

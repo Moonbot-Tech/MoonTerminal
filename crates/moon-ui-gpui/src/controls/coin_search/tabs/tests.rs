@@ -22,6 +22,7 @@ fn hit(core: CoreId, coin: &str) -> CoinHit {
             contract: None,
         },
         venue: None,
+        in_trade: false,
     }
 }
 

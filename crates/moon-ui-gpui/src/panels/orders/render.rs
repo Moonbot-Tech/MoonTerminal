@@ -43,6 +43,7 @@ impl Panel for OrdersPanel {
                 "kind": self.view.kind.to_u8(),
                 "newest_first": self.view.newest_first,
                 "only_current": self.view.only_current_market,
+                "coin": self.coin_query,
                 "main_on_top": self.view.main_on_top.to_u8(),
                 // Store visible columns as stable keys rather than a mask so enum reordering is
                 // harmless. A missing field restores every column as visible.
@@ -128,7 +129,17 @@ impl Render for OrdersPanel {
             .px_2()
             .py_1()
             .child(self.source_combo(&cores, cx))
-            .child(self.kind_combo(cx));
+            .child(self.kind_combo(cx))
+            // Sized as the Alerts and Report coin fields are; at a narrow panel it shrinks toward a
+            // floor that still shows a few letters rather than pushing the menus off the bar.
+            .child(
+                div().w(px(90.0)).min_w(px(48.0)).flex_shrink(1.0).child(
+                    MoonInput::new("orders-coin")
+                        .state(&self.coin_input)
+                        .size(design::INPUT_SIZE)
+                        .cleanable(true),
+                ),
+            );
         if view.only_current_market {
             controls = controls.child(
                 div()

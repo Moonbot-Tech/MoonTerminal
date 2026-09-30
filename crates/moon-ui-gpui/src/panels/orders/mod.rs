@@ -11,6 +11,7 @@
 //! Responsibilities are split across this module for state, view, and lifecycle;
 //! [`controls`] for field selectors and sort menus; and [`table`] for table columns and cells.
 
+mod coin_filter;
 mod controls;
 mod persist;
 mod render;
@@ -30,8 +31,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonButtonSize, MoonButtonVariant, MoonDataCell, MoonDataRow, MoonDataTable,
-    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonMenuItem, MoonPalette, MoonTone,
-    Panel, PanelEvent, PanelInfo, PanelState, h_flex, v_flex,
+    MoonDataTableColumn, MoonDataTableState, MoonDropdown, MoonInput, MoonInputEvent,
+    MoonInputState, MoonMenuItem, MoonPalette, MoonTone, Panel, PanelEvent, PanelInfo, PanelState,
+    h_flex, v_flex,
 };
 
 use rust_i18n::t;
@@ -64,6 +66,8 @@ struct OrdersCacheKey {
     /// Canonically ordered effective scope; any Classic or Auto scope change changes the row set.
     scope_cores: Vec<CoreId>,
     current: Option<(CoreId, String)>,
+    /// The coin filter's text; typing changes the row set.
+    coin: String,
     /// Markets open in the group's Main stack; changes affect row highlighting and ordering.
     main_open: Vec<(CoreId, String)>,
 }
@@ -76,6 +80,11 @@ pub struct OrdersPanel {
     /// Retained Classic multi-select core filter; an empty set means every group core. Auto mode
     /// pins its effective workspace scope without using or mutating this selection.
     pub(super) sel_cores: HashSet<CoreId>,
+    /// The toolbar's coin filter field.
+    pub(super) coin_input: Entity<MoonInputState>,
+    /// Trimmed mirror of [`Self::coin_input`], so a rebuild from the backend observer (which has
+    /// no input to read) filters by it. Persisted with the view's other filters.
+    pub(super) coin_query: String,
     /// Repaint gate for frequent order and market-driven price/PnL updates.
     ///
     /// `RenderGate` accepts a signature change or new one-second bucket subject to a 250 ms floor,
@@ -142,7 +151,7 @@ impl OrdersPanel {
     /// Args:
     ///     backend: Shared terminal state and workspace authority.
     ///     group: Window group whose cores supply order rows.
-    ///     _window: Owning window; retained for the panel-constructor contract.
+    ///     window: Owning window, which the coin filter field is created in.
     ///     cx: Panel context used to create table state and subscriptions.
     ///
     /// Returns:
@@ -150,9 +159,27 @@ impl OrdersPanel {
     pub fn new(
         backend: Entity<Backend>,
         group: String,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // The Report's placeholder, as the Alerts coin filter uses: one control, one wording.
+        let coin_input = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(t!("report.filter.coin_ph").to_string())
+        });
+        cx.subscribe(
+            &coin_input,
+            |this: &mut Self, input, ev: &MoonInputEvent, cx| {
+                if matches!(ev, MoonInputEvent::Change) {
+                    this.coin_query = input.read(cx).value().trim().to_string();
+                    let backend = this.backend.clone();
+                    this.rebuild_cache(backend.read(cx));
+                    cx.notify();
+                    let view = cx.entity();
+                    cx.defer(move |app| Self::persist(&view, app));
+                }
+            },
+        )
+        .detach();
         // Repaint after a backend drain only when the represented cache key changed or the refresh
         // gate admits its periodic update.
         cx.observe(&backend, |this, backend, cx| {
@@ -207,6 +234,8 @@ impl OrdersPanel {
             group,
             view: OrdersViewState::default(),
             sel_cores: HashSet::new(),
+            coin_input,
+            coin_query: String::new(),
             gate: RenderGate::default(),
             cache_key: None,
             cached_entries: Rc::new(Vec::new()),
@@ -277,6 +306,7 @@ impl OrdersPanel {
                 .only_current_market
                 .then(|| self.current_market(b))
                 .flatten(),
+            coin: self.coin_query.clone(),
             // Track every market open in the Main stack, whether it holds one fullscreen chart or
             // several charts. One row per `(core, market)` is highlighted and may be lifted.
             main_open: b.main_open_markets(&self.group).to_vec(),
@@ -458,8 +488,8 @@ impl OrdersPanel {
 
     /// Collect, filter, and base-sort rows.
     ///
-    /// Return `(rows, real_count, emulated_count)`. Counts apply the core and current-market filters
-    /// but precede the all/real/emulated kind filter, matching the footer totals.
+    /// Return `(rows, real_count, emulated_count)`. Counts apply the core, current-market and coin
+    /// filters but precede the all/real/emulated kind filter, matching the footer totals.
     fn build_entries(
         &self,
         b: &Backend,
@@ -467,8 +497,8 @@ impl OrdersPanel {
         current: &Option<(CoreId, String)>,
     ) -> (Vec<OrderEntry>, usize, usize) {
         let mut entries = self.collect(b);
-        // Apply the effective Classic or Auto core scope and the current-market filter before the
-        // order-kind filter.
+        // Apply the effective Classic or Auto core scope, the current-market filter and the coin
+        // filter before the order-kind filter, so the footer counts what the table shows.
         let scope = self.effective_scope(b);
         entries.retain(|e| {
             let by_source = scope.contains(e.core);
@@ -478,6 +508,7 @@ impl OrdersPanel {
                         Some((c, m)) => e.core == *c && &e.row.market == m,
                         None => true,
                     })
+                && coin_filter::matches_coin(&e.row.coin, &self.coin_query)
         });
         // Split this pre-kind-filter set into real and emulated footer counts.
         let count_real = entries.iter().filter(|e| !e.row.emulator).count();

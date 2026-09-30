@@ -34,6 +34,7 @@ use moon_core::session::CoreId;
 use moon_core::session::core_order::{self, ExchangeSection};
 use moon_core::venue::CoreVenue;
 
+mod in_trade;
 mod ranking;
 mod tabs;
 
@@ -211,6 +212,9 @@ pub(crate) struct CoinHit {
     /// core, and the venue is what decides whether two cores offering `BTC-USDT` are ONE choice on
     /// one exchange or two choices on two.
     pub(crate) venue: Option<CoreVenue>,
+    /// Whether this core already holds an open order or position on `market`; see
+    /// [`in_trade`]. Decoration only: it sorts and marks rows, never changes what a row opens.
+    pub(crate) in_trade: bool,
 }
 
 /// Returns token-search results, each carrying its resolved label.
@@ -527,10 +531,13 @@ pub(crate) fn hits_for(
                 server: server.clone(),
                 label,
                 venue: venue.clone(),
+                in_trade: false,
             });
         }
     }
-    out.into_iter().flatten().collect()
+    let mut hits: Vec<CoinHit> = out.into_iter().flatten().collect();
+    in_trade::mark_live(b, &mut hits);
+    hits
 }
 
 /// Identity of one coin row: the exchange it sits under, and the instrument it names.
@@ -931,6 +938,7 @@ where
         }
         for group in venue_section.groups {
             let members = group.members.len();
+            let trading = group.members.iter().filter(|hit| hit.in_trade).count();
             let open = group_is_open(&group.key, members, toggled);
             // The coin row stands for the instrument; this is the core it would actually open, and
             // it is NAMED on the row so the choice is never hidden.
@@ -1021,16 +1029,30 @@ where
                                             .text_color(rgb(p.text))
                                             .child(pair),
                                     )
+                                    // A lone core carries its marker on the coin row itself;
+                                    // a group states the count and marks its child rows.
+                                    .when(members == 1 && trading == 1, |row| {
+                                        row.child(in_trade_dot(
+                                            SharedString::from(format!("{id}-{section}-trade-{i}")),
+                                            p,
+                                            cx,
+                                        ))
+                                    })
                                     .when(members > 1, |row| {
+                                        let caption = match trading {
+                                            0 => t!("chart.coin.cores", n = members.to_string()),
+                                            k => t!(
+                                                "chart.coin.cores_in_trade",
+                                                n = members.to_string(),
+                                                k = k.to_string()
+                                            ),
+                                        };
                                         row.child(
                                             div()
                                                 .flex_none()
                                                 .text_size(design::t_caption(cx))
                                                 .text_color(rgb(p.text_muted))
-                                                .child(
-                                                    t!("chart.coin.cores", n = members.to_string())
-                                                        .to_string(),
-                                                ),
+                                                .child(caption.to_string()),
                                         )
                                     })
                                     .when(show_server_per_row, |row| {
@@ -1053,13 +1075,15 @@ where
             if !open || members <= 1 {
                 continue;
             }
-            for member in group.members {
+            // Cores already trading the coin first; the row's pick above used canonical order.
+            for member in in_trade::in_trade_first(&group.members) {
                 let CoinHit {
                     core,
                     market,
                     server,
+                    in_trade,
                     ..
-                } = member;
+                } = member.clone();
                 let checked = selected.contains(&(core, market.clone()));
                 let on_pick_child = on_pick.clone();
                 let market_pick = market.clone();
@@ -1116,7 +1140,14 @@ where
                                             app.stop_propagation();
                                         })
                                         .child(server),
-                                ),
+                                )
+                                .when(in_trade, |row| {
+                                    row.child(in_trade_dot(
+                                        SharedString::from(format!("{id}-{section}-trade-{i}")),
+                                        p,
+                                        cx,
+                                    ))
+                                }),
                         ),
                 );
                 i += 1;
@@ -1124,6 +1155,22 @@ where
         }
     }
     list
+}
+
+/// The "already trading here" marker: a small accent dot whose tooltip says what it means.
+///
+/// A dot rather than a word tag: the popup is [`COIN_POPUP_W`] wide and a core name already
+/// competes for that width, so the marker must never be the thing that clips it.
+fn in_trade_dot(id: SharedString, p: MoonPalette, cx: &App) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .text_size(design::t_caption(cx))
+        .text_color(rgb(p.accent))
+        .tooltip(crate::panels::common::text_tooltip(SharedString::from(
+            t!("chart.coin.in_trade_tip").to_string(),
+        )))
+        .child("●")
 }
 
 /// Hand the keyboard back to the window when the coin search is finished with.
