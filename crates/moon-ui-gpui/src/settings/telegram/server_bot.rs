@@ -14,15 +14,13 @@
 //! The job itself, its progress and the bot's hand-over belong to the backend
 //! (`backend::station`): they outlive this window. This module builds jobs and shows the state.
 
-use std::path::PathBuf;
-
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::{Secret, TelegramConfig};
 use moon_core::station_api::Access;
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
-use moon_remote::setup::{FirstAccess, Setup};
+use moon_remote::setup::{FirstAccess, Setup, StationBinary};
 use moon_remote::ssh::Target;
 use moon_remote::station::BotChange;
 use moon_remote::station::bot::BotState;
@@ -53,7 +51,6 @@ pub(in crate::settings) struct ServerBotEd {
     key_path: Entity<MoonInputState>,
     passphrase: Entity<MoonInputState>,
     old_admin: Entity<MoonInputState>,
-    bin: Entity<MoonInputState>,
     /// A token for the bot on the server: a new bot, or another one in place of it.
     server_token: Entity<MoonInputState>,
     /// First login by a key file rather than a password.
@@ -125,7 +122,6 @@ pub(in crate::settings) fn build<T: 'static>(
         key_path: input(window, cx, false),
         passphrase: input(window, cx, true),
         old_admin: input(window, cx, true),
-        bin: input(window, cx, false),
         server_token: input(window, cx, true),
         by_key: false,
         mini_app: None,
@@ -389,10 +385,6 @@ impl SettingsView {
         let ed = &self.telegram.server;
         let target = parse_target(&text(&ed.host, cx))
             .ok_or_else(|| t!("telegram.server.need_host").to_string())?;
-        let bin = text(&ed.bin, cx);
-        if bin.is_empty() {
-            return Err(t!("telegram.server.need_bin").to_string());
-        }
         // The terminal's bot always moves with the install (decided 2026-09-30).
         let bot = self.server_bot_transfer(cx).unwrap_or(BotPlan::Keep);
         Ok(Job::Install {
@@ -400,7 +392,8 @@ impl SettingsView {
                 target,
                 first: self.server_bot_first_access(cx)?,
                 legacy_admin_password: secret(&ed.old_admin, cx),
-                station_bin: Some(PathBuf::from(bin)),
+                // Only from the release (STATION.md §1 п. 21): no file to choose.
+                station: StationBinary::Release,
             },
             cores: self.server_bot_cores(cx),
             bot,
@@ -412,7 +405,6 @@ impl SettingsView {
     /// "Forget the server", then install it anew from the form.
     fn server_bot_resetup_job(&self, target: Target, cx: &App) -> Result<Job, String> {
         let ed = &self.telegram.server;
-        let bin = text(&ed.bin, cx);
         Ok(Job::Resetup {
             setup: Setup {
                 target,
@@ -421,7 +413,8 @@ impl SettingsView {
                     password: Zeroizing::new(String::new()),
                 },
                 legacy_admin_password: secret(&ed.old_admin, cx),
-                station_bin: (!bin.is_empty()).then(|| PathBuf::from(bin)),
+                // The installed station stays; "Update the service" moves it to the release.
+                station: StationBinary::Keep,
             },
         })
     }
@@ -920,7 +913,8 @@ impl SettingsView {
         })
     }
 
-    /// A server not set up yet: what the provider gave, the service file, the bot, "Install".
+    /// A server not set up yet: what the provider gave, the bot, "Install" — the station comes from
+    /// the latest release.
     fn server_bot_new(&self, section: MoonGroupBox, cx: &Context<Self>) -> MoonGroupBox {
         let ed = &self.telegram.server;
         let busy = self.backend.read(cx).station.busy();
@@ -979,14 +973,7 @@ impl SettingsView {
             ))
             .child(self.server_bot_hint("telegram.server.first_login_hint", cx));
         self.server_bot_old_admin(section, cx)
-            .child(self.server_bot_field(
-                "server-bin",
-                t!("telegram.server.bin").to_string(),
-                &ed.bin,
-                false,
-                cx,
-            ))
-            .child(self.server_bot_hint("telegram.server.bin_hint", cx))
+            .child(self.server_bot_hint("telegram.server.release_hint", cx))
             .when(has_bot, |s| {
                 s.child(self.server_bot_hint("telegram.server.transfer_hint", cx))
             })

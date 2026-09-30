@@ -57,14 +57,25 @@ pub enum FirstAccess {
     },
 }
 
+/// The station binary a setup installs on the way.
+pub enum StationBinary {
+    /// None: a server set up again keeps the one it has.
+    Keep,
+    /// The newest MoonTerminal release's, for the server's architecture — how a server gets its
+    /// first station (the terminal's Settings).
+    Release,
+    /// A file of this machine — a developer's build (`moon-remote setup --station-bin`).
+    File(PathBuf),
+}
+
 pub struct Setup {
     pub target: Target,
     pub first: FirstAccess,
     /// The old administrator password of a server set up before key-only sudo
     /// ([`NeedsAdminPassword`]); `None` everywhere else.
     pub legacy_admin_password: Option<Zeroizing<String>>,
-    /// A station binary to install on the way.
-    pub station_bin: Option<PathBuf>,
+    /// The station binary to install on the way.
+    pub station: StationBinary,
 }
 
 /// Prepare the server. `say` receives one line per thing done or found.
@@ -144,6 +155,21 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         systemd >= MIN_SYSTEMD,
         "systemd {systemd} is older than {MIN_SYSTEMD}: no encrypted credentials"
     );
+    // The release's binary is fetched now, before anything on the server changes: no release for
+    // its architecture, or GitHub out of reach, stops the setup here rather than after the server
+    // was closed.
+    // Its own directory per process, gone on every way out of the setup.
+    let release_dir =
+        DropDir(std::env::temp_dir().join(format!("moon-station-release-{}", std::process::id())));
+    let _ = std::fs::remove_dir_all(&release_dir.0);
+    let release_bin = match &setup.station {
+        StationBinary::Release => {
+            let arch = script::value(&probe, "arch")
+                .ok_or_else(|| anyhow::anyhow!("the server did not report its architecture"))?;
+            Some(crate::release::fetch_station(arch, &release_dir.0, say)?)
+        }
+        _ => None,
+    };
 
     // 3. The administrator — by key only, the app's and the user's own when the first login was
     // by key — and its sudo without a password.
@@ -225,11 +251,28 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     )?;
     say_values(say, &out.stdout_text());
 
-    // 6. The binary, if one was given — through the helper's `update`, as every later one will.
-    if let Some(path) = &setup.station_bin {
-        install_station(&setup.target, &admin, &app, pin.as_deref(), path, say)?;
+    // 6. The binary — through the helper's `update`, as every later one will.
+    match &setup.station {
+        StationBinary::Keep => {}
+        StationBinary::File(path) => {
+            install_station(&setup.target, &admin, &app, pin.as_deref(), path, say)?;
+        }
+        StationBinary::Release => {
+            if let Some(file) = &release_bin {
+                install_station(&setup.target, &admin, &app, pin.as_deref(), file, say)?;
+            }
+        }
     }
     Ok(())
+}
+
+/// A directory of this machine removed when it goes out of scope, whichever way.
+struct DropDir(PathBuf);
+
+impl Drop for DropDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Log in with what the provider gave.

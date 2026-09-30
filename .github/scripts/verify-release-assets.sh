@@ -27,10 +27,12 @@ fail() {
 # and macOS ships neither `sha256sum` nor bash 4. Both tools print the lowercase hex digest first.
 sha256_hex() {
     local path="$1"
+    # From stdin: GNU sha256sum escapes a file name holding a backslash and prefixes the digest
+    # with one, which a Windows checkout's paths do.
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$path" | awk '{print $1}'
+        sha256sum < "$path" | awk '{print $1}'
     elif command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$path" | awk '{print $1}'
+        shasum -a 256 < "$path" | awk '{print $1}'
     else
         fail "no SHA-256 utility is available: install coreutils or shasum"
     fi
@@ -91,6 +93,27 @@ find_draft_release() {
     printf '%s\n' "$match_id"
 }
 
+# Require one published asset to carry exactly the local file's bytes: GitHub's SHA-256 digest and
+# the size. `what` names the asset in the refusal.
+require_asset_matches() {
+    local release_json="$1"
+    local asset="$2"
+    local local_digest="$3"
+    local local_size="$4"
+    local what="$5"
+    local remote_digest remote_digest_lower remote_size
+
+    remote_digest="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
+    remote_size="$(jq -r --arg name "$asset" '.assets[] | select(.name == $name) | .size' <<<"$release_json")"
+    [[ "$remote_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] \
+        || fail "GitHub did not publish a valid SHA-256 digest for $asset"
+    remote_digest_lower="$(printf '%s' "$remote_digest" | tr '[:upper:]' '[:lower:]')"
+    [[ "$remote_digest_lower" == "$local_digest" ]] \
+        || fail "published digest does not match the local $what"
+    [[ "$remote_size" == "$local_size" ]] \
+        || fail "published size does not match the local $what"
+}
+
 # Read one release by its already-verified numeric id.
 release_by_id() {
     local release_id="$1"
@@ -98,13 +121,13 @@ release_by_id() {
     gh api "${repository_api}/releases/${release_id}"
 }
 
-# Verify release identity, lifecycle state, exact assets, and the local Windows bytes.
+# Verify release identity, lifecycle state, exact assets, and the local Windows and station bytes.
 verify_release() {
     local release_json="$1"
     local expected_state="$2"
     local expected_release_id="${3:-}"
     local actual_id actual_tag actual_target actual_draft actual_prerelease actual_immutable
-    local asset_names remote_digest remote_digest_lower remote_size tag_json tag_release_id
+    local asset_names station_asset station_path tag_json tag_release_id
 
     jq -e 'type == "object" and (.assets | type == "array")' <<<"$release_json" >/dev/null \
         || fail "GitHub returned malformed release metadata"
@@ -138,18 +161,18 @@ verify_release() {
     esac
 
     asset_names="$(jq -c '[.assets[].name] | sort' <<<"$release_json")"
-    if [[ "$asset_names" != '["MoonTerminal.dmg","MoonTerminal.exe"]' ]]; then
-        fail "release must contain exactly MoonTerminal.dmg and MoonTerminal.exe"
+    if [[ "$asset_names" != '["MoonTerminal.dmg","MoonTerminal.exe","moon-station-aarch64","moon-station-x86_64"]' ]]; then
+        fail "release must contain exactly MoonTerminal.dmg, MoonTerminal.exe, moon-station-aarch64 and moon-station-x86_64"
     fi
-    remote_digest="$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .digest // empty' <<<"$release_json")"
-    remote_size="$(jq -r --arg name "$asset_name" '.assets[] | select(.name == $name) | .size' <<<"$release_json")"
-    [[ "$remote_digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] \
-        || fail "GitHub did not publish a valid SHA-256 digest for $asset_name"
-    remote_digest_lower="$(printf '%s' "$remote_digest" | tr '[:upper:]' '[:lower:]')"
-    [[ "$remote_digest_lower" == "$local_digest" ]] \
-        || fail "published digest does not match the local Windows asset"
-    [[ "$remote_size" == "$local_size" ]] \
-        || fail "published size does not match the local Windows asset"
+    require_asset_matches "$release_json" "$asset_name" "$local_digest" "$local_size" "Windows asset"
+    # The station's binaries: what its updater installs as root on the user's server.
+    for station_asset in $station_assets; do
+        station_path="$station_asset_dir/$station_asset"
+        require_asset_matches "$release_json" "$station_asset" \
+            "sha256:$(sha256_hex "$station_path")" \
+            "$(wc -c < "$station_path" | tr -d '[:space:]')" \
+            "station asset $station_asset"
+    done
 
     if [[ "$expected_state" == "published" ]]; then
         tag_json="$(gh api "${repository_api}/releases/tags/$release_tag")"
@@ -167,6 +190,9 @@ verification_state="${3:-draft}"
 expected_release_id="${4:-}"
 asset_name="MoonTerminal.exe"
 repository_api="repos/${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+# The station's Linux binaries, built beside the Windows one and verified the same way.
+station_assets="moon-station-x86_64 moon-station-aarch64"
+station_asset_dir="${STATION_ASSET_DIR:?STATION_ASSET_DIR is required: the directory holding the local station binaries}"
 
 if [[ ! "$release_tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
     fail "non-canonical release tag: $release_tag"
@@ -178,6 +204,10 @@ if ! valid_u64_component "$release_major" \
     fail "release tag exceeds the supported numeric range: $release_tag"
 fi
 [[ -f "$asset_path" ]] || fail "local Windows asset is missing: $asset_path"
+for station_asset in $station_assets; do
+    [[ -f "$station_asset_dir/$station_asset" ]] \
+        || fail "local station asset is missing: $station_asset_dir/$station_asset"
+done
 expected_commit="$(git rev-parse "${release_tag}^{commit}")"
 local_digest_hex="$(sha256_hex "$asset_path")"
 [[ "$local_digest_hex" =~ ^[0-9a-f]{64}$ ]] \

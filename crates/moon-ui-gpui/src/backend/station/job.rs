@@ -126,10 +126,6 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
     match job {
         Job::Install { setup, cores, bot } => {
             let target = setup.target.clone();
-            anyhow::ensure!(
-                setup.station_bin.is_some(),
-                "the station binary is not chosen"
-            );
             // Read before the server changes: a terminal without a core key has nothing to
             // install a station for.
             let keys = core_keys(&cores)?;
@@ -252,6 +248,9 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
                 for line in moon_tg::station_status_text(station).lines() {
                     say(line);
                 }
+                if let Some(line) = older_service(&station.station_version) {
+                    say(&line);
+                }
             }
             Ok(Done::Ok {
                 transferred: false,
@@ -312,6 +311,24 @@ fn settled(
             "the change is saved; the bot has not settled yet: {e:#}"
         ));
         bot::bot_state(target)
+    })
+}
+
+/// "The service is older than this terminal" when the station's release (`v0.51.0 (<rev>)`) is
+/// behind the terminal's: "Update the service" takes it to the newest release, which is at least
+/// the terminal's. Nothing for a development build on either side.
+fn older_service(station_version: &str) -> Option<String> {
+    use moon_core::update::ReleaseVersion;
+    let station = ReleaseVersion::parse(station_version.split_whitespace().next()?)?;
+    let terminal = ReleaseVersion::parse(option_env!("MOONTERMINAL_RELEASE_BASE")?)?;
+    (station < terminal).then(|| {
+        rust_i18n::t!(
+            "telegram.server.older_service",
+            station = station.to_string(),
+            terminal = terminal.to_string(),
+            button = rust_i18n::t!("telegram.server.update")
+        )
+        .to_string()
     })
 }
 

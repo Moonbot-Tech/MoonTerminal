@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>
-//!             [--login-key <file>] [--station-bin <file>]
+//!             [--login-key <file>] [--station-bin <file> | --station-release]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
 //! moon-remote --data <dir> station-update --host <h> [--port 22]
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
@@ -85,7 +85,14 @@ fn run() -> anyhow::Result<()> {
                     user: login,
                 },
             };
-            let station_bin = args.value("--station-bin")?.map(PathBuf::from);
+            let station = match (args.value("--station-bin")?, args.flag("--station-release")) {
+                (Some(path), false) => setup::StationBinary::File(PathBuf::from(path)),
+                (None, true) => setup::StationBinary::Release,
+                (None, false) => setup::StationBinary::Keep,
+                (Some(_), true) => {
+                    anyhow::bail!("give --station-bin or --station-release, not both")
+                }
+            };
             args.done()?;
             let mut setup = Setup {
                 target,
@@ -93,7 +100,7 @@ fn run() -> anyhow::Result<()> {
                 legacy_admin_password: std::env::var("MOON_REMOTE_OLD_ADMIN_PASSWORD")
                     .ok()
                     .map(Zeroizing::new),
-                station_bin,
+                station,
             };
             if let Err(e) = setup::run(&setup, &mut say) {
                 let Some(old) = e.downcast_ref::<setup::NeedsAdminPassword>() else {

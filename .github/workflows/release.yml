@@ -1,13 +1,15 @@
 name: release
 
-# Publishes a GitHub Release with downloadable .exe + .dmg from one exact canonical stable tag.
+# Publishes a GitHub Release with downloadable .exe + .dmg — and the station's Linux binaries,
+# moon-station-x86_64 and moon-station-aarch64 — from one exact canonical stable tag.
 # The build.yml workflow gates compilation and the test suite; THIS one ships the reviewed tagged
-# commit and verifies GitHub's published Windows digest against the local artifact.
+# commit and verifies GitHub's published digests of the Windows and station binaries against the
+# local artifacts.
 #
 # Note it does NOT re-run those gates: publishing trusts whatever build.yml
 # reported on the commit being tagged.
 #
-# THE LOCKFILE, and the one procedure this workflow depends on. Both builds below pass `--locked`,
+# THE LOCKFILE, and the one procedure this workflow depends on. Every build below passes `--locked`,
 # so a release is exactly the committed third-party set and a lock that disagrees with the
 # manifests fails here loudly instead of being silently re-resolved. There is deliberately NO
 # `cargo update` step: build.yml refreshes MoonUI on every run, but a release must never pull a
@@ -219,9 +221,66 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
+  station:
+    name: Station (${{ matrix.arch }}-linux-musl)
+    needs: validate
+    # The station is the binary the terminal installs on the user's Linux server and the server
+    # updates itself to (docs-internal/STATION.md §6): a static musl build per architecture, the
+    # asset name its updater looks for (`moon_core::update::station_asset_name`). Each is built on a
+    # runner of its own architecture, so the musl C toolchain the station's C dependencies (ring,
+    # SQLite) compile with is the distribution's native one — no cross compiler on the release path.
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    env:
+      # `musl-gcc` for the C inside the station's dependencies, per target so a build script's own
+      # host C is left to the host compiler.
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CC_aarch64_unknown_linux_musl: musl-gcc
+    steps:
+      # Full history with tags: the station's version is the release tag (`build-support/git_meta.rs`),
+      # and without the tags it builds as `dev`, which its updater never offers anything to.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: ${{ matrix.arch }}-unknown-linux-musl
+      - name: Install the musl C toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+          key: ${{ matrix.arch }}-unknown-linux-musl
+      - name: Build the station
+        run: cargo build -p moon-station --release --locked --target ${{ matrix.arch }}-unknown-linux-musl
+      - name: Stage the station
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.arch }}-unknown-linux-musl/release/moon-station dist/moon-station-${{ matrix.arch }}
+      # The server runs it with nothing beside it: a binary that links a shared library would start
+      # on this runner and fail on the user's Debian.
+      - name: Require a static binary
+        run: |
+          file dist/moon-station-${{ matrix.arch }}
+          file dist/moon-station-${{ matrix.arch }} | grep -Eq 'statically linked|static-pie linked'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: station-${{ matrix.arch }}
+          path: dist/moon-station-${{ matrix.arch }}
+          if-no-files-found: error
+          overwrite: true
+
   publish:
     name: Publish GitHub Release
-    needs: [validate, windows, macos]
+    needs: [validate, windows, macos, station]
     runs-on: ubuntu-latest
     # The human gate on shipping. The `release` environment has required reviewers, so this whole
     # job - draft upload, digest verification, publication - waits until one of them approves the
@@ -246,6 +305,11 @@ jobs:
         with:
           name: macos
           path: dist/macos
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: station-*
+          merge-multiple: true
+          path: dist/station
       - name: Upload a draft release
         uses: softprops/action-gh-release@v3
         with:
@@ -257,11 +321,14 @@ jobs:
           files: |
             dist/windows/MoonTerminal.exe
             dist/macos/MoonTerminal.dmg
-      - name: Verify the draft Windows digest
+            dist/station/moon-station-x86_64
+            dist/station/moon-station-aarch64
+      - name: Verify the draft Windows and station digests
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          STATION_ASSET_DIR: dist/station
         run: bash .github/scripts/verify-release-assets.sh "$RELEASE_TAG" dist/windows/MoonTerminal.exe
       - name: Publish the verified release
         shell: bash
@@ -269,4 +336,5 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
           RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+          STATION_ASSET_DIR: dist/station
         run: bash .github/scripts/publish-verified-release.sh "$RELEASE_TAG" "$RELEASE_COMMIT" dist/windows/MoonTerminal.exe
