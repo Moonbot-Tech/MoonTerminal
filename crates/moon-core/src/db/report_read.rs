@@ -406,6 +406,32 @@ pub enum PeriodBasis {
     OpenDate,
 }
 
+/// Whether the Report coin field asks for an exact ticker rather than a substring.
+///
+/// A raw value ending in a space means "the ticker ends here": it matches that ticker and its
+/// contract tails only. Only a TRAILING space counts; the check runs on the untrimmed value.
+///
+/// Args:
+///     raw: The coin field exactly as typed, before any trim.
+///
+/// Returns:
+///     `true` when the value names an exact ticker.
+pub fn report_coin_is_exact(raw: &str) -> bool {
+    raw.ends_with(' ') && !raw.trim().is_empty()
+}
+
+/// Escape the LIKE wildcards `%`, `_` and the escape character itself with a backslash.
+fn escape_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Complete filter shared by Report rows, totals, export, and strategy discovery.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ReportFilter {
@@ -416,6 +442,8 @@ pub struct ReportFilter {
     pub core_uids: Vec<u64>,
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,
+    /// Report coin field as typed; a trailing space asks for an exact ticker
+    /// ([`report_coin_is_exact`]), otherwise a substring match.
     pub coin: String,
     /// Exact case-insensitive coin identities used by chart history.
     ///
@@ -1245,8 +1273,18 @@ fn build_where(
             sql.push(')');
         }
     } else if !coin.is_empty() && has("coin") {
-        sql.push_str(" AND r.coin LIKE ?");
-        params.push(Box::new(format!("%{}%", coin.to_uppercase())));
+        if report_coin_is_exact(&f.coin) {
+            // The ticker itself, or the ticker followed by a contract tail (`SOL_RP`,
+            // `SOL_0925`); `SOLV` is another coin. The tail pattern escapes the ticker, since
+            // `_` and `%` are LIKE wildcards.
+            let ticker = coin.to_uppercase();
+            sql.push_str(" AND (r.coin COLLATE NOCASE = ? OR r.coin LIKE ? ESCAPE '\\')");
+            params.push(Box::new(ticker.clone()));
+            params.push(Box::new(format!("{}\\_%", escape_like(&ticker))));
+        } else {
+            sql.push_str(" AND r.coin LIKE ?");
+            params.push(Box::new(format!("%{}%", coin.to_uppercase())));
+        }
     }
     if has("isshort") {
         match f.side {

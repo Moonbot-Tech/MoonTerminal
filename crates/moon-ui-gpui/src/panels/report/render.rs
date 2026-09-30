@@ -265,17 +265,19 @@ impl Render for ReportPanel {
                     // `SOL_RP`, not a reading of the market name. Core is selected separately.
                     // Update the mirror before `set_value` so the resulting Change event does not
                     // reopen the popup.
-                    // The DISPLAY coin, without a contract tail: the filter is a substring match,
-                    // so `SOL` still finds the core's `SOL_RP` and `SOL_0925` rows while the
-                    // qualified token would exclude every other expiry — and `_` is a
-                    // single-character wildcard in the `coin LIKE` this feeds.
-                    let base = backend_pick
-                        .read(app)
-                        .session
-                        .market_source()
-                        .market_label(core, &market)
-                        .display_coin()
-                        .to_string();
+                    // The DISPLAY coin, without a contract tail, plus the trailing space that
+                    // asks for an exact ticker: a pick names one coin, so `IO ` keeps BIO and IOTA
+                    // out, while the exact match still admits the core's `SOL_RP` and `SOL_0925`
+                    // tails of a picked `SOL`. The field then shows the state a typed space would.
+                    let base = format!(
+                        "{} ",
+                        backend_pick
+                            .read(app)
+                            .session
+                            .market_source()
+                            .market_label(core, &market)
+                            .display_coin()
+                    );
                     view.update(app, |this, cx| {
                         this.coin_query = base.clone();
                         this.coin_popup_open = false;
@@ -314,15 +316,37 @@ impl Render for ReportPanel {
                     }),
                 )
         });
+        // A trailing space is invisible, so exact mode carries a visible `=` beside the field.
+        let coin_exact = moon_core::db::report_coin_is_exact(
+            &crate::controls::coin_search::normalize_layout(&self.coin_query),
+        );
         let coin_field = div()
+            .id("rep-coin-field")
             .relative()
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.filter.coin_tip").to_string(),
+            ))
             .child(
-                div().w(design::ui_px(cx, 90.0)).child(
-                    MoonInput::new("rep-coin")
-                        .state(&self.coin)
-                        .size(design::INPUT_SIZE)
-                        .cleanable(true),
-                ),
+                h_flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div().w(design::ui_px(cx, 90.0)).child(
+                            MoonInput::new("rep-coin")
+                                .state(&self.coin)
+                                .size(design::INPUT_SIZE)
+                                .cleanable(true),
+                        ),
+                    )
+                    .when(coin_exact, |row| {
+                        row.child(
+                            div()
+                                .font_family(design::mono())
+                                .text_color(rgb(p.accent))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("="),
+                        )
+                    }),
             )
             .children(coin_popup);
 

@@ -169,7 +169,12 @@ fn strategy_catalog_scope(filter: &ReportFilter) -> ReportFilter {
     scope.strategy_name_mask.clear();
     scope.core_uids.sort_unstable();
     scope.core_uids.dedup();
+    // The exact-ticker trailing space survives: `io` and `io ` select different strategy sets.
+    let exact = moon_core::db::report_coin_is_exact(&scope.coin);
     scope.coin = scope.coin.trim().to_uppercase();
+    if exact {
+        scope.coin.push(' ');
+    }
     scope
 }
 
