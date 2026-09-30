@@ -89,6 +89,16 @@ telegram.tab:
   en: "Telegram"
   es: "Telegram"
 
+station.tab:
+  ru: "Станция"
+  en: "Station"
+  es: "Estación"
+
+telegram.server.on_station:
+  ru: "Бот работает на станции на сервере Linux. Установка, состояние и действия станции — во вкладке «Станция»."
+  en: "The bot runs on the station on a Linux server. The station's install, status and actions are in the Station tab."
+  es: "El bot funciona en la estación de un servidor Linux. La instalación, el estado y las acciones de la estación están en la pestaña Estación."
+
 telegram.section_bot:
   ru: "Бот"
   en: "Bot"

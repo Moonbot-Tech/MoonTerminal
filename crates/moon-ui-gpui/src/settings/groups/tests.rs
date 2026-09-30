@@ -2,14 +2,15 @@
 
 use super::*;
 
-/// The strip is five buttons, General last, and the three single pages have no inner switch.
+/// The strip is six buttons, General last, and the four single pages have no inner switch.
 #[test]
-fn the_strip_is_five_buttons_with_general_last() {
+fn the_strip_is_six_buttons_with_general_last() {
     assert_eq!(
         TabGroup::ALL,
         [
             TabGroup::Connections,
             TabGroup::Telegram,
+            TabGroup::Station,
             TabGroup::Hotkeys,
             TabGroup::Interface,
             TabGroup::General,
@@ -17,9 +18,21 @@ fn the_strip_is_five_buttons_with_general_last() {
     );
     assert_eq!(
         TabGroup::ALL.map(TabGroup::id),
-        ["Подключения", "Telegram", "Хоткеи", "Интерфейс", "Общие"]
+        [
+            "Подключения",
+            "Telegram",
+            "station",
+            "Хоткеи",
+            "Интерфейс",
+            "Общие"
+        ]
     );
-    for group in [TabGroup::Connections, TabGroup::Telegram, TabGroup::Hotkeys] {
+    for group in [
+        TabGroup::Connections,
+        TabGroup::Telegram,
+        TabGroup::Station,
+        TabGroup::Hotkeys,
+    ] {
         assert!(!group.has_switch());
         assert_eq!(group.pages().len(), 1);
     }
@@ -86,6 +99,7 @@ fn every_page_belongs_to_one_group() {
     let pages = [
         Tab::Connections,
         Tab::Telegram,
+        Tab::Station,
         Tab::Hotkeys,
         Tab::Interface,
         Tab::Lines,

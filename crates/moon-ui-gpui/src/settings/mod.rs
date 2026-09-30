@@ -5,9 +5,9 @@
 //! Save writes to disk through `AppConfig::save`; the shared daily scheduler independently owns
 //! recovery copies in `backups/settings/`.
 //!
-//! The window is split into pages like the egui original. Five strip buttons reach them:
-//! Connections, Telegram, Hotkeys, Interface, and General. Interface and General each open an
-//! inner switch over the pages that used to be their own buttons. This module owns the
+//! The window is split into pages like the egui original. Six strip buttons reach them:
+//! Connections, Telegram, Station, Hotkeys, Interface, and General. Interface and General each
+//! open an inner switch over the pages that used to be their own buttons. This module owns the
 //! `SettingsView` state and `open`; tab state and `impl SettingsView` blocks live in submodules.
 //! [`render`] owns the tab bar, header, body, and Save footer, [`apply`] owns persistence and
 //! activation, and [`common`] provides the shared UI and draft-binding helpers re-exported below.
@@ -75,6 +75,7 @@ pub(crate) enum Tab {
     Lines,
     Badges,
     Storage,
+    Station,
     Telegram,
     TradeSounds,
 }
@@ -90,6 +91,7 @@ impl Tab {
             Tab::Lines => "Линии",
             Tab::Badges => "Бейджи",
             Tab::Storage => "Хранилище",
+            Tab::Station => "station",
             Tab::Telegram => "Telegram",
             Tab::TradeSounds => "trade-sounds",
         }
@@ -104,6 +106,7 @@ impl Tab {
             Tab::Lines => t!("tab.lines"),
             Tab::Badges => t!("tab.badges"),
             Tab::Storage => t!("tab.storage"),
+            Tab::Station => t!("station.tab"),
             Tab::Telegram => t!("telegram.tab"),
             Tab::TradeSounds => t!("trade_sounds.tab"),
         }
@@ -691,7 +694,7 @@ fn settings_sig(b: &Backend) -> u64 {
     // Token plaintext is never hashed; emptiness plus the non-secret preference fields
     // are enough to repaint the Telegram tab.
     b.telegram.revision.hash(&mut h);
-    // The station job's progress lives in the backend (Telegram -> Bot on a server).
+    // The station job's progress lives in the backend (the Station tab).
     b.station.revision.hash(&mut h);
     cfg.telegram.token.is_empty().hash(&mut h);
     cfg.telegram.authorized_chat_ids.hash(&mut h);
