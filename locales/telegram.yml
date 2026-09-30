@@ -993,6 +993,98 @@ telegram.server.running:
   ru: "Выполняется…"
   en: "Working…"
   es: "Trabajando…"
+telegram.server.no_known_server:
+  ru: "Нет известного сервера: откройте вкладку «Станция» и настройте сервер."
+  en: "No known server: open the Station tab and set up a server."
+  es: "No hay un servidor conocido: abre la pestaña Estación y configura un servidor."
+telegram.server.change_address:
+  ru: "Изменить адрес"
+  en: "Change address"
+  es: "Cambiar dirección"
+telegram.server.address_hint:
+  ru: "Новый IP или имя сервера. Администратор и вход по ключу сохранятся; сначала проверьте отпечаток ключа хоста."
+  en: "New server IP or hostname. The administrator and key login are kept; verify the host fingerprint first."
+  es: "Nueva IP o nombre del servidor. Se conservan el administrador y el acceso por clave; verifica primero la huella del host."
+telegram.server.address_probe:
+  ru: "Проверить новый адрес"
+  en: "Check new address"
+  es: "Comprobar nueva dirección"
+telegram.server.address_review:
+  ru: "Адрес ещё не изменён: проверьте и подтвердите отпечаток во вкладке «Станция»."
+  en: "The address is still unchanged: review and confirm the fingerprint in the Station tab."
+  es: "La dirección aún no ha cambiado: revisa y confirma la huella en la pestaña Estación."
+telegram.server.address_fingerprint:
+  ru: "Сервер %{addr} предъявил ключ %{fingerprint}. Сверьте отпечаток через консоль провайдера. Подтверждайте только ключ вашего сервера."
+  en: "Server %{addr} presented key %{fingerprint}. Verify the fingerprint through the provider console. Confirm only your own server's key."
+  es: "El servidor %{addr} presentó la clave %{fingerprint}. Verifica la huella en la consola del proveedor. Confirma solo la clave de tu servidor."
+telegram.server.address_confirm:
+  ru: "Доверять ключу и изменить адрес"
+  en: "Trust this key and change address"
+  es: "Confiar en esta clave y cambiar dirección"
+telegram.server.address_changed:
+  ru: "Адрес станции изменён; администратор и вход по ключу сохранены."
+  en: "Station address changed; administrator and key login preserved."
+  es: "Dirección de la estación cambiada; se conservan el administrador y el acceso por clave."
+telegram.server.record_changed:
+  ru: "Запись сервера изменилась. Проверьте станцию заново; подтверждение отменено."
+  en: "The server record changed. Check the station again; confirmation cancelled."
+  es: "La entrada del servidor cambió. Comprueba de nuevo la estación; confirmación cancelada."
+telegram.server.address_unchanged:
+  ru: "Введите новый адрес: адрес станции не изменился."
+  en: "Enter a new address: the station address is unchanged."
+  es: "Introduce una dirección nueva: la dirección de la estación no ha cambiado."
+telegram.server.address_in_use:
+  ru: "Этот адрес уже принадлежит известному серверу. Его ключ и администратор сохранены."
+  en: "This address already belongs to a known server. Its key and administrator were kept."
+  es: "Esta dirección ya pertenece a un servidor conocido. Se conservaron su clave y su administrador."
+telegram.server.no_fingerprint:
+  ru: "Нет отпечатка для подтверждения. Проверьте новый адрес ещё раз."
+  en: "No fingerprint to confirm. Check the new address again."
+  es: "No hay una huella que confirmar. Comprueba de nuevo la dirección nueva."
+telegram.server.forget_confirm:
+  ru: "Забыть сервер %{addr}? Терминал потеряет доступ, а сервер сохранит ключи ядер и бота. Используйте это только после переустановки сервера. Иначе сначала нажмите «Удалить станцию»."
+  en: "Forget server %{addr}? The terminal will lose access; the server still holds the core keys and bot. Use this only after the server was reinstalled. Otherwise use Remove the station first."
+  es: "¿Olvidar el servidor %{addr}? El terminal perderá el acceso; el servidor conservará las claves de los núcleos y el bot. Úsalo solo tras reinstalar el servidor. En otro caso, usa primero Eliminar la estación."
+telegram.server.remove:
+  ru: "Удалить станцию"
+  en: "Remove the station"
+  es: "Eliminar la estación"
+telegram.server.remove_confirm:
+  ru: "Удалить станцию с %{addr}? Служба будет остановлена и отключена, ключи всех ядер и токен бота удалены. Затем терминал забудет сервер. Доступ по ключу администратора на сервере сохранится."
+  en: "Remove the station from %{addr}? The service will be stopped and disabled, all core keys and the bot token deleted. The terminal then forgets the server. Administrator key access on the server is preserved."
+  es: "¿Eliminar la estación de %{addr}? Se detendrá y deshabilitará el servicio y se eliminarán las claves de todos los núcleos y el token del bot. El terminal olvidará el servidor. Se conserva el acceso por clave del administrador."
+telegram.server.remove_bot_confirm:
+  ru: "Бот на станции тоже будет удалён вместе с его чатами. Чтобы вернуть бота в терминал, сначала используйте «Снять бота с сервера»."
+  en: "The station's bot and its paired chats will also be removed. To return the bot to the terminal, use Take the bot off the server first."
+  es: "También se eliminarán el bot de la estación y sus chats vinculados. Para devolver el bot al terminal, usa primero Retirar el bot del servidor."
+telegram.server.remove_unsupported:
+  ru: "Установленная служебная программа не поддерживает удаление станции. Сначала нажмите «Обновить службу» (или «Настроить заново»), затем повторите удаление."
+  en: "The installed helper does not support station removal. Use Update the service (or Set up again) first, then retry removal."
+  es: "El script instalado no permite eliminar la estación. Usa primero Actualizar el servicio (o Configurar de nuevo) y vuelve a intentarlo."
+telegram.server.removed:
+  ru: "Станция и её секреты удалены с сервера; сервер забыт в терминале."
+  en: "Station and its secrets removed from the server; server forgotten in the terminal."
+  es: "Se eliminaron la estación y sus secretos del servidor; el terminal olvidó el servidor."
+telegram.server.remove_unconfirmed:
+  ru: "Сервер не подтвердил удаление станции. Запись доступа сохранена: проверьте службу и повторите удаление."
+  en: "The server did not confirm station removal. The access record was kept: check the service and retry removal."
+  es: "El servidor no confirmó la eliminación. Se conservó el acceso: comprueba el servicio y vuelve a intentarlo."
+telegram.server.remove_local_failed:
+  ru: "Станция и её секреты удалены с сервера, но забыть сервер в терминале не удалось. Запись доступа сохранена."
+  en: "The station and its secrets were removed from the server, but the terminal could not forget the server. The access record was kept."
+  es: "Se eliminaron la estación y sus secretos del servidor, pero el terminal no pudo olvidar el servidor. Se conservó la entrada de acceso."
+telegram.server.core_sync_refused:
+  ru: "На сервере нет конфигурации станции: автоматическая передача ключей ядер отклонена. Проверьте настройку станции."
+  en: "The server has no station configuration: automatic core key transfer refused. Check the station setup."
+  es: "El servidor no tiene configuración de la estación: se rechazó la transferencia automática de claves. Comprueba la configuración de la estación."
+telegram.server.confirm:
+  ru: "Подтвердить"
+  en: "Confirm"
+  es: "Confirmar"
+telegram.server.cancel:
+  ru: "Отмена"
+  en: "Cancel"
+  es: "Cancelar"
 telegram.server.done:
   ru: "Готово."
   en: "Done."
@@ -1097,3 +1189,12 @@ telegram.server.auto_cores_done:
   ru: "Ключи ядер на станции обновлены."
   en: "The station's core keys are updated."
   es: "Las claves de los núcleos en la estación están actualizadas."
+
+telegram.server.access_pending_handover:
+  ru: "Доступ к станции нельзя изменить или удалить, пока передача бота не завершена или журнал передачи недоступен. Сначала восстановите владение ботом."
+  en: "Station access cannot be changed or removed while a bot hand-over is pending or its journal is unreadable. Resolve bot ownership first."
+  es: "No se puede cambiar ni eliminar el acceso a la estación mientras la transferencia del bot esté pendiente o su registro sea ilegible. Resuelve primero la propiedad del bot."
+telegram.server.access_pending_return:
+  ru: "Доступ к станции нельзя изменить или удалить: возвращённый бот ещё ожидает восстановления. Сначала повторите «Снять бота с сервера»."
+  en: "Station access cannot be changed or removed: a returned bot still needs recovery. Retry Take the bot off the server first."
+  es: "No se puede cambiar ni eliminar el acceso a la estación: un bot devuelto aún necesita recuperación. Reintenta primero Quitar el bot del servidor."

@@ -3,6 +3,12 @@
 /// A completed or pending station step, localized by the consuming UI.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
+    /// Read a candidate destination key before asking for user consent.
+    AddressProbe,
+    /// Authenticate only against the destination key the user confirmed.
+    AddressVerify,
+    /// Stop remote polling and remove trading and bot credentials.
+    StationRemove,
     Login,
     Pin,
     Probe,

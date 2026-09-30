@@ -45,6 +45,8 @@ const SSH_PORT: u16 = 22;
 
 /// The station's editors.
 pub(in crate::settings) struct ServerBotEd {
+    /// Inline address and destructive-action confirmations, independent of the bot chat draft.
+    pub(super) station_access: super::station_access::AccessEd,
     host: Entity<MoonInputState>,
     login: Entity<MoonInputState>,
     password: Entity<MoonInputState>,
@@ -114,6 +116,7 @@ pub(in crate::settings) fn build<T: 'static>(
     let login = input(window, cx, false);
     login.update(cx, |st, c| st.set_value("root", window, c));
     ServerBotEd {
+        station_access: super::station_access::AccessEd::new(window, cx),
         host: input(window, cx, false),
         login,
         password: input(window, cx, true),
@@ -144,7 +147,7 @@ pub(in crate::settings) fn known_server() -> Option<Target> {
 }
 
 /// `host` or `host:port`; an IPv6 address goes in brackets when it names a port.
-fn parse_target(text: &str) -> Option<Target> {
+pub(super) fn parse_target(text: &str) -> Option<Target> {
     let text = text.trim();
     if text.is_empty() {
         return None;
@@ -268,7 +271,20 @@ impl SettingsView {
         ed.bot_asked |= ask;
         if finished != ed.seen_finished {
             ed.seen_finished = finished;
-            ed.known = known_server();
+            let known = known_server();
+            if ed.known.as_ref().map(Target::addr) != known.as_ref().map(Target::addr) {
+                ed.station_access.clear();
+                ed.local_bot = None;
+                ed.bot_asked = false;
+                ed.access_seen = None;
+                ed.access_base = None;
+                ed.access_draft = None;
+                ed.chats.close();
+            }
+            ed.known = known;
+            if ed.known.is_none() {
+                ed.station_access.clear();
+            }
             for state in [
                 &ed.password,
                 &ed.passphrase,
@@ -423,27 +439,37 @@ impl SettingsView {
         })
     }
 
-    /// Drop the known server from `remote/hosts.toml`: after a reinstall it presents a new host
-    /// key, which the pin would refuse. Refuse while a returned bot still needs recovery, so its
-    /// retry cannot be redirected to a different server. Nothing on the server changes.
-    fn server_bot_forget(&mut self, cx: &mut Context<Self>) {
-        if self.backend.read(cx).station.has_returned_bot() {
+    /// Forget only the exact host explicitly confirmed inline. Refuse a changed record or an
+    /// ongoing job or unresolved bot recovery, retaining access and cached state on a failed save.
+    pub(super) fn server_bot_forget(
+        &mut self,
+        source: moon_remote::hosts::Host,
+        cx: &mut Context<Self>,
+    ) {
+        if self.backend.read(cx).station.running {
             return;
         }
-        let Some(target) = self.telegram.server.known.clone() else {
+        if let Some(reason) = self.backend.read(cx).station.access_refusal() {
+            self.server_bot_run(Err(reason), cx);
             return;
-        };
+        }
         let path = moon_remote::hosts::Hosts::path();
         let forgotten = moon_remote::hosts::Hosts::load(&path).and_then(|mut hosts| {
-            hosts.forget(&target.addr());
+            if hosts.get(&source.addr) != Some(&source) {
+                return Err(moon_remote::hosts::HostEditError::Changed.into());
+            }
+            hosts.forget(&source.addr);
             hosts.save(&path)
         });
         let outcome = match forgotten {
             Ok(()) => {
                 self.telegram.server.known = known_server();
-                Ok(t!("telegram.server.forgotten", addr = target.addr()).to_string())
+                Ok(t!("telegram.server.forgotten", addr = source.addr).to_string())
             }
-            Err(e) => Err(crate::backend::station::text::error(&e)),
+            Err(e) => {
+                self.server_bot_run(Err(crate::backend::station::text::error(&e)), cx);
+                return;
+            }
         };
         let ed = &mut self.telegram.server;
         ed.local_bot = None;
@@ -452,6 +478,7 @@ impl SettingsView {
         ed.access_base = None;
         ed.access_draft = None;
         ed.chats.close();
+        ed.station_access.clear();
         self.backend.update(cx, |b, bcx| {
             b.station_forgotten(outcome);
             bcx.notify();
@@ -572,7 +599,7 @@ impl SettingsView {
                                 (_, true) => {
                                     Err(t!("telegram.server.need_server_token").to_string())
                                 }
-                                (None, _) => return,
+                                (None, _) => Err(t!("telegram.server.no_known_server").to_string()),
                                 (Some(_), false) if local => {
                                     Err(t!("telegram.server.token_is_local").to_string())
                                 }
@@ -1048,15 +1075,14 @@ impl SettingsView {
                     .render(),
             )
             .child(
-                button("server-forget", t!("telegram.server.forget").to_string())
-                    .disabled(
-                        self.backend.read(cx).station.running
-                            || self.backend.read(cx).station.has_returned_bot(),
-                    )
-                    .ghost()
-                    .tooltip(t!("telegram.server.forget_hint").to_string())
-                    .on_click(cx.listener(|this, _, _, cx| this.server_bot_forget(cx)))
-                    .render(),
+                button(
+                    "server-change-address",
+                    t!("telegram.server.change_address").to_string(),
+                )
+                .disabled(self.backend.read(cx).station.running)
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| this.station_address_begin(window, cx)))
+                .render(),
             );
         let section = section.child(
             div()
@@ -1066,10 +1092,13 @@ impl SettingsView {
         // A server set up already updates from the release: no file to choose.
         self.server_bot_old_admin(section, cx)
             .child(actions)
+            .child(self.station_access_block(target, cx))
             .child(self.server_tape_block(target, cx))
     }
 
-    fn server_bot_progress(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The shared job's loading, outcome and scrollable lines, shown where station or bot
+    /// actions are pressed. The backend owns the same state in either tab.
+    pub(in crate::settings) fn server_bot_progress(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let st = &self.backend.read(cx).station;
         let outcome = st.outcome.as_ref().map(|o| match o {

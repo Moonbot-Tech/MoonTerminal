@@ -24,6 +24,7 @@ mod core_section;
 mod qr;
 mod server_bot;
 mod server_tape;
+mod station_access;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
@@ -442,6 +443,7 @@ impl SettingsView {
                 )
                 .child(self.server_bot_block(cx))
                 .children(self.server_bot_sections(cx))
+                .child(self.server_bot_progress(cx))
                 .child(self.server_bot_local_toggle(cx))
             })
             .when(local_on, |s| s.child(local))

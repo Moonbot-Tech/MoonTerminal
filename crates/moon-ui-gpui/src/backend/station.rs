@@ -1,4 +1,4 @@
-//! The station's server work (Settings -> Telegram -> the bot's segment), owned by the backend.
+//! The station's server work, shared by the Station and Telegram Settings tabs, owned by the backend.
 //!
 //! A job runs for minutes and may hand the terminal's bot over; its end must be applied whether
 //! or not the Settings window is still open — a lost end would leave the terminal's bot down, or
@@ -56,6 +56,8 @@ enum Kind {
 /// The station jobs' state, as the Settings segment shows it.
 #[derive(Default)]
 pub(crate) struct StationJobs {
+    /// A probe's exact destination and key awaiting explicit UI confirmation.
+    pub(crate) address_change: Option<moon_remote::station::access::AddressChange>,
     pub(crate) lines: Vec<String>,
     /// Bumped per line, so a view follows the newest one even once the list is full.
     pub(crate) line_seq: u64,
@@ -99,6 +101,17 @@ impl StationJobs {
         self.returned.is_some()
     }
 
+    /// Preserve the recovery destination and the only retained bot credentials until resolved.
+    pub(crate) fn access_refusal(&self) -> Option<String> {
+        if self.holds_bot() {
+            Some(t!("telegram.server.access_pending_handover").to_string())
+        } else if self.has_returned_bot() {
+            Some(t!("telegram.server.access_pending_return").to_string())
+        } else {
+            None
+        }
+    }
+
     /// A job the user sees as work in progress: buttons wait for it. A quiet read does not count.
     pub(crate) fn busy(&self) -> bool {
         self.running && self.kind != Kind::Quiet
@@ -130,6 +143,21 @@ impl StationJobs {
         if self.lines.len() > MAX_LINES {
             self.lines.drain(..self.lines.len() - MAX_LINES);
         }
+    }
+
+    /// The server was forgotten: nothing learnt about it applies to the next one.
+    fn clear_known(&mut self, outcome: Result<String, String>) {
+        let st = self;
+        st.address_change = None;
+        st.bot = None;
+        st.bot_error = None;
+        st.needs_old_admin = false;
+        st.pending_cores = false;
+        st.pending_refresh = false;
+        st.waiting = None;
+        st.lines.clear();
+        st.outcome = Some(outcome);
+        st.revision = st.revision.wrapping_add(1);
     }
 }
 
@@ -191,18 +219,9 @@ impl Backend {
         self.station_send_cores(cx);
     }
 
-    /// The server was forgotten: nothing learnt about it applies to the next one.
+    /// Drop cached state and queued work after a confirmed forget, removal or address change.
     pub(crate) fn station_forgotten(&mut self, outcome: Result<String, String>) {
-        let st = &mut self.station;
-        st.bot = None;
-        st.bot_error = None;
-        st.needs_old_admin = false;
-        st.pending_cores = false;
-        st.pending_refresh = false;
-        st.waiting = None;
-        st.lines.clear();
-        st.outcome = Some(outcome);
-        st.revision = st.revision.wrapping_add(1);
+        self.station.clear_known(outcome);
     }
 
     fn station_send_cores(&mut self, cx: &mut Context<Self>) {
@@ -253,6 +272,15 @@ impl Backend {
         kind: Kind,
         cx: &mut Context<Self>,
     ) {
+        // Recheck at execution time too: a queued action must not discard recovery access.
+        if job.changes_access()
+            && let Some(reason) = self.station.access_refusal()
+        {
+            self.station.outcome = Some(Err(reason));
+            self.station.revision = self.station.revision.wrapping_add(1);
+            cx.notify();
+            return;
+        }
         let job = match job {
             job::Job::BotOff { target, .. } => {
                 // A queued job decides from the current saved and draft state when it starts.
@@ -295,6 +323,7 @@ impl Backend {
         st.handing_over = hand_over;
         match kind {
             Kind::User => {
+                st.address_change = None;
                 st.outcome = None;
                 st.lines.clear();
             }
@@ -389,7 +418,11 @@ impl Backend {
                     self.station.bot = Some(bot);
                     self.station.bot_error = None;
                 }
-                job::Done::Ok { .. } | job::Done::BotOff { .. } => {}
+                job::Done::Ok { .. }
+                | job::Done::BotOff { .. }
+                | job::Done::AddressProbed(_)
+                | job::Done::AddressChanged
+                | job::Done::Removed { .. } => {}
                 job::Done::NeedsAdminPassword => {
                     self.station.bot_error =
                         Some(t!("telegram.server.needs_old_admin").to_string());
@@ -408,6 +441,27 @@ impl Backend {
             job::Done::BotOff { returned } => {
                 self.station.returned = returned;
                 self.station_apply_returned();
+            }
+            job::Done::AddressProbed(change) => {
+                self.station.address_change = Some(change);
+                self.station.outcome = Some(Ok(t!("telegram.server.address_review").to_string()));
+                return true;
+            }
+            job::Done::AddressChanged => {
+                let pending_cores = self.station.pending_cores;
+                self.station_forgotten(Ok(t!("telegram.server.address_changed").to_string()));
+                // A Save during verification follows this station to its new address.
+                self.station.pending_cores = pending_cores;
+                self.station.pending_refresh = true;
+                return true;
+            }
+            job::Done::Removed { local_forget_error } => {
+                let outcome = match local_forget_error {
+                    Some(reason) => Err(reason),
+                    None => Ok(t!("telegram.server.removed").to_string()),
+                };
+                self.station_forgotten(outcome);
+                return true;
             }
             job::Done::Ok {
                 transferred: t,

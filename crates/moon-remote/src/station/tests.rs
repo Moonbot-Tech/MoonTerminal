@@ -185,7 +185,7 @@ api=no
 config_cas=yes
 "
     ));
-    // Release updates alone predate credential export: refresh that helper too.
+    // Release updates alone also predate credential export and guarded removal.
     assert!(!helper_is_current(
         "release_update=yes
 bot_return=no
@@ -195,7 +195,7 @@ bot_return=no
         "release_update=yes
 "
     ));
-    assert!(helper_is_current(
+    assert!(!helper_is_current(
         "active=active
 config=yes
 creds=core-3
@@ -215,6 +215,8 @@ bot_return=yes
 #[test]
 fn the_helper_prints_its_marker() {
     assert!(crate::script::HELPER.contains("echo \"bot_return=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"remove_station=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"removal_guard=yes\""));
 }
 
 /// A changed window rewrites only `[tape]` — the cores and the bot stay as the server has them —
@@ -247,4 +249,26 @@ fn a_tape_push_changes_only_the_tape_section() {
         .expect("a file without [tape] gets one");
     let back: toml::Value = toml::from_str(&text).unwrap();
     assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
+}
+
+/// Dropping the removal marker would keep an old helper after Update the service, preventing
+/// the user from safely removing their station. Unknown capability values must also refresh.
+#[test]
+fn helper_refresh_requires_the_removal_capability() {
+    assert!(!helper_is_current(
+        "remove_station=yes\nremoval_guard=yes\n"
+    ));
+    assert!(helper_is_current(
+        "release_update=yes
+bot_return=yes
+remove_station=yes
+removal_guard=yes
+"
+    ));
+    assert!(!helper_is_current(
+        "release_update=yes
+remove_station=no
+"
+    ));
+    assert!(!helper_is_current("remove_station=yes\n"));
 }

@@ -361,11 +361,13 @@ fn edit_config(
     anyhow::bail!("station.toml kept changing under this push: another terminal is writing it")
 }
 
-/// Whether a helper's `status` comes from this crate's helper: the line added last,
-/// `bot_return=` (credential read-back), is the marker. An older helper answers "unknown
-/// command" halfway through a push, or overwrites what another terminal wrote.
+/// Whether a helper's `status` comes from this crate's helper: `removal_guard=yes` is the
+/// latest capability marker. Refresh older helpers before using commands they cannot handle
+/// or writes they cannot guard against concurrent removal.
 fn helper_is_current(status: &str) -> bool {
     script::value(status, "bot_return") == Some("yes")
+        && script::value(status, "remove_station") == Some("yes")
+        && script::value(status, "removal_guard") == Some("yes")
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -651,6 +653,7 @@ pub fn put_valuation(
     Ok(())
 }
 
+pub mod access;
 pub mod api;
 pub mod bot;
 pub mod pull;

@@ -14,13 +14,39 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+/// A rejected host-record edit, kept typed so the terminal can explain it in the user's locale.
+#[derive(Debug)]
+pub enum HostEditError {
+    Changed,
+    NotSetUp,
+    SameAddress,
+    AddressKnown,
+    NoFingerprint,
+}
+
+impl std::fmt::Display for HostEditError {
+    /// Stable diagnostic facts; user-facing recovery advice belongs to the UI.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Changed => "the known server changed; read it again",
+            Self::NotSetUp => "the server setup did not finish",
+            Self::SameAddress => "the address has not changed",
+            Self::AddressKnown => "the destination is already a known server",
+            Self::NoFingerprint => "no confirmed host key",
+        })
+    }
+}
+
+impl std::error::Error for HostEditError {}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct Hosts {
     #[serde(default, rename = "host")]
     hosts: Vec<Host>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+/// A pinned server and the verified administrator whose key login survives address changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Host {
     /// `host:port`, exactly as the user typed the host.
     pub addr: String,
@@ -64,6 +90,46 @@ impl Hosts {
         self.hosts.len() != before
     }
 
+    /// Validate a proposed address change against the host the user saw. Refuses stale records,
+    /// unfinished setups and collisions so an existing administrator is never lost or replaced.
+    pub fn check_address(&self, source: &Host, addr: &str) -> anyhow::Result<()> {
+        if self.get(&source.addr) != Some(source) {
+            return Err(HostEditError::Changed.into());
+        }
+        if source.admin.is_none() {
+            return Err(HostEditError::NotSetUp.into());
+        }
+        if addr == source.addr {
+            return Err(HostEditError::SameAddress.into());
+        }
+        if self.get(addr).is_some() {
+            return Err(HostEditError::AddressKnown.into());
+        }
+        Ok(())
+    }
+
+    /// Move a verified record to the explicitly confirmed address and fingerprint, preserving
+    /// its administrator and list position. The caller verifies key login before saving this.
+    pub fn change_address(
+        &mut self,
+        source: &Host,
+        addr: &str,
+        fingerprint: &str,
+    ) -> anyhow::Result<()> {
+        self.check_address(source, addr)?;
+        if fingerprint.is_empty() {
+            return Err(HostEditError::NoFingerprint.into());
+        }
+        let host = self
+            .hosts
+            .iter_mut()
+            .find(|h| h.addr == source.addr)
+            .ok_or_else(|| anyhow::anyhow!("the known server disappeared"))?;
+        host.addr = addr.to_owned();
+        host.fingerprint = fingerprint.to_owned();
+        Ok(())
+    }
+
     /// The first host whose setup finished — its administrator verified.
     pub fn first_set_up(&self) -> Option<&Host> {
         self.hosts.iter().find(|h| h.admin.is_some())
@@ -71,7 +137,7 @@ impl Hosts {
 
     /// Pin `fingerprint` for `addr`. Refuses to replace a different pin: a changed host key is
     /// either a reinstalled server or someone in the middle, and only the user can tell which —
-    /// by deleting the entry by hand.
+    /// through the terminal's explicit address-change or forget confirmation.
     pub fn pin(&mut self, addr: &str, fingerprint: &str) -> anyhow::Result<()> {
         match self.hosts.iter().find(|h| h.addr == addr) {
             Some(host) if host.fingerprint == fingerprint => Ok(()),

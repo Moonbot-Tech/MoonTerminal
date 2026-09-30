@@ -112,11 +112,14 @@ pub fn helper(command: &str, args: &[&str]) -> String {
     line
 }
 
-/// A non-zero exit becomes an error with the command's own words — what it printed before it
-/// failed as well as why: a helper reports its steps on stdout and its reason on stderr.
+/// A non-zero exit becomes an error with the command's own words, or a typed removal refusal
+/// for localized UI advice. A helper reports its steps on stdout and its reason on stderr.
 pub fn checked(out: Output) -> anyhow::Result<Output> {
     if out.ok() {
         return Ok(out);
+    }
+    if value(&out.stdout_text(), "station") == Some("removed") {
+        return Err(crate::station::access::RemovalError::NotConfigured.into());
     }
     let stdout = out.stdout_text().trim().to_owned();
     let stderr = out.stderr_text();
