@@ -236,8 +236,10 @@ impl SettingsView {
     /// `LONG_POSITION_MIN_RANGE`, and updates live state and storage.toml. The cleanup's count
     /// moves with it: a long position claims its two ends, a short one its whole length.
     fn adjust_long_position_min(&mut self, delta: i32, cx: &mut Context<Self>) {
-        let current = self.storage.cfg.trade_replay.long_position_min as i32;
-        let v = storage_cfg::clamp_long_position_min((current + delta).max(0) as u32);
+        let v = storage_cfg::step_long_position_min(
+            self.storage.cfg.trade_replay.long_position_min,
+            delta,
+        );
         if self.storage.cfg.trade_replay.long_position_min != v {
             self.storage.cfg.trade_replay.long_position_min = v;
             moon_core::market::trade_replay::set_long_position_min(v);
@@ -250,7 +252,7 @@ impl SettingsView {
     /// The stepper's label for a margin: a whole number of minutes when the step divides by
     /// 60, seconds otherwise. A step that is not a whole minute must not read as the minute
     /// beside it — 60 s already says "1 min".
-    fn trades_margin_label(secs: u32) -> String {
+    pub(super) fn trades_margin_label(secs: u32) -> String {
         if secs.is_multiple_of(60) {
             t!("storage.trades_min", min = secs / 60).to_string()
         } else {

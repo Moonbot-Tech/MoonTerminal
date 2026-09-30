@@ -39,6 +39,8 @@ pub(crate) enum Job {
     Update { target: Target, bin: PathBuf },
     /// Make the picked cores the station's whole set.
     Cores { target: Target, cores: Vec<u64> },
+    /// Set the station's window around a trade.
+    Tape { target: Target, tape: TapeWindow },
     /// Set the station's bot.
     Bot { target: Target, bot: BotPlan },
     /// Take the bot off the station: its token, its chats and `[telegram]`.
@@ -134,7 +136,8 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
             setup::run(&setup, say)?;
             // Before the first start: the station opens the cache as its own.
             send_valuation(&target, say);
-            station::push_cores(&target, &keys, tape_window(), say)?;
+            // The terminal's window only starts a station that has none.
+            station::push_cores(&target, &keys, station::terminal_tape(), say)?;
             set_bot(&target, bot, say)
         }
         Job::Resetup { setup } => {
@@ -156,7 +159,16 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
             })
         }
         Job::Cores { target, cores } => {
-            station::push_cores(&target, &core_keys(&cores)?, tape_window(), say)?;
+            // The station's window is set by hand only: a change of cores brings none.
+            station::push_cores(&target, &core_keys(&cores)?, None, say)?;
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::Tape { target, tape } => {
+            station::push_tape(&target, tape, say)?;
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,
@@ -331,18 +343,6 @@ fn core_keys(picked: &[u64]) -> anyhow::Result<Vec<CoreKey>> {
             })
         })
         .collect()
-}
-
-/// The terminal's window around a trade, for the station's tape.
-fn tape_window() -> Option<TapeWindow> {
-    if !moon_core::config::paths::storage_path().exists() {
-        return None;
-    }
-    let cfg = moon_core::config::storage::load().trade_replay;
-    Some(TapeWindow {
-        margin_s: cfg.margin_s,
-        long_position_min: cfg.long_position_min,
-    })
 }
 
 /// How the user gets in the first time.

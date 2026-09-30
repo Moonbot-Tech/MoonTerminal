@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use moon_core::config::Secret;
-use moon_core::station_api::{Access, Answer, BotStatus, Request};
+use moon_core::station_api::{Access, Answer, BotStatus, Request, TapeWindow};
 use moon_core::telegram::TelegramStatus;
 
-use super::{BotChange, admin_conn, api, current_helper_status, with_telegram};
+use super::{BotChange, admin_conn, api, current_helper_status, edit_config, with_telegram};
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::Target;
 
@@ -38,6 +38,8 @@ pub struct BotState {
     pub pairing_until: Option<Instant>,
     /// The paired chats, the owner and the viewers' grants, while a bot runs.
     pub access: Option<Access>,
+    /// The window around a trade the station records with; `None` from a station older than it.
+    pub tape: Option<TapeWindow>,
 }
 
 impl BotState {
@@ -107,6 +109,7 @@ pub fn bot_state(target: &Target) -> anyhow::Result<BotState> {
             other => anyhow::bail!("the station answered an access request with {other:?}"),
         };
     }
+    state.tape = station.tape;
     state.bot = station.bot;
     Ok(state)
 }
@@ -174,7 +177,8 @@ pub fn transfer_bot(
     );
     let current =
         run(script::helper("get-config", &[]), &[]).context("read the server's station.toml")?;
-    let config = with_telegram(&current, change, false)?;
+    // Checked before anything is written; written below over whatever the file holds by then.
+    with_telegram(&current, change, false)?;
     let pairing_json = serde_json::to_vec(pairing).context("encode telegram.json")?;
 
     let handed = (|| -> anyhow::Result<BotState> {
@@ -187,7 +191,10 @@ pub fn transfer_bot(
             "paired chats: {} handed over",
             pairing.authorized_chat_ids.len()
         ));
-        run(script::helper("put-config", &[]), config.as_bytes())?;
+        edit_config(&conn, true, |now| {
+            let now = now.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
+            with_telegram(now, change, false).map(Some)
+        })?;
         run(script::helper("start", &[]), &[])?;
         say("station started with the bot");
         wait_polling(target, !pairing.authorized_chat_ids.is_empty(), say)
@@ -309,16 +316,30 @@ fn look(target: &Target) -> anyhow::Result<BotState> {
     bot_state(target)
 }
 
-/// Undo a hand-over on a fresh connection, every step tried whatever the others did: the
-/// configuration as it was, no token, no chats, and the station running again.
+/// Undo a hand-over on a fresh connection, every step tried whatever the others did: `[telegram]`
+/// as it was (the rest of the file as it is now), no token, no chats, and the station running
+/// again.
 fn take_bot_off(target: &Target, config_before: &str) -> anyhow::Result<()> {
     let conn = admin_conn(target)?;
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<()> {
         script::checked(conn.run(&command, stdin, STEP_TIMEOUT)?)?;
         Ok(())
     };
+    let restore = || -> anyhow::Result<()> {
+        let before: toml::Table = toml::from_str(config_before)?;
+        edit_config(&conn, true, |now| {
+            let now = now.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
+            let mut file: toml::Table = toml::from_str(now)?;
+            match before.get("telegram") {
+                Some(telegram) => file.insert("telegram".to_owned(), telegram.clone()),
+                None => file.remove("telegram"),
+            };
+            Ok(Some(toml::to_string_pretty(&file)?))
+        })?;
+        Ok(())
+    };
     let failed: Vec<String> = [
-        run(script::helper("put-config", &[]), config_before.as_bytes()),
+        restore(),
         run(script::helper("drop-token", &[]), &[]),
         run(script::helper("drop-pairing", &[]), &[]),
         run(script::helper("start", &[]), &[]),

@@ -202,6 +202,13 @@ pub fn clamp_long_position_min(minutes: u32) -> u32 {
     )
 }
 
+/// `minutes` moved by `delta` minutes, within [`LONG_POSITION_MIN_RANGE`] — the stepper of the
+/// long-position threshold, the terminal's and the station's.
+pub fn step_long_position_min(minutes: u32, delta: i32) -> u32 {
+    let moved = (i64::from(minutes) + i64::from(delta)).max(0);
+    clamp_long_position_min(u32::try_from(moved).unwrap_or(u32::MAX))
+}
+
 /// The step of [`TRADE_MARGIN_STEPS_S`] nearest to `secs` — the lower one when `secs` sits
 /// exactly between two (a migrated `margin_min = 45` lands on 30 minutes, not 60). Anything
 /// past the last step is the last step, anything under the first is the first.

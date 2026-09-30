@@ -222,6 +222,21 @@ pub struct Status {
     pub cores_total: usize,
     /// `None`: the station runs no bot — no token, or a pairing file it could not read.
     pub bot: Option<BotStatus>,
+    /// The window around a trade the station records with now. `None` from a station older than
+    /// it — an added field with a default, so neither end of version 2 misreads the other.
+    #[serde(default)]
+    pub tape: Option<TapeWindow>,
+}
+
+/// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the
+/// station's `[tape]` in `station.toml`): the station's own, set from the terminal's Settings by
+/// hand, never behind the user's back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeWindow {
+    /// Seconds of prints on each side of a trade.
+    pub margin_s: u32,
+    /// From how many minutes a position is recorded as its two ends.
+    pub long_position_min: u32,
 }
 
 /// The station's bot now.

@@ -44,6 +44,12 @@ lock() {
     flock -n 9 || die "another station command is running"
 }
 
+# The same lock, waited for: a short write that only has to come after the command holding it.
+lock_wait() {
+    exec 9>"$LOCK"
+    flock -w 30 9 || die "another station command is running"
+}
+
 valid_uid() {
     case "$1" in
     '' | 0 | *[!0-9]*) return 1 ;;
@@ -110,8 +116,14 @@ cmd_get_config() {
     cat "$CONF"
 }
 
-# put-config; stdin: station.toml. Refused if it carries a key: keys live in credentials only.
+# put-config [base]; stdin: station.toml. With <base> — the sha256 of the file the caller read, or
+# `none` for no file yet — it is written only while the file is still that one, so what another
+# terminal wrote in between is not overwritten: `config=changed`, exit 3, and the caller reads it
+# again. Without it (a terminal older than this helper, which still takes it for its own) it is
+# written as it comes. Replaced in one rename: a reader never sees half a file. Refused if it
+# carries a key: keys live in credentials only.
 cmd_put_config() {
+    base=${1:-}
     tmp=$(mktemp)
     cat >"$tmp"
     grep -q '^\[\[core\]\]' "$tmp" || {
@@ -122,7 +134,17 @@ cmd_put_config() {
         rm -f "$tmp"
         die "station.toml must not carry a key"
     fi
-    install -m 640 -o root -g moon-station "$tmp" "$CONF"
+    if [ -n "$base" ]; then
+        now=none
+        [ -f "$CONF" ] && now=$(sha256sum "$CONF" | cut -d' ' -f1)
+        if [ "$now" != "$base" ]; then
+            rm -f "$tmp"
+            echo "config=changed"
+            exit 3
+        fi
+    fi
+    install -m 640 -o root -g moon-station "$tmp" "$CONF.new"
+    mv -f "$CONF.new" "$CONF"
     rm -f "$tmp"
     echo "config=written"
 }
@@ -250,6 +272,9 @@ cmd_status() {
     [ -f "$PAIRING" ] && echo "pairing=yes" || echo "pairing=no"
     [ -f "$VALUATION" ] && echo "valuation=yes" || echo "valuation=no"
     [ -S "$API_SOCKET" ] && echo "api=yes" || echo "api=no"
+    # The marker of this helper's version (the line added last): a terminal that does not see it
+    # puts its own helper in place first.
+    echo "config_cas=yes"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -319,7 +344,10 @@ drop-cred) cmd_drop_cred "$@" ;;
 put-token) cmd_put_token ;;
 drop-token) cmd_drop_token ;;
 get-config) cmd_get_config ;;
-put-config) cmd_put_config ;;
+put-config)
+    lock_wait
+    cmd_put_config "$@"
+    ;;
 install-bin)
     lock
     cmd_install_bin "$@"

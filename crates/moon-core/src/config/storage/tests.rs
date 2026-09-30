@@ -209,3 +209,12 @@ autoload_missing = true
     let back: StorageCfg = toml::from_str(&text).expect("parses");
     assert!(!back.trade_replay.autoload_cores);
 }
+
+/// The long-position stepper moves by minutes and stays inside the range, at both ends.
+#[test]
+fn the_long_position_step_stays_in_range() {
+    assert_eq!(step_long_position_min(10, 5), 15);
+    assert_eq!(step_long_position_min(3, -5), 1);
+    assert_eq!(step_long_position_min(118, 5), 120);
+    assert_eq!(step_long_position_min(0, 0), 1);
+}
