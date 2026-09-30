@@ -1,6 +1,45 @@
 //! Fixture-only restart and deletion-age coverage; no Bot API requests.
 use super::{Answer, History};
 
+/// Keeping only the persisted message-id check leaves Status visible after an upgrade or
+/// ownership transfer. The old JSON fixture has no markup; a changed keyboard must be resent.
+#[test]
+fn navigation_refreshes_legacy_and_changed_role_keyboards() {
+    use crate::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
+    let markup = |status: bool| {
+        let mut buttons = vec![KeyboardButton {
+            text: "Today".into(),
+            style: None,
+        }];
+        if status {
+            buttons.push(KeyboardButton {
+                text: "Status".into(),
+                style: None,
+            });
+        }
+        ReplyMarkup::Reply(ReplyKeyboardMarkup {
+            keyboard: vec![buttons],
+            resize_keyboard: true,
+            is_persistent: true,
+        })
+    };
+    let owner = markup(true);
+    let viewer = markup(false);
+    let mut history: History =
+        serde_json::from_str(r#"{"navigation":{"7":10},"answers":{}}"#).unwrap();
+    assert!(history.needs_navigation(7, &viewer, false));
+    history.navigation_markup.insert(7, owner.clone());
+    assert!(history.needs_navigation(7, &viewer, false));
+    assert!(!history.needs_navigation(7, &owner, false));
+    // Persisting the replacement keeps restart suppression without retaining the old role.
+    history.navigation_markup.insert(7, viewer.clone());
+    let restored: History = serde_json::from_slice(&serde_json::to_vec(&history).unwrap()).unwrap();
+    assert!(!restored.needs_navigation(7, &viewer, false));
+    assert!(restored.needs_navigation(7, &viewer, true));
+    assert!(restored.needs_navigation(8, &viewer, false));
+    assert!(restored.needs_navigation(7, &owner, false));
+}
+
 /// Exact temporary file ownership keeps fixture cleanup independent of the application data root.
 struct Fixture(std::path::PathBuf);
 impl Drop for Fixture {
