@@ -1852,6 +1852,14 @@ analytics.ticks.col.duration:
   ru: "длит."
   en: "dur."
   es: "dur."
+analytics.ticks.duration_tip:
+  ru: "от исполнения входа до исполнения выхода; время, которое ордер на вход ждал в стакане до исполнения, не входит"
+  en: "from the entry fill to the exit fill; the time the entry order waited in the book before filling is not counted"
+  es: "desde la ejecución de la entrada hasta la ejecución de la salida; no cuenta el tiempo que la orden de entrada esperó en el libro antes de ejecutarse"
+analytics.ticks.order_wait_tip:
+  ru: "ордер ждал %{wait} до исполнения"
+  en: "the order waited %{wait} before filling"
+  es: "la orden esperó %{wait} antes de ejecutarse"
 analytics.ticks.col.held:
   ru: "в базе"
   en: "held"

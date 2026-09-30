@@ -39,3 +39,16 @@ fn every_answer_states_its_out_of_sample_status() {
     assert!(open.warn && open.short != whole);
     assert!(!real.warn && real.short != whole && !real.short.is_empty());
 }
+
+/// The wait before the fill is shown only where the core filed a placement that precedes the
+/// entry fill: an absent, zero or later placement gives no line.
+#[test]
+fn order_wait_needs_a_placement_before_the_fill() {
+    use super::order_wait_ms;
+    assert_eq!(order_wait_ms(10_000, Some(7_600)), Some(2_400));
+    assert_eq!(order_wait_ms(10_000, None), None);
+    assert_eq!(order_wait_ms(10_000, Some(0)), None);
+    assert_eq!(order_wait_ms(10_000, Some(-5)), None);
+    assert_eq!(order_wait_ms(10_000, Some(12_000)), None);
+    assert_eq!(order_wait_ms(10_000, Some(10_000)), None);
+}
