@@ -68,10 +68,8 @@ pub(crate) struct StationJobs {
     pub(crate) erased: u64,
     /// Bumped after restoration so Settings refreshes its masked token input.
     pub(crate) restored: u64,
-    /// A failed disk save retains the recovered credential for a local retry.
+    /// An incomplete removal or failed disk save retains the credential for another return attempt.
     returned: Option<moon_remote::station::bot::ReturnedBot>,
-    /// Removal succeeded; a retry needs only the local save, without SSH.
-    returned_ready: bool,
     /// Bumped on every change of this state: part of the Settings window's repaint signature.
     pub(crate) revision: u64,
     kind: Kind,
@@ -87,7 +85,7 @@ pub(crate) struct StationJobs {
 }
 
 impl StationJobs {
-    /// Keep the retry action available after removal succeeded but saving locally failed.
+    /// Keep the retry action available while removal or the local save still needs recovery.
     pub(crate) fn has_returned_bot(&self) -> bool {
         self.returned.is_some()
     }
@@ -207,14 +205,6 @@ impl Backend {
                     &self.config.telegram,
                     self.preview.as_ref().map(|p| &p.telegram),
                 );
-                if self.station.returned.is_some() && self.station.returned_ready {
-                    self.station_apply_returned();
-                    self.station.finished = self.station.finished.wrapping_add(1);
-                    self.station.revision = self.station.revision.wrapping_add(1);
-                    cx.notify();
-                    self.station_next(cx);
-                    return;
-                }
                 job::Job::BotOff {
                     target,
                     restore,
@@ -304,7 +294,6 @@ impl Backend {
         let done = match event {
             job::Event::Returned(returned) => {
                 self.station.returned = Some(returned);
-                self.station.returned_ready = false;
                 return false;
             }
             job::Event::Line(line) => {
@@ -341,7 +330,6 @@ impl Backend {
         match done {
             job::Done::BotOff { returned } => {
                 self.station.returned = returned;
-                self.station.returned_ready = true;
                 self.station_apply_returned();
             }
             job::Done::Ok {
@@ -416,7 +404,8 @@ impl Backend {
     }
 
     /// Save before resuming the transport; a failed disk save retains the only returned bot in
-    /// protected memory and lets the same button retry without another server operation.
+    /// protected memory. Every retry first checks and removes the current server bot again:
+    /// a token may have been installed there since the failed local save.
     fn station_apply_returned(&mut self) {
         let Some(returned) = self.station.returned.take() else {
             if self.telegram.suspended() {

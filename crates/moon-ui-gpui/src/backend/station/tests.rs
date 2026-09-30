@@ -129,3 +129,15 @@ fn local_bot_created_during_ssh_is_never_saved_over() {
         "new-local-bot"
     );
 }
+
+/// Reintroducing the local-only station_begin shortcut after a failed save can start a second
+/// poller: server-token actions remain available between attempts. This binary-only owner cannot
+/// be constructed without the production host, so check its dispatch boundary as source text.
+#[test]
+fn bot_off_retries_never_publish_locally_before_dispatching_server_work() {
+    let source = include_str!("../station.rs");
+    let begin = source.split("    fn station_begin(").nth(1).unwrap();
+    let begin = begin.split("    fn station_next(").next().unwrap();
+    assert!(!begin.contains("self.station_apply_returned()"));
+    assert!(!begin.contains("self.telegram.resume("));
+}
