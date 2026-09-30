@@ -3106,3 +3106,87 @@ fn default_period_basis_is_byte_for_byte_the_close_date_result() {
         assert_eq!(basis_summary(&conn, &default), basis_summary(&conn, &close));
     }
 }
+
+/// Coin fixture for the Report coin field: a short ticker, its superstrings, its contract tails,
+/// and two coins that differ only where `_` would act as a LIKE wildcard.
+fn coin_fixture() -> Connection {
+    let conn = Connection::open_in_memory().expect("open coin fixture");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT,
+             newrecid INTEGER NOT NULL,
+             closedate INTEGER,
+             coin TEXT
+         );
+         INSERT INTO orders_rep VALUES
+             (1, 'A', 1, 10, 'IO'),
+             (1, 'A', 2, 10, 'BIO'),
+             (1, 'A', 3, 10, 'IOTA'),
+             (1, 'A', 4, 10, 'IO_RP'),
+             (1, 'A', 5, 10, 'IO_0925'),
+             (1, 'A', 6, 10, 'A_B'),
+             (1, 'A', 7, 10, 'AXB'),
+             (1, 'A', 8, 10, 'A_B_0925'),
+             (1, 'A', 9, 10, 'AXBX0925');",
+    )
+    .expect("seed coin fixture");
+    conn
+}
+
+/// Record ids the Report returns for one raw coin field value, ascending.
+fn coin_hits(conn: &Connection, raw: &str) -> Vec<i64> {
+    let filter = ReportFilter {
+        coin: raw.to_string(),
+        ..ReportFilter::default()
+    };
+    let mut ids = query_reports(conn, &filter, "coin", false, 100)
+        .expect("query the coin fixture")
+        .rec_ids;
+    ids.sort_unstable();
+    ids
+}
+
+/// Dropping the trailing-space check in `report_read.rs:build_where` returns BIO and IOTA for
+/// `io `; applying it to a value without the space narrows today's substring search.
+#[test]
+fn trailing_space_selects_the_exact_ticker_and_keeps_substring_otherwise() {
+    let conn = coin_fixture();
+    assert_eq!(coin_hits(&conn, "io"), vec![1, 2, 3, 4, 5]);
+    assert_eq!(coin_hits(&conn, "io "), vec![1, 4, 5]);
+    assert_eq!(coin_hits(&conn, "IO "), vec![1, 4, 5]);
+    // A leading space alone stays a substring search.
+    assert_eq!(coin_hits(&conn, " io"), vec![1, 2, 3, 4, 5]);
+    // Spaces only select nothing special: an empty filter.
+    assert_eq!(coin_hits(&conn, "  ").len(), 9);
+}
+
+/// Matching only `coin = ?` in exact mode drops the `IO_RP` / `IO_0925` contract tails; a tail
+/// pattern without the `\_` separator admits `IOTA`.
+#[test]
+fn exact_ticker_keeps_contract_tails_only() {
+    let conn = coin_fixture();
+    assert_eq!(coin_hits(&conn, "io_rp "), vec![4]);
+    assert!(!coin_hits(&conn, "io ").contains(&3));
+}
+
+/// Without `escape_like`, `a_b ` would treat `_` as any character and match `AXB` and
+/// `AXBX0925`.
+#[test]
+fn exact_ticker_escapes_like_wildcards() {
+    let conn = coin_fixture();
+    assert_eq!(coin_hits(&conn, "a_b "), vec![6, 8]);
+    assert_eq!(coin_hits(&conn, "axb "), vec![7]);
+    assert_eq!(coin_hits(&conn, "a%b "), Vec::<i64>::new());
+}
+
+/// The exact flag reads the untrimmed value: only a trailing space counts.
+#[test]
+fn report_coin_is_exact_reads_only_a_trailing_space() {
+    assert!(super::report_coin_is_exact("io "));
+    assert!(super::report_coin_is_exact(" io "));
+    assert!(!super::report_coin_is_exact("io"));
+    assert!(!super::report_coin_is_exact(" io"));
+    assert!(!super::report_coin_is_exact("io ta"));
+    assert!(!super::report_coin_is_exact(" "));
+}

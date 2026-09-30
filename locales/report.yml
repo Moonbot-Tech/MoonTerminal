@@ -237,6 +237,11 @@ report.filter.coin_ph:
   ru: "Монета"
   en: "Coin"
   es: "Moneda"
+# Hover text of the coin field; a `=` beside the field marks the exact mode it describes.
+report.filter.coin_tip:
+  ru: "Часть тикера находит все монеты с ним (io: IO, BIO, IOTA). Пробел в конце или выбор из списка ищет точный тикер (io : только IO и его контракты вроде IO_0925), рядом появляется «=»."
+  en: "Part of a ticker finds every coin containing it (io: IO, BIO, IOTA). A trailing space or a pick from the list finds the exact ticker (io : only IO and its contracts such as IO_0925), marked by '=' beside the field."
+  es: "Parte de un ticker encuentra todas las monedas que lo contienen (io: IO, BIO, IOTA). Un espacio al final o elegir de la lista busca el ticker exacto (io : solo IO y sus contratos como IO_0925), marcado con '=' junto al campo."
 report.filter.date_ph:
   ru: "Дата и время"
   en: "Date and time"

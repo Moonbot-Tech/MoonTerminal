@@ -95,7 +95,7 @@ fn populated_filter() -> ReportFilter {
         core_uids: vec![7, 3],
         date_from: Some(100),
         date_to: Some(200),
-        coin: " BTC ".to_string(),
+        coin: " BTC".to_string(),
         exact_coins: None,
         side: SideFilter::Long,
         emulator: Some(false),
@@ -260,4 +260,41 @@ fn scope_change_rejects_pending_old_scope_result() {
         !report_query_result_is_current(4, 4, &requested, &mask_drift),
         "a late result must not publish after the Auto strategy mask changes"
     );
+}
+
+/// Trimming the exact-ticker space in `query:strategy_catalog_scope` makes `io` and `io ` one
+/// scope, so switching to exact mode keeps strategies that only traded BIO or IOTA listed.
+#[test]
+fn exact_coin_mode_is_part_of_the_catalog_scope() {
+    let mut substring = populated_filter();
+    substring.coin = "io".to_string();
+    let mut exact = substring.clone();
+    exact.coin = "io ".to_string();
+
+    let published = strategy_catalog_scope(&substring);
+    assert_ne!(strategy_catalog_scope(&exact), published);
+    assert!(strategy_metadata_request(&exact, Some(&published), false).is_some());
+    // A leading space is not exact mode and canonicalizes to the plain substring scope.
+    let mut leading = substring.clone();
+    leading.coin = " io".to_string();
+    assert_eq!(strategy_catalog_scope(&leading), published);
+    // Case still canonicalizes inside exact mode.
+    let mut exact_upper = substring.clone();
+    exact_upper.coin = "IO ".to_string();
+    assert_eq!(
+        strategy_catalog_scope(&exact_upper),
+        strategy_catalog_scope(&exact)
+    );
+}
+
+/// Russian-layout input keeps its trailing space through `normalize_layout`, so `шщ ` is the
+/// exact ticker IO rather than a substring search.
+#[test]
+fn russian_layout_keeps_the_exact_ticker_space() {
+    let normalized = crate::controls::coin_search::normalize_layout("шщ ");
+    assert_eq!(normalized, "io ");
+    assert!(db::report_coin_is_exact(&normalized));
+    assert!(!db::report_coin_is_exact(
+        &crate::controls::coin_search::normalize_layout("шщ")
+    ));
 }
