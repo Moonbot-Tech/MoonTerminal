@@ -8,7 +8,9 @@
 //! - backfills and keeps each closed trade's order traces (`order_traces.sqlite`);
 //! - records the tape around every trade (`market::tape_recorder`, always on here) into
 //!   `tape_recorder.sqlite`: the pair subscribed for the trade's lifetime, seeded once with the
-//!   core's chart archive.
+//!   core's chart archive; a trade open across a restart is taken up again, what the file holds
+//!   of it not recorded twice. The file keeps everything while the disk has room; short of the
+//!   reserve, the oldest tape goes — and only the tape (`storage.rs`).
 //!
 //! With `[telegram]` in `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with
 //! the Mini App on, the account the Mini App shows: orders, balances, strategies, the cores'
@@ -46,6 +48,7 @@ mod host;
 mod pull;
 mod release;
 mod signals;
+mod storage;
 mod tg;
 
 use std::path::{Path, PathBuf};

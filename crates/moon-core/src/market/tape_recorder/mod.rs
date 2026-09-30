@@ -30,6 +30,16 @@
 //! `tape_recorder.sqlite` — the layout of `trades.sqlite`, a second [`TradeCache`] on its own
 //! file — and is logged to `logs/tape_recorder.log`, with a summary line every minute.
 //!
+//! # A station's restart and its disk
+//!
+//! A trade open while the station restarts reaches the new process only through the core's
+//! open-row check, stamped with its old entry. The terminal takes such an open for no entry and
+//! skips it; a station RESUMES it: what the file already holds of the trade counts as filed, the
+//! rest is recorded from the core's archive and the live stream as for any trade, the part out of
+//! reach named lost. The file keeps everything until the server runs short of space; then the
+//! station asks for room ([`free_disk`]) and the prints filed longest ago go first, their pages
+//! handed back to the disk.
+//!
 //! Once a closed trade is settled here, and the terminal's own close-time capture has had time to
 //! land, the two tapes of it are read back and compared ([`compare`]): coverage, prints, volume and
 //! the level touches the entry model fills on. The ring capture is the reference. A station has
@@ -143,6 +153,8 @@ enum Cmd {
     },
     /// A core's connection went away or was replaced: a donor on it must not be used again.
     CoreGone(CoreId),
+    /// The server is short of this many bytes: evict the oldest prints.
+    FreeDisk(i64),
     /// The process is stopping: file what is drained, and answer once it is on disk.
     Shutdown(Sender<()>),
 }
@@ -201,6 +213,15 @@ pub fn trade_closed(exchange_key: &str, market: &str, trade: TradeId, open_ms: i
             open_ms,
             close_ms,
         });
+    }
+}
+
+/// The server is short of `bytes` of free space (a station's own reckoning): the prints filed
+/// longest ago leave the file until that much is gone, and the file shrinks by it. Starts the
+/// recorder if it is not running yet — a file from before the restart is on the disk all the same.
+pub fn free_disk(bytes: i64) {
+    if enabled() && bytes > 0 {
+        send(Cmd::FreeDisk(bytes));
     }
 }
 
@@ -316,6 +337,8 @@ struct Stats {
     breaks: u64,
     /// Opens that were no entry: resent open rows after a (re)connect.
     stale_opens: u64,
+    /// Open trades a station took up again after its own restart (resent open rows).
+    resumed: u64,
     /// Settled trades compared with the ring capture, and their sums.
     compared: u64,
     needed_ms: i64,
@@ -353,9 +376,10 @@ struct Recorder {
 impl Recorder {
     fn start() -> Option<Self> {
         let path = crate::config::paths::tape_recorder_db_path();
-        // No ceiling: a measuring file, deleted by hand after a run — not the Storage tab's
-        // `max_mb`, which is for `trades.sqlite` and would evict spans before they are compared.
-        let Some(cache) = TradeCache::open_with_ceiling(path.clone(), || None) else {
+        // No ceiling — not the Storage tab's `max_mb`, which is for `trades.sqlite` and would
+        // evict spans before they are compared: kept whole until a station runs short of disk
+        // ([`free_disk`]), then shrunk by what it must give back.
+        let Some(cache) = TradeCache::open_evictable(path.clone()) else {
             line("not started: the database thread could not be spawned");
             return None;
         };
@@ -385,14 +409,30 @@ impl Recorder {
                 trade,
                 open_ms,
             } => {
-                if now_ms - open_ms > FRESH_OPEN_MS {
+                let key = (exchange, market);
+                let station = crate::feed::station::enabled();
+                let known = self.tasks.get(&key).is_some_and(|t| t.knows(trade));
+                let verdict = open_verdict(station, now_ms - open_ms, known);
+                if verdict == OpenVerdict::Skip {
                     // Hundreds at every (re)connect: counted, not logged one by one.
                     self.stats.stale_opens += 1;
                     return;
                 }
-                line(&format!("open {exchange} {market} at {open_ms}"));
+                let what = match verdict {
+                    OpenVerdict::Resume => {
+                        self.stats.resumed += 1;
+                        "resume"
+                    }
+                    _ => "open",
+                };
+                line(&format!("{what} {} {} at {open_ms}", key.0, key.1));
+                // What the file already holds of a trade open across the station's restart is
+                // not recorded twice.
+                if verdict == OpenVerdict::Resume {
+                    self.prime(&key, open_ms.saturating_sub(margin), now_ms);
+                }
                 self.tasks
-                    .entry((exchange, market))
+                    .entry(key)
                     .or_insert_with(KeyTask::new)
                     .opened(trade, open_ms, margin, long);
             }
@@ -404,13 +444,31 @@ impl Recorder {
                 close_ms,
             } => {
                 line(&format!("close {exchange} {market} {open_ms}..{close_ms}"));
+                let key = (exchange, market);
+                // A station's close of a trade it never saw open — it opened before a restart and
+                // its resent open did not come first: what the file holds of it counts as filed.
+                let known = self.tasks.get(&key).is_some_and(|t| t.knows(trade));
+                if crate::feed::station::enabled() && !known {
+                    self.prime(
+                        &key,
+                        open_ms.saturating_sub(margin),
+                        close_ms.saturating_add(margin),
+                    );
+                }
                 self.tasks
-                    .entry((exchange, market))
+                    .entry(key)
                     .or_insert_with(KeyTask::new)
                     .closed(trade, open_ms, close_ms, margin, long);
             }
             // Taken by `run` before a command reaches here.
             Cmd::Shutdown(_) => {}
+            Cmd::FreeDisk(bytes) => {
+                line(&format!(
+                    "the server is short of {} KB: the oldest prints go",
+                    bytes / 1_000
+                ));
+                self.cache.evict_oldest(bytes);
+            }
             Cmd::CoreGone(core) => {
                 let gone: Vec<String> = self
                     .donors
@@ -422,6 +480,32 @@ impl Recorder {
                     self.drop_donor(&exchange, "its core went away");
                 }
             }
+        }
+    }
+
+    /// Count as filed what the file already holds of `key` over `[from_ms, to_ms]`. A read the
+    /// worker did not answer in time leaves nothing counted: the stretch is recorded again, and
+    /// the file keeps only what it does not already hold.
+    fn prime(&mut self, key: &Key, from_ms: i64, to_ms: i64) {
+        let held = self.cache.held_spans(&key.0, &key.1, from_ms, to_ms);
+        match &held {
+            Some(spans) if !spans.is_empty() => line(&format!(
+                "{} {}: {} span(s) already in the file",
+                key.0,
+                key.1,
+                spans.len()
+            )),
+            Some(_) => {}
+            None => line(&format!(
+                "{} {}: the file did not answer what it holds; recorded again where held",
+                key.0, key.1
+            )),
+        }
+        if let Some(spans) = held {
+            self.tasks
+                .entry(key.clone())
+                .or_insert_with(KeyTask::new)
+                .filed_before(&spans);
         }
     }
 
@@ -880,7 +964,7 @@ impl Recorder {
         let asking: usize = self.donors.values().map(Donor::in_flight).sum();
         let recording = self.tasks.values().filter(|t| t.is_live()).count();
         line(&format!(
-            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}",
+            "{what}: keys {} (recording {recording}), pairs {pairs} (asking {asking}), donors {} ({ready} ready), requests {}, answers {}, failed {}, filed {} prints in {} spans, lost {} s in {} gaps, clipped {}, late {}, breaks {}, stale opens skipped {}, resumed {}",
             self.tasks.len(),
             self.donors.len(),
             s.requests,
@@ -894,6 +978,7 @@ impl Recorder {
             s.late,
             s.breaks,
             s.stale_opens,
+            s.resumed,
         ));
         if s.compared > 0 {
             let t = s.touches;
@@ -911,6 +996,33 @@ impl Recorder {
                 t.only_recorded,
             ));
         }
+    }
+}
+
+/// What an open does to the recording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OpenVerdict {
+    /// An entry happening now — or a resend of a trade already recorded.
+    Open,
+    /// A station's trade open across its own restart: taken up again.
+    Resume,
+    /// No entry: a resent open row the terminal does not record, or one past the horizon.
+    Skip,
+}
+
+/// The verdict on an open `age_ms` old when it reaches the recorder.
+///
+/// Args:
+///     station: The process is a station, which resumes its trades after a restart.
+///     age_ms: How long ago the trade opened.
+///     known: The trade is already in its key's plan — a resend after a reconnect.
+fn open_verdict(station: bool, age_ms: i64, known: bool) -> OpenVerdict {
+    if age_ms <= FRESH_OPEN_MS {
+        OpenVerdict::Open
+    } else if station && !known && age_ms <= OPEN_HORIZON_MS {
+        OpenVerdict::Resume
+    } else {
+        OpenVerdict::Skip
     }
 }
 
@@ -979,3 +1091,6 @@ fn slice(ticks: &[Tick], from_ms: i64, to_ms: i64) -> Vec<Tick> {
         .copied()
         .collect()
 }
+
+#[cfg(test)]
+mod tests;

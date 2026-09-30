@@ -237,11 +237,16 @@ fn spawn_disk_thread(data_root: PathBuf) -> Arc<Mutex<DiskFound>> {
     let started = std::thread::Builder::new()
         .name("station-disk".into())
         .spawn(move || {
+            // The same measure keeps the disk's reserve: the tape gives back what it lacks.
+            let mut keeper = crate::storage::Keeper::default();
             loop {
                 let fresh = DiskFound {
                     disk: disk_space(&data_root),
                     files: data_files(&data_root),
                 };
+                if let Some(disk) = fresh.disk {
+                    keeper.look(disk);
+                }
                 let Some(slot) = published.upgrade() else {
                     return;
                 };

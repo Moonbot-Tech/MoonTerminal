@@ -63,6 +63,7 @@
 //! garbage — and writes its prints there; the next newer build moves them over.
 
 mod codec;
+mod evict;
 mod remote;
 mod trim;
 
@@ -197,6 +198,9 @@ enum Op {
     },
     /// Nothing: answered once every op queued before it has been served.
     Sync { reply: mpsc::Sender<()> },
+    /// Drop the spans written longest ago until this many packed bytes are gone, and give the
+    /// pages back to the disk ([`evict`]).
+    Evict { bytes: i64 },
 }
 
 /// Cheaply cloneable handle to the one worker.
@@ -227,6 +231,18 @@ impl TradeCache {
     /// tab's `[trade_replay] max_mb`: `ceiling` is asked at open and after every insert, and
     /// `None` keeps everything.
     pub fn open_with_ceiling(path: PathBuf, ceiling: fn() -> Option<i64>) -> Option<Self> {
+        Self::start(path, ceiling, false)
+    }
+
+    /// [`Self::open`] for a file without a byte ceiling that gives room back to the disk on
+    /// request ([`Self::evict_oldest`]): the station's tape, kept while the server has space.
+    pub fn open_evictable(path: PathBuf) -> Option<Self> {
+        Self::start(path, || None, true)
+    }
+
+    /// The worker behind every constructor; `shrinkable` keeps the file in the mode an eviction
+    /// can shrink it in ([`evict::make_shrinkable`]).
+    fn start(path: PathBuf, ceiling: fn() -> Option<i64>, shrinkable: bool) -> Option<Self> {
         let (tx, rx) = mpsc::channel::<Op>();
         std::thread::Builder::new()
             .name("trade-cache".into())
@@ -241,6 +257,11 @@ impl TradeCache {
                 if let Err(e) = init_schema(&conn) {
                     log::warn!("trade cache schema failed {}: {e}", path.display());
                     return;
+                }
+                if shrinkable {
+                    if let Err(e) = evict::make_shrinkable(&conn) {
+                        log::warn!("trade cache {} cannot shrink: {e}", path.display());
+                    }
                 }
                 let held = match prune(&conn, ceiling()) {
                     Ok(held) => held,
@@ -333,6 +354,15 @@ impl TradeCache {
             })
             .ok()?;
         rx.recv_timeout(READ_TIMEOUT).ok()?.ok()
+    }
+
+    /// Drop the spans written longest ago until `bytes` packed bytes are gone, and give the pages
+    /// back to the disk — for a file opened with [`Self::open_evictable`]; another file keeps its
+    /// length. Nonblocking; the worker logs what it freed.
+    pub fn evict_oldest(&self, bytes: i64) {
+        if bytes > 0 {
+            let _ = self.tx.send(Op::Evict { bytes });
+        }
     }
 
     /// The file's markets and time range — see [`Inventory`].
@@ -737,6 +767,31 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
         Op::Sync { reply } => {
             let _ = reply.send(());
         }
+        Op::Evict { bytes } => match evict::evict_oldest(conn, *held, bytes) {
+            Ok(evict::Evicted::Freed {
+                held: after,
+                shrunk,
+            }) => {
+                log::info!(
+                    "trade cache: {} bytes of the oldest prints evicted for disk space, {after} held{}",
+                    *held - after,
+                    if shrunk {
+                        ""
+                    } else {
+                        "; a reader kept the file from shrinking yet"
+                    }
+                );
+                *held = after;
+            }
+            Ok(evict::Evicted::NotShrinkable) => log::warn!(
+                "trade cache: asked for disk space, but the file cannot give pages back (its \
+                 one VACUUM failed): nothing evicted"
+            ),
+            Err(e) => {
+                log::warn!("trade cache eviction failed: {e}");
+                *held = held_bytes(conn).unwrap_or(*held);
+            }
+        },
         Op::Trim { keep, apply, reply } => {
             let result = trim::trim(conn, &keep, apply);
             if apply {
