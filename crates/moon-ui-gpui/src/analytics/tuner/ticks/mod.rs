@@ -437,7 +437,12 @@ impl AnalyticsView {
         let sortable =
             |id: SharedString, title: String, key: &'static str, col: Option<&DealCol>| {
                 let arrow = sort_arrow_of(&self.ticks.sort, key);
-                let tip = title.clone();
+                let tip = match col {
+                    Some(col) if col.key == COL_DURATION => {
+                        format!("{title} · {}", t!("analytics.ticks.duration_tip"))
+                    }
+                    _ => title.clone(),
+                };
                 match col {
                     Some(col) => deal_cell(col, scale),
                     None => coin_cell(scale),
@@ -870,6 +875,29 @@ fn duration_text(ms: i64) -> String {
     }
 }
 
+/// How long the entry order stood in the book before it filled: from its placement
+/// (`Deal::buy_set_ms`, filed by newer cores only) to the entry fill. `None` where the row
+/// carries no placement or the two stamps do not give a positive wait.
+fn order_wait_ms(buy_ms: i64, buy_set_ms: Option<i64>) -> Option<i64> {
+    buy_set_ms
+        .filter(|set| *set > 0)
+        .map(|set| buy_ms - set)
+        .filter(|wait| *wait > 0)
+}
+
+/// The duration cell's tooltip: what the column measures, and the order's wait before the
+/// fill where the core filed its placement.
+fn duration_tip(buy_ms: i64, buy_set_ms: Option<i64>) -> String {
+    let what = t!("analytics.ticks.duration_tip").to_string();
+    match order_wait_ms(buy_ms, buy_set_ms) {
+        Some(wait) => format!(
+            "{what} · {}",
+            t!("analytics.ticks.order_wait_tip", wait = duration_text(wait))
+        ),
+        None => what,
+    }
+}
+
 /// The tape the terminal holds around a trade, as "lead/trail" — what lies before the entry
 /// and past the exit; a dash when nothing is held.
 fn held_text(held: Option<(i64, i64)>) -> String {
@@ -1094,7 +1122,11 @@ fn deal_row(
                 ),
                 None => ("—".to_string(), p.text_muted, None),
             },
-            COL_DURATION => (duration_text(d.close_ms - d.buy_ms), p.text_muted, None),
+            COL_DURATION => (
+                duration_text(d.close_ms - d.buy_ms),
+                p.text_muted,
+                Some(duration_tip(d.buy_ms, d.buy_set_ms)),
+            ),
             COL_HELD => (
                 held_text(row.held),
                 p.text_muted,
