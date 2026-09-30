@@ -1,7 +1,6 @@
 //! The station's server work, off the UI thread: every step is a blocking SSH exchange of seconds to
 //! minutes. One job at a time; its lines and its end come back over a channel the backend drains.
 
-use std::path::PathBuf;
 use std::sync::mpsc;
 
 use moon_core::config::Secret;
@@ -35,8 +34,9 @@ pub(crate) enum Job {
     /// Run the setup again on a server set up before: updates the helper and the unit, and moves a
     /// server from before key-only sudo over (with its old administrator password).
     Resetup { setup: Setup },
-    /// Install another station binary (health-checked, rolled back when it does not stay up).
-    Update { target: Target, bin: PathBuf },
+    /// Update the station from the latest release (health-checked, rolled back when it does not
+    /// stay up).
+    Update { target: Target },
     /// Make the picked cores the station's whole set.
     Cores { target: Target, cores: Vec<u64> },
     /// Set the station's window around a trade.
@@ -148,10 +148,8 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
                 bot_off: false,
             })
         }
-        Job::Update { target, bin } => {
-            let host = known_host(&target)?;
-            let app = moon_remote::app_key::load_or_create()?;
-            setup::install_station(&target, &host.0, &app, Some(host.1.as_str()), &bin, say)?;
+        Job::Update { target } => {
+            station::update_from_release(&target, say)?;
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,
@@ -315,19 +313,6 @@ fn settled(
         ));
         bot::bot_state(target)
     })
-}
-
-/// The administrator and the pinned host key of a server this terminal set up.
-fn known_host(target: &Target) -> anyhow::Result<(String, String)> {
-    let hosts = moon_remote::hosts::Hosts::load(&moon_remote::hosts::Hosts::path())?;
-    let host = hosts
-        .get(&target.addr())
-        .ok_or_else(|| anyhow::anyhow!("{} was never set up here", target.addr()))?;
-    let admin = host
-        .admin
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("{}: the setup did not finish", target.addr()))?;
-    Ok((admin, host.fingerprint.clone()))
 }
 
 /// The picked cores' keys from the terminal's `servers.enc`, read here — never held by the view.

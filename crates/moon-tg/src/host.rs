@@ -5,9 +5,12 @@
 //! [`crate::tick`] — so no method needs to be thread-safe; the only work that leaves that thread
 //! is a [`Job`], and its result comes back through [`Finish`] on the same owner thread.
 
+use std::sync::mpsc::SyncSender;
+
 use chrono_tz::Tz;
 use moon_core::config::AppConfig;
 use moon_core::session::{CoreId, SessionManager};
+use moon_core::telegram::runtime::Response;
 
 use crate::TelegramState;
 
@@ -82,4 +85,25 @@ pub trait TgHost {
 
     /// Tell the host its Telegram state changed, so whatever shows it redraws.
     fn repaint(&mut self);
+
+    /// Answer the station's status through `reply` (the chat's "Status"): the station reads it on
+    /// its loop and looks for a newer release off it ([`crate::station_status_reply`]).
+    ///
+    /// Returns:
+    ///     `false` from a host with no station behind its bot — the terminal —, which then
+    ///     answers it as a request it cannot run.
+    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
+        let _ = reply;
+        false
+    }
+
+    /// Ask the station's updater, which runs as root beside it, to install the latest release.
+    /// The request names no version: the updater finds the release and checks it itself.
+    ///
+    /// Returns:
+    ///     `None` from a host with no station — the terminal; `Err` with why the request could
+    ///     not be filed.
+    fn request_station_update(&mut self) -> Option<Result<(), String>> {
+        None
+    }
 }

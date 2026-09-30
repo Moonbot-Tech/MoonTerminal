@@ -77,6 +77,7 @@ fn a_status_reads_back_whole() {
                 bytes: 609 << 20,
             }],
         })),
+        last_update: Some("2026-09-30T14:02Z health=ok".into()),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
@@ -85,7 +86,7 @@ fn a_status_reads_back_whole() {
     let Reply::Ok(Answer::Status(old)) = serde_json::from_str::<Reply>(old).unwrap() else {
         panic!("not a status");
     };
-    assert_eq!((old.tape, old.host), (None, None));
+    assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
 }

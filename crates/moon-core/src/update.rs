@@ -1,8 +1,9 @@
 //! Stable GitHub release discovery and verified update downloads.
 //!
-//! This module deliberately stops at a verified download: the staged Windows executable or the
-//! macOS disk image. Process coordination, replacement, restart, and rollback belong to the
-//! Windows GPUI shell; on macOS the shell only opens the image.
+//! This module deliberately stops at a verified download: the staged Windows executable, the
+//! macOS disk image, or the station's Linux binary. Process coordination, replacement, restart,
+//! and rollback belong to the Windows GPUI shell; on macOS the shell only opens the image; the
+//! station's binary is installed by its server helper (`moon-station-admin update-from-release`).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -14,6 +15,7 @@ mod release;
 pub use discovery::{DiscoveryError, DiscoveryResult, DiscoveryRetry, ReleaseDiscovery};
 pub use release::{
     AvailableRelease, BuildIdentity, ReleaseAsset, ReleaseVersion, UpdateEligibility,
+    station_asset_name,
 };
 
 #[cfg(test)]

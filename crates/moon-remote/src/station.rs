@@ -345,11 +345,10 @@ fn edit_config(
 }
 
 /// Whether a helper's `status` comes from this crate's helper: the line added last,
-/// `config_cas=` (`put-config` writes only over the file it was given the digest of), is the
-/// marker. An older helper answers "unknown command" halfway through a push, or overwrites what
-/// another terminal wrote.
+/// `release_update=` (`update-from-release`), is the marker. An older helper answers "unknown
+/// command" halfway through a push, or overwrites what another terminal wrote.
 fn helper_is_current(status: &str) -> bool {
-    script::value(status, "config_cas").is_some()
+    script::value(status, "release_update").is_some()
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -498,6 +497,61 @@ pub fn push_cores(
     let status = run(script::helper("status", &[]), &[])?;
     for line in status.lines() {
         say(line);
+    }
+    Ok(())
+}
+
+/// Update the station from the latest release (the Settings' "Update the service"): the helper's
+/// `update-from-release` has the installed binary find the release and download it, checked
+/// against its immutable digest, then installs it as `update` does — a restart that must stay up,
+/// or the previous binary back. The same the bot's "Update" starts through its request file.
+pub fn update_from_release(target: &Target, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    anyhow::ensure!(
+        script::value(&status, "bin") != Some("none"),
+        "no station is installed on {} yet",
+        target.addr()
+    );
+    // The connection, not the update, failed — an error, or an end without an exit status: the
+    // update goes on without it (the helper detaches the restart), and what the server says it
+    // did is the answer, read through a new one.
+    let out = match conn.run(
+        &script::helper("update-from-release", &[]),
+        &[],
+        script::APT_TIMEOUT,
+    ) {
+        Ok(out) if out.status.is_some() => out,
+        dropped => {
+            let e = match dropped {
+                Ok(out) => anyhow::anyhow!(
+                    "the connection ended before the update did: {}",
+                    out.stdout_text().trim()
+                ),
+                Err(e) => e,
+            };
+            let verdict = admin_conn(target).ok().and_then(|conn| {
+                let out = conn
+                    .run(&script::helper("status", &[]), &[], STEP_TIMEOUT)
+                    .ok()?;
+                script::value(&out.stdout_text(), "last_update").map(str::to_owned)
+            });
+            return Err(match verdict {
+                Some(verdict) => e.context(format!("the server's last update says: {verdict}")),
+                None => e,
+            });
+        }
+    };
+    let text = script::checked(out)?.stdout_text();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        say(line);
+    }
+    // Not a failure, and not an update either: said in words, not only as the helper's token.
+    if let Some(none) = text.lines().find(|l| l.starts_with("update=none")) {
+        say(match none.contains("unversioned") {
+            true => "nothing installed: this station build is not from a release",
+            false => "nothing installed: no release newer than the station carries its binary",
+        });
     }
     Ok(())
 }

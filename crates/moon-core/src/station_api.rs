@@ -231,6 +231,11 @@ pub struct Status {
     /// the bulk of the status, and every reply would otherwise carry its size.
     #[serde(default)]
     pub host: Option<Box<Host>>,
+    /// How the last update ended, as the server's helper left it: `<UTC time> <verdict line>`.
+    /// `None` before the first update, or from a station older than it — an added field with a
+    /// default, so neither end of version 2 misreads the other.
+    #[serde(default)]
+    pub last_update: Option<String>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

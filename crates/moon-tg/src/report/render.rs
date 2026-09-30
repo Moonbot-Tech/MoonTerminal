@@ -88,7 +88,7 @@ pub(super) fn render(page: &Page, host: HostKind) -> Response {
         keyboard: keyboard(page),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(),
+            navigation_keyboard(host),
         ),
     }
 }
@@ -247,6 +247,12 @@ pub(crate) fn help(zone: &str, host: HostKind) -> Response {
             escape(&t!(key))
         ));
     }
+    if host == HostKind::Station {
+        html.push_str(&format!(
+            "<p><code>/status</code> &#183; {}</p>",
+            escape(&t!("telegram.help_status_station"))
+        ));
+    }
     html.push_str(&format!("<p><b>{}</b></p><pre>/report 2026-09-01 2026-09-10</pre><pre>/daily 2026-09-01 2026-09-10</pre><p>{}</p></details>",
         escape(&t!("telegram.help_custom")), escape(&t!(limits, zone = zone))));
     html.push_str(&format!(
@@ -273,7 +279,7 @@ pub(crate) fn help(zone: &str, host: HostKind) -> Response {
         keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(),
+            navigation_keyboard(host),
         ),
     }
 }

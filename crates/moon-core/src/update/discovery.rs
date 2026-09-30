@@ -9,7 +9,7 @@ use ureq::http::{HeaderMap, HeaderValue};
 use super::GitHubReleaseClient;
 use super::release::{
     AvailableRelease, BuildIdentity, GitHubRelease, ReleaseVersion, UpdateEligibility,
-    eligible_release,
+    eligible_release_for, platform_asset_name,
 };
 use crate::util::time::now_unix_secs;
 
@@ -104,16 +104,18 @@ pub struct DiscoveryResult {
     pub defer_until_unix: Option<u64>,
 }
 
-/// Stateful conditional discovery session bound to one executable build identity.
+/// Stateful conditional discovery session bound to one executable build identity and the one
+/// release asset that executable installs.
 pub struct ReleaseDiscovery {
     client: GitHubReleaseClient,
     identity: BuildIdentity,
+    asset_name: &'static str,
     pages: [Option<CachedReleasePage>; MAX_RELEASE_PAGES],
     page_two_refresh_at: u64,
 }
 
 impl ReleaseDiscovery {
-    /// Create a production HTTPS discovery session for one executable baseline.
+    /// Create a production HTTPS discovery session for the terminal of this platform.
     ///
     /// Args:
     ///     identity: Immutable release baseline embedded in the running executable.
@@ -121,7 +123,22 @@ impl ReleaseDiscovery {
     /// Returns:
     ///     A new HTTPS-only discovery session with an empty page cache.
     pub fn new(identity: BuildIdentity) -> Self {
-        Self::with_client(identity, GitHubReleaseClient::new())
+        Self::for_asset(identity, platform_asset_name())
+    }
+
+    /// Create a production HTTPS discovery session for one exact release asset — the station's
+    /// `moon-station-<arch>` ([`super::station_asset_name`]); every other rule is the terminal's.
+    ///
+    /// Args:
+    ///     identity: Immutable release baseline embedded in the running executable.
+    ///     asset_name: The exact asset a release must carry to be offered.
+    ///
+    /// Returns:
+    ///     A new HTTPS-only discovery session with an empty page cache.
+    pub fn for_asset(identity: BuildIdentity, asset_name: &'static str) -> Self {
+        let mut discovery = Self::with_client(identity, GitHubReleaseClient::new());
+        discovery.asset_name = asset_name;
+        discovery
     }
 
     /// Revalidate the bounded release snapshot once.
@@ -147,6 +164,7 @@ impl ReleaseDiscovery {
         Self {
             client,
             identity,
+            asset_name: platform_asset_name(),
             pages: [None, None],
             page_two_refresh_at: 0,
         }
@@ -184,7 +202,7 @@ impl ReleaseDiscovery {
 
         if first_len < RELEASES_PER_PAGE {
             staged[1] = None;
-            let eligibility = eligibility_from_pages(&staged, baseline)?;
+            let eligibility = eligibility_from_pages(&staged, baseline, self.asset_name)?;
             self.pages = staged;
             self.page_two_refresh_at = 0;
             return Ok(DiscoveryResult {
@@ -215,7 +233,7 @@ impl ReleaseDiscovery {
             next_page_two_refresh_at = now_unix.saturating_add(PAGE_SENTINEL_SECONDS);
         }
 
-        let eligibility = eligibility_from_pages(&staged, baseline)?;
+        let eligibility = eligibility_from_pages(&staged, baseline, self.asset_name)?;
         self.pages = staged;
         self.page_two_refresh_at = next_page_two_refresh_at;
         Ok(DiscoveryResult {
@@ -514,6 +532,7 @@ fn apply_page_update(
 /// Args:
 ///     pages: Complete committed or staged first-200 page snapshot.
 ///     baseline: Embedded executable version used for strict-newer comparison.
+///     asset_name: The exact asset a release must carry.
 ///
 /// Returns:
 ///     Current or available eligibility for a supported build identity.
@@ -523,12 +542,19 @@ fn apply_page_update(
 fn eligibility_from_pages(
     pages: &[Option<CachedReleasePage>; MAX_RELEASE_PAGES],
     baseline: ReleaseVersion,
+    asset_name: &'static str,
 ) -> Result<UpdateEligibility, DiscoveryError> {
     let mut greatest = None;
     let mut tags_by_version = BTreeMap::new();
     for page in pages.iter().flatten() {
-        greatest = greatest_eligible(&page.releases, baseline, greatest, &mut tags_by_version)
-            .map_err(|error| DiscoveryError::new(DiscoveryRetry::Protocol, None, error))?;
+        greatest = greatest_eligible(
+            &page.releases,
+            baseline,
+            asset_name,
+            greatest,
+            &mut tags_by_version,
+        )
+        .map_err(|error| DiscoveryError::new(DiscoveryRetry::Protocol, None, error))?;
     }
     Ok(greatest.map_or(UpdateEligibility::Current, UpdateEligibility::Available))
 }
@@ -538,6 +564,7 @@ fn eligibility_from_pages(
 /// Args:
 ///     releases: One bounded page of GitHub release metadata.
 ///     baseline: Embedded numeric version below which candidates remain hidden.
+///     asset_name: The exact asset a release must carry.
 ///     greatest: Greatest eligible candidate from earlier releases or pages.
 ///     tags_by_version: Exact-tag authority used to reject semantic aliases across all pages.
 ///
@@ -549,11 +576,12 @@ fn eligibility_from_pages(
 fn greatest_eligible(
     releases: &[GitHubRelease],
     baseline: ReleaseVersion,
+    asset_name: &'static str,
     mut greatest: Option<AvailableRelease>,
     tags_by_version: &mut BTreeMap<ReleaseVersion, String>,
 ) -> anyhow::Result<Option<AvailableRelease>> {
     for release in releases {
-        if let Some(candidate) = eligible_release(release)? {
+        if let Some(candidate) = eligible_release_for(release, asset_name)? {
             if let Some(existing_tag) = tags_by_version.get(&candidate.version()) {
                 if existing_tag != candidate.release_tag() {
                     anyhow::bail!("release list contains ambiguous tags for one numeric version");

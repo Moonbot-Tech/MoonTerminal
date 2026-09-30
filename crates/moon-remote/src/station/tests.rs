@@ -132,7 +132,8 @@ valuation=no
 api=no
 "
     ));
-    assert!(helper_is_current(
+    // The helper of PR #803/#804: `put-config` with a base, but no `update-from-release`.
+    assert!(!helper_is_current(
         "active=active
 config=yes
 creds=core-3
@@ -143,12 +144,25 @@ api=no
 config_cas=yes
 "
     ));
+    assert!(helper_is_current(
+        "active=active
+config=yes
+creds=core-3
+token=no
+pairing=no
+valuation=no
+api=no
+config_cas=yes
+update_path=active
+release_update=yes
+"
+    ));
 }
 
 /// The helper's status really prints the marker the terminal looks for.
 #[test]
 fn the_helper_prints_its_marker() {
-    assert!(crate::script::HELPER.contains("echo \"config_cas=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"release_update=yes\""));
 }
 
 /// A changed window rewrites only `[tape]` — the cores and the bot stay as the server has them —

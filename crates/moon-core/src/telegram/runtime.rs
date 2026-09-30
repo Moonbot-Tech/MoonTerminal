@@ -180,8 +180,12 @@ impl Drop for TelegramService {
     }
 }
 /// Wait for application response while observing shutdown.
-fn response(rx: Receiver<Response>, alive: &Weak<()>, report: bool) -> Option<Response> {
-    let deadline = Instant::now() + std::time::Duration::from_secs(if report { 120 } else { 10 });
+///
+/// Args:
+///     slow: The answer reads off the owner thread first — a report's database, the station
+///         status's look at the latest release — so it gets two minutes instead of ten seconds.
+fn response(rx: Receiver<Response>, alive: &Weak<()>, slow: bool) -> Option<Response> {
+    let deadline = Instant::now() + std::time::Duration::from_secs(if slow { 120 } else { 10 });
     while alive.upgrade().is_some() && Instant::now() < deadline {
         match rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(result) => return Some(result),

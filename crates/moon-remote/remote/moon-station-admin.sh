@@ -28,6 +28,13 @@ HEALTH_S=30
 # The last update's or rollback's own output, so its verdict survives a dropped SSH connection;
 # `status` reports its last line — `update=running` / `rollback=running` while one is under way.
 UPDATE_LOG=/opt/moon-station/update.log
+# Where `update-from-release` has the installed binary download the latest release: under
+# /opt/moon-station, which only root writes.
+RELEASE_DIR=/opt/moon-station/release
+# The station's request for an update from its bot (moon-station-update.path watches it).
+UPDATE_REQUEST=/var/lib/moon-station/update.request
+# The last update's verdict with its time, for the station to show in its status.
+UPDATE_RESULT=/var/lib/moon-station/update.result
 LOCK=/run/moon-station-admin.lock
 
 die() {
@@ -48,6 +55,13 @@ lock() {
 lock_wait() {
     exec 9>"$LOCK"
     flock -w 30 9 || die "another station command is running"
+}
+
+# The same lock, waited for as long as an update may take: a request from the bot's chat that
+# comes during another update runs after it, rather than being dropped.
+lock_wait_long() {
+    exec 9>"$LOCK"
+    flock -w 600 9 || die "another station command has run for ten minutes"
 }
 
 valid_uid() {
@@ -164,9 +178,11 @@ cmd_install_bin() {
         rm -f "$tmp"
         die "sha256 mismatch: got $got"
     fi
-    chmod 755 "$tmp"
-    [ -f "$BIN" ] && ln -f "$BIN" "$BIN.prev"
-    mv -f "$tmp" "$BIN"
+    chmod 755 "$tmp" || die "chmod $tmp failed"
+    if [ -f "$BIN" ]; then
+        ln -f "$BIN" "$BIN.prev" || die "keeping the previous binary failed"
+    fi
+    mv -f "$tmp" "$BIN" || die "putting the new binary in place failed"
     echo "bin=$got"
 }
 
@@ -208,6 +224,12 @@ restore_prev() {
 cmd_update() {
     lock
     echo "update=running" >"$UPDATE_LOG"
+    install_and_restart "$@"
+}
+
+# The binary on stdin, checked against <sha256>, in place; then restarted and judged as `update`
+# says. Under the lock, with `update=running` already in $UPDATE_LOG.
+install_and_restart() {
     # Not a pipe: `sh` has no pipefail, and a refused binary must stop here.
     installed=$(cmd_install_bin "$@") || {
         echo "update=refused" >>"$UPDATE_LOG"
@@ -220,6 +242,55 @@ cmd_update() {
     fi
     # `update=running` stays the last line until the detached half writes its verdict.
     detached finish-update
+}
+
+# update-from-release: the latest release's station binary, installed as `update` installs one.
+# The installed binary finds the release and downloads it (`moon-station release-fetch`: GitHub's
+# immutable release, its SHA-256 digest — the terminal updater's own rules); nothing the station
+# could write chooses it. Started by moon-station-update.service when the station files its
+# request from the bot's chat, or by the terminal's "Update the service". All of it runs detached,
+# the download too: a dropped connection leaves a verdict, not `update=running`.
+cmd_update_from_release() {
+    rm -f "$UPDATE_REQUEST"
+    # The watcher of the bot's requests up again, should it have stopped or failed: the terminal
+    # runs this command when a request from the chat was never taken.
+    systemctl reset-failed moon-station-update.path 2>/dev/null || true
+    systemctl start moon-station-update.path 2>/dev/null || true
+    lock_wait_long
+    echo "update=running" >"$UPDATE_LOG"
+    detached finish-update-from-release
+}
+
+# finish-update-from-release: the detached half of `update-from-release`.
+cmd_finish_update_from_release() {
+    trap 'rm -rf "$RELEASE_DIR"; publish_verdict "update from release"' EXIT
+    rm -rf "$RELEASE_DIR"
+    # Its stdout only: why it failed goes to $UPDATE_LOG through stderr.
+    found=$("$BIN" release-fetch --out "$RELEASE_DIR/moon-station") || {
+        echo "update=failed: the installed station could not fetch the latest release (the lines above say why)"
+        exit 1
+    }
+    case "$found" in
+    release=current | release=unversioned)
+        echo "update=none $found"
+        return
+        ;;
+    esac
+    sha=$(printf '%s\n' "$found" | sed -n 's/^release=v[0-9.]* sha256=\([0-9a-f]\{64\}\)$/\1/p')
+    if [ -z "$sha" ]; then
+        echo "update=failed: unexpected answer from release-fetch: $found"
+        exit 1
+    fi
+    echo "$found"
+    cmd_install_bin "$sha" <"$RELEASE_DIR/moon-station" || {
+        echo "update=refused"
+        exit 1
+    }
+    if ! systemctl is-enabled --quiet "$UNIT"; then
+        echo "health=not-started"
+        return
+    fi
+    cmd_finish_update
 }
 
 # rollback: the previous binary back, by hand — detached like an update.
@@ -237,6 +308,18 @@ detached() {
     setsid -w "$0" "$1" >>"$UPDATE_LOG" 2>&1 </dev/null || rc=$?
     tail -n +"$((from + 1))" "$UPDATE_LOG"
     [ "$rc" -eq 0 ] || exit "$rc"
+}
+
+# `<UTC time> <what>: <last line of $UPDATE_LOG>` where the station reads it: its status says how
+# the last update or rollback ended — the chat that pressed "Update" learns it there. Called by
+# the detached half as it exits, so a caller that went away does not leave an older verdict.
+# Best-effort: a verdict that cannot be left does not fail the update.
+publish_verdict() {
+    [ -d "$(dirname "$UPDATE_RESULT")" ] || return 0
+    tmp=$(mktemp) || return 0
+    printf '%s %s: %s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$1" "$(tail -n1 "$UPDATE_LOG")" >"$tmp"
+    install -m 600 -o moon-station -g moon-station "$tmp" "$UPDATE_RESULT" || true
+    rm -f "$tmp"
 }
 
 # finish-update: the detached half of `update`.
@@ -272,9 +355,11 @@ cmd_status() {
     [ -f "$PAIRING" ] && echo "pairing=yes" || echo "pairing=no"
     [ -f "$VALUATION" ] && echo "valuation=yes" || echo "valuation=no"
     [ -S "$API_SOCKET" ] && echo "api=yes" || echo "api=no"
+    echo "config_cas=yes"
+    echo "update_path=$(systemctl is-active moon-station-update.path 2>/dev/null || true)"
     # The marker of this helper's version (the line added last): a terminal that does not see it
     # puts its own helper in place first.
-    echo "config_cas=yes"
+    echo "release_update=yes"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -353,9 +438,17 @@ install-bin)
     cmd_install_bin "$@"
     ;;
 update) cmd_update "$@" ;;
+update-from-release) cmd_update_from_release ;;
 rollback) cmd_rollback ;;
-finish-update) cmd_finish_update ;;
-finish-rollback) cmd_finish_rollback ;;
+finish-update)
+    trap 'publish_verdict update' EXIT
+    cmd_finish_update
+    ;;
+finish-update-from-release) cmd_finish_update_from_release ;;
+finish-rollback)
+    trap 'publish_verdict rollback' EXIT
+    cmd_finish_rollback
+    ;;
 # start: enabled for every boot, and (re)started so new credentials and config take effect. Every
 # command that restarts or stops the station waits for no update: a restart in the middle of an
 # update's health check would roll a good binary back.

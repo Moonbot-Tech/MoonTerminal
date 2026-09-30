@@ -1,8 +1,58 @@
 //! The station's status in words (STATION.md §1 п. 20, §4.5), in the user's language: what the
-//! terminal's "Status" shows, and the text meant for the bot's chat "Status" too.
+//! terminal's "Status" shows, and what the bot's chat "Status" answers — with an "Update" button
+//! while a newer release carries the station's binary.
 
 use moon_core::station_api::{CpuWindow, Host, Status, TapeWindow};
+use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
+use moon_core::telegram::commands::STATION_UPDATE_CALLBACK;
+use moon_core::telegram::runtime::Response;
 use rust_i18n::t;
+
+/// What the station's look at the latest release found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ReleaseCheck {
+    /// A newer release carries the station's binary: its version.
+    Newer(String),
+    /// No release newer than this station carries its binary.
+    Current,
+    /// This build carries no release version: it is updated only by a binary from the terminal.
+    Unversioned,
+    /// The releases could not be read; why.
+    Failed(String),
+}
+
+/// The chat's answer to "Status": the station's status, a line on the latest release, and — only
+/// while a newer release carries the station's binary — the "Update" button under it.
+pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response {
+    let mut text = station_status_text(status);
+    let line = match release {
+        ReleaseCheck::Newer(version) => {
+            Some(t!("telegram.station.update_available", version = version))
+        }
+        ReleaseCheck::Current => None,
+        ReleaseCheck::Unversioned => Some(t!("telegram.station.release_unversioned")),
+        ReleaseCheck::Failed(error) => {
+            Some(t!("telegram.station.release_unreadable", error = error))
+        }
+    };
+    if let Some(line) = line {
+        text.push_str("\n\n");
+        text.push_str(&line);
+    }
+    let keyboard = match release {
+        ReleaseCheck::Newer(version) => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(vec![
+            vec![InlineKeyboardButton::callback(
+                t!("telegram.station.update_button", version = version).to_string(),
+                STATION_UPDATE_CALLBACK,
+            )],
+        ])),
+        _ => crate::labels::navigation_keyboard(crate::HostKind::Station),
+    };
+    Response::Text {
+        text,
+        keyboard: Some(keyboard),
+    }
+}
 
 /// The station's status as lines of plain text: version and uptime, cores, bot, tape window,
 /// processor, memory, disk, and the data root's files, largest first.
@@ -36,6 +86,9 @@ pub fn station_status_text(status: &Status) -> String {
     }
     if let Some(tape) = status.tape {
         lines.push(tape_line(tape));
+    }
+    if let Some(verdict) = &status.last_update {
+        lines.push(t!("telegram.station.last_update", verdict = verdict).to_string());
     }
     match &status.host {
         Some(host) => host_lines(host, &mut lines),

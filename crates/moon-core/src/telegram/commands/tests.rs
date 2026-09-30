@@ -30,6 +30,57 @@ fn report_callbacks_require_matching_private_sender_identity() {
     assert!(super::parse_update(&update, None).is_none());
 }
 
+/// The station's "Update" button is its own callback, held to the same private-sender identity as
+/// a report's; any other data stays unknown rather than falling into an update.
+#[test]
+fn the_station_update_callback_is_exact_and_private() {
+    let mut update: crate::telegram::api::Update = serde_json::from_value(serde_json::json!({
+        "update_id":1,"callback_query":{"id":"fixture","from":{"id":7},
+        "message":{"message_id":10,"chat":{"id":7,"type":"private"}},"data":"station:update"}
+    }))
+    .unwrap();
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::StationUpdate
+    );
+    update.callback_query.as_mut().unwrap().data = Some("station:update:v9".into());
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::Unknown
+    );
+    update.callback_query.as_mut().unwrap().data = Some("station:update".into());
+    update.callback_query.as_mut().unwrap().from.id = 8;
+    assert!(super::parse_update(&update, None).is_none());
+}
+
+/// `/status` and the station's button reach the status; an argument or another bot's suffix
+/// does not.
+#[test]
+fn station_status_keeps_address_and_argument_guards() {
+    assert_eq!(parse_text("/status", None), ParsedCommand::StationStatus);
+    assert_eq!(
+        parse_text("/status@MyBot", Some("mybot")),
+        ParsedCommand::StationStatus
+    );
+    assert_eq!(
+        parse_text("/status@other", Some("mybot")),
+        ParsedCommand::Unknown
+    );
+    assert_eq!(
+        parse_text("/status now", None),
+        ParsedCommand::InvalidArgument
+    );
+    let labels = BTreeMap::from([("button_status_emoji_ru".into(), "📡 Статус".into())]);
+    assert_eq!(
+        parse_reply_button("📡 Статус", &labels),
+        ParsedCommand::StationStatus
+    );
+    assert_eq!(
+        parse_reply_button("📡 Статус", &BTreeMap::new()),
+        ParsedCommand::Unknown
+    );
+}
+
 /// Reports retain the bot suffix guard and reject oversized or reversed custom ranges.
 #[test]
 fn report_commands_preserve_address_and_range_guards() {

@@ -11,6 +11,8 @@ HELPER=/usr/local/sbin/moon-station-admin
 SUDOERS=/etc/sudoers.d/moon-station
 SSHD_DROPIN=/etc/ssh/sshd_config.d/00-moon-station.conf
 UNIT=/etc/systemd/system/moon-station.service
+UPDATE_PATH_UNIT=/etc/systemd/system/moon-station-update.path
+UPDATE_SERVICE_UNIT=/etc/systemd/system/moon-station-update.service
 F2B_JAIL=/etc/fail2ban/jail.d/moon-station.conf
 AUTO_UPGRADES=/etc/apt/apt.conf.d/20auto-upgrades
 SYSCTL=/etc/sysctl.d/60-moon-station.conf
@@ -145,6 +147,39 @@ step_helper() {
     # account ("!") even its key logins, and a fresh `useradd` account starts locked.
     usermod -p '*' "$name"
     echo "password=none"
+    put_update_units
+}
+
+# The station's update from its bot's chat: the station (unprivileged) files a request without
+# parameters, the path unit starts the helper's update-from-release as root. Installed with the
+# helper they run, so a terminal that replaces an older helper brings them too.
+put_update_units() {
+    path=$(printf '%s\n' \
+        '# moon-station: an update asked for from the station bot (update-from-release).' \
+        '[Unit]' \
+        'Description=MoonTerminal station update request' \
+        '' \
+        '[Path]' \
+        'PathExists=/var/lib/moon-station/update.request' \
+        'Unit=moon-station-update.service' \
+        '' \
+        '[Install]' \
+        'WantedBy=paths.target' | put_file "$UPDATE_PATH_UNIT" 644 root:root)
+    service=$(printf '%s\n' \
+        '# moon-station: the latest release installed, health-checked, rolled back on failure.' \
+        '[Unit]' \
+        'Description=MoonTerminal station update from the latest release' \
+        '' \
+        '[Service]' \
+        'Type=oneshot' \
+        'ExecStartPre=/bin/rm -f /var/lib/moon-station/update.request' \
+        "ExecStart=$HELPER update-from-release" \
+        'TimeoutStartSec=15min' | put_file "$UPDATE_SERVICE_UNIT" 644 root:root)
+    if [ "$path" = changed ] || [ "$service" = changed ]; then
+        systemctl daemon-reload
+    fi
+    systemctl enable --now --quiet moon-station-update.path
+    echo "update_units=$(systemctl is-active moon-station-update.path)"
 }
 
 # service; stdin: the unit file. The service account, its directories, the unit, the UDP receive

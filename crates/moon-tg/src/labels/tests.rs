@@ -9,7 +9,9 @@ use moon_core::telegram::{
 #[test]
 fn persistent_keyboard_fits_in_two_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
-    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard() else {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
+        super::navigation_keyboard(crate::HostKind::Terminal)
+    else {
         panic!("expected persistent keyboard")
     };
     assert_eq!(markup.keyboard.len(), 2);
@@ -40,7 +42,9 @@ fn persistent_keyboard_fits_in_two_rows() {
 #[test]
 fn persistent_navigation_buttons_have_recognized_commands() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
-    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard() else {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
+        super::navigation_keyboard(crate::HostKind::Terminal)
+    else {
         panic!("expected persistent keyboard")
     };
     assert!(markup.is_persistent);
@@ -54,6 +58,40 @@ fn persistent_navigation_buttons_have_recognized_commands() {
             );
         }
     }
+}
+
+/// A station's keyboard carries its "Status" after the months, and only a station's labels parse
+/// it: a terminal's bot has no station to report on.
+#[test]
+fn only_the_station_keyboard_has_its_status() {
+    let labels = super::telegram_labels(crate::HostKind::Station);
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
+        super::navigation_keyboard(crate::HostKind::Station)
+    else {
+        panic!("expected persistent keyboard")
+    };
+    assert_eq!(markup.keyboard[0].len(), 3);
+    assert_eq!(markup.keyboard[1].len(), 3);
+    let status = &markup.keyboard[1][2].text;
+    assert_eq!(
+        parse_reply_button(status, &labels),
+        ParsedCommand::StationStatus
+    );
+    for row in &markup.keyboard {
+        for button in row {
+            assert_ne!(
+                parse_reply_button(&button.text, &labels),
+                ParsedCommand::Unknown,
+                "{}",
+                button.text
+            );
+        }
+    }
+    let terminal = super::telegram_labels(crate::HostKind::Terminal);
+    assert_eq!(
+        parse_reply_button(status, &terminal),
+        ParsedCommand::Unknown
+    );
 }
 
 /// A station's Mini App page and failure texts name the station, never a terminal that may be off;

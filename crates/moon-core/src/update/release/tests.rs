@@ -160,6 +160,26 @@ fn asset_name_is_chosen_per_target_os() {
     );
 }
 
+/// The station's asset is named by the CPU the release builds it for (STATION.md §6): a new
+/// architecture, or a name the release does not publish, must find nothing rather than a binary
+/// for another CPU.
+#[test]
+fn station_asset_name_is_chosen_per_target_arch() {
+    assert_eq!(
+        station_asset_name_for_arch("x86_64"),
+        Some("moon-station-x86_64")
+    );
+    assert_eq!(
+        station_asset_name_for_arch("aarch64"),
+        Some("moon-station-aarch64")
+    );
+    assert_eq!(station_asset_name_for_arch("riscv64"), None);
+    assert_eq!(
+        station_asset_name(),
+        station_asset_name_for_arch(std::env::consts::ARCH)
+    );
+}
+
 /// A macOS build must be offered only the `.dmg`, validated as strictly as the executable: a
 /// release carrying just the Windows asset is not an update for it, and vice versa.
 #[test]

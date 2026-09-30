@@ -16,6 +16,12 @@ pub enum ParsedCommand {
     /// Explain navigation without requiring the user to remember `/miniapp`.
     Help,
     MiniApp,
+    /// The station's status (`/status`, the station's "Status" button). A terminal's bot has no
+    /// station behind it and answers it as a request it cannot run.
+    StationStatus,
+    /// Update the station from the latest release: the button under its status, shown only while
+    /// a newer release carries the station's binary. The request names no version.
+    StationUpdate,
     Pair {
         code: String,
     },
@@ -24,6 +30,10 @@ pub enum ParsedCommand {
     /// Known command with an unusable argument (`/pair` with no code).
     InvalidArgument,
 }
+
+/// Callback data of the "Update" button under the station's status; outside the report
+/// callbacks' `r:` namespace.
+pub const STATION_UPDATE_CALLBACK: &str = "station:update";
 
 /// Chat-scoped parse result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,14 +57,16 @@ pub fn parse_update(update: &Update, bot_username: Option<&str>) -> Option<Inbou
         if message.chat.kind != "private" || message.chat.id != callback.from.id {
             return None;
         }
+        let data = callback.data.as_deref();
         return Some(Inbound {
             chat_id: message.chat.id,
-            command: callback
-                .data
-                .as_deref()
-                .and_then(ReportRequest::parse_callback)
-                .map(ParsedCommand::Report)
-                .unwrap_or(ParsedCommand::Unknown),
+            command: match data {
+                Some(STATION_UPDATE_CALLBACK) => ParsedCommand::StationUpdate,
+                _ => data
+                    .and_then(ReportRequest::parse_callback)
+                    .map(ParsedCommand::Report)
+                    .unwrap_or(ParsedCommand::Unknown),
+            },
         });
     }
     update
@@ -147,6 +159,7 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
         "start" => require_no_args(args, ParsedCommand::Start),
         "help" => require_no_args(args, ParsedCommand::Help),
         "miniapp" => require_no_args(args, ParsedCommand::MiniApp),
+        "status" => require_no_args(args, ParsedCommand::StationStatus),
         "pair" => parse_pair(args),
         _ => ParsedCommand::Unknown,
     }
@@ -189,6 +202,8 @@ pub fn parse_reply_button(
                 "daily",
                 ParsedCommand::Report(ReportRequest::new(Period::Month, true)),
             ),
+            // Only a station's labels carry this button; a terminal's never match it.
+            ("status", ParsedCommand::StationStatus),
         ] {
             if [
                 format!("button_{name}_{locale}"),

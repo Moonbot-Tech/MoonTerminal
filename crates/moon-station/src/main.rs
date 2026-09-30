@@ -27,6 +27,9 @@
 //! systemd gives the service (the data root outside systemd); `moon-station ctl` is its client:
 //! one request from stdin, the reply on stdout — what the helper runs for the terminal.
 //!
+//! `moon-station release-fetch --out <path>` is what the root updater runs: the latest release's
+//! station binary, found and checked against its immutable digest (`release.rs`, §4.6).
+//!
 //! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
 //! the process exits; the report replica and the order traces need no such step, the replica
 //! resuming from its last committed checkpoint and the traces backfilled at the next start.
@@ -41,6 +44,7 @@ mod api;
 mod cores;
 mod host;
 mod pull;
+mod release;
 mod signals;
 mod tg;
 
@@ -49,7 +53,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use moon_core::session::SessionManager;
-use moon_core::station_api::{Access, Answer, Reply, Request, Status};
+use moon_core::station_api::{Access, Answer, BotStatus, Reply, Request, Status};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -65,6 +69,10 @@ fn main() -> anyhow::Result<()> {
     // The API's client: no log, no data root — one exchange with the running station.
     if std::env::args().nth(1).as_deref() == Some("ctl") {
         return api::ctl(std::env::args().skip(2));
+    }
+    // The root updater's download: no log, no data root — one release found, fetched, checked.
+    if std::env::args().nth(1).as_deref() == Some("release-fetch") {
+        return release::fetch(std::env::args().skip(2));
     }
     // The station's uptime counts from here.
     let process_started = Instant::now();
@@ -95,7 +103,7 @@ fn main() -> anyhow::Result<()> {
     moon_core::diagnostics::ensure_file();
     log::info!(
         "moon-station {} starting, data root {}",
-        env!("CARGO_PKG_VERSION"),
+        release::version(),
         data_root.display()
     );
 
@@ -211,12 +219,17 @@ fn main() -> anyhow::Result<()> {
                 session.reconnect(id, &cfg, Some(&reports.tx));
             }
         }
+        let station = StationNow {
+            session: &session,
+            groups: &groups,
+            host: &host,
+            data_root: &data_root,
+        };
+        if let Some(bot) = bot.as_mut() {
+            // The chats' "Status" asked during the tick above.
+            bot.answer_status(&cfg, |bot| station.status(Some(bot)));
+        }
         if let Some(api) = &api {
-            let station = StationNow {
-                session: &session,
-                groups: &groups,
-                host: &host,
-            };
             api.drain(|request| answer(request, bot.as_mut(), &mut cfg, &station));
         }
         // A committed report page wakes the valuation, as the terminal's coordination tick does.
@@ -280,6 +293,27 @@ struct StationNow<'a> {
     session: &'a SessionManager,
     groups: &'a [String],
     host: &'a host::HostWatch,
+    data_root: &'a Path,
+}
+
+impl StationNow<'_> {
+    /// The station now, with `bot` — what the API's `status` and the chat's "Status" answer.
+    fn status(&self, bot: Option<BotStatus>) -> Status {
+        let (cores_ready, cores_total, _) = cores_summary(self.session, self.groups);
+        Status {
+            station_version: release::version(),
+            cores_ready,
+            cores_total,
+            bot,
+            tape: Some(moon_core::station_api::TapeWindow {
+                margin_s: (moon_core::market::trade_replay::margin_ms() / 1_000) as u32,
+                long_position_min: (moon_core::market::trade_replay::long_position_ms() / 60_000)
+                    as u32,
+            }),
+            host: Some(Box::new(self.host.host())),
+            last_update: release::last_update(self.data_root),
+        }
+    }
 }
 
 /// One control API request, answered on the main loop's thread.
@@ -291,21 +325,9 @@ fn answer(
 ) -> Reply {
     const NO_BOT: &str = "the station runs no bot";
     let answer = match request {
-        Request::Status => {
-            let (cores_ready, cores_total, _) = cores_summary(station.session, station.groups);
-            Ok(Answer::Status(Status {
-                station_version: env!("CARGO_PKG_VERSION").to_owned(),
-                cores_ready,
-                cores_total,
-                bot: bot.map(|bot| bot.status(cfg)),
-                tape: Some(moon_core::station_api::TapeWindow {
-                    margin_s: (moon_core::market::trade_replay::margin_ms() / 1_000) as u32,
-                    long_position_min: (moon_core::market::trade_replay::long_position_ms()
-                        / 60_000) as u32,
-                }),
-                host: Some(Box::new(station.host.host())),
-            }))
-        }
+        Request::Status => Ok(Answer::Status(
+            station.status(bot.map(|bot| bot.status(cfg))),
+        )),
         Request::PairIssue => match bot {
             None => Err(NO_BOT.to_owned()),
             Some(bot) => bot

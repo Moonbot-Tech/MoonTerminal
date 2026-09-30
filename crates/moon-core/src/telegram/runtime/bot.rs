@@ -140,6 +140,8 @@ pub(super) fn run(
                 inbound.command,
                 ParsedCommand::Report(_) | ParsedCommand::Start
             );
+            // The station's status looks for a newer release before it answers.
+            let slow = is_report || inbound.command == ParsedCommand::StationStatus;
             let work = {
                 let Ok(mut ledger) = auth.lock() else {
                     return;
@@ -176,7 +178,7 @@ pub(super) fn run(
                 break;
             }
             api.acknowledge_update(update.update_id);
-            let Some(result) = super::response(rx, &alive, is_report) else {
+            let Some(result) = super::response(rx, &alive, slow) else {
                 if is_report {
                     report_failure(&mut api, &tx, &labels, chat_id);
                 }
