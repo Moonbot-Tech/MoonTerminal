@@ -23,6 +23,10 @@
 //! `/etc/moon-station`, read-only to the station. Core keys come as systemd credentials
 //! (`cores.rs`).
 //!
+//! The control API (`api.rs`, STATION.md §4.5) listens on `api.sock` in the runtime directory
+//! systemd gives the service (the data root outside systemd); `moon-station ctl` is its client:
+//! one request from stdin, the reply on stdout — what the helper runs for the terminal.
+//!
 //! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
 //! the process exits; the report replica and the order traces need no such step, the replica
 //! resuming from its last committed checkpoint and the traces backfilled at the next start.
@@ -33,6 +37,7 @@
 //! The allocator is musl's own. `mimalloc` was measured in its place (2026-09-28): the same CPU at
 //! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server.
 
+mod api;
 mod cores;
 mod signals;
 mod tg;
@@ -40,6 +45,9 @@ mod tg;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
+
+use moon_core::session::SessionManager;
+use moon_core::station_api::{Access, Answer, Reply, Request, Status};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -52,6 +60,10 @@ const STATUS_EVERY: Duration = Duration::from_secs(60);
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
 fn main() -> anyhow::Result<()> {
+    // The API's client: no log, no data root — one exchange with the running station.
+    if std::env::args().nth(1).as_deref() == Some("ctl") {
+        return api::ctl(std::env::args().skip(2));
+    }
     // The bot's dictionary, built at the base of the stack before anything can reach a `t!`.
     moon_tg::warm_locales();
     let (data_root, config) = args()?;
@@ -126,6 +138,15 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Without its API the station still runs; only the terminal's Settings cannot reach it.
+    let api = match api::Api::start(api_socket(&data_root)) {
+        Ok(api) => Some(api),
+        Err(e) => {
+            log::warn!("control API not started: {e:#}");
+            None
+        }
+    };
+
     let mut groups = groups_of(&cfg);
     let mut last_diag = Instant::now();
     let mut last_status = Instant::now();
@@ -182,6 +203,9 @@ fn main() -> anyhow::Result<()> {
                 session.reconnect(id, &cfg, Some(&reports.tx));
             }
         }
+        if let Some(api) = &api {
+            api.drain(|request| answer(request, bot.as_mut(), &mut cfg, &session, &groups));
+        }
         // A committed report page wakes the valuation, as the terminal's coordination tick does.
         let committed = reports.immediate_commit_dirty.swap(false, Ordering::AcqRel)
             | reports
@@ -201,15 +225,7 @@ fn main() -> anyhow::Result<()> {
         }
         if now.duration_since(last_status) >= STATUS_EVERY {
             last_status = now;
-            let (mut ready, mut total, mut down) = (0, 0, Vec::new());
-            for summary in groups.iter().map(|g| session.conn_summary_group(g)) {
-                ready += summary.ready;
-                total += summary.total;
-                down.extend(summary.down.into_iter().map(|d| match d.fault {
-                    Some(fault) => format!("{} {:?} ({fault:?})", d.name, d.status),
-                    None => format!("{} {:?}", d.name, d.status),
-                }));
-            }
+            let (ready, total, down) = cores_summary(&session, &groups);
             match down.is_empty() {
                 true => log::info!("status: {ready}/{total} cores ready"),
                 false => log::info!(
@@ -220,6 +236,67 @@ fn main() -> anyhow::Result<()> {
         }
         std::thread::sleep(DRAIN_EVERY);
     }
+}
+
+/// How many cores are ready of how many, and each one that is not, in words.
+fn cores_summary(session: &SessionManager, groups: &[String]) -> (usize, usize, Vec<String>) {
+    let (mut ready, mut total, mut down) = (0, 0, Vec::new());
+    for summary in groups.iter().map(|g| session.conn_summary_group(g)) {
+        ready += summary.ready;
+        total += summary.total;
+        down.extend(summary.down.into_iter().map(|d| match d.fault {
+            Some(fault) => format!("{} {:?} ({fault:?})", d.name, d.status),
+            None => format!("{} {:?}", d.name, d.status),
+        }));
+    }
+    (ready, total, down)
+}
+
+/// The control API's socket: in the runtime directory systemd made for the service, or in the
+/// data root when run by hand.
+fn api_socket(data_root: &Path) -> PathBuf {
+    std::env::var_os("RUNTIME_DIRECTORY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_root.to_path_buf())
+        .join(moon_core::station_api::SOCKET_FILE)
+}
+
+/// One control API request, answered on the main loop's thread.
+fn answer(
+    request: Request,
+    bot: Option<&mut tg::StationTg>,
+    cfg: &mut moon_core::config::AppConfig,
+    session: &SessionManager,
+    groups: &[String],
+) -> Reply {
+    const NO_BOT: &str = "the station runs no bot";
+    let answer = match request {
+        Request::Status => {
+            let (cores_ready, cores_total, _) = cores_summary(session, groups);
+            Ok(Answer::Status(Status {
+                station_version: env!("CARGO_PKG_VERSION").to_owned(),
+                cores_ready,
+                cores_total,
+                bot: bot.map(|bot| bot.status(cfg)),
+            }))
+        }
+        Request::PairIssue => match bot {
+            None => Err(NO_BOT.to_owned()),
+            Some(bot) => bot
+                .issue_pairing()
+                .map(Answer::Pairing)
+                .ok_or_else(|| "the bot is not up yet: try again in a moment".to_owned()),
+        },
+        Request::AccessGet => match bot {
+            None => Err(NO_BOT.to_owned()),
+            Some(_) => Ok(Answer::Access(Access::of(&cfg.telegram))),
+        },
+        Request::AccessSet { base, access } => match bot {
+            None => Err(NO_BOT.to_owned()),
+            Some(bot) => bot.set_access(cfg, &base, access).map(Answer::Access),
+        },
+    };
+    Reply::from(answer)
 }
 
 /// Re-read `station.toml` and apply its tape window; the cores are for the caller to reconcile.

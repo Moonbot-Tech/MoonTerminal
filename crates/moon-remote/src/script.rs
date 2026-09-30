@@ -67,16 +67,25 @@ impl Privilege {
         stdin: &[u8],
         timeout: Duration,
     ) -> anyhow::Result<Output> {
+        // A password is sent only while sudo still asks for one. The setup's own `helper` step lets
+        // the administrator's sudo go without it: a password line sent after that is not read by
+        // sudo, and lands as the first line of the step's stdin — once, inside the unit file.
+        let asks = match self {
+            Self::SudoPassword(_) => !conn.run("sudo -n true", &[], timeout)?.ok(),
+            _ => false,
+        };
         let (command, stdin) = match self {
             Self::Root => (command.to_owned(), Zeroizing::new(stdin.to_vec())),
-            Self::SudoNoPassword => (format!("sudo -n {command}"), Zeroizing::new(stdin.to_vec())),
-            Self::SudoPassword(password) => {
+            Self::SudoPassword(password) if asks => {
                 let mut input =
                     Zeroizing::new(Vec::with_capacity(password.len() + 1 + stdin.len()));
                 input.extend_from_slice(password.as_bytes());
                 input.push(b'\n');
                 input.extend_from_slice(stdin);
                 (format!("sudo -k -S -p '' {command}"), input)
+            }
+            Self::SudoNoPassword | Self::SudoPassword(_) => {
+                (format!("sudo -n {command}"), Zeroizing::new(stdin.to_vec()))
             }
         };
         checked(conn.run(&command, &stdin, timeout)?)

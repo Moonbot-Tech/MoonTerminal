@@ -3,9 +3,9 @@
 _version: 2
 
 telegram.segment_terminal_bot:
-  ru: "Бот терминала"
-  en: "Terminal bot"
-  es: "Bot del terminal"
+  ru: "Бот Telegram"
+  en: "Telegram bot"
+  es: "Bot de Telegram"
 telegram.segment_core_reader:
   ru: "Telegram на ядре"
   en: "Telegram on core"
@@ -669,3 +669,261 @@ telegram.mini_orders_n_many:
   ru: "{n} орд."
   en: "{n} orders"
   es: "{n} órdenes"
+
+# Settings -> Telegram -> the bot's segment -> "Station on a Linux server".
+telegram.server.section:
+  ru: "Станция на сервере Linux"
+  en: "Station on a Linux server"
+  es: "Estación en un servidor Linux"
+telegram.server.intro:
+  ru: "Бот, Mini App и отчёты работают на вашем Linux-сервере круглосуточно, даже когда терминал выключен. Терминал сам настраивает сервер по SSH: закрывает вход по паролю, ставит службу, передаёт ей ключи всех включённых ядер и переносит бота."
+  en: "The bot, the Mini App and the reports run on your own Linux server around the clock, even while the terminal is off. The terminal sets the server up over SSH: closes password logins, installs the service, hands it the keys of every active core and moves the bot."
+  es: "El bot, la Mini App y los informes funcionan en tu propio servidor Linux las 24 horas, incluso con el terminal apagado. El terminal configura el servidor por SSH: cierra el acceso por contraseña, instala el servicio, le pasa las claves de todos los núcleos activos y traslada el bot."
+telegram.server.host:
+  ru: "IP сервера"
+  en: "Server IP"
+  es: "IP del servidor"
+telegram.server.login:
+  ru: "Логин"
+  en: "Login"
+  es: "Usuario"
+telegram.server.by_key:
+  ru: "Вход по SSH-ключу"
+  en: "Log in with an SSH key"
+  es: "Entrar con una clave SSH"
+telegram.server.key_path:
+  ru: "Файл ключа"
+  en: "Key file"
+  es: "Archivo de clave"
+telegram.server.passphrase:
+  ru: "Пароль ключа"
+  en: "Key passphrase"
+  es: "Contraseña de la clave"
+telegram.server.key_hint:
+  ru: "Путь к приватному ключу ed25519 или ECDSA (OpenSSH, PuTTY .ppk или PKCS#8). Ключи RSA не поддерживаются. Пароль ключа — только если ключ зашифрован."
+  en: "Path to an ed25519 or ECDSA private key (OpenSSH, PuTTY .ppk or PKCS#8). RSA keys are not supported. The passphrase only if the key is encrypted."
+  es: "Ruta a una clave privada ed25519 o ECDSA (OpenSSH, PuTTY .ppk o PKCS#8). Las claves RSA no son compatibles. La contraseña solo si la clave está cifrada."
+telegram.server.sudo_password:
+  ru: "Пароль sudo"
+  en: "sudo password"
+  es: "Contraseña de sudo"
+telegram.server.password:
+  ru: "Пароль"
+  en: "Password"
+  es: "Contraseña"
+telegram.server.first_login_hint:
+  ru: "Доступ от провайдера (IP, логин, пароль root или ключ) нужен один раз и нигде не сохраняется. После установки вход по паролю закрыт, терминал входит своим ключом."
+  en: "The access from your provider (IP, login, root password or key) is used once and stored nowhere. After the install, password logins are closed and the terminal logs in with its own key."
+  es: "El acceso del proveedor (IP, usuario, contraseña de root o clave) se usa una vez y no se guarda. Tras la instalación, el acceso por contraseña queda cerrado y el terminal entra con su propia clave."
+telegram.server.old_admin:
+  ru: "Старый пароль moon"
+  en: "Old password of moon"
+  es: "Contraseña anterior de moon"
+telegram.server.bin:
+  ru: "Файл службы"
+  en: "Service file"
+  es: "Archivo del servicio"
+telegram.server.bin_hint:
+  ru: "Путь к файлу moon-station для Linux. Пока нет релиза службы, его собирают вручную."
+  en: "Path to the moon-station file for Linux. Until the service has a release, it is built by hand."
+  es: "Ruta al archivo moon-station para Linux. Hasta que el servicio tenga una versión publicada, se compila a mano."
+telegram.server.transfer_hint:
+  ru: "Бот терминала переносится на сервер: токен, чаты и доступы. Когда бот на сервере заработает, терминал удалит токен у себя; для локального бота понадобится другой токен. Если перенос не удастся, бот останется в терминале."
+  en: "The terminal's bot moves to the server: its token, chats and their access. Once the bot runs there, the terminal deletes its own token; a local bot will need another token. If the move fails, the bot stays in the terminal."
+  es: "El bot del terminal se traslada al servidor: su token, los chats y sus accesos. Cuando el bot funcione allí, el terminal borra su propio token; un bot local necesitará otro token. Si el traslado falla, el bot se queda en el terminal."
+telegram.server.mini_app:
+  ru: "Mini App на сервере"
+  en: "Mini App on the server"
+  es: "Mini App en el servidor"
+telegram.server.mini_app_hint:
+  ru: "Вход в Mini App идёт через туннель Cloudflare: где Cloudflare заблокирован, Mini App не откроется — тогда выключите. Переключение перезапускает станцию."
+  en: "The Mini App is reached through a Cloudflare tunnel: where Cloudflare is blocked it will not open, so switch it off there. Switching restarts the station."
+  es: "La Mini App se abre a través de un túnel de Cloudflare: donde Cloudflare está bloqueado no se abrirá, así que desactívala. Cambiarlo reinicia la estación."
+telegram.server.access_title:
+  ru: "Доступ к боту на сервере"
+  en: "Access to the bot on the server"
+  es: "Acceso al bot en el servidor"
+telegram.server.access_apply:
+  ru: "Применить на сервере"
+  en: "Apply on the server"
+  es: "Aplicar en el servidor"
+telegram.server.access_revert:
+  ru: "Отменить правки"
+  en: "Discard edits"
+  es: "Descartar cambios"
+telegram.server.access_apply_hint:
+  ru: "Правки чатов уходят на сервер кнопкой «Применить на сервере»; «Сохранить» их не касается."
+  en: "Chat edits go to the server with «Apply on the server»; Save does not touch them."
+  es: "Los cambios de chats van al servidor con «Aplicar en el servidor»; Guardar no los toca."
+telegram.server.bot_no_api:
+  ru: "Станция не отвечает: запускается или её служба старше этого терминала — нажмите «Обновить службу»."
+  en: "The station does not answer: it is starting, or its service is older than this terminal — press «Update the service»."
+  es: "La estación no responde: está arrancando o su servicio es más antiguo que este terminal; pulsa «Actualizar el servicio»."
+telegram.server.cores_hint:
+  ru: "На сервер уходят зашифрованными ключи всех включённых ядер; с ними сервер может торговать."
+  en: "The keys of every active core go to the server encrypted; with them the server can trade."
+  es: "Las claves de todos los núcleos activos van al servidor cifradas; con ellas el servidor puede operar."
+telegram.server.install:
+  ru: "Установить"
+  en: "Install"
+  es: "Instalar"
+telegram.server.known:
+  ru: "Станция стоит на сервере %{addr}: терминал входит на него своим ключом."
+  en: "The station runs on server %{addr}: the terminal logs in with its own key."
+  es: "La estación funciona en el servidor %{addr}: el terminal entra con su propia clave."
+telegram.server.bot_stopped:
+  ru: "Служба на сервере остановлена."
+  en: "The service on the server is stopped."
+  es: "El servicio en el servidor está detenido."
+telegram.server.bot_pair:
+  ru: "Отправьте боту: /pair %{code}"
+  en: "Send the bot: /pair %{code}"
+  es: "Envía al bot: /pair %{code}"
+telegram.server.status:
+  ru: "Статус"
+  en: "Status"
+  es: "Estado"
+telegram.server.move_bot:
+  ru: "Перенести бота на сервер"
+  en: "Move the bot to the server"
+  es: "Mover el bot al servidor"
+telegram.server.bot_off:
+  ru: "Снять бота с сервера"
+  en: "Take the bot off the server"
+  es: "Quitar el bot del servidor"
+telegram.server.update:
+  ru: "Обновить службу"
+  en: "Update the service"
+  es: "Actualizar el servicio"
+telegram.server.resetup:
+  ru: "Настроить заново"
+  en: "Set up again"
+  es: "Configurar de nuevo"
+telegram.server.resetup_hint:
+  ru: "Повторяет настройку сервера: обновляет служебные скрипты и юнит. Сервер, настроенный старой версией, попросит один раз старый пароль moon."
+  en: "Runs the server setup again: updates the helper scripts and the unit. A server set up by an older version asks once for the old password of moon."
+  es: "Repite la configuración del servidor: actualiza los scripts auxiliares y la unidad. Un servidor configurado por una versión anterior pedirá una vez la contraseña anterior de moon."
+telegram.server.logs:
+  ru: "Журнал"
+  en: "Log"
+  es: "Registro"
+telegram.server.forget:
+  ru: "Забыть сервер"
+  en: "Forget the server"
+  es: "Olvidar el servidor"
+telegram.server.forget_hint:
+  ru: "Терминал забывает сервер и его ключ хоста; на самом сервере ничего не меняется. Нужно после переустановки сервера — чтобы поставить станцию заново."
+  en: "The terminal forgets the server and its host key; nothing changes on the server itself. Needed after the server was reinstalled, to install the station anew."
+  es: "El terminal olvida el servidor y su clave de host; en el servidor no cambia nada. Hace falta tras reinstalar el servidor, para instalar la estación de nuevo."
+telegram.server.forgotten:
+  ru: "Сервер %{addr} забыт."
+  en: "Server %{addr} is forgotten."
+  es: "Servidor %{addr} olvidado."
+telegram.server.running:
+  ru: "Выполняется…"
+  en: "Working…"
+  es: "Trabajando…"
+telegram.server.done:
+  ru: "Готово."
+  en: "Done."
+  es: "Hecho."
+telegram.server.needs_old_admin:
+  ru: "Сервер настроен старой версией: у moon ещё есть пароль. Введите его один раз и повторите — после этого вход будет только по ключу."
+  en: "The server was set up by an older version: moon still has a password. Enter it once and retry — after that the login is by key only."
+  es: "El servidor fue configurado por una versión anterior: moon aún tiene contraseña. Introdúcela una vez y repite; después el acceso será solo por clave."
+telegram.server.erase_failed:
+  ru: "Бот работает на сервере, но токен в терминале удалить не удалось"
+  en: "The bot runs on the server, but deleting the terminal's token failed"
+  es: "El bot funciona en el servidor, pero no se pudo borrar el token del terminal"
+telegram.server.need_host:
+  ru: "Укажите IP сервера (можно с портом: 1.2.3.4:2222)."
+  en: "Enter the server IP (a port may follow: 1.2.3.4:2222)."
+  es: "Indica la IP del servidor (puede llevar puerto: 1.2.3.4:2222)."
+telegram.server.need_bin:
+  ru: "Укажите файл службы."
+  en: "Enter the service file."
+  es: "Indica el archivo del servicio."
+telegram.server.job_lost:
+  ru: "Задача прервалась, не сообщив результат."
+  en: "The job stopped without reporting its result."
+  es: "La tarea se detuvo sin informar su resultado."
+telegram.server.local_bot_held:
+  ru: "Бот терминала остаётся выключенным: сервер может всё ещё опрашивать этот токен. Нажмите «Снять бота с сервера» — после этого бот терминала включится сам."
+  en: "The terminal's bot stays off: the server may still poll this token. Press «Take the bot off the server» — the terminal's bot then starts again by itself."
+  es: "El bot del terminal sigue apagado: el servidor puede seguir consultando este token. Pulsa «Quitar el bot del servidor»: después el bot del terminal se activará solo."
+telegram.server.bot_title:
+  ru: "Бот на сервере %{addr}"
+  en: "Bot on server %{addr}"
+  es: "Bot en el servidor %{addr}"
+telegram.server.bot_unknown:
+  ru: "Состояние бота ещё не получено."
+  en: "The bot's state is not known yet."
+  es: "El estado del bot aún no se conoce."
+telegram.server.bot_none:
+  ru: "Бот на сервере не задан: укажите токен."
+  en: "No bot on the server: enter a token."
+  es: "No hay bot en el servidor: indica un token."
+telegram.server.bot_paired:
+  ru: "Работает, привязано чатов: %{count}."
+  en: "Running, paired chats: %{count}."
+  es: "Funcionando, chats vinculados: %{count}."
+telegram.server.bot_unpaired:
+  ru: "Работает, чат не привязан."
+  en: "Running, no chat paired."
+  es: "Funcionando, ningún chat vinculado."
+telegram.server.bot_conflict:
+  ru: "Этот токен опрашивается в другом месте (другой терминал или сервер)."
+  en: "This token is polled elsewhere (another terminal or server)."
+  es: "Este token se consulta en otro lugar (otro terminal o servidor)."
+telegram.server.bot_starting:
+  ru: "Запускается…"
+  en: "Starting…"
+  es: "Iniciando…"
+telegram.server.token_hint:
+  ru: "Токен бота от @BotFather. Новый токен — это новый бот: чаты старого снимаются, привязка — заново кодом /pair."
+  en: "The bot token from @BotFather. A new token is a new bot: the old one's chats are dropped, pair again with /pair."
+  es: "El token del bot de @BotFather. Un token nuevo es un bot nuevo: se quitan los chats del anterior, vincula de nuevo con /pair."
+telegram.server.token_set:
+  ru: "Поставить"
+  en: "Set"
+  es: "Poner"
+telegram.server.token_replace:
+  ru: "Заменить"
+  en: "Replace"
+  es: "Reemplazar"
+telegram.server.refresh:
+  ru: "Обновить"
+  en: "Refresh"
+  es: "Actualizar"
+telegram.server.local_bot:
+  ru: "Также бот в терминале"
+  en: "Also a bot in the terminal"
+  es: "También un bot en el terminal"
+telegram.server.local_bot_hint:
+  ru: "Второй бот со своим токеном работает, пока открыт терминал. Токен должен быть другим: один токен — один бот."
+  en: "A second bot with its own token runs while the terminal is open. The token must differ: one token, one bot."
+  es: "Un segundo bot con su propio token funciona mientras el terminal está abierto. El token debe ser otro: un token, un bot."
+telegram.server.need_server_token:
+  ru: "Укажите токен бота для сервера."
+  en: "Enter the bot token for the server."
+  es: "Indica el token del bot para el servidor."
+telegram.server.token_is_local:
+  ru: "Этот токен уже у бота терминала: один токен — один бот. Перенесите бота терминала или укажите другой токен."
+  en: "The terminal's bot already uses this token: one token, one bot. Move the terminal's bot or enter another token."
+  es: "El bot del terminal ya usa este token: un token, un bot. Mueve el bot del terminal o indica otro token."
+telegram.server.bot_unreadable:
+  ru: "Состояние бота не получено: %{error}"
+  en: "The bot's state could not be read: %{error}"
+  es: "No se pudo leer el estado del bot: %{error}"
+telegram.server.no_active_cores:
+  ru: "Нет включённых ядер: ключи на станции не изменены."
+  en: "No active core: the station's keys are left as they are."
+  es: "No hay núcleos activos: las claves de la estación no cambian."
+telegram.server.auto_cores:
+  ru: "Ядра изменены — ключи уходят на станцию…"
+  en: "The cores changed — their keys go to the station…"
+  es: "Los núcleos cambiaron: sus claves van a la estación…"
+telegram.server.auto_cores_done:
+  ru: "Ключи ядер на станции обновлены."
+  en: "The station's core keys are updated."
+  es: "Las claves de los núcleos en la estación están actualizadas."

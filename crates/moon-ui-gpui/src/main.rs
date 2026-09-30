@@ -90,6 +90,8 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 struct Backend {
     /// Optional Telegram service, joined before application owners disappear.
     telegram: moon_tg::TelegramState,
+    /// The station's server work (Settings -> Telegram -> Bot on a server): outlives the window.
+    station: backend::station::StationJobs,
     /// Process-wide self-update state shared by every group window.
     updater: Entity<update::UpdateController>,
     session: SessionManager,

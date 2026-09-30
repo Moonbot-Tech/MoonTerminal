@@ -1,15 +1,165 @@
-//! Per-chat role and core assignment editor using the shared Settings save transaction.
+//! Per-chat role and core assignment editor, for either bot: the terminal's (edits the Settings
+//! draft, saved by the shared Save transaction) or the station's (edits a draft of its own, sent
+//! to the server by "Apply on the server").
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_core::config::telegram_access::TelegramReportAccess;
-use moon_ui::{MoonButton, MoonGroupBox, MoonInput, MoonPalette, h_flex, rgba_from, v_flex};
+use moon_core::config::TelegramConfig;
+use moon_core::config::telegram_access::{TelegramChatAccess, TelegramReportAccess};
+use moon_ui::{
+    MoonButton, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    h_flex, rgba_from, v_flex,
+};
 use rust_i18n::t;
 
 use super::SettingsView;
 use crate::design;
 use moon_core::session::core_order::CoreOrder;
 
+/// Whose chats an editor shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::settings) enum ChatsOf {
+    /// The terminal's own bot: the Settings draft, saved by Save.
+    Terminal,
+    /// The bot on the station: a draft of the server's chats, applied by a button.
+    Station,
+}
+
+impl ChatsOf {
+    /// An element id unique to this editor: both can be on screen at once.
+    fn id(self, what: impl std::fmt::Display) -> SharedString {
+        match self {
+            Self::Terminal => format!("tg-{what}").into(),
+            Self::Station => format!("tgs-{what}").into(),
+        }
+    }
+}
+
+/// One chat editor's own state: the chat opened, an ownership transfer awaiting its second click,
+/// the opened chat's name and the core search.
+pub(in crate::settings) struct ChatEd {
+    pub(super) active_chat: Option<i64>,
+    /// Ownership transfer requires a second explicit click within the selected chat.
+    pub(super) pending_owner: Option<i64>,
+    name: Entity<MoonInputState>,
+    search: Entity<MoonInputState>,
+}
+
+impl ChatEd {
+    /// A closed editor; [`Self::wire`] binds its name field to a side's draft.
+    pub(in crate::settings) fn new<T: 'static>(window: &mut Window, cx: &mut Context<T>) -> Self {
+        let name = cx.new(|cx| MoonInputState::new(window, cx));
+        let search = cx.new(|cx| MoonInputState::new(window, cx));
+        cx.subscribe(&search, |_, _, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                cx.notify();
+            }
+        })
+        .detach();
+        Self {
+            active_chat: None,
+            pending_owner: None,
+            name,
+            search,
+        }
+    }
+
+    /// Write the opened chat's caption into `side`'s draft as it is typed.
+    pub(in crate::settings) fn wire(&self, side: ChatsOf, cx: &mut Context<SettingsView>) {
+        cx.subscribe(&self.name, move |this, emitter, ev: &MoonInputEvent, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let Some(chat) = this.chat_ed(side).active_chat else {
+                    return;
+                };
+                let value = emitter.read(cx).value().to_string();
+                this.chats_edit(side, cx, |telegram| {
+                    // Opening a chat fills this field too: an unchanged name must not create
+                    // an empty profile, which would read as an edit.
+                    let current = telegram
+                        .chat_access
+                        .iter()
+                        .find(|a| a.chat_id == chat)
+                        .map_or("", |a| a.name.as_str());
+                    if !telegram.authorized_chat_ids.contains(&chat) || current == value {
+                        return false;
+                    }
+                    telegram.chat_profile_mut(chat).name = value;
+                    true
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Close the opened chat: its chats were replaced from elsewhere.
+    pub(in crate::settings) fn close(&mut self) {
+        self.active_chat = None;
+        self.pending_owner = None;
+    }
+}
+
 impl SettingsView {
+    fn chat_ed(&self, side: ChatsOf) -> &ChatEd {
+        match side {
+            ChatsOf::Terminal => &self.telegram.chats,
+            ChatsOf::Station => &self.telegram.server.chats,
+        }
+    }
+
+    fn chat_ed_mut(&mut self, side: ChatsOf) -> &mut ChatEd {
+        match side {
+            ChatsOf::Terminal => &mut self.telegram.chats,
+            ChatsOf::Station => &mut self.telegram.server.chats,
+        }
+    }
+
+    /// `side`'s chats as edited; `None` while the station's are not read yet.
+    fn chats<'a>(&'a self, side: ChatsOf, cx: &'a App) -> Option<&'a TelegramConfig> {
+        match side {
+            ChatsOf::Terminal => {
+                let b = self.backend.read(cx);
+                Some(&b.preview.as_ref().unwrap_or(&b.config).telegram)
+            }
+            ChatsOf::Station => self.telegram.server.access_draft.as_ref(),
+        }
+    }
+
+    /// `side`'s grants as saved: they stay offered after being unchecked in the draft.
+    fn chats_saved<'a>(&'a self, side: ChatsOf, cx: &'a App) -> &'a [TelegramChatAccess] {
+        match side {
+            ChatsOf::Terminal => &self.backend.read(cx).config.telegram.chat_access,
+            ChatsOf::Station => self
+                .telegram
+                .server
+                .access_base
+                .as_ref()
+                .map_or(&[], |a| a.chat_access.as_slice()),
+        }
+    }
+
+    /// Change `side`'s draft; `edit` says whether it changed anything.
+    fn chats_edit(
+        &mut self,
+        side: ChatsOf,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut TelegramConfig) -> bool,
+    ) {
+        match side {
+            ChatsOf::Terminal => self.backend.update(cx, |b, bcx| {
+                if let Some(draft) = b.preview.as_mut()
+                    && edit(&mut draft.telegram)
+                {
+                    bcx.notify();
+                }
+            }),
+            ChatsOf::Station => {
+                if let Some(draft) = self.telegram.server.access_draft.as_mut() {
+                    edit(draft);
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Load archived candidates off GPUI without deriving the catalog from mutable checkbox state.
     fn load_telegram_history(&mut self, cx: &mut Context<Self>) {
         if self.telegram.history_loaded || self.telegram.history_loading {
@@ -41,37 +191,42 @@ impl SettingsView {
     }
 
     /// Open one chat without carrying another client's name, search, or transfer confirmation.
-    fn edit_telegram_chat(&mut self, chat: i64, window: &mut Window, cx: &mut Context<Self>) {
+    fn edit_telegram_chat(
+        &mut self,
+        side: ChatsOf,
+        chat: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.load_telegram_history(cx);
-        let name = {
-            let backend = self.backend.read(cx);
-            let cfg = backend.preview.as_ref().unwrap_or(&backend.config);
-            cfg.telegram
-                .chat_access
-                .iter()
-                .find(|a| a.chat_id == chat)
-                .map(|a| a.name.clone())
-                .unwrap_or_default()
-        };
-        self.telegram.active_chat = Some(chat);
-        self.telegram.pending_owner = None;
-        self.telegram
-            .name
-            .update(cx, |state, cx| state.set_value(name, window, cx));
-        self.telegram
-            .search
-            .update(cx, |state, cx| state.set_value("", window, cx));
+        let name = self
+            .chats(side, cx)
+            .and_then(|telegram| telegram.chat_access.iter().find(|a| a.chat_id == chat))
+            .map(|a| a.name.clone())
+            .unwrap_or_default();
+        let ed = self.chat_ed_mut(side);
+        ed.active_chat = Some(chat);
+        ed.pending_owner = None;
+        let (name_state, search_state) = (ed.name.clone(), ed.search.clone());
+        name_state.update(cx, |state, cx| state.set_value(name, window, cx));
+        search_state.update(cx, |state, cx| state.set_value("", window, cx));
         cx.notify();
     }
 
     /// Stack chat cards and expand a single editor so narrow Settings needs no sideways scrolling.
-    pub(in crate::settings) fn telegram_chat_access(&self, cx: &Context<Self>) -> impl IntoElement {
+    ///
+    /// Args:
+    ///     side: Whose chats.
+    ///     footer: What ends the section: the terminal's save hint, the station's Apply row.
+    pub(in crate::settings) fn telegram_chat_access(
+        &self,
+        side: ChatsOf,
+        footer: AnyElement,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
-        let backend = self.backend.read(cx);
-        let cfg = backend.preview.as_ref().unwrap_or(&backend.config);
-        let telegram = &cfg.telegram;
-        let mut section = MoonGroupBox::new("telegram-chat-access")
+        let section = MoonGroupBox::new(side.id("chat-access"))
             .title(t!("telegram.access_title").to_string())
             .padding(14.0)
             .gap(10.0)
@@ -80,13 +235,18 @@ impl SettingsView {
                     .text_color(muted)
                     .child(t!("telegram.access_roles_hint").to_string()),
             );
-        if telegram.authorized_chat_ids.is_empty() {
-            return section.child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.access_first_owner").to_string()),
-            );
-        }
+        let telegram = match self.chats(side, cx) {
+            Some(telegram) if !telegram.authorized_chat_ids.is_empty() => telegram,
+            _ => {
+                return section.child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.access_first_owner").to_string()),
+                );
+            }
+        };
+        let ed = self.chat_ed(side);
+        let mut section = section;
         for &chat in &telegram.authorized_chat_ids {
             let owner = telegram.owner() == Some(chat);
             let profile = telegram.chat_access.iter().find(|a| a.chat_id == chat);
@@ -108,7 +268,7 @@ impl SettingsView {
                     t!("telegram.access_viewer_summary", count = count).to_string()
                 }
             };
-            let active = self.telegram.active_chat == Some(chat);
+            let active = ed.active_chat == Some(chat);
             let mut card = v_flex()
                 .w_full()
                 .min_w_0()
@@ -131,7 +291,7 @@ impl SettingsView {
                                 .child(div().text_color(muted).child(summary)),
                         )
                         .child(
-                            MoonButton::new(format!("tg-edit-{chat}"))
+                            MoonButton::new(side.id(format_args!("edit-{chat}")))
                                 .ghost()
                                 .label(
                                     if active {
@@ -142,12 +302,13 @@ impl SettingsView {
                                     .to_string(),
                                 )
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    if this.telegram.active_chat == Some(chat) {
-                                        this.telegram.active_chat = None;
-                                        this.telegram.pending_owner = None;
+                                    if this.chat_ed(side).active_chat == Some(chat) {
+                                        let ed = this.chat_ed_mut(side);
+                                        ed.active_chat = None;
+                                        ed.pending_owner = None;
                                         cx.notify();
                                     } else {
-                                        this.edit_telegram_chat(chat, window, cx);
+                                        this.edit_telegram_chat(side, chat, window, cx);
                                     }
                                 }))
                                 .render(),
@@ -162,14 +323,14 @@ impl SettingsView {
                     )
                     .child(div().child(t!("telegram.access_name").to_string()))
                     .child(
-                        MoonInput::new("tg-chat-name")
-                            .state(&self.telegram.name)
+                        MoonInput::new(side.id("chat-name"))
+                            .state(&ed.name)
                             .placeholder(t!("telegram.access_name_placeholder").to_string())
                             .size(design::INPUT_SIZE),
                     );
                 if !owner {
-                    card = card.child(self.telegram_core_access(chat, cx));
-                    let confirm = self.telegram.pending_owner == Some(chat);
+                    card = card.child(self.telegram_core_access(side, chat, cx));
+                    let confirm = ed.pending_owner == Some(chat);
                     card = card
                         .when(confirm, |card| {
                             card.child(
@@ -183,7 +344,7 @@ impl SettingsView {
                                 .flex_wrap()
                                 .gap(design::ui_px(cx, 8.0))
                                 .child(
-                                    MoonButton::new(format!("tg-owner-{chat}"))
+                                    MoonButton::new(side.id(format_args!("owner-{chat}")))
                                         .ghost()
                                         .label(
                                             if confirm {
@@ -194,44 +355,39 @@ impl SettingsView {
                                             .to_string(),
                                         )
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            if this.telegram.pending_owner == Some(chat) {
-                                                this.backend.update(cx, |b, bcx| {
-                                                    if let Some(cfg) = b.preview.as_mut() {
-                                                        cfg.telegram.set_owner(chat);
-                                                        bcx.notify();
-                                                    }
+                                            if this.chat_ed(side).pending_owner == Some(chat) {
+                                                this.chats_edit(side, cx, |telegram| {
+                                                    telegram.set_owner(chat);
+                                                    true
                                                 });
-                                                this.telegram.pending_owner = None;
+                                                this.chat_ed_mut(side).pending_owner = None;
                                             } else {
-                                                this.telegram.pending_owner = Some(chat);
+                                                this.chat_ed_mut(side).pending_owner = Some(chat);
                                             }
                                             cx.notify();
                                         }))
                                         .render(),
                                 )
                                 .child(
-                                    MoonButton::new(format!("tg-revoke-{chat}"))
+                                    MoonButton::new(side.id(format_args!("revoke-{chat}")))
                                         .ghost()
                                         .label(t!("telegram.access_remove").to_string())
                                         .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.backend.update(cx, |b, bcx| {
-                                                if let Some(cfg) = b.preview.as_mut()
-                                                    && cfg.telegram.owner() != Some(chat)
-                                                {
-                                                    // Freeze legacy ownership before removing an entry from the ordered pairing list.
-                                                    cfg.telegram.owner_chat_id =
-                                                        cfg.telegram.owner();
-                                                    cfg.telegram
-                                                        .authorized_chat_ids
-                                                        .retain(|id| *id != chat);
-                                                    cfg.telegram
-                                                        .chat_access
-                                                        .retain(|a| a.chat_id != chat);
-                                                    bcx.notify();
+                                            this.chats_edit(side, cx, |telegram| {
+                                                if telegram.owner() == Some(chat) {
+                                                    return false;
                                                 }
+                                                // Freeze legacy ownership before removing an entry from the ordered pairing list.
+                                                telegram.owner_chat_id = telegram.owner();
+                                                telegram
+                                                    .authorized_chat_ids
+                                                    .retain(|id| *id != chat);
+                                                telegram.chat_access.retain(|a| a.chat_id != chat);
+                                                true
                                             });
-                                            this.telegram.active_chat = None;
-                                            this.telegram.pending_owner = None;
+                                            let ed = this.chat_ed_mut(side);
+                                            ed.active_chat = None;
+                                            ed.pending_owner = None;
                                             cx.notify();
                                         }))
                                         .render(),
@@ -241,21 +397,24 @@ impl SettingsView {
             }
             section = section.child(card);
         }
-        section.child(
-            div()
-                .text_color(muted)
-                .child(t!("telegram.access_save_hint").to_string()),
-        )
+        section.child(footer)
     }
 
     /// Viewer assignments use stable saved core IDs; selecting today's list never grants future cores.
-    fn telegram_core_access(&self, chat: i64, cx: &Context<Self>) -> impl IntoElement {
+    fn telegram_core_access(
+        &self,
+        side: ChatsOf,
+        chat: i64,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let backend = self.backend.read(cx);
         let cfg = backend.preview.as_ref().unwrap_or(&backend.config);
-        let selected = match cfg.telegram.report_access(chat) {
+        let telegram = self.chats(side, cx);
+        let selected = match telegram.and_then(|t| t.report_access(chat)) {
             Some(TelegramReportAccess::Viewer(ids)) => ids,
             _ => Vec::new(),
         };
+        // The station serves the terminal's cores: the same uids, the same names.
         let mut cores: Vec<_> = cfg
             .servers
             .iter()
@@ -273,13 +432,8 @@ impl SettingsView {
             }
         }
         // Saved grants stay available during a failed or pending history read, even after unchecking.
-        for profile in backend
-            .config
-            .telegram
-            .chat_access
-            .iter()
-            .chain(cfg.telegram.chat_access.iter())
-        {
+        let drafted = telegram.map_or(&[][..], |t| t.chat_access.as_slice());
+        for profile in self.chats_saved(side, cx).iter().chain(drafted) {
             for &id in &profile.core_uids {
                 if id != 0
                     && id != moon_core::config::NO_MATCH_CORE_UID
@@ -290,15 +444,16 @@ impl SettingsView {
             }
         }
         CoreOrder::new(cfg).sort_by(&mut cores, |(id, _)| *id);
-        let query = self.telegram.search.read(cx).value().trim().to_lowercase();
+        let ed = self.chat_ed(side);
+        let query = ed.search.read(cx).value().trim().to_lowercase();
         let mut content = v_flex()
             .w_full()
             .min_w_0()
             .gap(design::ui_px(cx, 8.0))
             .child(div().child(t!("telegram.access_cores").to_string()))
             .child(
-                MoonInput::new("tg-core-search")
-                    .state(&self.telegram.search)
+                MoonInput::new(side.id("core-search"))
+                    .state(&ed.search)
                     .size(design::INPUT_SIZE)
                     .placeholder(t!("telegram.access_search").to_string()),
             )
@@ -307,40 +462,33 @@ impl SettingsView {
                     .flex_wrap()
                     .gap(design::ui_px(cx, 8.0))
                     .child(
-                        MoonButton::new("tg-select-current")
+                        MoonButton::new(side.id("select-current"))
                             .ghost()
                             .label(t!("telegram.access_select_current").to_string())
                             .disabled(current_ids.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    if let Some(cfg) = b.preview.as_mut() {
-                                        let ids =
-                                            &mut cfg.telegram.chat_profile_mut(chat).core_uids;
-                                        for id in &current_ids {
-                                            if !ids.contains(id) {
-                                                ids.push(*id);
-                                            }
+                                this.chats_edit(side, cx, |telegram| {
+                                    let ids = &mut telegram.chat_profile_mut(chat).core_uids;
+                                    for id in &current_ids {
+                                        if !ids.contains(id) {
+                                            ids.push(*id);
                                         }
-                                        bcx.notify();
                                     }
+                                    true
                                 });
-                                cx.notify();
                             }))
                             .render(),
                     )
                     .child(
-                        MoonButton::new("tg-clear-cores")
+                        MoonButton::new(side.id("clear-cores"))
                             .ghost()
                             .label(t!("telegram.access_clear").to_string())
                             .disabled(selected.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    if let Some(cfg) = b.preview.as_mut() {
-                                        cfg.telegram.chat_profile_mut(chat).core_uids.clear();
-                                        bcx.notify();
-                                    }
+                                this.chats_edit(side, cx, |telegram| {
+                                    telegram.chat_profile_mut(chat).core_uids.clear();
+                                    true
                                 });
-                                cx.notify();
                             }))
                             .render(),
                     ),
@@ -352,7 +500,7 @@ impl SettingsView {
             content = content
                 .child(div().child(t!("telegram.access_history_failed").to_string()))
                 .child(
-                    MoonButton::new("tg-history-retry")
+                    MoonButton::new(side.id("history-retry"))
                         .ghost()
                         .label(t!("telegram.access_retry").to_string())
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -370,23 +518,23 @@ impl SettingsView {
             }
             count += 1;
             content = content.child(
-                self.draft_checkbox(
-                    cx,
-                    format!("tg-core-{chat}-{id}"),
-                    selected.contains(&id),
-                    move |cfg, checked| {
-                        let ids = &mut cfg.telegram.chat_profile_mut(chat).core_uids;
-                        if checked {
-                            if !ids.contains(&id) {
-                                ids.push(id);
+                MoonCheckbox::new(side.id(format_args!("core-{chat}-{id}")))
+                    .checked(selected.contains(&id))
+                    .label(label)
+                    .on_change(cx.listener(move |this, checked: &bool, _, cx| {
+                        let checked = *checked;
+                        this.chats_edit(side, cx, |telegram| {
+                            let ids = &mut telegram.chat_profile_mut(chat).core_uids;
+                            if checked {
+                                if !ids.contains(&id) {
+                                    ids.push(id);
+                                }
+                            } else {
+                                ids.retain(|value| *value != id);
                             }
-                        } else {
-                            ids.retain(|value| *value != id);
-                        }
-                        true
-                    },
-                )
-                .label(label),
+                            true
+                        });
+                    })),
             );
         }
         content.when(count == 0, |content| {

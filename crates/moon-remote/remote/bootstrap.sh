@@ -80,44 +80,47 @@ step_probe() {
     fi
 }
 
-# admin <name>; stdin: the password line, then the app's public key line.
+# admin <name>; stdin: public key lines — the app's first, then the user's own when the first login
+# was by key, so the user keeps a way in of their own.
 step_admin() {
     name=${1:-}
     valid_name "$name" || die "not a usable administrator name: $name"
-    IFS= read -r pw || die "no password on stdin"
-    IFS= read -r pub || die "no public key on stdin"
-    case "$pub" in
-    "ssh-ed25519 "*) ;;
-    *) die "not an ed25519 public key" ;;
-    esac
+    keys_in=$(mktemp)
+    cat >"$keys_in"
+    [ -s "$keys_in" ] || die "no public key on stdin"
+    while IFS= read -r pub; do
+        case "$pub" in
+        "ssh-ed25519 "* | "ecdsa-sha2-"*) ;;
+        *) die "not an ed25519 or ECDSA public key" ;;
+        esac
+    done <"$keys_in"
     if id "$name" >/dev/null 2>&1; then
         echo "admin=exists"
     else
         useradd -m -s /bin/bash "$name"
         echo "admin=created"
     fi
-    group=sudo
-    getent group sudo >/dev/null || group=wheel
-    usermod -aG "$group" "$name"
-    printf '%s:%s\n' "$name" "$pw" | chpasswd
     home=$(getent passwd "$name" | cut -d: -f6)
     primary=$(id -gn "$name")
     install -d -m 700 -o "$name" -g "$primary" "$home/.ssh"
     keys="$home/.ssh/authorized_keys"
     [ -f "$keys" ] || install -m 600 -o "$name" -g "$primary" /dev/null "$keys"
-    body=$(printf '%s\n' "$pub" | awk '{print $2}')
-    if grep -qF "$body" "$keys"; then
-        echo "key=present"
-    else
-        printf '%s\n' "$pub" >>"$keys"
-        echo "key=added"
-    fi
+    while IFS= read -r pub; do
+        body=$(printf '%s\n' "$pub" | awk '{print $2}')
+        if grep -qF "$body" "$keys"; then
+            echo "key=present"
+        else
+            printf '%s\n' "$pub" >>"$keys"
+            echo "key=added"
+        fi
+    done <"$keys_in"
+    rm -f "$keys_in"
     chown "$name:$primary" "$keys"
     chmod 600 "$keys"
 }
 
-# helper <admin>; stdin: the helper script. Installs it root-owned and lets the administrator run
-# it, and only it, without a password.
+# helper <admin>; stdin: the helper script. Installs it root-owned; the administrator runs sudo
+# without a password.
 step_helper() {
     name=${1:-}
     valid_name "$name" || die "not a usable administrator name: $name"
@@ -128,11 +131,20 @@ step_helper() {
     echo "helper=$(put_file "$HELPER" 755 root:root <"$tmp")"
     rm -f "$tmp"
     rule=$(mktemp)
-    printf '# moon-station: the installer commands, without a password\n%s ALL=(root) NOPASSWD: %s\n' \
-        "$name" "$HELPER" >"$rule"
+    # The administrator has no password (step_admin), so sudo asks for none. Whoever holds the
+    # terminal's key already holds the station's core keys through the helper's `update`; root on a
+    # server that runs nothing else adds no reach, and lets the terminal update the helper itself.
+    printf '# moon-station: the administrator, by key only, without a password\n%s ALL=(ALL) NOPASSWD: ALL\n' \
+        "$name" >"$rule"
     visudo -cf "$rule" >/dev/null || die "visudo rejected the rule"
     echo "sudoers=$(put_file "$SUDOERS" 440 root:root <"$rule")"
     rm -f "$rule"
+    # Key logins only (decided 2026-09-30): a server set up with an administrator password loses
+    # it — only here, once the rule above lets sudo go without it, or root would go away from the
+    # very login doing this. `*` (no password), not `passwd -l`: sshd without PAM refuses a LOCKED
+    # account ("!") even its key logins, and a fresh `useradd` account starts locked.
+    usermod -p '*' "$name"
+    echo "password=none"
 }
 
 # service; stdin: the unit file. The service account, its directories, the unit, the UDP receive

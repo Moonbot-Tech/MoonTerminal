@@ -22,7 +22,8 @@ pub mod web;
 ///
 /// Variants carry no secret and no Bot API URL. `Unavailable` represents a
 /// configured token whose transport is currently unavailable.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Serialized for the station's control API (`crate::station_api`).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TelegramStatus {
     /// No token is configured; no worker exists.
     Disabled,

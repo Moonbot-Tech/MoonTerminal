@@ -4668,12 +4668,14 @@ name = "moon-remote"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "getrandom 0.2.17",
  "log",
  "moon-core",
  "rpassword",
  "russh",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "tokio",
  "toml 0.8.23",
@@ -4842,6 +4844,7 @@ dependencies = [
  "moon-core",
  "moon-gpui",
  "moon-gpui-platform",
+ "moon-remote",
  "moon-tg",
  "moon-ui",
  "objc",
@@ -4859,6 +4862,7 @@ dependencies = [
  "windows 0.61.3",
  "winresource",
  "x11",
+ "zeroize",
  "zune-core 0.5.1",
 ]
 

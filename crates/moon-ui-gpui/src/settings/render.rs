@@ -25,6 +25,8 @@ impl Render for SettingsView {
     ///     The complete Settings window element tree.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::diag::bump(&crate::diag::SETTINGS_RENDER);
+        // A finished station job clears the secrets typed for it: its inputs need the window.
+        self.server_bot_sync(window, cx);
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 
@@ -452,7 +454,10 @@ fn page_with_switch(
 
 /// Measure the whole padded tab at intrinsic height inside a fixed scroll viewport.
 ///
-/// The direct non-flex child makes expanded descendants contribute to the scroll extent.
+/// The direct non-flex child makes expanded descendants contribute to the scroll extent. A tab
+/// that narrows its column gives it an explicit width, never `w_full().max_w(..)`: the column's
+/// height is then measured with its wrapped text laid out at the full viewport width — fewer
+/// lines than it renders at the narrower width — and its end falls outside the scroll extent.
 fn scrollable_tab_content(
     content: impl IntoElement,
     scroll: &ScrollHandle,

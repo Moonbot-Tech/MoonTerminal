@@ -691,6 +691,8 @@ fn settings_sig(b: &Backend) -> u64 {
     // Token plaintext is never hashed; emptiness plus the non-secret preference fields
     // are enough to repaint the Telegram tab.
     b.telegram.revision.hash(&mut h);
+    // The station job's progress lives in the backend (Telegram -> Bot on a server).
+    b.station.revision.hash(&mut h);
     cfg.telegram.token.is_empty().hash(&mut h);
     cfg.telegram.authorized_chat_ids.hash(&mut h);
     cfg.telegram.owner_chat_id.hash(&mut h);

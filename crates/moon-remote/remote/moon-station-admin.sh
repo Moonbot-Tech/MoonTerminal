@@ -1,9 +1,10 @@
 #!/bin/sh
-# moon-station-admin: the root commands the terminal runs on its station without a password.
+# moon-station-admin: the root commands the terminal runs on its station.
 #
-# sudoers: `<admin> ALL=(root) NOPASSWD: /usr/local/sbin/moon-station-admin`. That rule is only
-# narrow because this file is: nothing here changes who logs in, the unit, sudo, or any path
-# outside the station's own. Everything else needs the administrator's password.
+# The administrator logs in by key only and runs sudo without a password (bootstrap.sh, decided
+# 2026-09-30); this file is the station's own vocabulary on top of that — the commands every
+# terminal version agrees on — not a limit on what the administrator may do. Nothing here
+# changes who logs in, the unit, sudo, or any path outside the station's own.
 set -eu
 umask 077
 
@@ -14,6 +15,12 @@ DROPIN_DIR=/etc/systemd/system/moon-station.service.d
 DROPIN=$DROPIN_DIR/credentials.conf
 # The bot token's credential, beside the cores' keys.
 TOKEN=telegram-token
+# The bot's pairing (chats, owner, access): the station's own state, in its data root.
+PAIRING=/var/lib/moon-station/telegram.json
+# The USDT valuation cache, the station's own file once written.
+VALUATION=/var/lib/moon-station/valuation.sqlite
+# The running station's control API (moon_core::station_api), in its runtime directory.
+API_SOCKET=/run/moon-station/api.sock
 UNIT=moon-station.service
 # How long a station just (re)started must stay up to count as healthy: longer than its slowest
 # start-up check (the report replica's integrity pass, ~11 s on 1 vCPU).
@@ -240,8 +247,59 @@ cmd_status() {
     creds=$( (cd "$CREDS" && ls core-*.cred 2>/dev/null | sed 's/\.cred$//' | tr '\n' ' ') || true)
     echo "creds=${creds% }"
     [ -f "$CREDS/$TOKEN.cred" ] && echo "token=yes" || echo "token=no"
+    [ -f "$PAIRING" ] && echo "pairing=yes" || echo "pairing=no"
+    [ -f "$VALUATION" ] && echo "valuation=yes" || echo "valuation=no"
+    [ -S "$API_SOCKET" ] && echo "api=yes" || echo "api=no"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
+}
+
+# put-pairing; stdin: telegram.json — the chats, owner and access a terminal hands over with its
+# bot. The station owns the file and rewrites it on every /pair, so it is written with the station
+# stopped; the caller starts it again.
+cmd_put_pairing() {
+    tmp=$(mktemp)
+    cat >"$tmp"
+    head -c 1 "$tmp" | grep -q '{' || {
+        rm -f "$tmp"
+        die "telegram.json is not a JSON object"
+    }
+    systemctl stop "$UNIT"
+    install -m 600 -o moon-station -g moon-station "$tmp" "$PAIRING"
+    rm -f "$tmp"
+    echo "pairing=written"
+}
+
+# ctl; stdin: one API request (JSON) — relayed to the running station by its own binary, the
+# reply printed as one JSON line. The station checks the request; this only carries it.
+cmd_ctl() {
+    [ -S "$API_SOCKET" ] || die "the station is not running (no $API_SOCKET)"
+    exec "$BIN" ctl --socket "$API_SOCKET"
+}
+
+# put-valuation; stdin: the terminal's valuation.sqlite, gzipped — its cached USDT rates, so a new
+# station does not ask the exchanges for years of minutes again. Written with the station stopped;
+# the caller starts it. The station re-derives the values from its own replica.
+cmd_put_valuation() {
+    tmp=$(mktemp)
+    gzip -dc >"$tmp" || {
+        rm -f "$tmp"
+        die "valuation.sqlite: not a gzip stream"
+    }
+    [ "$(head -c 15 "$tmp")" = "SQLite format 3" ] || {
+        rm -f "$tmp"
+        die "valuation.sqlite: not an SQLite database"
+    }
+    systemctl stop "$UNIT"
+    install -m 600 -o moon-station -g moon-station "$tmp" "$VALUATION"
+    rm -f "$tmp" "$VALUATION-wal" "$VALUATION-shm"
+    echo "valuation=written $(stat -c %s "$VALUATION")"
+}
+
+# drop-pairing: the chats of a bot taken off the station, so the next bot starts unpaired.
+cmd_drop_pairing() {
+    rm -f "$PAIRING"
+    echo "dropped=pairing"
 }
 
 cmd_logs() {
@@ -294,5 +352,18 @@ stop)
     ;;
 status) cmd_status ;;
 logs) cmd_logs "$@" ;;
+put-pairing)
+    lock
+    cmd_put_pairing
+    ;;
+ctl) cmd_ctl ;;
+put-valuation)
+    lock
+    cmd_put_valuation
+    ;;
+drop-pairing)
+    lock
+    cmd_drop_pairing
+    ;;
 *) die "unknown command: $cmd" ;;
 esac

@@ -3,16 +3,17 @@
 //!
 //! ```text
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>
-//!             [--login-key <file>] --admin <name> [--station-bin <file>]
+//!             [--login-key <file>] [--station-bin <file>]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
-//! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | [--token] [--mini-app on|off]
-//!             [--zone <IANA zone>] [--language ru|en|es])
+//! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
+//!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es])
 //! ```
 //!
-//! Passwords are asked without echo, or taken from `MOON_REMOTE_LOGIN_PASSWORD` (the provider's
-//! login, or sudo for `--login-key`) and `MOON_REMOTE_ADMIN_PASSWORD`. None is stored anywhere.
+//! The administrator is always `moon`, by key only. Passwords are asked without echo, or taken
+//! from `MOON_REMOTE_LOGIN_PASSWORD` (the provider's login, or sudo for `--login-key`) and, for a
+//! server set up before key-only sudo, `MOON_REMOTE_OLD_ADMIN_PASSWORD`. None is stored anywhere.
 //! The bot token (`telegram --token`) likewise: asked without echo, or `MOON_REMOTE_BOT_TOKEN`.
 
 use std::path::PathBuf;
@@ -22,7 +23,7 @@ use moon_core::config::Secret;
 use moon_remote::setup::{FirstAccess, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::CoreKey;
-use moon_remote::{app_key, hosts, script, setup, station};
+use moon_remote::{app_key, hosts, keys, script, setup, station};
 use zeroize::Zeroizing;
 
 fn main() {
@@ -83,22 +84,30 @@ fn run() -> anyhow::Result<()> {
                     user: login,
                 },
             };
-            let admin = args
-                .value("--admin")?
-                .ok_or_else(|| anyhow::anyhow!("--admin <name> is required"))?;
-            let admin_password = new_secret("MOON_REMOTE_ADMIN_PASSWORD", &admin)?;
             let station_bin = args.value("--station-bin")?.map(PathBuf::from);
             args.done()?;
-            setup::run(
-                &Setup {
-                    target,
-                    first,
-                    admin,
-                    admin_password,
-                    station_bin,
-                },
-                &mut say,
-            )?;
+            let mut setup = Setup {
+                target,
+                first,
+                legacy_admin_password: std::env::var("MOON_REMOTE_OLD_ADMIN_PASSWORD")
+                    .ok()
+                    .map(Zeroizing::new),
+                station_bin,
+            };
+            if let Err(e) = setup::run(&setup, &mut say) {
+                let Some(old) = e.downcast_ref::<setup::NeedsAdminPassword>() else {
+                    return Err(e);
+                };
+                if setup.legacy_admin_password.is_some() {
+                    return Err(e);
+                }
+                println!("{old}");
+                setup.legacy_admin_password = Some(secret(
+                    "MOON_REMOTE_OLD_ADMIN_PASSWORD",
+                    &format!("old password of {}: ", old.admin),
+                )?);
+                setup::run(&setup, &mut say)?;
+            }
             println!("done: the server is closed; the station has no cores yet");
         }
         "station-bin" => {
@@ -165,6 +174,16 @@ fn run() -> anyhow::Result<()> {
             }
         }
         "telegram" => {
+            if args.flag("--state") {
+                args.done()?;
+                let state = station::bot::bot_state(&target)?;
+                println!("status={}", state.summary());
+                println!("pairing_code={}", state.pairing_code().unwrap_or("-"));
+                if let Some(access) = &state.access {
+                    println!("chats={:?}", access.authorized_chat_ids);
+                }
+                return Ok(());
+            }
             let off = args.flag("--off");
             let token = args.flag("--token");
             let change = station::BotChange {
@@ -286,16 +305,16 @@ fn confirm_keys(target: &Target, cores: &[CoreKey]) -> anyhow::Result<()> {
 
 fn read_key(path: &str) -> anyhow::Result<russh::keys::PrivateKey> {
     let text = std::fs::read_to_string(path).with_context(|| format!("read {path}"))?;
-    let key =
-        russh::keys::PrivateKey::from_openssh(&text).with_context(|| format!("parse {path}"))?;
-    if !key.is_encrypted() {
-        return Ok(key);
+    match keys::parse(&text, None) {
+        Err(keys::KeyError::NeedsPassphrase) => {
+            let phrase = secret(
+                "MOON_REMOTE_KEY_PASSPHRASE",
+                &format!("passphrase of {path}: "),
+            )?;
+            Ok(keys::parse(&text, Some(&phrase))?)
+        }
+        other => Ok(other?),
     }
-    let phrase = secret(
-        "MOON_REMOTE_KEY_PASSPHRASE",
-        &format!("passphrase of {path}: "),
-    )?;
-    key.decrypt(phrase.as_bytes()).context("decrypt the key")
 }
 
 /// A secret from the environment, or asked without echo.
@@ -304,20 +323,6 @@ fn secret(env: &str, prompt: &str) -> anyhow::Result<Zeroizing<String>> {
         return Ok(Zeroizing::new(value));
     }
     Ok(Zeroizing::new(rpassword::prompt_password(prompt)?))
-}
-
-/// The administrator's password — chosen on the first setup, the current one on a re-run: asked
-/// twice unless it comes from the environment.
-fn new_secret(env: &str, admin: &str) -> anyhow::Result<Zeroizing<String>> {
-    if let Ok(value) = std::env::var(env) {
-        return Ok(Zeroizing::new(value));
-    }
-    let first = Zeroizing::new(rpassword::prompt_password(format!(
-        "password for {admin} (new on the first setup, the current one on a re-run): "
-    ))?);
-    let again = Zeroizing::new(rpassword::prompt_password("again: ")?);
-    anyhow::ensure!(*first == *again, "the two passwords differ");
-    Ok(first)
 }
 
 /// Hand-rolled flags: a handful of `--name value` pairs.

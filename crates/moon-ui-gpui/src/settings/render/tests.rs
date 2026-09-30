@@ -78,3 +78,65 @@ fn expanded_content_increases_scroll_extent(cx: &mut gpui::TestAppContext) {
         }
     }
 }
+
+/// A narrowed tab column with wrapped text, in a window much wider than the column.
+struct NarrowColumnFixture {
+    scroll: ScrollHandle,
+}
+
+impl Render for NarrowColumnFixture {
+    /// Draw a column the way the Telegram tab narrows its own: an explicit width.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let long = "A hint long enough to wrap onto several lines in a narrow settings column, \
+                    and again, and again, and again, and again.";
+        let mut section = MoonGroupBox::new("section").padding(14.0).gap(10.0);
+        for _ in 0..10 {
+            section = section.child(div().child(long));
+        }
+        let column = v_flex()
+            .w(px(400.0))
+            .gap(px(16.0))
+            .child(div().child(long))
+            .child(section.child(div().debug_selector(|| "last-control".into()).h(px(30.0))));
+        div()
+            .w(px(1440.0))
+            .h(px(300.0))
+            .child(super::scrollable_tab_content(column, &self.scroll, cx))
+    }
+}
+
+/// A column narrowed by `w_full().max_w(..)` is measured with its text wrapped at the viewport's
+/// width and loses its end below the scroll extent (the Telegram tab's Install button, 2026-09-30);
+/// an explicit width keeps the whole column reachable.
+#[gpui::test]
+fn a_narrow_column_with_wrapped_text_stays_reachable(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let scroll = ScrollHandle::new();
+    let window = cx.add_window(|_, _| NarrowColumnFixture {
+        scroll: scroll.clone(),
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let tail = visual
+        .debug_bounds("last-control")
+        .expect("final control was laid out");
+    let reachable = scroll.bounds().bottom_right().y + scroll.max_offset().y;
+    assert!(
+        reachable >= tail.bottom_right().y,
+        "final control lies outside the scroll extent"
+    );
+}
+
+/// The Telegram tab narrows its column by an explicit width: a `max_w` there brings back the
+/// Install button below the scroll extent (see the test above).
+#[test]
+fn the_telegram_tab_narrows_by_an_explicit_width() {
+    let source = include_str!("../telegram.rs");
+    assert!(
+        !source.contains(".max_w(design::font_w_px"),
+        "the Telegram tab's column is narrowed with max_w again"
+    );
+    assert!(source.contains(".w(px(column_w))"));
+}

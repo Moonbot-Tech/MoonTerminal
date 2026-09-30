@@ -1,0 +1,411 @@
+//! The station's server work (Settings -> Telegram -> the bot's segment), owned by the backend.
+//!
+//! A job runs for minutes and may hand the terminal's bot over; its end must be applied whether
+//! or not the Settings window is still open — a lost end would leave the terminal's bot down, or
+//! its token on disk while the station polls it. So the jobs, their lines and their ends live
+//! here, and the Settings segment only starts jobs and shows this state.
+//!
+//! One job runs at a time, of three kinds: the user's (a button; it owns the progress lines and the
+//! outcome), a quiet read of the station's bot (on opening the tab; it touches only the bot's
+//! state), and the automatic core keys after a Save changed the cores (its lines append, the last
+//! outcome stays). A user's job pressed during a quiet read waits for it; cores changed during any
+//! job go right after it.
+//!
+//! Handing the bot over: the terminal's transport is suspended first (`TelegramState::suspend`:
+//! one token, one poller) with the saved configuration untouched, so a Save meanwhile writes the
+//! token as it was. The station's bot polls (paired, or offering a code when no chat came along) →
+//! the token and the chats are erased here, on disk and in an open Settings draft; a failure the
+//! station undid → the terminal's bot resumes; a failure it could not undo → the terminal's bot
+//! stays down, and the user is told to take the bot off the station.
+
+use std::sync::mpsc;
+use std::time::Duration;
+
+use gpui::{Context, Task};
+use moon_core::config::AppConfig;
+use moon_remote::station::bot::BotState;
+use rust_i18n::t;
+
+use crate::Backend;
+
+pub(crate) mod job;
+
+/// How often the backend drains a running job's channel.
+const POLL: Duration = Duration::from_millis(150);
+/// How many of a job's lines are kept.
+const MAX_LINES: usize = 400;
+
+/// Who started a job, which decides what its end may change.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum Kind {
+    /// A button: owns the progress lines and the outcome.
+    #[default]
+    User,
+    /// A read of the bot's state: touches that state only.
+    Quiet,
+    /// The core keys after a Save: appends its lines, keeps the outcome unless it fails.
+    Auto,
+}
+
+/// The station jobs' state, as the Settings segment shows it.
+#[derive(Default)]
+pub(crate) struct StationJobs {
+    pub(crate) lines: Vec<String>,
+    /// Bumped per line, so a view follows the newest one even once the list is full.
+    pub(crate) line_seq: u64,
+    pub(crate) running: bool,
+    /// The last job's end: `Ok(summary)` or `Err(reason)`.
+    pub(crate) outcome: Option<Result<String, String>>,
+    pub(crate) bot: Option<BotState>,
+    /// Why the last read of the bot's state failed; shown instead of a state that may be stale.
+    pub(crate) bot_error: Option<String>,
+    /// The server predates key-only sudo: its old administrator password is asked once.
+    pub(crate) needs_old_admin: bool,
+    /// Bumped at every user job's end, so an open segment clears the secrets it was given.
+    pub(crate) finished: u64,
+    /// Bumped when a hand-over erased the terminal's token, so the segment clears its input.
+    pub(crate) erased: u64,
+    /// Bumped on every change of this state: part of the Settings window's repaint signature.
+    pub(crate) revision: u64,
+    kind: Kind,
+    /// The running job hands the terminal's bot over.
+    handing_over: bool,
+    /// A user's job pressed while a quiet read ran: it starts right after.
+    waiting: Option<(job::Job, bool)>,
+    /// The terminal's cores changed while a job ran: their keys go to the station after it.
+    pending_cores: bool,
+    /// The last user job said nothing about the bot: its state is read again after it.
+    pending_refresh: bool,
+    task: Option<Task<()>>,
+}
+
+impl StationJobs {
+    /// A job the user sees as work in progress: buttons wait for it. A quiet read does not count.
+    pub(crate) fn busy(&self) -> bool {
+        self.running && self.kind != Kind::Quiet
+    }
+
+    fn push_line(&mut self, line: String) {
+        self.lines.push(line);
+        self.line_seq = self.line_seq.wrapping_add(1);
+        if self.lines.len() > MAX_LINES {
+            self.lines.drain(..self.lines.len() - MAX_LINES);
+        }
+    }
+}
+
+/// The station's server this terminal set up, if any (`remote/hosts.toml`).
+pub(crate) fn known_target() -> Option<moon_remote::ssh::Target> {
+    let hosts = moon_remote::hosts::Hosts::load(&moon_remote::hosts::Hosts::path()).ok()?;
+    let host = hosts.first_set_up()?;
+    let (name, port) = host.addr.rsplit_once(':')?;
+    Some(moon_remote::ssh::Target {
+        host: name.trim_matches(['[', ']']).to_owned(),
+        port: port.parse().ok()?,
+    })
+}
+
+impl Backend {
+    /// Start the user's `job`; `hand_over` suspends the terminal's bot for its duration. During a
+    /// quiet read it waits for that read; during another job it is not started (the buttons wait).
+    pub(crate) fn station_start(&mut self, job: job::Job, hand_over: bool, cx: &mut Context<Self>) {
+        if self.station.running {
+            if self.station.kind == Kind::Quiet {
+                self.station.waiting = Some((job, hand_over));
+            }
+            return;
+        }
+        self.station_begin(job, hand_over, Kind::User, cx);
+    }
+
+    /// Read the station's bot again (its status, its pairing code), quietly: the last job's lines
+    /// and outcome stay on screen. Nothing when no server is set up or a job runs.
+    pub(crate) fn station_refresh_bot(&mut self, cx: &mut Context<Self>) {
+        if self.station.running {
+            return;
+        }
+        if let Some(target) = known_target() {
+            self.station_begin(job::Job::BotState { target }, false, Kind::Quiet, cx);
+        }
+    }
+
+    /// The terminal's cores changed (added, removed, switched on or off, renamed, a key or
+    /// transport replaced): every active core's key goes to the station — now, or right after the
+    /// job that runs.
+    pub(crate) fn station_cores_changed(&mut self, cx: &mut Context<Self>) {
+        if known_target().is_none() {
+            return;
+        }
+        if self.station.running {
+            self.station.pending_cores = true;
+            return;
+        }
+        self.station_send_cores(cx);
+    }
+
+    /// The server was forgotten: nothing learnt about it applies to the next one.
+    pub(crate) fn station_forgotten(&mut self, outcome: Result<String, String>) {
+        let st = &mut self.station;
+        st.bot = None;
+        st.bot_error = None;
+        st.needs_old_admin = false;
+        st.pending_cores = false;
+        st.pending_refresh = false;
+        st.waiting = None;
+        st.lines.clear();
+        st.outcome = Some(outcome);
+        st.revision = st.revision.wrapping_add(1);
+    }
+
+    fn station_send_cores(&mut self, cx: &mut Context<Self>) {
+        self.station.pending_cores = false;
+        let Some(target) = known_target() else {
+            return;
+        };
+        let cores: Vec<u64> = self
+            .config
+            .servers
+            .iter()
+            .filter(|s| s.active && s.uid != 0)
+            .map(|s| s.uid)
+            .collect();
+        if cores.is_empty() {
+            // A station without cores would still be a station; the keys it has stay until one
+            // is switched on again.
+            self.station
+                .push_line(t!("telegram.server.no_active_cores").to_string());
+            self.station.revision = self.station.revision.wrapping_add(1);
+            return;
+        }
+        self.station_begin(job::Job::Cores { target, cores }, false, Kind::Auto, cx);
+    }
+
+    fn station_begin(
+        &mut self,
+        job: job::Job,
+        hand_over: bool,
+        kind: Kind,
+        cx: &mut Context<Self>,
+    ) {
+        if hand_over {
+            self.telegram.suspend();
+        }
+        let st = &mut self.station;
+        st.running = true;
+        st.kind = kind;
+        st.handing_over = hand_over;
+        match kind {
+            Kind::User => {
+                st.outcome = None;
+                st.lines.clear();
+            }
+            Kind::Auto => st.push_line(t!("telegram.server.auto_cores").to_string()),
+            Kind::Quiet => {}
+        }
+        st.revision = st.revision.wrapping_add(1);
+        let rx = job::start(job);
+        st.task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(POLL).await;
+                let mut events = Vec::new();
+                let mut gone = false;
+                loop {
+                    match rx.try_recv() {
+                        Ok(event) => events.push(event),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            gone = true;
+                            break;
+                        }
+                    }
+                }
+                // A job thread gone without its end still ends the job here: nothing else would.
+                if gone && !events.iter().any(|e| matches!(e, job::Event::Done(_))) {
+                    events.push(job::Event::Done(job::Done::Failed {
+                        reason: t!("telegram.server.job_lost").to_string(),
+                        station_may_poll: false,
+                    }));
+                }
+                // Nothing new wakes nobody: the backend has many observers.
+                if events.is_empty() {
+                    continue;
+                }
+                let mut finished = false;
+                let alive = this.update(cx, |b, cx| {
+                    for event in events {
+                        finished |= b.station_event(event);
+                    }
+                    b.station.revision = b.station.revision.wrapping_add(1);
+                    if finished {
+                        b.station_next(cx);
+                    }
+                    cx.notify();
+                });
+                if alive.is_err() || finished {
+                    break;
+                }
+            }
+        }));
+        cx.notify();
+    }
+
+    /// After a job: the user's job that waited, then the cores that changed, then a read of the
+    /// bot when the last job said nothing about it.
+    fn station_next(&mut self, cx: &mut Context<Self>) {
+        if let Some((job, hand_over)) = self.station.waiting.take() {
+            self.station_begin(job, hand_over, Kind::User, cx);
+        } else if self.station.pending_cores {
+            self.station_send_cores(cx);
+        }
+        // Also after cores that had nothing to send: nothing else would run the read.
+        if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
+            self.station_refresh_bot(cx);
+        }
+    }
+
+    /// Apply one job event; `true` once the job has ended.
+    fn station_event(&mut self, event: job::Event) -> bool {
+        let done = match event {
+            job::Event::Line(line) => {
+                self.station.push_line(line);
+                return false;
+            }
+            job::Event::Done(done) => done,
+        };
+        let handing_over = std::mem::take(&mut self.station.handing_over);
+        let kind = self.station.kind;
+        self.station.running = false;
+        if kind == Kind::Quiet {
+            // A quiet read changes only the bot's state, or says why it could not read it.
+            match done {
+                job::Done::Ok { bot: Some(bot), .. } => {
+                    self.station.bot = Some(bot);
+                    self.station.bot_error = None;
+                }
+                job::Done::Ok { .. } => {}
+                job::Done::NeedsAdminPassword => {
+                    self.station.bot_error =
+                        Some(t!("telegram.server.needs_old_admin").to_string());
+                }
+                job::Done::Failed { reason, .. } => self.station.bot_error = Some(reason),
+            }
+            return true;
+        }
+        if kind == Kind::User {
+            self.station.finished = self.station.finished.wrapping_add(1);
+        }
+        let mut transferred = false;
+        let mut station_polls = false;
+        let mut said_bot = false;
+        match done {
+            job::Done::Ok {
+                transferred: t,
+                bot,
+                bot_off,
+            } => {
+                transferred = t;
+                // A terminal bot held down after an undo that failed runs again once the station
+                // no longer polls its token.
+                if bot_off && !handing_over && self.telegram.suspended() {
+                    self.telegram.resume(&self.config.telegram);
+                }
+                self.station.needs_old_admin = false;
+                if let Some(bot) = bot {
+                    self.station.bot = Some(bot);
+                    self.station.bot_error = None;
+                    said_bot = true;
+                }
+                match kind {
+                    Kind::User => {
+                        self.station.outcome = Some(Ok(t!("telegram.server.done").to_string()))
+                    }
+                    _ => self
+                        .station
+                        .push_line(t!("telegram.server.auto_cores_done").to_string()),
+                }
+            }
+            job::Done::NeedsAdminPassword => {
+                self.station.needs_old_admin = true;
+                self.station.outcome = Some(Err(t!("telegram.server.needs_old_admin").to_string()));
+            }
+            job::Done::Failed {
+                reason,
+                station_may_poll,
+            } => {
+                station_polls = station_may_poll;
+                self.station.outcome = Some(Err(reason));
+            }
+        }
+        // A job that ended without the bot's state may have changed it: read it again.
+        self.station.pending_refresh |= !said_bot;
+        if !handing_over {
+            return true;
+        }
+        if transferred {
+            if let Err(e) = self.station_erase_local_bot() {
+                // The token is still on disk while the station polls it: the terminal's bot stays
+                // down for this run, and the user is told why.
+                self.station.outcome = Some(Err(format!(
+                    "{}: {e:#}",
+                    t!("telegram.server.erase_failed")
+                )));
+            }
+        } else if station_polls {
+            // The station may still poll the token: the terminal's bot stays down until the bot
+            // is taken off the station ("Take the bot off the server"), or the two answer 409.
+            if let Some(Err(reason)) = self.station.outcome.take() {
+                self.station.outcome = Some(Err(format!(
+                    "{reason}\n{}",
+                    t!("telegram.server.local_bot_held")
+                )));
+            }
+        } else {
+            self.telegram.resume(&self.config.telegram);
+        }
+        true
+    }
+
+    /// The bot runs on the station now: forget its token and chats here, on disk and in an open
+    /// Settings draft alike, so a later Save does not bring them back. The draft's other Telegram
+    /// fields keep their unsaved edits.
+    fn station_erase_local_bot(&mut self) -> anyhow::Result<()> {
+        let mut candidate = self.config.clone();
+        forget_bot(&mut candidate.telegram);
+        candidate.save_telegram()?;
+        self.config = candidate;
+        if let Some(draft) = self.preview.as_mut() {
+            forget_bot(&mut draft.telegram);
+        }
+        self.telegram.resume(&self.config.telegram);
+        self.station.erased = self.station.erased.wrapping_add(1);
+        Ok(())
+    }
+}
+
+/// A Telegram configuration without its bot: no token, no paired chat, no access.
+fn forget_bot(telegram: &mut moon_core::config::TelegramConfig) {
+    telegram.token = moon_core::config::Secret::new(String::new());
+    telegram.authorized_chat_ids.clear();
+    telegram.owner_chat_id = None;
+    telegram.chat_access.clear();
+}
+
+/// Whether the cores the station would get differ: one added or removed, switched on or off,
+/// renamed, or its key or transport replaced. Compared in place, so no key is copied out of the
+/// configuration.
+pub(crate) fn cores_differ(before: &AppConfig, after: &AppConfig) -> bool {
+    fn active(c: &AppConfig) -> Vec<&moon_core::config::ServerConfig> {
+        c.servers
+            .iter()
+            .filter(|s| s.active && s.uid != 0)
+            .collect()
+    }
+    let (a, b) = (active(before), active(after));
+    a.len() != b.len()
+        || a.iter().zip(&b).any(|(x, y)| {
+            x.uid != y.uid
+                || x.name != y.name
+                || x.transport != y.transport
+                || x.key.expose() != y.key.expose()
+        })
+}
