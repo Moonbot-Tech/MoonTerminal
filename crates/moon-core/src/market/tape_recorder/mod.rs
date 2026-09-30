@@ -32,7 +32,9 @@
 //!
 //! Once a closed trade is settled here, and the terminal's own close-time capture has had time to
 //! land, the two tapes of it are read back and compared ([`compare`]): coverage, prints, volume and
-//! the level touches the entry model fills on. The ring capture is the reference.
+//! the level touches the entry model fills on. The ring capture is the reference. A station has
+//! no ring capture to compare with, so it never compares — nor opens `trades.sqlite` to find that
+//! out.
 //!
 //! # The switch
 //!
@@ -431,13 +433,18 @@ impl Recorder {
             self.drain();
         }
         self.reconcile(now, now_ms);
+        let compares = !crate::feed::station::enabled();
         for (key, task) in &mut self.tasks {
             task.drop_stale_opens(now_ms - OPEN_HORIZON_MS);
             if task.overdue(now_ms) {
                 let lost = task.give_up();
                 note_lost(&mut self.stats, key, &lost, "gave up");
             }
-            for (open_ms, close_ms, needed) in task.take_settled() {
+            let settled = task.take_settled();
+            if !compares {
+                continue;
+            }
+            for (open_ms, close_ms, needed) in settled {
                 self.compares.push(PendingCompare {
                     due: now + COMPARE_DELAY,
                     exchange: key.0.clone(),

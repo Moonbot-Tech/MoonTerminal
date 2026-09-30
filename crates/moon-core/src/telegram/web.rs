@@ -13,9 +13,9 @@
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
+use std::sync::{Arc, RwLock};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -63,6 +63,16 @@ pub struct MiniAppServer {
     join: Option<JoinHandle<()>>,
     events_tx: SyncSender<MiniAppApiRequest>,
     events_rx: Option<mpsc::Receiver<MiniAppApiRequest>>,
+    admission: Arc<RwLock<Admission>>,
+}
+
+/// What the listener admits and shows, replaced in place while it runs: a pairing or a language
+/// change must not cost the tunnel its public address.
+struct Admission {
+    /// Chat ids allowed to authenticate Mini App API requests.
+    chats: Vec<i64>,
+    /// Localized page labels, served inside the page.
+    labels: std::collections::BTreeMap<String, String>,
 }
 
 /// Inputs required to bind the Mini App listener. The process is not started until
@@ -286,10 +296,13 @@ impl MiniAppServer {
         listener.set_nonblocking(false)?;
         let stop = Arc::new(AtomicBool::new(false));
         let (events_tx, events_rx) = mpsc::sync_channel(64);
+        let admission = Arc::new(RwLock::new(Admission {
+            chats: config.authorized_chat_ids,
+            labels,
+        }));
         let app = App {
-            labels: Arc::new(labels),
+            admission: Arc::clone(&admission),
             token: Arc::new(config.token),
-            authorized_chat_ids: Arc::new(config.authorized_chat_ids),
             events_tx: events_tx.clone(),
             stop: Arc::clone(&stop),
         };
@@ -311,7 +324,27 @@ impl MiniAppServer {
             join: Some(join),
             events_tx,
             events_rx: Some(events_rx),
+            admission,
         })
+    }
+
+    /// Replace the admitted chats and the page labels without rebinding: the next request sees
+    /// them, a removed chat is refused from that request on.
+    ///
+    /// Args:
+    ///     authorized_chat_ids: Chat ids allowed to authenticate from now on.
+    ///     labels: Localized page labels for the next page load.
+    pub fn update(
+        &self,
+        authorized_chat_ids: Vec<i64>,
+        labels: std::collections::BTreeMap<String, String>,
+    ) {
+        let mut admission = self
+            .admission
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        admission.chats = authorized_chat_ids;
+        admission.labels = labels;
     }
 
     /// OS-assigned loopback address of the listener.
@@ -460,9 +493,8 @@ struct PanicSellBody {
 /// Per-connection `touche` service. Clone is cheap: only Arcs and a channel sender.
 #[derive(Clone)]
 struct App {
-    labels: Arc<std::collections::BTreeMap<String, String>>,
+    admission: Arc<RwLock<Admission>>,
     token: Arc<Secret>,
-    authorized_chat_ids: Arc<Vec<i64>>,
     events_tx: SyncSender<MiniAppApiRequest>,
     stop: Arc<AtomicBool>,
 }
@@ -481,9 +513,15 @@ impl App {
         }
         match (request.method(), request.uri().path()) {
             (&Method::GET, "/") => {
-                let labels = serde_json::to_string(&*self.labels)
-                    .unwrap_or_default()
-                    .replace('<', "\\u003c");
+                let labels = serde_json::to_string(
+                    &self
+                        .admission
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .labels,
+                )
+                .unwrap_or_else(|_| "{}".into())
+                .replace('<', "\\u003c");
                 static_response(
                     "text/html; charset=utf-8",
                     &INDEX_HTML.replace("__TELEGRAM_LABELS__", &labels),
@@ -799,8 +837,14 @@ impl App {
             .ok_or_else(|| status_response(StatusCode::UNAUTHORIZED, "missing_init_data"))?;
         let signed = verify_init_data(init_data, self.token.expose(), now_unix_secs())
             .map_err(|error| status_response(auth_status(error), auth_reason(error)))?;
-        let chat_id = authorize_paired_identity(&signed, &self.authorized_chat_ids)
-            .map_err(|error| status_response(auth_status(error), auth_reason(error)))?;
+        // A poisoned admission admits nobody.
+        let paired = self
+            .admission
+            .read()
+            .map(|admission| authorize_paired_identity(&signed, &admission.chats))
+            .unwrap_or(Err(InitDataError::Unpaired));
+        let chat_id =
+            paired.map_err(|error| status_response(auth_status(error), auth_reason(error)))?;
         Ok((signed, chat_id))
     }
 }

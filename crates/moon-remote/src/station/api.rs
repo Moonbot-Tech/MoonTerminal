@@ -12,7 +12,7 @@ use crate::ssh::{Conn, Target};
 /// One request on an open administrator connection whose helper is current.
 ///
 /// The station's hello is judged before its reply is read: a station of another API version is
-/// refused by name ("update the service"), never misread.
+/// refused by name — update whichever side is older — never misread.
 pub(crate) fn call(conn: &Conn, request: &Request) -> anyhow::Result<Answer> {
     let body = serde_json::to_vec(request)?;
     let out = script::checked(conn.run(&script::helper("ctl", &[]), &body, STEP_TIMEOUT)?)?;
@@ -20,11 +20,18 @@ pub(crate) fn call(conn: &Conn, request: &Request) -> anyhow::Result<Answer> {
         serde_json::from_str(out.stdout_text().trim()).context("read the station's answer")?;
     let hello: Hello =
         serde_json::from_value(output["hello"].clone()).context("read the station's hello")?;
+    // Whichever side is older is the one to update: a station set up by a newer terminal is not
+    // fixed by updating it again.
     anyhow::ensure!(
         hello.proto_version == PROTO_VERSION,
-        "the station's service {} speaks API version {}, this terminal {PROTO_VERSION}: update the service",
+        "the station's service {} speaks API version {}, this terminal {PROTO_VERSION}: update {}",
         hello.station_version,
-        hello.proto_version
+        hello.proto_version,
+        if hello.proto_version > PROTO_VERSION {
+            "this terminal"
+        } else {
+            "the service"
+        }
     );
     match serde_json::from_value(output["reply"].clone()).context("read the station's reply")? {
         Reply::Ok(answer) => Ok(answer),

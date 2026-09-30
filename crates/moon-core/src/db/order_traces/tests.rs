@@ -192,3 +192,54 @@ fn backfill_without_the_uid_column_is_not_ready() {
         Err(ReadFail::NotReady)
     ));
 }
+
+/// The station is asked for every recent closed trade without lines here — an empty answer from
+/// the core included, however fresh: the station may hold what the core does not.
+#[test]
+fn the_station_is_asked_for_trades_without_lines() {
+    let (path, writer) = store("station");
+    let now_ms = 40 * DAY_MS;
+    let now_s = now_ms / 1000;
+    store_answer(
+        &writer,
+        1,
+        100,
+        &[line(true, ArchivedLineKind::Entry, &[(1.0, 1.0)])],
+        0,
+    )
+    .unwrap();
+    store_answer(&writer, 1, 101, &[], now_ms - DAY_MS).unwrap();
+    let day_s = DAY_MS / 1000;
+    let conn = replica(
+        &path,
+        &[
+            (1, 100, now_s - day_s, 0),
+            (2, 101, now_s - day_s, 0),
+            (3, 102, now_s - 2 * day_s, 0),
+            (4, 105, now_s - day_s, 1),
+            (5, 0, now_s - day_s, 0),
+            (6, 106, 0, 0),
+            (7, 107, now_s - 35 * day_s, 0),
+        ],
+    );
+    let wanted = super::pull::lacking_lines_on(&conn, true, now_ms).unwrap();
+    // 100 has lines; 101's fresh empty answer is still asked; 105 is soft-deleted, 0 is not a
+    // key, 106 is open, 107 is past the depth.
+    assert_eq!(wanted.get(&1), Some(&vec![101, 102]));
+    assert_eq!(wanted.len(), 1);
+}
+
+/// An empty answer never wipes lines already filed — the station's, filed while the core's own
+/// answer was still out, or the core's own from before it lost the archive.
+#[test]
+fn an_empty_answer_keeps_filed_lines() {
+    let (_path, conn) = store("keep");
+    let lines = [line(true, ArchivedLineKind::Exit, &[(1_000.0, 2.0)])];
+    store_answer(&conn, 3, 77, &lines, 10).unwrap();
+    store_answer(&conn, 3, 77, &[], 20).unwrap();
+    let read = read_many_on(&conn, 3, &[77]).unwrap();
+    let TraceEntry::Lines(kept) = &read[&77] else {
+        panic!("the empty answer replaced the lines");
+    };
+    assert_eq!(&kept[..], &lines[..]);
+}

@@ -7,13 +7,16 @@
 //! client one [`Request`], the station one [`Reply`]; each frame is a big-endian `u32` length and
 //! that many bytes of JSON.
 //!
-//! Only what the Settings tab needs so far: the station's and its bot's state, a pairing code on
-//! demand, and the paired chats with their access, read and replaced. Nothing here deletes data.
+//! The Settings tab's share: the station's and its bot's state, a pairing code on demand, and the
+//! paired chats with their access, read and replaced. The terminal's pull (§4.9): the tape around
+//! closed trades and their order traces, what the station holds of what the terminal lacks.
+//! Nothing here deletes data.
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::TelegramConfig;
 use crate::config::telegram_access::TelegramChatAccess;
+use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
 use crate::telegram::TelegramStatus;
 use crate::telegram::runtime::mini_app::MiniAppStatus;
 
@@ -21,13 +24,22 @@ use crate::telegram::runtime::mini_app::MiniAppStatus;
 /// ones it carries (`TelegramStatus`, `MiniAppStatus`, `TelegramChatAccess`): they have no
 /// fallback for a variant or field they do not know. The terminal refuses a station of another
 /// version ([`CtlOutput::hello`]) before it reads the reply.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 /// The socket's name in the station's runtime directory.
 pub const SOCKET_FILE: &str = "api.sock";
 /// The socket of the service (`RuntimeDirectory=moon-station` in its unit).
 pub const SERVICE_SOCKET: &str = "/run/moon-station/api.sock";
 /// The largest frame either end accepts.
 pub const MAX_FRAME: usize = 1 << 20;
+/// How many bytes of prints one [`Tape`] answer carries at most, leaving the rest of a frame to
+/// the JSON around them.
+pub const TAPE_REPLY_BUDGET: usize = MAX_FRAME * 3 / 4;
+/// Most markets one [`Request::TapeFetch`] names.
+pub const MAX_TAPE_ITEMS: usize = 256;
+/// Most spans one [`TapeWant`] names.
+pub const MAX_TAPE_SPANS: usize = 64;
+/// Most trades one [`Request::TracesFetch`] names.
+pub const MAX_TRACE_UIDS: usize = 256;
 
 /// The station's first frame on every connection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,7 +50,7 @@ pub struct Hello {
 
 /// What `moon-station ctl` prints: the station's hello and its reply, one JSON line — so the
 /// terminal, not the station's own client, decides whether it speaks the station's version.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CtlOutput {
     pub hello: Hello,
     pub reply: Reply,
@@ -62,10 +74,21 @@ pub enum Request {
     /// before it.
     #[serde(rename = "access.set")]
     AccessSet { base: Access, access: Access },
+    /// What the station's recording holds inside these stretches of these markets — the tape of
+    /// closed trades the terminal lacks. Answered from the file alone, off the main loop.
+    #[serde(rename = "tape.fetch")]
+    TapeFetch { items: Vec<TapeWant> },
+    /// The order traces the station holds for these trades of one core; a trade it holds none
+    /// for is left out.
+    #[serde(rename = "traces.fetch")]
+    TracesFetch {
+        core_uid: u64,
+        report_uids: Vec<i64>,
+    },
 }
 
 /// What the station answers: the answer, or why there is none.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Reply {
     Ok(Answer),
@@ -82,12 +105,113 @@ impl From<Result<Answer, String>> for Reply {
 }
 
 /// An answer, one kind per request kind.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Answer {
     Status(Status),
     Pairing(PairingCode),
     Access(Access),
+    Tape(Tape),
+    Traces(Traces),
+}
+
+/// Stretches of one market's tape a client lacks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeWant {
+    /// The exchange key the tape is filed under (`"{code}:{dex:08x}"`).
+    pub exchange: String,
+    /// The exchange-native market name.
+    pub market: String,
+    /// Inclusive `(from_ms, to_ms)` stretches, true-UTC milliseconds, ascending and disjoint.
+    pub spans: Vec<(i64, i64)>,
+}
+
+/// One covered stretch of a wanted market: every print the station recorded in it — none is a
+/// quiet stretch, still covered.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapePiece {
+    /// Index of its [`TapeWant`] in the request.
+    pub item: u32,
+    pub from_ms: i64,
+    pub to_ms: i64,
+    /// The prints, packed as the tape file packs them, in base64
+    /// (`market::trade_replay::trade_cache::encode_prints`).
+    pub prints: String,
+}
+
+/// Where an answer that hit [`TAPE_REPLY_BUDGET`] stopped: ask again from `item`, its spans cut
+/// to start at `from_ms`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeResume {
+    pub item: u32,
+    pub from_ms: i64,
+}
+
+/// The answer to [`Request::TapeFetch`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tape {
+    /// Ascending by item, then by time. A wanted stretch not covered by any piece is one the
+    /// station does not hold.
+    pub pieces: Vec<TapePiece>,
+    /// `None`: every wanted stretch was answered.
+    pub resume: Option<TapeResume>,
+}
+
+/// The answer to [`Request::TracesFetch`]: the traces of the first `answered` trades asked, those
+/// the station holds lines for. An answer that reached [`TAPE_REPLY_BUDGET`] answers fewer than
+/// were asked; the client asks again for the rest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Traces {
+    pub trades: Vec<TradeTraces>,
+    /// How many of the asked `report_uids`, in order, this answer covers.
+    pub answered: u32,
+}
+
+/// The order traces of one trade, as the station archived them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TradeTraces {
+    pub report_uid: i64,
+    pub lines: Vec<TraceLine>,
+}
+
+/// One line of a trade's trace ([`ArchivedOrderTrace`] on the wire).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TraceLine {
+    pub own: bool,
+    /// The exit leg; `false` is the entry.
+    pub exit: bool,
+    pub stop_price: Option<f64>,
+    pub stop_time_ms: Option<f64>,
+    /// `(Unix UTC ms, price)`.
+    pub points: Vec<(f64, f64)>,
+}
+
+impl From<&ArchivedOrderTrace> for TraceLine {
+    fn from(trace: &ArchivedOrderTrace) -> Self {
+        Self {
+            own: trace.own,
+            exit: trace.kind == ArchivedLineKind::Exit,
+            stop_price: trace.stop_price,
+            stop_time_ms: trace.stop_time_ms,
+            points: trace.points.clone(),
+        }
+    }
+}
+
+impl From<TraceLine> for ArchivedOrderTrace {
+    fn from(line: TraceLine) -> Self {
+        Self {
+            own: line.own,
+            kind: if line.exit {
+                ArchivedLineKind::Exit
+            } else {
+                ArchivedLineKind::Entry
+            },
+            stop_price: line.stop_price,
+            stop_time_ms: line.stop_time_ms,
+            points: line.points,
+        }
+    }
 }
 
 /// The station now.

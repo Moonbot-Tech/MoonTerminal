@@ -11,6 +11,7 @@ use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 use moon_core::telegram::web::dto::{ReportDto, ReportPeriodDto, TradesDto};
 use moon_core::telegram::{TelegramService, TelegramStatus};
 
+use crate::HostKind;
 use crate::labels::telegram_labels;
 
 /// Process-only service state; no credential is rendered by Debug.
@@ -58,19 +59,29 @@ pub struct TelegramState {
     /// The bot is being handed over to a server: no transport starts, whatever the saved
     /// configuration says, until [`Self::resume`].
     suspended: bool,
+    /// Which process runs the bot: the Mini App's own texts name what it depends on.
+    kind: HostKind,
 }
 
 impl TelegramState {
     /// Construct optional transport only from saved configuration.
-    pub fn new(config: &TelegramConfig) -> Self {
-        Self::new_with_menu_cleanup(config, Vec::new())
+    ///
+    /// Args:
+    ///     config: The saved Telegram configuration.
+    ///     kind: Which process runs the bot.
+    pub fn new(config: &TelegramConfig, kind: HostKind) -> Self {
+        Self::new_with_menu_cleanup(config, kind, Vec::new())
     }
 
     /// Start transport with cleanup-only identities retained from the same bot credential.
-    fn new_with_menu_cleanup(config: &TelegramConfig, retired_menu_chats: Vec<i64>) -> Self {
+    fn new_with_menu_cleanup(
+        config: &TelegramConfig,
+        kind: HostKind,
+        retired_menu_chats: Vec<i64>,
+    ) -> Self {
         let service = TelegramService::start_localized_with_menu_cleanup(
             config,
-            telegram_labels(),
+            telegram_labels(kind),
             &retired_menu_chats,
         );
         let status = if config.token.is_empty() {
@@ -96,7 +107,13 @@ impl TelegramState {
             retiring: None,
             retired_menu_chats,
             suspended: false,
+            kind,
         }
+    }
+
+    /// Which process runs the bot.
+    pub(crate) fn kind(&self) -> HostKind {
+        self.kind
     }
 
     /// Replace joined transport without forgetting pending cleanup for the same bot.
@@ -109,7 +126,7 @@ impl TelegramState {
         let report_pending = self.report_pending;
         let mini_report_pending = self.mini_report_pending;
         let mini_trades_pending = self.mini_trades_pending;
-        *self = Self::new_with_menu_cleanup(config, retired);
+        *self = Self::new_with_menu_cleanup(config, self.kind, retired);
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
         self.mini_trades_pending = mini_trades_pending;

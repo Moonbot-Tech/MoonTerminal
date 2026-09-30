@@ -479,8 +479,10 @@ impl BotApi {
             }
             let result = self.post_once(method, body, long_poll);
             if let (Err(failure), Some(observer)) = (&result, &self.error_observer) {
+                // A chat out of reach says nothing about the bot's own health.
                 if !is_unchanged_edit(method, &failure.error)
                     && !is_unavailable_delete(method, &failure.error)
+                    && !is_unreachable_chat(&failure.error)
                 {
                     observer(&failure.error);
                 }
@@ -720,6 +722,16 @@ pub fn is_unavailable_delete(method: &str, error: &ApiError) -> bool {
         && matches!(error, ApiError::Telegram { description, retry_after_secs: None }
             if description == "Bad Request: message to delete not found"
                 || description == "Bad Request: message can't be deleted")
+}
+
+/// Telegram refused a call because this one chat is out of the bot's reach — its user is gone,
+/// deactivated or blocked the bot. The bot itself is fine; retrying changes nothing until the user
+/// acts.
+pub fn is_unreachable_chat(error: &ApiError) -> bool {
+    matches!(error, ApiError::Telegram { description, retry_after_secs: None }
+        if description.starts_with("Forbidden:")
+            || description == "Bad Request: user not found"
+            || description == "Bad Request: chat not found")
 }
 
 impl InlineKeyboardButton {

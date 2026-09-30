@@ -554,6 +554,11 @@ impl SessionManager {
             open_ms,
             close_ms,
         );
+        // `trades.sqlite` is the terminal's capture; a station keeps its tape in the recorder's
+        // own file and never opens this one (STATION.md §4.3).
+        if crate::feed::station::enabled() {
+            return;
+        }
         crate::market::trade_replay::worker::capture(
             crate::market::trade_replay::worker::CaptureRequest {
                 address,

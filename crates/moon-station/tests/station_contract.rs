@@ -1,4 +1,4 @@
-//! The station's mode, pinned in source (`docs-internal/STATION.md` §3.1, level 3).
+//! The station's mode, pinned in source (`docs-internal/STATION.md` §3.1).
 //!
 //! What the station may ask a core is decided by which calls exist in its code, so the guard reads
 //! the code: the station crate itself, the bot and Mini App it runs (`moon-tg`, shared with the
@@ -157,7 +157,7 @@ fn trading_stays_inside_tg_trade() {
         }
         assert!(
             !names(&code, "TradeLink"),
-            "{} names `TradeLink`: trading belongs to `tg::trade` alone (STATION.md §3.1)",
+            "{} names `TradeLink`: trading belongs to `tg::trade` alone (STATION.md §1 item 17)",
             path.display()
         );
     }
@@ -183,7 +183,7 @@ const SESSION_CALLS: [&str; 6] = [
 const TG_HOST_SESSION_CALLS: [&str; 2] = ["panic_sell_market", "store"];
 
 /// Breakage guarded: the station growing a call into the terminal's session beyond the ones
-/// its mode was measured with (STATION.md §7.14) — each new one is a decision, made here. Any
+/// its mode was measured with (STATION.md §7.4, §7.7) — each new one is a decision, made here. Any
 /// receiver ending in `session` counts: `self.session.` as much as `session.`.
 #[test]
 fn the_station_calls_only_its_share_of_the_session() {
@@ -208,7 +208,7 @@ fn the_station_calls_only_its_share_of_the_session() {
 /// What the bot and the Mini App read from the sessions, anywhere in `moon-tg`.
 const TG_READ_CALLS: [&str; 3] = ["core_venues", "sessions", "store"];
 
-/// The Mini App's owner commands (STATION.md §4.2а, §9 question 34: the Mini App as it is, what
+/// The Mini App's owner commands (STATION.md §1 item 9, §4.2: the Mini App as it is, what
 /// the key allows): the terminal's own session calls, from `mini_app/commands.rs` alone.
 const TG_TRADE_CALLS: [&str; 7] = [
     "apply_strategies",
@@ -261,7 +261,7 @@ fn the_bot_trades_only_from_the_mini_app_commands() {
 /// Breakage guarded: the tape recorder — the one station component with a client of its own —
 /// building a raw `MoonClient` again, or subscribing its donors to every market (the core then
 /// streams the exchange AND the client retains every market's rings: +586 MB in a minute,
-/// STATION.md §4.3).
+/// STATION.md §4.3, §7.1).
 #[test]
 fn the_tape_recorder_holds_only_a_station_link() {
     let dir = workspace().join("crates/moon-core/src/market/tape_recorder");
@@ -280,6 +280,45 @@ fn the_tape_recorder_holds_only_a_station_link() {
     assert!(
         links > 0,
         "the tape recorder must build its donors on `StationLink`"
+    );
+}
+
+/// Breakage guarded: a station opening `trades.sqlite` — the terminal's close-time capture, and
+/// the tape recorder comparing against it — which creates the file and its writer thread for
+/// nothing: the station's tape is the recorder's own file (STATION.md §4.3).
+#[test]
+fn the_tape_recorder_compares_only_in_the_terminal() {
+    let code_of = |path: &str| code(&workspace().join(path));
+    let code = code_of("crates/moon-core/src/market/tape_recorder/mod.rs");
+    let gate = code
+        .find("feed::station::enabled()")
+        .expect("the recorder must ask whether it runs on a station");
+    let queued = code
+        .find("self.compares.push")
+        .expect("the recorder queues its comparisons in one place");
+    assert!(
+        gate < queued,
+        "the station gate must come before a comparison is queued"
+    );
+    assert_eq!(
+        code.matches("self.compares.push").count(),
+        1,
+        "a second place queues comparisons past the station gate"
+    );
+    let lifecycle = code_of("crates/moon-core/src/session/lifecycle.rs");
+    let from = lifecycle
+        .find("fn capture_closed_trade(")
+        .expect("the close-time capture has its own function");
+    let lifecycle = &lifecycle[from..];
+    let gate = lifecycle
+        .find("feed::station::enabled()")
+        .expect("the close-time capture must ask whether it runs on a station");
+    let capture = lifecycle
+        .find("trade_replay::worker::capture(")
+        .expect("the close-time capture is queued from the session lifecycle");
+    assert!(
+        gate < capture,
+        "a station must not queue the terminal's close-time capture into trades.sqlite"
     );
 }
 
@@ -353,7 +392,7 @@ fn kept_by(code: &str, filter: &str) -> (BTreeSet<String>, String) {
 /// Breakage guarded: the station mode's event filters letting another class of core event in —
 /// the light station anything past reports, the Mini App's station anything past the account its
 /// tabs show — each of which starts a store or a queue the station was measured without
-/// (STATION.md §3.2, §7.14, §7.21).
+/// (STATION.md §3.1, §7.4, §7.7).
 #[test]
 fn each_station_profile_keeps_its_own_events_alone() {
     let code = code(&workspace().join("crates/moon-core/src/feed/station.rs"));

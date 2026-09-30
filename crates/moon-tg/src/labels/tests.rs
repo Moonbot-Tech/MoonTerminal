@@ -8,7 +8,7 @@ use moon_core::telegram::{
 /// The reply keyboard is two rows: short period labels with Help, then the two month labels.
 #[test]
 fn persistent_keyboard_fits_in_two_rows() {
-    let labels = super::telegram_labels();
+    let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard() else {
         panic!("expected persistent keyboard")
     };
@@ -39,7 +39,7 @@ fn persistent_keyboard_fits_in_two_rows() {
 /// Every visible emoji button must resolve through exact localized aliases without guessing text.
 #[test]
 fn persistent_navigation_buttons_have_recognized_commands() {
-    let labels = super::telegram_labels();
+    let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard() else {
         panic!("expected persistent keyboard")
     };
@@ -54,4 +54,29 @@ fn persistent_navigation_buttons_have_recognized_commands() {
             );
         }
     }
+}
+
+/// A station's Mini App page and failure texts name the station, never a terminal that may be off;
+/// a terminal keeps its own wording.
+#[test]
+fn station_labels_replace_the_terminal_wording() {
+    let _locale = crate::test_locale::force("en");
+    let terminal = super::telegram_labels(crate::HostKind::Terminal);
+    let station = super::telegram_labels(crate::HostKind::Station);
+    for key in super::STATION_WORDED {
+        assert_ne!(terminal[*key], station[*key], "{key}");
+        for locale in ["ru", "en", "es"] {
+            let path = format!("telegram.{key}_station");
+            let text = rust_i18n::t!(&path, locale = locale).to_lowercase();
+            assert_ne!(text, path.to_lowercase(), "{path} is missing in {locale}");
+            assert!(
+                !text.contains("terminal") && !text.contains("терминал") || key.contains("denied"),
+                "{path} ({locale}) names the terminal: {text}"
+            );
+        }
+    }
+    assert_eq!(
+        super::report_delivery_failed(crate::HostKind::Station),
+        station["report_delivery_failed"]
+    );
 }

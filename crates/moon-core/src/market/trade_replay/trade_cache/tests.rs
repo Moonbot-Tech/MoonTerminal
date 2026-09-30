@@ -555,7 +555,7 @@ fn a_packed_row_that_does_not_decode_is_dropped_on_read() {
     )
     .expect("damaged row");
     let mut dropped = 0;
-    let spans = read_spans_dropping(&conn, "x", "M", 0, 1_000, &mut dropped).expect("read");
+    let spans = read_spans_dropping(&conn, "x", "M", 0, 1_000, Some(&mut dropped)).expect("read");
     assert_eq!(times(&spans), vec![(0, 99, vec![50])]);
     assert_eq!(
         dropped, 4,

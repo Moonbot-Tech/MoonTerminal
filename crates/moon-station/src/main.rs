@@ -39,6 +39,7 @@
 
 mod api;
 mod cores;
+mod pull;
 mod signals;
 mod tg;
 
@@ -139,7 +140,7 @@ fn main() -> anyhow::Result<()> {
     });
 
     // Without its API the station still runs; only the terminal's Settings cannot reach it.
-    let api = match api::Api::start(api_socket(&data_root)) {
+    let api = match api::Api::start(api_socket(&data_root), pull::answer_directly) {
         Ok(api) => Some(api),
         Err(e) => {
             log::warn!("control API not started: {e:#}");
@@ -295,6 +296,10 @@ fn answer(
             None => Err(NO_BOT.to_owned()),
             Some(bot) => bot.set_access(cfg, &base, access).map(Answer::Access),
         },
+        // Answered on the API's thread (`pull::answer_directly`); never sent here.
+        Request::TapeFetch { .. } | Request::TracesFetch { .. } => {
+            Err("the pull is answered off the main loop".to_owned())
+        }
     };
     Reply::from(answer)
 }

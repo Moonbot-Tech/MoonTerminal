@@ -1,8 +1,8 @@
 //! Headless reachability regression for expanded content inside the bounded Settings body.
 
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, Styled, Window,
-    div, px,
+    AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle,
+    Styled, Window, div, px,
 };
 use moon_ui::{MoonGroupBox, v_flex};
 
@@ -139,4 +139,62 @@ fn the_telegram_tab_narrows_by_an_explicit_width() {
         "the Telegram tab's column is narrowed with max_w again"
     );
     assert!(source.contains(".w(px(column_w))"));
+}
+
+/// A settings tab holding a slider row whose label wraps, in a window much wider than the row.
+struct SliderRowFixture {
+    scroll: ScrollHandle,
+    slider: gpui::Entity<moon_ui::MoonSliderState>,
+}
+
+impl Render for SliderRowFixture {
+    /// Draw the production slider row, then a final control, in the production scroll container.
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let long = "A slider label long enough to wrap onto several lines inside the slider row, \
+                    and again, and again, and again, and again, and again, and again, and again.";
+        let mut section = MoonGroupBox::new("sliders").padding(14.0).gap(10.0);
+        for _ in 0..8 {
+            section = section.child(super::super::common::slider_row(
+                long,
+                &self.slider,
+                0.0..=100.0,
+                |v| format!("{v:.0}"),
+                cx,
+            ));
+        }
+        let column = v_flex()
+            .w_full()
+            .gap(px(16.0))
+            .child(section)
+            .child(div().debug_selector(|| "last-control".into()).h(px(30.0)));
+        div()
+            .w(px(1440.0))
+            .h(px(300.0))
+            .child(super::scrollable_tab_content(column, &self.scroll, cx))
+    }
+}
+
+/// The slider row narrows itself by `w_full().max_w(..)` — the shape that loses a narrowed tab
+/// column's end (above) — yet with a wrapped label inside a group box it keeps the tab reachable
+/// (measured 2026-09-30). This pins that: a slider row that starts losing the tab's end fails here.
+#[gpui::test]
+fn a_slider_row_with_a_wrapped_label_keeps_the_tab_reachable(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let scroll = ScrollHandle::new();
+    let window = cx.add_window(|_, cx| SliderRowFixture {
+        scroll: scroll.clone(),
+        slider: cx.new(|_| moon_ui::MoonSliderState::new().min(0.0).max(100.0)),
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let tail = visual
+        .debug_bounds("last-control")
+        .expect("final control was laid out");
+    let reachable = scroll.bounds().bottom_right().y + scroll.max_offset().y;
+    assert!(
+        reachable >= tail.bottom_right().y,
+        "final control lies outside the scroll extent"
+    );
 }

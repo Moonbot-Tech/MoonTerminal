@@ -110,3 +110,41 @@ fn access_moves_in_and_out_of_a_configuration() {
     assert_eq!(telegram.token.expose(), "t");
     assert!(telegram.mini_app_enabled);
 }
+
+/// The pull's requests carry their names on the wire, and a trace line survives the trip both
+/// ways.
+#[test]
+fn pull_requests_and_trace_lines_round_trip() {
+    use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
+    let fetch = Request::TapeFetch {
+        items: vec![TapeWant {
+            exchange: "binf:00000000".into(),
+            market: "ACEUSDT".into(),
+            spans: vec![(1_000, 2_000)],
+        }],
+    };
+    let json = serde_json::to_value(&fetch).unwrap();
+    assert_eq!(json["cmd"], "tape.fetch");
+    assert_eq!(serde_json::from_value::<Request>(json).unwrap(), fetch);
+    let traces = Request::TracesFetch {
+        core_uid: 7,
+        report_uids: vec![-5, 9],
+    };
+    assert_eq!(
+        serde_json::to_value(&traces).unwrap()["cmd"],
+        "traces.fetch"
+    );
+    let archived = ArchivedOrderTrace {
+        own: false,
+        kind: ArchivedLineKind::Exit,
+        stop_price: Some(1.5),
+        stop_time_ms: None,
+        points: vec![(1_000.0, 2.25), (2_000.0, 2.5)],
+    };
+    let wire: TraceLine = (&archived).into();
+    let back: ArchivedOrderTrace =
+        serde_json::from_value::<TraceLine>(serde_json::to_value(&wire).unwrap())
+            .unwrap()
+            .into();
+    assert_eq!(back, archived);
+}

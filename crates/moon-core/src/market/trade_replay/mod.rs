@@ -46,6 +46,7 @@ pub use settings::{
     cleanup_at_startup, long_position_ms, margin_ms, set_cleanup_at_startup, set_long_position_min,
     set_margin_s, set_tape_autoload, set_tape_autoload_cores, tape_autoload, tape_autoload_cores,
 };
+pub use tick_tiles::TileSource;
 pub use worker::{TickAnswer, TickQuery, query_held};
 
 /// Milliseconds in one minute, the only timeframe a replay is fetched at.

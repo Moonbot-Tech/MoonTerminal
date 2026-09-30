@@ -7,6 +7,12 @@ use std::time::{Duration, Instant};
 use super::mini_app::MiniAppStatus;
 use crate::telegram::api::{ApiError, MenuButton, WebAppInfo};
 
+/// Wait after a failed write before the same chat is tried again.
+const RETRY: Duration = Duration::from_secs(30);
+/// Wait before a paired chat the bot cannot reach (blocked, deleted) is tried again: it changes
+/// only when its user acts, so a slow retry costs nothing.
+const UNREACHABLE_RETRY: Duration = Duration::from_secs(600);
+
 /// Latest intent replaces older tunnel URLs even while the bot is long polling.
 pub(super) type SharedMenu = Arc<Mutex<MenuIntent>>;
 
@@ -56,6 +62,9 @@ impl MenuIntent {
 struct ChatMenu {
     applied: Option<MenuButton>,
     retry_at: Option<Instant>,
+    /// The button an unreachable chat refused: its long cooldown holds only while the wanted
+    /// button stays the same — a new tunnel address is tried at once.
+    refused: Option<MenuButton>,
 }
 
 /// Retain removed chats until their old link has been cleared successfully.
@@ -93,19 +102,39 @@ impl MenuSync {
             } else {
                 &MenuButton::Commands
             };
-            if state.applied.as_ref() == Some(desired) || state.retry_at.is_some_and(|at| now < at)
-            {
+            let cooling = state.retry_at.is_some_and(|at| now < at)
+                && state
+                    .refused
+                    .as_ref()
+                    .is_none_or(|refused| refused == desired);
+            if state.applied.as_ref() == Some(desired) || cooling {
                 continue;
             }
             match send(chat, desired) {
                 Ok(()) => {
                     state.applied = Some(desired.clone());
                     state.retry_at = None;
+                    state.refused = None;
+                }
+                Err(error) if crate::telegram::api::is_unreachable_chat(&error) => {
+                    // Nobody can see this chat's menu while the bot cannot reach it: a removed
+                    // chat is done with, a paired one waits for its user. Neither is bot health.
+                    log::info!("telegram menu of an unreachable chat not updated: {error}");
+                    if intent.chats.contains(&chat) {
+                        state.applied = None;
+                        state.retry_at = Some(Instant::now() + UNREACHABLE_RETRY);
+                        state.refused = Some(desired.clone());
+                    } else {
+                        state.applied = Some(MenuButton::Commands);
+                        state.retry_at = None;
+                        state.refused = None;
+                    }
                 }
                 Err(error) => {
                     // A request may have reached Telegram even if its response was lost.
                     state.applied = None;
-                    state.retry_at = Some(Instant::now() + Duration::from_secs(30));
+                    state.retry_at = Some(Instant::now() + RETRY);
+                    state.refused = None;
                     first_error.get_or_insert(error);
                 }
             }

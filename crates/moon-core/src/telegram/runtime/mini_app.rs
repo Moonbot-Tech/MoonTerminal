@@ -200,6 +200,23 @@ impl MiniAppOwner {
         let _ = self.events_tx.try_send(MiniAppEvent::PublicUrl(url));
     }
 
+    /// Hand the running listener new admitted chats and page labels, keeping the tunnel and its
+    /// public address.
+    ///
+    /// Returns:
+    ///     `false` when no listener runs; the caller then starts one.
+    pub fn update(
+        &self,
+        authorized_chat_ids: Vec<i64>,
+        labels: std::collections::BTreeMap<String, String>,
+    ) -> bool {
+        let Some(server) = self.server.as_ref() else {
+            return false;
+        };
+        server.update(authorized_chat_ids, labels);
+        true
+    }
+
     /// Tear down the tunnel first, then the listener. Safe to call twice.
     pub fn stop(&mut self) {
         if let Some(mut tunnel) = self.tunnel.take() {
@@ -272,7 +289,17 @@ pub(super) fn run_service(
         let Ok(current_labels) = labels.lock().map(|labels| labels.clone()) else {
             break;
         };
-        if previous.as_ref() != Some(&desired) || previous_labels != current_labels {
+        let change = change_of(
+            previous.as_ref(),
+            &previous_labels,
+            &desired,
+            &current_labels,
+        );
+        if change == Change::InPlace && owner.update(desired.1.clone(), current_labels.clone()) {
+            // A new pairing or language keeps the tunnel: its address is in every chat's menu.
+            previous = Some(desired.clone());
+            previous_labels = current_labels;
+        } else if change != Change::None {
             super::menu::MenuIntent::publish(
                 &menu,
                 &desired.1,
@@ -363,6 +390,38 @@ pub(super) fn run_service(
     owner.stop();
 }
 
+/// What a change of the saved Mini App intent asks of the owner.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Change {
+    /// Nothing changed.
+    None,
+    /// Only the admitted chats or the labels changed while the Mini App stays on: the running
+    /// listener takes them in place.
+    InPlace,
+    /// The Mini App is switched on or off, or nothing has run yet: stop, then start as desired.
+    Restart,
+}
+
+/// Classify the move from the last applied intent to the saved one.
+///
+/// Args:
+///     previous: The last applied `(enabled, chats)`, `None` before the first pass.
+///     previous_labels: The labels applied with it.
+///     desired: The saved `(enabled, chats)`.
+///     labels: The current labels.
+fn change_of(
+    previous: Option<&(bool, Vec<i64>)>,
+    previous_labels: &std::collections::BTreeMap<String, String>,
+    desired: &(bool, Vec<i64>),
+    labels: &std::collections::BTreeMap<String, String>,
+) -> Change {
+    match previous {
+        Some(previous) if previous == desired && previous_labels == labels => Change::None,
+        Some(previous) if previous.0 && desired.0 => Change::InPlace,
+        _ => Change::Restart,
+    }
+}
+
 /// Outcome of one Mini App start attempt against the current desired configuration.
 enum StartOutcome {
     Started,
@@ -423,3 +482,6 @@ fn schedule_mini_app_retry(retry_at: &mut Option<Instant>, retry_failures: &mut 
     *retry_failures = retry_failures.saturating_add(1);
     *retry_at = Some(Instant::now() + wait);
 }
+
+#[cfg(test)]
+mod tests;

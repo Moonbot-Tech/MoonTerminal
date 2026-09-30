@@ -132,3 +132,49 @@ fn eviction_keeps_what_is_in_flight() {
     );
     assert!(r.slots.len() <= SLOT_CAP);
 }
+
+/// The station's lines land on every row met without lines — settled, pending, unasked or being
+/// read — and a pending ask is not left to overwrite them; a row not met reads the archive, and a
+/// row with lines keeps its own.
+#[test]
+fn pulled_lines_land_on_rows_settled_without_them() {
+    let mut r = TraceResolver::default();
+    let to_read = r.begin_read(7, &[1, 2, 3, 4]);
+    let mut read = HashMap::new();
+    read.insert(1, TraceEntry::Lines(lines()));
+    read.insert(
+        2,
+        TraceEntry::Empty {
+            checked_at_ms: 1_000,
+        },
+    );
+    r.apply_read(7, &read, &to_read, 1, 1_000, (5, 1));
+    assert_eq!(r.state(7, 2), TraceState::Empty);
+    assert_eq!(r.state(7, 3), TraceState::Pending);
+    assert_eq!(r.state(7, 4), TraceState::Unasked);
+    for uid in [1, 2, 3, 4, 9] {
+        let changed = r.adopt_pulled(7, uid, lines());
+        assert_eq!(changed, [2, 3, 4].contains(&uid), "row {uid}");
+    }
+    for uid in [2, 3, 4] {
+        assert!(matches!(r.state(7, uid), TraceState::Lines(_)), "row {uid}");
+    }
+    assert_eq!(r.state(7, 9), TraceState::Unknown);
+    // A row read from the archive while the station's lines were adopted: the read no longer
+    // speaks for it.
+    let reading = r.begin_read(7, &[10]);
+    assert!(r.adopt_pulled(7, 10, lines()));
+    let empty = HashMap::from([(
+        10,
+        TraceEntry::Empty {
+            checked_at_ms: 1_000,
+        },
+    )]);
+    assert!(
+        r.apply_read(7, &empty, &reading, 1, 1_000, (5, 1))
+            .is_empty()
+    );
+    assert!(matches!(r.state(7, 10), TraceState::Lines(_)));
+    // The core's later empty answer for 3 is no longer awaited: the pending set lost it.
+    assert!(!r.adopt_all(&CoreStore::default()));
+}

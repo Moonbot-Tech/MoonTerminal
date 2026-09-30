@@ -99,7 +99,7 @@ impl StationTg {
         );
         let (finished_tx, finished_rx) = mpsc::channel();
         Ok(Self {
-            state: TelegramState::new(bot),
+            state: TelegramState::new(bot, moon_tg::HostKind::Station),
             zone: telegram.zone,
             pairing_path,
             panic_local: HashMap::new(),
@@ -164,7 +164,7 @@ impl StationTg {
     /// Replace the paired chats with `access`, only while they are still `base` — what the
     /// terminal read before its user edited them; a chat paired here since is not dropped. Saved
     /// before it is adopted, then applied to the running bot as a terminal's Save applies it: a
-    /// change of permissions restarts the transport, a caption alone does not.
+    /// revoked or changed grant restarts the transport; captions and added chats reach it in place.
     pub fn set_access(
         &mut self,
         config: &mut AppConfig,

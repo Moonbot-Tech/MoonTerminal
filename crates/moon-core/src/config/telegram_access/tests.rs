@@ -1,9 +1,10 @@
 //! Role migration and explicit grants must never turn a viewer into an implicit owner.
 use super::{TelegramConfig, TelegramReportAccess};
 
-/// Revocation and owner transfer retire pending deliveries; captions and set ordering do not.
+/// Revocation and owner transfer retire pending deliveries; captions, set ordering and a newly
+/// added chat do not.
 #[test]
-fn delivery_generation_changes_for_permissions_but_not_captions() {
+fn only_revocations_and_owner_transfer_break_an_additive_change() {
     let mut before = TelegramConfig {
         authorized_chat_ids: vec![11, 22],
         ..Default::default()
@@ -12,15 +13,17 @@ fn delivery_generation_changes_for_permissions_but_not_captions() {
     let mut after = before.clone();
     after.chat_profile_mut(22).name = "Client".into();
     after.chat_profile_mut(22).core_uids = vec![7, 3, 3];
-    assert!(before.same_chat_permissions(&after));
+    assert!(after.only_adds_chats_to(&before));
+    after.pair_chat(33);
+    assert!(after.only_adds_chats_to(&before));
     after.chat_profile_mut(22).core_uids = vec![3];
-    assert!(!before.same_chat_permissions(&after));
+    assert!(!after.only_adds_chats_to(&before));
     after = before.clone();
     after.set_owner(22);
-    assert!(!before.same_chat_permissions(&after));
+    assert!(!after.only_adds_chats_to(&before));
     after = before.clone();
     after.authorized_chat_ids.retain(|id| *id != 22);
-    assert!(!before.same_chat_permissions(&after));
+    assert!(!after.only_adds_chats_to(&before));
 }
 
 /// Old multi-chat files keep exactly one owner; later pairings start without data access.

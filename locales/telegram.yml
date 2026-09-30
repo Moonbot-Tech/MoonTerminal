@@ -72,9 +72,9 @@ telegram.bot_mini_wait:
   en: "Mini App is not available yet. Check its status in Settings → Telegram and send /miniapp again when ready."
   es: "Mini App aún no está disponible. Comprueba su estado en Ajustes → Telegram y vuelve a enviar /miniapp cuando esté lista."
 telegram.bot_mini_disabled_station:
-  ru: "Mini App на станции выключено. Его включает администратор станции — командой telegram программы moon-remote. Затем отправьте /miniapp."
-  en: "Mini App is off on the station. The station's administrator turns it on with moon-remote's telegram command. Then send /miniapp."
-  es: "Mini App está desactivada en la estación. La activa el administrador de la estación con el comando telegram de moon-remote. Después envía /miniapp."
+  ru: "Mini App на станции выключено. Его включает владелец в терминале: «Настройки → Telegram», галка «Mini App на сервере». Затем отправьте /miniapp."
+  en: "Mini App is off on the station. Its owner turns it on in the terminal: Settings → Telegram, the «Mini App on the server» box. Then send /miniapp."
+  es: "Mini App está desactivada en la estación. La activa su propietario en el terminal: Ajustes → Telegram, la casilla «Mini App en el servidor». Después envía /miniapp."
 telegram.bot_mini_wait_station:
   ru: "Mini App пока недоступно: станция ещё открывает к нему доступ. Повторите /miniapp через минуту."
   en: "Mini App is not available yet: the station is still opening access to it. Send /miniapp again in a minute."
@@ -211,11 +211,19 @@ telegram.mini_shell_denied:
   ru: "Этот чат не допущен. Привяжите его заново или включите Mini App в Настройках."
   en: "This chat is not admitted. Re-pair it, or turn Mini App on in Settings."
   es: "Este chat no está admitido. Vuelve a vincularlo o activa Mini App en Ajustes."
+telegram.mini_shell_denied_station:
+  ru: "Этот чат не допущен. Привяжите его заново или включите Mini App на станции в Настройках терминала."
+  en: "This chat is not admitted. Re-pair it, or turn the station's Mini App on in the terminal's Settings."
+  es: "Este chat no está admitido. Vuelve a vincularlo o activa la Mini App de la estación en los Ajustes del terminal."
 
 telegram.mini_shell_unreachable:
   ru: "Терминал недоступен. Туннель или сам терминал выключен."
   en: "The terminal could not be reached. The tunnel or the terminal is down."
   es: "No se pudo alcanzar el terminal. El túnel o el terminal está apagado."
+telegram.mini_shell_unreachable_station:
+  ru: "Станция недоступна. Туннель или служба на сервере выключены."
+  en: "The station could not be reached. The tunnel or the service on the server is down."
+  es: "No se pudo alcanzar la estación. El túnel o el servicio del servidor está apagado."
 
 telegram.mini_title:
   ru: "MoonTerminal"
@@ -377,6 +385,10 @@ telegram.mini_error_busy:
   ru: "Терминал занят. Повторите чуть позже."
   en: "The terminal is busy. Try again in a moment."
   es: "El terminal está ocupado. Inténtalo de nuevo en un momento."
+telegram.mini_error_busy_station:
+  ru: "Станция занята. Повторите чуть позже."
+  en: "The station is busy. Try again in a moment."
+  es: "La estación está ocupada. Inténtalo de nuevo en un momento."
 telegram.mini_error_stale_session:
   ru: "Сессия устарела. Закройте Mini App и откройте снова."
   en: "Session expired. Close Mini App and open it again."

@@ -208,6 +208,15 @@ impl TraceSink {
         }
     }
 
+    /// Queue one message, waiting for room — for a batch off the feed's thread (the station's
+    /// pull), which must not lose answers to a full queue the way [`Self::send`] may.
+    ///
+    /// Returns:
+    ///     `false` when the writer is gone.
+    pub fn send_waiting(&self, msg: TraceDbMsg) -> bool {
+        self.tx.send(msg).is_ok()
+    }
+
     /// Number of committed answer writes since the writer started.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Relaxed)
@@ -376,7 +385,9 @@ fn spawn_writer() -> Option<TraceSink> {
 ///     conn: Write connection.
 ///     core_uid: Core that recorded the trade.
 ///     report_uid: The row's `ReportUID`.
-///     lines: What the core answered; empty files an empty answer.
+///     lines: What the core answered; empty files an empty answer — unless lines are already
+///         filed: a core that no longer holds a trade's archive, or never held what the station
+///         archived at the close (STATION.md §4.4), does not make those lines wrong.
 ///     now_ms: Terminal wall clock, Unix ms.
 ///
 /// Errors:
@@ -390,6 +401,18 @@ fn store_answer(
 ) -> rusqlite::Result<()> {
     let core = core_uid as i64;
     let tx = conn.unchecked_transaction()?;
+    if lines.is_empty() {
+        let filed: Option<i64> = tx
+            .query_row(
+                "SELECT line_count FROM trace_answers WHERE core_uid=?1 AND report_uid=?2",
+                params![core, report_uid],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if filed.is_some_and(|count| count > 0) {
+            return Ok(());
+        }
+    }
     tx.execute(
         "DELETE FROM trace_lines WHERE core_uid=?1 AND report_uid=?2",
         params![core, report_uid],
@@ -724,6 +747,9 @@ pub fn max_core_uid() -> ReadResult<Option<u64>> {
     };
     super::max_core_uid_in(&conn, "trace_answers", CTX)
 }
+
+mod pull;
+pub use pull::{STATION_LIMIT, lacking_lines};
 
 #[cfg(test)]
 mod tests;

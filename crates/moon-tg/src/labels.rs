@@ -84,8 +84,29 @@ fn navigation_buttons() -> [(&'static str, &'static str); 5] {
     ]
 }
 
+/// Page and transport keys whose text names what the bot depends on: a station has its own
+/// wording, under the same key with `_station` appended.
+const STATION_WORDED: &[&str] = &[
+    "mini_shell_denied",
+    "mini_shell_unreachable",
+    "mini_error_busy",
+    "report_delivery_failed",
+];
+
+/// The report-delivery failure a chat is shown; what the bot depends on is `host`'s.
+pub(crate) fn report_delivery_failed(host: crate::HostKind) -> String {
+    match host {
+        crate::HostKind::Terminal => t!("telegram.report_delivery_failed"),
+        crate::HostKind::Station => t!("telegram.report_delivery_failed_station"),
+    }
+    .to_string()
+}
+
 /// Compose Mini App page and shell labels, plus reply-button aliases in the UI locale domain.
-pub(crate) fn telegram_labels() -> std::collections::BTreeMap<String, String> {
+///
+/// Args:
+///     host: Which process runs the bot; a station swaps in its own wording ([`STATION_WORDED`]).
+pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeMap<String, String> {
     let mut labels: std::collections::BTreeMap<String, String> = [
         ("menu_miniapp".to_string(), t!("telegram.open").to_string()),
         (
@@ -148,6 +169,12 @@ pub(crate) fn telegram_labels() -> std::collections::BTreeMap<String, String> {
     for (kind, panel_key) in moon_core::feed::fault_keys::FAULT_KIND_SHORT_KEYS {
         let path = (*panel_key).to_string();
         labels.insert(format!("mini_fault_{kind}"), t!(&path).to_string());
+    }
+    if host == crate::HostKind::Station {
+        for key in STATION_WORDED {
+            let path = format!("telegram.{key}_station");
+            labels.insert((*key).to_string(), t!(&path).to_string());
+        }
     }
     labels
 }

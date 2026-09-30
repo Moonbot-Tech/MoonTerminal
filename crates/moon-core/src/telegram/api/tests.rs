@@ -183,3 +183,32 @@ fn a_409_is_a_conflict_and_is_not_retried() {
         super::ApiError::Telegram { .. }
     ));
 }
+
+/// Only a refusal about one chat is that chat's state; a bad token, a rate limit or a transport
+/// failure stays the bot's health.
+#[test]
+fn only_chat_refusals_count_as_an_unreachable_chat() {
+    use super::ApiError;
+    let telegram = |description: &str, retry_after_secs| ApiError::Telegram {
+        description: description.into(),
+        retry_after_secs,
+    };
+    for chat in [
+        "Forbidden: bot was blocked by the user",
+        "Forbidden: user is deactivated",
+        "Bad Request: user not found",
+        "Bad Request: chat not found",
+    ] {
+        assert!(super::is_unreachable_chat(&telegram(chat, None)), "{chat}");
+    }
+    for bot in [
+        telegram("Unauthorized", None),
+        telegram("Too Many Requests: retry after 5", Some(5)),
+        telegram("Bad Request: message text is empty", None),
+        ApiError::Transport,
+        ApiError::Timeout,
+        ApiError::Conflict,
+    ] {
+        assert!(!super::is_unreachable_chat(&bot), "{bot}");
+    }
+}

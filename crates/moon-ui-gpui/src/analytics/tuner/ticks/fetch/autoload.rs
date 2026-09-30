@@ -13,7 +13,12 @@
 //!
 //! 1. read every closed trade with millisecond stamps of the last [`HORIZON_MS`] across every
 //!    core, under the axis' own filter — strategy trades the tuner can be run on;
-//! 2. resolve each through the live source and split the rows:
+//! 2. resolve each through the live source; drop the rows whose tape `trades.sqlite` already
+//!    holds ([`drop_held`], answered off the span table's bounds, one read per market); with a
+//!    station set up, ask it first for what the rest lack of their windows
+//!    ([`super::station::fill`]) and drop what it covered — the station records the live stream
+//!    around every trade while the terminal is off, and costs neither a core nor a venue;
+//! 3. split what is left:
 //!    - with the venue switch on, the ones the venue still serves by the worker's own retention
 //!      rule (`inside_retention`: the exit inside the route's retention) go to the fetch job
 //!      ([`super::job::enqueue`]), whose tape stage asks the core's archive first and the venue
@@ -21,11 +26,7 @@
 //!    - with the core switch on, every other row that closed within [`CORE_HORIZON_MS`] — no
 //!      route (Bybit, Hyperliquid), past the venue's retention, or the venue switch off — is
 //!      filed straight from the core's archive ([`file_from_cores`]): no venue request at all;
-//!
-//!    minus, on both paths, the rows whose tape `trades.sqlite` already holds ([`drop_held`],
-//!    answered off the span table's bounds, one read per market): those would come back served
-//!    off the disk, one at a time, every launch;
-//! 3. a trade whose core is not connected yet, or whose catalog is not in, is kept and tried
+//! 4. a trade whose core is not connected yet, or whose catalog is not in, is kept and tried
 //!    again every [`RETRY`] for up to [`MAX_ATTEMPTS`]: the cores come up one by one after the
 //!    terminal, and the catalog a little after each core.
 //!
@@ -34,8 +35,8 @@
 //! cleanup cuts the file to what the tuner's rows claim, this then fetches what they still
 //! lack — the other order would fetch first and cut second.
 //!
-//! The read and the resolution run on the background executor; the tick only decides whether
-//! one is due. "Stop" on the axis' button cancels the whole batch and the core filing
+//! The read, the resolution and the station's round trips run on a thread of the pass's own; the
+//! tick only decides whether one is due. "Stop" on the axis' button cancels the whole batch and the core filing
 //! ([`cancel`]). The venue switch going off re-arms the pass and drops every row this autoload
 //! queued for the venues ([`switched_off`]); rows the user queued with "Fetch trades" in the
 //! same batch stay. The core switch going off stops the core filing between markets and
@@ -44,8 +45,6 @@
 
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-
-use gpui::App;
 
 use std::collections::HashMap;
 
@@ -80,6 +79,9 @@ const RETRY: Duration = Duration::from_secs(30);
 /// Passes before the rows still unresolved are given up on: ten minutes of cores not coming.
 const MAX_ATTEMPTS: u32 = 20;
 
+/// How long a station that could not be reached is left out of the passes.
+const STATION_BACKOFF: Duration = Duration::from_secs(600);
+
 /// Where the autoload stands.
 #[derive(Default)]
 enum Phase {
@@ -113,6 +115,9 @@ struct Autoload {
     /// switch going off, and by every re-arm — a re-armed pass files what the disk still lacks,
     /// so the filing it replaces stops rather than run beside it.
     cores_generation: u64,
+    /// The station could not be reached: passes before this instant leave it out rather than
+    /// wait for it again on every retry.
+    station_back_at: Option<Instant>,
 }
 
 static AUTOLOAD: OnceLock<Mutex<Autoload>> = OnceLock::new();
@@ -178,7 +183,7 @@ pub(crate) fn cancel() {
 
 /// The coordination tick's call: start, continue or finish the autoload. Cheap when nothing is
 /// due — a switch read and a clock compare.
-pub(crate) fn tick(backend: &Backend, cx: &App) {
+pub(crate) fn tick(backend: &Backend) {
     let on = tape_autoload() || tape_autoload_cores();
     if !on {
         // Off re-arms and drops what this autoload queued. Already armed: nothing to do, and
@@ -211,7 +216,7 @@ pub(crate) fn tick(backend: &Backend, cx: &App) {
             st.phase = Phase::Running;
             st.generation += 1;
             let generation = st.generation;
-            start_pass(backend, left, attempts, generation, cx);
+            start_pass(backend, left, attempts, generation);
         }
         waiting @ Phase::Waiting { .. } => st.phase = waiting,
         Phase::Running => match st.result.take() {
@@ -239,28 +244,33 @@ pub(crate) fn tick(backend: &Backend, cx: &App) {
     }
 }
 
-/// One pass on the background executor: read the deals (first pass only), resolve, hand over,
-/// report what is left — unless the pass was cancelled or outlived meanwhile.
-fn start_pass(
-    backend: &Backend,
-    left: Option<Vec<Deal>>,
-    attempts: u32,
-    generation: u64,
-    cx: &App,
-) {
+/// One pass on a thread of its own: read the deals (first pass only), resolve, ask the station,
+/// hand over, report what is left — unless the pass was cancelled or outlived meanwhile.
+fn start_pass(backend: &Backend, left: Option<Vec<Deal>>, attempts: u32, generation: u64) {
     let resolver = FetchResolver::of(backend);
     let defaults = strategy_field_defaults(backend);
     let axis = backend.report_axis(chrono_tz::UTC);
     let attempt = attempts + 1;
-    cx.background_executor()
-        .spawn(async move {
-            let left = run_pass(resolver, defaults, axis, left, attempt, generation);
+    // Read when the pass starts: a server set up or forgotten meanwhile counts from the next one.
+    let station = crate::backend::station::known_target();
+    // A thread of its own, not the background executor: the station's round trips are blocking
+    // SSH and may take minutes over a month of trades.
+    let spawned = std::thread::Builder::new()
+        .name("tape-autoload".into())
+        .spawn(move || {
+            let left = run_pass(resolver, defaults, axis, left, attempt, generation, station);
             let mut st = lock();
             if st.generation == generation {
                 st.result = Some((left, attempt));
             }
-        })
-        .detach();
+        });
+    if let Err(e) = spawned {
+        log::warn!("[x] ticks autoload: pass thread did not start: {e}");
+        let mut st = lock();
+        if st.generation == generation {
+            st.result = Some((Vec::new(), attempt));
+        }
+    }
 }
 
 /// The pass itself, off the UI thread.
@@ -276,6 +286,7 @@ fn run_pass(
     left: Option<Vec<Deal>>,
     attempt: u32,
     generation: u64,
+    station: Option<moon_remote::ssh::Target>,
 ) -> Vec<Deal> {
     // Taken at the start, like the switches below: a core switch that goes off while this pass
     // resolves has moved it by the hand-over, and the filing then stops before its first market.
@@ -299,8 +310,7 @@ fn run_pass(
     // pass, the venue switch going off drops what this one queued, and the core switch going
     // off moves the core generation this pass took at its start.
     let (venues_on, cores_on) = (tape_autoload(), tape_autoload_cores());
-    let mut rows = Vec::new();
-    let mut core_rows = Vec::new();
+    let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
     let mut no_route = 0usize;
     let mut out_of_retention = 0usize;
@@ -324,6 +334,39 @@ fn run_pass(
             unresolved.push(deal);
             continue;
         };
+        resolved.push(row);
+    }
+    let place = |row: &QueuedRow| {
+        (
+            row.address.exchange_key.clone(),
+            row.address.market.clone(),
+            row.window,
+        )
+    };
+    let held_spans = |exchange: &str, market: &str, from_ms, to_ms| {
+        trade_cache::handle()?.held_spans(exchange, market, from_ms, to_ms)
+    };
+    let (mut resolved, mut held) = drop_held(resolved, place, held_spans);
+    let mut from_station = 0usize;
+    let station = station.filter(|_| {
+        !resolved.is_empty() && lock().station_back_at.is_none_or(|at| Instant::now() >= at)
+    });
+    if let Some(target) = station {
+        // A Stop, a flip that outlived this pass, or both switches going off end the station's
+        // round trips between two requests.
+        let stop =
+            || lock().generation != generation || !(tape_autoload() || tape_autoload_cores());
+        let unreachable = super::station::fill(&resolved, place, &target, stop).unreachable;
+        lock().station_back_at = unreachable.then(|| Instant::now() + STATION_BACKOFF);
+        let before = resolved.len();
+        let (rest, _) = drop_held(resolved, place, held_spans);
+        from_station = before - rest.len();
+        held += from_station;
+        resolved = rest;
+    }
+    let mut rows = Vec::new();
+    let mut core_rows = Vec::new();
+    for row in resolved {
         // The worker's own rule, asked here only to spare the candle page a refused row would
         // pay first: the exit inside the route's retention. Not the entry — a trade held across
         // the retention edge still gets its exit's tape, and what the model then lacks is the
@@ -345,18 +388,6 @@ fn run_pass(
             RowPath::TooOldForCores => too_old_for_core += 1,
         }
     }
-    let place = |row: &QueuedRow| {
-        (
-            row.address.exchange_key.clone(),
-            row.address.market.clone(),
-            row.window,
-        )
-    };
-    let held_spans = |exchange: &str, market: &str, from_ms, to_ms| {
-        trade_cache::handle()?.held_spans(exchange, market, from_ms, to_ms)
-    };
-    let (core_rows, core_held) = drop_held(core_rows, place, held_spans);
-    let (mut rows, held) = drop_held(rows, place, held_spans);
     // Newest-first is the job's queue order: it pops from the end, oldest first.
     rows.sort_by_key(|row| std::cmp::Reverse(row.deal.close_ms));
     let offered = rows.len();
@@ -384,9 +415,8 @@ fn run_pass(
     }
     log::info!(
         target: moon_core::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks autoload pass {attempt}: {total} deal(s) considered, {queued} queued for the venues ({} already in the batch), {to_cores} filed from the cores' archives, {} already held on disk, {no_route} with no route, {out_of_retention} past the venue's retention, {venue_off} with the venue switch off, {too_old_for_core} older than the cores' archives, {degenerate} with no window, {} unresolved (core not connected or catalog without the coin)",
+        "[x] ticks autoload pass {attempt}: {total} deal(s) considered, {queued} queued for the venues ({} already in the batch), {to_cores} filed from the cores' archives, {held} held on disk ({from_station} of them just from the station), {no_route} with no route, {out_of_retention} past the venue's retention, {venue_off} with the venue switch off, {too_old_for_core} older than the cores' archives, {degenerate} with no window, {} unresolved (core not connected or catalog without the coin)",
         offered - queued,
-        held + core_held,
         unresolved.len()
     );
     unresolved
