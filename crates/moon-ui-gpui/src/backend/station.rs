@@ -5,18 +5,19 @@
 //! its token on disk while the station polls it. So the jobs, their lines and their ends live
 //! here, and the Settings segment only starts jobs and shows this state.
 //!
-//! One job runs at a time, of three kinds: the user's (a button; it owns the progress lines and the
+//! One job runs at a time: the user's (a button; it owns the progress lines and the
 //! outcome), a quiet read of the station's bot (on opening the tab; it touches only the bot's
 //! state), and the automatic core keys after a Save changed the cores (its lines append, the last
 //! outcome stays). A user's job pressed during a quiet read waits for it; cores changed during any
-//! job go right after it.
+//! job go right after it. A recovery read resolves a persisted hand-over before local polling.
 //!
 //! Handing the bot over: the terminal's transport is suspended first (`TelegramState::suspend`:
 //! one token, one poller) with the saved configuration untouched, so a Save meanwhile writes the
 //! token as it was. The station's bot polls (paired, or offering a code when no chat came along) →
 //! the token and the chats are erased here, on disk and in an open Settings draft; a failure the
 //! station undid → the terminal's bot resumes; a failure it could not undo → the terminal's bot
-//! stays down, and the user is told to take the bot off the station.
+//! stays down, and the user is told to take the bot off the station. Ownership is journaled before
+//! suspension and cleared only after the end is safely applied, so quitting cannot release it.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -30,6 +31,7 @@ use crate::Backend;
 
 pub(crate) mod job;
 pub(crate) mod pull;
+mod recovery;
 
 /// How often the backend drains a running job's channel.
 const POLL: Duration = Duration::from_millis(150);
@@ -46,6 +48,8 @@ enum Kind {
     Quiet,
     /// The core keys after a Save: appends its lines, keeps the outcome unless it fails.
     Auto,
+    /// A startup read that resolves durable bot ownership.
+    Recovery,
 }
 
 /// The station jobs' state, as the Settings segment shows it.
@@ -72,6 +76,10 @@ pub(crate) struct StationJobs {
     returned: Option<moon_remote::station::bot::ReturnedBot>,
     /// Bumped on every change of this state: part of the Settings window's repaint signature.
     pub(crate) revision: u64,
+    /// Durable hand-over still awaiting a safe ownership decision.
+    pending: Option<recovery::Pending>,
+    /// An unreadable journal must never be treated as absent or overwritten.
+    journal_unreadable: bool,
     kind: Kind,
     /// The running job hands the terminal's bot over.
     handing_over: bool,
@@ -95,6 +103,26 @@ impl StationJobs {
         self.running && self.kind != Kind::Quiet
     }
 
+    /// Load ownership before the saved Telegram configuration can start transport.
+    pub(crate) fn load() -> Self {
+        match recovery::load(&moon_core::config::paths::station_handover_path()) {
+            Ok(pending) => Self {
+                pending,
+                ..Self::default()
+            },
+            Err(_) => Self {
+                journal_unreadable: true,
+                ..Self::default()
+            },
+        }
+    }
+
+    /// An outstanding or unreadable journal forbids starting the saved local token.
+    pub(crate) fn holds_bot(&self) -> bool {
+        self.pending.is_some() || self.journal_unreadable
+    }
+
+    /// Append a bounded progress line and advance the view cursor.
     fn push_line(&mut self, line: String) {
         self.lines.push(line);
         self.line_seq = self.line_seq.wrapping_add(1);
@@ -116,7 +144,7 @@ pub(crate) fn known_target() -> Option<moon_remote::ssh::Target> {
 }
 
 impl Backend {
-    /// Start the user's `job`; `hand_over` suspends the terminal's bot for its duration. During a
+    /// Start the user's `job`; `hand_over` journals ownership and suspends the terminal's bot. During a
     /// quiet read it waits for that read; during another job it is not started (the buttons wait).
     pub(crate) fn station_start(&mut self, job: job::Job, hand_over: bool, cx: &mut Context<Self>) {
         if self.station.running {
@@ -128,13 +156,22 @@ impl Backend {
         self.station_begin(job, hand_over, Kind::User, cx);
     }
 
-    /// Read the station's bot again (its status, its pairing code), quietly: the last job's lines
-    /// and outcome stay on screen. Nothing when no server is set up or a job runs.
+    /// Read the station's bot quietly, or reconcile an outstanding hand-over at its original
+    /// destination. Ordinary reads preserve the outcome; recovery updates it. A running job waits.
     pub(crate) fn station_refresh_bot(&mut self, cx: &mut Context<Self>) {
         if self.station.running {
             return;
         }
-        if let Some(target) = known_target() {
+        if let Some(pending) = &self.station.pending {
+            self.station_begin(
+                job::Job::BotState {
+                    target: pending.target(),
+                },
+                false,
+                Kind::Recovery,
+                cx,
+            );
+        } else if let Some(target) = known_target() {
             self.station_begin(job::Job::BotState { target }, false, Kind::Quiet, cx);
         }
     }
@@ -190,7 +227,24 @@ impl Backend {
         self.station_begin(job::Job::Cores { target, cores }, false, Kind::Auto, cx);
     }
 
-    /// Start a queued job, deciding bot restoration from current local configuration.
+    /// Show a held-bot outcome and quietly reconcile the original hand-over destination.
+    pub(crate) fn station_recover(&mut self, cx: &mut Context<Self>) {
+        if self.station.holds_bot() {
+            self.station.outcome = Some(Err(t!("telegram.server.local_bot_held").to_string()));
+            if self.station.pending.is_some() {
+                self.station_refresh_bot(cx);
+            }
+        }
+    }
+
+    /// Clear the durable journal before releasing local polling; failure keeps the bot held.
+    fn station_clear_handover(&mut self) -> anyhow::Result<()> {
+        recovery::save(&moon_core::config::paths::station_handover_path(), None)?;
+        self.station.pending = None;
+        Ok(())
+    }
+
+    /// Start remote work only after publishing any hand-over ownership synchronously.
     fn station_begin(
         &mut self,
         job: job::Job,
@@ -213,7 +267,25 @@ impl Backend {
             }
             other => other,
         };
+        let hand_over = hand_over || job.handover_target().is_some();
         if hand_over {
+            let pending = job.handover_target().map(recovery::Pending::new);
+            let saved = if self.station.holds_bot() || pending.is_none() {
+                Err(anyhow::anyhow!("unresolved station hand-over"))
+            } else {
+                recovery::save(
+                    &moon_core::config::paths::station_handover_path(),
+                    pending.as_ref(),
+                )
+            };
+            if saved.is_err() {
+                self.station.outcome =
+                    Some(Err(t!("telegram.server.handover_save_failed").to_string()));
+                self.station.revision = self.station.revision.wrapping_add(1);
+                cx.notify();
+                return;
+            }
+            self.station.pending = pending;
             self.telegram.suspend();
         }
         let st = &mut self.station;
@@ -226,7 +298,7 @@ impl Backend {
                 st.lines.clear();
             }
             Kind::Auto => st.push_line(t!("telegram.server.auto_cores").to_string()),
-            Kind::Quiet => {}
+            Kind::Quiet | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
         let rx = job::start(job);
@@ -249,7 +321,7 @@ impl Backend {
                 if gone && !events.iter().any(|e| matches!(e, job::Event::Done(_))) {
                     events.push(job::Event::Done(job::Done::Failed {
                         reason: t!("telegram.server.job_lost").to_string(),
-                        station_may_poll: false,
+                        station_may_poll: hand_over,
                     }));
                 }
                 // Nothing new wakes nobody: the backend has many observers.
@@ -305,6 +377,10 @@ impl Backend {
         let handing_over = std::mem::take(&mut self.station.handing_over);
         let kind = self.station.kind;
         self.station.running = false;
+        if kind == Kind::Recovery {
+            self.station_apply_recovery(done);
+            return true;
+        }
         if kind == Kind::Quiet {
             // A quiet read changes only the bot's state, or says why it could not read it.
             match done {
@@ -341,7 +417,8 @@ impl Backend {
                 // A terminal bot held down after an undo that failed runs again once the station
                 // no longer polls its token.
                 if bot_off && !handing_over && self.telegram.suspended() {
-                    self.telegram.resume(&self.config.telegram);
+                    // A different server's job cannot release the marked destination.
+                    self.station.pending_refresh = true;
                 }
                 self.station.needs_old_admin = false;
                 if let Some(bot) = bot {
@@ -397,8 +474,10 @@ impl Backend {
                     t!("telegram.server.local_bot_held")
                 )));
             }
-        } else {
+        } else if self.station_clear_handover().is_ok() {
             self.telegram.resume(&self.config.telegram);
+        } else {
+            self.station.outcome = Some(Err(t!("telegram.server.local_bot_held").to_string()));
         }
         true
     }
@@ -441,10 +520,57 @@ impl Backend {
         }));
     }
 
+    /// Apply a read without guessing when the station is unreachable or owns a stopped bot.
+    fn station_apply_recovery(&mut self, done: job::Done) {
+        let job::Done::Ok { bot: Some(bot), .. } = done else {
+            self.station.bot_error = Some(t!("telegram.server.local_bot_held").to_string());
+            self.station.outcome = Some(Err(t!("telegram.server.local_bot_held").to_string()));
+            return;
+        };
+        let decision = self
+            .station
+            .pending
+            .as_ref()
+            .map(|p| recovery::decide(p, &bot));
+        self.station.bot_error = None;
+        let stopped_with_token = bot.stopped && bot.has_token;
+        self.station.bot = Some(bot);
+        let result = match decision {
+            Some(recovery::Decision::Erase) => self.station_erase_local_bot(),
+            Some(recovery::Decision::Resume) => self.station_clear_handover().map(|()| {
+                self.telegram.resume(&self.config.telegram);
+            }),
+            _ => Err(anyhow::anyhow!("station ownership is unresolved")),
+        };
+        let message = if stopped_with_token {
+            format!(
+                "{}\n{}",
+                t!("telegram.server.bot_stopped"),
+                t!("telegram.server.local_bot_held")
+            )
+        } else if result.is_err() {
+            t!("telegram.server.local_bot_held").to_string()
+        } else {
+            t!("telegram.server.done").to_string()
+        };
+        self.station.outcome = Some(if result.is_ok() {
+            Ok(message)
+        } else {
+            Err(message)
+        });
+    }
+
     /// The bot runs on the station now: forget its token and chats here, on disk and in an open
     /// Settings draft alike, so a later Save does not bring them back. The draft's other Telegram
     /// fields keep their unsaved edits.
     fn station_erase_local_bot(&mut self) -> anyhow::Result<()> {
+        if let Some(pending) = self.station.pending.as_mut() {
+            pending.erase_pending = true;
+            recovery::save(
+                &moon_core::config::paths::station_handover_path(),
+                Some(pending),
+            )?;
+        }
         let mut candidate = self.config.clone();
         forget_bot(&mut candidate.telegram);
         candidate.save_telegram()?;
@@ -452,8 +578,10 @@ impl Backend {
         if let Some(draft) = self.preview.as_mut() {
             forget_bot(&mut draft.telegram);
         }
-        self.telegram.resume(&self.config.telegram);
+        // The Settings input must forget the token even if clearing the journal then fails.
         self.station.erased = self.station.erased.wrapping_add(1);
+        self.station_clear_handover()?;
+        self.telegram.resume(&self.config.telegram);
         Ok(())
     }
 }

@@ -497,6 +497,11 @@ pub(crate) fn config_pair_pending_path() -> PathBuf {
     cfg_dir().join(".config-pair-pending")
 }
 
+/// A secret-free journal preventing two pollers after an interrupted station hand-over.
+pub fn station_handover_path() -> PathBuf {
+    cfg_dir().join("station-handover.json")
+}
+
 /// Remaining config (groups, etc.) as plaintext TOML without secrets.
 pub fn settings_path() -> PathBuf {
     cfg_dir().join("settings.toml")
