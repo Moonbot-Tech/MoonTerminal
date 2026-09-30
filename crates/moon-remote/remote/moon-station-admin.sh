@@ -10,6 +10,8 @@ umask 077
 
 BIN=/opt/moon-station/bin/moon-station
 CONF=/etc/moon-station/station.toml
+# A completed removal revokes in-flight writes from other terminals until explicit setup.
+REMOVED=/etc/moon-station/removed
 CREDS=/etc/moon-station/creds
 DROPIN_DIR=/etc/systemd/system/moon-station.service.d
 DROPIN=$DROPIN_DIR/credentials.conf
@@ -62,6 +64,15 @@ lock_wait() {
 lock_wait_long() {
     exec 9>"$LOCK"
     flock -w 600 9 || die "another station command has run for ten minutes"
+}
+
+# Called under the same lock as removal, before any credential/config write or service start.
+# A preflight on another SSH connection cannot provide this guarantee.
+require_station() {
+    if [ -f "$REMOVED" ]; then
+        echo "station=removed"
+        die "station was removed; run setup again"
+    fi
 }
 
 valid_uid() {
@@ -238,6 +249,7 @@ restore_prev() {
 # rollback in half. This command waits for it and prints what it wrote.
 cmd_update() {
     lock
+    require_station
     echo "update=running" >"$UPDATE_LOG"
     install_and_restart "$@"
 }
@@ -266,12 +278,13 @@ install_and_restart() {
 # request from the bot's chat, or by the terminal's "Update the service". All of it runs detached,
 # the download too: a dropped connection leaves a verdict, not `update=running`.
 cmd_update_from_release() {
+    lock_wait_long
+    require_station
     rm -f "$UPDATE_REQUEST"
     # The watcher of the bot's requests up again, should it have stopped or failed: the terminal
     # runs this command when a request from the chat was never taken.
     systemctl reset-failed moon-station-update.path 2>/dev/null || true
     systemctl start moon-station-update.path 2>/dev/null || true
-    lock_wait_long
     echo "update=running" >"$UPDATE_LOG"
     detached finish-update-from-release
 }
@@ -311,6 +324,7 @@ cmd_finish_update_from_release() {
 # rollback: the previous binary back, by hand — detached like an update.
 cmd_rollback() {
     lock
+    require_station
     echo "rollback=running" >"$UPDATE_LOG"
     detached finish-rollback
 }
@@ -376,6 +390,8 @@ cmd_status() {
     # puts its own helper in place first.
     echo "release_update=yes"
     echo "bot_return=yes"
+    echo "remove_station=yes"
+    echo "removal_guard=yes"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -428,6 +444,23 @@ cmd_drop_pairing() {
     echo "dropped=pairing"
 }
 
+# Remove only material that can trade or act as the bot, after all station processes stop.
+# Keep the administrator, authorized keys and SSH configuration for key-only access.
+cmd_remove_station() {
+    lock
+    systemctl disable --now moon-station-update.path
+    systemctl stop moon-station-update.service
+    systemctl disable --now "$UNIT"
+    # Publish revocation before deleting anything; failed deletions remain retryable, and no
+    # other terminal can put a credential back after this lock is released.
+    : >"$REMOVED"
+    rm -f "$CREDS"/core-*.cred "$CREDS"/.core-*.new \
+        "$CREDS/$TOKEN.cred" "$CREDS/.$TOKEN.new" \
+        "$PAIRING" "$PAIRING.new" "$PAIRING.tmp" "$CONF" "$CONF.new" "$UPDATE_REQUEST"
+    write_dropin
+    echo "removed=yes"
+}
+
 cmd_logs() {
     lines=${1:-100}
     case "$lines" in
@@ -440,19 +473,37 @@ cmd_logs() {
 cmd=${1:-}
 [ "$#" -gt 0 ] && shift
 case "$cmd" in
-put-cred) cmd_put_cred "$@" ;;
-drop-cred) cmd_drop_cred "$@" ;;
-put-token) cmd_put_token ;;
+put-cred)
+    lock_wait
+    require_station
+    cmd_put_cred "$@"
+    ;;
+drop-cred)
+    lock_wait
+    require_station
+    cmd_drop_cred "$@"
+    ;;
+put-token)
+    lock_wait
+    require_station
+    cmd_put_token
+    ;;
+drop-token)
+    lock_wait
+    require_station
+    cmd_drop_token
+    ;;
 get-token) cmd_get_token ;;
 get-pairing) cmd_get_pairing ;;
-drop-token) cmd_drop_token ;;
 get-config) cmd_get_config ;;
 put-config)
     lock_wait
+    require_station
     cmd_put_config "$@"
     ;;
 install-bin)
     lock
+    require_station
     cmd_install_bin "$@"
     ;;
 update) cmd_update "$@" ;;
@@ -472,17 +523,20 @@ finish-rollback)
 # update's health check would roll a good binary back.
 start)
     lock
+    require_station
     systemctl enable --quiet "$UNIT"
     systemctl restart "$UNIT"
     ;;
 restart)
     lock
+    require_station
     systemctl restart "$UNIT"
     ;;
 # reload: station.toml again without a restart (SIGHUP) — for a changed tape window or a core
 # taken out; a core added still needs `start` for its credential.
 reload)
     lock
+    require_station
     systemctl reload "$UNIT"
     ;;
 stop)
@@ -490,14 +544,17 @@ stop)
     systemctl stop "$UNIT"
     ;;
 status) cmd_status ;;
+remove-station) cmd_remove_station ;;
 logs) cmd_logs "$@" ;;
 put-pairing)
     lock
+    require_station
     cmd_put_pairing
     ;;
 ctl) cmd_ctl ;;
 put-valuation)
     lock
+    require_station
     cmd_put_valuation
     ;;
 drop-pairing)

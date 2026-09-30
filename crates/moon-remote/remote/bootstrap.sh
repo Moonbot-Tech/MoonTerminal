@@ -11,6 +11,7 @@ HELPER=/usr/local/sbin/moon-station-admin
 SUDOERS=/etc/sudoers.d/moon-station
 SSHD_DROPIN=/etc/ssh/sshd_config.d/00-moon-station.conf
 UNIT=/etc/systemd/system/moon-station.service
+REMOVED=/etc/moon-station/removed
 UPDATE_PATH_UNIT=/etc/systemd/system/moon-station-update.path
 UPDATE_SERVICE_UNIT=/etc/systemd/system/moon-station-update.service
 F2B_JAIL=/etc/fail2ban/jail.d/moon-station.conf
@@ -195,6 +196,8 @@ step_service() {
     install -d -m 750 -o root -g moon-station /etc/moon-station
     install -d -m 700 -o root -g root /etc/moon-station/creds
     install -d -m 700 -o moon-station -g moon-station /var/lib/moon-station
+    # Only explicit setup re-arms a removed station. Helper refreshes must retain revocation.
+    rm -f "$REMOVED"
     echo "unit=$(put_file "$UNIT" 644 root:root)"
     systemctl daemon-reload
     # moonproto asks for an 8 MB UDP receive buffer; the kernel caps it at rmem_max, 208 KB on a

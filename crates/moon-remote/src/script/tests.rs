@@ -37,3 +37,41 @@ fn values_are_read_by_key() {
     assert_eq!(value(out, "systemd"), Some("255"));
     assert_eq!(value(out, "tpm2"), None);
 }
+
+/// Treating a revoked write as an ordinary English stderr string loses localized recovery
+/// advice for a Save that raced another terminal's station removal.
+#[test]
+fn removal_revocation_is_a_typed_failure() {
+    let out = Output {
+        status: Some(1),
+        stdout: b"station=removed\n".to_vec(),
+        stderr: b"station was removed; run setup again".to_vec(),
+    };
+    let error = checked(out).err().expect("revocation must fail");
+    assert!(matches!(
+        error.downcast_ref::<crate::station::access::RemovalError>(),
+        Some(crate::station::access::RemovalError::NotConfigured)
+    ));
+}
+
+/// Clearing revocation on an automatic helper refresh would let a concurrent Save recreate
+/// secrets after removal. Only the explicit setup's service step may clear it.
+#[test]
+fn only_explicit_service_setup_clears_removal_revocation() {
+    let service = BOOTSTRAP
+        .split("step_service() {")
+        .nth(1)
+        .unwrap()
+        .split("step_harden() {")
+        .next()
+        .unwrap();
+    assert!(service.contains("rm -f \"$REMOVED\""));
+    let helper = BOOTSTRAP
+        .split("step_helper() {")
+        .nth(1)
+        .unwrap()
+        .split("step_service() {")
+        .next()
+        .unwrap();
+    assert!(!helper.contains("rm -f \"$REMOVED\""));
+}

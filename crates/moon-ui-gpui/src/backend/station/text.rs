@@ -1,8 +1,10 @@
 //! Localized station headlines and progress; remote diagnostics stay secondary.
 
 use moon_remote::error::StationError;
+use moon_remote::hosts::HostEditError;
 use moon_remote::progress::{Progress, Step};
 use moon_remote::ssh::OpenError;
+use moon_remote::station::access::RemovalError;
 use moon_remote::station::bot::{BotReturnError, StationMayStillPoll};
 use rust_i18n::t;
 
@@ -15,6 +17,21 @@ pub(crate) fn error(error: &anyhow::Error) -> String {
             BotReturnError::OldHelper => t!("telegram.server.return_old_helper").to_string(),
             BotReturnError::ReadFailed => t!("telegram.server.return_read_failed").to_string(),
         };
+    } else if let Some(kind) = error.downcast_ref::<HostEditError>() {
+        t!(match kind {
+            HostEditError::Changed => "telegram.server.record_changed",
+            HostEditError::NotSetUp => "telegram.server.no_known_server",
+            HostEditError::SameAddress => "telegram.server.address_unchanged",
+            HostEditError::AddressKnown => "telegram.server.address_in_use",
+            HostEditError::NoFingerprint => "telegram.server.no_fingerprint",
+        })
+    } else if let Some(kind) = error.downcast_ref::<RemovalError>() {
+        t!(match kind {
+            RemovalError::Unsupported => "telegram.server.remove_unsupported",
+            RemovalError::Unconfirmed => "telegram.server.remove_unconfirmed",
+            RemovalError::LocalForgetFailed => "telegram.server.remove_local_failed",
+            RemovalError::NotConfigured => "telegram.server.core_sync_refused",
+        })
     } else if let Some(kind) = error.downcast_ref::<StationError>() {
         return with_detail(station_error(kind), error);
     } else if let Some(kind) = error.downcast_ref::<OpenError>() {
@@ -82,6 +99,9 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
             log::info!("station: {diagnostic}");
             Some(
                 match step {
+                    Step::AddressProbe => t!("station.progress.AddressProbe"),
+                    Step::AddressVerify => t!("station.progress.AddressVerify"),
+                    Step::StationRemove => t!("station.progress.StationRemove"),
                     Step::Login => t!("station.progress.Login"),
                     Step::Pin => t!("station.progress.Pin"),
                     Step::Probe => t!("station.progress.Probe"),

@@ -12,9 +12,9 @@ station.error.login_refused:
   en: "The server refused the login. Check the login, password or key in the Station tab."
   es: "El servidor rechazó el acceso. Comprueba el usuario, la contraseña o la clave en la pestaña Estación."
 station.error.host_key_changed:
-  ru: "Ключ сервера изменился. Проверьте адрес на вкладке «Станция»; если сервер переустановлен и адрес верен, нажмите «Забыть сервер» и настройте его заново."
-  en: "The server key changed. Check the address in the Station tab; if the server was reinstalled and the address is correct, use Forget the server and set it up again."
-  es: "La clave del servidor cambió. Comprueba la dirección en la pestaña Estación; si se reinstaló el servidor y la dirección es correcta, usa Olvidar el servidor y configúralo de nuevo."
+  ru: "Ключ сервера изменился. На вкладке «Станция» используйте «Изменить адрес», если изменился IP, и проверьте отпечаток. Только после переустановки сервера используйте «Забыть сервер»."
+  en: "The server key changed. In the Station tab, use Change address if the IP changed and verify the fingerprint. Only after reinstalling the server, use Forget the server."
+  es: "La clave del servidor cambió. En la pestaña Estación, usa Cambiar dirección si cambió la IP y verifica la huella. Usa Olvidar el servidor solo tras reinstalarlo."
 station.error.unreachable:
   ru: "Сервер недоступен. Проверьте адрес, порт SSH и сеть на вкладке «Станция»."
   en: "The server is unreachable. Check the address, SSH port and network in the Station tab."
@@ -311,3 +311,15 @@ station.update.unknown:
   ru: "Результат обновления не распознан. Проверьте журнал станции."
   en: "The update result is not recognized. Check the station log."
   es: "No se reconoce el resultado de la actualización. Comprueba el registro de la estación."
+station.progress.AddressProbe:
+  ru: "Проверяем отпечаток нового адреса."
+  en: "Reading the new address fingerprint."
+  es: "Comprobando la huella de la nueva dirección."
+station.progress.AddressVerify:
+  ru: "Проверяем вход с подтверждённым отпечатком."
+  en: "Verifying login with the confirmed fingerprint."
+  es: "Verificando el acceso con la huella confirmada."
+station.progress.StationRemove:
+  ru: "Останавливаем станцию и удаляем ключи и бота."
+  en: "Stopping the station and removing keys and the bot."
+  es: "Deteniendo la estación y eliminando las claves y el bot."

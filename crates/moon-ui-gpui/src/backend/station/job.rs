@@ -6,7 +6,7 @@ use std::sync::mpsc;
 use moon_core::config::Secret;
 use moon_core::station_api::Access;
 use moon_remote::error::StationError;
-use moon_remote::progress::Progress;
+use moon_remote::progress::{Progress, Step};
 use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::{self, BotState};
@@ -27,6 +27,17 @@ pub(crate) enum BotPlan {
 
 /// One unit of work on the server.
 pub(crate) enum Job {
+    /// Read the destination fingerprint without authenticating or changing the saved host.
+    AddressProbe {
+        source: moon_remote::hosts::Host,
+        target: Target,
+    },
+    /// Verify a user-confirmed fingerprint and move the administrator record.
+    AddressChange {
+        change: station::access::AddressChange,
+    },
+    /// Remove station credentials before forgetting the known host.
+    Remove { source: moon_remote::hosts::Host },
     /// Prepare a new server, install the station, send the cores, set the bot.
     Install {
         setup: Setup,
@@ -77,6 +88,14 @@ pub(crate) enum Job {
 }
 
 impl Job {
+    /// These actions change the destination used to recover bot ownership or credentials.
+    pub(super) fn changes_access(&self) -> bool {
+        matches!(
+            self,
+            Self::Remove { .. } | Self::AddressProbe { .. } | Self::AddressChange { .. }
+        )
+    }
+
     /// The destination of an actual hand-over; a caller flag alone cannot create ownership.
     pub(super) fn handover_target(&self) -> Option<&Target> {
         match self {
@@ -98,6 +117,13 @@ impl Job {
 pub(crate) enum Done {
     /// The station stopped polling and removed its bot; recovered data may be saved locally.
     BotOff { returned: Option<bot::ReturnedBot> },
+    /// The destination fingerprint awaits an explicit confirmation in the Station tab.
+    AddressProbed(station::access::AddressChange),
+    /// The destination was verified and saved; cached station state must be discarded.
+    AddressChanged,
+    /// All remote secrets were removed. Even if forgetting locally failed, queued core writes
+    /// must be cancelled so they cannot recreate credentials on the removed station.
+    Removed { local_forget_error: Option<String> },
     Ok {
         /// The terminal's bot now runs on the station: its token goes from the terminal.
         transferred: bool,
@@ -162,6 +188,45 @@ fn run(
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<Done> {
     match job {
+        Job::AddressProbe { source, target } => {
+            say(Progress::step(
+                Step::AddressProbe,
+                "probe destination host key",
+            ));
+            Ok(Done::AddressProbed(station::access::probe_address(
+                source, target,
+            )?))
+        }
+        Job::AddressChange { change } => {
+            say(Progress::step(
+                Step::AddressVerify,
+                "verify confirmed destination",
+            ));
+            station::access::change_address(&change)?;
+            Ok(Done::AddressChanged)
+        }
+        Job::Remove { source } => {
+            say(Progress::step(
+                Step::StationRemove,
+                "remove station credentials",
+            ));
+            match station::access::remove_station(&source) {
+                Ok(()) => Ok(Done::Removed {
+                    local_forget_error: None,
+                }),
+                Err(e)
+                    if matches!(
+                        e.downcast_ref::<station::access::RemovalError>(),
+                        Some(station::access::RemovalError::LocalForgetFailed)
+                    ) =>
+                {
+                    Ok(Done::Removed {
+                        local_forget_error: Some(super::text::error(&e)),
+                    })
+                }
+                Err(e) => Err(e),
+            }
+        }
         Job::Install { setup, cores, bot } => {
             let target = setup.target.clone();
             // Read before the server changes: a terminal without a core key has nothing to
@@ -191,6 +256,18 @@ fn run(
             })
         }
         Job::Cores { target, cores } => {
+            // A remote wipe may have succeeded even when forgetting the local record failed,
+            // or another terminal removed the station. A Save must not reinstall its secrets.
+            let conn = station::admin_conn(&target)?;
+            let status = moon_remote::script::checked(conn.run(
+                &moon_remote::script::helper("status", &[]),
+                &[],
+                moon_remote::script::STEP_TIMEOUT,
+            )?)?
+            .stdout_text();
+            if moon_remote::script::value(&status, "config") != Some("yes") {
+                return Err(station::access::RemovalError::NotConfigured.into());
+            }
             // The station's window is set by hand only: a change of cores brings none.
             station::push_cores(&target, &core_keys(&cores)?, None, say)?;
             Ok(Done::Ok {

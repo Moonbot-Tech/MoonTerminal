@@ -1,9 +1,12 @@
-//! Restored bot ownership and Settings draft preservation.
-use super::{can_restore_bot, restore_bot, save_returned_bot};
+//! Bot ownership, Settings draft preservation and station access lifecycle decisions.
+use super::{StationJobs, can_restore_bot, job, restore_bot, save_returned_bot};
 use moon_core::config::AppConfig;
 use moon_core::config::telegram_access::TelegramChatAccess;
 use moon_core::config::{Secret, TelegramConfig};
 use moon_core::station_api::Access;
+use moon_remote::hosts::Host;
+use moon_remote::ssh::Target;
+use moon_remote::station::access::AddressChange;
 use moon_remote::station::bot::ReturnedBot;
 
 /// Overwriting either a saved or unsaved local token discards the user's second bot.
@@ -140,4 +143,157 @@ fn bot_off_retries_never_publish_locally_before_dispatching_server_work() {
     let begin = begin.split("    fn station_next(").next().unwrap();
     assert!(!begin.contains("self.station_apply_returned()"));
     assert!(!begin.contains("self.telegram.resume("));
+}
+
+/// Omitting queue reset on removal lets station_next re-upload core keys to a removed station;
+/// retaining a fingerprint candidate lets a confirmation from the old station survive.
+#[test]
+fn losing_a_known_station_cancels_queued_work_and_fingerprint_consent() {
+    let mut jobs = StationJobs {
+        pending_cores: true,
+        pending_refresh: true,
+        needs_old_admin: true,
+        waiting: Some((
+            job::Job::Status {
+                target: Target {
+                    host: "old".into(),
+                    port: 22,
+                },
+            },
+            false,
+        )),
+        address_change: Some(AddressChange {
+            source: Host {
+                addr: "old:22".into(),
+                fingerprint: "SHA256:old".into(),
+                admin: Some("moon".into()),
+            },
+            target: Target {
+                host: "new".into(),
+                port: 22,
+            },
+            fingerprint: "SHA256:new".into(),
+        }),
+        finished: 7,
+        ..StationJobs::default()
+    };
+    jobs.clear_known(Ok("removed".into()));
+    assert!(!jobs.pending_cores && !jobs.pending_refresh);
+    assert!(jobs.waiting.is_none() && jobs.address_change.is_none());
+    assert!(!jobs.needs_old_admin);
+    assert_eq!(
+        jobs.finished, 7,
+        "the UI still needs the job-end counter to observe the lost station"
+    );
+}
+
+/// Omitting the automatic job's preflight would recreate secrets after a completed remote
+/// removal whose local forget failed. Explicit installation still uses its own push path.
+#[test]
+fn automatic_core_writes_require_a_configured_station_before_pushing_keys() {
+    let jobs = include_str!("job.rs");
+    let sync = jobs
+        .split("Job::Cores { target, cores } => {")
+        .nth(1)
+        .unwrap()
+        .split("Job::Tape")
+        .next()
+        .unwrap();
+    let refusal = sync.find("RemovalError::NotConfigured").unwrap();
+    assert!(sync[..refusal].contains("script::value(&status, \"config\") != Some(\"yes\")"));
+    assert!(refusal < sync.find("station::push_cores(").unwrap());
+}
+
+/// Dropping either ownership marker permits Forget/Remove to discard the only recovery route.
+#[test]
+fn pending_or_unreadable_handover_blocks_access_changes() {
+    let clear = StationJobs::default();
+    assert!(clear.access_refusal().is_none());
+    let pending = StationJobs {
+        pending: Some(super::recovery::Pending::new(&Target {
+            host: "original".into(),
+            port: 22,
+        })),
+        ..StationJobs::default()
+    };
+    assert!(pending.access_refusal().is_some());
+    let unreadable = StationJobs {
+        journal_unreadable: true,
+        ..StationJobs::default()
+    };
+    assert!(unreadable.access_refusal().is_some());
+}
+
+/// Ignoring the retained snapshot redirects a failed bot-return retry to a different server.
+#[test]
+fn returned_bot_blocks_access_changes_until_recovered() {
+    let mut jobs = StationJobs {
+        returned: Some(ReturnedBot {
+            token: Secret::new("synthetic-retained"),
+            access: Access::default(),
+        }),
+        ..StationJobs::default()
+    };
+    assert!(jobs.access_refusal().is_some());
+    jobs.returned = None;
+    assert!(jobs.access_refusal().is_none());
+}
+
+/// Removing the execution-time guard lets a queued removal bypass a newly retained snapshot;
+/// omitting the Forget guard discards access even when its inline confirmation became stale.
+#[test]
+fn queued_access_changes_and_forgetting_recheck_recovery_state() {
+    let jobs = include_str!("../station.rs");
+    let begin = jobs
+        .split("    fn station_begin(")
+        .nth(1)
+        .unwrap()
+        .split("    fn station_next(")
+        .next()
+        .unwrap();
+    assert!(begin.find("job.changes_access()").unwrap() < begin.find("job::start(job)").unwrap());
+    assert!(begin.contains("self.station.access_refusal()"));
+    let view = include_str!("../../settings/telegram/server_bot.rs");
+    let forget = view
+        .split("    pub(super) fn server_bot_forget(")
+        .nth(1)
+        .unwrap()
+        .split("    ///")
+        .next()
+        .unwrap();
+    assert!(
+        forget.find("station.access_refusal()").unwrap() < forget.find("hosts.forget(").unwrap()
+    );
+    let host = Host {
+        addr: "old:22".into(),
+        fingerprint: "SHA256:old".into(),
+        admin: Some("moon".into()),
+    };
+    assert!(
+        job::Job::Remove {
+            source: host.clone()
+        }
+        .changes_access()
+    );
+    assert!(
+        job::Job::AddressProbe {
+            source: host,
+            target: Target {
+                host: "new".into(),
+                port: 22
+            }
+        }
+        .changes_access()
+    );
+    assert!(
+        !job::Job::BotOff {
+            target: Target {
+                host: "old".into(),
+                port: 22
+            },
+            restore: true,
+            recovered: None
+        }
+        .changes_access()
+    );
 }
