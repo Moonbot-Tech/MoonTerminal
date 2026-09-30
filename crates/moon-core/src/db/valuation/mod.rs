@@ -154,20 +154,42 @@ impl CoverageSql {
     /// Returns:
     ///     SQL expressions ordered for [`CoverageAggregate::add_row`].
     pub(crate) fn aggregate_columns(&self) -> String {
-        format!(
-            "COALESCE(SUM(CASE WHEN {eligible} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {valued} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {unavailable} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM({profit_usdt}),0.0),
-             COALESCE(SUM({spent_usdt}),0.0),
-             COALESCE(SUM(CASE WHEN {valued} AND ({spent_usdt}) IS NOT NULL
-                               THEN 1 ELSE 0 END),0)",
-            eligible = self.eligible,
-            valued = self.valued,
-            unavailable = self.unavailable,
-            profit_usdt = self.profit_usdt,
-            spent_usdt = self.spent_usdt,
-        )
+        self.sum_columns()
+            .iter()
+            .map(super::sql_sum::SumColumn::aggregate_sql)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The same six columns described once, for the grouped and the row-pass shape alike.
+    ///
+    /// Returns:
+    ///     Columns ordered for [`CoverageAggregate::add_row`].
+    pub(in crate::db) fn sum_columns(&self) -> Vec<super::sql_sum::SumColumn> {
+        use super::sql_sum::{SumColumn, SumZero};
+        vec![
+            SumColumn::sum(
+                format!("CASE WHEN {} THEN 1 ELSE 0 END", self.eligible),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {} THEN 1 ELSE 0 END", self.valued),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {} THEN 1 ELSE 0 END", self.unavailable),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(self.profit_usdt.clone(), SumZero::Real),
+            SumColumn::sum(self.spent_usdt.clone(), SumZero::Real),
+            SumColumn::sum(
+                format!(
+                    "CASE WHEN {} AND ({}) IS NOT NULL THEN 1 ELSE 0 END",
+                    self.valued, self.spent_usdt
+                ),
+                SumZero::Integer,
+            ),
+        ]
     }
 }
 
