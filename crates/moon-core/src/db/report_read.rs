@@ -10,6 +10,7 @@ use crate::strategy_query::StrategyQuery;
 use super::read_fail::read_fail;
 use super::rep;
 use super::report_axis::ReportStamp;
+use super::sql_sum::{SumColumn, SumZero};
 use super::strategy_name_match::install_strategy_name_match;
 use super::valuation::ValuationMode;
 use super::{
@@ -1751,24 +1752,41 @@ struct TradedVolumeSql {
 }
 
 impl TradedVolumeSql {
-    /// Build the five grouped columns consumed by [`super::TradedVolume::from_groups`].
+    /// Describe the five grouped columns consumed by [`super::TradedVolume::from_groups`].
     ///
     /// Returns:
     ///     Eligible/reconstructed counts, native sum, valued count, and USDT sum in that order.
-    fn aggregate_columns(&self) -> String {
-        format!(
-            "COALESCE(SUM(CASE WHEN {eligible} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {reconstructed} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {reconstructed} THEN {native} ELSE 0.0 END),0.0),
-             COALESCE(SUM(CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL
-                               THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL
-                               THEN ({native}) * ({rate}) ELSE 0.0 END),0.0)",
-            eligible = self.eligible,
-            reconstructed = self.reconstructed,
-            native = self.native,
-            rate = self.rate,
-        )
+    fn sum_columns(&self) -> Vec<SumColumn> {
+        let (eligible, reconstructed, native, rate) = (
+            &self.eligible,
+            &self.reconstructed,
+            &self.native,
+            &self.rate,
+        );
+        vec![
+            SumColumn::sum(
+                format!("CASE WHEN {eligible} THEN 1 ELSE 0 END"),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {reconstructed} THEN 1 ELSE 0 END"),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {reconstructed} THEN {native} ELSE 0.0 END"),
+                SumZero::Real,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL THEN 1 ELSE 0 END"),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!(
+                    "CASE WHEN {reconstructed} AND ({rate}) IS NOT NULL                      THEN ({native}) * ({rate}) ELSE 0.0 END"
+                ),
+                SumZero::Real,
+            ),
+        ]
     }
 }
 
@@ -1781,15 +1799,15 @@ impl TradedVolumeSql {
 ///     src: Physical Report source and its discovered columns.
 ///
 /// Returns:
-///     A `SUM` expression over the settled amount, or `0.0` on a source without `profitbtc`.
-fn profit_sum_sql(src: &ReadSource) -> String {
+///     A sum over the settled amount, or the literal `0.0` on a source without `profitbtc`.
+fn profit_column(src: &ReadSource) -> SumColumn {
     if src.cols.contains("profitbtc") {
-        format!(
-            "COALESCE(SUM({}),0.0)",
-            super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+        SumColumn::sum(
+            super::quote::settled_amount_expr("r", &src.cols, "profitbtc"),
+            SumZero::Real,
         )
     } else {
-        "0.0".to_string()
+        SumColumn::ZeroReal
     }
 }
 
@@ -1865,27 +1883,40 @@ struct EntrySpendSql {
 }
 
 impl EntrySpendSql {
-    /// Build the six grouped columns consumed by [`super::EntrySpend::from_groups`].
+    /// Describe the six grouped columns consumed by [`super::EntrySpend::from_groups`].
     ///
     /// Returns:
     ///     Counted-row count, summed settled spend, summed settled profit, valued-row count, and
     ///     the summed USDT spend and profit over counted rows carrying a rate, in that order.
-    fn aggregate_columns(&self) -> String {
-        format!(
-            "COALESCE(SUM(CASE WHEN {counted} THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {counted} THEN {spent} ELSE 0.0 END),0.0),
-             COALESCE(SUM(CASE WHEN {counted} THEN {profit} ELSE 0.0 END),0.0),
-             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
-                               THEN 1 ELSE 0 END),0),
-             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
-                               THEN ({spent}) * ({rate}) ELSE 0.0 END),0.0),
-             COALESCE(SUM(CASE WHEN {counted} AND ({rate}) IS NOT NULL
-                               THEN ({profit}) * ({rate}) ELSE 0.0 END),0.0)",
-            counted = self.counted,
-            spent = self.spent,
-            profit = self.profit,
-            rate = self.rate,
-        )
+    fn sum_columns(&self) -> Vec<SumColumn> {
+        let (counted, spent, profit, rate) = (&self.counted, &self.spent, &self.profit, &self.rate);
+        let rated = format!("{counted} AND ({rate}) IS NOT NULL");
+        vec![
+            SumColumn::sum(
+                format!("CASE WHEN {counted} THEN 1 ELSE 0 END"),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {counted} THEN {spent} ELSE 0.0 END"),
+                SumZero::Real,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {counted} THEN {profit} ELSE 0.0 END"),
+                SumZero::Real,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {rated} THEN 1 ELSE 0 END"),
+                SumZero::Integer,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {rated} THEN ({spent}) * ({rate}) ELSE 0.0 END"),
+                SumZero::Real,
+            ),
+            SumColumn::sum(
+                format!("CASE WHEN {rated} THEN ({profit}) * ({rate}) ELSE 0.0 END"),
+                SumZero::Real,
+            ),
+        ]
     }
 }
 
@@ -1970,11 +2001,8 @@ fn query_totals_attempt(
     sources: &[ReadSource],
     include_valuation: bool,
 ) -> rusqlite::Result<ReportTotals> {
-    let mut groups = Vec::new();
+    let mut sink = totals::TotalsSink::default();
     let mut open_groups = Vec::new();
-    let mut volume_groups = Vec::new();
-    let mut spend_groups = Vec::new();
-    let mut coverage = super::valuation::CoverageAggregate::default();
     let has_strategy_names =
         strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
     // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
@@ -1994,85 +2022,11 @@ fn query_totals_attempt(
     // arrived yet keeps stating its money instead of reporting an empty period. That degradation
     // is the OPPOSITE of the row query's, and deliberately: withholding a row the user has no
     // other way to see is a smaller harm than blanking the figure they are reading. The open pass
-    // still fails CLOSED on the same source — an unprovable position must never be invented.
+    // still fails CLOSED on the same source — an unprovable position must never be invented. The
+    // realized pass's scope choice lives in `totals::ClosedPass::new`.
     for src in sources {
-        let closed_scope = ReportFilter {
-            rows: if src.cols.contains("closedate") {
-                RowScope::Closed
-            } else {
-                RowScope::ClosedAndOpen
-            },
-            ..f.clone()
-        };
-        let (where_sql, params) = build_where(&closed_scope, &src.cols, has_strategy_names);
-        let profit = profit_sum_sql(src);
-        let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
-        let valuation = super::valuation::projection(
-            f.valuation,
-            include_valuation,
-            "r",
-            &src.cols,
-            source_partition(src),
-        );
-        let joins = valuation
-            .as_ref()
-            .map(|parts| parts.joins.as_str())
-            .unwrap_or("");
-        let coverage_columns = valuation
-            .as_ref()
-            .map(|parts| format!(", {}", parts.aggregate_columns()))
-            .unwrap_or_default();
-        let volume_sql = traded_volume_sql(
-            src,
-            valuation
-                .as_ref()
-                .map(|parts| parts.per_row.quote_rate.as_str()),
-        );
-        let volume_columns = volume_sql.aggregate_columns();
-        let spend_sql = entry_spend_sql(
-            src,
-            valuation
-                .as_ref()
-                .map(|parts| parts.per_row.quote_rate.as_str()),
-        );
-        let spend_columns = spend_sql.aggregate_columns();
-        let sql = format!(
-            "SELECT {quote}, {profit}, COUNT(*){coverage_columns}, {volume_columns}, {spend_columns}
-             FROM {} r{joins}{where_sql}{group_by}",
-            src.table,
-        );
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|b| b.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = stmt.query(refs.as_slice())?;
-        let volume_offset = 3 + usize::from(valuation.is_some()) * 6;
-        let spend_offset = volume_offset + 5;
-        while let Some(row) = rows.next()? {
-            let raw = row.get::<_, Value>(0)?;
-            let ordinal = super::quote::report_ordinal_from_value(&raw);
-            let profit = row.get::<_, f64>(1)?;
-            let orders = row.get::<_, i64>(2)?;
-            groups.push((ordinal, profit, orders));
-            if valuation.is_some() {
-                coverage.add_row(row, 3)?;
-            }
-            volume_groups.push((
-                ordinal,
-                row.get::<_, i64>(volume_offset)?,
-                row.get::<_, i64>(volume_offset + 1)?,
-                row.get::<_, f64>(volume_offset + 2)?,
-                row.get::<_, i64>(volume_offset + 3)?,
-                row.get::<_, f64>(volume_offset + 4)?,
-            ));
-            spend_groups.push((
-                ordinal,
-                row.get::<_, i64>(spend_offset)?,
-                row.get::<_, f64>(spend_offset + 1)?,
-                row.get::<_, f64>(spend_offset + 2)?,
-                row.get::<_, i64>(spend_offset + 3)?,
-                row.get::<_, f64>(spend_offset + 4)?,
-                row.get::<_, f64>(spend_offset + 5)?,
-            ));
-        }
+        totals::ClosedPass::new(src, f, include_valuation, has_strategy_names)
+            .run_grouped(conn, &mut sink)?;
     }
     // The open pass: a plain per-quote tally, with no window, no coverage and no volume — none of
     // those mean anything for a position that has not closed. Skipped entirely for a caller that
@@ -2084,7 +2038,7 @@ fn query_totals_attempt(
         };
         for src in sources {
             let (where_sql, params) = build_where(&open_scope, &src.cols, has_strategy_names);
-            let profit = profit_sum_sql(src);
+            let profit = profit_column(src).aggregate_sql();
             let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
             let sql = format!(
                 "SELECT {quote}, {profit}, COUNT(*) FROM {} r{where_sql}{group_by}",
@@ -2101,19 +2055,7 @@ fn query_totals_attempt(
             }
         }
     }
-    let quotes = QuoteBreakdown::from_groups(groups)
-        .with_traded_volume(super::TradedVolume::from_groups(volume_groups))
-        .with_entry_spend(super::EntrySpend::from_groups(spend_groups));
-    // Publish coverage whenever the selected mode can build a projection: always for current rates,
-    // and only with an attached cache for historical rates.
-    Ok(ReportTotals {
-        quotes: if valuation_present {
-            quotes.with_valuation(coverage.finish())
-        } else {
-            quotes
-        },
-        open: super::OpenPositions::from_groups(open_groups),
-    })
+    Ok(sink.finish(valuation_present, open_groups))
 }
 
 /// Everything one Report row pass needs except whether the derived cache may be joined.
@@ -3100,6 +3042,9 @@ pub fn distinct_strategies(
     });
     Ok(out)
 }
+
+mod totals;
+pub use totals::{TotalsSlice, query_totals_sliced};
 
 #[cfg(test)]
 mod tests;

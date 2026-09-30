@@ -403,33 +403,35 @@ fn read_mini_report_on(
         axis: db::ReportAxis::load(&snap, zone)?,
         ..Default::default()
     };
-    let total = db::query_totals(&snap, &filter)?.quotes;
-    let mut by_exchange = Vec::new();
-    for (venue, members) in core_order::exchange_sections(
+    // Every figure the page shows is one slice of `filter`: the period, each exchange, each core,
+    // each day. One sliced read sums them all from a single pass over the period's rows, each
+    // exactly what its own `query_totals` would state.
+    let whole = |core_uids: Option<Vec<u64>>| db::TotalsSlice {
+        core_uids,
+        date_from: Some(from),
+        date_to: Some(to),
+    };
+    let mut slices = vec![whole(None)];
+    let exchanges = core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
             .map(|(index, (id, _))| (index, venues.get(id))),
-    ) {
-        let mut group = filter.clone();
-        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
-        let quotes = db::query_totals(&snap, &group)?.quotes;
-        if quotes.orders > 0 {
-            by_exchange.push((exchange_key(venue), section_label(venue), quotes));
-        }
+    )
+    .into_iter()
+    .map(|(venue, members)| {
+        slices.push(whole(Some(
+            members.iter().map(|&index| cores[index].0).collect(),
+        )));
+        venue
+    })
+    .collect::<Vec<_>>();
+    let sections =
+        crate::mini_app::by_section(cores.clone(), &venues, |(id, _)| *id, |(_, name)| name);
+    for (_, (id, _)) in &sections {
+        slices.push(whole(Some(vec![*id])));
     }
-    let mut by_core = Vec::new();
-    for (section, (id, name)) in
-        crate::mini_app::by_section(cores.clone(), &venues, |(id, _)| *id, |(_, name)| name)
-    {
-        let mut core = filter.clone();
-        core.core_uids = vec![id];
-        let quotes = db::query_totals(&snap, &core)?.quotes;
-        if quotes.orders > 0 {
-            by_core.push((id.to_string(), name, section, quotes));
-        }
-    }
-    let mut days = Vec::new();
+    let mut day_dates = Vec::new();
     if let (Some(mut date), Some(end)) =
         (display_time::date(from, zone), display_time::date(to, zone))
     {
@@ -451,14 +453,33 @@ fn read_mini_report_on(
                 display_time::day_start(date, zone),
                 display_time::day_start(next, zone),
             ) {
-                let mut day = filter.clone();
-                day.date_from = Some(start.max(from));
-                day.date_to = Some((stop - 1).min(to));
-                days.push((date.to_string(), db::query_totals(&snap, &day)?.quotes));
+                slices.push(db::TotalsSlice {
+                    core_uids: None,
+                    date_from: Some(start.max(from)),
+                    date_to: Some((stop - 1).min(to)),
+                });
+                day_dates.push(date.to_string());
             }
             date = next;
         }
     }
+    let mut sliced = db::query_totals_sliced(&snap, &filter, &slices)?
+        .into_iter()
+        .map(|totals| totals.quotes);
+    let total = sliced.next().unwrap_or_default();
+    let mut by_exchange = Vec::new();
+    for (venue, quotes) in exchanges.into_iter().zip(sliced.by_ref()) {
+        if quotes.orders > 0 {
+            by_exchange.push((exchange_key(venue), section_label(venue), quotes));
+        }
+    }
+    let mut by_core = Vec::new();
+    for ((section, (id, name)), quotes) in sections.into_iter().zip(sliced.by_ref()) {
+        if quotes.orders > 0 {
+            by_core.push((id.to_string(), name, section, quotes));
+        }
+    }
+    let days = day_dates.into_iter().zip(sliced).collect::<Vec<_>>();
     // The complement of the window's upper edge on the same snapshot and axis: `closedate > to`
     // exactly where the window says `closedate <= to`. Asked only for a window ending now, and a
     // failure here is not the report's: it only withholds the answer from later reuse.
