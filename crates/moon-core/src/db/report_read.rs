@@ -765,9 +765,33 @@ fn source_sort_expression(
 /// Returns:
 ///     The predicate, or `None` when the source cannot express `closedate` at all.
 pub(super) fn closed_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
-    cols.contains("closedate").then(|| {
-        "(typeof(r.\"closedate\") IN ('integer','real') AND r.\"closedate\" > 0)".to_string()
-    })
+    cols.contains("closedate")
+        .then(|| format!("(typeof({CLOSEDATE}) IN ('integer','real') AND {CLOSEDATE} > 0)"))
+}
+
+/// The close-date column as the row-scope predicates spell it.
+const CLOSEDATE: &str = "r.\"closedate\"";
+
+/// The same column with SQLite's unary plus: identical value and type, but no longer a term the
+/// planner may use as an index bound (see the disjunctions in [`append_row_scope`]).
+const UNINDEXED_CLOSEDATE: &str = "+r.\"closedate\"";
+
+/// Take every copy of the closed test's `closedate > 0` in a disjunction off the index.
+///
+/// Every offset group's branch carries the same `closedate > 0`; SQLite folds the identical terms
+/// into one derived `closedate > 0` and may pick it as the index's lower bound over the real
+/// window, walking the replica's whole history. The window terms stay indexable.
+///
+/// Args:
+///     branches: The joined branches of one disjunction.
+///
+/// Returns:
+///     The same predicate with the positivity test spelled on [`UNINDEXED_CLOSEDATE`].
+fn close_test_off_index(branches: &str) -> String {
+    branches.replace(
+        &format!("{CLOSEDATE} > 0"),
+        &format!("{UNINDEXED_CLOSEDATE} > 0"),
+    )
 }
 
 /// Return the canonical "this row is still open" test for one aliased source.
@@ -893,13 +917,13 @@ fn append_row_scope(
         let mut shifted_to: Option<i64> = None;
         if let Some(from) = f.date_from {
             let shifted = crate::db::ReportAxis::shift_bound(from, *offset);
-            window.push_str(" AND r.\"closedate\" >= ?");
+            window.push_str(&format!(" AND {CLOSEDATE} >= ?"));
             bounds.push(Box::new(shifted));
             shifted_from = Some(shifted);
         }
         if let Some(to) = f.date_to {
             let shifted = crate::db::ReportAxis::shift_bound(to, *offset);
-            window.push_str(" AND r.\"closedate\" <= ?");
+            window.push_str(&format!(" AND {CLOSEDATE} <= ?"));
             bounds.push(Box::new(shifted));
             shifted_to = Some(shifted);
         }
@@ -961,9 +985,21 @@ fn append_row_scope(
         parts.push(part);
     }
     if let Some((from, to)) = coarse_range(&parts) {
+        // Inside the disjunction the column is spelled `+r."closedate"`: same value, same type,
+        // and every comparison on it sits behind the `typeof` test, so no row changes sides. What
+        // changes is the plan. Each branch carries the same `closedate > 0` from the closed test,
+        // SQLite folds the identical terms into one derived `closedate > 0`, and then picks THAT
+        // as the index's lower bound instead of the coarse `>= ?` below -- every statement walked
+        // the whole replica's history up to the window's end (18 ms for an empty day on 606k
+        // rows, 30 days of the Mini App month = 0.7 s). The unary plus keeps the branch terms off
+        // the index, so the coarse range is the only bound left to choose.
         let closed = parts
             .iter()
-            .filter_map(|p| p.closed.as_ref().map(|c| format!("{}{c}", p.guard)))
+            .filter_map(|p| {
+                p.closed
+                    .as_ref()
+                    .map(|c| format!("{}{}", p.guard, c.replace(CLOSEDATE, UNINDEXED_CLOSEDATE)))
+            })
             .collect::<Vec<_>>()
             .join(") OR (");
         let open = parts
@@ -978,7 +1014,7 @@ fn append_row_scope(
         for part in parts.iter_mut() {
             params.append(&mut part.bounds);
         }
-        let closed_side = format!("r.\"closedate\" >= ? AND r.\"closedate\" <= ? AND (({closed}))");
+        let closed_side = format!("{CLOSEDATE} >= ? AND {CLOSEDATE} <= ? AND (({closed}))");
         if open.is_empty() {
             sql.push_str(&format!(" AND ({closed_side})"));
         } else {
@@ -996,7 +1032,13 @@ fn append_row_scope(
         0 if f.rows == RowScope::OpenIfCurrent => sql.push_str(" AND 1=0"),
         0 => {}
         1 => sql.push_str(&format!(" AND {}", branches[0])),
-        _ => sql.push_str(&format!(" AND (({}))", branches.join(") OR ("))),
+        // A one-sided or unbounded window with two or more groups: the branches keep their own
+        // window bounds on the index, but not the shared positivity test (Mini App's "any row past
+        // the window" read: 377 ms -> 2.6 ms on 606k rows).
+        _ => sql.push_str(&format!(
+            " AND (({}))",
+            close_test_off_index(&branches.join(") OR ("))
+        )),
     }
 }
 

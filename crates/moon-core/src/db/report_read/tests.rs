@@ -929,6 +929,92 @@ fn coarse_closed_range_keeps_open_rows_outside_its_date_predicate() {
     );
 }
 
+/// `db/report_read.rs::append_row_scope` -- spelling the close date inside an offset-group
+/// disjunction as a plain column lets SQLite fold every branch's `closedate > 0` into one derived
+/// term and seek the index from 0 instead of from the window: an owner read of a future window,
+/// bounded or open-ended, then steps through every closed row of the replica's history. The rows
+/// it admits must not change: a TEXT, NULL or zero close date stays out, a REAL one stays in.
+#[test]
+fn offset_disjunction_seeks_the_index_from_the_window_not_from_zero() {
+    const MEASURED_CORE: u64 = 71;
+    const HISTORY: i64 = 5_000;
+    let conn = Connection::open_in_memory().expect("open coarse-seek fixture");
+    // `closedate` is untyped so a numeric-looking TEXT keeps its type (an INTEGER column's
+    // affinity would turn it back into a number on the way in).
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (core_uid INTEGER NOT NULL, newrecid INTEGER NOT NULL,
+                                  closedate);
+         CREATE INDEX idx_rep_closedate ON orders_rep(closedate);
+         CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);",
+    )
+    .expect("create coarse-seek fixture");
+    let mut insert = conn
+        .prepare("INSERT INTO orders_rep VALUES (?1, ?2, ?3)")
+        .expect("prepare history insert");
+    for rec in 1..=HISTORY {
+        let core = if rec % 2 == 0 { MEASURED_CORE } else { 72 };
+        insert
+            .execute(params![core as i64, rec, 1_000_000 + rec])
+            .expect("insert closed history row");
+    }
+    drop(insert);
+    // Inside the window: one REAL close (admitted) beside a numeric TEXT close and a NULL, both
+    // of which the `typeof` test reads as still open.
+    conn.execute_batch(
+        "INSERT INTO orders_rep VALUES (72, 90001, 9000000100.5);
+         INSERT INTO orders_rep VALUES (72, 90002, NULL);
+         UPDATE orders_rep SET closedate = CAST(9000000200 AS TEXT) WHERE newrecid = 3;",
+    )
+    .expect("seed the in-window rows");
+    let axis = crate::db::ReportAxis::from_measured(
+        std::collections::HashMap::from([(
+            MEASURED_CORE,
+            vec![crate::db::OffsetSegment {
+                from_utc: 0,
+                offset_secs: 3_600,
+            }],
+        )]),
+        chrono_tz::UTC,
+    );
+    // An unbounded (owner) read with one measured core: its branch plus the catch-all is the
+    // two-group disjunction, factored under the coarse range when both ends are bounded.
+    for (label, date_to) in [("bounded", Some(9_000_086_399)), ("open-ended", None)] {
+        let filter = ReportFilter {
+            date_from: Some(9_000_000_000),
+            date_to,
+            rows: RowScope::Closed,
+            axis: axis.clone(),
+            ..ReportFilter::default()
+        };
+        let cols = std::collections::HashSet::from(["closedate".to_string()]);
+        let mut sql = "SELECT COUNT(*) FROM orders_rep r WHERE 1=1".to_string();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        super::append_row_scope(&mut sql, &mut params, &filter, &cols);
+        assert!(
+            sql.contains(") OR ("),
+            "{label}: the fixture must reach the two-branch shape: {sql}"
+        );
+        let refs = params
+            .iter()
+            .map(|param| param.as_ref())
+            .collect::<Vec<_>>();
+        let mut stmt = conn.prepare(&sql).expect("prepare disjunction predicate");
+        let count: i64 = stmt
+            .query_row(refs.as_slice(), |row| row.get(0))
+            .expect("count the window");
+        let steps = stmt.get_status(rusqlite::StatementStatus::VmStep);
+
+        assert_eq!(
+            count, 1,
+            "{label}: only the REAL close lies inside the window"
+        );
+        assert!(
+            (steps as i64) < HISTORY,
+            "{label}: the window must not walk the {HISTORY}-row history ({steps} VM steps)"
+        );
+    }
+}
+
 /// `report_read.rs::append_row_scope` -- when every core in scope shares ONE measured offset, the
 /// per-group predicate must collapse to the same single branch an unmeasured (identity) fleet
 /// produces, and each core's window bound must still be shifted by exactly that shared offset. A
@@ -1059,7 +1145,7 @@ fn window_bound_stays_on_a_bare_unwrapped_closedate_column() {
     );
     assert!(
         !sql.contains("closedate\" +") && !sql.contains("closedate\" -"),
-        "the column itself must never be wrapped in an arithmetic conversion; got: {sql}"
+        "the column itself must never be wrapped in an arithmetic conversion (a disjunction's          unary plus is not one: see `append_row_scope`); got: {sql}"
     );
 }
 
