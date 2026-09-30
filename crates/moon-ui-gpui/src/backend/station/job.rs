@@ -248,9 +248,16 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
             for line in out.stdout_text().lines() {
                 say(line);
             }
+            // The station's own figures, in the words meant for the bot's chat "Status" too.
+            let state = bot::bot_state(&target)?;
+            if let Some(station) = &state.station {
+                for line in moon_tg::station_status_text(station).lines() {
+                    say(line);
+                }
+            }
             Ok(Done::Ok {
                 transferred: false,
-                bot: Some(bot::bot_state(&target)?),
+                bot: Some(state),
                 bot_off: false,
             })
         }

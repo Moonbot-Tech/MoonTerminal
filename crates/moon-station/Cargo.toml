@@ -26,6 +26,8 @@ zeroize = "1"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = { version = "0.4", default-features = false }
+# `statvfs`: the free space of the data root's filesystem, for `status`.
+libc = "0.2"
 
 [features]
 # Read the cores from a copy of the terminal's `cfg/servers.enc` when no `station.toml` is

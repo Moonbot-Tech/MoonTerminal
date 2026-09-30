@@ -168,3 +168,15 @@ common.apply:
   ru: "Применить"
   en: "Apply"
   es: "Aplicar"
+common.size_kb:
+  ru: "%{value} КБ"
+  en: "%{value} KB"
+  es: "%{value} KB"
+common.size_mb:
+  ru: "%{value} МБ"
+  en: "%{value} MB"
+  es: "%{value} MB"
+common.size_gb:
+  ru: "%{value} ГБ"
+  en: "%{value} GB"
+  es: "%{value} GB"

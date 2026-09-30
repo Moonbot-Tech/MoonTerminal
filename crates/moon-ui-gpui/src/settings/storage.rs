@@ -95,19 +95,6 @@ fn collect_info() -> StorageInfo {
     out
 }
 
-/// Formats a byte count for display in KB, MB, or GB.
-fn fmt_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    let b = bytes as f64;
-    if b >= KB * KB * KB {
-        format!("{:.2} ГБ", b / KB / KB / KB)
-    } else if b >= KB * KB {
-        format!("{:.1} МБ", b / KB / KB)
-    } else {
-        format!("{:.0} КБ", b / KB)
-    }
-}
-
 impl SettingsView {
     /// Collects storage sizes and row counts in the background.
     ///
@@ -284,11 +271,11 @@ impl SettingsView {
         let size_line = |sz: Option<(u64, u64)>| -> String {
             match sz {
                 None => t!("storage.no_file").to_string(),
-                Some((main, 0)) => t!("storage.size", size = fmt_size(main)).to_string(),
+                Some((main, 0)) => t!("storage.size", size = moon_tg::size_text(main)).to_string(),
                 Some((main, wal)) => t!(
                     "storage.size_wal",
-                    size = fmt_size(main),
-                    wal = fmt_size(wal)
+                    size = moon_tg::size_text(main),
+                    wal = moon_tg::size_text(wal)
                 )
                 .to_string(),
             }
@@ -341,7 +328,7 @@ impl SettingsView {
             // figure in one text node (locales/storage.yml:22-25) — cannot style half of it, so
             // it stays mono.
             .child(
-                hint(t!("storage.total_size", size = fmt_size(total)).to_string())
+                hint(t!("storage.total_size", size = moon_tg::size_text(total)).to_string())
                     .font_family(design::mono()),
             )
             .child(separator(p, cx))

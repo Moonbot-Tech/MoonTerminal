@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use moon_core::config::Secret;
-use moon_core::station_api::{Access, Answer, BotStatus, Request, TapeWindow};
+use moon_core::station_api::{Access, Answer, BotStatus, Request, Status, TapeWindow};
 use moon_core::telegram::TelegramStatus;
 
 use super::{BotChange, admin_conn, api, current_helper_status, edit_config, with_telegram};
@@ -40,6 +40,9 @@ pub struct BotState {
     pub access: Option<Access>,
     /// The window around a trade the station records with; `None` from a station older than it.
     pub tape: Option<TapeWindow>,
+    /// The station's whole status as read, for its "Status"; `None` while it does not answer.
+    /// Boxed: the state travels in every job's end.
+    pub station: Option<Box<Status>>,
 }
 
 impl BotState {
@@ -110,7 +113,8 @@ pub fn bot_state(target: &Target) -> anyhow::Result<BotState> {
         };
     }
     state.tape = station.tape;
-    state.bot = station.bot;
+    state.bot = station.bot.clone();
+    state.station = Some(Box::new(station));
     Ok(state)
 }
 

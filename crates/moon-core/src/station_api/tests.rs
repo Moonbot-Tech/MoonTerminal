@@ -53,6 +53,30 @@ fn a_status_reads_back_whole() {
             margin_s: 180,
             long_position_min: 10,
         }),
+        host: Some(Box::new(Host {
+            uptime_s: 3_725,
+            cpu: vec![CpuWindow {
+                minutes: 60,
+                station_avg_permille: 123,
+                station_peak_permille: 870,
+                machine_avg_permille: 150,
+                machine_peak_permille: 1000,
+            }],
+            memory: Some(Memory {
+                rss_bytes: 420 << 20,
+                rss_peak_bytes: 520 << 20,
+                available_bytes: 300 << 20,
+                total_bytes: 955 << 20,
+            }),
+            disk: Some(Disk {
+                free_bytes: 15 << 30,
+                total_bytes: 23 << 30,
+            }),
+            files: vec![DataFile {
+                name: "reports.sqlite".into(),
+                bytes: 609 << 20,
+            }],
+        })),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
@@ -61,7 +85,7 @@ fn a_status_reads_back_whole() {
     let Reply::Ok(Answer::Status(old)) = serde_json::from_str::<Reply>(old).unwrap() else {
         panic!("not a status");
     };
-    assert_eq!(old.tape, None);
+    assert_eq!((old.tape, old.host), (None, None));
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
 }

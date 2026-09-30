@@ -1,5 +1,5 @@
-//! Diagnostic process and system metrics for the status bar: process/system CPU,
-//! process RAM, and RAM growth over a time window. On Windows, this also samples
+//! Diagnostic process and system metrics — the terminal's status bar and the station's `status`:
+//! process/system CPU, process RAM, the machine's memory, and RAM growth over a time window. On Windows, this also samples
 //! GPU Engine utilization for the current process through PDH.
 //!
 //! Sampled on a THREAD OF ITS OWN, and that is the point of the module's shape. Refreshing
@@ -47,6 +47,10 @@ pub struct MetricsSnapshot {
     pub mem_delta_mb: f32,
     /// Current process GPU usage from Windows GPU Engine counters; zero elsewhere.
     pub gpu_process: f32,
+    /// Memory the machine can still hand out without swapping, in MiB.
+    pub mem_available_mb: f32,
+    /// The machine's memory, in MiB.
+    pub mem_total_mb: f32,
 }
 
 struct Metrics {
@@ -123,12 +127,15 @@ impl Metrics {
             .unwrap_or(0.0);
         let gpu_process = self.gpu.sample().unwrap_or(self.snap.gpu_process);
 
+        const MIB: f32 = 1024.0 * 1024.0;
         self.snap = MetricsSnapshot {
             cpu_process,
             cpu_system,
             mem_mb,
             mem_delta_mb,
             gpu_process,
+            mem_available_mb: self.sys.available_memory() as f32 / MIB,
+            mem_total_mb: self.sys.total_memory() as f32 / MIB,
         };
         // The detector counts its samples AS SECONDS, which is exactly why this sits on the
         // refresh path and why the worker's sleep is the only thing pacing it.
@@ -154,7 +161,7 @@ impl Metrics {
 /// Handle to the metrics worker: the UI's only contact with it.
 ///
 /// Holds no `Metrics` and does no system work — [`snapshot`](Self::snapshot) is a lock and a copy
-/// of five floats, which is the whole reason this type exists.
+/// of seven floats, which is the whole reason this type exists.
 pub struct MetricsSampler {
     latest: Arc<Mutex<MetricsSnapshot>>,
 }

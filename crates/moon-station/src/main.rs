@@ -39,6 +39,7 @@
 
 mod api;
 mod cores;
+mod host;
 mod pull;
 mod signals;
 mod tg;
@@ -65,6 +66,8 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some("ctl") {
         return api::ctl(std::env::args().skip(2));
     }
+    // The station's uptime counts from here.
+    let process_started = Instant::now();
     // First of all: until the handlers are in, a SIGHUP (`systemctl reload` right after a start)
     // would kill the process.
     let signals = signals::Signals::install()?;
@@ -151,6 +154,8 @@ fn main() -> anyhow::Result<()> {
     };
 
     let mut groups = groups_of(&cfg);
+    // The load `status` reports is kept from the start, whether or not anyone asks.
+    let mut host = host::HostWatch::start(process_started, data_root.clone());
     let mut last_diag = Instant::now();
     let mut last_status = Instant::now();
     loop {
@@ -207,7 +212,12 @@ fn main() -> anyhow::Result<()> {
             }
         }
         if let Some(api) = &api {
-            api.drain(|request| answer(request, bot.as_mut(), &mut cfg, &session, &groups));
+            let station = StationNow {
+                session: &session,
+                groups: &groups,
+                host: &host,
+            };
+            api.drain(|request| answer(request, bot.as_mut(), &mut cfg, &station));
         }
         // A committed report page wakes the valuation, as the terminal's coordination tick does.
         let committed = reports.immediate_commit_dirty.swap(false, Ordering::AcqRel)
@@ -220,6 +230,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         let now = Instant::now();
+        host.tick(now);
         if now.duration_since(last_diag) >= DIAG_POLL_EVERY {
             last_diag = now;
             if let Some(changed) = moon_core::diagnostics::poll() {
@@ -264,18 +275,24 @@ fn api_socket(data_root: &Path) -> PathBuf {
         .join(moon_core::station_api::SOCKET_FILE)
 }
 
+/// What `status` reads besides the bot, borrowed from the main loop.
+struct StationNow<'a> {
+    session: &'a SessionManager,
+    groups: &'a [String],
+    host: &'a host::HostWatch,
+}
+
 /// One control API request, answered on the main loop's thread.
 fn answer(
     request: Request,
     bot: Option<&mut tg::StationTg>,
     cfg: &mut moon_core::config::AppConfig,
-    session: &SessionManager,
-    groups: &[String],
+    station: &StationNow<'_>,
 ) -> Reply {
     const NO_BOT: &str = "the station runs no bot";
     let answer = match request {
         Request::Status => {
-            let (cores_ready, cores_total, _) = cores_summary(session, groups);
+            let (cores_ready, cores_total, _) = cores_summary(station.session, station.groups);
             Ok(Answer::Status(Status {
                 station_version: env!("CARGO_PKG_VERSION").to_owned(),
                 cores_ready,
@@ -286,6 +303,7 @@ fn answer(
                     long_position_min: (moon_core::market::trade_replay::long_position_ms()
                         / 60_000) as u32,
                 }),
+                host: Some(Box::new(station.host.host())),
             }))
         }
         Request::PairIssue => match bot {
