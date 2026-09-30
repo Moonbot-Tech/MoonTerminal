@@ -1,6 +1,7 @@
 //! [ReportPanel] construction, retained table state, and per-context column layout.
 
 use super::*;
+use moon_core::strategy_query::StrategyQuery;
 
 /// Insert or refresh a scoped strategy before the periodic metadata snapshot contains it.
 ///
@@ -711,9 +712,14 @@ impl ReportPanel {
                 if matches!(event, MoonInputEvent::Change) {
                     let value = input.read(cx).value().to_string();
                     if panel.strategy_name_mask != value {
+                        // An equivalent query (`a` vs `a,`) keeps the rows: persist the text only.
+                        let requery = StrategyQuery::parse(&panel.strategy_name_mask)
+                            != StrategyQuery::parse(&value);
                         panel.strategy_name_mask = value;
                         panel.persist_filters(None, cx);
-                        panel.request_requery(cx);
+                        if requery {
+                            panel.request_requery(cx);
+                        }
                     }
                 }
             },

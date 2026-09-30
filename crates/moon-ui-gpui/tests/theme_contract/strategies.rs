@@ -1285,9 +1285,9 @@ fn strategies_reopen_state_is_process_lifetime_only() {
         selection.contains("self.persist_session(cx)")
             && selection.contains("before_folder != (self.folder_sel.len()")
             && tree_mod.contains("this.persist_session(cx)")
-            && tree_mod.contains("this.persist_session(c)")
+            && tree_mod.contains("this.on_filter_changed(c)")
             && moon.contains("this.persist_session(cx)")
-            && actions.contains("self.persist_session(cx)")
+            && actions.contains("self.on_filter_changed(cx)")
             && read_src("strategies/versions.rs").contains("self.persist_session(cx)"),
         "Strategies mutation writers must share persist_session"
     );

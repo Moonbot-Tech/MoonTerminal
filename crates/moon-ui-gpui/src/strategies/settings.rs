@@ -207,6 +207,10 @@ impl StrategiesView {
     ///     Nothing; the shared setter ignores an unchanged value.
     fn set_active_only(&mut self, value: bool, cx: &mut Context<Self>) {
         self.write_pref(&ACTIVE_ONLY, value, cx);
+        // `write_pref` already repaints; only a changed selection needs saving.
+        if self.prune_selection_to_filter(cx) {
+            self.persist_session(cx);
+        }
     }
 
     /// Apply and persist the Strategies tree's local text-size step.

@@ -81,13 +81,15 @@ pub struct Query {
     /// and that Save writes to. Scoping to the clicked row alone was the bug where
     /// "plan vs fact" compared one strategy while N were selected.
     pub strategies: Vec<(i64, Option<u64>)>,
-    /// Literal, case-insensitive substring matched against the effective strategy NAME.
+    /// Strategy-name query in the shared `moon_core::strategy_query` syntax, matched against the
+    /// effective strategy NAME.
     ///
-    /// Empty or whitespace-only text adds no predicate and costs nothing. Independent of the exact
-    /// keys above, so setting both narrows by their CONJUNCTION — the same rule the Report states
-    /// on `ReportFilter::strategy_name_mask`, and the reason this is raw user text here: trimming,
-    /// folding and escaping happen once, in [`StrategyMask::resolve`], so Analytics and the Report
-    /// cannot disagree about what "matches" means.
+    /// Text that parses to an empty query adds no predicate and costs nothing. Independent of the
+    /// exact keys above, so setting both narrows by their CONJUNCTION — the same rule the Report
+    /// states on `ReportFilter::strategy_name_mask`, and the reason this is raw user text here:
+    /// parsing and escaping happen once, in [`StrategyMask::resolve`], and matching in the shared
+    /// `mt_strategy_name_match`, so Analytics and the Report cannot disagree about what "matches"
+    /// means.
     pub strategy_name_mask: String,
     /// Which quantity every profit figure is measured in: absolute quote money (`Quote`) or
     /// return on spent capital (`Percent`, the report's `Profit` column). Applied once in
@@ -373,11 +375,13 @@ impl Query {
                 w.push_str(" AND 1=0");
                 return vec![w];
             }
-            StrategyMask::Match(_) if !has("core_uid") || !has("strategyid") => {
+            StrategyMask::Match(_) | StrategyMask::Exclude(_)
+                if !has("core_uid") || !has("strategyid") =>
+            {
                 w.push_str(" AND 1=0");
                 return vec![w];
             }
-            StrategyMask::Match(_) => {}
+            StrategyMask::Match(_) | StrategyMask::Exclude(_) => {}
         }
         // Which id the mask is matched against. With attribution the effective expression, so a
         // LIQUIDATION row booked under the strategy named in it matches that strategy's name;

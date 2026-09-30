@@ -3,6 +3,11 @@
 use super::*;
 use moon_core::feed::strategy_path;
 
+/// How long the search text settles before the selection is pruned to it.
+///
+/// Mirrors Analytics' `MASK_DEBOUNCE` (300 ms), the other strategy-name query typed live.
+const SEARCH_PRUNE_DEBOUNCE: Duration = Duration::from_millis(300);
+
 impl StrategiesView {
     /// Apply a strategy click with selection modifiers.
     /// Shift selects the `order` range from the anchor, Ctrl/Cmd toggles one key, and an
@@ -123,6 +128,126 @@ impl StrategiesView {
         self.anchor = Some(key);
         self.selected = Some(key);
         self.clear_folder_selection();
+    }
+
+    /// Move the primary selection and the Shift anchor to `key`, leaving the selection sets alone.
+    ///
+    /// The narrowing counterpart of [`Self::focus_strategy`], which replaces the whole selection:
+    /// a prune that drops the primary must keep every other surviving row selected.
+    fn repoint_primary(&mut self, key: Option<Key>) {
+        self.selected = key;
+        self.anchor = key;
+    }
+
+    /// Drop every selected row and folder the current filter hides.
+    ///
+    /// Narrows only, like the delete path in `tree/dialogs.rs`, and never calls
+    /// [`Self::focus_strategy`], which would replace the set. A hidden primary moves to the first
+    /// surviving row in tree order (or the smallest surviving key when none is on screen).
+    /// While a search debounce is pending the search part of the filter is the last SETTLED text,
+    /// not the half-typed one: another filter's change must not prune by an unfinished query.
+    /// Limitations: folders are pruned by their core's exchange only; a row that stops matching
+    /// through its own edit stays selected until the next filter change; pruning is irreversible,
+    /// so clearing the filter does not bring rows back.
+    ///
+    /// Args:
+    ///     cx: App context used to read the store and venues.
+    ///
+    /// Returns:
+    ///     Whether the selection changed.
+    pub(super) fn prune_selection_to_filter(&mut self, cx: &mut App) -> bool {
+        if self.search_prune_debounce.is_none() && self.settled_search != self.filter.search {
+            self.settled_search = self.filter.search.clone();
+        }
+        let query = StrategyQuery::parse(&self.settled_search);
+        self.prune_against_settled(query, cx)
+    }
+
+    /// Prune against the settled search text, whose parse the caller already holds.
+    fn prune_against_settled(&mut self, query: StrategyQuery, cx: &mut App) -> bool {
+        self.last_pruned_query = Some(query);
+        // The filter is evaluated with the settled text swapped in, then restored.
+        let live_search = std::mem::replace(&mut self.filter.search, self.settled_search.clone());
+        let hidden = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            let venues = backend.session.core_venues();
+            let candidates = self.sel.iter().copied().chain(self.selected);
+            filter_hidden_keys(candidates, store, &self.filter, venues, &self.deleted)
+        };
+        self.filter.search = live_search;
+        let venues = self.backend.read(cx).session.core_venues();
+        let folder_before = self.folder_sel.len();
+        self.folder_sel
+            .retain(|(core, _)| self.filter.core_matches(venues.get(core)));
+        let anchor_hidden = self
+            .folder_anchor
+            .as_ref()
+            .is_some_and(|(core, _)| !self.filter.core_matches(venues.get(core)));
+        if hidden.is_empty() && folder_before == self.folder_sel.len() && !anchor_hidden {
+            return false;
+        }
+        if anchor_hidden {
+            self.folder_anchor = None;
+        }
+        self.sel.retain(|k| !hidden.contains(k));
+        let primary_moved = self.selected.is_some_and(|k| hidden.contains(&k));
+        if primary_moved {
+            let next = if self.sel.is_empty() {
+                None
+            } else {
+                self.flat_order
+                    .iter()
+                    .copied()
+                    .find(|k| self.sel.contains(k))
+                    .or_else(|| self.sel.iter().copied().min())
+            };
+            self.repoint_primary(next);
+        } else if self.anchor.is_some_and(|k| hidden.contains(&k)) {
+            self.anchor = self.selected;
+        }
+        if primary_moved {
+            self.clamp_selected_section(cx);
+        }
+        true
+    }
+
+    /// Settle the current search text and prune for it, unless it parses to the query last
+    /// pruned against.
+    pub(super) fn prune_for_search(&mut self, cx: &mut Context<Self>) {
+        let query = StrategyQuery::parse(&self.filter.search);
+        self.settled_search.clone_from(&self.filter.search);
+        if self.last_pruned_query.as_ref() == Some(&query) {
+            return;
+        }
+        self.prune_against_settled(query, cx);
+        self.persist_session(cx);
+        cx.notify();
+    }
+
+    /// Schedule the search prune after the text settles, replacing any pending one.
+    ///
+    /// The same shape as Analytics' strategy-mask debounce, with the same delay.
+    pub(super) fn arm_search_prune(&mut self, cx: &mut Context<Self>) {
+        self.search_prune_debounce = Some(cx.spawn(async move |this, cx| {
+            let executor = cx.update(|cx| cx.background_executor().clone());
+            executor.timer(SEARCH_PRUNE_DEBOUNCE).await;
+            cx.update(|cx| {
+                // The handle is deliberately NOT cleared here: dropping a task from inside its
+                // own body cancels the body, and a spent handle sitting in the field until the
+                // next keystroke replaces it costs nothing.
+                let _ = this.update(cx, |this, cx| this.prune_for_search(cx));
+            });
+        }));
+    }
+
+    /// Prune the selection to a changed filter, persist, and repaint.
+    ///
+    /// The one follow-up every row-filter control runs after writing `self.filter`.
+    pub(super) fn on_filter_changed(&mut self, cx: &mut Context<Self>) {
+        self.prune_selection_to_filter(cx);
+        self.persist_session(cx);
+        cx.notify();
     }
 
     /// Resolve a pending create/paste/copy selection after the core echoes the named strategy.
@@ -433,34 +558,31 @@ impl StrategiesView {
         }
     }
 
-    /// Expand every node when `collapsed` is true; otherwise collapse hand-managed nodes.
+    /// Expand every core and every folder path its live strategies sit in.
     ///
-    /// The concrete Auto rail core remains in `rail_expanded_core`, so Collapse all cannot hide
-    /// the sole root of a singleton workspace. Its overlay is not persisted and all other core
-    /// and folder expansion state continues to follow the existing toggle behavior.
-    pub(super) fn expand_collapse_toggle(
-        &mut self,
-        cores: &[(CoreId, String)],
-        store: &CoreStore,
-        collapsed: bool,
-    ) {
-        if !collapsed {
-            self.expanded_cores.clear();
-            self.expanded_folders.clear();
-            return;
-        }
+    /// The concrete Auto rail core is kept in `rail_expanded_core`, which neither this nor
+    /// [`Self::collapse_all`] touches, so Collapse all cannot hide the sole root of a singleton
+    /// workspace. That overlay is not persisted.
+    ///
+    /// Args:
+    ///     cores: Cores the tree currently shows.
+    ///     store: Live store supplying each core's folder paths.
+    pub(super) fn expand_all(&mut self, cores: &[(CoreId, String)], store: &CoreStore) {
         for (c, _) in cores {
             self.expanded_cores.insert(*c);
             let Some(cd) = store.core(*c) else { continue };
-            let paths: Vec<String> = cd
-                .strategies
-                .iter()
-                .map(|r| r.folder_path.clone())
-                .collect();
-            for path in paths {
-                self.expand_path(*c, strategy_path::path_segments(&path));
+            for r in &cd.strategies {
+                self.expand_path(*c, strategy_path::path_segments(&r.folder_path));
             }
         }
+    }
+
+    /// Collapse every hand-expanded core and folder.
+    ///
+    /// `rail_expanded_core` and the Deleted folders are left as they are.
+    pub(super) fn collapse_all(&mut self) {
+        self.expanded_cores.clear();
+        self.expanded_folders.clear();
     }
 
     // ── Panel 1: strategy tree ───────────────────────────────────────────────

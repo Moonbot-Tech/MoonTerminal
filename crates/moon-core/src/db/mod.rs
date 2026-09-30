@@ -23,7 +23,6 @@ mod dates;
 pub mod integrity;
 pub mod maint;
 pub mod metrics;
-mod name_fold;
 pub mod order_traces;
 mod quote;
 mod read_cancel;
@@ -33,6 +32,7 @@ mod rep;
 pub mod report_axis;
 mod report_read;
 pub mod report_recovery;
+mod strategy_name_match;
 pub mod tape_owners;
 #[cfg(test)]
 mod test_support;

@@ -33,6 +33,7 @@ pub mod session;
 pub mod settings_diag;
 pub mod station_api;
 pub mod strat_db;
+pub mod strategy_query;
 pub mod symbol;
 pub mod telegram;
 pub mod update;

@@ -63,6 +63,7 @@ use moon_core::feed::{
     StrategyEditResult, StrategyEditRow, StrategyFieldChange, StrategyRow,
 };
 use moon_core::session::{CoreId, CoreStore};
+use moon_core::strategy_query::StrategyQuery;
 use rust_i18n::t;
 
 use filter::StrategyFilter;
@@ -200,6 +201,16 @@ pub struct StrategiesView {
     /// The folder node last clicked or keyed to: the Shift anchor for `folder_sel`, and the
     /// keyboard cursor while it is `Some`.
     folder_anchor: Option<(CoreId, String)>,
+    /// Pending selection prune for the search text, replaced on every keystroke.
+    ///
+    /// Pruning is irreversible, so a half-typed query must not drop rows keystroke by keystroke;
+    /// dropping the task cancels it.
+    search_prune_debounce: Option<Task<()>>,
+    /// Search text the last search prune ran against; every prune uses it while a debounce is
+    /// pending, so a half-typed query never drops rows through another filter's change.
+    settled_search: String,
+    /// Search query the selection was last pruned against, so an equivalent edit skips the prune.
+    last_pruned_query: Option<StrategyQuery>,
     /// Rows marked by Cut and awaiting the paste that moves them, or `None`.
     ///
     /// Not carried in the session snapshot: a pending cut is a gesture in progress, and one

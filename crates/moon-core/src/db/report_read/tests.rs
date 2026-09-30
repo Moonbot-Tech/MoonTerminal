@@ -3190,3 +3190,238 @@ fn report_coin_is_exact_reads_only_a_trailing_space() {
     assert!(!super::report_coin_is_exact("io ta"));
     assert!(!super::report_coin_is_exact(" "));
 }
+
+/// One synthetic trade of the strategy-name parity fixture.
+///
+/// Fields: coin label (the row's identity in every expectation), core, stored strategy id.
+const PARITY_TRADES: [(&str, i64, Option<i64>); 10] = [
+    ("EMA", 1, Some(1)),
+    ("HOOK", 1, Some(2)),
+    ("CYR", 1, Some(3)),
+    ("LIT", 1, Some(4)),
+    ("STR", 1, Some(5)),
+    ("TST", 1, Some(6)),
+    // Manual trade: strategy id 0.
+    ("MAN0", 1, Some(0)),
+    // Manual trade: no strategy id at all.
+    ("MANNULL", 1, None),
+    // A strategy id the metadata table has never heard of.
+    ("UNK", 1, Some(99)),
+    // Core 2 reuses id 1, but core 2 has no strategy rows: core 1's name for id 1 is not its own.
+    ("OTHER", 2, Some(1)),
+];
+
+/// Strategy names of core 1 in the parity fixture, keyed by the coin label of the trade run by
+/// that strategy (strategy ids are 1..=6 in this order).
+const PARITY_NAMES: [(&str, &str); 6] = [
+    ("EMA", "EMA_Fast"),
+    ("HOOK", "Hook_M1"),
+    ("CYR", "Стратегия_1"),
+    ("LIT", "100%_a\\b"),
+    ("STR", "Straße_x"),
+    ("TST", "My TEST one"),
+];
+
+/// Every coin label of [`PARITY_TRADES`], for the cases that select everything.
+const PARITY_ALL: &[&str] = &[
+    "EMA", "HOOK", "CYR", "LIT", "STR", "TST", "MAN0", "MANNULL", "UNK", "OTHER",
+];
+
+/// The ONE case table of the strategy-name syntax: mask text -> the coin labels of the trades every
+/// window must show. Written out literally; nothing here is computed by the code under test.
+///
+/// A positive query drops manual, sid-0, unknown-strategy and other-core rows; an exclusion-only
+/// query keeps them; a mask with no word selects everything.
+const PARITY_CASES: [(&str, &[&str]); 13] = [
+    ("ema", &["EMA"]),
+    ("ema, hook", &["EMA", "HOOK"]),
+    ("СТРАТЕГИЯ", &["CYR"]),
+    ("%", &["LIT"]),
+    ("\\", &["LIT"]),
+    ("strasse", &["STR"]),
+    ("test one", &["TST"]),
+    ("ema one", &[]),
+    (
+        "!test",
+        &[
+            "EMA", "HOOK", "CYR", "LIT", "STR", "MAN0", "MANNULL", "UNK", "OTHER",
+        ],
+    ),
+    (
+        "!ema !hook",
+        &[
+            "CYR", "LIT", "STR", "TST", "MAN0", "MANNULL", "UNK", "OTHER",
+        ],
+    ),
+    ("e !ema", &["STR", "TST"]),
+    (",", PARITY_ALL),
+    (" ! ", PARITY_ALL),
+];
+
+/// Builds the typed trade table of [`PARITY_TRADES`], with or without the attached strategy names.
+fn parity_fixture(with_strategies: bool) -> Connection {
+    let conn = Connection::open_in_memory().expect("open parity database");
+    super::super::init_db(&conn).expect("initialize report database");
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+             core_uid INTEGER NOT NULL,
+             core_name TEXT NOT NULL,
+             newrecid INTEGER NOT NULL,
+             closedate INTEGER,
+             profitbtc REAL,
+             coin TEXT,
+             strategyid INTEGER,
+             deleted INTEGER,
+             isshort INTEGER,
+             emulator INTEGER,
+             basecurrency INTEGER,
+             channelname TEXT,
+             signaltype TEXT,
+             PRIMARY KEY (core_uid, newrecid)
+         );",
+    )
+    .expect("create parity trades");
+    for (index, (coin, core, strategy_id)) in PARITY_TRADES.iter().enumerate() {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1, 'CORE', ?2, ?3, 1.0, ?4, ?5, 0, 0, 0, 1, '', '')",
+            params![
+                core,
+                index as i64 + 1,
+                200 + index as i64,
+                coin,
+                strategy_id
+            ],
+        )
+        .expect("insert parity trade");
+    }
+    if with_strategies {
+        conn.execute_batch(
+            "ATTACH DATABASE ':memory:' AS strat;
+             CREATE TABLE strat.strategies (
+                 core_uid INTEGER NOT NULL,
+                 strategy_id INTEGER NOT NULL,
+                 name TEXT NOT NULL,
+                 deleted INTEGER NOT NULL
+             );",
+        )
+        .expect("attach parity strategies");
+        for (index, (_, name)) in PARITY_NAMES.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO strat.strategies VALUES (1, ?1, ?2, 0)",
+                params![index as i64 + 1, name],
+            )
+            .expect("insert parity strategy");
+        }
+    }
+    conn
+}
+
+/// Coin labels the Report shows for one strategy-name mask.
+fn report_coins(conn: &Connection, mask: &str) -> std::collections::BTreeSet<String> {
+    let filter = ReportFilter {
+        rows: RowScope::Closed,
+        strategy_name_mask: mask.to_string(),
+        ..ReportFilter::default()
+    };
+    let table = query_reports(conn, &filter, "closedate", false, 100).expect("masked Report read");
+    let coin = table
+        .cols
+        .iter()
+        .position(|column| column == "coin")
+        .expect("coin column");
+    table
+        .rows
+        .iter()
+        .map(|row| match &row[coin] {
+            Value::Text(text) => text.clone(),
+            value => panic!("expected coin text, got {value:?}"),
+        })
+        .collect()
+}
+
+/// Coin labels the Analytics source selects for one strategy-name mask.
+fn analytics_coins(conn: &Connection, mask: &str) -> std::collections::BTreeSet<String> {
+    let query = crate::db::analytics::Query {
+        from: 0,
+        to: i64::MAX,
+        strategy_name_mask: mask.to_string(),
+        ..Default::default()
+    };
+    let source = crate::db::analytics::unified_from(conn, &query)
+        .expect("masked Analytics source")
+        .expect("Analytics source is ready");
+    let mut statement = conn
+        .prepare(&format!("SELECT o.coin FROM {source}"))
+        .expect("prepare masked Analytics source");
+    statement
+        .query_map(params![0_i64, i64::MAX], |row| row.get::<_, String>(0))
+        .expect("read masked Analytics source")
+        .map(|coin| coin.expect("coin label"))
+        .collect()
+}
+
+/// Expected coin set of one [`PARITY_CASES`] row.
+fn parity_expected(expected: &[&str]) -> std::collections::BTreeSet<String> {
+    expected.iter().map(|coin| (*coin).to_string()).collect()
+}
+
+/// `report_read::append_strategy_name_mask`'s exclusion-only branch (and `StrategyMask::term`'s
+/// `Exclude` arm) must agree with `StrategyQuery::matches` and with each other on one literal case
+/// table: a positive query drops manual, unknown and other-core rows, an exclusion-only query
+/// keeps them.
+///
+/// Breakage: making the exclusion-only branch emit the positive `EXISTS ... = 1` shape drops every
+/// manual trade from the Report for `!test`; the same edit on the Analytics `Exclude` arm does it
+/// there. Consequence: `!test` in the Report or Analytics hides every manual trade that the
+/// Strategies tree keeps listing as "not test".
+#[test]
+fn strategy_name_masks_select_the_same_rows_in_report_analytics_and_rust() {
+    let conn = parity_fixture(true);
+    for (mask, expected) in PARITY_CASES {
+        let want = parity_expected(expected);
+        assert_eq!(report_coins(&conn, mask), want, "Report, mask {mask:?}");
+        assert_eq!(
+            analytics_coins(&conn, mask),
+            want,
+            "Analytics, mask {mask:?}"
+        );
+        let query = crate::strategy_query::StrategyQuery::parse(mask);
+        for (coin, name) in PARITY_NAMES {
+            assert_eq!(
+                query.matches(name),
+                want.contains(coin),
+                "StrategyQuery on {name:?}, mask {mask:?}"
+            );
+        }
+    }
+}
+
+/// A mask that parses to no word must need no strategy metadata, while any real query still fails
+/// closed without it.
+///
+/// Breakage: resolving the mask before checking it parses empty makes `,` or `!` fail closed, and
+/// letting a real query through without metadata broadens it to every trade. Consequence: a stray
+/// comma in the search box empties the Report, or a missing strategies file shows unfiltered totals.
+#[test]
+fn a_wordless_mask_needs_no_metadata_but_a_real_query_fails_closed() {
+    let conn = parity_fixture(false);
+    let all = parity_expected(PARITY_ALL);
+    for mask in [",", " ! ", " , ,"] {
+        assert_eq!(report_coins(&conn, mask), all, "Report, mask {mask:?}");
+        assert_eq!(
+            analytics_coins(&conn, mask),
+            all,
+            "Analytics, mask {mask:?}"
+        );
+    }
+    for mask in ["ema", "!test"] {
+        assert!(
+            report_coins(&conn, mask).is_empty(),
+            "Report, mask {mask:?}"
+        );
+        assert!(
+            analytics_coins(&conn, mask).is_empty(),
+            "Analytics, mask {mask:?}"
+        );
+    }
+}

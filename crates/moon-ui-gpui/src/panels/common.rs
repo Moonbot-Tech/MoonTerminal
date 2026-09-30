@@ -656,6 +656,20 @@ pub(crate) fn text_tooltip(
     move |_window, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into()
 }
 
+/// Build the tooltip text of a strategy-name search field.
+///
+/// The lead line names the field; the second part is the one shared description of the query
+/// syntax, so the Strategies tree, Analytics and the Report explain it identically.
+///
+/// Args:
+///     lead: Already-translated first line naming what the field filters.
+///
+/// Returns:
+///     The lead line followed by the shared syntax description and its examples.
+pub(crate) fn strategy_query_tip(lead: impl std::fmt::Display) -> String {
+    format!("{lead}\n{}", rust_i18n::t!("common.strategy_query_syntax"))
+}
+
 /// Hosts a caller-built data table in the shared table-body surface. The container fills available
 /// flex space and clips overflow; when `empty` is true, it adds an absolute placeholder row below
 /// the table header. `empty_msg` must already be localized by the caller.

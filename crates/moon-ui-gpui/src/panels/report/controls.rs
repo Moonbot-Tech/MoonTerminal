@@ -834,7 +834,9 @@ impl ReportPanel {
                     .flex_none()
                     .w(design::font_w_px(cx, 150.0))
                     .tooltip(crate::panels::common::text_tooltip(
-                        t!("report.filter.strategy_mask_tip").to_string(),
+                        crate::panels::common::strategy_query_tip(t!(
+                            "report.filter.strategy_mask_tip"
+                        )),
                     ))
                     .child(
                         MoonInput::new("rep-strategy-mask")

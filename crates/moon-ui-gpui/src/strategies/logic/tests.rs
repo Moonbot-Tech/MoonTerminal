@@ -1,16 +1,20 @@
-//! Unit tests for the folder-count accumulator.
+//! Unit tests for the folder-count accumulator and the selection-pruning visibility filter.
 //!
 //! The oracle is [`naive_folder_counts`], a straightforward scan of every strategy for each
 //! folder. Its algorithm and traversal order are independent of the accumulator, so agreement
 //! between them checks the result rather than restating the implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use moon_core::feed::StrategyRow;
+use moon_core::feed::{ExchangeId, StrategyRow};
+use moon_core::session::core_order::ExchangeSection;
+use moon_core::session::{CoreId, CoreStore};
+use moon_core::strat_db::stats::HeadRow;
+use moon_core::venue::CoreVenue;
 
 use super::{
-    FolderCounts, subtree_check_targets, subtree_displayed_all_checked, subtree_folder_paths,
-    visible_strategy_keys,
+    FolderCounts, filter_hidden_keys, subtree_check_targets, subtree_displayed_all_checked,
+    subtree_folder_paths, visible_strategy_keys,
 };
 use crate::strategies::filter::{PreparedFilter, StrategyFilter};
 use moon_core::feed::strategy_path::path_segments;
@@ -749,4 +753,154 @@ fn the_sound_picklist_marks_a_missing_name_and_not_an_existing_one() {
         arm.contains("format!(\"{value} ({mark})\")"),
         "the closed trigger shows the same mark on the stored value"
     );
+}
+
+/// Builds a live strategy row carrying only what the filter predicates read.
+fn named_row(id: u64, name: &str, folder_path: &str) -> StrategyRow {
+    StrategyRow {
+        id,
+        name: name.to_string(),
+        kind: "Test".to_string(),
+        kind_ordinal: 0,
+        folder_path: folder_path.to_string(),
+        checked: true,
+        is_short: false,
+        fields: Vec::new(),
+    }
+}
+
+/// Builds a store holding one core whose live rows are exactly `rows`.
+fn store_with(core: CoreId, rows: Vec<StrategyRow>) -> CoreStore {
+    let mut store = CoreStore::default();
+    store.ensure(core);
+    store.core_mut(core).expect("ensured core").strategies = rows;
+    store
+}
+
+/// Builds stored filter state that only searches by name.
+fn search_filter(search: &str) -> StrategyFilter {
+    StrategyFilter {
+        search: search.to_string(),
+        kind: None,
+        dir: None,
+        exchange: None,
+        active_only: false,
+    }
+}
+
+/// Builds a Deleted-folder row with the only fields the name check reads.
+fn deleted_head(core: CoreId, id: i64, name: &str) -> HeadRow {
+    HeadRow {
+        core_uid: core,
+        strategy_id: id,
+        name: name.to_string(),
+        kind: "Test".to_string(),
+        kind_ordinal: 0,
+        folder_path: String::new(),
+        is_short: false,
+    }
+}
+
+/// Dropping the `prepared.matches` check in `filter_hidden_keys` would leave a selected row the
+/// search hides still selected, so a bulk action would act on strategies nobody can see.
+#[test]
+fn a_search_hides_the_selected_rows_it_rejects() {
+    let store = store_with(
+        1,
+        vec![named_row(1, "EMA_Fast", ""), named_row(2, "Hook_M1", "")],
+    );
+    let hidden = filter_hidden_keys(
+        [(1, 1), (1, 2)],
+        &store,
+        &search_filter("ema"),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert_eq!(hidden, HashSet::from([(1, 2)]));
+}
+
+/// Judging visibility by the tree's flattened order instead of by the filter would empty the
+/// selection whenever the user collapses a folder: a row deep in a folder that the search shows
+/// must stay selectable whatever the expansion state, which the function never even receives.
+#[test]
+fn a_row_inside_a_folder_is_judged_by_the_filter_alone() {
+    let store = store_with(1, vec![named_row(1, "EMA_Fast", "Group/Sub")]);
+    let hidden = filter_hidden_keys(
+        [(1, 1)],
+        &store,
+        &search_filter("ema"),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert!(hidden.is_empty());
+}
+
+/// In `filter_hidden_keys`, marking a key with no live row and no Deleted-folder entry as hidden
+/// instead of kept makes Apply silently drop selected strategies whose row has not loaded yet.
+#[test]
+fn a_key_with_no_row_and_no_deleted_entry_is_kept() {
+    let store = store_with(1, vec![named_row(1, "EMA_Fast", "")]);
+    // The search would reject any name; unknown is not hidden. Core 5 is not in the store at all.
+    let hidden = filter_hidden_keys(
+        [(1, 77), (5, 1)],
+        &store,
+        &search_filter("zzz"),
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert!(hidden.is_empty());
+}
+
+/// Skipping `core_matches` in `filter_hidden_keys` would keep selected rows of a core the exchange
+/// filter removed from the tree, so an action would reach a core the user filtered out.
+#[test]
+fn the_exchange_filter_hides_every_row_of_a_filtered_out_core() {
+    let store = store_with(1, vec![named_row(1, "EMA_Fast", "")]);
+    let mut on_other_exchange = search_filter("ema");
+    on_other_exchange.exchange = Some(ExchangeSection::Venue(ExchangeId::new(250)));
+    // Core 1 has reported no venue, so it is Unidentified and sits outside the chosen section.
+    let hidden = filter_hidden_keys(
+        [(1, 1)],
+        &store,
+        &on_other_exchange,
+        &HashMap::new(),
+        &HashMap::new(),
+    );
+    assert_eq!(hidden, HashSet::from([(1, 1)]));
+
+    // The same row under a core reporting that very venue stays.
+    let venues = HashMap::from([(1, CoreVenue::identify(250, "", Some("Synthetic Venue")))]);
+    let hidden = filter_hidden_keys(
+        [(1, 1)],
+        &store,
+        &on_other_exchange,
+        &venues,
+        &HashMap::new(),
+    );
+    assert!(hidden.is_empty());
+}
+
+/// A Deleted-folder strategy has no live row, so only its NAME is tested: rejecting it on kind,
+/// direction or the active-only switch (which a `HeadRow` cannot satisfy) would hide every
+/// deleted strategy the moment any of them is on.
+#[test]
+fn a_deleted_strategy_is_hidden_by_name_only() {
+    let store = store_with(1, Vec::new());
+    let deleted = HashMap::from([(1, vec![deleted_head(1, 50, "Old_Hook")])]);
+
+    let rejected = filter_hidden_keys(
+        [(1, 50)],
+        &store,
+        &search_filter("ema"),
+        &HashMap::new(),
+        &deleted,
+    );
+    assert_eq!(rejected, HashSet::from([(1, 50)]));
+
+    let mut narrowed = search_filter("hook");
+    narrowed.kind = Some(9);
+    narrowed.dir = Some(true);
+    narrowed.active_only = true;
+    let accepted = filter_hidden_keys([(1, 50)], &store, &narrowed, &HashMap::new(), &deleted);
+    assert!(accepted.is_empty());
 }

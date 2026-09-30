@@ -601,7 +601,9 @@ impl AnalyticsView {
                     .flex_none()
                     .w(design::font_w_px(cx, MASK_FIELD_W))
                     .tooltip(crate::panels::common::text_tooltip(
-                        t!("analytics.filter.strategy_mask_tip").to_string(),
+                        crate::panels::common::strategy_query_tip(t!(
+                            "analytics.filter.strategy_mask_tip"
+                        )),
                     ))
                     .child(
                         MoonInput::new("an-strategy-mask")

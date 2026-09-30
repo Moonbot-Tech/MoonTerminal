@@ -751,15 +751,7 @@ fn build_core_subtree(
     let del: Vec<&moon_core::strat_db::stats::HeadRow> = view
         .deleted
         .get(&core)
-        .map(|v| {
-            v.iter()
-                .filter(|h| {
-                    filter
-                        .query()
-                        .is_none_or(|q| h.name.to_lowercase().contains(q))
-                })
-                .collect()
-        })
+        .map(|v| v.iter().filter(|h| filter.name_matches(&h.name)).collect())
         .unwrap_or_default();
     if !del.is_empty() {
         let did = id_del_folder(core);

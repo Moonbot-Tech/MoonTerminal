@@ -61,7 +61,8 @@ fn an_empty_search_matches_every_name() {
     let f = filter("", None, None, false).prepare();
     assert!(f.matches(&row("anything", 0, false, false)));
     assert!(!f.searching());
-    assert!(f.query().is_none());
+    assert!(f.name_matches("anything"));
+    assert!(f.name_matches(""));
 }
 
 /// Removing `trim` in `prepare` would make whitespace hide every strategy as a live search.
@@ -72,14 +73,17 @@ fn a_whitespace_only_search_is_not_a_search() {
     assert!(!f.searching());
 }
 
-/// Switching `PreparedFilter::matches` to ASCII-only lowering would break Cyrillic name searches.
+/// Switching `PreparedFilter::matches` (via `StrategyQuery`) to ASCII-only folding would break
+/// Cyrillic name searches.
 #[test]
 fn the_search_is_case_insensitive_across_scripts() {
-    // Strategy names in this product are commonly Cyrillic, so the lowering must be full-Unicode
-    // rather than ASCII-only.
+    // Strategy names in this product are commonly Cyrillic, so the fold must be full Unicode case
+    // folding rather than ASCII-only lowering.
     let f = filter("  СТРАТЕГИЯ  ", None, None, false).prepare();
     assert!(f.searching());
-    assert_eq!(f.query(), Some("стратегия"));
+    assert!(f.name_matches("Стратегия_1"));
+    assert!(f.name_matches("стратегия"));
+    assert!(!f.name_matches("Another"));
     assert!(f.matches(&row("Моя Стратегия 7", 0, false, false)));
     assert!(f.matches(&row("МОЯ СТРАТЕГИЯ", 0, false, false)));
     assert!(!f.matches(&row("Another", 0, false, false)));
