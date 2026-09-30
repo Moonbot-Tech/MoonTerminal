@@ -129,6 +129,10 @@ telegram.report_delivery_failed:
   ru: "Не удалось показать отчёт. Повторите запрос; если ошибка повторяется, проверьте подключение терминала и обновите Telegram."
   en: "Could not display the report. Please retry; if this persists, check the terminal connection and update Telegram."
   es: "No se pudo mostrar el informe. Reinténtalo; si persiste, comprueba la conexión del terminal y actualiza Telegram."
+telegram.report_delivery_failed_station:
+  ru: "Не удалось показать отчёт. Повторите запрос; если ошибка повторяется, обновите Telegram."
+  en: "Could not display the report. Please retry; if this persists, update Telegram."
+  es: "No se pudo mostrar el informe. Reinténtalo; si persiste, actualiza Telegram."
 
 telegram.button_today:
   ru: "Сегодня"
@@ -224,6 +228,10 @@ telegram.report_scope:
   ru: "Выбранная группа в истории терминала · реальные закрытые сделки · курс на момент сделки. Данные локальной истории; выключенные боты не обновляются."
   en: "Selected group in terminal history · closed real trades · rates at trade time. Local history; offline bots do not update."
   es: "Grupo seleccionado del historial · operaciones reales cerradas · tipos al operar. Historial local; los bots desconectados no se actualizan."
+telegram.report_scope_station:
+  ru: "Выбранная группа в истории станции · реальные закрытые сделки · курс на момент сделки. Станция копирует историю ядер круглосуточно; отключённые боты не обновляются."
+  en: "Selected group in the station's history · closed real trades · rates at trade time. The station copies the cores' history around the clock; offline bots do not update."
+  es: "Grupo seleccionado del historial de la estación · operaciones reales cerradas · tipos al operar. La estación copia el historial de los núcleos las 24 horas; los bots desconectados no se actualizan."
 
 telegram.report_missing_rates:
   ru: "Если не все сделки оценены, итог в USDT недоступен. Детали сохраняют суммы по известным валютам; неизвестные валюты в них не включены."

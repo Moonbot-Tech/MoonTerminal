@@ -73,11 +73,13 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 }
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
-pub(super) fn render(page: &Page) -> Response {
+///
+/// `host` words the failure a chat sees when the report does not fit one message.
+pub(super) fn render(page: &Page, host: HostKind) -> Response {
     let html = report_html(page);
     if !rich_message_fits(&html) {
         return Response::Text {
-            text: t!("telegram.report_delivery_failed").to_string(),
+            text: crate::labels::report_delivery_failed(host),
             keyboard: Some(keyboard(page)),
         };
     }
@@ -251,8 +253,12 @@ pub(crate) fn help(zone: &str, host: HostKind) -> Response {
         "<details><summary>{}</summary>",
         escape(&t!("telegram.report_calculation"))
     ));
+    let scope = match host {
+        HostKind::Terminal => "telegram.report_scope",
+        HostKind::Station => "telegram.report_scope_station",
+    };
     for key in [
-        "telegram.report_scope",
+        scope,
         "telegram.report_missing_rates",
         "telegram.report_calculation_extra",
     ] {

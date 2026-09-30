@@ -78,7 +78,7 @@ pub(crate) fn telegram_report(
             }
             match result {
                 Ok(page) => {
-                    let _ = reply.try_send(render(&page));
+                    let _ = reply.try_send(render(&page, host.kind()));
                 }
                 Err(_) => report_notice(&reply, t!("telegram.report_failed").to_string()),
             }

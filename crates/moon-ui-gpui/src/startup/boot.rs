@@ -149,7 +149,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
     let backend = cx.new(|_| Backend {
-        telegram: moon_tg::TelegramState::new(&cfg.telegram),
+        telegram: moon_tg::TelegramState::new(&cfg.telegram, moon_tg::HostKind::Terminal),
         station: Default::default(),
         updater: updater.clone(),
         session: SessionManager::start(

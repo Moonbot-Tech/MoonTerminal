@@ -7,7 +7,7 @@
 //! computed and then read back.
 
 use std::io::Read;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{Arc, RwLock, atomic::AtomicBool};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +17,9 @@ use touche::body::HttpBody;
 use touche::{Body, Method, Request, StatusCode};
 
 use super::dto::{StrategyDto, id_text};
-use super::{App, CancelOrderBody, MiniAppApiError, MiniAppApiRequest, StrategyToggleBody};
+use super::{
+    Admission, App, CancelOrderBody, MiniAppApiError, MiniAppApiRequest, StrategyToggleBody,
+};
 use crate::config::Secret;
 
 const BOT_TOKEN: &str = "123456:authoring-fixture-token";
@@ -111,9 +113,11 @@ fn handler_with_acceptor() -> App {
         }
     });
     App {
-        labels: Arc::new(std::collections::BTreeMap::new()),
+        admission: Arc::new(RwLock::new(Admission {
+            chats: vec![PAIRED_USER],
+            labels: std::collections::BTreeMap::new(),
+        })),
         token: Arc::new(Secret::new(BOT_TOKEN)),
-        authorized_chat_ids: Arc::new(vec![PAIRED_USER]),
         events_tx,
         stop: Arc::new(AtomicBool::new(false)),
     }
@@ -490,4 +494,67 @@ fn big_ids_round_trip_as_decimal_strings() {
     let mut out = Vec::new();
     id_text::serialize(&7, &mut serde_json::Serializer::new(&mut out)).expect("serialize");
     assert_eq!(out, br#""7""#);
+}
+
+/// One `POST /api/session` over a real socket; returns the HTTP status code.
+fn session_over_socket(port: u16, init_data: &str) -> u16 {
+    use std::io::Write;
+    let mut stream =
+        std::net::TcpStream::connect(("127.0.0.1", port)).expect("the listener accepts");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read timeout");
+    // Telegram sends initData URL-encoded; raw JSON quotes are not a valid header value.
+    let init_data: String = init_data
+        .chars()
+        .map(|c| match c {
+            '{' | '}' | '"' | ',' | ':' => format!("%{:02X}", c as u32),
+            c => c.to_string(),
+        })
+        .collect();
+    let request = [
+        "POST /api/session HTTP/1.1".to_string(),
+        "Host: 127.0.0.1".to_string(),
+        "Content-Type: application/json".to_string(),
+        format!("X-Telegram-Init-Data: {init_data}"),
+        "Content-Length: 2".to_string(),
+        "Connection: close".to_string(),
+        String::new(),
+        "{}".to_string(),
+    ]
+    .join("\r\n");
+    stream.write_all(request.as_bytes()).expect("request sent");
+    let mut answer = String::new();
+    let _ = stream.read_to_string(&mut answer);
+    answer
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .expect("an HTTP status line")
+}
+
+/// A pairing or an unpairing reaches the running listener in place (STATION.md §9, question 36:
+/// restarting it for a new chat gave the tunnel a new address): the next request of a removed chat
+/// is refused, and of a newly paired one admitted — on the same port.
+#[test]
+fn admission_changes_reach_the_running_listener() {
+    let mut server = super::MiniAppServer::bind(super::MiniAppServerConfig {
+        token: Secret::new(BOT_TOKEN),
+        authorized_chat_ids: vec![PAIRED_USER],
+    })
+    .expect("loopback bind");
+    let events = server.take_events().expect("event receiver");
+    thread::spawn(move || {
+        while let Ok(event) = events.recv() {
+            accept(event);
+        }
+    });
+    let port = server.port();
+    let launch = signed_at(stable_unix_now());
+    assert_eq!(session_over_socket(port, &launch), 200);
+    server.update(Vec::new(), std::collections::BTreeMap::new());
+    assert_eq!(session_over_socket(port, &launch), 403);
+    server.update(vec![PAIRED_USER], std::collections::BTreeMap::new());
+    assert_eq!(session_over_socket(port, &launch), 200);
+    server.stop();
 }

@@ -24,13 +24,26 @@ use crate::{TelegramState, TgHost, mini_app, report};
 ///     before: The Telegram configuration before the save.
 pub fn reconcile(state: &mut TelegramState, saved: &TelegramConfig, before: &TelegramConfig) {
     state.remember_menu_cleanup(before, saved);
-    if before.token.expose() != saved.token.expose() || !before.same_chat_permissions(saved) {
+    let same_token = before.token.expose() == saved.token.expose();
+    if !same_token || !saved.only_adds_chats_to(before) {
         // Cancel the old API's liveness before retiring it: a queued report or a pending
         // navigation send must not continue with grants that have just been revoked.
         state.restart_saved(saved);
     } else if let Some(service) = state.service.as_ref() {
+        // Every earlier chat keeps its grant and chats may be added: the live transport takes them
+        // in place, and the Mini App keeps its tunnel address.
         state.configuration_pending |= !service.configure(saved);
-        state.configuration_pending |= !service.set_labels(telegram_labels());
+        state.configuration_pending |= !service.set_labels(telegram_labels(state.kind()));
+        // The bot republishes its status only after its current long poll; show the new count now.
+        if matches!(
+            state.status,
+            TelegramStatus::Unpaired | TelegramStatus::Paired { .. }
+        ) {
+            state.status = match saved.authorized_chat_ids.len() {
+                0 => TelegramStatus::Unpaired,
+                chat_count => TelegramStatus::Paired { chat_count },
+            };
+        }
     }
     state.revision = state.revision.wrapping_add(1);
 }
@@ -80,9 +93,10 @@ pub fn tick(host: &mut dyn TgHost) {
     if host.state().configuration_pending {
         let saved = host.config().telegram.clone();
         let state = host.state_mut();
+        let kind = state.kind();
         if let Some(service) = state.service.as_ref() {
             let configured = service.configure(&saved);
-            let localized = service.set_labels(telegram_labels());
+            let localized = service.set_labels(telegram_labels(kind));
             state.configuration_pending = !configured || !localized;
         }
     }

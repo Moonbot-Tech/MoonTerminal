@@ -189,6 +189,77 @@ fn restarted_service_clears_retired_chat_and_keeps_new_chat_launcher() {
     );
 }
 
+/// Telegram's answer for a chat the bot can no longer reach (VPS, 2026-09-30).
+fn unreachable() -> ApiError {
+    ApiError::Telegram {
+        description: "Bad Request: user not found".into(),
+        retry_after_secs: None,
+    }
+}
+
+/// A removed chat whose user is gone can never be cleared: the attempt is dropped, and the failure
+/// is not the bot's, so it must not surface as bot health on every cycle.
+#[test]
+fn unreachable_retired_chat_is_dropped_without_reporting_the_bot() {
+    let mut sync = MenuSync::with_cleanup(&[1]);
+    let now = Instant::now();
+    assert_eq!(
+        sync.sync(&MenuIntent::stopped(&[]), now, |_, _| Err(unreachable())),
+        Ok(())
+    );
+    sync.sync(
+        &MenuIntent::stopped(&[]),
+        now + Duration::from_secs(3_600),
+        |_, _| panic!("an unreachable retired chat must not be retried"),
+    )
+    .unwrap();
+}
+
+/// A paired chat that blocked the bot keeps its retry, but is not a bot failure either.
+#[test]
+fn unreachable_paired_chat_is_retried_without_reporting_the_bot() {
+    let mut sync = MenuSync::default();
+    let now = Instant::now();
+    let blocked = ApiError::Telegram {
+        description: "Forbidden: bot was blocked by the user".into(),
+        retry_after_secs: None,
+    };
+    assert_eq!(
+        sync.sync(&MenuIntent::stopped(&[7]), now, |_, _| Err(blocked.clone())),
+        Ok(())
+    );
+    let mut sent = Vec::new();
+    sync.sync(
+        &MenuIntent::stopped(&[7]),
+        now + UNREACHABLE_RETRY + Duration::from_secs(1),
+        |chat, _| {
+            sent.push(chat);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(sent, vec![7]);
+}
+
+/// A new tunnel address reaches a chat that refused the old one at once, not after the long wait.
+#[test]
+fn unreachable_chat_is_retried_at_once_for_a_new_link() {
+    let mut sync = MenuSync::default();
+    let now = Instant::now();
+    let old = intent(&[7], true, tunnel("https://old.trycloudflare.com"), "Open");
+    sync.sync(&old, now, |_, _| Err(unreachable())).unwrap();
+    sync.sync(&old, now, |_, _| panic!("the refused link must wait"))
+        .unwrap();
+    let new = intent(&[7], true, tunnel("https://new.trycloudflare.com"), "Open");
+    let mut sent = Vec::new();
+    sync.sync(&new, now, |chat, _| {
+        sent.push(chat);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(sent, vec![7]);
+}
+
 /// A blocked or deleted first chat must not starve later paired chats on every retry.
 #[test]
 fn one_failed_chat_does_not_block_other_menus() {

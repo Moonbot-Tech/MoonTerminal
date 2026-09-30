@@ -306,7 +306,14 @@ fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
 }
 
 /// Map a redacted API failure onto Telegram health without sleeping.
+///
+/// A chat out of the bot's reach (blocked, deleted) is that chat's state, not the bot's: it is
+/// logged and leaves the status alone.
 fn publish_status(tx: &SyncSender<Work>, error: &crate::telegram::api::ApiError) {
+    if crate::telegram::api::is_unreachable_chat(error) {
+        log::info!("telegram chat unreachable: {error}");
+        return;
+    }
     let _ = tx.try_send(Work::Status(status_of(error)));
 }
 

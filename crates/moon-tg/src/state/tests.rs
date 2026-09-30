@@ -7,7 +7,7 @@ use moon_core::config::{Secret, TelegramConfig};
 #[test]
 fn pending_report_survives_service_replacement() {
     let config = TelegramConfig::default();
-    let mut state = TelegramState::new(&config);
+    let mut state = TelegramState::new(&config, crate::HostKind::Terminal);
     state.report_pending = true;
     state.start_saved(&config);
     assert!(state.report_pending);
@@ -24,7 +24,7 @@ fn revoked_menu_identities_survive_service_replacement() {
         authorized_chat_ids: vec![8],
         ..TelegramConfig::default()
     };
-    let mut state = TelegramState::new(&before);
+    let mut state = TelegramState::new(&before, crate::HostKind::Terminal);
     state.remember_menu_cleanup(&before, &saved);
     state.restart();
     state.start_saved(&saved);
@@ -49,7 +49,7 @@ fn token_change_discards_old_bot_menu_identities() {
         ..TelegramConfig::default()
     };
     let saved = TelegramConfig::default();
-    let mut state = TelegramState::new(&before);
+    let mut state = TelegramState::new(&before, crate::HostKind::Terminal);
     state.remember_menu_cleanup(&before, &saved);
     let new_bot = TelegramConfig {
         token: Secret::new("fixture-only"),

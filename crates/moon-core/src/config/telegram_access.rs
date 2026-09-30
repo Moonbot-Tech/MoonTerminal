@@ -26,14 +26,14 @@ pub enum TelegramReportAccess {
 }
 
 impl TelegramConfig {
-    /// Compare effective permissions, ignoring captions and equivalent ordering of viewer grants.
-    /// A changed result requires cancellation of queued deliveries from the previous generation.
-    pub fn same_chat_permissions(&self, other: &Self) -> bool {
-        self.authorized_chat_ids == other.authorized_chat_ids
-            && self
-                .authorized_chat_ids
-                .iter()
-                .all(|chat| self.report_access(*chat) == other.report_access(*chat))
+    /// Whether `self` only adds chats to `before`: every chat of `before` stays, with the same
+    /// effective grant (captions and the order of viewer grants aside). Nothing is revoked, so
+    /// work queued under `before` stays valid; otherwise queued deliveries must be cancelled.
+    pub fn only_adds_chats_to(&self, before: &Self) -> bool {
+        before.authorized_chat_ids.iter().all(|chat| {
+            self.authorized_chat_ids.contains(chat)
+                && self.report_access(*chat) == before.report_access(*chat)
+        })
     }
 
     /// Add a chat to the paired set.

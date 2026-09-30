@@ -29,7 +29,7 @@ fn viewer_membership_filters_every_report_view_and_total() {
         assert_eq!(page.total.totals[0].profit, 7.0);
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].1.totals[0].profit, 7.0);
-        let Response::Rich { html, .. } = render(&page) else {
+        let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
             panic!("expected report");
         };
         assert!(!html.contains("other client"));
@@ -120,7 +120,7 @@ fn full_total_is_the_final_summary_row() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected report")
     };
     let table_start = html.find("<table").unwrap();
@@ -189,7 +189,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected report")
     };
     let coverage = rust_i18n::t!(
@@ -388,7 +388,7 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     .unwrap();
     assert_eq!(page.rows.len(), 31);
     assert_eq!(page.pages, 1);
-    let Response::Rich { html, keyboard, .. } = render(&page) else {
+    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(
@@ -433,7 +433,7 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     .unwrap();
     assert_eq!(page.rows.len(), 6);
     assert_eq!(page.pages, 1);
-    let Response::Rich { html, keyboard, .. } = render(&page) else {
+    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(
@@ -491,7 +491,7 @@ fn oversized_daily_report_still_pages() {
         page.rows.len()
     );
     assert_eq!(page.rows.len(), 6);
-    let Response::Rich { html, keyboard, .. } = render(&page) else {
+    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
@@ -531,7 +531,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(html.replace("&#160;", " ").contains("0.001 BTC"));
@@ -642,7 +642,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(html.contains("&lt;b&gt;&amp;"));
@@ -792,7 +792,7 @@ fn core_names_span_the_money_columns() {
         drilldowns: Vec::new(),
         scope_label: None,
     };
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected rich report")
     };
     assert!(html.contains(&format!("<td colspan=\"3\"><b>{name}</b>")));
@@ -841,6 +841,9 @@ fn station_help_does_not_ask_for_a_running_terminal() {
     assert!(!station.contains("Keep the terminal running"));
     assert!(!station.contains("terminal settings"));
     assert!(station.contains("around the clock"));
+    assert!(terminal.contains("terminal history"));
+    assert!(!station.contains("terminal history"));
+    assert!(station.contains("the station's history"));
     assert!(!crate::labels::report_help(crate::HostKind::Station).contains("terminal"));
 }
 
@@ -862,7 +865,7 @@ fn chat_report_names_a_renamed_core_by_its_configured_name() {
     .unwrap();
     let labels: Vec<&str> = page.rows.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(labels, ["core-a-renamed", "core-b-gone"]);
-    let Response::Rich { html, .. } = render(&page) else {
+    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal) else {
         panic!("expected report");
     };
     assert!(html.contains("core-a-renamed"));
