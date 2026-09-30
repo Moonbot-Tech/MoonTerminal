@@ -345,10 +345,10 @@ fn edit_config(
 }
 
 /// Whether a helper's `status` comes from this crate's helper: the line added last,
-/// `release_update=` (`update-from-release`), is the marker. An older helper answers "unknown
+/// `bot_return=` (credential read-back), is the marker. An older helper answers "unknown
 /// command" halfway through a push, or overwrites what another terminal wrote.
 fn helper_is_current(status: &str) -> bool {
-    script::value(status, "release_update").is_some()
+    script::value(status, "bot_return") == Some("yes")
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —

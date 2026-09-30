@@ -925,6 +925,34 @@ telegram.server.bot_off:
   ru: "Снять бота с сервера"
   en: "Take the bot off the server"
   es: "Quitar el bot del servidor"
+telegram.server.bot_off_hint:
+  ru: "Вернуть бота в терминал вместе с чатами и правами доступа. Если в терминале уже есть бот, он сохранится, а серверный бот будет только снят."
+  en: "Return the bot to the terminal with its chats and access. If the terminal already has a bot, keep it and only remove the server bot."
+  es: "Devolver el bot al terminal con sus chats y permisos. Si el terminal ya tiene un bot, conservarlo y solo quitar el bot del servidor."
+telegram.server.return_done:
+  ru: "Бот возвращён в терминал вместе с чатами и правами доступа."
+  en: "The bot is back in the terminal with its chats and access."
+  es: "El bot ha vuelto al terminal con sus chats y permisos."
+telegram.server.return_skipped:
+  ru: "Бот снят с сервера, но не восстановлен: в терминале уже есть свой бот."
+  en: "The server bot was removed but not restored: the terminal already has its own bot."
+  es: "El bot se quitó del servidor, pero no se restauró: el terminal ya tiene su propio bot."
+telegram.server.return_old_helper:
+  ru: "Бот остался на сервере: его помощник ещё не умеет возвращать токен. Сначала нажмите «Настроить заново», затем попробуйте снова."
+  en: "The bot remains on the server: its helper cannot return the token yet. Press Set up again first, then retry."
+  es: "El bot sigue en el servidor: su asistente aún no puede devolver el token. Pulsa primero Configurar de nuevo y vuelve a intentarlo."
+telegram.server.return_read_failed:
+  ru: "Не удалось прочитать токен или права бота. Бот не снят с сервера; проверьте SSH-соединение и повторите попытку."
+  en: "Could not read the bot token or access. The bot was not removed; check the SSH connection and retry."
+  es: "No se pudo leer el token o los permisos del bot. El bot no se quitó; comprueba la conexión SSH y vuelve a intentarlo."
+telegram.server.return_save_failed:
+  ru: "Бот снят с сервера, но сохранить его в терминале не удалось. Токен временно сохранён в памяти: не закрывайте терминал, устраните ошибку и снова нажмите «Снять бота с сервера»."
+  en: "The server bot was removed, but saving it locally failed. Its token is retained in memory: keep the terminal open, resolve the error and press Take the bot off the server again."
+  es: "El bot se quitó del servidor, pero no pudo guardarse en el terminal. Su token se conserva en memoria: mantén el terminal abierto, resuelve el error y pulsa Quitar el bot del servidor otra vez."
+telegram.server.return_remove_failed:
+  ru: "Возврат бота не завершён. Прочитанный токен сохранён в памяти: не закрывайте терминал, устраните ошибку и снова нажмите «Снять бота с сервера»."
+  en: "The bot return is incomplete. The recovered token is retained in memory: keep the terminal open, resolve the error and press Take the bot off the server again."
+  es: "La devolución del bot no ha terminado. El token recuperado se conserva en memoria: mantén el terminal abierto, resuelve el error y pulsa Quitar el bot del servidor otra vez."
 telegram.server.update:
   ru: "Обновить службу"
   en: "Update the service"

@@ -144,6 +144,16 @@ api=no
 config_cas=yes
 "
     ));
+    // Release updates alone predate credential export: refresh that helper too.
+    assert!(!helper_is_current(
+        "release_update=yes
+bot_return=no
+"
+    ));
+    assert!(!helper_is_current(
+        "release_update=yes
+"
+    ));
     assert!(helper_is_current(
         "active=active
 config=yes
@@ -155,6 +165,7 @@ api=no
 config_cas=yes
 update_path=active
 release_update=yes
+bot_return=yes
 "
     ));
 }
@@ -162,7 +173,7 @@ release_update=yes
 /// The helper's status really prints the marker the terminal looks for.
 #[test]
 fn the_helper_prints_its_marker() {
-    assert!(crate::script::HELPER.contains("echo \"release_update=yes\""));
+    assert!(crate::script::HELPER.contains("echo \"bot_return=yes\""));
 }
 
 /// A changed window rewrites only `[tape]` — the cores and the bot stay as the server has them —

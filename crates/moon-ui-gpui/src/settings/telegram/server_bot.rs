@@ -69,6 +69,7 @@ pub(in crate::settings) struct ServerBotEd {
     seen_finished: u64,
     /// The backend's hand-over erase last seen: a newer one clears the bot's token input.
     seen_erased: u64,
+    seen_restored: u64,
     /// The server's chat editor, wired to `access_draft` by the tab's `build`.
     pub(super) chats: ChatEd,
     /// The server's chats as last read.
@@ -128,6 +129,7 @@ pub(in crate::settings) fn build<T: 'static>(
         bot_asked: false,
         seen_finished: 0,
         seen_erased: 0,
+        seen_restored: 0,
         chats: ChatEd::new(window, cx),
         access_seen: None,
         access_base: None,
@@ -198,7 +200,7 @@ fn draft_of(access: &Access) -> TelegramConfig {
 
 impl SettingsView {
     /// After each job end: forget the secrets typed for it, empty the bot's token input after a
-    /// hand-over erased the token, re-read which server is set up, and keep the newest progress
+    /// hand-over erased or returned the token, re-read which server is set up, and keep the newest progress
     /// line in view.
     pub(in crate::settings) fn server_bot_sync(
         &mut self,
@@ -288,6 +290,15 @@ impl SettingsView {
             self.telegram
                 .token
                 .update(cx, |st, c| st.set_value("", window, c));
+        }
+        let restored = self.backend.read(cx).station.restored;
+        if restored != self.telegram.server.seen_restored {
+            self.telegram.server.seen_restored = restored;
+            self.telegram.server.local_bot = Some(true);
+            let token = self.backend.read(cx).config.telegram.token.clone();
+            self.telegram
+                .token
+                .update(cx, |st, c| st.set_value(token.expose(), window, c));
         }
     }
 
@@ -413,8 +424,12 @@ impl SettingsView {
     }
 
     /// Drop the known server from `remote/hosts.toml`: after a reinstall it presents a new host
-    /// key, which the pin would refuse. Nothing on the server changes.
+    /// key, which the pin would refuse. Refuse while a returned bot still needs recovery, so its
+    /// retry cannot be redirected to a different server. Nothing on the server changes.
     fn server_bot_forget(&mut self, cx: &mut Context<Self>) {
+        if self.backend.read(cx).station.has_returned_bot() {
+            return;
+        }
         let Some(target) = self.telegram.server.known.clone() else {
             return;
         };
@@ -587,12 +602,20 @@ impl SettingsView {
                             .render(),
                         )
                     })
-                    .when(has_token, |row| {
+                    .when(has_token || b.station.has_returned_bot(), |row| {
                         row.child(
                             button("server-bot-off", t!("telegram.server.bot_off").to_string())
+                                .tooltip(t!("telegram.server.bot_off_hint").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(target) = known_server() {
-                                        this.server_bot_run(Ok(Job::BotOff { target }), cx);
+                                        this.server_bot_run(
+                                            Ok(Job::BotOff {
+                                                target,
+                                                restore: true,
+                                                recovered: None,
+                                            }),
+                                            cx,
+                                        );
                                     }
                                 }))
                                 .render(),
@@ -1026,7 +1049,10 @@ impl SettingsView {
             )
             .child(
                 button("server-forget", t!("telegram.server.forget").to_string())
-                    .disabled(self.backend.read(cx).station.running)
+                    .disabled(
+                        self.backend.read(cx).station.running
+                            || self.backend.read(cx).station.has_returned_bot(),
+                    )
                     .ghost()
                     .tooltip(t!("telegram.server.forget_hint").to_string())
                     .on_click(cx.listener(|this, _, _, cx| this.server_bot_forget(cx)))

@@ -12,6 +12,7 @@ use anyhow::Context;
 use russh::client::{self, AuthResult};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, MethodKind};
+use zeroize::Zeroizing;
 
 /// How long a TCP connect plus key exchange may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -86,6 +87,13 @@ pub struct Output {
     pub status: Option<u32>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
+}
+
+/// Credential-bearing SSH output, protected during reception and on timeout or failure.
+pub struct SecretOutput {
+    pub status: Option<u32>,
+    pub stdout: Zeroizing<Vec<u8>>,
+    pub stderr: Zeroizing<Vec<u8>>,
 }
 
 impl Output {
@@ -232,6 +240,21 @@ impl Conn {
 
     /// Run `command` through the login shell, feed it `stdin` and close it, wait for it to end.
     pub fn run(&self, command: &str, stdin: &[u8], timeout: Duration) -> anyhow::Result<Output> {
+        let mut out = self.run_secret(command, stdin, timeout)?;
+        Ok(Output {
+            status: out.status,
+            stdout: std::mem::take(&mut *out.stdout),
+            stderr: std::mem::take(&mut *out.stderr),
+        })
+    }
+
+    /// Run a credential read without converting its buffers to ordinary strings or vectors.
+    pub fn run_secret(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+    ) -> anyhow::Result<SecretOutput> {
         self.rt.block_on(async {
             tokio::time::timeout(timeout, self.run_async(command, stdin))
                 .await
@@ -239,7 +262,8 @@ impl Conn {
         })
     }
 
-    async fn run_async(&self, command: &str, stdin: &[u8]) -> anyhow::Result<Output> {
+    /// Receive into zeroizing buffers so a cancelled read cannot leave a partial credential.
+    async fn run_async(&self, command: &str, stdin: &[u8]) -> anyhow::Result<SecretOutput> {
         let channel = self.handle.channel_open_session().await?;
         channel.exec(true, command).await?;
         // Written and read at once: a command that answers while it still reads a large stdin
@@ -253,10 +277,10 @@ impl Conn {
             write.eof().await
         };
         let receive = async {
-            let mut out = Output {
+            let mut out = SecretOutput {
                 status: None,
-                stdout: Vec::new(),
-                stderr: Vec::new(),
+                stdout: Zeroizing::new(Vec::new()),
+                stderr: Zeroizing::new(Vec::new()),
             };
             while let Some(msg) = read.wait().await {
                 match msg {
