@@ -226,6 +226,11 @@ pub struct Status {
     /// it — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub tape: Option<TapeWindow>,
+    /// The machine and the process under the station. `None` from a station older than it — an
+    /// added field with a default, so neither end of version 2 misreads the other. Boxed: it is
+    /// the bulk of the status, and every reply would otherwise carry its size.
+    #[serde(default)]
+    pub host: Option<Box<Host>>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the
@@ -237,6 +242,63 @@ pub struct TapeWindow {
     pub margin_s: u32,
     /// From how many minutes a position is recorded as its two ends.
     pub long_position_min: u32,
+}
+
+/// The station's server and process: what it has run, what it uses, what it keeps on disk.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Host {
+    /// Seconds since the station process started.
+    pub uptime_s: u64,
+    /// Processor load over the last hour and the last day, each as far back as the process has
+    /// run; empty before its first whole minute.
+    pub cpu: Vec<CpuWindow>,
+    /// `None` where the process could not read it.
+    pub memory: Option<Memory>,
+    /// The filesystem the data root is on; `None` where it could not be read.
+    pub disk: Option<Disk>,
+    /// Everything in the data root, largest first: a database with its `-wal`/`-shm`/`-journal`
+    /// as one entry, a directory as the sum of what is in it.
+    pub files: Vec<DataFile>,
+}
+
+/// Processor load over one window, in tenths of a percent of the whole machine (every core):
+/// 1000 is the machine at full load. A peak is the busiest minute's average.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CpuWindow {
+    /// How many minutes the window covers: 60 or 1440, or fewer while the process is younger.
+    pub minutes: u32,
+    pub station_avg_permille: u16,
+    pub station_peak_permille: u16,
+    pub machine_avg_permille: u16,
+    pub machine_peak_permille: u16,
+}
+
+/// The station's memory and the machine's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Memory {
+    /// Resident memory of the station process now.
+    pub rss_bytes: u64,
+    /// The largest resident memory it has had since it started, sampled once a second.
+    pub rss_peak_bytes: u64,
+    /// What the machine can still hand out without swapping (`MemAvailable`).
+    pub available_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// Space on the filesystem the data root is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Disk {
+    /// Free to the station (what an unprivileged writer gets).
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+}
+
+/// One entry of the data root.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataFile {
+    /// The name in the data root: `reports.sqlite`, or a directory's name with a trailing `/`.
+    pub name: String,
+    pub bytes: u64,
 }
 
 /// The station's bot now.

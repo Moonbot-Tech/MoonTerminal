@@ -17,6 +17,8 @@ mod labels;
 mod mini_app;
 mod report;
 mod state;
+mod station_status;
+mod units;
 // The terminal's own helper, compiled into this crate's test binary too: `rust_i18n` keeps one
 // locale per process, and each test binary is its own process with its own lock.
 #[cfg(test)]
@@ -27,6 +29,8 @@ pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, TgHost};
 pub use labels::status_text;
 pub use state::TelegramState;
+pub use station_status::station_status_text;
+pub use units::size_text;
 
 /// Build this crate's dictionary now, at the base of the caller's stack.
 ///

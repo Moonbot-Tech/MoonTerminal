@@ -352,7 +352,7 @@ fn removal_detail(report: &TrimReport) -> String {
     t!(
         "storage.trades_cleanup_done",
         prints = report.prints_dropped,
-        size = super::fmt_size(report.bytes_dropped.max(0) as u64)
+        size = moon_tg::size_text(report.bytes_dropped.max(0) as u64)
     )
     .to_string()
 }
@@ -419,7 +419,7 @@ impl SettingsView {
             Some(Ok(preview)) => t!(
                 "storage.trades_cleanup_preview",
                 prints = preview.report.prints_dropped,
-                size = super::fmt_size(preview.report.bytes_dropped.max(0) as u64)
+                size = moon_tg::size_text(preview.report.bytes_dropped.max(0) as u64)
             )
             .to_string(),
         };
