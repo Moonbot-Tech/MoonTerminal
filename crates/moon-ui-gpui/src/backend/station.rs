@@ -66,6 +66,12 @@ pub(crate) struct StationJobs {
     pub(crate) finished: u64,
     /// Bumped when a hand-over erased the terminal's token, so the segment clears its input.
     pub(crate) erased: u64,
+    /// Bumped after restoration so Settings refreshes its masked token input.
+    pub(crate) restored: u64,
+    /// A failed disk save retains the recovered credential for a local retry.
+    returned: Option<moon_remote::station::bot::ReturnedBot>,
+    /// Removal succeeded; a retry needs only the local save, without SSH.
+    returned_ready: bool,
     /// Bumped on every change of this state: part of the Settings window's repaint signature.
     pub(crate) revision: u64,
     kind: Kind,
@@ -81,6 +87,11 @@ pub(crate) struct StationJobs {
 }
 
 impl StationJobs {
+    /// Keep the retry action available after removal succeeded but saving locally failed.
+    pub(crate) fn has_returned_bot(&self) -> bool {
+        self.returned.is_some()
+    }
+
     /// A job the user sees as work in progress: buttons wait for it. A quiet read does not count.
     pub(crate) fn busy(&self) -> bool {
         self.running && self.kind != Kind::Quiet
@@ -181,6 +192,7 @@ impl Backend {
         self.station_begin(job::Job::Cores { target, cores }, false, Kind::Auto, cx);
     }
 
+    /// Start a queued job, deciding bot restoration from current local configuration.
     fn station_begin(
         &mut self,
         job: job::Job,
@@ -188,6 +200,29 @@ impl Backend {
         kind: Kind,
         cx: &mut Context<Self>,
     ) {
+        let job = match job {
+            job::Job::BotOff { target, .. } => {
+                // A queued job decides from the current saved and draft state when it starts.
+                let restore = can_restore_bot(
+                    &self.config.telegram,
+                    self.preview.as_ref().map(|p| &p.telegram),
+                );
+                if self.station.returned.is_some() && self.station.returned_ready {
+                    self.station_apply_returned();
+                    self.station.finished = self.station.finished.wrapping_add(1);
+                    self.station.revision = self.station.revision.wrapping_add(1);
+                    cx.notify();
+                    self.station_next(cx);
+                    return;
+                }
+                job::Job::BotOff {
+                    target,
+                    restore,
+                    recovered: self.station.returned.clone(),
+                }
+            }
+            other => other,
+        };
         if hand_over {
             self.telegram.suspend();
         }
@@ -267,6 +302,11 @@ impl Backend {
     /// Apply one job event; `true` once the job has ended.
     fn station_event(&mut self, event: job::Event) -> bool {
         let done = match event {
+            job::Event::Returned(returned) => {
+                self.station.returned = Some(returned);
+                self.station.returned_ready = false;
+                return false;
+            }
             job::Event::Line(line) => {
                 self.station.push_line(line);
                 return false;
@@ -283,7 +323,7 @@ impl Backend {
                     self.station.bot = Some(bot);
                     self.station.bot_error = None;
                 }
-                job::Done::Ok { .. } => {}
+                job::Done::Ok { .. } | job::Done::BotOff { .. } => {}
                 job::Done::NeedsAdminPassword => {
                     self.station.bot_error =
                         Some(t!("telegram.server.needs_old_admin").to_string());
@@ -299,6 +339,11 @@ impl Backend {
         let mut station_polls = false;
         let mut said_bot = false;
         match done {
+            job::Done::BotOff { returned } => {
+                self.station.returned = returned;
+                self.station.returned_ready = true;
+                self.station_apply_returned();
+            }
             job::Done::Ok {
                 transferred: t,
                 bot,
@@ -334,7 +379,11 @@ impl Backend {
                 station_may_poll,
             } => {
                 station_polls = station_may_poll;
-                self.station.outcome = Some(Err(reason));
+                self.station.outcome = Some(Err(if self.station.returned.is_some() {
+                    format!("{reason}\n{}", t!("telegram.server.return_remove_failed"))
+                } else {
+                    reason
+                }));
             }
         }
         // A job that ended without the bot's state may have changed it: read it again.
@@ -366,6 +415,43 @@ impl Backend {
         true
     }
 
+    /// Save before resuming the transport; a failed disk save retains the only returned bot in
+    /// protected memory and lets the same button retry without another server operation.
+    fn station_apply_returned(&mut self) {
+        let Some(returned) = self.station.returned.take() else {
+            if self.telegram.suspended() {
+                self.telegram.resume(&self.config.telegram);
+            }
+            self.station.outcome = Some(Ok(t!("telegram.server.return_skipped").to_string()));
+            return;
+        };
+        let restored = match save_returned_bot(
+            &mut self.config,
+            &mut self.preview,
+            &returned,
+            AppConfig::save_telegram,
+        ) {
+            Ok(restored) => restored,
+            Err(error) => {
+                self.station.returned = Some(returned);
+                self.station.outcome = Some(Err(format!(
+                    "{}: {error:#}",
+                    t!("telegram.server.return_save_failed")
+                )));
+                return;
+            }
+        };
+        self.telegram.resume(&self.config.telegram);
+        if restored {
+            self.station.restored = self.station.restored.wrapping_add(1);
+        }
+        self.station.outcome = Some(Ok(if restored {
+            t!("telegram.server.return_done").to_string()
+        } else {
+            t!("telegram.server.return_skipped").to_string()
+        }));
+    }
+
     /// The bot runs on the station now: forget its token and chats here, on disk and in an open
     /// Settings draft alike, so a later Save does not bring them back. The draft's other Telegram
     /// fields keep their unsaved edits.
@@ -391,6 +477,44 @@ fn forget_bot(telegram: &mut moon_core::config::TelegramConfig) {
     telegram.chat_access.clear();
 }
 
+/// Preserve both saved local bots and unsaved Settings tokens; never merge their chats.
+fn can_restore_bot(
+    saved: &moon_core::config::TelegramConfig,
+    draft: Option<&moon_core::config::TelegramConfig>,
+) -> bool {
+    saved.token.is_empty() && draft.is_none_or(|d| d.token.is_empty())
+}
+
+/// Restore exactly the bot fields, keeping the terminal's own Mini App preference.
+fn restore_bot(
+    telegram: &mut moon_core::config::TelegramConfig,
+    returned: &moon_remote::station::bot::ReturnedBot,
+) {
+    telegram.token = returned.token.clone();
+    returned.access.apply_to(telegram);
+}
+
+/// Atomically save before publishing bot data to the live config or open draft. A failed save
+/// leaves both unchanged; `false` preserves a local bot created while SSH was still running.
+fn save_returned_bot(
+    saved: &mut AppConfig,
+    draft: &mut Option<AppConfig>,
+    returned: &moon_remote::station::bot::ReturnedBot,
+    save: impl FnOnce(&AppConfig) -> anyhow::Result<()>,
+) -> anyhow::Result<bool> {
+    if !can_restore_bot(&saved.telegram, draft.as_ref().map(|d| &d.telegram)) {
+        return Ok(false);
+    }
+    let mut candidate = saved.clone();
+    restore_bot(&mut candidate.telegram, returned);
+    save(&candidate)?;
+    *saved = candidate;
+    if let Some(draft) = draft {
+        restore_bot(&mut draft.telegram, returned);
+    }
+    Ok(true)
+}
+
 /// Whether the cores the station would get differ: one added or removed, switched on or off,
 /// renamed, or its key or transport replaced. Compared in place, so no key is copied out of the
 /// configuration.
@@ -410,3 +534,6 @@ pub(crate) fn cores_differ(before: &AppConfig, after: &AppConfig) -> bool {
                 || x.key.expose() != y.key.expose()
         })
 }
+
+#[cfg(test)]
+mod tests;

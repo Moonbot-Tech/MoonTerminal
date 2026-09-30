@@ -4,6 +4,115 @@ use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 
 use super::*;
 
+/// Removing before reading destroys the only bot; a failed read must run no removal.
+#[test]
+fn return_read_failure_never_removes_the_bot() {
+    let removed = std::cell::Cell::new(false);
+    let result = read_then_remove(
+        true,
+        || Err(BotReturnError::ReadFailed.into()),
+        &mut |_| {},
+        |_, _| {
+            removed.set(true);
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+    assert!(!removed.get());
+}
+
+/// A premature return starts a second poller before server removal completes.
+#[test]
+fn returning_reads_before_removal_and_waits_for_it() {
+    let steps = std::cell::RefCell::new(Vec::new());
+    let returned = read_then_remove(
+        true,
+        || {
+            steps.borrow_mut().push("read");
+            Ok(ReturnedBot {
+                token: Secret::new("synthetic-token"),
+                access: Access::default(),
+            })
+        },
+        &mut |_| {},
+        |_, _| {
+            steps.borrow_mut().push("remove");
+            Ok(())
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(*steps.borrow(), ["read", "remove"]);
+    assert_eq!(returned.token.expose(), "synthetic-token");
+}
+
+/// Requiring a new helper for a second local bot incorrectly blocks simple removal.
+#[test]
+fn local_bot_skips_readback_but_removes_server_bot() {
+    let removed = std::cell::Cell::new(false);
+    let returned = read_then_remove(
+        false,
+        || panic!("must not export another bot"),
+        &mut |_| {},
+        |_, _| {
+            removed.set(true);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert!(returned.is_none());
+    assert!(removed.get());
+}
+
+/// script::checked here would expose a token echoed on stdout or stderr in the UI error.
+#[test]
+fn credential_read_errors_never_expose_output() {
+    for status in [Some(1), None] {
+        let error = decode_token(crate::ssh::SecretOutput {
+            status,
+            stdout: zeroize::Zeroizing::new(b"synthetic-secret-token".to_vec()),
+            stderr: zeroize::Zeroizing::new(b"synthetic-secret-token".to_vec()),
+        })
+        .unwrap_err();
+        assert!(error.downcast_ref::<BotReturnError>().is_some());
+        assert!(!format!("{error:#}").contains("synthetic-secret-token"));
+    }
+}
+
+/// Empty or malformed output must not erase the sole server credential.
+#[test]
+fn invalid_credentials_fail_closed() {
+    for text in ["", "\n", "first\nsecond"] {
+        assert!(
+            decode_token(crate::ssh::SecretOutput {
+                status: Some(0),
+                stdout: zeroize::Zeroizing::new(text.as_bytes().to_vec()),
+                stderr: zeroize::Zeroizing::new(Vec::new()),
+            })
+            .is_err()
+        );
+    }
+}
+
+/// Dropping the snapshot on a failed removal loses the bot if the credential was already deleted.
+#[test]
+fn removal_failure_retains_recovered_credentials_without_a_success() {
+    let mut retained = None;
+    let result = read_then_remove(
+        true,
+        || {
+            Ok(ReturnedBot {
+                token: Secret::new("synthetic-retained"),
+                access: Access::default(),
+            })
+        },
+        &mut |returned| retained = Some(returned),
+        |_, _| Err(anyhow::anyhow!("synthetic restart failure")),
+    );
+    assert!(result.is_err());
+    assert_eq!(retained.unwrap().token.expose(), "synthetic-retained");
+}
+
 fn running(status: TelegramStatus, code: Option<&str>) -> BotState {
     BotState {
         has_token: true,

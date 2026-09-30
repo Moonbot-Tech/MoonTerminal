@@ -117,6 +117,21 @@ cmd_put_token() {
     echo "cred=$TOKEN"
 }
 
+# get-token: decrypted directly to the admin SSH channel, never a plaintext file.
+cmd_get_token() {
+    [ -f "$CREDS/$TOKEN.cred" ] || die "no bot token"
+    systemd-creds decrypt --name="$TOKEN" "$CREDS/$TOKEN.cred" -
+}
+
+# get-pairing: the same Access the station reads, including a never-paired bot.
+cmd_get_pairing() {
+    if [ -f "$PAIRING" ]; then
+        cat "$PAIRING"
+    else
+        printf '{}\n'
+    fi
+}
+
 cmd_drop_token() {
     rm -f "$CREDS/$TOKEN.cred"
     write_dropin
@@ -360,6 +375,7 @@ cmd_status() {
     # The marker of this helper's version (the line added last): a terminal that does not see it
     # puts its own helper in place first.
     echo "release_update=yes"
+    echo "bot_return=yes"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
@@ -427,6 +443,8 @@ case "$cmd" in
 put-cred) cmd_put_cred "$@" ;;
 drop-cred) cmd_drop_cred "$@" ;;
 put-token) cmd_put_token ;;
+get-token) cmd_get_token ;;
+get-pairing) cmd_get_pairing ;;
 drop-token) cmd_drop_token ;;
 get-config) cmd_get_config ;;
 put-config)

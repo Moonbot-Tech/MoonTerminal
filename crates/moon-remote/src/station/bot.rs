@@ -13,6 +13,132 @@ use super::{BotChange, admin_conn, api, current_helper_status, edit_config, with
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::Target;
 
+/// A recovered bot; credentials never appear in progress or error text.
+#[derive(Clone)]
+pub struct ReturnedBot {
+    pub token: Secret,
+    pub access: Access,
+}
+
+/// Typed, secret-free read-back failures for localized UI feedback.
+#[derive(Debug)]
+pub enum BotReturnError {
+    /// The installed helper cannot export the bot yet.
+    OldHelper,
+    /// A connection, credential or pairing read failed before removal.
+    ReadFailed,
+}
+
+impl std::fmt::Display for BotReturnError {
+    /// Fixed diagnostics for non-UI callers, never remote credential output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::OldHelper => "the helper cannot return the bot: run setup again first",
+            Self::ReadFailed => "could not read the station bot; it has not been removed",
+        })
+    }
+}
+
+impl std::error::Error for BotReturnError {}
+
+/// Read the token and the station's saved Access over admin SSH before any removal.
+pub fn read_bot(target: &Target) -> anyhow::Result<ReturnedBot> {
+    let conn = admin_conn(target).map_err(|_| BotReturnError::ReadFailed)?;
+    let status = conn
+        .run(&script::helper("status", &[]), &[], STEP_TIMEOUT)
+        .map_err(|_| BotReturnError::ReadFailed)?;
+    anyhow::ensure!(status.ok(), BotReturnError::ReadFailed);
+    if script::value(&status.stdout_text(), "bot_return") != Some("yes") {
+        return Err(BotReturnError::OldHelper.into());
+    }
+    let out = conn
+        .run_secret(&script::helper("get-token", &[]), &[], STEP_TIMEOUT)
+        .map_err(|_| BotReturnError::ReadFailed)?;
+    let token = decode_token(out)?;
+    let out = conn
+        .run(&script::helper("get-pairing", &[]), &[], STEP_TIMEOUT)
+        .map_err(|_| BotReturnError::ReadFailed)?;
+    anyhow::ensure!(out.ok(), BotReturnError::ReadFailed);
+    let access: Access =
+        serde_json::from_slice(&out.stdout).map_err(|_| BotReturnError::ReadFailed)?;
+    access.check().map_err(|_| BotReturnError::ReadFailed)?;
+    Ok(ReturnedBot { token, access })
+}
+
+/// Protect SSH buffers before inspecting them and never include their contents in errors.
+fn decode_token(out: crate::ssh::SecretOutput) -> anyhow::Result<Secret> {
+    anyhow::ensure!(out.status == Some(0), BotReturnError::ReadFailed);
+    let text = std::str::from_utf8(&out.stdout).map_err(|_| BotReturnError::ReadFailed)?;
+    let text = text.trim();
+    anyhow::ensure!(
+        !text.is_empty() && !text.contains(['\r', '\n']),
+        BotReturnError::ReadFailed
+    );
+    Ok(Secret::new(text))
+}
+
+/// Read first, stop and remove second; a failed read preserves the station's only bot copy.
+pub fn return_bot(
+    target: &Target,
+    restore: bool,
+    recovered: Option<ReturnedBot>,
+    remember: &mut dyn FnMut(ReturnedBot),
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<Option<ReturnedBot>> {
+    read_then_remove(
+        restore,
+        || {
+            let returned = match recovered {
+                Some(returned) => returned,
+                None => read_bot(target)?,
+            };
+            Ok(returned)
+        },
+        remember,
+        |returned, remember| {
+            // Prevent the live station from rewriting pairing after it has been deleted.
+            let conn = admin_conn(target)?;
+            script::checked(conn.run(&script::helper("stop", &[]), &[], STEP_TIMEOUT)?)?;
+            if let Some(returned) = returned {
+                // A chat may have paired between the first read and stop. Read the final saved
+                // Access before deleting it; on a partial-removal retry retain our copy if gone.
+                let status = script::checked(conn.run(
+                    &script::helper("status", &[]),
+                    &[],
+                    STEP_TIMEOUT,
+                )?)?;
+                if script::value(&status.stdout_text(), "pairing") == Some("yes") {
+                    let out = conn
+                        .run(&script::helper("get-pairing", &[]), &[], STEP_TIMEOUT)
+                        .map_err(|_| BotReturnError::ReadFailed)?;
+                    anyhow::ensure!(out.ok(), BotReturnError::ReadFailed);
+                    let access: Access = serde_json::from_slice(&out.stdout)
+                        .map_err(|_| BotReturnError::ReadFailed)?;
+                    access.check().map_err(|_| BotReturnError::ReadFailed)?;
+                    returned.access = access;
+                    remember(returned.clone());
+                }
+            }
+            super::push_telegram(target, None, &BotChange::default(), true, say)
+        },
+    )
+}
+
+/// The ordering contract shared by production SSH execution and fixture tests.
+fn read_then_remove(
+    restore: bool,
+    read: impl FnOnce() -> anyhow::Result<ReturnedBot>,
+    remember: &mut dyn FnMut(ReturnedBot),
+    remove: impl FnOnce(&mut Option<ReturnedBot>, &mut dyn FnMut(ReturnedBot)) -> anyhow::Result<()>,
+) -> anyhow::Result<Option<ReturnedBot>> {
+    let mut returned = if restore { Some(read()?) } else { None };
+    if let Some(returned) = &returned {
+        remember(returned.clone());
+    }
+    remove(&mut returned, remember)?;
+    Ok(returned)
+}
+
 /// How long a handed-over bot may take to come up paired: the station restarts, checks its
 /// replica, connects the bot — ~30 s on one vCPU (STATION.md §7.7).
 const PAIRED_WITHIN: Duration = Duration::from_secs(90);

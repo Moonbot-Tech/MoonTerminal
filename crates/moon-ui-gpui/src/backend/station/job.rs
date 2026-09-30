@@ -43,8 +43,12 @@ pub(crate) enum Job {
     Tape { target: Target, tape: TapeWindow },
     /// Set the station's bot.
     Bot { target: Target, bot: BotPlan },
-    /// Take the bot off the station: its token, its chats and `[telegram]`.
-    BotOff { target: Target },
+    /// Remove the station bot, recovering it only when the terminal has none.
+    BotOff {
+        target: Target,
+        restore: bool,
+        recovered: Option<bot::ReturnedBot>,
+    },
     /// Give the station's bot this token: a new bot, or a replacement that pairs anew.
     ServerToken {
         target: Target,
@@ -72,6 +76,8 @@ pub(crate) enum Job {
 
 /// What a finished job reports.
 pub(crate) enum Done {
+    /// The station stopped polling and removed its bot; recovered data may be saved locally.
+    BotOff { returned: Option<bot::ReturnedBot> },
     Ok {
         /// The terminal's bot now runs on the station: its token goes from the terminal.
         transferred: bool,
@@ -89,6 +95,8 @@ pub(crate) enum Done {
 }
 
 pub(crate) enum Event {
+    /// Quarantined before removal; never starts a local poller until the successful end.
+    Returned(bot::ReturnedBot),
     Line(String),
     Done(Done),
 }
@@ -103,7 +111,10 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
             let mut say = move |line: &str| {
                 let _ = lines.send(Event::Line(line.to_owned()));
             };
-            let done = match run(job, &mut say) {
+            let mut remember = |returned| {
+                let _ = tx.send(Event::Returned(returned));
+            };
+            let done = match run(job, &mut remember, &mut say) {
                 Ok(done) => done,
                 Err(e) if e.downcast_ref::<NeedsAdminPassword>().is_some() => {
                     Done::NeedsAdminPassword
@@ -112,7 +123,7 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
                     station_may_poll: e
                         .downcast_ref::<moon_remote::station::bot::StationMayStillPoll>()
                         .is_some(),
-                    reason: format!("{e:#}"),
+                    reason: job_error(&e),
                 },
             };
             let _ = tx.send(Event::Done(done));
@@ -122,7 +133,25 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
     rx
 }
 
-fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
+/// Localize return-read failures without exposing remote credential output.
+fn job_error(error: &anyhow::Error) -> String {
+    match error.downcast_ref::<bot::BotReturnError>() {
+        Some(bot::BotReturnError::OldHelper) => {
+            rust_i18n::t!("telegram.server.return_old_helper").to_string()
+        }
+        Some(bot::BotReturnError::ReadFailed) => {
+            rust_i18n::t!("telegram.server.return_read_failed").to_string()
+        }
+        None => format!("{error:#}"),
+    }
+}
+
+/// Execute one queued station job; return bot data only after server polling has stopped.
+fn run(
+    job: Job,
+    remember: &mut dyn FnMut(bot::ReturnedBot),
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<Done> {
     match job {
         Job::Install { setup, cores, bot } => {
             let target = setup.target.clone();
@@ -170,14 +199,13 @@ fn run(job: Job, say: &mut dyn FnMut(&str)) -> anyhow::Result<Done> {
             })
         }
         Job::Bot { target, bot } => set_bot(&target, bot, say),
-        Job::BotOff { target } => {
-            station::push_telegram(&target, None, &BotChange::default(), true, say)?;
-            Ok(Done::Ok {
-                transferred: false,
-                bot: Some(bot::bot_state(&target)?),
-                bot_off: true,
-            })
-        }
+        Job::BotOff {
+            target,
+            restore,
+            recovered,
+        } => Ok(Done::BotOff {
+            returned: bot::return_bot(&target, restore, recovered, remember, say)?,
+        }),
         Job::ServerToken {
             target,
             token,
