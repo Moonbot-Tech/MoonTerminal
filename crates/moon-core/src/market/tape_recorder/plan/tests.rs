@@ -52,6 +52,34 @@ fn an_open_selects_the_pair_and_is_seeded_once() {
     );
 }
 
+/// A trade taken up again after a restart: what the file already holds is not recorded twice.
+/// Held whole, the key wants no pair at all; held in part, the recording asks for the rest only
+/// and files nothing over what is held.
+#[test]
+fn a_resumed_trade_records_only_what_the_file_lacks() {
+    let mut whole = KeyTask::new();
+    whole.filed_before(&[(T0 - MARGIN, T0 + LONG)]);
+    whole.opened(ID, T0, MARGIN, LONG);
+    assert!(whole.knows(ID));
+    assert!(
+        !whole.wants_pair(),
+        "everything needed is in the file already"
+    );
+
+    let mut part = KeyTask::new();
+    // Filed up to the restart at T0 + 60 s; the station came back at T0 + 180 s.
+    part.filed_before(&[(T0 - MARGIN, T0 + 60_000)]);
+    part.opened(ID, T0, MARGIN, LONG);
+    assert!(part.wants_pair());
+    assert!(part.needs_seed());
+    part.seed_asked(T0 + 180_000, 0);
+    let lost = part.seeded(prints(T0 + 100_000, T0 + 180_000, 1_000), T0 + 180_000, 0);
+    // Only the downtime the archive no longer holds is lost, not the stretch already filed.
+    assert_eq!(lost.spans(), &[(T0 + 60_001, T0 + 99_999)]);
+    let filing = part.flush(T0 + 200_000, true).unwrap();
+    assert_eq!(filing.file.spans(), &[(T0 + 100_000, T0 + 200_000)]);
+}
+
 #[test]
 fn a_hot_ring_names_the_run_up_it_no_longer_holds() {
     let mut task = KeyTask::new();

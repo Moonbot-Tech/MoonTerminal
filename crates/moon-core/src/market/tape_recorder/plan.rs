@@ -120,7 +120,7 @@ struct Live {
 #[derive(Clone, Debug)]
 pub(super) struct KeyTask {
     trades: Vec<Trade>,
-    /// Written this session.
+    /// Written this session — or before it, for a trade taken up again ([`Self::filed_before`]).
     filed: Coverage,
     /// Needed and out of reach: older than the archive, overwritten in the ring, given up.
     lost: Coverage,
@@ -139,6 +139,19 @@ impl KeyTask {
             live: None,
             seed: None,
             buffer: Vec::new(),
+        }
+    }
+
+    /// Whether the key already has this trade.
+    pub(super) fn knows(&self, id: TradeId) -> bool {
+        self.trades.iter().any(|t| t.id == id)
+    }
+
+    /// Stretches the file already holds, from before this process: a trade taken up again after
+    /// a restart does not record them twice, nor ask the archive for them.
+    pub(super) fn filed_before(&mut self, spans: &[(i64, i64)]) {
+        for &span in spans {
+            self.filed.add(span);
         }
     }
 
