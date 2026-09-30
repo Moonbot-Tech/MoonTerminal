@@ -25,6 +25,7 @@ fn coin_hit(core: u64, venue: u8, coin: &str) -> CoinHit {
             contract: None,
         },
         venue: Some(CoreVenue::identify(venue, "", None)),
+        in_trade: false,
     }
 }
 
