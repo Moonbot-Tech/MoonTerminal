@@ -89,7 +89,22 @@ pub fn return_bot(
         restore,
         || {
             let returned = match recovered {
-                Some(returned) => returned,
+                Some(returned) => {
+                    // A failed removal may have left the credential on the station. Its bot may
+                    // have been replaced since: read that bot rather than restoring the old token
+                    // with the new bot's grants. Only an absent credential uses our retained copy.
+                    let conn = admin_conn(target).map_err(|_| BotReturnError::ReadFailed)?;
+                    let status = conn
+                        .run(&script::helper("status", &[]), &[], STEP_TIMEOUT)
+                        .map_err(|_| BotReturnError::ReadFailed)?;
+                    anyhow::ensure!(status.ok(), BotReturnError::ReadFailed);
+                    let has_token = match script::value(&status.stdout_text(), "token") {
+                        Some("yes") => true,
+                        Some("no") => false,
+                        _ => return Err(BotReturnError::ReadFailed.into()),
+                    };
+                    current_or_recovered(returned, has_token, || read_bot(target))?
+                }
                 None => read_bot(target)?,
             };
             Ok(returned)
@@ -122,6 +137,16 @@ pub fn return_bot(
             super::push_telegram(target, None, &BotChange::default(), true, say)
         },
     )
+}
+
+/// The station's current bot takes precedence on retry; retain our snapshot only when its
+/// credential has already been removed, so a partial removal remains recoverable.
+fn current_or_recovered(
+    recovered: ReturnedBot,
+    has_token: bool,
+    read: impl FnOnce() -> anyhow::Result<ReturnedBot>,
+) -> anyhow::Result<ReturnedBot> {
+    if has_token { read() } else { Ok(recovered) }
 }
 
 /// The ordering contract shared by production SSH execution and fixture tests.

@@ -113,6 +113,54 @@ fn removal_failure_retains_recovered_credentials_without_a_success() {
     assert_eq!(retained.unwrap().token.expose(), "synthetic-retained");
 }
 
+/// Reusing token A after ServerToken replaced it with B deletes B and associates B's grants with A.
+#[test]
+fn a_retry_returns_the_current_bot_instead_of_a_superseded_snapshot() {
+    let old = ReturnedBot {
+        token: Secret::new("synthetic-bot-A"),
+        access: Access {
+            authorized_chat_ids: vec![42],
+            owner_chat_id: Some(42),
+            chat_access: Vec::new(),
+        },
+    };
+    let mut remembered = None;
+    let returned = read_then_remove(
+        true,
+        || {
+            current_or_recovered(old, true, || {
+                Ok(ReturnedBot {
+                    token: Secret::new("synthetic-bot-B"),
+                    access: Access {
+                        authorized_chat_ids: vec![73],
+                        owner_chat_id: Some(73),
+                        chat_access: Vec::new(),
+                    },
+                })
+            })
+        },
+        &mut |bot| remembered = Some(bot),
+        |_, _| Ok(()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(returned.token.expose(), "synthetic-bot-B");
+    assert_eq!(returned.access.authorized_chat_ids, [73]);
+    assert_eq!(returned.access.owner_chat_id, Some(73));
+    assert_eq!(remembered.unwrap().token.expose(), "synthetic-bot-B");
+}
+
+/// Requiring an already-deleted credential after partial removal would strand the only copy.
+#[test]
+fn a_partial_removal_retry_uses_the_retained_bot_when_credential_is_gone() {
+    let old = ReturnedBot {
+        token: Secret::new("synthetic-retained"),
+        access: Access::default(),
+    };
+    let returned = current_or_recovered(old, false, || panic!("credential is gone")).unwrap();
+    assert_eq!(returned.token.expose(), "synthetic-retained");
+}
+
 fn running(status: TelegramStatus, code: Option<&str>) -> BotState {
     BotState {
         has_token: true,
