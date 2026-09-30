@@ -286,15 +286,22 @@ impl StrategiesView {
         });
         // Update the filter and redraw from search input events; render must not poll the input as
         // an event source.
-        cx.subscribe(&search, |this, input, ev: &MoonInputEvent, cx| {
-            if matches!(ev, MoonInputEvent::Change) {
+        cx.subscribe(&search, |this, input, ev: &MoonInputEvent, cx| match ev {
+            MoonInputEvent::Change => {
                 let value = input.read(cx).value().to_string();
                 if this.filter.search != value {
                     this.filter.search = value;
                     this.persist_session(cx);
                     cx.notify();
+                    this.arm_search_prune(cx);
                 }
             }
+            // Finishing the edit prunes at once: the user has stopped typing.
+            MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. } => {
+                this.search_prune_debounce = None;
+                this.prune_for_search(cx);
+            }
+            _ => {}
         })
         .detach();
 
@@ -611,6 +618,12 @@ impl StrategiesView {
                 .map(|s| s.folder_sel.clone())
                 .unwrap_or_default(),
             folder_anchor: session.as_ref().and_then(|s| s.folder_anchor.clone()),
+            search_prune_debounce: None,
+            settled_search: session
+                .as_ref()
+                .map(|s| s.search.clone())
+                .unwrap_or_default(),
+            last_pruned_query: None,
             // Deliberately not restored: a pending cut, the drawn order and undelivered notices
             // all belong to the frame that produced them.
             cut: None,

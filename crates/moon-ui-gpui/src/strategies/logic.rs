@@ -9,6 +9,8 @@ use moon_core::feed::{
     SchemaField, SchemaFieldUi, SchemaSection, StrategyEditPhase, StrategyEditRow, StrategyRow,
 };
 use moon_core::session::{CoreId, CoreStore};
+use moon_core::strat_db::stats::HeadRow;
+use moon_core::venue::CoreVenue;
 
 use super::filter::PreparedFilter;
 use super::rules::{Rules, Values};
@@ -1037,3 +1039,43 @@ pub(super) fn subtree_folder_paths(
 
 #[cfg(test)]
 mod tests;
+
+/// Return the keys the current filter hides, for pruning a selection to what the tree shows.
+///
+/// Visibility is judged by the filter alone, never by `flat_order`, so collapsing a folder can
+/// never shrink the selection. A key is hidden when its core fails the exchange filter, when its
+/// live row fails the row filter, or, with no live row, when it is listed in the core's Deleted
+/// folder under a name the search rejects. Any other absent key is kept: unknown is not hidden.
+///
+/// Args:
+///     keys: Candidate keys, typically the selection set plus the primary.
+///     store: Live store supplying each key's row.
+///     filter: Current tree filter.
+///     venues: Each core's reported venue, as the tree build reads it.
+///     deleted: Each core's Deleted-folder rows, as the tree build reads them.
+///
+/// Returns:
+///     The subset of `keys` the filter hides.
+pub(super) fn filter_hidden_keys(
+    keys: impl IntoIterator<Item = Key>,
+    store: &CoreStore,
+    filter: &super::filter::StrategyFilter,
+    venues: &HashMap<CoreId, CoreVenue>,
+    deleted: &HashMap<CoreId, Vec<HeadRow>>,
+) -> HashSet<Key> {
+    let prepared = filter.prepare();
+    keys.into_iter()
+        .filter(|&(core, id)| {
+            if !filter.core_matches(venues.get(&core)) {
+                return true;
+            }
+            if let Some(r) = row(store, core, id) {
+                return !prepared.matches(r);
+            }
+            deleted
+                .get(&core)
+                .and_then(|rows| rows.iter().find(|h| h.strategy_id as u64 == id))
+                .is_some_and(|h| !prepared.name_matches(&h.name))
+        })
+        .collect()
+}

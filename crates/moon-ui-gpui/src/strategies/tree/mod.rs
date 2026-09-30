@@ -64,6 +64,31 @@ fn visible_tree_collapsed(
     })
 }
 
+/// Whether Expand all would change nothing: every visible core and every folder prefix of its
+/// strategies is already expanded — the same set [`StrategiesView::expand_all`] inserts.
+fn visible_tree_expanded(
+    expanded_cores: &HashSet<CoreId>,
+    expanded_folders: &HashSet<(CoreId, String)>,
+    cores: &[(CoreId, String)],
+    store: &CoreStore,
+) -> bool {
+    cores.iter().all(|(core, _)| {
+        expanded_cores.contains(core)
+            && store.core(*core).is_none_or(|cd| {
+                cd.strategies.iter().all(|r| {
+                    let mut acc = String::new();
+                    moon_core::feed::strategy_path::path_segments(&r.folder_path).all(|part| {
+                        if !acc.is_empty() {
+                            acc.push('/');
+                        }
+                        acc.push_str(part);
+                        expanded_folders.contains(&(*core, acc.clone()))
+                    })
+                })
+            })
+    })
+}
+
 impl StrategiesView {
     /// Render the Strategies tree pane, its responsive filter row, and atomic action footer.
     ///
@@ -152,6 +177,8 @@ impl StrategiesView {
         };
 
         let collapsed = visible_tree_collapsed(&self.expanded_cores, &self.expanded_folders, cores);
+        let all_expanded =
+            visible_tree_expanded(&self.expanded_cores, &self.expanded_folders, cores, store);
         let settings =
             self.settings_popover(super::settings::settings_trigger(self.settings_open), p, cx);
 
@@ -186,12 +213,21 @@ impl StrategiesView {
                             .gap_x(design::ui_px(cx, 7.0))
                             .gap_y(design::ui_px(cx, 5.0))
                             .child(
-                                div().flex_1().min_w(design::ui_px(cx, SEARCH_MIN_W)).child(
-                                    MoonInput::new("strat-search")
-                                        .state(&self.search)
-                                        .size(design::INPUT_SIZE)
-                                        .cleanable(true),
-                                ),
+                                div()
+                                    .id("strat-search-tip")
+                                    .flex_1()
+                                    .min_w(design::ui_px(cx, SEARCH_MIN_W))
+                                    .tooltip(crate::panels::common::text_tooltip(
+                                        crate::panels::common::strategy_query_tip(t!(
+                                            "strat.search_tip"
+                                        )),
+                                    ))
+                                    .child(
+                                        MoonInput::new("strat-search")
+                                            .state(&self.search)
+                                            .size(design::INPUT_SIZE)
+                                            .cleanable(true),
+                                    ),
                             )
                             .child(self.active_only_toggle(cx))
                             .child(settings),
@@ -213,31 +249,50 @@ impl StrategiesView {
                             .child(
                                 // Wrapper, not a bare button: the caret is right-aligned by
                                 // `ml_auto` and must not be shrunk by the wrapping row.
-                                h_flex().ml_auto().flex_none().items_center().child(
-                                    MoonButton::new("expand-all")
-                                        .ghost()
-                                        .leading_icon(MoonButtonIconSlot::caret(
-                                            MoonDisclosureDirection::DownUp,
-                                            !collapsed,
-                                        ))
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            // Resolved at click time, like the paste handler in
-                                            // `ui.rs`: capturing the frame's list instead cost
-                                            // a deep copy of every core name on every repaint.
-                                            let backend = this.backend.read(cx);
-                                            let cores = visible_strategy_cores(this, backend);
-                                            let store = backend.session.store();
-                                            let coll = visible_tree_collapsed(
-                                                &this.expanded_cores,
-                                                &this.expanded_folders,
-                                                &cores,
-                                            );
-                                            this.expand_collapse_toggle(&cores, store, coll);
-                                            this.persist_session(cx);
-                                            cx.notify();
-                                        }))
-                                        .render(),
-                                ),
+                                h_flex()
+                                    .ml_auto()
+                                    .flex_none()
+                                    .items_center()
+                                    .gap(design::ui_px(cx, 2.0))
+                                    .child(
+                                        MoonButton::new("expand-all")
+                                            .ghost()
+                                            .leading_icon(MoonButtonIconSlot::caret(
+                                                MoonDisclosureDirection::DownUp,
+                                                false,
+                                            ))
+                                            .tooltip(t!("strat.expand_all").to_string())
+                                            .disabled(all_expanded)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                // Resolved at click time, like the paste handler
+                                                // in `ui.rs`: capturing the frame's list instead
+                                                // cost a deep copy of every core name on every
+                                                // repaint.
+                                                let backend = this.backend.read(cx);
+                                                let cores = visible_strategy_cores(this, backend);
+                                                let store = backend.session.store();
+                                                this.expand_all(&cores, store);
+                                                this.persist_session(cx);
+                                                cx.notify();
+                                            }))
+                                            .render(),
+                                    )
+                                    .child(
+                                        MoonButton::new("collapse-all")
+                                            .ghost()
+                                            .leading_icon(MoonButtonIconSlot::caret(
+                                                MoonDisclosureDirection::DownUp,
+                                                true,
+                                            ))
+                                            .tooltip(t!("strat.collapse_all").to_string())
+                                            .disabled(collapsed)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.collapse_all();
+                                                this.persist_session(cx);
+                                                cx.notify();
+                                            }))
+                                            .render(),
+                                    ),
                             ),
                     ),
             )
@@ -374,8 +429,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.kind.is_some() {
                                 this.filter.kind = None;
-                                this.persist_session(c);
-                                c.notify();
+                                this.on_filter_changed(c);
                             }
                         });
                     }
@@ -393,8 +447,7 @@ impl StrategiesView {
                             view.update(app, |this, c| {
                                 if this.filter.kind != Some(name_ord) {
                                     this.filter.kind = Some(name_ord);
-                                    this.persist_session(c);
-                                    c.notify();
+                                    this.on_filter_changed(c);
                                 }
                             });
                         }
@@ -431,8 +484,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.dir != val {
                                 this.filter.dir = val;
-                                this.persist_session(c);
-                                c.notify();
+                                this.on_filter_changed(c);
                             }
                         });
                     }),
@@ -482,8 +534,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.exchange.is_some() {
                                 this.filter.exchange = None;
-                                this.persist_session(c);
-                                c.notify();
+                                this.on_filter_changed(c);
                             }
                         });
                     }
@@ -505,8 +556,7 @@ impl StrategiesView {
                         view.update(app, |this, c| {
                             if this.filter.exchange != Some(section) {
                                 this.filter.exchange = Some(section);
-                                this.persist_session(c);
-                                c.notify();
+                                this.on_filter_changed(c);
                             }
                         });
                     }),

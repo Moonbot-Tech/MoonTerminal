@@ -5,10 +5,12 @@ use std::collections::HashMap;
 use rusqlite::Connection;
 use rusqlite::types::Value;
 
-use super::name_fold::{install_unicode_casefold, strategy_name_casefold};
+use crate::strategy_query::StrategyQuery;
+
 use super::read_fail::read_fail;
 use super::rep;
 use super::report_axis::ReportStamp;
+use super::strategy_name_match::install_strategy_name_match;
 use super::valuation::ValuationMode;
 use super::{
     QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource, read_sources_res, table_columns_res,
@@ -475,9 +477,10 @@ pub struct ReportFilter {
     /// The core is part of every key because strategy ids repeat across cores. An explicit empty
     /// collection intentionally matches no rows so a lost/stale selection cannot broaden a query.
     pub strategies: Option<Vec<ReportStrategyKey>>,
-    /// Literal case-insensitive substring matched against the effective strategy name.
+    /// Strategy-name query in the shared `moon_core::strategy_query` syntax (comma = OR, space =
+    /// AND, `!word` = exclude, Unicode caseless), matched against the effective strategy name.
     ///
-    /// Empty or whitespace-only text adds no predicate. This stays independent of the exact
+    /// Text that parses to an empty query adds no predicate. This stays independent of the exact
     /// strategy keys above, so using both filters narrows by their conjunction.
     pub strategy_name_mask: String,
     /// Which conversion the three USDT columns and the totals row apply.
@@ -1329,7 +1332,19 @@ fn strategy_metadata_required(filter: &ReportFilter) -> bool {
         .strategies
         .as_ref()
         .is_some_and(|strategies| !strategies.is_empty())
-        || !filter.strategy_name_mask.trim().is_empty()
+        || strategy_name_query(filter).is_some()
+}
+
+/// Parse the Report's strategy-name mask — the ONE emptiness decision for it.
+///
+/// Args:
+///     filter: Complete Report filter.
+///
+/// Returns:
+///     The parsed query, or `None` when it selects everything and no predicate is needed.
+fn strategy_name_query(filter: &ReportFilter) -> Option<StrategyQuery> {
+    let query = StrategyQuery::parse(&filter.strategy_name_mask);
+    (!query.is_empty()).then_some(query)
 }
 
 /// Append the exact multi-strategy predicate without consuming SQLite bind-variable capacity.
@@ -1387,11 +1402,17 @@ fn append_strategy_filter(
     sql.push_str(&format!(" AND ({groups})"));
 }
 
-/// Append a literal, case-insensitive strategy-name substring predicate.
+/// Append the strategy-name predicate in the shared `moon_core::strategy_query` syntax.
 ///
-/// `instr` gives `%`, `_`, and `\` no wildcard meaning, unlike `LIKE`, while the bound parameter
-/// keeps arbitrary user text outside SQL syntax. The name is joined by the same effective strategy
-/// id as the exact selector so liquidation attribution and physical strategy ids agree.
+/// `mt_strategy_name_match` runs the same parser as the Strategies tree, so `%`, `_` and `\` stay
+/// literal, while the bound parameter keeps arbitrary user text outside SQL syntax. The name is
+/// joined by the same effective strategy id as the exact selector so liquidation attribution and
+/// physical strategy ids agree.
+///
+/// Two shapes. A query with a positive term keeps rows whose strategy name matches (`EXISTS`), so
+/// rows without a named strategy drop out. An exclusion-only query means "everything except", so it
+/// drops only rows whose named strategy fails it (`NOT EXISTS`): manual, sid-0 and
+/// unknown-strategy rows survive.
 ///
 /// Args:
 ///     sql: Mutable WHERE clause receiving the name predicate.
@@ -1401,7 +1422,8 @@ fn append_strategy_filter(
 ///     has_strategy_names: Whether the attached strategy metadata is readable.
 ///
 /// Returns:
-///     Nothing; a non-empty mask fails closed when its identity or name metadata is unavailable.
+///     Nothing; a non-empty mask of either shape fails closed when its identity or name metadata
+///     is unavailable, since not even an exclusion can be proven then.
 fn append_strategy_name_mask(
     sql: &mut String,
     params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
@@ -1409,26 +1431,38 @@ fn append_strategy_name_mask(
     columns: &std::collections::HashSet<String>,
     has_strategy_names: bool,
 ) {
-    let mask = filter.strategy_name_mask.trim();
-    if mask.is_empty() {
+    let Some(query) = strategy_name_query(filter) else {
         return;
-    }
+    };
     if !has_strategy_names || !columns.contains("core_uid") || !columns.contains("strategyid") {
         sql.push_str(" AND 1=0");
         return;
     }
 
     let sid = super::analytics::effective_sid_expr("r", columns, has_strategy_names);
-    sql.push_str(&format!(
-        " AND EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
-         WHERE mask_strategy.core_uid = r.core_uid \
-         AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
-         AND instr(mt_unicode_casefold(mask_strategy.name), ?) > 0)"
-    ));
-    params.push(Box::new(strategy_name_casefold(mask)));
+    if query.has_positive() {
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
+             WHERE mask_strategy.core_uid = r.core_uid \
+             AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
+             AND mt_strategy_name_match(mask_strategy.name, ?) = 1)"
+        ));
+    } else {
+        // `name IS NOT NULL` is load-bearing: `mt_strategy_name_match` returns 0 for a NULL name,
+        // which `= 0` would otherwise read as excluded.
+        sql.push_str(&format!(
+            " AND NOT EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
+             WHERE mask_strategy.core_uid = r.core_uid \
+             AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
+             AND mask_strategy.name IS NOT NULL \
+             AND mt_strategy_name_match(mask_strategy.name, ?) = 0)"
+        ));
+    }
+    // The raw text, exactly what `strategy_name_query` parsed; the parser ignores edge whitespace.
+    params.push(Box::new(filter.strategy_name_mask.clone()));
 }
 
-/// Install the case folding for a Report read, only when its filter carries a mask.
+/// Install the strategy-name match function for a Report read, only when its filter has a mask.
 ///
 /// Registration is skipped when the query has no mask, keeping unrelated Report reads unchanged.
 ///
@@ -1445,10 +1479,10 @@ fn install_strategy_name_mask_function(
     conn: &Connection,
     filter: &ReportFilter,
 ) -> rusqlite::Result<()> {
-    if filter.strategy_name_mask.trim().is_empty() {
+    if strategy_name_query(filter).is_none() {
         return Ok(());
     }
-    install_unicode_casefold(conn)
+    install_strategy_name_match(conn)
 }
 
 /// SQL projecting the rec id the soft-delete protocol addresses a row by.

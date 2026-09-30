@@ -61,6 +61,7 @@ use moon_core::db::ReportAxis;
 use moon_core::db::analytics::{DayCell, PreviousPeriodBasis, Query, StrategyBase, Summary};
 use moon_core::db::valuation::{ValuationMode, ValuationStatus};
 use moon_core::db::{ProfitMetric, ProfitUnit, ReadFail, SideFilter};
+use moon_core::strategy_query::StrategyQuery;
 
 use crate::load_state::{LoadState, note_el};
 use refresh::{
@@ -2237,8 +2238,8 @@ impl AnalyticsView {
         }
         // Any fresh decision retires whatever timer is still pending: dropping the task cancels it.
         self.strategy_mask_debounce = None;
-        if self.strategy_mask_applied == value {
-            // Nothing to read: the reads on screen already used exactly this mask.
+        if StrategyQuery::parse(&self.strategy_mask_applied) == StrategyQuery::parse(&value) {
+            // Nothing to read: the reads on screen already used an equivalent query.
             if text_changed {
                 cx.notify();
             }

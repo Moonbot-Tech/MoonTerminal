@@ -1049,9 +1049,8 @@ fn install_plan_stub_functions(conn: &rusqlite::Connection) -> rusqlite::Result<
     conn.create_scalar_function("mt_minute_of_week", 2, flags, |_ctx| Ok(0i64))?;
     conn.create_scalar_function("mt_core_minute_of_day", 1, flags, |_ctx| Ok(0i64))?;
     conn.create_scalar_function("mt_core_minute_of_week", 1, flags, |_ctx| Ok(0i64))?;
-    // The real function returns its argument casefolded; a stub only needs to resolve, but
-    // returning the argument unchanged keeps its declared return type (TEXT) honest too.
-    conn.create_scalar_function("mt_unicode_casefold", 1, flags, |ctx| ctx.get::<String>(0))?;
+    // The real function answers 1 or 0 (INTEGER); a stub only needs to resolve.
+    conn.create_scalar_function("mt_strategy_name_match", 2, flags, |_ctx| Ok(1i64))?;
     Ok(())
 }
 

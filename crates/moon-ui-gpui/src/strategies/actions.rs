@@ -547,20 +547,31 @@ impl StrategiesView {
         self.focused_field = None;
     }
 
-    /// Put a strategy's full name into the search filter and focus the input for Find All by Name.
-    /// Writes both the filter and input because `set_value` does not emit Change.
+    /// Put a query that finds a strategy's name into the search filter and focus the input for Find
+    /// All by Name. [`StrategyQuery::phrase_for_name`] turns the name into the AND of its words, so
+    /// commas and `!` in it are never read as syntax; a name that yields no phrase leaves the search
+    /// unchanged. Writes both the filter and input because `set_value` does not emit Change.
+    ///
+    /// [`StrategyQuery::phrase_for_name`]: moon_core::strategy_query::StrategyQuery::phrase_for_name
     pub(super) fn search_by_name(
         &mut self,
         name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.filter.search = name.clone();
+        let text = moon_core::strategy_query::StrategyQuery::phrase_for_name(&name);
+        // A name with no words (only `!`, commas, whitespace) yields no phrase; clearing the
+        // search for it would widen the tree instead of finding anything.
+        if text.is_empty() {
+            return;
+        }
+        self.filter.search = text.clone();
+        // A deliberate search settles at once, like Enter.
+        self.search_prune_debounce = None;
         self.search.update(cx, |st, cx| {
-            st.set_value(name, window, cx);
+            st.set_value(text, window, cx);
             st.focus(window, cx);
         });
-        self.persist_session(cx);
-        cx.notify();
+        self.on_filter_changed(cx);
     }
 }

@@ -163,6 +163,13 @@ common.mixed_values:
   en: "mixed values"
   es: "valores distintos"
 
+# Second part of every strategy-name search tooltip (Strategies tree, Analytics, Report): the one
+# shared query syntax with examples.
+common.strategy_query_syntax:
+  ru: "Запятая = ИЛИ, пробел = И, !слово = исключить. Регистр не важен.\nEMA, Hook — названия с EMA или с Hook\ndrops 1m — названия с drops и 1m\nshort !test — названия с short, но без test"
+  en: "Comma = OR, space = AND, !word = exclude. Case-insensitive.\nEMA, Hook — names with EMA or Hook\ndrops 1m — names with drops and 1m\nshort !test — names with short, without test"
+  es: "Coma = o, espacio = y, !palabra = excluir. Sin distinguir mayúsculas.\nEMA, Hook — nombres con EMA o Hook\ndrops 1m — nombres con drops y 1m\nshort !test — nombres con short, sin test"
+
 # The button that writes a staged change and keeps its surface open.
 common.apply:
   ru: "Применить"

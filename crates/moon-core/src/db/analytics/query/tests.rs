@@ -293,7 +293,7 @@ fn strategy_name_mask_covers_the_no_exact_selection_branch() {
 
     assert_eq!(branches.len(), 1);
     assert!(
-        branches[0].contains("strat.strategies") && branches[0].contains("mt_unicode_casefold"),
+        branches[0].contains("strat.strategies") && branches[0].contains("mt_strategy_name_match"),
         "an unscoped name mask must retain its strategy predicate: {branches:#?}"
     );
 }

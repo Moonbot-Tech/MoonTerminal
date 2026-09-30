@@ -611,7 +611,8 @@ pub struct ReportFilterPrefs {
     /// Only an explicit menu pick is stored, matching the manual-date rule on [`Self::period`].
     #[serde(default, deserialize_with = "de_lenient")]
     pub period_overview: Option<String>,
-    /// Literal strategy-name substring retained for group Auto mode.
+    /// Strategy-name query retained for group Auto mode, in the shared syntax (comma = OR,
+    /// space = AND, `!word` excludes; see `moon_core::strategy_query`).
     ///
     /// `Some("")` is a deliberate clear. A missing or malformed value leaves the panel's current
     /// value standing when it changes host context.
@@ -1050,7 +1051,8 @@ pub struct WindowLayout {
     /// from "Summary" (each tab has its own time window). None = default.
     #[serde(default)]
     pub analytics_strat_period: Option<String>,
-    /// "Analytics" strategy-name mask: a literal, case-insensitive part of the strategy name.
+    /// "Analytics" strategy-name mask in the shared syntax (comma = OR, space = AND, `!word`
+    /// excludes; see `moon_core::strategy_query`).
     /// None or empty = no filter.
     ///
     /// A flat field rather than an entry in [`Self::report_filters`], because Analytics is a

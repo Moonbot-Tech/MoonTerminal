@@ -15,6 +15,10 @@ strat.search:
   ru: "поиск"
   en: "search"
   es: "buscar"
+strat.search_tip:
+  ru: "Фильтр дерева по названию стратегии."
+  en: "Filter the tree by strategy name."
+  es: "Filtra el árbol por nombre de estrategia."
 strat.all_kinds:
   ru: "все типы"
   en: "all types"

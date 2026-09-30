@@ -394,10 +394,13 @@ header widths.
 
 The group-owned Auto Report retains a separate strategy-name mask beside the exact strategy
 selector. It is applied to every core in the effective Auto scope (the complete Overview or one
-selected core), combines conjunctively with exact keys, and uses full Unicode case-folded literal
-substring matching through the shared
-`ReportFilter`, so rows,
-totals, stale-result identity, and export cannot diverge. Strategy catalog discovery clears both
+selected core) and combines conjunctively with exact keys. The Report and Analytics strategy-name
+masks and the Strategies tree search share `moon_core::strategy_query` (comma = OR, space = AND
+within a term, `!word` excludes); SQL reads call it through the registered
+`mt_strategy_name_match` function (one bound value, no `LIKE`), and an exclusion-only query keeps
+rows without strategy metadata. The Report applies it through the shared `ReportFilter`, so rows,
+totals, stale-result identity, and export cannot diverge. The Strategies tree prunes its selection
+to the rows the filter shows, with the search prune debounced until the text settles. Strategy catalog discovery clears both
 strategy predicates and therefore never self-locks under either filter. The Auto core trigger takes
 its current full name from the live group roster, falls back to report metadata only when offline,
 and exposes the complete text through a fitted trigger and tooltip. The toolbar consists of small
