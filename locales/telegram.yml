@@ -735,14 +735,10 @@ telegram.server.old_admin:
   ru: "Старый пароль moon"
   en: "Old password of moon"
   es: "Contraseña anterior de moon"
-telegram.server.bin:
-  ru: "Файл службы"
-  en: "Service file"
-  es: "Archivo del servicio"
-telegram.server.bin_hint:
-  ru: "Путь к файлу moon-station для Linux. Пока нет релиза службы, его собирают вручную."
-  en: "Path to the moon-station file for Linux. Until the service has a release, it is built by hand."
-  es: "Ruta al archivo moon-station para Linux. Hasta que el servicio tenga una versión publicada, se compila a mano."
+telegram.server.release_hint:
+  ru: "Служба ставится из последнего релиза MoonTerminal на GitHub под архитектуру сервера (проверка SHA-256)."
+  en: "The service is installed from the latest MoonTerminal release on GitHub, for the server's architecture (SHA-256 checked)."
+  es: "El servicio se instala desde la última versión de MoonTerminal en GitHub, para la arquitectura del servidor (SHA-256 comprobado)."
 telegram.server.transfer_hint:
   ru: "Бот терминала переносится на сервер: токен, чаты и доступы. Когда бот на сервере заработает, терминал удалит токен у себя; для локального бота понадобится другой токен. Если перенос не удастся, бот останется в терминале."
   en: "The terminal's bot moves to the server: its token, chats and their access. Once the bot runs there, the terminal deletes its own token; a local bot will need another token. If the move fails, the bot stays in the terminal."
@@ -923,6 +919,10 @@ telegram.server.update:
   ru: "Обновить службу"
   en: "Update the service"
   es: "Actualizar el servicio"
+telegram.server.older_service:
+  ru: "Служба %{station} старше этого терминала %{terminal}: нажмите «%{button}»."
+  en: "The service %{station} is older than this terminal %{terminal}: press «%{button}»."
+  es: "El servicio %{station} es anterior a este terminal %{terminal}: pulsa «%{button}»."
 telegram.server.update_hint:
   ru: "Ставит станцию из последнего релиза MoonTerminal на GitHub (проверка SHA-256), перезапускает и проверяет; не удержалась — возвращает прежнюю. Новее установленной нет — ничего не меняет."
   en: "Installs the station from the latest MoonTerminal release on GitHub (SHA-256 checked), restarts and checks it; if it does not stay up, the previous one comes back. Nothing newer than the installed one — nothing changes."
@@ -971,10 +971,6 @@ telegram.server.need_host:
   ru: "Укажите IP сервера (можно с портом: 1.2.3.4:2222)."
   en: "Enter the server IP (a port may follow: 1.2.3.4:2222)."
   es: "Indica la IP del servidor (puede llevar puerto: 1.2.3.4:2222)."
-telegram.server.need_bin:
-  ru: "Укажите файл службы."
-  en: "Enter the service file."
-  es: "Indica el archivo del servicio."
 telegram.server.job_lost:
   ru: "Задача прервалась, не сообщив результат."
   en: "The job stopped without reporting its result."

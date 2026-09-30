@@ -8,6 +8,7 @@
 pub mod app_key;
 pub mod hosts;
 pub mod keys;
+pub mod release;
 pub mod script;
 pub mod setup;
 pub mod ssh;

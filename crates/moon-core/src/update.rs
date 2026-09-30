@@ -15,7 +15,7 @@ mod release;
 pub use discovery::{DiscoveryError, DiscoveryResult, DiscoveryRetry, ReleaseDiscovery};
 pub use release::{
     AvailableRelease, BuildIdentity, ReleaseAsset, ReleaseVersion, UpdateEligibility,
-    station_asset_name,
+    station_asset_name, station_asset_name_for_arch,
 };
 
 #[cfg(test)]

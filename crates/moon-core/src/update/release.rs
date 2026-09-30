@@ -41,7 +41,7 @@ pub(super) fn platform_asset_name() -> &'static str {
 /// Returns:
 ///     `moon-station-x86_64` or `moon-station-aarch64`; `None` for an architecture the release
 ///     does not build the station for.
-pub(super) fn station_asset_name_for_arch(target_arch: &str) -> Option<&'static str> {
+pub fn station_asset_name_for_arch(target_arch: &str) -> Option<&'static str> {
     match target_arch {
         "x86_64" => Some("moon-station-x86_64"),
         "aarch64" => Some("moon-station-aarch64"),

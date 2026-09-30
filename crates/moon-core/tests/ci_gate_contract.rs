@@ -1100,7 +1100,10 @@ fn releases_verify_the_published_windows_digest() {
         "release list must contain exactly one release tagged $release_tag",
         "release_by_id",
         "release_json=\"$(release_by_id \"$listed_release_id\")\"",
-        "'[\"MoonTerminal.dmg\",\"MoonTerminal.exe\"]'",
+        "'[\"MoonTerminal.dmg\",\"MoonTerminal.exe\",\"moon-station-aarch64\",\"moon-station-x86_64\"]'",
+        "STATION_ASSET_DIR",
+        "require_asset_matches \"$release_json\" \"$asset_name\"",
+        "require_asset_matches \"$release_json\" \"$station_asset\"",
         "remote_digest=",
         "local_digest=",
         "remote_digest_lower=\"$(printf '%s' \"$remote_digest\" | tr '[:upper:]' '[:lower:]')\"",
@@ -1166,6 +1169,64 @@ fn releases_verify_the_published_windows_digest() {
             && text.contains("GH_TOKEN: ${{ secrets.RELEASE_ADMIN_TOKEN }}")
             && publisher.contains("RELEASE_ADMIN_TOKEN is required"),
         "only the publication step may use an explicit token with Administration read permission"
+    );
+}
+
+/// Breakage guarded: the station stops shipping, or ships under a name its updater never looks for
+/// (`moon_core::update::station_asset_name_for_arch`), or one architecture quietly drops out — the
+/// release still publishes, and every server either cannot be installed from it or never sees an
+/// update. Or a station built without the tags goes out as `dev`, which its updater never offers
+/// anything to, or links a shared library the user's server does not have.
+#[test]
+fn releases_ship_the_station_under_the_names_its_updater_reads() {
+    let text = release_workflow_text();
+    let station = job_body(&text, "station").expect("release.yml must keep the station job");
+    let publish = job_body(&text, "publish").expect("release.yml must keep the publish job");
+    let has = |body: &[&str], want: &str| body.iter().any(|line| line.trim() == want);
+
+    for (arch, runner) in [("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")] {
+        let asset = moon_core::update::station_asset_name_for_arch(arch)
+            .unwrap_or_else(|| panic!("the updater must know a station asset for {arch}"));
+        assert_eq!(asset, format!("moon-station-{arch}"));
+        assert!(
+            has(&station, &format!("- arch: {arch}"))
+                && has(&station, &format!("runner: {runner}")),
+            "the station job must build {arch} on {runner}"
+        );
+        assert!(
+            has(&publish, &format!("dist/station/{asset}")),
+            "the release must publish {asset}"
+        );
+    }
+    for want in [
+        "runs-on: ${{ matrix.runner }}",
+        "fetch-depth: 0",
+        "run: cargo build -p moon-station --release --locked --target ${{ matrix.arch }}-unknown-linux-musl",
+        "cp target/${{ matrix.arch }}-unknown-linux-musl/release/moon-station dist/moon-station-${{ matrix.arch }}",
+        "file dist/moon-station-${{ matrix.arch }} | grep -Eq 'statically linked|static-pie linked'",
+        "name: station-${{ matrix.arch }}",
+        "path: dist/moon-station-${{ matrix.arch }}",
+    ] {
+        assert!(has(&station, want), "the station job must keep `{want}`");
+    }
+    assert!(
+        has(&publish, "pattern: station-*")
+            && has(&publish, "merge-multiple: true")
+            && has(&publish, "path: dist/station"),
+        "the publish job must download every station binary into dist/station"
+    );
+    assert!(
+        text.lines()
+            .any(|line| line.trim() == "needs: [validate, windows, macos, station]"),
+        "publication must wait for the station binaries"
+    );
+    assert_eq!(
+        publish
+            .iter()
+            .filter(|line| line.trim() == "STATION_ASSET_DIR: dist/station")
+            .count(),
+        2,
+        "both the draft verification and the publisher must check the station digests"
     );
 }
 
@@ -1342,6 +1403,11 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
     .expect("write release publisher into fixture");
     std::fs::write(root.join("MoonTerminal.exe"), b"abc")
         .expect("write local Windows asset fixture");
+    std::fs::create_dir_all(root.join("station")).expect("create station asset directory");
+    for (name, bytes) in STATION_ASSETS {
+        std::fs::write(root.join("station").join(name), bytes)
+            .expect("write local station asset fixture");
+    }
 
     run_git(&root, &["init", "-b", "main"]);
     run_git(&root, &["config", "user.name", "MoonTerminal Test"]);
@@ -1386,6 +1452,32 @@ fn create_release_script_fixture(purpose: &str) -> (PathBuf, String) {
 const WINDOWS_ASSET_SHA256: &str =
     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
+/// The station binaries the fixture writes beside the Windows one, by asset name.
+const STATION_ASSETS: [(&str, &[u8]); 2] = [
+    ("moon-station-x86_64", b"x86-64 station"),
+    ("moon-station-aarch64", b"aarch64 station"),
+];
+
+/// The published `assets` entries of the station fixture: each file's own size and digest, or
+/// `x86_sha256` in place of the x86-64 one.
+fn station_assets_json(x86_sha256: Option<&str>) -> String {
+    use sha2::{Digest, Sha256};
+    STATION_ASSETS
+        .iter()
+        .map(|(name, bytes)| {
+            let digest = match (*name, x86_sha256) {
+                ("moon-station-x86_64", Some(forced)) => forced.to_owned(),
+                _ => format!("{:x}", Sha256::digest(bytes)),
+            };
+            format!(
+                r#"{{"name":"{name}","size":{},"digest":"sha256:{digest}"}}"#,
+                bytes.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Render one independent GitHub release response for the three-byte `abc` Windows fixture.
 fn release_fixture_json(commit: &str, draft: bool, immutable: bool) -> String {
     release_fixture_json_with_digest(commit, draft, immutable, WINDOWS_ASSET_SHA256)
@@ -1401,8 +1493,20 @@ fn release_fixture_json_with_digest(
     immutable: bool,
     exe_sha256: &str,
 ) -> String {
+    release_fixture_json_full(commit, draft, immutable, exe_sha256, None)
+}
+
+/// The same release response, optionally with the x86-64 station binary's digest replaced.
+fn release_fixture_json_full(
+    commit: &str,
+    draft: bool,
+    immutable: bool,
+    exe_sha256: &str,
+    station_x86_sha256: Option<&str>,
+) -> String {
+    let station = station_assets_json(station_x86_sha256);
     format!(
-        r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:{exe_sha256}"}}]}}"#
+        r#"{{"id":4242,"tag_name":"v0.24.2","target_commitish":"{commit}","draft":{draft},"prerelease":false,"immutable":{immutable},"assets":[{{"name":"MoonTerminal.dmg","size":7,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}},{{"name":"MoonTerminal.exe","size":3,"digest":"sha256:{exe_sha256}"}},{station}]}}"#
     )
 }
 
@@ -1533,6 +1637,7 @@ fn run_release_script(root: &Path, script: &str, args: &[&str]) -> Output {
         .env("GH_FIXTURE_DIR", root)
         .env("GITHUB_REPOSITORY", "Moonbot-Tech/MoonTerminal")
         .env("GH_TOKEN", "fixture-token")
+        .env("STATION_ASSET_DIR", root.join("station"))
         .output()
         .expect("run release script fixture")
 }
@@ -1582,6 +1687,23 @@ fn release_scripts_locate_and_publish_the_exact_draft_by_id() {
     assert_verifier(
         &root,
         Err("published digest does not match the local Windows asset"),
+    );
+
+    // A station binary that is not the one built is refused the same way: its updater would
+    // install it as root on the user's server.
+    write_draft_fixture(
+        &root,
+        &release_fixture_json_full(
+            &commit,
+            true,
+            false,
+            WINDOWS_ASSET_SHA256,
+            Some(&"e".repeat(64)),
+        ),
+    );
+    assert_verifier(
+        &root,
+        Err("published digest does not match the local station asset moon-station-x86_64"),
     );
 
     write_draft_fixture(&root, &draft);
