@@ -1,6 +1,7 @@
 //! Pure moonproto-to-terminal snapshot projections (license/client-settings/lev/runtime),
 //! targeted edits to retained settings snapshots, and order-row (`OrderRow`) construction.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use moonproto::state::{
@@ -1036,11 +1037,80 @@ pub fn percentage_take_price(entry: f64, pct: f64, short: bool) -> Option<f64> {
     (price.is_finite() && price > 0.0).then_some(price)
 }
 
+/// The stop flags an order inherits from its strategy: `UseStopLoss`, `UseTrailing` and
+/// `UseBV_SV_Stop`, in that order.
+///
+/// Args:
+///     snap: The snapshot the batch is built from.
+///     strat_id: The order's own strategy id; `0` is a manual order.
+///
+/// Returns:
+///     The three flags — read from the effective strategy, from the ClientSettings defaults for a
+///     manual order without one, or all off.
+fn strategy_stop_flags(snap: &moonproto::MoonStateSnapshot, strat_id: u64) -> (bool, bool, bool) {
+    let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, strat_id);
+    let strat_snapshot = snap.strats().snapshot(eff_strat_id);
+    let strat_schema = snap.strats().strategy_schema();
+    // The strategy serializer (mirrored in Delphi and moonproto) DOES NOT send fields whose value
+    // equals the SCHEMA DEFAULT, because the writer skips defaults. A missing snapshot field means
+    // "equals the schema default", NOT "disabled", so fall back to the schema's own default value.
+    // Field names are Moonbot Delphi names, confirmed against strings in MoonBot.exe.
+    let strat_flag = |name: &str| -> bool {
+        let Some(s) = strat_snapshot else {
+            return false;
+        };
+        if let Some(v) = s.fields.get_bool(name) {
+            return v;
+        }
+        strat_schema
+            .and_then(|sc| sc.field(name))
+            .and_then(|f| f.default_value.as_ref())
+            .is_some_and(|v| matches!(v, moonproto::FieldValue::Bool(true)))
+    };
+    // The effective strategy is the order's own or the core settings' manual strategy, which governs
+    // manual orders with strat_id=0. A manual order with no strategy snapshot falls back to the
+    // ClientSettings stop defaults, whose "drop" percentages are NEGATIVE (price_drop_level=-1.1
+    // means SL 1.1%), so nonzero means enabled — not "> 0".
+    if strat_snapshot.is_some() {
+        (
+            strat_flag("UseStopLoss"),
+            strat_flag("UseTrailing"),
+            strat_flag("UseBV_SV_Stop"),
+        )
+    } else if strat_id == 0 {
+        snap.settings()
+            .client_settings
+            .as_ref()
+            .map(|c| {
+                (
+                    c.price_drop_level != 0.0,
+                    c.trailing_drop != 0.0,
+                    c.vol_drop_level != 0,
+                )
+            })
+            .unwrap_or((false, false, false))
+    } else {
+        (false, false, false)
+    }
+}
+
 /// Project one retained MoonProto order into a UI row.
 ///
 /// This conversion has no report-database side effects; protocol-v4 reports are
 /// replicated independently through `Event::Report`.
-fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Order) -> OrderRow {
+///
+/// Args:
+///     server_id: The core the order belongs to.
+///     snap: The snapshot the batch is built from.
+///     o: The order.
+///     strat_flags: [`strategy_stop_flags`] per strategy id, shared by one batch's rows and valid
+///         only for `snap`.
+fn build_order_row(
+    server_id: u64,
+    snap: &moonproto::MoonStateSnapshot,
+    o: &Order,
+    strat_flags: &mut HashMap<u64, (bool, bool, bool)>,
+) -> OrderRow {
     // Display name for the market. Hyperliquid spot names pairs by INDEX ("@206"); moonproto
     // provides the human-readable name in `market_name_mb_classic` ("UENAUSDT"). Store the classic
     // name in the order/report so `coin_of_market` yields "UENA", not "@206". Gate this on the
@@ -1048,7 +1118,10 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // below (price/snapshot/liquidation) keep the RAW `o.market_name`, which the core uses as its
     // key. Fall back to the raw name when mb_classic is empty or also starts with "@".
     let indexed = o.market_name.starts_with('@');
-    let catalog = snap.markets().get(&o.market_name).map(|h| {
+    // One catalog lookup serves every read below: the coin and quote, the contract size and the
+    // liquidation prices all come from this handle.
+    let handle = snap.markets().get(&o.market_name);
+    let catalog = handle.as_ref().map(|h| {
         h.with(|m| {
             // `market_currency`, NOT `market_currency_canonic`. The two answer different
             // questions, measured on live cores: for Bybit's `1000BONKPERP` the catalog holds
@@ -1122,7 +1195,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     );
     let raw_size = if bs.abs() >= ss.abs() { bs } else { ss };
 
-    let mkt = snap.markets().price(&o.market_name);
+    // What `MarketsState::price` reads, off the handle already in hand.
+    let mkt = handle.as_ref().map(|h| h.with(|m| m.price));
     let last = mkt.as_ref().map(|p| p.p_last as f32).unwrap_or(0.0);
     // Entry price for the entry line and stop/take-profit level calculations.
     //
@@ -1141,11 +1215,12 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // number shared by every order on it, and it never arrives anyway: `pos_price` was zero in all
     // 56060 diagnostic samples across 21 cores, since the balance record only carries it when the
     // core sets its flag.
-    let mkt_snapshot = snap.markets().get(&o.market_name).map(|h| h.snapshot());
-    let contract_size = mkt_snapshot
+    // Read in place: `MarketHandle::snapshot` would copy the whole market, ten strings of it, for
+    // every order of every batch just to learn these two facts.
+    let (contract_size, quote_is_empty) = handle
         .as_ref()
-        .map(|m| m.contract_size())
-        .unwrap_or(1.0);
+        .map(|h| h.with(|m| (m.contract_size(), m.base_currency.trim().is_empty())))
+        .unwrap_or((1.0, false));
     // "In position" means holding a position for which PnL and lines are rendered. The signal is
     // the authoritative moonproto worker PHASE, not an inference from `sell_order.quantity`:
     // - `fill_pct > 0` means the ENTRY leg (`buy_order`) has at least some fill. This covers every
@@ -1182,10 +1257,8 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // Gate (ASTEROID_USDT: cs=10000 coins/contract), the core already reports legs IN COINS;
     // dividing by the tiny price inflated quantity to 7e14 and PnL to -71 million for an actual
     // -$1 result. A true coin-margined contract has an EMPTY QUOTE CURRENCY because the contract is
-    // denominated in USD; `build_assets` distinguishes it the same way. Convert only in that case.
-    let quote_is_empty = mkt_snapshot
-        .as_ref()
-        .is_some_and(|m| m.base_currency.trim().is_empty());
+    // denominated in USD; `build_assets` distinguishes it the same way (`quote_is_empty` above).
+    // Convert only in that case.
     let convert_contract_qty = |qty: f64, price: f64| {
         if quote_is_empty
             && contract_size != 1.0
@@ -1207,10 +1280,14 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
     // order whose size is NOT converted reaches the chart label as a contract count multiplied by
     // a coin price, which is the same figure wrong by the contract size — $4.99K where the order
     // is $500. The three inputs that decide it are invisible from outside otherwise.
-    if crate::order_diag::follows(
-        &crate::feed::core_label(server_id).to_string(),
-        &o.market_name,
-    ) {
+    // `enabled` first: the label is a fresh String, and with the channel off `follows` would
+    // allocate it for every order only to answer false.
+    if crate::order_diag::enabled()
+        && crate::order_diag::follows(
+            &crate::feed::core_label(server_id).to_string(),
+            &o.market_name,
+        )
+    {
         crate::order_diag::line(&format!(
             "core {} uid={} market={} size {raw_size} -> {size} (quote_is_empty={quote_is_empty}, \
              contract_size={contract_size}, entry={entry}, valid_entry={valid_entry})",
@@ -1276,7 +1353,7 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
         .flatten();
     let vstop = o.vstop_on.then(|| fin(o.vstop_level)).flatten();
     let pending_cond = o.pending_buy_cond_price.and_then(fin);
-    let liq = snap.markets().get(&o.market_name).and_then(|h| {
+    let liq = handle.as_ref().and_then(|h| {
         let bp = h.balance_position();
         let v = if o.is_short {
             bp.short_liq_price
@@ -1336,50 +1413,11 @@ fn build_order_row(server_id: u64, snap: &moonproto::MoonStateSnapshot, o: &Orde
             ),
         )
     };
-    let eff_strat_id = crate::feed::strategies::effective_strat_id(snap, o.strat_id);
-    let strat_snapshot = snap.strats().snapshot(eff_strat_id);
-    let strat_schema = snap.strats().strategy_schema();
-    // The strategy serializer (mirrored in Delphi and moonproto) DOES NOT send fields whose value
-    // equals the SCHEMA DEFAULT, because the writer skips defaults. A missing snapshot field means
-    // "equals the schema default", NOT "disabled", so fall back to the schema's own default value.
-    // Field names are Moonbot Delphi names, confirmed against strings in MoonBot.exe.
-    let strat_flag = |name: &str| -> bool {
-        let Some(s) = strat_snapshot else {
-            return false;
-        };
-        if let Some(v) = s.fields.get_bool(name) {
-            return v;
-        }
-        strat_schema
-            .and_then(|sc| sc.field(name))
-            .and_then(|f| f.default_value.as_ref())
-            .is_some_and(|v| matches!(v, moonproto::FieldValue::Bool(true)))
-    };
-    // The effective strategy is the order's own or the core settings' manual strategy, which governs
-    // manual orders with strat_id=0. A manual order with no strategy snapshot falls back to the
-    // ClientSettings stop defaults, whose "drop" percentages are NEGATIVE (price_drop_level=-1.1
-    // means SL 1.1%), so nonzero means enabled — not "> 0".
-    let (sl_strat, ts_strat, vstop_strat) = if strat_snapshot.is_some() {
-        (
-            strat_flag("UseStopLoss"),
-            strat_flag("UseTrailing"),
-            strat_flag("UseBV_SV_Stop"),
-        )
-    } else if o.strat_id == 0 {
-        snap.settings()
-            .client_settings
-            .as_ref()
-            .map(|c| {
-                (
-                    c.price_drop_level != 0.0,
-                    c.trailing_drop != 0.0,
-                    c.vol_drop_level != 0,
-                )
-            })
-            .unwrap_or((false, false, false))
-    } else {
-        (false, false, false)
-    };
+    // A function of the snapshot and the strategy id alone, so one answer serves every order of the
+    // batch that carries this id.
+    let (sl_strat, ts_strat, vstop_strat) = *strat_flags
+        .entry(o.strat_id)
+        .or_insert_with(|| strategy_stop_flags(snap, o.strat_id));
     // The coin token, from the CATALOG. It is not a display convenience: it is what the coin
     // context menu writes into the core's and the strategy's blacklists, and the core matches
     // those against this very field. `market_currency_canonic`/`market_currency` also carry the
@@ -1663,9 +1701,10 @@ pub(super) fn build_order_rows(
     snap: &moonproto::MoonStateSnapshot,
     events: &[Event],
 ) -> Vec<OrderRow> {
-    let mut order_rows = Vec::new();
+    let mut strat_flags = HashMap::new();
+    let mut order_rows = Vec::with_capacity(snap.orders().len());
     for o in snap.orders().iter() {
-        order_rows.push(build_order_row(server_id, snap, o));
+        order_rows.push(build_order_row(server_id, snap, o, &mut strat_flags));
     }
 
     // Snapshot is the live view. Terminal statuses can be removed from that view
@@ -1680,7 +1719,7 @@ pub(super) fn build_order_rows(
         let Some(order) = order_event.order() else {
             continue;
         };
-        let row = build_order_row(server_id, snap, order);
+        let row = build_order_row(server_id, snap, order, &mut strat_flags);
         if let Some(existing) = order_rows.iter_mut().find(|r| r.uid == row.uid) {
             *existing = row;
         } else {

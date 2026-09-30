@@ -190,16 +190,23 @@ impl LineTrace {
             }
             return changed;
         };
-        let points: Vec<(f64, f32)> = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
         let tmp = trace.tmp_point.map(|p| (p.time_ms, p.price));
         let stop_price = trace.stop_price;
         let stop_time = trace.stop_time_ms;
-        let changed = self.server_points != points
+        // Compared in place: every batch carries every order's trace, and an unchanged one must
+        // not cost a fresh vector just to be found equal.
+        let same_points = self.server_points.len() == trace.points.len()
+            && self
+                .server_points
+                .iter()
+                .zip(&trace.points)
+                .all(|(held, p)| *held == (p.time_ms, p.price));
+        let changed = !same_points
             || self.tmp_point != tmp
             || self.server_stop_price != stop_price
             || self.server_stop_time_ms != stop_time;
         if changed {
-            self.server_points = points;
+            self.server_points = trace.points.iter().map(|p| (p.time_ms, p.price)).collect();
             self.tmp_point = tmp;
             self.server_stop_price = stop_price;
             self.server_stop_time_ms = stop_time;
