@@ -86,9 +86,15 @@ fn a_bot_change_touches_only_its_fields() {
     assert_eq!(off["core"][0]["uid"].as_integer(), Some(3));
 }
 
-/// A helper set up before the bot's commands prints no `token=`: refused before any write.
+/// A helper older than the valuation cache's transfer prints no `valuation=`: it is replaced
+/// before any write.
 #[test]
-fn an_old_helper_is_refused_before_anything_is_written() {
-    assert!(ensure_current_helper("active=active\nconfig=yes\ncreds=core-3\n").is_err());
-    assert!(ensure_current_helper("active=active\nconfig=yes\ncreds=core-3\ntoken=no\n").is_ok());
+fn an_old_helper_is_told_by_its_status() {
+    // The helper of 2026-09-30 night printed `pairing=` but had no `put-valuation`.
+    assert!(!helper_is_current(
+        "active=active\nconfig=yes\ncreds=core-3\ntoken=no\npairing=no\n"
+    ));
+    assert!(helper_is_current(
+        "active=active\nconfig=yes\ncreds=core-3\ntoken=no\npairing=no\nvaluation=no\n"
+    ));
 }

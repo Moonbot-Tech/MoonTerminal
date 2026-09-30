@@ -55,6 +55,9 @@ pub struct TelegramState {
     pub(crate) retiring: Option<JoinHandle<()>>,
     /// Same-token service restarts must still clear menus for previously revoked chats.
     retired_menu_chats: Vec<i64>,
+    /// The bot is being handed over to a server: no transport starts, whatever the saved
+    /// configuration says, until [`Self::resume`].
+    suspended: bool,
 }
 
 impl TelegramState {
@@ -92,11 +95,16 @@ impl TelegramState {
             configuration_pending: false,
             retiring: None,
             retired_menu_chats,
+            suspended: false,
         }
     }
 
     /// Replace joined transport without forgetting pending cleanup for the same bot.
     pub(crate) fn start_saved(&mut self, config: &TelegramConfig) {
+        if self.suspended {
+            self.status = TelegramStatus::Stopped;
+            return;
+        }
         let retired = std::mem::take(&mut self.retired_menu_chats);
         let report_pending = self.report_pending;
         let mini_report_pending = self.mini_report_pending;
@@ -148,6 +156,27 @@ impl TelegramState {
         if let Some(service) = self.service.as_mut() {
             service.request_stop();
         }
+    }
+
+    /// Retire the transport without blocking and keep it down, the saved configuration untouched:
+    /// the bot's token is being handed to a server, and one token has one poller.
+    pub fn suspend(&mut self) {
+        self.suspended = true;
+        self.restart();
+    }
+
+    /// End [`Self::suspend`]: start `saved` now, or on the owner tick once the retired transport
+    /// has joined. A `saved` without a token starts nothing.
+    pub fn resume(&mut self, saved: &TelegramConfig) {
+        self.suspended = false;
+        if self.retiring.is_none() && self.service.is_none() {
+            self.start_saved(saved);
+        }
+    }
+
+    /// Whether the bot is held down by [`Self::suspend`].
+    pub fn suspended(&self) -> bool {
+        self.suspended
     }
 
     /// Retire the current transport and start the saved one now, unless the old one is still

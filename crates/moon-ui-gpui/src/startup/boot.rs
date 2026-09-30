@@ -150,6 +150,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
 
     let backend = cx.new(|_| Backend {
         telegram: moon_tg::TelegramState::new(&cfg.telegram),
+        station: Default::default(),
         updater: updater.clone(),
         session: SessionManager::start(
             &cfg,

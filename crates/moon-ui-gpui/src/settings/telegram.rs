@@ -1,4 +1,5 @@
-//! Telegram Settings navigation between the terminal bot and the core reader.
+//! Telegram Settings navigation between the terminal bot and the core reader. The bot's segment
+//! also installs the station on a Linux server and hands the bot over to it (`server_bot`).
 //!
 //! Edits stay on `Backend.preview` and persist through the existing Save transaction. Live
 //! service status and pairing come from the live service, independently of unsaved edits.
@@ -18,6 +19,7 @@ use moon_core::config::Secret;
 mod access;
 mod core_section;
 mod qr;
+mod server_bot;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
@@ -46,6 +48,7 @@ pub(super) struct TelegramEd {
     history_loading: bool,
     history_failed: bool,
     core: core_section::CoreTelegramEd,
+    server: server_bot::ServerBotEd,
 }
 
 impl TelegramEd {
@@ -134,6 +137,7 @@ pub(super) fn build(
         history_loading: false,
         history_failed: false,
         core: core_section::build(window, cx),
+        server: server_bot::build(window, cx, server_bot::known_server()),
     }
 }
 
@@ -180,15 +184,21 @@ impl SettingsView {
                 .child(self.core_telegram_section(cx))
                 .into_any_element(),
         };
+        // An explicit width, not `w_full().max_w(..)`: see `render::scrollable_tab_content` — the
+        // bottom of a long segment would fall outside the scroll extent.
+        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
+            .min(design::font_w(cx, 680.0))
+            .max(0.0);
         v_flex()
-            .w_full()
-            .max_w(design::font_w_px(cx, 680.0))
+            .w(px(column_w))
             .gap(design::ui_px(cx, 16.0))
             .child(navigation)
             .child(content)
     }
 
-    /// Render the terminal bot's four existing settings sections in their original order.
+    /// Render the bot's segment: without a station, the terminal bot's four sections and the
+    /// station's install form; with one, the server's bot on top, "Also a bot in the terminal"
+    /// opening those four sections, and the station's own actions.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -198,7 +208,7 @@ impl SettingsView {
     ///     cx: Settings context used for palette, draft, and callbacks.
     ///
     /// Returns:
-    ///     The terminal-bot segment, including its own introduction.
+    ///     The bot's segment.
     fn terminal_bot_segment(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
@@ -258,15 +268,13 @@ impl SettingsView {
         };
         let mini_app = telegram.mini_app_enabled;
 
-        v_flex()
+        // With a station on a server the bot runs there; the terminal's own bot is an extra, shown
+        // on demand. Without one, the terminal's bot is the only one.
+        let station_known = self.telegram.server.known().is_some();
+        let local_on = !station_known || self.server_bot_local_on(cx);
+        let local = v_flex()
             .w_full()
-            .max_w(design::font_w_px(cx, 680.0))
             .gap(design::ui_px(cx, 16.0))
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.intro").to_string()),
-            )
             .child(
                 MoonGroupBox::new("telegram-bot-section")
                     .title(t!("telegram.section_bot").to_string())
@@ -421,7 +429,24 @@ impl SettingsView {
                                 .render(),
                         )
                     }),
-            )
+            );
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 16.0))
+            // The terminal bot's own introduction; with a station the server's bot block leads.
+            .when(!station_known, |s| {
+                s.child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.intro").to_string()),
+                )
+            })
+            .when(station_known, |s| {
+                s.child(self.server_bot_block(cx))
+                    .child(self.server_bot_local_toggle(cx))
+            })
+            .when(local_on, |s| s.child(local))
+            .child(self.server_bot_section(cx))
     }
 }
 

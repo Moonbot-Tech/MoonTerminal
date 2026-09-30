@@ -108,6 +108,8 @@ impl SettingsView {
         if let Some(core) = self.telegram.core.picked {
             self.send_telegram(core, TelegramCmd::Refresh, cx);
         }
+        // The station's bot, when one runs on a server: its status and pairing code.
+        self.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
     }
 
     /// Render the fitted core selector and a full-button disclosure for its parameters.

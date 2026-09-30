@@ -56,6 +56,19 @@ impl Hosts {
         self.hosts.iter().find(|h| h.addr == addr)
     }
 
+    /// Forget `addr`: its pinned key and administrator. The way back to a server that was
+    /// reinstalled — it presents a new host key, which the pin refuses.
+    pub fn forget(&mut self, addr: &str) -> bool {
+        let before = self.hosts.len();
+        self.hosts.retain(|h| h.addr != addr);
+        self.hosts.len() != before
+    }
+
+    /// The first host whose setup finished — its administrator verified.
+    pub fn first_set_up(&self) -> Option<&Host> {
+        self.hosts.iter().find(|h| h.admin.is_some())
+    }
+
     /// Pin `fingerprint` for `addr`. Refuses to replace a different pin: a changed host key is
     /// either a reinstalled server or someone in the middle, and only the user can tell which —
     /// by deleting the entry by hand.

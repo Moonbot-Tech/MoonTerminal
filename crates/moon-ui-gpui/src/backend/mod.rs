@@ -12,6 +12,7 @@ mod open_request;
 mod problem_sound;
 mod quiet;
 pub(crate) mod server_chart;
+pub(crate) mod station;
 pub(crate) mod telegram;
 #[cfg(test)]
 mod tests;

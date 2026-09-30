@@ -20,8 +20,28 @@ use crate::ssh::{Auth, Conn, OpenError, Target};
 
 /// Oldest systemd with `systemd-creds` and `LoadCredentialEncrypted=`.
 const MIN_SYSTEMD: u32 = 250;
-/// The distributions' own floor for a password (`pam_pwquality` minlen).
-const MIN_ADMIN_PASSWORD: usize = 8;
+/// The administrator every setup creates: one name for every server, never shown or asked.
+pub const ADMIN: &str = "moon";
+
+/// A server set up before the administrator lost its password (2026-09-30): its sudo still asks
+/// for it, once, to move the server onto key-only sudo.
+#[derive(Debug)]
+pub struct NeedsAdminPassword {
+    pub admin: String,
+}
+
+impl std::fmt::Display for NeedsAdminPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}'s sudo still asks for a password: this server was set up before key-only sudo — \
+             give that password once to move it over",
+            self.admin
+        )
+    }
+}
+
+impl std::error::Error for NeedsAdminPassword {}
 
 /// What the provider gave for the first login. Used for the setup only, never stored.
 pub enum FirstAccess {
@@ -40,26 +60,15 @@ pub enum FirstAccess {
 pub struct Setup {
     pub target: Target,
     pub first: FirstAccess,
-    /// The administrator's login, chosen by the user.
-    pub admin: String,
-    /// The administrator's password, chosen by the user: for sudo by hand, never for SSH.
-    pub admin_password: Zeroizing<String>,
+    /// The old administrator password of a server set up before key-only sudo
+    /// ([`NeedsAdminPassword`]); `None` everywhere else.
+    pub legacy_admin_password: Option<Zeroizing<String>>,
     /// A station binary to install on the way.
     pub station_bin: Option<PathBuf>,
 }
 
 /// Prepare the server. `say` receives one line per thing done or found.
 pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !setup.admin_password.contains('\n'),
-        "the administrator password must be one line"
-    );
-    // Debian and Ubuntu refuse shorter ones in `chpasswd` (pam_pwquality) — after the user was
-    // already created. Refused here, before anything on the server changes.
-    anyhow::ensure!(
-        setup.admin_password.chars().count() >= MIN_ADMIN_PASSWORD,
-        "the administrator password needs at least {MIN_ADMIN_PASSWORD} characters"
-    );
     // A password is the first stdin line of `sudo -S`: a second line would spill into the
     // script's own input.
     let first_password = match &setup.first {
@@ -67,8 +76,11 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         FirstAccess::Key { sudo_password, .. } => sudo_password.as_ref(),
     };
     anyhow::ensure!(
-        first_password.is_none_or(|p| !p.contains('\n')),
-        "the login password must be one line"
+        first_password
+            .into_iter()
+            .chain(&setup.legacy_admin_password)
+            .all(|p| !p.contains('\n')),
+        "a password must be one line"
     );
     let hosts_path = Hosts::path();
     let mut hosts = Hosts::load(&hosts_path)?;
@@ -79,7 +91,9 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     // 1. In. A server this tool already closed takes only the administrator's key; anything else
     // comes in with what the provider gave.
     let known_admin = hosts.get(&addr).and_then(|h| h.admin.clone());
-    let (lifeline, privilege) = match known_admin.filter(|a| *a == setup.admin) {
+    // A server set up earlier keeps its administrator, whatever it was called then.
+    let admin = known_admin.clone().unwrap_or_else(|| ADMIN.to_owned());
+    let (lifeline, privilege) = match known_admin {
         Some(admin) => match Conn::open(
             &setup.target,
             &Auth::Key {
@@ -90,12 +104,18 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         ) {
             Ok(conn) => {
                 say(&format!("in as {admin} by the app key"));
-                let privilege = Privilege::detect(&conn, Some(&setup.admin_password))?;
-                // On a server already set up, sudo takes the administrator's CURRENT password;
-                // a different one would fail deep inside the first step with sudo's own words.
-                privilege.run(&conn, "true", &[], STEP_TIMEOUT).context(
-                    "sudo refused the administrator password: a re-run needs the current one",
-                )?;
+                // Only a sudo that answered "a password is needed" asks for the old one; a dropped
+                // connection or a timeout is its own error, not a question about a password.
+                let sudo_free = conn.run("sudo -n true", &[], STEP_TIMEOUT)?.ok();
+                if !sudo_free && setup.legacy_admin_password.is_none() {
+                    return Err(NeedsAdminPassword { admin }.into());
+                }
+                let privilege = Privilege::detect(&conn, setup.legacy_admin_password.as_ref())?;
+                // The old password, when one was needed, must be the current one: a wrong one
+                // would fail deep inside the first step with sudo's own words.
+                privilege
+                    .run(&conn, "true", &[], STEP_TIMEOUT)
+                    .context("sudo refused the old administrator password")?;
                 (conn, privilege)
             }
             Err(OpenError::Refused { .. }) => first_login(setup, pin.as_deref(), say)?,
@@ -125,25 +145,27 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
         "systemd {systemd} is older than {MIN_SYSTEMD}: no encrypted credentials"
     );
 
-    // 3. The administrator, and the one script it may run without a password.
-    let mut input = Zeroizing::new(Vec::new());
-    input.extend_from_slice(setup.admin_password.as_bytes());
-    input.push(b'\n');
-    input.extend_from_slice(app_key::authorized_line(&app)?.as_bytes());
-    input.push(b'\n');
-    let out = root(script::bootstrap("admin", &[&setup.admin]), &input)?;
+    // 3. The administrator — by key only, the app's and the user's own when the first login was
+    // by key — and its sudo without a password.
+    let mut input = app_key::authorized_line(&app)?;
+    input.push('\n');
+    if let FirstAccess::Key { key, .. } = &setup.first {
+        input.push_str(&crate::keys::authorized_line(key)?);
+        input.push('\n');
+    }
+    let out = root(script::bootstrap("admin", &[&admin]), input.as_bytes())?;
     say_values(say, &out.stdout_text());
     let out = root(
-        script::bootstrap("helper", &[&setup.admin]),
+        script::bootstrap("helper", &[&admin]),
         script::HELPER.as_bytes(),
     )?;
     say_values(say, &out.stdout_text());
-    admin_works(setup, &app, pin.as_deref()).context("the new administrator does not work")?;
-    hosts.set_admin(&addr, &setup.admin)?;
+    admin_works(&setup.target, &admin, &app, pin.as_deref())
+        .context("the new administrator does not work")?;
+    hosts.set_admin(&addr, &admin)?;
     hosts.save(&hosts_path)?;
     say(&format!(
-        "{} logs in by the app key; sudo for {HELPER_PATH} works",
-        setup.admin
+        "{admin} logs in by the app key; sudo without a password and {HELPER_PATH} work"
     ));
 
     // 4. The station's account, directories and unit — before closing, so a failure here still
@@ -159,8 +181,8 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     say_values(say, &out.stdout_text());
     let changed = script::value(&out.stdout_text(), "sshd") != Some("unchanged");
     let verified = match changed {
-        true => closed_properly(setup, &app, pin.as_deref()),
-        false => admin_works(setup, &app, pin.as_deref()),
+        true => closed_properly(setup, &admin, &app, pin.as_deref()),
+        false => admin_works(&setup.target, &admin, &app, pin.as_deref()),
     };
     if let Err(e) = verified {
         let undo = root(script::bootstrap("unharden", &[]), &[]);
@@ -186,7 +208,7 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     for line in out.stdout_text().lines() {
         say(line);
     }
-    if let Err(e) = admin_works(setup, &app, pin.as_deref()) {
+    if let Err(e) = admin_works(&setup.target, &admin, &app, pin.as_deref()) {
         let undo = root(script::bootstrap("firewall-off", &[]), &[]);
         return Err(match undo {
             Ok(_) => e.context("the firewall cut the administrator off; it is disabled again"),
@@ -203,9 +225,9 @@ pub fn run(setup: &Setup, say: &mut dyn FnMut(&str)) -> anyhow::Result<()> {
     )?;
     say_values(say, &out.stdout_text());
 
-    // 6. The binary, if one was given — through the narrow path, as every later update will.
+    // 6. The binary, if one was given — through the helper's `update`, as every later one will.
     if let Some(path) = &setup.station_bin {
-        install_station(&setup.target, &setup.admin, &app, pin.as_deref(), path, say)?;
+        install_station(&setup.target, &admin, &app, pin.as_deref(), path, say)?;
     }
     Ok(())
 }
@@ -235,25 +257,36 @@ fn first_login(
     Ok((conn, privilege))
 }
 
-/// A NEW login as the administrator by the app key, and its passwordless sudo for the helper.
-fn admin_works(setup: &Setup, app: &PrivateKey, pin: Option<&str>) -> anyhow::Result<()> {
+/// A NEW login as the administrator by the app key, its sudo without a password, and the helper.
+fn admin_works(
+    target: &Target,
+    admin: &str,
+    app: &PrivateKey,
+    pin: Option<&str>,
+) -> anyhow::Result<()> {
     let conn = Conn::open(
-        &setup.target,
+        target,
         &Auth::Key {
-            user: &setup.admin,
+            user: admin,
             key: app,
         },
         pin,
     )?;
+    script::checked(conn.run("sudo -n true", &[], STEP_TIMEOUT)?)
+        .context("sudo still asks for a password")?;
     script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?;
     Ok(())
 }
 
-/// The closed server, seen from outside: the administrator's key still works, and a password is
-/// refused — the administrator's, and root's when that is what the provider gave.
-fn closed_properly(setup: &Setup, app: &PrivateKey, pin: Option<&str>) -> anyhow::Result<()> {
-    admin_works(setup, app, pin)?;
-    must_refuse(&setup.target, &setup.admin, &setup.admin_password, pin)?;
+/// The closed server, seen from outside: the administrator's key still works, and the password
+/// the provider gave is refused.
+fn closed_properly(
+    setup: &Setup,
+    admin: &str,
+    app: &PrivateKey,
+    pin: Option<&str>,
+) -> anyhow::Result<()> {
+    admin_works(&setup.target, admin, app, pin)?;
     if let FirstAccess::Password { user, password } = &setup.first {
         must_refuse(&setup.target, user, password, pin)?;
     }

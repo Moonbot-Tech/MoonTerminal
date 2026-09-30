@@ -139,16 +139,43 @@ pub fn with_telegram(current: &str, change: &BotChange, off: bool) -> anyhow::Re
     Ok(toml::to_string_pretty(&file)?)
 }
 
-/// Refuse a server whose helper predates the bot's commands (`get-config`, `put-token`,
-/// `drop-token`), before anything is written: the helper is installed by `setup`, and a server set
-/// up before them answers "unknown command" halfway through a push. Its `status` is the marker —
-/// the current helper always prints `token=`.
-fn ensure_current_helper(status: &str) -> anyhow::Result<()> {
+/// Whether a helper's `status` comes from this crate's helper: the newest line it prints,
+/// `valuation=` (with `put-valuation`), is the marker. An older helper answers "unknown command"
+/// halfway through a push.
+fn helper_is_current(status: &str) -> bool {
+    script::value(status, "valuation").is_some()
+}
+
+/// The helper's `status`, after putting this crate's helper in place when the server's is older —
+/// before anything else is written. The administrator's sudo needs no password (`setup`), so the
+/// terminal updates the helper itself; a server set up before that is refused with the way out.
+fn current_helper_status(conn: &crate::ssh::Conn) -> anyhow::Result<String> {
+    let status = |conn: &crate::ssh::Conn| -> anyhow::Result<String> {
+        Ok(
+            script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
+                .stdout_text(),
+        )
+    };
+    // An old helper still answers `status`; one that fails is replaced the same way.
+    match status(conn) {
+        Ok(text) if helper_is_current(&text) => return Ok(text),
+        _ => {}
+    }
+    let out = conn.run(
+        &format!("sudo -n {}", script::bootstrap("helper", &[conn.user()])),
+        script::HELPER.as_bytes(),
+        STEP_TIMEOUT,
+    )?;
+    script::checked(out).context(
+        "the server's moon-station-admin is older than this terminal and sudo there still asks \
+         for a password: re-run the setup once to move the server over",
+    )?;
+    let text = status(conn)?;
     anyhow::ensure!(
-        script::value(status, "token").is_some(),
-        "the server's moon-station-admin predates this moon-remote: re-run `setup` to update it"
+        helper_is_current(&text),
+        "the helper on the server was updated but still answers as the old one"
     );
-    Ok(())
+    Ok(text)
 }
 
 /// Set the station's bot: its token when given, `[telegram]` changed by `change` (or removed
@@ -165,8 +192,7 @@ pub fn push_telegram(
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<String> {
         Ok(script::checked(conn.run(&command, stdin, STEP_TIMEOUT)?)?.stdout_text())
     };
-    let status = run(script::helper("status", &[]), &[])?;
-    ensure_current_helper(&status)?;
+    let status = current_helper_status(&conn)?;
     let has_token = script::value(&status, "token") == Some("yes");
     anyhow::ensure!(
         off || token.is_some() || has_token,
@@ -186,9 +212,14 @@ pub fn push_telegram(
         say("bot token: credential written");
     }
     run(script::helper("put-config", &[]), config.as_bytes())?;
-    if off && has_token {
-        run(script::helper("drop-token", &[]), &[])?;
-        say("bot token: dropped");
+    if off {
+        if has_token {
+            run(script::helper("drop-token", &[]), &[])?;
+            say("bot token: dropped");
+        }
+        // The chats belonged to that bot: the next one starts unpaired.
+        run(script::helper("drop-pairing", &[]), &[])?;
+        say("paired chats: dropped");
     }
     run(script::helper("start", &[]), &[])?;
     let status = run(script::helper("status", &[]), &[])?;
@@ -219,8 +250,7 @@ pub fn push_cores(
     };
     // Read before anything is written: an old helper or an unreadable file stops the push here,
     // not between the credentials and the configuration. No file yet is the first push.
-    let status = run(script::helper("status", &[]), &[])?;
-    ensure_current_helper(&status)?;
+    let status = current_helper_status(&conn)?;
     let current = match script::value(&status, "config") {
         Some("yes") => Some(
             run(script::helper("get-config", &[]), &[])
@@ -262,6 +292,45 @@ pub fn push_cores(
     }
     Ok(())
 }
+
+/// Put the terminal's USDT valuation cache (`snapshot`, a consistent copy of its
+/// `valuation.sqlite`) on a new station before it first starts: its cached rates spare the new
+/// station years of minute rates asked from the exchanges again (hours on one vCPU); the values
+/// themselves the station re-derives from its own replica. Sent gzipped; the service is left
+/// stopped for the caller to start.
+pub fn put_valuation(
+    target: &Target,
+    snapshot: &std::path::Path,
+    say: &mut dyn FnMut(&str),
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let plain = std::fs::read(snapshot).with_context(|| format!("read {}", snapshot.display()))?;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(&plain)?;
+    let packed = gz.finish()?;
+    say(&format!(
+        "valuation cache: {} MB, {} MB to send",
+        plain.len() / 1_000_000,
+        packed.len() / 1_000_000
+    ));
+    let conn = admin_conn(target)?;
+    // A station already valuing on its own (a server set up anew over a running one) keeps it.
+    if script::value(&current_helper_status(&conn)?, "valuation") == Some("yes") {
+        say("valuation cache: the station has its own, kept");
+        return Ok(());
+    }
+    let out = script::checked(conn.run(
+        &script::helper("put-valuation", &[]),
+        &packed,
+        script::APT_TIMEOUT,
+    )?)?;
+    for line in out.stdout_text().lines() {
+        say(line);
+    }
+    Ok(())
+}
+
+pub mod bot;
 
 #[cfg(test)]
 mod tests;

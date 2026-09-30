@@ -27,6 +27,9 @@ winresource = "0.1"
 # Shared backend (config/session/market/metrics/...). UI-agnostic.
 moon-core = { path = "../moon-core" }
 moon-tg = { path = "../moon-tg" }
+# The station's server setup (Settings -> Telegram -> Bot on a server).
+moon-remote = { path = "../moon-remote" }
+zeroize = "1"
 # Platform-neutral chart math/geometry (view/axes/transform/build_order_geometry/instance types,
 # constants). chartdx renders the data via DX11 on Windows, Metal on macOS, and wgpu on Linux.
 moon-chart = { path = "../moon-chart" }

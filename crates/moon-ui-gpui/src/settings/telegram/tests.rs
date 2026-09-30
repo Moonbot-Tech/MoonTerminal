@@ -50,6 +50,7 @@ fn fixture(window: &mut Window, cx: &mut Context<EditorFixture>) -> EditorFixtur
             terms_accepted: Some((71, "fixture terms".into())),
             resend_pulse_armed: false,
         },
+        server: super::server_bot::build(window, cx, None),
     })
 }
 
