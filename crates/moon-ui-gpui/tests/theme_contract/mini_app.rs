@@ -190,16 +190,31 @@ fn mini_panic_already_armed_does_not_toggle() {
 /// `moon-tg mini_app/reads.rs:mini_report` must serve a cached report
 /// only when the cached grant still equals the chat's current grant.
 ///
-/// Mutation: replace `(cached_access == &access, cached_access != &access)` with
-/// `(true, false)`. A report cached under a wider grant is then served after the
-/// chat is narrowed, for the rest of the minute.
+/// Mutation: pass `true` instead of `cached.access == access` to `reuse`, or move
+/// `reuse`'s `!same_grant` drop below its `Serve`/`Rebuild` returns. A report cached
+/// under a wider grant is then served after the chat is narrowed.
 #[test]
 fn mini_report_cache_requires_same_grant() {
     let source = read_tg_src("mini_app/reads.rs");
     let body = braced_body(&source, "fn mini_report(");
     assert!(
-        body.contains("(cached_access == &access, cached_access != &access)"),
-        "a cache hit must compare the stored grant with the current one, and a mismatch must drop it"
+        body.contains("cached.access == access,"),
+        "a cache hit must compare the stored grant with the current one"
+    );
+    let cache = read_tg_src("mini_app/cache.rs");
+    let reuse = braced_body(&cache, "fn reuse<");
+    let drop = reuse
+        .find("if !same_grant {\n        return Reuse::Drop;")
+        .expect("another grant must drop the cache");
+    let serve = reuse
+        .find("Reuse::Serve")
+        .expect("reuse serves within the TTL");
+    let rebuild = reuse
+        .find("Reuse::Rebuild")
+        .expect("reuse rebuilds past the TTL");
+    assert!(
+        drop < serve && drop < rebuild,
+        "the grant check must come before any answer from the cache"
     );
 }
 

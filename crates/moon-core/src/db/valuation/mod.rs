@@ -29,7 +29,7 @@ pub use worker::{ValuationHandle, spawn_worker};
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -56,6 +56,10 @@ const UNHEALTHY: u8 = 2;
 
 /// Process-wide health of the one canonical valuation cache.
 static CACHE_HEALTH: AtomicU8 = AtomicU8::new(HEALTHY);
+
+/// Advanced after every write of [`CACHE_HEALTH`], so a reader can tell that attachability may
+/// have changed since it last looked even when both looks saw the same health.
+static CACHE_HEALTH_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// Serializes file-family replacement against attachment proof and validation.
 static CACHE_LIFECYCLE: RwLock<()> = RwLock::new(());
@@ -939,17 +943,20 @@ pub(crate) fn mark_unhealthy(reason: &dyn std::fmt::Display) {
     if CACHE_HEALTH.swap(UNHEALTHY, Ordering::AcqRel) != UNHEALTHY {
         log::warn!("valuation: derived cache disabled: {reason}");
     }
+    CACHE_HEALTH_EPOCH.fetch_add(1, Ordering::AcqRel);
     worker::wake_for_recovery();
 }
 
 /// Publish a successfully opened canonical cache to new readers.
 fn mark_healthy() {
     CACHE_HEALTH.store(HEALTHY, Ordering::Release);
+    CACHE_HEALTH_EPOCH.fetch_add(1, Ordering::AcqRel);
 }
 
 /// Disable attachment while startup validation runs without emitting a false damage warning.
 fn begin_store_validation() {
     CACHE_HEALTH.store(UNHEALTHY, Ordering::Release);
+    CACHE_HEALTH_EPOCH.fetch_add(1, Ordering::AcqRel);
 }
 
 /// Return whether new readers may attach the canonical derived cache.
@@ -958,6 +965,21 @@ fn begin_store_validation() {
 ///     `true` only after startup validation or recovery succeeded.
 pub(crate) fn cache_is_healthy() -> bool {
     CACHE_HEALTH.load(Ordering::Acquire) == HEALTHY
+}
+
+/// Whether report readers attach the derived cache now, as a revision a caller can compare later.
+///
+/// A healthy answer is stamped with the health epoch, which every change of health advances: two
+/// equal answers mean every reader opened between them attached the cache, not only the readers
+/// that happened to open while it looked healthy.
+///
+/// Returns:
+///     The epoch while the cache is attachable; `None` while it is not.
+pub fn attach_epoch() -> Option<u64> {
+    let before = CACHE_HEALTH_EPOCH.load(Ordering::Acquire);
+    let healthy = cache_is_healthy();
+    let after = CACHE_HEALTH_EPOCH.load(Ordering::Acquire);
+    (healthy && before == after).then_some(before)
 }
 
 /// Check one existing cache without creating or mutating it.

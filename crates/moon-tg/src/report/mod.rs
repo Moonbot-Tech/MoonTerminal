@@ -286,6 +286,7 @@ fn read_page_on(
 }
 
 /// One Mini App report: the period total plus every exchange, core, and day on that snapshot.
+#[derive(Clone)]
 pub(crate) struct MiniReport {
     /// Inclusive window start, unix seconds.
     pub from: i64,
@@ -301,6 +302,10 @@ pub(crate) struct MiniReport {
     pub by_core: Vec<(String, String, String, QuoteBreakdown)>,
     /// Every calendar day in the window, including days with no trades.
     pub days: Vec<(String, QuoteBreakdown)>,
+    /// Whether the snapshot holds a closed row of the scope past `to`: while it holds none, a
+    /// window reaching further on the same day reads exactly these rows. `None` when not asked
+    /// (a window with a fixed end) or when the check itself failed.
+    pub rows_after_to: Option<bool>,
 }
 
 /// Read a Mini App report on one snapshot, the same connection `read_page` uses.
@@ -317,9 +322,12 @@ pub(crate) struct MiniReport {
 ///     names: Current configured core names, shown in place of the stored ones.
 ///     venues: Live venue of each core id.
 ///     access: Chat grant captured at admission.
+///     ends_now: Whether `to` is the instant of the request (Today, Month), so the read also
+///         says whether any row lies past it.
 ///
 /// Returns:
 ///     The four breakdowns, or the database error. A successful empty period is not an error.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn read_mini_report(
     from: i64,
     to: i64,
@@ -328,11 +336,22 @@ pub(crate) fn read_mini_report(
     names: &db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
+    ends_now: bool,
 ) -> db::ReadResult<MiniReport> {
     let conn = db::open_reader()?;
-    read_mini_report_on(&conn, from, to, zone, names, venues, access, |cores| {
-        order.sort_by(cores, |(id, _)| *id);
-    })
+    read_mini_report_on(
+        &conn,
+        from,
+        to,
+        zone,
+        names,
+        venues,
+        access,
+        ends_now,
+        |cores| {
+            order.sort_by(cores, |(id, _)| *id);
+        },
+    )
 }
 
 /// Connection-injected body of [`read_mini_report`], so fixtures exercise the production query.
@@ -345,6 +364,7 @@ fn read_mini_report_on(
     names: &db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
+    ends_now: bool,
     order: impl FnOnce(&mut [(u64, String)]),
 ) -> db::ReadResult<MiniReport> {
     let snap = db::read_snapshot(conn)?;
@@ -426,6 +446,19 @@ fn read_mini_report_on(
             date = next;
         }
     }
+    // The complement of the window's upper edge on the same snapshot and axis: `closedate > to`
+    // exactly where the window says `closedate <= to`. Asked only for a window ending now, and a
+    // failure here is not the report's: it only withholds the answer from later reuse.
+    let rows_after_to = ends_now
+        .then(|| {
+            let mut after = filter.clone();
+            after.date_from = Some(to.saturating_add(1));
+            after.date_to = None;
+            db::query_totals(&snap, &after)
+                .ok()
+                .map(|totals| totals.quotes.orders > 0)
+        })
+        .flatten();
     Ok(MiniReport {
         from,
         to,
@@ -434,6 +467,7 @@ fn read_mini_report_on(
         by_exchange,
         by_core,
         days,
+        rows_after_to,
     })
 }
 

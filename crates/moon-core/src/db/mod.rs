@@ -279,9 +279,29 @@ fn publish_report_commit(
 }
 
 /// Advance the authoritative revision before exposing its causal wake edge.
+///
+/// Release as well as acquire: a reader that sees the new value must also see the commit it
+/// stands for, or a revision taken before a read could claim data that read missed.
 fn publish_after_generation(generation: &AtomicU64, publish_edge: impl FnOnce()) {
-    generation.fetch_add(1, Ordering::Relaxed);
+    generation.fetch_add(1, Ordering::AcqRel);
     publish_edge();
+}
+
+/// Process state a report read depends on beyond the committed rows, as a revision a caller can
+/// compare later together with the report and valuation generations.
+///
+/// Returns:
+///     `None` while a reader opened now might not read what an earlier one did with no generation
+///     to say so: this process does not hold the replica's lease, integrity damage has stopped its
+///     writer, the file is missing, or the COIN-M knowledge money SQL is built from is unsettled.
+pub fn read_state_revision() -> Option<u64> {
+    if !report_recovery::access_permitted()
+        || integrity::writes_blocked()
+        || !paths::reports_db_path().exists()
+    {
+        return None;
+    }
+    quote::coin_m::knowledge_revision()
 }
 
 /// Commit one stateful batch without exposing speculative in-memory mutations.

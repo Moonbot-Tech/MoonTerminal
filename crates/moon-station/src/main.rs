@@ -146,7 +146,13 @@ fn main() -> anyhow::Result<()> {
     session.map_cores_to_themselves();
     // A saved pairing that cannot be read keeps the bot off, not the station.
     let mut bot = telegram.as_ref().and_then(|telegram| {
-        match tg::StationTg::start(&mut cfg, telegram, &data_root) {
+        let generations = (
+            reports.generation.clone(),
+            valuation
+                .as_ref()
+                .map(|valuation| valuation.generation.clone()),
+        );
+        match tg::StationTg::start(&mut cfg, telegram, &data_root, generations) {
             Ok(bot) => Some(bot),
             Err(e) => {
                 log::error!("telegram: bot not started: {e:#}");

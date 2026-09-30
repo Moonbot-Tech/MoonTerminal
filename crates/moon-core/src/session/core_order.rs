@@ -174,6 +174,7 @@ fn insertion_key(s: &crate::config::ServerConfig) -> (u64, u64) {
 /// A rank table built from the current config for one render pass.
 ///
 /// Rebuilding is cheap for these short lists and prevents stale order.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CoreOrder {
     rank: HashMap<CoreId, u32>,
 }

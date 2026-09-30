@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -36,7 +37,7 @@ use moon_core::station_api::{Access, BotStatus, PairingCode, Status};
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::runtime::Response;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
-use moon_tg::{Finish, HostKind, Job, TelegramState, TgHost};
+use moon_tg::{Finish, HostKind, Job, ReportRevision, TelegramState, TgHost};
 
 use crate::cores::Telegram;
 use crate::release::{self, ReleaseWatch};
@@ -50,6 +51,9 @@ const CONFLICT_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(6
 pub struct StationTg {
     state: TelegramState,
     zone: Tz,
+    /// The report writer's and the valuation worker's generations, which the Mini App's cached
+    /// reads are compared on.
+    generations: (Arc<AtomicU64>, Option<Arc<AtomicU64>>),
     pairing_path: PathBuf,
     /// Where the update request is filed.
     data_root: PathBuf,
@@ -82,6 +86,7 @@ impl StationTg {
     ///     config: The station's configuration; its `telegram` is replaced.
     ///     telegram: `[telegram]` of `station.toml`, with its token.
     ///     data_root: Where `telegram.json` lives.
+    ///     generations: The report writer's generation and the valuation worker's, when it runs.
     ///
     /// Returns:
     ///     `Err` when the saved pairing cannot be read: the bot then does not start, rather than
@@ -90,6 +95,7 @@ impl StationTg {
         config: &mut AppConfig,
         telegram: &Telegram,
         data_root: &Path,
+        generations: (Arc<AtomicU64>, Option<Arc<AtomicU64>>),
     ) -> anyhow::Result<Self> {
         let token = telegram.token.clone().ok_or_else(|| {
             anyhow::anyhow!("no bot token: the credential telegram-token is missing or empty")
@@ -113,6 +119,7 @@ impl StationTg {
         Ok(Self {
             state: TelegramState::new(bot, moon_tg::HostKind::Station),
             zone: telegram.zone,
+            generations,
             pairing_path,
             data_root: data_root.to_path_buf(),
             status_asks: Vec::new(),
@@ -375,6 +382,11 @@ impl TgHost for StationHost<'_> {
 
     fn report_zone(&self) -> Tz {
         self.tg.zone
+    }
+
+    fn report_revision(&self) -> Option<ReportRevision> {
+        let (reports, valuation) = &self.tg.generations;
+        ReportRevision::current(reports, valuation.as_deref())
     }
 
     fn save_paired_chat(&mut self, chat_id: i64) -> bool {
