@@ -56,22 +56,31 @@ pub fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// Global navigation owns periods and help; report actions remain inline.
-pub(crate) fn navigation_keyboard() -> ReplyMarkup {
+/// Global navigation owns periods and help — and on a station its status; report actions remain
+/// inline.
+pub(crate) fn navigation_keyboard(host: crate::HostKind) -> ReplyMarkup {
     let locale = rust_i18n::locale();
-    let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(|(name, icon)| {
+    let button = |(name, icon): (&str, &str)| {
         let key = format!("telegram.button_{name}");
         KeyboardButton {
             text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
             style: None,
         }
-    });
+    };
+    let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(button);
+    let mut months = vec![month, lastmonth];
+    if host == crate::HostKind::Station {
+        months.push(button(STATION_STATUS_BUTTON));
+    }
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: vec![vec![today, yesterday, help], vec![month, lastmonth]],
+        keyboard: vec![vec![today, yesterday, help], months],
         resize_keyboard: true,
         is_persistent: true,
     })
 }
+
+/// The station's own navigation button: its status in the chat.
+const STATION_STATUS_BUTTON: (&str, &str) = ("status", "\u{1f4e1}");
 
 /// Stable glyphs are kept outside localization dictionaries and shared by rendering and aliases.
 fn navigation_buttons() -> [(&'static str, &'static str); 5] {
@@ -174,6 +183,16 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
         for key in STATION_WORDED {
             let path = format!("telegram.{key}_station");
             labels.insert((*key).to_string(), t!(&path).to_string());
+        }
+        // Only a station's bot knows its status button: a terminal's never parses it.
+        let (name, icon) = STATION_STATUS_BUTTON;
+        for locale in ["ru", "en", "es"] {
+            let text = t!("telegram.button_status", locale = locale).to_string();
+            labels.insert(
+                format!("button_{name}_emoji_{locale}"),
+                format!("{icon} {text}"),
+            );
+            labels.insert(format!("button_{name}_{locale}"), text);
         }
     }
     labels

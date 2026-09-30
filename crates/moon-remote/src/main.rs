@@ -5,6 +5,7 @@
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>
 //!             [--login-key <file>] [--station-bin <file>]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
+//! moon-remote --data <dir> station-update --host <h> [--port 22]
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
@@ -44,7 +45,7 @@ fn run() -> anyhow::Result<()> {
     );
     anyhow::ensure!(
         !args.0.is_empty(),
-        "no command: setup | station-bin | cores | status | telegram"
+        "no command: setup | station-bin | station-update | cores | status | telegram"
     );
     let command = args.0.remove(0);
     let target = Target {
@@ -133,6 +134,10 @@ fn run() -> anyhow::Result<()> {
                 &mut say,
             )?;
         }
+        "station-update" => {
+            args.done()?;
+            station::update_from_release(&target, &mut say)?;
+        }
         "cores" => {
             let from_terminal = args.flag("--from-terminal");
             let picks = args.values("--core")?;
@@ -214,7 +219,7 @@ fn run() -> anyhow::Result<()> {
             station::push_telegram(&target, token.as_ref(), &change, off, &mut say)?;
         }
         other => anyhow::bail!(
-            "unknown command {other:?}: setup | station-bin | cores | status | telegram"
+            "unknown command {other:?}: setup | station-bin | station-update | cores | status | telegram"
         ),
     }
     Ok(())

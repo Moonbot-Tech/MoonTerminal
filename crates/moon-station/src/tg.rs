@@ -13,11 +13,15 @@
 //! While no chat is paired the station keeps a pairing code issued itself and logs it. The
 //! terminal's Settings reach the rest through the control API (`api.rs`): the bot's state, a code
 //! for one more chat, and the chats' access read and replaced ([`StationTg::set_access`]).
+//!
+//! The chat's "Status" is the station's own status, read on the main loop
+//! ([`StationTg::answer_status`]) and sent from a thread that first asks GitHub for a newer
+//! release; "Update" files the request the root updater acts on (`release.rs`).
 
 use std::collections::HashMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -28,12 +32,14 @@ use moon_core::session::panic_override::{
     PanicLocal, effective_panic_armed, panic_local_settled, panic_snapshot_armed,
 };
 use moon_core::session::{CoreId, SessionManager};
-use moon_core::station_api::{Access, BotStatus, PairingCode};
+use moon_core::station_api::{Access, BotStatus, PairingCode, Status};
 use moon_core::telegram::TelegramStatus;
+use moon_core::telegram::runtime::Response;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 use moon_tg::{Finish, HostKind, Job, TelegramState, TgHost};
 
 use crate::cores::Telegram;
+use crate::release::{self, ReleaseWatch};
 
 /// The station's own Telegram state file, in the data root.
 const PAIRING_FILE: &str = "telegram.json";
@@ -45,6 +51,12 @@ pub struct StationTg {
     state: TelegramState,
     zone: Tz,
     pairing_path: PathBuf,
+    /// Where the update request is filed.
+    data_root: PathBuf,
+    /// Chats' "Status" waiting for the main loop to read the station's status.
+    status_asks: Vec<SyncSender<Response>>,
+    /// The look at the latest release each "Status" takes.
+    release: ReleaseWatch,
     /// Optimistic Panic Sell override by `(core, market)`, reconciled every tick.
     panic_local: HashMap<(CoreId, String), PanicLocal>,
     /// Cores the Mini App asked to reconnect, for the loop to rebuild.
@@ -102,6 +114,9 @@ impl StationTg {
             state: TelegramState::new(bot, moon_tg::HostKind::Station),
             zone: telegram.zone,
             pairing_path,
+            data_root: data_root.to_path_buf(),
+            status_asks: Vec::new(),
+            release: ReleaseWatch::default(),
             panic_local: HashMap::new(),
             reconnect: Vec::new(),
             finished_tx,
@@ -137,6 +152,44 @@ impl StationTg {
         tg.offer_pairing(config);
         tg.log_status();
         std::mem::take(&mut tg.reconnect)
+    }
+
+    /// Answer the chats that asked for "Status" since the last pass: the station's status read now
+    /// through `status` (given the bot's own), sent from a thread that first looks for a newer
+    /// release — GitHub can take seconds, the loop must not.
+    pub fn answer_status(&mut self, config: &AppConfig, status: impl FnOnce(BotStatus) -> Status) {
+        if self.status_asks.is_empty() {
+            return;
+        }
+        let asks = std::mem::take(&mut self.status_asks);
+        let status = status(self.status(config));
+        let release = self.release.clone();
+        let answer = move |asks: Vec<SyncSender<Response>>, check: moon_tg::ReleaseCheck| {
+            for ask in asks {
+                let _ = ask.try_send(moon_tg::station_status_reply(&status, &check));
+            }
+        };
+        // Handed over through a slot, so a thread that cannot be started leaves the answer here:
+        // then without the look at the release, rather than none at all.
+        let slot = Arc::new(Mutex::new(Some((asks, answer))));
+        let theirs = Arc::clone(&slot);
+        let started = std::thread::Builder::new()
+            .name("tg-status".into())
+            .spawn(move || {
+                let taken = theirs.lock().ok().and_then(|mut slot| slot.take());
+                if let Some((asks, answer)) = taken {
+                    answer(asks, release.check_within());
+                }
+            });
+        if let Err(error) = started {
+            log::warn!(
+                "telegram: no thread for the status ({error}); answering without a release check"
+            );
+            let taken = slot.lock().ok().and_then(|mut slot| slot.take());
+            if let Some((asks, answer)) = taken {
+                answer(asks, moon_tg::ReleaseCheck::Failed(error.to_string()));
+            }
+        }
     }
 
     /// The bot now, for the control API.
@@ -400,6 +453,16 @@ impl TgHost for StationHost<'_> {
 
     fn repaint(&mut self) {
         // Nothing on the station shows the bot's state.
+    }
+
+    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
+        // The status is read on the loop after this tick, where the cores and the host are.
+        self.tg.status_asks.push(reply);
+        true
+    }
+
+    fn request_station_update(&mut self) -> Option<Result<(), String>> {
+        Some(release::request_update(&self.tg.data_root))
     }
 }
 

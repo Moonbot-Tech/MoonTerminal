@@ -33,6 +33,27 @@ pub(super) fn platform_asset_name() -> &'static str {
     asset_name_for_os(std::env::consts::OS)
 }
 
+/// Exact release asset name of the station binary for one CPU architecture.
+///
+/// Args:
+///     target_arch: Value of `std::env::consts::ARCH` for the build being served.
+///
+/// Returns:
+///     `moon-station-x86_64` or `moon-station-aarch64`; `None` for an architecture the release
+///     does not build the station for.
+pub(super) fn station_asset_name_for_arch(target_arch: &str) -> Option<&'static str> {
+    match target_arch {
+        "x86_64" => Some("moon-station-x86_64"),
+        "aarch64" => Some("moon-station-aarch64"),
+        _ => None,
+    }
+}
+
+/// Exact release asset name of the station binary for the architecture this one was compiled for.
+pub fn station_asset_name() -> Option<&'static str> {
+    station_asset_name_for_arch(std::env::consts::ARCH)
+}
+
 /// Stable release version encoded by legacy `v0.21` or canonical `v0.24.1` tags.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ReleaseVersion {
@@ -129,7 +150,8 @@ pub struct AvailableRelease {
     version: ReleaseVersion,
     /// Exact Git tag returned by the immutable release metadata.
     release_tag: String,
-    /// Exact platform asset (`MoonTerminal.exe` or `MoonTerminal.dmg`).
+    /// Exact asset the discovery looked for: `MoonTerminal.exe`, `MoonTerminal.dmg`, or the
+    /// station's `moon-station-<arch>`.
     asset: ReleaseAsset,
 }
 
@@ -157,7 +179,7 @@ impl AvailableRelease {
         self.asset.sha256
     }
 
-    /// Return the exact asset file name selected for this platform.
+    /// Return the exact asset file name the discovery selected.
     pub fn asset_name(&self) -> &'static str {
         self.asset.name
     }
@@ -199,27 +221,11 @@ struct GitHubAsset {
     browser_download_url: String,
 }
 
-/// Convert one API release into an eligible candidate for this platform.
-///
-/// Args:
-///     release: One bounded release-list record borrowed from the page cache.
-///
-/// Returns:
-///     A cloned install candidate when every stable immutable metadata check passes.
-///
-/// Errors:
-///     Returns an error for duplicate platform assets or a malformed canonical download URL.
-pub(super) fn eligible_release(
-    release: &GitHubRelease,
-) -> anyhow::Result<Option<AvailableRelease>> {
-    eligible_release_for(release, platform_asset_name())
-}
-
 /// Convert one API release into an eligible candidate carrying one exact asset name.
 ///
 /// Args:
 ///     release: One bounded release-list record borrowed from the page cache.
-///     asset_name: Exact platform asset name from [`asset_name_for_os`].
+///     asset_name: Exact asset name from [`asset_name_for_os`] or [`station_asset_name`].
 ///
 /// Returns:
 ///     A cloned install candidate when every stable immutable metadata check passes.

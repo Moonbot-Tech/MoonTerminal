@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use super::*;
-use crate::update::release::GitHubRelease;
+use crate::update::release::{GitHubRelease, platform_asset_name};
 use crate::update::{BuildIdentity, GitHubReleaseClient, UpdateEligibility};
 
 /// Comparing only major/minor inside `greatest_eligible` would keep `v0.24.0` ahead of
@@ -28,6 +28,7 @@ fn reducer_selects_the_greatest_strictly_newer_release() {
             fixture_release("v0.20"),
         ],
         baseline,
+        platform_asset_name(),
         None,
         &mut tags_by_version,
     )
@@ -45,6 +46,7 @@ fn reducer_selects_the_greatest_strictly_newer_release() {
         greatest_eligible(
             &[fixture_release("v0.21")],
             baseline,
+            platform_asset_name(),
             None,
             &mut BTreeMap::new(),
         )
@@ -65,6 +67,7 @@ fn reducer_rejects_distinct_tags_for_the_same_newer_version() {
     let error = greatest_eligible(
         &[fixture_release("v0.24"), fixture_release("v0.24.0")],
         baseline,
+        platform_asset_name(),
         None,
         &mut BTreeMap::new(),
     )
@@ -85,6 +88,7 @@ fn reducer_rejects_an_alias_below_the_selected_maximum() {
     let greatest = greatest_eligible(
         &[fixture_release("v0.25.0"), fixture_release("v0.24")],
         baseline,
+        platform_asset_name(),
         None,
         &mut tags_by_version,
     )
@@ -92,6 +96,7 @@ fn reducer_rejects_an_alias_below_the_selected_maximum() {
     let error = greatest_eligible(
         &[fixture_release("v0.24.0")],
         baseline,
+        platform_asset_name(),
         greatest,
         &mut tags_by_version,
     )
@@ -298,6 +303,42 @@ fn transient_http_responses_keep_the_server_deadline() {
     assert_eq!(server.finish().len(), 1);
 }
 
+/// A release that carries only the station's binary must not be offered to the terminal, and a
+/// station must see nothing but its own asset: a session that ignored its asset name would install
+/// the terminal's executable on a Linux server, or offer the terminal a release it cannot install.
+#[test]
+fn each_session_offers_only_the_asset_it_installs() {
+    let station_only = format!(
+        "[{}]",
+        release_json_with_asset("v0.24.1", "moon-station-x86_64")
+    );
+    let server = ScriptedServer::start(vec![
+        http_response(200, &[], &station_only),
+        http_response(200, &[], &station_only),
+    ]);
+    let mut terminal = ReleaseDiscovery::with_client(
+        BuildIdentity::from_release_base("v0.21"),
+        GitHubReleaseClient::for_test(&server.url),
+    );
+    let mut station = ReleaseDiscovery::with_client(
+        BuildIdentity::from_release_base("v0.21"),
+        GitHubReleaseClient::for_test(&server.url),
+    );
+    station.asset_name = "moon-station-x86_64";
+
+    assert_eq!(
+        terminal.scan_at(1_000).unwrap().eligibility,
+        UpdateEligibility::Current
+    );
+    let UpdateEligibility::Available(candidate) = station.scan_at(1_000).unwrap().eligibility
+    else {
+        panic!("the station's asset was not offered to the station");
+    };
+    assert_eq!(candidate.asset_name(), "moon-station-x86_64");
+    assert_eq!(candidate.release_tag(), "v0.24.1");
+    assert_eq!(server.finish().len(), 2);
+}
+
 /// Loopback HTTP script retaining every request as a wire-level test oracle.
 struct ScriptedServer {
     url: String,
@@ -400,7 +441,11 @@ fn repeated_release_page(tag: &str, count: usize) -> String {
 ///
 /// The asset is the one this platform installs, so the suite holds on Windows and macOS alike.
 fn release_json(tag: &str) -> String {
-    let asset = crate::update::release::platform_asset_name();
+    release_json_with_asset(tag, platform_asset_name())
+}
+
+/// The same immutable release fixture carrying one named asset.
+fn release_json_with_asset(tag: &str, asset: &str) -> String {
     format!(
         r#"{{"tag_name":"{tag}","draft":false,"prerelease":false,"immutable":true,"assets":[{{"name":"{asset}","size":3,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","browser_download_url":"https://github.com/Moonbot-Tech/MoonTerminal/releases/download/{tag}/{asset}"}}]}}"#
     )

@@ -50,17 +50,21 @@ pub(crate) fn telegram_report(
         return;
     };
     if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
-        report_notice(&reply, t!("telegram.access_no_cores").to_string());
+        report_notice(
+            &reply,
+            t!("telegram.access_no_cores").to_string(),
+            host.kind(),
+        );
         return;
     }
     if host.state().report_pending {
-        report_notice(&reply, t!("telegram.report_busy").to_string());
+        report_notice(&reply, t!("telegram.report_busy").to_string(), host.kind());
         return;
     }
     let zone = host.report_zone();
     let now = moon_core::util::time::now_unix_secs() as i64;
     let Some((from, to)) = request.bounds(now, zone) else {
-        report_notice(&reply, crate::labels::report_help(host.kind()));
+        report_notice(&reply, crate::labels::report_help(host.kind()), host.kind());
         return;
     };
     let order = CoreOrder::new(host.config());
@@ -80,17 +84,21 @@ pub(crate) fn telegram_report(
                 Ok(page) => {
                     let _ = reply.try_send(render(&page, host.kind()));
                 }
-                Err(_) => report_notice(&reply, t!("telegram.report_failed").to_string()),
+                Err(_) => report_notice(
+                    &reply,
+                    t!("telegram.report_failed").to_string(),
+                    host.kind(),
+                ),
             }
         })
     }));
 }
 
 /// A report read failure still exposes global navigation, including during first /start.
-fn report_notice(reply: &SyncSender<Response>, text: String) {
+fn report_notice(reply: &SyncSender<Response>, text: String, host: crate::HostKind) {
     let _ = reply.try_send(Response::Text {
         text,
-        keyboard: Some(navigation_keyboard()),
+        keyboard: Some(navigation_keyboard(host)),
     });
 }
 

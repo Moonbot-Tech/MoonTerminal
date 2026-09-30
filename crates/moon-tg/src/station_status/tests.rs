@@ -16,6 +16,7 @@ fn status(host: Option<Host>) -> Status {
             long_position_min: 10,
         }),
         host: host.map(Box::new),
+        last_update: None,
     }
 }
 
@@ -92,6 +93,54 @@ fn an_older_station_is_told_to_update() {
     let text = station_status_text(&status(None));
     assert!(text.starts_with("Station 0.1.0\n"));
     assert!(text.ends_with("update it."));
+}
+
+/// The chat's "Update" button comes only with a newer release, carrying the callback the bot
+/// parses; otherwise the answer keeps the station's navigation, and a failed look says why.
+#[test]
+fn the_update_button_comes_only_with_a_newer_release() {
+    let _locale = crate::test_locale::force("en");
+    let Response::Text { text, keyboard } =
+        station_status_reply(&status(None), &ReleaseCheck::Newer("v0.52.0".into()))
+    else {
+        panic!("the status is plain text");
+    };
+    assert!(text.ends_with("A new version of the station is out: v0.52.0."));
+    let mut updated = status(None);
+    updated.last_update = Some("2026-09-30T14:02Z health=ok".into());
+    assert!(station_status_text(&updated).contains("\nLast update: 2026-09-30T14:02Z health=ok\n"));
+    let Some(ReplyMarkup::Inline(markup)) = keyboard else {
+        panic!("a newer release brings the inline Update button");
+    };
+    assert_eq!(markup.inline_keyboard[0][0].text, "Update to v0.52.0");
+    assert_eq!(
+        markup.inline_keyboard[0][0].callback_data.as_deref(),
+        Some(STATION_UPDATE_CALLBACK)
+    );
+
+    for (check, tail) in [
+        (ReleaseCheck::Current, None),
+        (
+            ReleaseCheck::Failed("GitHub releases returned HTTP 403".into()),
+            Some("Could not check for a new version: GitHub releases returned HTTP 403"),
+        ),
+        (
+            ReleaseCheck::Unversioned,
+            Some("updated from the terminal only."),
+        ),
+    ] {
+        let Response::Text { text, keyboard } = station_status_reply(&status(None), &check) else {
+            panic!("the status is plain text");
+        };
+        match tail {
+            Some(tail) => assert!(text.ends_with(tail), "{text}"),
+            None => assert!(text.ends_with("update it."), "{text}"),
+        }
+        assert!(
+            matches!(keyboard, Some(ReplyMarkup::Reply(_))),
+            "{check:?} keeps the navigation keyboard"
+        );
+    }
 }
 
 #[test]

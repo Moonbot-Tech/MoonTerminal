@@ -59,6 +59,10 @@ telegram.button_help:
   ru: "Помощь"
   en: "Help"
   es: "Ayuda"
+telegram.button_status:
+  ru: "Статус"
+  en: "Status"
+  es: "Estado"
 telegram.bot_ready:
   ru: "Mini App готово к открытию. Нажмите «Открыть»."
   en: "Mini App is ready. Tap Open."
@@ -859,6 +863,34 @@ telegram.station.no_host:
   ru: "Показатели сервера: служба станции старше этого терминала — обнови её."
   en: "Server figures: the station's service is older than this terminal — update it."
   es: "Datos del servidor: el servicio de la estación es anterior a este terminal; actualízalo."
+telegram.station.last_update:
+  ru: "Последнее обновление: %{verdict}"
+  en: "Last update: %{verdict}"
+  es: "Última actualización: %{verdict}"
+telegram.station.update_available:
+  ru: "Вышла новая версия станции: %{version}."
+  en: "A new version of the station is out: %{version}."
+  es: "Hay una nueva versión de la estación: %{version}."
+telegram.station.update_button:
+  ru: "Обновить до %{version}"
+  en: "Update to %{version}"
+  es: "Actualizar a %{version}"
+telegram.station.release_unversioned:
+  ru: "Эта сборка станции не из релиза: обновляется только из терминала."
+  en: "This station build is not from a release: it is updated from the terminal only."
+  es: "Esta compilación de la estación no viene de una versión publicada: solo se actualiza desde el terminal."
+telegram.station.release_unreadable:
+  ru: "Новую версию проверить не удалось: %{error}"
+  en: "Could not check for a new version: %{error}"
+  es: "No se pudo comprobar si hay una versión nueva: %{error}"
+telegram.station.update_requested:
+  ru: "Обновление запущено: станция скачает последний релиз, проверит его и перезапустится — около минуты. Если новая версия не удержится, вернётся прежняя. Затем нажмите «Статус» — там будет версия."
+  en: "Update started: the station downloads the latest release, checks it and restarts — about a minute. If the new version does not stay up, the previous one comes back. Then press Status to see the version."
+  es: "Actualización iniciada: la estación descarga la última versión, la comprueba y se reinicia — alrededor de un minuto. Si la nueva versión no se mantiene, vuelve la anterior. Después pulsa Estado para ver la versión."
+telegram.station.update_not_requested:
+  ru: "Обновление не запущено: %{reason}"
+  en: "The update did not start: %{reason}"
+  es: "La actualización no se inició: %{reason}"
 telegram.server.tape_title:
   ru: "Лента вокруг сделок на станции"
   en: "The station's tape around trades"
@@ -891,6 +923,10 @@ telegram.server.update:
   ru: "Обновить службу"
   en: "Update the service"
   es: "Actualizar el servicio"
+telegram.server.update_hint:
+  ru: "Ставит станцию из последнего релиза MoonTerminal на GitHub (проверка SHA-256), перезапускает и проверяет; не удержалась — возвращает прежнюю. Новее установленной нет — ничего не меняет."
+  en: "Installs the station from the latest MoonTerminal release on GitHub (SHA-256 checked), restarts and checks it; if it does not stay up, the previous one comes back. Nothing newer than the installed one — nothing changes."
+  es: "Instala la estación desde la última versión de MoonTerminal en GitHub (SHA-256 comprobado), la reinicia y la comprueba; si no se mantiene, vuelve la anterior. Si no hay nada más nuevo que lo instalado, no cambia nada."
 telegram.server.resetup:
   ru: "Настроить заново"
   en: "Set up again"

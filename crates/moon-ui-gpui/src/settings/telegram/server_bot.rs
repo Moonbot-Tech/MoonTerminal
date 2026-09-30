@@ -1041,16 +1041,8 @@ impl SettingsView {
             )
             .child(
                 button("server-update", t!("telegram.server.update").to_string())
-                    .on_click(on(|this, target, cx| {
-                        let bin = text(&this.telegram.server.bin, cx);
-                        if bin.is_empty() {
-                            return Err(t!("telegram.server.need_bin").to_string());
-                        }
-                        Ok(Job::Update {
-                            target,
-                            bin: PathBuf::from(bin),
-                        })
-                    }))
+                    .tooltip(t!("telegram.server.update_hint").to_string())
+                    .on_click(on(|_, target, _| Ok(Job::Update { target })))
                     .render(),
             )
             .child(
@@ -1081,14 +1073,8 @@ impl SettingsView {
                 .text_color(rgba_from(p.text, 1.0))
                 .child(t!("telegram.server.known", addr = target.addr()).to_string()),
         );
+        // A server set up already updates from the release: no file to choose.
         self.server_bot_old_admin(section, cx)
-            .child(self.server_bot_field(
-                "server-bin",
-                t!("telegram.server.bin").to_string(),
-                &self.telegram.server.bin,
-                false,
-                cx,
-            ))
             .child(actions)
             .child(self.server_tape_block(target, cx))
     }

@@ -155,7 +155,7 @@ fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
         t!("telegram.refusal")
     }
     .to_string();
-    let keyboard = saved.then(navigation_keyboard);
+    let keyboard = saved.then(|| navigation_keyboard(host.kind()));
     let _ = reply.try_send(Response::PairSaved {
         saved,
         text,
@@ -225,20 +225,39 @@ fn run_command(
             };
             let keyboard = keyboard
                 .map(ReplyMarkup::Inline)
-                .or_else(|| Some(navigation_keyboard()));
+                .or_else(|| Some(navigation_keyboard(host.kind())));
             let _ = reply.try_send(Response::Text { text, keyboard });
         }
-        _ => {
+        ParsedCommand::StationStatus => {
+            if !host.station_status(reply.clone()) {
+                cannot_run(host, &reply);
+            }
+        }
+        ParsedCommand::StationUpdate => {
+            let text = match host.request_station_update() {
+                None => return cannot_run(host, &reply),
+                Some(Ok(())) => t!("telegram.station.update_requested"),
+                Some(Err(reason)) => t!("telegram.station.update_not_requested", reason = reason),
+            };
             let _ = reply.try_send(Response::Text {
-                text: format!(
-                    "{}\n\n{}",
-                    t!("telegram.invalid"),
-                    crate::labels::report_help(host.kind())
-                ),
-                keyboard: Some(navigation_keyboard()),
+                text: text.to_string(),
+                keyboard: Some(navigation_keyboard(host.kind())),
             });
         }
+        _ => cannot_run(host, &reply),
     }
+}
+
+/// A request this bot cannot run: why, and what it can.
+fn cannot_run(host: &dyn TgHost, reply: &SyncSender<Response>) {
+    let _ = reply.try_send(Response::Text {
+        text: format!(
+            "{}\n\n{}",
+            t!("telegram.invalid"),
+            crate::labels::report_help(host.kind())
+        ),
+        keyboard: Some(navigation_keyboard(host.kind())),
+    });
 }
 
 /// Recheck pairing and Mini App enablement on every authenticated HTTP request.

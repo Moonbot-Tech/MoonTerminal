@@ -132,7 +132,7 @@ fn exchange(
         stream,
         &Hello {
             proto_version: PROTO_VERSION,
-            station_version: env!("CARGO_PKG_VERSION").to_owned(),
+            station_version: crate::release::version(),
         },
     )?;
     let request: Request = match read_frame(stream) {
