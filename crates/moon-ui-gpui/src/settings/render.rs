@@ -61,6 +61,7 @@ impl Render for SettingsView {
             Tab::Connections => self.connections_tab(cx).into_any_element(),
             Tab::Storage => self.storage_tab(cx).into_any_element(),
             Tab::Telegram => self.telegram_tab(chrome_width, cx).into_any_element(),
+            Tab::Station => self.station_tab(chrome_width, cx).into_any_element(),
             Tab::TradeSounds => self.trade_sounds_tab(chrome_width, cx).into_any_element(),
         };
         // Keep the viewport bounded but measure its child at intrinsic height. The convenience
@@ -340,6 +341,9 @@ impl SettingsView {
         self.hotkeys_hover_row = None;
         if page == Tab::Telegram {
             self.telegram_tab_activated(cx);
+        }
+        if page == Tab::Station {
+            self.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
         }
         cx.notify();
     }

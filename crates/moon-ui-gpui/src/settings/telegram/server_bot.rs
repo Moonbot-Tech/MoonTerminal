@@ -1,7 +1,7 @@
-//! The station on a Linux server, in the Telegram bot's segment: its install form, and once it runs
-//! the bot's sections on top (the bot lives on the server: its token, access, chats with their
-//! cores, the Mini App — read and changed through the station's control API) and the station's
-//! own actions below.
+//! The station on a Linux server. The Station tab shows its install form, and once it runs the
+//! station's own actions; the Telegram bot's segment shows the bot's sections (the bot lives on the
+//! server: its token, access, chats with their cores, the Mini App — read and changed through the
+//! station's control API).
 //!
 //! Unlike the rest of the Telegram tab nothing here waits for Save — every button is work on the
 //! server, done at once (as the Storage tab does); the server's chats are edited in a draft of
@@ -55,9 +55,6 @@ pub(in crate::settings) struct ServerBotEd {
     server_token: Entity<MoonInputState>,
     /// First login by a key file rather than a password.
     by_key: bool,
-    /// The Mini App on the server for a bot set up from here, set by the user; `None` follows the
-    /// terminal's own Mini App switch.
-    mini_app: Option<bool>,
     /// "Also a bot in the terminal", set by the user; `None` follows whether the terminal has one.
     local_bot: Option<bool>,
     /// The server this terminal already set up, from `remote/hosts.toml`.
@@ -124,7 +121,6 @@ pub(in crate::settings) fn build<T: 'static>(
         old_admin: input(window, cx, true),
         server_token: input(window, cx, true),
         by_key: false,
-        mini_app: None,
         local_bot: None,
         known,
         lines_scroll: ScrollHandle::new(),
@@ -307,13 +303,10 @@ impl SettingsView {
         }
     }
 
-    /// The Mini App for a bot set up on the server from here: the user's choice, or the
-    /// terminal's own switch.
+    /// The Mini App for a bot set up on the server from here: the terminal's own switch. Once the
+    /// bot runs there, its own Mini App section changes it.
     fn server_mini_choice(&self, cx: &App) -> bool {
-        self.telegram
-            .server
-            .mini_app
-            .unwrap_or_else(|| self.backend.read(cx).config.telegram.mini_app_enabled)
+        self.backend.read(cx).config.telegram.mini_app_enabled
     }
 
     /// The terminal's bot handed to the station: its saved token and chats. `None` when the
@@ -617,21 +610,6 @@ impl SettingsView {
                         .render(),
                     ),
             )
-            .when(!has_token, |s| {
-                s.child(self.server_bot_mini_choice("server-mini-new", cx))
-            })
-    }
-
-    /// The Mini App switch for a bot set up on the server from here (the install, a first token).
-    fn server_bot_mini_choice(&self, id: &'static str, cx: &Context<Self>) -> MoonCheckbox {
-        MoonCheckbox::new(id)
-            .checked(self.server_mini_choice(cx))
-            .label(t!("telegram.server.mini_app").to_string())
-            .description(t!("telegram.server.mini_app_hint").to_string())
-            .on_change(cx.listener(|this, v: &bool, _, cx| {
-                this.telegram.server.mini_app = Some(*v);
-                cx.notify();
-            }))
     }
 
     /// The running bot's own sections, as the terminal's bot has them: access with its pairing
@@ -977,7 +955,6 @@ impl SettingsView {
             .when(has_bot, |s| {
                 s.child(self.server_bot_hint("telegram.server.transfer_hint", cx))
             })
-            .child(self.server_bot_mini_choice("server-mini-install", cx))
             .child(self.server_bot_hint("telegram.server.cores_hint", cx))
             .child(
                 h_flex().child(
@@ -995,8 +972,8 @@ impl SettingsView {
             )
     }
 
-    /// A server this terminal set up: the station's own actions (its bot is on top of the
-    /// segment).
+    /// A server this terminal set up: the station's own actions (its bot is in the Telegram
+    /// tab).
     fn server_bot_known(
         &self,
         section: MoonGroupBox,

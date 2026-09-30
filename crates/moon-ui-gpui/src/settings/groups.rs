@@ -1,18 +1,19 @@
 //! Top buttons of the Settings window, and which page each one opens.
 //!
-//! Five buttons are visible. Interface and General each remember one sub-page for as long as
+//! Six buttons are visible. Interface and General each remember one sub-page for as long as
 //! the window stays open; that memory is not written to config.
 
 use super::Tab;
 
 /// One button on the Settings tab strip, in strip order.
 ///
-/// General is last on purpose: the strip reads Connections, Telegram, Hotkeys, Interface,
-/// then General.
+/// General is last on purpose: the strip reads Connections, Telegram, Station, Hotkeys,
+/// Interface, then General.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::settings) enum TabGroup {
     Connections,
     Telegram,
+    Station,
     Hotkeys,
     Interface,
     General,
@@ -20,9 +21,10 @@ pub(in crate::settings) enum TabGroup {
 
 impl TabGroup {
     /// Strip order. General is the last button.
-    pub(in crate::settings) const ALL: [TabGroup; 5] = [
+    pub(in crate::settings) const ALL: [TabGroup; 6] = [
         Self::Connections,
         Self::Telegram,
+        Self::Station,
         Self::Hotkeys,
         Self::Interface,
         Self::General,
@@ -41,6 +43,7 @@ impl TabGroup {
         match self {
             Self::Connections => &[Tab::Connections],
             Self::Telegram => &[Tab::Telegram],
+            Self::Station => &[Tab::Station],
             Self::Hotkeys => &[Tab::Hotkeys],
             Self::Interface => &Self::INTERFACE_PAGES,
             Self::General => &Self::GENERAL_PAGES,
@@ -79,7 +82,9 @@ impl TabGroup {
         match self {
             Self::Interface => "settings-interface-segments",
             Self::General => "settings-general-segments",
-            Self::Connections | Self::Telegram | Self::Hotkeys => "settings-segments",
+            Self::Connections | Self::Telegram | Self::Station | Self::Hotkeys => {
+                "settings-segments"
+            }
         }
     }
 }
@@ -93,6 +98,7 @@ impl Tab {
         match self {
             Tab::Connections => TabGroup::Connections,
             Tab::Telegram => TabGroup::Telegram,
+            Tab::Station => TabGroup::Station,
             Tab::Hotkeys => TabGroup::Hotkeys,
             Tab::Interface | Tab::Lines | Tab::Badges => TabGroup::Interface,
             Tab::General | Tab::Storage | Tab::TradeSounds => TabGroup::General,
@@ -139,6 +145,7 @@ impl SubpageMemory {
         match group {
             TabGroup::Connections => Tab::Connections,
             TabGroup::Telegram => Tab::Telegram,
+            TabGroup::Station => Tab::Station,
             TabGroup::Hotkeys => Tab::Hotkeys,
             TabGroup::Interface => self.interface,
             TabGroup::General => self.general,
@@ -155,7 +162,7 @@ impl SubpageMemory {
         match page {
             Tab::Interface | Tab::Lines | Tab::Badges => self.interface = page,
             Tab::General | Tab::Storage | Tab::TradeSounds => self.general = page,
-            Tab::Connections | Tab::Telegram | Tab::Hotkeys => {}
+            Tab::Connections | Tab::Telegram | Tab::Station | Tab::Hotkeys => {}
         }
     }
 }

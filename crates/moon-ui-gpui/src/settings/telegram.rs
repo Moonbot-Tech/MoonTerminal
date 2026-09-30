@@ -1,7 +1,8 @@
-//! Telegram Settings navigation between the terminal bot and the core reader. The bot's segment
-//! also installs the station on a Linux server and hands the bot over to it (`server_bot`); with a
-//! station the bot on the server gets the same sections as the terminal's own — access, chats and
-//! their cores, the Mini App — and the terminal's bot is an extra below.
+//! Telegram Settings navigation between the terminal bot and the core reader. With a station on a
+//! Linux server the bot on the server gets the same sections as the terminal's own — access, chats
+//! and their cores, the Mini App — and the terminal's bot is an extra below. The station itself
+//! (install, status, actions, tape window) has its own Settings tab, hosted here as well because
+//! its editors are part of [`TelegramEd`].
 //!
 //! Edits stay on `Backend.preview` and persist through the existing Save transaction. Live
 //! service status and pairing come from the live service, independently of unsaved edits.
@@ -167,9 +168,21 @@ impl SettingsView {
             .child(content)
     }
 
-    /// Render the bot's segment: without a station, the terminal bot's four sections and the
-    /// station's install form; with one, the server's bot on top with the same sections of its
-    /// own, "Also a bot in the terminal" opening the terminal's four, and the station's actions.
+    /// Render the Station tab: the install form, or the known station's status, actions and tape
+    /// window, and the last job's progress. Station buttons act at once, without Save.
+    pub(super) fn station_tab(&self, width: f32, cx: &Context<Self>) -> impl IntoElement {
+        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
+            .min(design::font_w(cx, 680.0))
+            .max(0.0);
+        v_flex()
+            .w(px(column_w))
+            .gap(design::ui_px(cx, 16.0))
+            .child(self.server_bot_section(cx))
+    }
+
+    /// Render the bot's segment: without a station, the terminal bot's four sections; with one,
+    /// the server's bot on top with the same sections of its own, a line pointing to the Station
+    /// tab, and "Also a bot in the terminal" opening the terminal's four.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -422,12 +435,16 @@ impl SettingsView {
                 )
             })
             .when(station_known, |s| {
-                s.child(self.server_bot_block(cx))
-                    .children(self.server_bot_sections(cx))
-                    .child(self.server_bot_local_toggle(cx))
+                s.child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.server.on_station").to_string()),
+                )
+                .child(self.server_bot_block(cx))
+                .children(self.server_bot_sections(cx))
+                .child(self.server_bot_local_toggle(cx))
             })
             .when(local_on, |s| s.child(local))
-            .child(self.server_bot_section(cx))
     }
 }
 
