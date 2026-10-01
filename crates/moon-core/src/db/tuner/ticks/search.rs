@@ -788,6 +788,62 @@ fn better(a: &Tally, b: &Tally, min_n: i64) -> bool {
     a.profit_factor() > b.profit_factor()
 }
 
+/// `point` less every field the answer does not need: each in turn, in name order, is put back to
+/// what the strategies hold, and stays out when the point scores no worse without it.
+///
+/// A restart starts from the strategies moved a few steps on a few fields, and descent never
+/// moves a field whose every step scores the same: such a field rides along to the answer at the
+/// value the start drew, and Save would write it. A field the dependency rules see as in effect
+/// can still move nothing — 2026-10-01, `SellLevelDelayNext` 1 answered on strategies whose
+/// SellLevel was off — so the answer is held to the score, not to the rules alone.
+///
+/// A field held off its grid ([`pinned`]) is never put back: the strategy's value is one its
+/// range leaves out, and the answer comes from the range. Nor is one that trades a different
+/// number of deals for the same result: it changes which deals trade, and that is not nothing.
+///
+/// Args:
+///     point: The best point.
+///     score: Its score; a refused point (`None`) is returned as it is.
+///     pinned: The fields the search holds on their grids.
+///     evaluate: The search's scoring, refusals included.
+///     min_n: The sample floor.
+///     cancelled: Whether the search was stopped; a stopped search answers its point untrimmed.
+fn drop_passengers(
+    point: Point,
+    score: Option<Tally>,
+    pinned: &Point,
+    evaluate: &dyn Fn(&Point) -> Option<Tally>,
+    min_n: i64,
+    cancelled: &dyn Fn() -> bool,
+) -> (Point, Option<Tally>) {
+    if score.is_none() {
+        return (point, score);
+    }
+    let mut keys: Vec<&'static str> = point
+        .keys()
+        .copied()
+        .filter(|key| !pinned.contains_key(key))
+        .collect();
+    keys.sort_unstable();
+    let (mut point, mut score) = (point, score);
+    for key in keys {
+        if cancelled() {
+            break;
+        }
+        let mut without = point.clone();
+        without.remove(key);
+        let trial = evaluate(&without);
+        let same_trades = matches!((&score, &trial), (Some(a), Some(b)) if a.n == b.n);
+        let drop = better_score(&trial, &score, min_n)
+            || (same_trades && !better_score(&score, &trial, min_n));
+        if drop {
+            point = without;
+            score = trial;
+        }
+    }
+    (point, score)
+}
+
 /// xorshift64*, the same stream shape the threshold search draws its starts from.
 fn next_random(state: &mut u64) -> u64 {
     let mut x = *state;
@@ -1079,18 +1135,26 @@ pub fn suggest(
             }
         })
         .ok_or(SearchMiss::Nothing)?;
+    // What the descents refused, read before the trim's own trials add to it.
+    let load = |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
+    let (cornered_n, unclosed_n, risky_n) = (load(&cornered), load(&unclosed), load(&risky));
+    let (best_restart, passes, converged) = (best.restart, best.passes, best.converged);
+    let (point, score) =
+        drop_passengers(best.point, best.score, &pinned, &evaluate, min_n, &|| {
+            handle.is_cancelled()
+        });
+    // Every point scored, the trim's trials included.
     let stats = SearchStats {
         restarts: restarts_done,
-        best_restart: best.restart,
-        passes: best.passes,
-        converged: best.converged,
+        best_restart,
+        passes,
+        converged,
         distinct,
         evaluations: evaluations.load(std::sync::atomic::Ordering::Relaxed),
         refused,
         left_open: left_open.len(),
         entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
     };
-    let (point, score) = (best.point, best.score);
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
     // below its own base is a search that could not reach the base — or one whose typed range
     // leaves the base's value out, which no restart stands on ([`pinned`]) — and the log says so.
@@ -1125,12 +1189,12 @@ pub fn suggest(
         train_n,
         left_open.len(),
         base_why,
-        cornered.load(std::sync::atomic::Ordering::Relaxed),
-        unclosed.load(std::sync::atomic::Ordering::Relaxed),
-        risky.load(std::sync::atomic::Ordering::Relaxed)
+        cornered_n,
+        unclosed_n,
+        risky_n
     );
-    // The answer as it was scored — every field it switched on at a value — less what is in
-    // effect on no strategy.
+    // The answer as it was scored — every field it switched on at a value, the passengers already
+    // dropped — less what is in effect on no strategy.
     let point = deps.prune(
         &deps.complete(&point, &bases.owns, params.held, params.defaults),
         &bases.owns,
@@ -1141,9 +1205,7 @@ pub fn suggest(
     // below any above it: a best refused or under the floor means no point held either.
     let Some(train_tally) = score else {
         // The rule that refused the most points is the one to name.
-        let load =
-            |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
-        let (unclosed, cornered, risky) = (load(&unclosed), load(&cornered), load(&risky));
+        let (unclosed, cornered, risky) = (unclosed_n, cornered_n, risky_n);
         return Err(if risky > unclosed.max(cornered) {
             SearchMiss::Risk
         } else if unclosed > cornered {
