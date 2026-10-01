@@ -37,7 +37,8 @@ pub struct ModelSettings {
     pub pre_spike_lookback_ms: i64,
     /// How often the core's REST ticker brings the price a non-fast stop watches.
     pub ticker_period_ms: i64,
-    /// The core's price-series tick, which a stop at `StopLossEMA` 0 also fires on.
+    /// The core's price-series tick, which a stop at `StopLossEMA` 0 also fires on and whose last
+    /// price the fast stop checks.
     pub series_tick_ms: i64,
     /// The floor on a sell-line step delay of zero.
     pub step_floor_ms: i64,

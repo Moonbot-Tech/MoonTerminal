@@ -2530,9 +2530,9 @@ analytics.ticks.model_series:
   en: "Price series tick, ms"
   es: "Paso de la serie de precios, ms"
 analytics.ticks.model_series_tip:
-  ru: "Шаг ряда цен ядра, по которому ещё срабатывает стоп при StopLossEMA 0"
-  en: "The core's price-series tick a stop at StopLossEMA 0 also fires on"
-  es: "El paso de la serie de precios del núcleo con el que también salta un stop con StopLossEMA 0"
+  ru: "Шаг ряда цен ядра: по нему ещё срабатывает стоп при StopLossEMA 0, а быстрый стоп (FastStopLoss) проверяет последнюю цену каждого шага"
+  en: "The core's price-series tick: a stop at StopLossEMA 0 also fires on it, and the fast stop (FastStopLoss) checks the last price of each tick"
+  es: "El paso de la serie de precios del núcleo: con él también salta un stop con StopLossEMA 0, y el stop rápido (FastStopLoss) comprueba el último precio de cada paso"
 analytics.ticks.model_step_floor:
   ru: "Мин. шаг линии, мс"
   en: "Line step floor, ms"

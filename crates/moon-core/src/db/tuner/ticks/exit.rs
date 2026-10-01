@@ -197,8 +197,8 @@ pub struct ExitParams {
     /// arms nothing.
     pub stop_loss_pct: f64,
     pub stop_loss_delay_s: f64,
-    /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), so the first
-    /// print through the level fires it. NO — the core's default: the REST ticker's BID (the
+    /// `FastStopLoss` — what the stop watches. YES: the trades ("crosses", FAQ), checked by the
+    /// last price of each series tick as it closes (`stops::FastStop`). NO — the core's default: the REST ticker's BID (the
     /// ASK for a short), a long's averaged per `StopLossEMA`, which the trade tape does not
     /// carry; the walk then reads a sampled proxy of it (see [`stops`]).
     pub fast_stop_loss: bool,
