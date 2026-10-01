@@ -821,46 +821,94 @@ telegram.station.uptime_dh:
   ru: "%{d} д %{h} ч"
   en: "%{d} d %{h} h"
   es: "%{d} d %{h} h"
-telegram.station.cores:
-  ru: "Ядра: готово %{ready} из %{total}"
-  en: "Cores: %{ready} of %{total} ready"
-  es: "Núcleos: %{ready} de %{total} listos"
-telegram.station.bot:
-  ru: "Бот: %{status}"
-  en: "Bot: %{status}"
-  es: "Bot: %{status}"
-telegram.station.tape:
-  ru: "Лента: %{margin} вокруг сделки, долгая сделка от %{long} мин"
-  en: "Tape: %{margin} around a trade, long trade from %{long} min"
-  es: "Cinta: %{margin} alrededor de una operación, operación larga desde %{long} min"
-telegram.station.cpu:
-  ru: "Процессор за %{over}: станция %{station} % (пик %{station_peak} %), сервер %{machine} % (пик %{machine_peak} %)"
-  en: "Processor over %{over}: station %{station} % (peak %{station_peak} %), server %{machine} % (peak %{machine_peak} %)"
-  es: "Procesador en %{over}: estación %{station} % (pico %{station_peak} %), servidor %{machine} % (pico %{machine_peak} %)"
 telegram.station.cpu_hour:
   ru: "час"
-  en: "the hour"
-  es: "la hora"
+  en: "hour"
+  es: "hora"
 telegram.station.cpu_day:
   ru: "сутки"
-  en: "the day"
-  es: "el día"
+  en: "day"
+  es: "día"
 telegram.station.cpu_minutes:
   ru: "%{minutes} мин"
   en: "%{minutes} min"
   es: "%{minutes} min"
-telegram.station.memory:
-  ru: "Память: станция %{rss} (пик %{peak}), у сервера свободно %{available} из %{total}"
-  en: "Memory: station %{rss} (peak %{peak}), server has %{available} free of %{total}"
-  es: "Memoria: estación %{rss} (pico %{peak}), al servidor le quedan %{available} de %{total}"
-telegram.station.disk:
-  ru: "Диск: свободно %{free} из %{total}"
-  en: "Disk: %{free} free of %{total}"
-  es: "Disco: %{free} libres de %{total}"
-telegram.station.files:
-  ru: "Файлы:"
-  en: "Files:"
-  es: "Archivos:"
+telegram.station.section_service:
+  ru: "Служба"
+  en: "Service"
+  es: "Servicio"
+telegram.station.cores_label:
+  ru: "Ядра"
+  en: "Cores"
+  es: "Núcleos"
+telegram.station.cores_value:
+  ru: "готово %{ready} из %{total}"
+  en: "%{ready} of %{total} ready"
+  es: "%{ready} de %{total} listos"
+telegram.station.bot_label:
+  ru: "Бот"
+  en: "Bot"
+  es: "Bot"
+telegram.station.last_update_label:
+  ru: "Обновление"
+  en: "Last update"
+  es: "Última actualización"
+telegram.station.section_tape:
+  ru: "Лента"
+  en: "Tape"
+  es: "Cinta"
+telegram.station.tape_margin:
+  ru: "Вокруг сделки"
+  en: "Around a trade"
+  es: "Alrededor de una operación"
+telegram.station.tape_long:
+  ru: "Долгая сделка от"
+  en: "Long trade from"
+  es: "Operación larga desde"
+telegram.station.section_server:
+  ru: "Сервер"
+  en: "Server"
+  es: "Servidor"
+telegram.station.cpu_station:
+  ru: "Процессор станции, %{over}"
+  en: "Station CPU, %{over}"
+  es: "CPU de la estación, %{over}"
+telegram.station.cpu_server:
+  ru: "Процессор сервера, %{over}"
+  en: "Server CPU, %{over}"
+  es: "CPU del servidor, %{over}"
+telegram.station.percent_peak:
+  ru: "%{value} % (пик %{peak} %)"
+  en: "%{value} % (peak %{peak} %)"
+  es: "%{value} % (pico %{peak} %)"
+telegram.station.memory_station:
+  ru: "Память станции"
+  en: "Station memory"
+  es: "Memoria de la estación"
+telegram.station.memory_server:
+  ru: "Память сервера"
+  en: "Server memory"
+  es: "Memoria del servidor"
+telegram.station.disk_label:
+  ru: "Диск"
+  en: "Disk"
+  es: "Disco"
+telegram.station.size_peak:
+  ru: "%{size} (пик %{peak})"
+  en: "%{size} (peak %{peak})"
+  es: "%{size} (pico %{peak})"
+telegram.station.free_of:
+  ru: "свободно %{free} из %{total}"
+  en: "%{free} free of %{total}"
+  es: "%{free} libres de %{total}"
+telegram.station.section_files:
+  ru: "Крупные файлы"
+  en: "Largest files"
+  es: "Archivos más grandes"
+telegram.station.files_more:
+  ru: "и ещё %{count}"
+  en: "and %{count} more"
+  es: "y %{count} más"
 telegram.station.no_readings:
   ru: "Процессор и память: служба их не видит — нажми «Настроить заново» на вкладке «Станция»."
   en: "Processor and memory: the service cannot see them — press “Set up again” in the Station tab."
@@ -869,10 +917,6 @@ telegram.station.no_host:
   ru: "Показатели сервера: служба станции старше этого терминала — обнови её."
   en: "Server figures: the station's service is older than this terminal — update it."
   es: "Datos del servidor: el servicio de la estación es anterior a este terminal; actualízalo."
-telegram.station.last_update:
-  ru: "Последнее обновление: %{verdict}"
-  en: "Last update: %{verdict}"
-  es: "Última actualización: %{verdict}"
 telegram.station.update_available:
   ru: "Вышла новая версия станции: %{version}."
   en: "A new version of the station is out: %{version}."

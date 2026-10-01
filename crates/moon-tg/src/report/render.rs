@@ -21,7 +21,7 @@ const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
 const RICH_MESSAGE_BLOCK_LIMIT: usize = 500;
 
 /// Escape all external text before inserting it into Telegram's restricted rich HTML.
-pub(super) fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -59,7 +59,7 @@ pub(super) fn native(total: &QuoteBreakdown) -> String {
 }
 
 /// Telegram counts UTF-8 characters and nested blocks on the `sendRichMessage` path.
-pub(super) fn rich_message_fits(html: &str) -> bool {
+pub(crate) fn rich_message_fits(html: &str) -> bool {
     html.chars().count() <= RICH_MESSAGE_CHAR_LIMIT
         && rich_message_blocks(html) <= RICH_MESSAGE_BLOCK_LIMIT
 }
