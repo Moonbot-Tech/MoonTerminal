@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use russh::client::{self, AuthResult};
+use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 use russh::keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::{ChannelMsg, MethodKind};
 use zeroize::Zeroizing;
@@ -58,7 +59,7 @@ pub enum OpenError {
         /// The refusal still lists `password` or `keyboard-interactive` as methods to try.
         password_offered: bool,
     },
-    /// The host presented a different key than the one pinned at first contact.
+    /// The host presented a different key than the host key the user confirmed.
     HostKeyChanged {
         pinned: String,
         presented: String,
@@ -114,7 +115,7 @@ impl Output {
 
 /// Checks the host key against the pin; remembers what was presented.
 struct PinCheck {
-    pinned: Option<String>,
+    pinned: String,
     presented: Arc<Mutex<Option<String>>>,
 }
 
@@ -130,7 +131,7 @@ impl client::Handler for PinCheck {
             return Ok(false);
         };
         let fingerprint = key.fingerprint(HashAlg::Sha256).to_string();
-        let accept = self.pinned.as_deref().is_none_or(|pin| pin == fingerprint);
+        let accept = self.pinned == fingerprint;
         *self.presented.lock().unwrap_or_else(|e| e.into_inner()) = Some(fingerprint);
         Ok(accept)
     }
@@ -145,9 +146,10 @@ pub struct Conn {
 }
 
 impl Conn {
-    /// Connect, check the host key against `pinned` (`None` = first contact, accept and report),
-    /// and log in.
-    pub fn open(target: &Target, auth: &Auth<'_>, pinned: Option<&str>) -> Result<Self, OpenError> {
+    /// Connect, check the host key against `pinned` and log in. The pin is mandatory: a key the
+    /// user has not confirmed is never accepted, and `""` matches no key — credentials are sent
+    /// only after the presented key equals the pin.
+    pub fn open(target: &Target, auth: &Auth<'_>, pinned: &str) -> Result<Self, OpenError> {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -156,7 +158,7 @@ impl Conn {
             .map_err(OpenError::Other)?;
         let presented = Arc::new(Mutex::new(None));
         let handler = PinCheck {
-            pinned: pinned.map(str::to_owned),
+            pinned: pinned.to_owned(),
             presented: presented.clone(),
         };
         let config = Arc::new(client::Config {
@@ -173,9 +175,9 @@ impl Conn {
             Ok(Ok(handle)) => handle,
             Ok(Err(e)) => {
                 let presented = presented.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                return Err(match (pinned, presented) {
-                    (Some(pin), Some(seen)) if pin != seen => OpenError::HostKeyChanged {
-                        pinned: pin.to_owned(),
+                return Err(match presented {
+                    Some(seen) if pinned != seen => OpenError::HostKeyChanged {
+                        pinned: pinned.to_owned(),
                         presented: seen,
                     },
                     _ => OpenError::Unreachable(
@@ -315,6 +317,29 @@ impl Conn {
             return Err(e.into());
         }
         Ok(out)
+    }
+}
+
+/// The host key `target` presents, read without sending any credential: an empty pin matches no
+/// key, so the verifier refuses at key exchange, before the throwaway login is ever offered.
+pub fn presented_key(target: &Target) -> Result<String, OpenError> {
+    let mut seed = Zeroizing::new([0u8; 32]);
+    getrandom::getrandom(&mut *seed)
+        .map_err(|e| OpenError::Other(anyhow::anyhow!("getrandom: {e}")))?;
+    let pair = KeypairData::from(Ed25519Keypair::from_seed(&seed));
+    let throwaway = PrivateKey::new(pair, "probe")
+        .context("throwaway probe key")
+        .map_err(OpenError::Other)?;
+    let auth = Auth::Key {
+        user: "probe",
+        key: &throwaway,
+    };
+    match Conn::open(target, &auth, "") {
+        Err(OpenError::HostKeyChanged { presented, .. }) => Ok(presented),
+        Err(e) => Err(e),
+        Ok(_) => Err(OpenError::Other(anyhow::anyhow!(
+            "the server accepted an empty host-key pin"
+        ))),
     }
 }
 

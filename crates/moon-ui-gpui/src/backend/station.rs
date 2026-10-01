@@ -58,6 +58,8 @@ enum Kind {
 pub(crate) struct StationJobs {
     /// A probe's exact destination and key awaiting explicit UI confirmation.
     pub(crate) address_change: Option<moon_remote::station::access::AddressChange>,
+    /// A new server's host key awaiting explicit UI confirmation before the install.
+    pub(crate) install_probe: Option<moon_remote::setup::HostKey>,
     pub(crate) lines: Vec<String>,
     /// Bumped per line, so a view follows the newest one even once the list is full.
     pub(crate) line_seq: u64,
@@ -149,6 +151,7 @@ impl StationJobs {
     fn clear_known(&mut self, outcome: Result<String, String>) {
         let st = self;
         st.address_change = None;
+        st.install_probe = None;
         st.bot = None;
         st.bot_error = None;
         st.needs_old_admin = false;
@@ -324,6 +327,7 @@ impl Backend {
         match kind {
             Kind::User => {
                 st.address_change = None;
+                st.install_probe = None;
                 st.outcome = None;
                 st.lines.clear();
             }
@@ -421,6 +425,7 @@ impl Backend {
                 job::Done::Ok { .. }
                 | job::Done::BotOff { .. }
                 | job::Done::AddressProbed(_)
+                | job::Done::InstallProbed(_)
                 | job::Done::AddressChanged
                 | job::Done::Removed { .. } => {}
                 job::Done::NeedsAdminPassword => {
@@ -445,6 +450,11 @@ impl Backend {
             job::Done::AddressProbed(change) => {
                 self.station.address_change = Some(change);
                 self.station.outcome = Some(Ok(t!("telegram.server.address_review").to_string()));
+                return true;
+            }
+            job::Done::InstallProbed(key) => {
+                self.station.install_probe = Some(key);
+                self.station.outcome = Some(Ok(t!("telegram.server.install_review").to_string()));
                 return true;
             }
             job::Done::AddressChanged => {

@@ -21,6 +21,12 @@ pub enum StationError {
     BotAlreadyPresent,
     BotStopped,
     BotNotReady,
+    /// The user has not confirmed the server's host key; nothing was sent to it.
+    HostKeyUnconfirmed,
+    /// The server has no `apt-get`; the setup needs Debian or Ubuntu.
+    NoAptGet,
+    /// The server's `sshd_config` does not include `sshd_config.d`.
+    SshdNoInclude,
 }
 
 impl std::fmt::Display for StationError {
@@ -48,6 +54,9 @@ impl std::fmt::Display for StationError {
                 }
                 Self::BotStopped => "the station stopped after the bot was handed over",
                 Self::BotNotReady => "the station bot did not start polling within the deadline",
+                Self::HostKeyUnconfirmed => "the server's host key was not confirmed",
+                Self::NoAptGet => "no apt-get on this server: Debian or Ubuntu is required",
+                Self::SshdNoInclude => "the server's sshd_config does not include sshd_config.d",
                 Self::CoreMissing(_) | Self::CoreWithoutKey(_) => unreachable!(),
             }),
         }

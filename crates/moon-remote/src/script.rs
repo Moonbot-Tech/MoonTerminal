@@ -67,6 +67,17 @@ impl Privilege {
         stdin: &[u8],
         timeout: Duration,
     ) -> anyhow::Result<Output> {
+        checked(self.run_raw(conn, command, stdin, timeout)?)
+    }
+
+    /// [`Self::run`] without the exit check: the output of a step that failed half-way.
+    pub fn run_raw(
+        &self,
+        conn: &Conn,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+    ) -> anyhow::Result<Output> {
         // A password is sent only while sudo still asks for one. The setup's own `helper` step lets
         // the administrator's sudo go without it: a password line sent after that is not read by
         // sudo, and lands as the first line of the step's stdin — once, inside the unit file.
@@ -88,7 +99,7 @@ impl Privilege {
                 (format!("sudo -n {command}"), Zeroizing::new(stdin.to_vec()))
             }
         };
-        checked(conn.run(&command, &stdin, timeout)?)
+        conn.run(&command, &stdin, timeout)
     }
 }
 

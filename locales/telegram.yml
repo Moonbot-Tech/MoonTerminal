@@ -1266,3 +1266,39 @@ telegram.server.access_pending_return:
   ru: "Доступ к станции нельзя изменить или удалить: возвращённый бот ещё ожидает восстановления. Сначала повторите «Снять бота с сервера»."
   en: "Station access cannot be changed or removed: a returned bot still needs recovery. Retry Take the bot off the server first."
   es: "No se puede cambiar ni eliminar el acceso a la estación: un bot devuelto aún necesita recuperación. Reintenta primero Quitar el bot del servidor."
+telegram.server.install_review:
+  ru: "Ничего ещё не отправлено на сервер: проверьте ключ и изменения ниже, затем начните установку."
+  en: "Nothing has been sent to the server yet: check the key and the changes below, then start the install."
+  es: "Aún no se ha enviado nada al servidor: comprueba la clave y los cambios de abajo y luego inicia la instalación."
+telegram.server.install_fingerprint:
+  ru: "Сервер %{addr} предъявил ключ %{fingerprint}. Сверьте его в консоли провайдера. Продолжайте, только если это ключ вашего сервера."
+  en: "Server %{addr} presented key %{fingerprint}. Check it in your provider's console. Continue only if it is your server's key."
+  es: "El servidor %{addr} presentó la clave %{fingerprint}. Compruébala en la consola de tu proveedor. Continúa solo si es la clave de tu servidor."
+telegram.server.install_changes_title:
+  ru: "Установка изменит на этом сервере:"
+  en: "The install will change this server:"
+  es: "La instalación cambiará este servidor:"
+telegram.server.install_change_ssh:
+  ru: "Вход по SSH по паролю и под root отключается для всех пользователей; работают только ключи."
+  en: "Password and root logins over SSH are turned off for every user; only keys work."
+  es: "Los inicios de sesión SSH con contraseña y como root se desactivan para todos los usuarios; solo funcionan las claves."
+telegram.server.install_change_firewall:
+  ru: "Включается межсетевой экран ufw и блокирует все входящие подключения, кроме SSH; всё остальное, что сейчас слушает, закрывается (журнал установки назовёт эти порты). Если ufw уже включён, добавляется только порт SSH."
+  en: "The ufw firewall is turned on and blocks every incoming connection except SSH; anything else that listens now gets closed (the install log names those ports). If ufw is already on, only the SSH port is added."
+  es: "Se activa el cortafuegos ufw y bloquea todas las conexiones entrantes excepto SSH; todo lo demás que escucha ahora se cierra (el registro de la instalación nombra esos puertos). Si ufw ya está activo, solo se añade el puerto SSH."
+telegram.server.install_change_admin:
+  ru: "Создаётся учётная запись администратора «moon» с sudo без пароля."
+  en: "An administrator account \"moon\" is created, with sudo without a password."
+  es: "Se crea una cuenta de administrador \"moon\", con sudo sin contraseña."
+telegram.server.install_change_extras:
+  ru: "Устанавливаются fail2ban и автоматические обновления безопасности."
+  en: "fail2ban and automatic security updates are installed."
+  es: "Se instalan fail2ban y las actualizaciones de seguridad automáticas."
+telegram.server.install_password_warning:
+  ru: "Вы входите по паролю и не даёте свой ключ: после установки войти сможет только MoonTerminal этого компьютера. Сохраните его папку данных или сначала добавьте на сервер свой ключ."
+  en: "You log in with a password and give no key of your own: after the install, only this computer's MoonTerminal can log in. Keep its data folder, or add your own key to the server first."
+  es: "Inicias sesión con contraseña y no das una clave propia: tras la instalación, solo el MoonTerminal de este ordenador podrá entrar. Conserva su carpeta de datos o añade antes tu propia clave al servidor."
+telegram.server.install_confirm:
+  ru: "Доверять ключу и установить"
+  en: "Trust this key and install"
+  es: "Confiar en esta clave e instalar"

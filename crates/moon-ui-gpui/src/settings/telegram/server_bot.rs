@@ -433,7 +433,8 @@ impl SettingsView {
     }
 
     /// "Install": prepare the server, install the station, send every active core, move the bot.
-    fn server_bot_install_job(&self, cx: &App) -> Result<Job, String> {
+    /// `host_key` is the fingerprint the user confirmed after the probe.
+    fn server_bot_install_job(&self, host_key: String, cx: &App) -> Result<Job, String> {
         let ed = &self.telegram.server;
         let target = parse_target(&text(&ed.host, cx))
             .ok_or_else(|| t!("telegram.server.need_host").to_string())?;
@@ -446,6 +447,7 @@ impl SettingsView {
                 legacy_admin_password: secret(&ed.old_admin, cx),
                 // Only from the release (STATION.md §1 п. 21): no file to choose.
                 station: StationBinary::Release,
+                host_key: Some(host_key),
             },
             cores: self.server_bot_cores(cx),
             bot,
@@ -467,6 +469,7 @@ impl SettingsView {
                 legacy_admin_password: secret(&ed.old_admin, cx),
                 // The installed station stays; "Update the service" moves it to the release.
                 station: StationBinary::Keep,
+                host_key: None,
             },
         })
     }
@@ -953,9 +956,96 @@ impl SettingsView {
     }
 
     fn server_bot_hint(&self, key: &str, cx: &Context<Self>) -> impl IntoElement {
+        self.server_bot_note(t!(key).to_string(), cx)
+    }
+
+    /// Already localized text in the hint's style.
+    fn server_bot_note(&self, text: String, cx: &Context<Self>) -> impl IntoElement {
         div()
             .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
-            .child(t!(key).to_string())
+            .child(text)
+    }
+
+    /// The probed key of the server in the form, with what the install changes there: the
+    /// install starts only from here, with exactly the fingerprint shown.
+    fn server_bot_install_review(&self, section: MoonGroupBox, cx: &Context<Self>) -> MoonGroupBox {
+        let ed = &self.telegram.server;
+        let host = parse_target(&text(&ed.host, cx)).map(|t| t.addr());
+        let station = &self.backend.read(cx).station;
+        let busy = station.busy();
+        let Some(probe) = station
+            .install_probe
+            .clone()
+            .filter(|key| Some(key.target.addr()) == host)
+        else {
+            return section;
+        };
+        let fingerprint = probe.fingerprint.clone();
+        let p = MoonPalette::active(cx);
+        let bullet = |key: &str| self.server_bot_note(format!("\u{2022} {}", t!(key)), cx);
+        section
+            .child(
+                div().child(
+                    t!(
+                        "telegram.server.install_fingerprint",
+                        addr = probe.target.addr(),
+                        fingerprint = probe.fingerprint.clone()
+                    )
+                    .to_string(),
+                ),
+            )
+            .child(self.server_bot_hint("telegram.server.install_changes_title", cx))
+            .child(bullet("telegram.server.install_change_ssh"))
+            .child(bullet("telegram.server.install_change_firewall"))
+            .child(bullet("telegram.server.install_change_admin"))
+            .child(bullet("telegram.server.install_change_extras"))
+            .when(!ed.by_key, |s| {
+                s.child(
+                    div()
+                        .text_color(rgba_from(p.red_text, 1.0))
+                        .child(t!("telegram.server.install_password_warning").to_string()),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        MoonButton::new("server-install-confirm")
+                            .primary()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.install_confirm").to_string())
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // The captured key is exactly the fingerprint displayed above;
+                                // starting the job clears the probe.
+                                let job = this.server_bot_install_job(fingerprint.clone(), cx);
+                                this.server_bot_run(job, cx);
+                            }))
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new("server-install-cancel")
+                            .ghost()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.cancel").to_string())
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.server_bot_clear_install_probe(cx);
+                            }))
+                            .render(),
+                    ),
+            )
+    }
+
+    /// Drop the probed key: a later install reads it again.
+    fn server_bot_clear_install_probe(&mut self, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            b.station.install_probe = None;
+            b.station.outcome = None;
+            b.station.revision = b.station.revision.wrapping_add(1);
+            bcx.notify();
+        });
+        cx.notify();
     }
 
     /// The old administrator password, asked only after a server set up by an older version said
@@ -1046,12 +1136,16 @@ impl SettingsView {
                         .label(t!("telegram.server.install").to_string())
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let job = this.server_bot_install_job(cx);
+                            // Nothing is sent before the user confirms the key this reads.
+                            let job = parse_target(&text(&this.telegram.server.host, cx))
+                                .map(|target| Job::InstallProbe { target })
+                                .ok_or_else(|| t!("telegram.server.need_host").to_string());
                             this.server_bot_run(job, cx);
                         }))
                         .render(),
                 ),
             )
+            .map(|s| self.server_bot_install_review(s, cx))
     }
 
     /// A server this terminal set up: the station's own actions (its bot is in the Telegram
