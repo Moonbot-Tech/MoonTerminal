@@ -22,6 +22,9 @@ unmaintained = "workspace"
 # Each entry needs an advisory id, a date, and a sentence on why it is tolerated. An ignore with
 # no reason becomes permanent by accident.
 ignore = [
+    # 2026-10-01 — Provider RSA keys only sign SSH login challenges; this client never decrypts
+    # RSA ciphertext, the operation affected by Marvin's padding timing side channel.
+    { id = "RUSTSEC-2023-0071", reason = "provider first-login keys only sign SSH challenges and never decrypt RSA ciphertext" },
     # 2026-08-20 — `arrayref` 0.3.9 (via tiny-skia) was yanked hours after 0.3.10 appeared, and
     # 0.3.10 is the compromised release: it adds a normal dependency on `proc-macro1`, a crate
     # published the same morning by `dtolney` (a typosquat of `dtolnay`) that copies proc-macro2's

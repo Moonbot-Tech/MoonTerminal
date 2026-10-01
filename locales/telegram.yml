@@ -721,14 +721,18 @@ telegram.server.key_path:
   ru: "Файл ключа"
   en: "Key file"
   es: "Archivo de clave"
+telegram.server.key_browse:
+  ru: "Обзор…"
+  en: "Browse…"
+  es: "Examinar…"
 telegram.server.passphrase:
   ru: "Пароль ключа"
   en: "Key passphrase"
   es: "Contraseña de la clave"
 telegram.server.key_hint:
-  ru: "Путь к приватному ключу ed25519 или ECDSA (OpenSSH, PuTTY .ppk или PKCS#8). Ключи RSA не поддерживаются. Пароль ключа — только если ключ зашифрован."
-  en: "Path to an ed25519 or ECDSA private key (OpenSSH, PuTTY .ppk or PKCS#8). RSA keys are not supported. The passphrase only if the key is encrypted."
-  es: "Ruta a una clave privada ed25519 o ECDSA (OpenSSH, PuTTY .ppk o PKCS#8). Las claves RSA no son compatibles. La contraseña solo si la clave está cifrada."
+  ru: "Путь к приватному ключу ed25519, ECDSA или RSA (OpenSSH, PuTTY .ppk, PKCS#8 или RSA PEM / PKCS#1). Пароль ключа — только если ключ зашифрован."
+  en: "Path to an ed25519, ECDSA or RSA private key (OpenSSH, PuTTY .ppk, PKCS#8 or RSA PEM / PKCS#1). The passphrase only if the key is encrypted."
+  es: "Ruta a una clave privada ed25519, ECDSA o RSA (OpenSSH, PuTTY .ppk, PKCS#8 o RSA PEM / PKCS#1). La contraseña solo si la clave está cifrada."
 telegram.server.sudo_password:
   ru: "Пароль sudo"
   en: "sudo password"

@@ -20,6 +20,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Keepalive cadence: a lifeline idle for minutes must not be dropped by a NAT on the way.
 const KEEPALIVE_EVERY: Duration = Duration::from_secs(15);
 
+/// Preserve the server's SHA-2 choice and use SHA-256 when it omits modern RSA algorithms.
+/// `None` in russh's constructor means SHA-1, so RSA always receives an explicit hash.
+fn signing_key(key: &PrivateKey, server_hash: Option<Option<HashAlg>>) -> PrivateKeyWithHashAlg {
+    let hash = key
+        .algorithm()
+        .is_rsa()
+        .then(|| server_hash.flatten().unwrap_or(HashAlg::Sha256));
+    PrivateKeyWithHashAlg::new(Arc::new(key.clone()), hash)
+}
+
 /// Where to connect.
 #[derive(Clone, Debug)]
 pub struct Target {
@@ -206,7 +216,13 @@ impl Conn {
                     handle.authenticate_password(*user, *password).await
                 }
                 Auth::Key { user, key } => {
-                    let key = PrivateKeyWithHashAlg::new(Arc::new((*key).clone()), None);
+                    // A missing extension still permits SHA-2; never fall back to SHA-1.
+                    let server_hash = if key.algorithm().is_rsa() {
+                        handle.best_supported_rsa_hash().await?
+                    } else {
+                        None
+                    };
+                    let key = signing_key(key, server_hash);
                     handle.authenticate_publickey(*user, key).await
                 }
             }
@@ -352,3 +368,6 @@ impl Drop for Conn {
         });
     }
 }
+
+#[cfg(test)]
+mod tests;

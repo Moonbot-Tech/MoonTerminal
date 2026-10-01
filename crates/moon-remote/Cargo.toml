@@ -23,9 +23,15 @@ toml = "0.8"
 sha2 = "0.10"
 zeroize = "1"
 getrandom = "0.2"
+# The legacy encrypted PKCS#1 PEM envelope: russh only decodes AES-128-CBC itself.
+aes = "0.9"
+cbc = "0.2"
+data-encoding = "2"
+md5 = "0.8"
 # SSH on `ring`, the crypto the workspace already builds; the default aws-lc-rs needs cmake and
-# a C toolchain for every target. No RSA: the app key is ed25519 and hosts offer ed25519 keys.
-russh = { version = "0.63", default-features = false, features = ["ring"] }
+# a C toolchain for every target. Pure-Rust RSA accepts providers' first-login keys;
+# the terminal's own app key remains ed25519.
+russh = { version = "0.63", default-features = false, features = ["ring", "rsa"] }
 tokio = { version = "1", features = ["rt", "net", "time", "io-util", "macros"] }
 rpassword = "7"
 
