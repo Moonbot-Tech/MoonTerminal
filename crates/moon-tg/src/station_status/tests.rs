@@ -5,6 +5,49 @@ use super::*;
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
 
+/// Removing a section or flattening its rows loses structured readings in Settings.
+#[test]
+fn typed_facts_keep_sections_values_and_missing_reading_notes() {
+    let _locale = crate::test_locale::force("en");
+    let facts = StatusFacts::of(&status(Some(host(vec![
+        file("small.db", MIB),
+        file("large.db", 2 * GIB),
+    ]))));
+    assert_eq!(facts.title, "Station 0.1.0 — up 3 h 12 min");
+    assert_eq!(
+        facts
+            .sections
+            .iter()
+            .map(|s| s.title.as_str())
+            .collect::<Vec<_>>(),
+        ["Service", "Tape", "Server", "Largest files"]
+    );
+    assert_eq!(
+        facts.sections[0].rows,
+        [("Cores".into(), "26 of 27 ready".into())]
+    );
+    assert_eq!(
+        facts.sections[1].rows,
+        [
+            ("Around a trade".into(), "3 min".into()),
+            ("Long trade from".into(), "10 min".into()),
+        ]
+    );
+    assert_eq!(facts.sections[2].rows.len(), 7);
+    assert_eq!(
+        facts.sections[3].rows,
+        [
+            ("large.db".into(), "2.00 GB".into()),
+            ("small.db".into(), "1.0 MB".into()),
+        ]
+    );
+    assert!(facts.notes.is_empty());
+    let missing = StatusFacts::of(&status(None));
+    assert_eq!(missing.sections.len(), 2);
+    assert_eq!(missing.notes.len(), 1);
+    assert!(missing.notes[0].ends_with("update it."));
+}
+
 fn status(host: Option<Host>) -> Status {
     Status {
         station_version: "0.1.0".into(),

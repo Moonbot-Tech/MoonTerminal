@@ -74,17 +74,17 @@ fn status_without_api_still_reaches_settings() {
     assert!(shown[0].contains("Update the service"));
 }
 
-/// Treating the Logs result as hidden helper tokens would remove the requested journal.
+/// Prefixing journal entries with station.detail makes every requested row wrap into noisy prose.
 #[test]
-fn requested_journal_remains_visible_as_secondary_details() {
+fn requested_journal_preserves_raw_lines_without_detail_prefixes() {
     let _locale = crate::test_locale::force("en");
     let shown = lines(|say| show_journal("synthetic journal entry\nsecond entry", say));
     assert_eq!(
         shown,
         [
             "Station journal:",
-            "Details: synthetic journal entry",
-            "Details: second entry"
+            "synthetic journal entry",
+            "second entry"
         ]
     );
 }

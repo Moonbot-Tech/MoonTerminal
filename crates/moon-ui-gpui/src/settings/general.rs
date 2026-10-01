@@ -3,6 +3,7 @@
 //! idle timeout are consumed live from that draft and roll back when Settings closes unsaved;
 //! other settings take effect after saving and reconciling the relevant runtime state.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonCheckbox, MoonPalette, MoonSelect, MoonSliderState,
@@ -174,9 +175,8 @@ impl SettingsView {
         }
     }
 
-    /// Keep equal-width arrows large enough for the body text at any zoom.
     /// Build a `<<  <  value  >  >>` stepper row with small and large adjustments.
-    /// Shared by second/day counters and the Storage version limit; `adjust` owns clamping.
+    /// Retain the compact appearance for General and Storage; `adjust` owns clamping.
     pub(super) fn stepper_controls(
         &self,
         cx: &Context<Self>,
@@ -187,6 +187,22 @@ impl SettingsView {
         large: i32,
         adjust: fn(&mut Self, i32, &mut Context<Self>),
     ) -> impl IntoElement {
+        self.stepper_controls_styled(cx, id, enabled, value_text, small, large, adjust, false)
+    }
+
+    /// Reuse the Settings counter idiom with optional visible, tier-sized buttons for Station.
+    /// Visible controls wrap within narrow forms; other callers keep their existing geometry.
+    pub(super) fn stepper_controls_styled(
+        &self,
+        cx: &Context<Self>,
+        id: &'static str,
+        enabled: bool,
+        value_text: String,
+        small: i32,
+        large: i32,
+        adjust: fn(&mut Self, i32, &mut Context<Self>),
+        visible: bool,
+    ) -> Div {
         let p = MoonPalette::active(cx);
         let color = if enabled {
             rgba_from(p.text, 1.0)
@@ -204,7 +220,8 @@ impl SettingsView {
             + 2.0; // MoonUI draws a one-pixel border on each side, independent of zoom.
         let btn = |suffix: &'static str, label: &'static str, delta: i32| {
             MoonButton::new(SharedString::from(format!("{id}{suffix}")))
-                .ghost()
+                .when(!visible, |button| button.ghost())
+                .when(visible, |button| button.size(design::CONTROL_TIER))
                 .width(button_w)
                 .label(label)
                 .disabled(!enabled)
@@ -212,7 +229,8 @@ impl SettingsView {
                 .render()
         };
         h_flex()
-            .flex_none()
+            .when(!visible, |row| row.flex_none())
+            .when(visible, |row| row.flex_wrap().min_w(px(0.0)).max_w_full())
             .gap(design::ui_px(cx, 4.0))
             .items_center()
             .child(btn("-large", "<<", -large))

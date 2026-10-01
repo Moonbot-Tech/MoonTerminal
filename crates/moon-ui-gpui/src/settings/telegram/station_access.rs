@@ -114,7 +114,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Render wrapping actions and explicit inline consent, including bot-removal consequences.
+    /// Separate dangerous, always-visible actions from maintenance and keep inline consent intact.
     pub(super) fn station_access_block(
         &self,
         target: &Target,
@@ -134,31 +134,37 @@ impl SettingsView {
         let button = |id, key| {
             MoonButton::new(id)
                 .label(t!(key).to_string())
-                .padding_x(12.0)
+                .size(design::CONTROL_TIER)
                 .disabled(busy)
         };
-        let mut block = v_flex().gap(design::ui_px(cx, 8.0)).child(
-            h_flex()
-                .flex_wrap()
+        let mut block =
+            v_flex()
                 .gap(design::ui_px(cx, 8.0))
+                .pt(design::ui_px(cx, 10.0))
+                .border_t_1()
+                .border_color(rgba_from(p.border, 1.0))
                 .child(
-                    button("station-forget", "telegram.server.forget")
-                        .ghost()
-                        .tooltip(t!("telegram.server.forget_hint").to_string())
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.station_access_confirm(false, cx)),
+                    h_flex()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(
+                            button("station-forget", "telegram.server.forget")
+                                .danger()
+                                .tooltip(t!("telegram.server.forget_hint").to_string())
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.station_access_confirm(false, cx)
+                                }))
+                                .render(),
                         )
-                        .render(),
-                )
-                .child(
-                    button("station-remove", "telegram.server.remove")
-                        .ghost()
-                        .on_click(
-                            cx.listener(|this, _, _, cx| this.station_access_confirm(true, cx)),
-                        )
-                        .render(),
-                ),
-        );
+                        .child(
+                            button("station-remove", "telegram.server.remove")
+                                .danger()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.station_access_confirm(true, cx)
+                                }))
+                                .render(),
+                        ),
+                );
         if let Some(reason) = refusal {
             block = block.child(div().text_color(rgba_from(p.red_text, 1.0)).child(reason));
         }
@@ -268,7 +274,6 @@ impl SettingsView {
             |block| {
                 block.child(
                     button("station-access-cancel", "telegram.server.cancel")
-                        .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.telegram.server.station_access.clear();
                             this.station_address_cancel_probe(cx);

@@ -144,10 +144,13 @@ pub(crate) enum Done {
     },
 }
 
+/// Progress, structured readings and completion sent from the worker to Settings.
 pub(crate) enum Event {
     /// Quarantined before removal; never starts a local poller until the successful end.
     Returned(bot::ReturnedBot),
     Line(String),
+    /// Only an explicit Status action publishes these facts, never a quiet bot refresh.
+    Status(moon_tg::StatusFacts),
     Done(Done),
 }
 
@@ -157,6 +160,7 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
     std::thread::Builder::new()
         .name("station-setup".into())
         .spawn(move || {
+            let status_requested = matches!(job, Job::Status { .. });
             let lines = tx.clone();
             let mut say = move |event: Progress| {
                 if let Some(line) = super::text::progress(event) {
@@ -178,6 +182,14 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
                     reason: super::text::error(&e),
                 },
             };
+            if status_requested
+                && let Done::Ok {
+                    bot: Some(state), ..
+                } = &done
+                && let Some(status) = &state.station
+            {
+                let _ = tx.send(Event::Status(moon_tg::StatusFacts::of(status)));
+            }
             let _ = tx.send(Event::Done(done));
         })
         .map(|_| ())
@@ -398,12 +410,9 @@ fn run(
     }
 }
 
-/// Preserve readable Status feedback even before the service exposes its control API.
+/// Keep compatibility guidance as progress; available readings travel as typed facts instead.
 fn show_status(state: &BotState, say: &mut dyn FnMut(Progress)) {
     if let Some(station) = &state.station {
-        for line in moon_tg::station_status_text(station).lines() {
-            say(Progress::Text(line.to_owned()));
-        }
         if let Some(line) = older_service(&station.station_version) {
             say(Progress::Text(line));
         }
@@ -417,16 +426,14 @@ fn show_status(state: &BotState, say: &mut dyn FnMut(Progress)) {
     }
 }
 
-/// The explicitly requested journal stays visible beneath a localized heading as details.
-/// This is diagnostic content, distinct from the helper's hidden status/progress tokens.
+/// Show the requested journal beneath one localized heading, preserving each raw line verbatim.
+/// Journal entries are visible content, unlike hidden helper status/progress diagnostics.
 fn show_journal(text: &str, say: &mut dyn FnMut(Progress)) {
     say(Progress::Text(
         rust_i18n::t!("station.progress.logs").to_string(),
     ));
     for line in text.lines() {
-        say(Progress::Text(
-            rust_i18n::t!("station.detail", detail = line).to_string(),
-        ));
+        say(Progress::Text(line.to_owned()));
     }
 }
 

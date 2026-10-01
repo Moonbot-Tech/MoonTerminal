@@ -946,9 +946,9 @@ telegram.server.tape_title:
   en: "The station's tape around trades"
   es: "La cinta de la estación alrededor de las operaciones"
 telegram.server.tape_hint:
-  ru: "У станции свои значения — те, с которыми она пишет сейчас. Терминал сам их не меняет: поменяй и нажми «Установить»."
-  en: "The station has values of its own — the ones it records with now. The terminal never changes them by itself: change them and press “Set”."
-  es: "La estación tiene sus propios valores: los que usa ahora. El terminal no los cambia por su cuenta: cámbialos y pulsa «Establecer»."
+  ru: "У станции свои значения — те, с которыми она пишет сейчас. Терминал сам их не меняет: поменяй и нажми «Установить» ниже."
+  en: "The station has values of its own — the ones it records with now. The terminal never changes them by itself: change them and press “Set” below."
+  es: "La estación tiene sus propios valores: los que usa ahora. El terminal no los cambia por su cuenta: cámbialos y pulsa «Establecer» abajo."
 telegram.server.tape_unknown:
   ru: "Значения станции ещё не прочитаны: станция не запущена или её служба старше этого терминала («Обновить службу»)."
   en: "The station's values are not read yet: the station is not running, or its service is older than this terminal (“Update the service”)."
