@@ -138,6 +138,7 @@ impl AnalyticsView {
             max_passes: passes_of(&self.ticks.passes),
             model: model_cfg::current(),
             keep_corridor: self.ticks.keep_corridor,
+            risk: self.ticks.risk_limits(),
         }))
     }
 

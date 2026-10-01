@@ -555,6 +555,28 @@ impl Outcome {
                 matches!(exit.kind, ExitKind::OpenAtWindowEnd | ExitKind::InGap)
             })
     }
+
+    /// What a position left open ([`Self::left_open`]) would make closed at the last print of
+    /// its tape, in the scope's active metric like [`Self::profit_metric`]. A position that may
+    /// have closed inside a hole of the tape ([`ExitKind::InGap`]) is valued the same way: its
+    /// close is on no record either. An estimate, never a trade: it is shown beside a column's
+    /// tally, never added to it. `None` when the position was not left open, or the tape holds
+    /// no print to value it at.
+    ///
+    /// Args:
+    ///     deal: The report row the outcome was replayed for.
+    ///     ticks: The tape the outcome was replayed on, ascending.
+    pub fn open_metric_at_tape_end(&self, deal: &Deal, ticks: &[Tick]) -> Option<f64> {
+        if !self.left_open() {
+            return None;
+        }
+        let last = f64::from(ticks.last()?.price);
+        let marked = Self {
+            profit_pct: profit_pct(deal, self.fill?.price, last),
+            ..*self
+        };
+        marked.profit_metric(deal)
+    }
 }
 
 /// The entry-side parameters of one variant: the strategy kind's own model, or the fact.

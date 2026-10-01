@@ -1,7 +1,8 @@
 //! Regression coverage for fixed-width Fact-versus-variant KPI values.
 
 use super::{
-    CellFormat, FigureTone, KpiCellText, MetricKind, figure_of, format_kpi_cell, plain_factor,
+    CellFormat, FigureTone, KpiCellText, MetricKind, OpenTail, figure_of, format_kpi_cell,
+    plain_factor, with_open_tail,
 };
 use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
@@ -160,4 +161,22 @@ fn break_even_profit_factor_is_a_dash_and_all_winners_stay_99() {
         "0.00"
     );
     set_pnl_unit(None);
+}
+
+/// A column with deals left open shows its closed profit, then their tape-end estimate and
+/// count in brackets, coloured by the closed profit alone — the estimate never joins the total.
+#[test]
+fn an_open_tail_follows_the_closed_profit_in_brackets() {
+    set_pnl_unit(None);
+    let stats = VarStats {
+        n: 3,
+        profit: -4.94,
+        ..VarStats::default()
+    };
+    let tail = OpenTail { profit: 20.0, n: 5 };
+    let figure = with_open_tail(figure_of(MetricKind::Profit, &stats), tail);
+    assert_eq!(figure.text.display, "-4.94 (+20 (5))");
+    assert!(figure.text.tooltip.is_some());
+    assert_eq!(figure.tone, FigureTone::Signed);
+    assert!((figure.signed + 4.94).abs() < 1e-12);
 }

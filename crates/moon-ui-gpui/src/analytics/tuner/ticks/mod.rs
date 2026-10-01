@@ -26,7 +26,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
-use super::kpi::{VarLabel, kpi_matrix_card_over};
+use super::kpi::{OpenTail, VarLabel, kpi_matrix_card_over};
 use super::{sort_arrow_of, toggle_sort_key};
 use crate::design;
 use crate::design::{moon, moon_alpha};
@@ -46,6 +46,7 @@ mod lags;
 mod load;
 pub(in crate::analytics) mod model_cfg;
 mod ranges;
+mod risk;
 pub(in crate::analytics::tuner) mod rows;
 mod sections;
 pub(in crate::analytics) mod state;
@@ -622,11 +623,18 @@ impl AnalyticsView {
                         shown.iter().any(|part| part.warn),
                     )
                 };
-                // A variant that leaves a deal open cannot be scored honestly: no number shows.
-                // One scored on too few deals is shown, never coloured as a gain.
-                if self.ticks.var_open > 0 {
-                    label.blanked()
-                } else if self.ticks.variant_too_few().is_some() {
+                // A deal the variant left open has no result: it stays out of the tally, and what
+                // it would make at the tape's end follows the profit in brackets. One scored on
+                // too few deals is shown, never coloured as a gain.
+                let label = if self.ticks.var_open > 0 {
+                    label.with_open(OpenTail {
+                        profit: self.ticks.var_open_profit,
+                        n: self.ticks.var_open,
+                    })
+                } else {
+                    label
+                };
+                if self.ticks.variant_too_few().is_some() {
                     label.muted()
                 } else {
                     label
@@ -678,10 +686,11 @@ struct VarPart {
 
 impl AnalyticsView {
     /// The variant column's parts, in the order the line shows them. A search answer's
-    /// out-of-sample status comes first — the holdout against the fact, a holdout the answer
-    /// left open, or no check at all — so it is always one of the two tokens on screen; then a
-    /// column scored on too few deals to recommend, a column not scored, an answer that loses to
-    /// the fact out of sample or on train, the deals without a result, the search base's own cut.
+    /// out-of-sample status comes first — the holdout against the fact, with the estimate of the
+    /// deals it left open, or no check at all — so it is always one of the two tokens on screen;
+    /// then a column scored on too few deals to recommend, the deals the column left open, an
+    /// answer that loses to the fact out of sample or on train, the deals without a result, the
+    /// search base's own cut.
     /// The search's verdict speaks only while the column still is its point
     /// ([`state::TicksState::current_result`]).
     fn ticks_variant_parts(&self) -> Vec<VarPart> {
@@ -742,7 +751,7 @@ impl AnalyticsView {
 }
 
 /// A search answer's out-of-sample status — every answer has one: the holdout against the
-/// fact, a holdout the answer left open, or no check (no holdout, or one under
+/// fact (with the estimate of the deals it left open, when it left any), or no check (no holdout, or one under
 /// [`MIN_HOLDOUT`](moon_core::db::tuner::ticks::search::MIN_HOLDOUT)): fitted and judged on the
 /// same deals.
 fn holdout_part(r: &moon_core::db::tuner::ticks::search::SearchResult) -> VarPart {
@@ -758,21 +767,37 @@ fn holdout_part(r: &moon_core::db::tuner::ticks::search::SearchResult) -> VarPar
         Some(h) if h.n < MIN_HOLDOUT => {
             whole(t!("analytics.ticks.holdout_small", n = h.n).to_string())
         }
-        // Deals the answer left open are not in its holdout, all are in the fact's: the two
-        // profits are over different sets and are not printed side by side.
-        Some(_) if r.holdout_open > 0 => {
-            let text = t!("analytics.ticks.holdout_open", n = r.holdout_open).to_string();
-            VarPart {
-                short: text.clone(),
-                long: text,
-                warn: true,
-            }
-        }
         Some(holdout) => {
             let fact = r
                 .fact_holdout
                 .as_ref()
                 .map_or_else(|| "—".to_string(), |f| fmt(f.profit));
+            // Deals the answer left open are not in its holdout, all are in the fact's: what
+            // they would make at the tape's end follows the holdout's profit in brackets, the
+            // way the column's profit cell carries it, and the part warns.
+            if r.holdout_open > 0 {
+                let open = fmt(r.holdout_open_profit);
+                return VarPart {
+                    short: t!(
+                        "analytics.ticks.holdout_open_short",
+                        profit = fmt(holdout.profit),
+                        open = open.clone(),
+                        k = r.holdout_open,
+                        fact = fact.clone()
+                    )
+                    .to_string(),
+                    long: t!(
+                        "analytics.ticks.holdout_open",
+                        n = holdout.n,
+                        profit = fmt(holdout.profit),
+                        open = open,
+                        k = r.holdout_open,
+                        fact = fact
+                    )
+                    .to_string(),
+                    warn: true,
+                };
+            }
             VarPart {
                 short: t!(
                     "analytics.ticks.holdout_short",

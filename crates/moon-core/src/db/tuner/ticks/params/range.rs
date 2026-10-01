@@ -13,7 +13,9 @@
 //! It is cut into about `steps` equal steps, the step rounded UP to 1, 2, 2.5 or 5 times a
 //! power of ten and never finer than the finest digit the values carry ([`FieldSpan::auto`]);
 //! the selected strategies' own values join the grid exactly, so restart 0 stands on the
-//! strategy and "leave it" is an answer the search can give.
+//! strategy and "leave it" is an answer the search can give. A typed range joins only the values
+//! inside it; a field a strategy holds outside starts every restart on the grid instead
+//! (`search::pinned`), so the value the range leaves out is never an answer.
 //!
 //! The user may type any of from, to and step over the automatic ones ([`TickRange`]); a slot
 //! left empty stays automatic ([`resolve`]). Every value is rounded to the field's precision and

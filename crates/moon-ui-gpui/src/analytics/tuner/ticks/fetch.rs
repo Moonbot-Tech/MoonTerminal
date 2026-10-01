@@ -129,9 +129,10 @@ impl FetchResolver {
     }
 }
 
-/// Numeric strategy-field defaults off the first core schema — what the model fills a field
-/// the strategy leaves at default with, and what the tuner's filter hides unconfigured chips
-/// by. Lowercase field names to values.
+/// Strategy-field defaults off the first core schema — what the model fills a field the
+/// strategy leaves at default with, and what the tuner's filter hides unconfigured chips by.
+/// Lowercase field names to values: numbers as themselves, switches as 1/0, and zero for a
+/// field the schema sends no default for ([`schema_default`]).
 pub(in crate::analytics::tuner) fn strategy_field_defaults(
     backend: &Backend,
 ) -> HashMap<String, f64> {
@@ -144,14 +145,7 @@ pub(in crate::analytics::tuner) fn strategy_field_defaults(
         for kind in &schema.kinds {
             for section in &kind.sections {
                 for field in &section.fields {
-                    let Some(default) = field.default.as_ref() else {
-                        continue;
-                    };
-                    if let Ok(value) = default
-                        .trim()
-                        .trim_end_matches('%')
-                        .replace(',', ".")
-                        .parse::<f64>()
+                    if let Some(value) = schema_default(&field.type_name, field.default.as_deref())
                     {
                         defaults
                             .entry(field.name.to_ascii_lowercase())
@@ -163,6 +157,42 @@ pub(in crate::analytics::tuner) fn strategy_field_defaults(
         break;
     }
     defaults
+}
+
+/// One schema field's default as the table keeps it: a number as itself, a switch as 1 or 0.
+///
+/// moonproto sends a default only when it is not zero (`FLAG_DEFAULT_NZ` in its
+/// `strategy_schema.rs`), so a number or switch field without one defaults to ZERO — a value,
+/// not "no data" (`feed::strategies::zero_for_type` reads it the same way). Read as no default,
+/// a field every strategy leaves out had no value at all: the search turned `UseSecondStop` on
+/// and left `PriceToSwitch2Stop` unwritten, and the model scored it at its own fallback. A
+/// switch's default arrives spelled `Yes`/`No` (`fmt_field`), which no number parse reads.
+///
+/// Args:
+///     type_name: The schema type (`SchemaField::type_name`).
+///     default: The formatted default, `None` when the schema sends none.
+///
+/// Returns:
+///     The default, or `None` for a text field or a type the terminal does not know.
+fn schema_default(type_name: &str, default: Option<&str>) -> Option<f64> {
+    let numeric = matches!(
+        type_name,
+        "Int32" | "Int64" | "Double" | "Single" | "Byte" | "Word" | "UInt32" | "UInt64"
+    );
+    match default {
+        None => (numeric || type_name == "Bool").then_some(0.0),
+        Some(text) if type_name == "Bool" => {
+            moon_core::feed::strategy_deps::as_bool(text).map(|on| if on { 1.0 } else { 0.0 })
+        }
+        Some(text) if numeric => text
+            .trim()
+            .trim_end_matches('%')
+            .replace(',', ".")
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite()),
+        Some(_) => None,
+    }
 }
 
 impl AnalyticsView {
@@ -345,3 +375,6 @@ impl AnalyticsView {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;

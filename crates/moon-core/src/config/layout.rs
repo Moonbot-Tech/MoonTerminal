@@ -659,6 +659,14 @@ pub struct TicksAxisLayout {
     /// that the search's answer speaks for fewer trades (it no longer locks the group out);
     /// `None` = the axis default.
     pub gate_pct: Option<u32>,
+    /// How much deeper than the fact's max drawdown the search's answer may fall, per cent;
+    /// `None` = the search's default (`search::DEFAULT_WORSE_PCT`).
+    #[serde(deserialize_with = "de_lenient")]
+    pub dd_worse_pct: Option<f64>,
+    /// How much lower than the fact's win rate the search's answer may be, per cent; `None` =
+    /// the search's default.
+    #[serde(deserialize_with = "de_lenient")]
+    pub wr_worse_pct: Option<f64>,
     /// Strategy fields the search holds at their base value — the unticked grid rows.
     pub locked: Vec<String>,
     /// The model's own settings.

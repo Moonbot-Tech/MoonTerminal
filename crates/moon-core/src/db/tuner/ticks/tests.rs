@@ -1088,6 +1088,28 @@ fn a_variant_move_is_leveraged_and_pays_the_fact_cost() {
     assert!((flat + cost).abs() < 1e-9, "{flat}");
 }
 
+/// A position left open is valued at its tape's last print, through the same money as a closed
+/// one; a closed position, or an open one with no print to value it at, has no estimate.
+#[test]
+fn an_open_position_is_valued_at_the_tapes_last_print() {
+    let deal = margin_deal();
+    let open = Outcome {
+        exit: Some(Exit {
+            t_ms: deal.close_ms,
+            price: f64::NAN,
+            kind: ExitKind::OpenAtWindowEnd,
+        }),
+        profit_pct: None,
+        ..closed_at(&deal, 99.0, 100.0)
+    };
+    let ticks = tape(&[(0, 98.0), (1_000, 100.0)]);
+    let marked = open.open_metric_at_tape_end(&deal, &ticks).unwrap();
+    assert!((marked - 48.0).abs() < 1e-4, "{marked}");
+    assert_eq!(open.open_metric_at_tape_end(&deal, &[]), None);
+    let closed = closed_at(&deal, 99.0, 100.0);
+    assert_eq!(closed.open_metric_at_tape_end(&deal, &ticks), None);
+}
+
 #[test]
 fn a_percent_scope_scores_a_variant_on_its_spend() {
     let deal = Deal {

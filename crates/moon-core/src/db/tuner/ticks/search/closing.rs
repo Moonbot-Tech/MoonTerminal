@@ -60,7 +60,7 @@ pub(super) fn closed_tally(
     params: &[(EntryParams, ExitParams)],
 ) -> Option<Tally> {
     let mut tally = Tally::default();
-    for (result, open) in results(deals, of_deal, params) {
+    for (result, open, _) in results(deals, of_deal, params) {
         if open {
             return None;
         }
@@ -74,7 +74,8 @@ pub(super) fn closed_tally(
 /// The sample less the deals the strategies as they stand leave open inside the tape — the
 /// variant's held edits over them and nothing else moved, completed as every point is
 /// (`deps::Dependents::complete`), over the same bases the search then scores on: restart 0's
-/// very point — with the kept deals' indices into `bases.owns`, and the dropped deals' ids.
+/// point less the fields it pins on their grids (`pinned`) — with the kept deals' indices into
+/// `bases.owns`, and the dropped deals' ids.
 ///
 /// Such a deal is no point's doing: a gap in its tape, a rule the model does not have. Held in the
 /// sample it would refuse every point, the strategy itself among them, and the search could not
@@ -104,7 +105,7 @@ pub(super) fn closable_at_base(
     let mut kept = Vec::with_capacity(deals.len());
     let mut of_kept = Vec::with_capacity(deals.len());
     let mut left_open = Vec::new();
-    for (((_, open), deal), &base_of) in results(deals, &bases.of_deal, &base)
+    for (((_, open, _), deal), &base_of) in results(deals, &bases.of_deal, &base)
         .into_iter()
         .zip(deals)
         .zip(&bases.of_deal)

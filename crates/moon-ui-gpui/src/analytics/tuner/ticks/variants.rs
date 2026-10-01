@@ -61,6 +61,7 @@ struct Scored {
     stats: VarStats,
     plan: HashMap<i64, (f64, f64)>,
     open: usize,
+    open_profit: f64,
     untraded: usize,
     n: usize,
     /// The cut the score was taken over, fresh or reused.
@@ -82,6 +83,7 @@ fn scored_of(
         stats: stats_of(score.tally, score.spent),
         plan,
         open: score.open,
+        open_profit: score.open_profit,
         untraded: score.untraded,
         n,
         cut,
@@ -208,6 +210,7 @@ impl AnalyticsView {
                     max_passes: 1,
                     model,
                     keep_corridor: false,
+                    risk: Default::default(),
                 };
                 let (deals, base_open) = comparable(&deals, &base);
                 let cut = CutCache {
@@ -229,6 +232,7 @@ impl AnalyticsView {
                     Some(s) => {
                         this.ticks.var_stats = Some(s.stats);
                         this.ticks.var_open = s.open;
+                        this.ticks.var_open_profit = s.open_profit;
                         this.ticks.var_untraded = s.untraded;
                         this.ticks.set_fact = Some(s.cut.fact.clone());
                         this.ticks.base_open = s.cut.base_open;
@@ -533,6 +537,7 @@ impl AnalyticsView {
             .filter(|n| *n > 0);
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
         let keep_corridor = self.ticks.keep_corridor;
+        let risk = self.ticks.risk_limits();
         // The grids are resolved now, from the ranges as they stand: a range edited while the
         // search runs is the next search's.
         let (grids, set_aside) = self.ticks_search_grids();
@@ -595,6 +600,7 @@ impl AnalyticsView {
                     max_passes,
                     model,
                     keep_corridor,
+                    risk,
                 };
                 // The search alone is timed for the point cost: the queue and the unpacking of
                 // the tapes above are no point's.
@@ -868,6 +874,7 @@ pub(super) fn miss_note(miss: SearchMiss, floor: i64) -> String {
         .to_string(),
         SearchMiss::Corridor => t!("analytics.ticks.sugg_corridor").to_string(),
         SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
+        SearchMiss::Risk => t!("analytics.ticks.sugg_risk").to_string(),
         SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
     }
 }

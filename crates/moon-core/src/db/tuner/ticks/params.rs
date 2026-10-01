@@ -630,8 +630,9 @@ pub fn exit_params(v: &StrategyValues<'_>, model: ModelSettings) -> ExitParams {
         pump_move_pct: v.num("PumpMovePersent", base.pump_move_pct),
         // `StopLoss` means nothing with `UseStopLoss` off (param_deps.toml: every stop field
         // hangs on it), and the value stays in the dump when the switch goes off. A dump that
-        // omits the switch keeps the stop, as the model did before it read the switch: 2 of
-        // 1 422 live strategies omit it, and nothing says which way their core defaults.
+        // omits the switch runs at the schema's default (zero when the schema sends none —
+        // `ticks::fetch::schema_default` in the terminal); the fallback `true` stands only
+        // without a schema: 2 of 1 422 live strategies omit it.
         stop_loss_pct: if v.bool("UseStopLoss", true) {
             v.num("StopLoss", base.stop_loss_pct)
         } else {

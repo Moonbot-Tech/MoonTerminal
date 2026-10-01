@@ -1,7 +1,8 @@
 //! The search of the "Entry/Exit" axis: coordinate descent with restarts over the discrete
 //! grids the caller hands it ([`SearchParams::grids`], `params::range`), scoring a point by REPLAYING every covered deal under it — the shape
 //! of `threshold_search`, with the SQL mask replaced by [`simulate`]. Restart 0 starts from the
-//! strategy itself; the others from the strategy moved a few steps on a few fields, each walking
+//! strategy itself, but for a field it holds off the field's grid ([`pinned`]); the others from
+//! the strategy moved a few steps on a few fields, each walking
 //! the fields in an order of its own. A pass that moves no single field then tries PAIRS of the
 //! Entry group's number fields, one a step down and another a step up, so a corridor's distance
 //! can move between the base fields and the modifiers ([`descend`]). A search of both groups
@@ -23,8 +24,10 @@
 //! variant never fills is not a trade and drops out of `n`; the caller prints "by N of M" beside
 //! the column so a variant that wins by trading less is visible as such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
 //! with nothing standing to close a trade, is refused outright ([`closing`], the developer,
-//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. A switch the
-//! point turns on brings the values it needs ([`deps`]).
+//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. So is one
+//! whose max drawdown or win rate on the fitted deals is worse than the fact's there by more
+//! than the risk limits allow ([`risk`]). A switch the point turns on brings the values it
+//! needs ([`deps`]).
 //!
 //! A MoonShot variant's entry is replayed the way the caller's model settings pick
 //! ([`super::mshot::EntryMethod`]): the corridor model from the order's creation, or the fact's
@@ -118,7 +121,8 @@ pub struct SearchParams<'a> {
     /// Values held over every deal's own base ([`PreparedDeal::own`]) before the point is laid
     /// on — the axis passes the variant's edits for every search, so the fields it leaves alone
     /// run at what the earlier searches found. The fields it varies are not held: their values
-    /// here are set aside, and each starts from the strategies ([`SearchResult::searched`]).
+    /// here are set aside, and each starts from the strategies, or from its grid step where a
+    /// strategy holds it off the grid (`pinned`; [`SearchResult::searched`]).
     /// Empty searches from the strategies as they stand.
     pub held: &'a HashMap<String, String>,
     /// Schema defaults for the keys a deal's base leaves out.
@@ -151,6 +155,9 @@ pub struct SearchParams<'a> {
     /// ([`MshotParams::never_closer_than`]). Read only while the Entry group is searched: a
     /// search of the exit alone moves no corridor.
     pub keep_corridor: bool,
+    /// How much riskier than the fact an answer may be, on the deals it is fitted on: a point
+    /// past a limit is refused ([`risk`]).
+    pub risk: RiskLimits,
 }
 
 /// Why a search came back with nothing.
@@ -166,6 +173,9 @@ pub enum SearchMiss {
     /// [`SearchParams::keep_corridor`], every trade's corridor at least as far from the price as
     /// the trade's own.
     Corridor,
+    /// No point the search visited kept its max drawdown and win rate within the risk limits
+    /// of the fact ([`SearchParams::risk`]).
+    Risk,
     /// No point the search visited closed every deal it bought inside the tape with something
     /// standing to close each trade — a stop, or a trailing without a take profit ([`closing`]).
     Unclosed,
@@ -182,7 +192,8 @@ pub enum SearchMiss {
 pub struct SearchStats {
     /// Restarts that ran to the end (a stop leaves the rest out).
     pub restarts: usize,
-    /// The restart the answer came from: 0 starts from the strategy itself.
+    /// The restart the answer came from: 0 starts from the strategy itself, but for the fields
+    /// pinned on their grids ([`pinned`]).
     pub best_restart: usize,
     /// Passes of coordinate descent the winning restart took.
     pub passes: usize,
@@ -211,8 +222,8 @@ pub struct SearchResult {
     /// at least one deal.
     pub values: Vec<(String, String)>,
     /// The fields the search varied, sorted: each one's answer is in `values`, or it is at the
-    /// strategies' own value — never at what the held edits had it at, which the search set
-    /// aside.
+    /// strategies' own value where that value is on the field's grid ([`pinned`]) — never at what
+    /// the held edits had it at, which the search set aside.
     pub searched: Vec<String>,
     /// What they achieve on the deals they were fitted on.
     pub train: Tally,
@@ -221,6 +232,9 @@ pub struct SearchResult {
     /// How many of the deals held back the answer bought and left open inside the tape — none
     /// may be among the deals it was fitted on; the holdout is only scored, so it says them.
     pub holdout_open: usize,
+    /// What the `holdout_open` deals would make closed at the last print of their tapes
+    /// ([`VariantScore::open_profit`]) — an estimate beside `holdout`, never part of it.
+    pub holdout_open_profit: f64,
     /// The fact over the deals the search was fitted on ([`fact_tally`]).
     pub fact_train: Tally,
     /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
@@ -558,7 +572,8 @@ impl<'a> Bases<'a> {
 
 /// Every deal's result under one point, in order — `(result, spent)`, the result in the scope's
 /// metric as the "Fact" column holds it ([`super::Outcome::profit_metric`]), `None` where the
-/// point makes no trade of the deal — and whether it bought the deal and left it open.
+/// point makes no trade of the deal — whether it bought the deal and left it open, and what
+/// such a deal would make at the tape's end ([`super::Outcome::open_metric_at_tape_end`]).
 ///
 /// Args:
 ///     deals: The deals.
@@ -568,7 +583,7 @@ fn results(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
-) -> Vec<(Option<(f64, f64)>, bool)> {
+) -> Vec<(Option<(f64, f64)>, bool, Option<f64>)> {
     deals
         .par_iter()
         .zip(of_deal.par_iter())
@@ -578,7 +593,8 @@ fn results(
             let result = outcome
                 .profit_metric(&d.deal)
                 .map(|value| (value, d.deal.spent));
-            (result, outcome.left_open())
+            let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
+            (result, outcome.left_open(), at_tape_end)
         })
         .collect()
 }
@@ -594,6 +610,11 @@ pub struct VariantScore {
     pub spent: f64,
     /// Deals the variant bought and left open inside the tape — no result on record.
     pub open: usize,
+    /// What the `open` deals would make closed at the last print of their tapes, summed in the
+    /// tally's metric ([`super::Outcome::open_metric_at_tape_end`]). An estimate shown beside
+    /// the tally, never part of it; NaN once an open deal has no estimate (no print, no price,
+    /// nothing spent under the percent metric), so the sum never claims deals it did not value.
+    pub open_profit: f64,
     /// Deals the variant has no result for: not bought (its entry did not fill on the tape), or
     /// bought and closed with no result in the scope's metric (nothing spent under the percent
     /// metric).
@@ -602,14 +623,17 @@ pub struct VariantScore {
 
 impl VariantScore {
     /// Count one deal's replay: its `(metric, spent)` when it made a trade, whether the
-    /// position was left open.
-    fn push(&mut self, result: Option<(f64, f64)>, left_open: bool) {
+    /// position was left open, and what an open one makes at the tape's end.
+    fn push(&mut self, result: Option<(f64, f64)>, left_open: bool, at_tape_end: Option<f64>) {
         match result {
             Some((value, size)) => {
                 self.tally.push(value);
                 self.spent += size;
             }
-            None if left_open => self.open += 1,
+            None if left_open => {
+                self.open += 1;
+                self.open_profit += at_tape_end.unwrap_or(f64::NAN);
+            }
             None => self.untraded += 1,
         }
     }
@@ -623,8 +647,8 @@ fn score(
 ) -> VariantScore {
     // The replay of every deal is independent; the score is folded in order afterwards.
     let mut score = VariantScore::default();
-    for (result, left_open) in results(deals, of_deal, params) {
-        score.push(result, left_open);
+    for (result, left_open, at_tape_end) in results(deals, of_deal, params) {
+        score.push(result, left_open, at_tape_end);
     }
     score
 }
@@ -795,16 +819,18 @@ pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
 /// Returns:
 ///     The best point found, or why there is none ([`SearchMiss`]): nothing to search or a
 ///     stop, no point that keeps `min_n` trades — the richest point under the floor is not what
-///     the caller asked for — or none that keeps the corridor.
+///     the caller asked for — none that keeps the corridor, none that closes what it buys, or
+///     none within the risk limits.
 pub fn suggest(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
     handle: &SearchHandle,
 ) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
-    // A searched field starts from the strategies, never from what the held edits put there
-    // (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever В1 holds"): its held value
-    // is set aside, and only the fields the search leaves alone are held.
+    // A searched field starts from the strategies (or its grid step, `pinned`), never from what
+    // the held edits put there (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever
+    // В1 holds"): its held value is set aside, and only the fields the search leaves alone are
+    // held.
     let held: HashMap<String, String> = params
         .held
         .iter()
@@ -853,6 +879,9 @@ pub fn suggest(
         of_deal: of_kept,
     };
     let train_of = &bases.of_deal[..train_n];
+    // A searched field some strategy holds off its grid starts every restart on the grid
+    // (`pinned`): the value the range leaves out is never an answer by standing still.
+    let pinned = pinned::off_grid(&fields, params.grids, &start, &bases.owns, params.defaults);
     // Held over the whole sample, the holdout included: a corridor nearer the price than a
     // trade's own is out whichever side of the cut the trade sits on.
     let guard = (params.keep_corridor && params.vary_entry).then(|| CorridorGuard::of(deals));
@@ -898,7 +927,7 @@ pub fn suggest(
         }
         refused
     };
-    let evaluate = |point: &Point| -> Option<Tally> {
+    let score_point = |point: &Point| -> Option<Tally> {
         let per_base = per_base_at(point);
         if corridor_refuses(&per_base) {
             return None;
@@ -914,6 +943,23 @@ pub fn suggest(
             unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         closed
+    };
+    // The strategies as they stand on the training slice, which the log sets the answer
+    // against.
+    let base_score = score_point(&Point::new());
+    // The fact on the same slice — the "Fact" column the KPI matrix compares a variant with, and
+    // always there, where a replayed base may be refused — is what the risk limits hold a point
+    // to (`risk`).
+    let fact_train = fact_tally(train);
+    let risky = std::sync::atomic::AtomicUsize::new(0);
+    let evaluate = |point: &Point| -> Option<Tally> {
+        let tally = score_point(point)?;
+        if params.risk.allows(&tally, &fact_train) {
+            Some(tally)
+        } else {
+            risky.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
     };
     // The fields that move in pairs: the Entry group's numbers, where a corridor's distance is
     // shared between the base fields and the modifiers and one field alone cannot move it.
@@ -943,7 +989,8 @@ pub fn suggest(
                     handle.note_abandoned();
                     return None;
                 }
-                // Restart 0 starts from the base itself, in grid order. The others start from
+                // Restart 0 starts from the base itself, in grid order, the fields pinned on
+                // their grids aside. The others start from
                 // the base moved a few steps on a few fields, and walk the fields in an order of
                 // their own: a start anywhere on the grid lands far from anything a strategy
                 // would run and descends into a worse valley every time (2026-09-24: 19 of 20
@@ -954,6 +1001,9 @@ pub fn suggest(
                     let mut state = restart_seed(seed, restart);
                     shuffle(&mut order, &mut state);
                     perturb(&mut point, params.grids, &order, &start, &mut state);
+                }
+                for (key, value) in &pinned {
+                    point.entry(key).or_insert_with(|| value.clone());
                 }
                 let walked = if nested_on {
                     // Each group in this restart's own order.
@@ -1005,7 +1055,7 @@ pub fn suggest(
     let mut runs = runs;
     runs.sort_by_key(|run| run.restart);
     // An end point by the parameters it comes to on every base, not by its spelling: restart 0
-    // leaves a field at its base by not holding it, a random restart by holding the base's
+    // leaves an on-grid field at its base by not holding it, a random restart by holding the base's
     // value — or the schema default's, for a field the strategy leaves out — and those are one
     // end point, not two.
     let mut ends: Vec<Vec<(EntryParams, ExitParams)>> = Vec::new();
@@ -1042,8 +1092,8 @@ pub fn suggest(
     };
     let (point, score) = (best.point, best.score);
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
-    // below its own base is a search that could not reach the base, and the log says so.
-    let base_score = evaluate(&Point::new());
+    // below its own base is a search that could not reach the base — or one whose typed range
+    // leaves the base's value out, which no restart stands on ([`pinned`]) — and the log says so.
     let brief = |t: &Option<Tally>| {
         t.as_ref()
             .map(|t| (t.n, (t.profit * 100.0).round() / 100.0))
@@ -1069,14 +1119,15 @@ pub fn suggest(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}",
         brief(&base_score),
         brief(&score),
         train_n,
         left_open.len(),
         base_why,
         cornered.load(std::sync::atomic::Ordering::Relaxed),
-        unclosed.load(std::sync::atomic::Ordering::Relaxed)
+        unclosed.load(std::sync::atomic::Ordering::Relaxed),
+        risky.load(std::sync::atomic::Ordering::Relaxed)
     );
     // The answer as it was scored — every field it switched on at a value — less what is in
     // effect on no strategy.
@@ -1092,7 +1143,10 @@ pub fn suggest(
         // The rule that refused the most points is the one to name.
         let load =
             |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
-        return Err(if load(&unclosed) > load(&cornered) {
+        let (unclosed, cornered, risky) = (load(&unclosed), load(&cornered), load(&risky));
+        return Err(if risky > unclosed.max(cornered) {
+            SearchMiss::Risk
+        } else if unclosed > cornered {
             SearchMiss::Unclosed
         } else {
             SearchMiss::Corridor
@@ -1109,14 +1163,13 @@ pub fn suggest(
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect();
     values.sort();
-    let (holdout, holdout_open) = if train_n < deals.len() {
+    let (holdout, holdout_open, holdout_open_profit) = if train_n < deals.len() {
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
         let held_back = self::score(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
-        (Some(held_back.tally), held_back.open)
+        (Some(held_back.tally), held_back.open, held_back.open_profit)
     } else {
-        (None, 0)
+        (None, 0, 0.0)
     };
-    let fact_train = fact_tally(&deals[..train_n]);
     let fact_holdout = holdout.is_some().then(|| fact_tally(&deals[train_n..]));
     let holdout_loses = match (&holdout, &fact_holdout) {
         (Some(ours), Some(fact)) => holdout_open > 0 || ours.profit < fact.profit,
@@ -1130,6 +1183,7 @@ pub fn suggest(
         train: train_tally,
         holdout,
         holdout_open,
+        holdout_open_profit,
         fact_train,
         fact_holdout,
         holdout_loses,
@@ -1148,7 +1202,8 @@ pub fn fact_tally(deals: &[PreparedDeal]) -> Tally {
 /// The deals a variant and the fact are compared over: `deals` less those the strategies as
 /// they stand leave open inside the tape — the cut the search makes before it fits
 /// ([`closing::closable_at_base`]), so the search's fact and the "Fact" column over the variant
-/// columns are one set. A variant that leaves one of the kept deals open cannot be scored.
+/// columns are one set. A kept deal a variant leaves open stays out of its tally; its tape-end
+/// estimate is counted beside it ([`VariantScore::open_profit`]).
 ///
 /// Args:
 ///     deals: The covered deals, chronological.
@@ -1372,16 +1427,23 @@ pub fn variant_tally_by_deal(
                 let metric = outcome
                     .profit_metric(&d.deal)
                     .map(|value| (value, d.deal.spent));
-                (d.deal.report_uid, result, metric, outcome.left_open())
+                let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
+                (
+                    d.deal.report_uid,
+                    result,
+                    metric,
+                    outcome.left_open(),
+                    at_tape_end,
+                )
             })
             .collect();
         let mut score = VariantScore::default();
-        for (_, _, metric, left_open) in &scored {
-            score.push(*metric, *left_open);
+        for (_, _, metric, left_open, at_tape_end) in &scored {
+            score.push(*metric, *left_open, *at_tape_end);
         }
         let money = scored
             .into_iter()
-            .map(|(uid, result, _, _)| (uid, result))
+            .map(|(uid, result, _, _, _)| (uid, result))
             .collect();
         (score, money)
     })
@@ -1405,6 +1467,9 @@ pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
 mod nested;
+mod pinned;
+mod risk;
+pub use self::risk::{DEFAULT_WORSE_PCT, RiskLimits};
 mod size;
 pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
 pub use self::size::{SearchSize, point_cost, search_size};

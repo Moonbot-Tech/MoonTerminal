@@ -2432,6 +2432,8 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
     let saved = WindowLayout {
         analytics_ticks: Some(TicksAxisLayout {
             iters: Some(40),
+            dd_worse_pct: Some(12.5),
+            wr_worse_pct: Some(35.0),
             locked: vec!["SellPrice".to_string()],
             trade_open: true,
             allow_closer_corridor: true,

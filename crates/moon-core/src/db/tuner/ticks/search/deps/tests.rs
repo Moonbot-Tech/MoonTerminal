@@ -197,6 +197,7 @@ fn a_search_of_one_field_completes_what_the_variant_switched_on() {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()

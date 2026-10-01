@@ -114,6 +114,7 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         max_passes: DEFAULT_MAX_PASSES,
         model: ModelSettings::default(),
         keep_corridor: false,
+        risk: Default::default(),
     };
     let started = Instant::now();
     let answer = suggest(&deals, &params, &SearchHandle::new());
@@ -318,6 +319,7 @@ fn search_groups(
         max_passes: DEFAULT_MAX_PASSES,
         model: ModelSettings::default(),
         keep_corridor: std::env::var("MOON_TICKS_KEEP_CORRIDOR").map_or(true, |v| v != "0"),
+        risk: Default::default(),
     };
     // What the axis would say before the run: the count and, at the measured cost of a point, the
     // time — held against what the run then took. `MOON_TICKS_SEARCH_DRY=1` stops there.

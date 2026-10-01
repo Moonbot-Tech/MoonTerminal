@@ -125,6 +125,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -254,6 +255,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         train_frac: 0.75,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -337,6 +339,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -440,6 +443,7 @@ fn a_shift_does_not_search_the_path_only_fields() {
             train_frac: 1.0,
             max_passes: DEFAULT_MAX_PASSES,
             keep_corridor: true,
+            risk: Default::default(),
             model: ModelSettings {
                 entry_method: method,
                 ..ModelSettings::default()
@@ -526,6 +530,7 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model,
     };
     let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
@@ -580,6 +585,7 @@ fn a_trade_floor_no_point_keeps_finds_nothing() {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -869,6 +875,7 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
         train_frac: 1.0,
         max_passes: 2,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -878,6 +885,7 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
     assert_eq!(result.map(|r| r.values), Err(SearchMiss::Corridor));
     let params = SearchParams {
         keep_corridor: false,
+        risk: Default::default(),
         ..params
     };
     let result = suggest(&deals, &params, &SearchHandle::new());
