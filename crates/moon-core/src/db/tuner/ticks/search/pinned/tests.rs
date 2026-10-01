@@ -49,6 +49,7 @@ fn a_range_without_the_strategys_value_answers_from_the_range() {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()

@@ -24,8 +24,10 @@
 //! variant never fills is not a trade and drops out of `n`; the caller prints "by N of M" beside
 //! the column so a variant that wins by trading less is visible as such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
 //! with nothing standing to close a trade, is refused outright ([`closing`], the developer,
-//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. A switch the
-//! point turns on brings the values it needs ([`deps`]).
+//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. So is one
+//! whose max drawdown or win rate on the fitted deals is worse than the fact's there by more
+//! than the risk limits allow ([`risk`]). A switch the point turns on brings the values it
+//! needs ([`deps`]).
 //!
 //! A MoonShot variant's entry is replayed the way the caller's model settings pick
 //! ([`super::mshot::EntryMethod`]): the corridor model from the order's creation, or the fact's
@@ -153,6 +155,9 @@ pub struct SearchParams<'a> {
     /// ([`MshotParams::never_closer_than`]). Read only while the Entry group is searched: a
     /// search of the exit alone moves no corridor.
     pub keep_corridor: bool,
+    /// How much riskier than the fact an answer may be, on the deals it is fitted on: a point
+    /// past a limit is refused ([`risk`]).
+    pub risk: RiskLimits,
 }
 
 /// Why a search came back with nothing.
@@ -168,6 +173,9 @@ pub enum SearchMiss {
     /// [`SearchParams::keep_corridor`], every trade's corridor at least as far from the price as
     /// the trade's own.
     Corridor,
+    /// No point the search visited kept its max drawdown and win rate within the risk limits
+    /// of the fact ([`SearchParams::risk`]).
+    Risk,
     /// No point the search visited closed every deal it bought inside the tape with something
     /// standing to close each trade — a stop, or a trailing without a take profit ([`closing`]).
     Unclosed,
@@ -811,7 +819,8 @@ pub fn train_len(closes: &[i64], train_frac: f64) -> usize {
 /// Returns:
 ///     The best point found, or why there is none ([`SearchMiss`]): nothing to search or a
 ///     stop, no point that keeps `min_n` trades — the richest point under the floor is not what
-///     the caller asked for — or none that keeps the corridor.
+///     the caller asked for — none that keeps the corridor, none that closes what it buys, or
+///     none within the risk limits.
 pub fn suggest(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
@@ -918,7 +927,7 @@ pub fn suggest(
         }
         refused
     };
-    let evaluate = |point: &Point| -> Option<Tally> {
+    let score_point = |point: &Point| -> Option<Tally> {
         let per_base = per_base_at(point);
         if corridor_refuses(&per_base) {
             return None;
@@ -934,6 +943,23 @@ pub fn suggest(
             unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         closed
+    };
+    // The strategies as they stand on the training slice, which the log sets the answer
+    // against.
+    let base_score = score_point(&Point::new());
+    // The fact on the same slice — the "Fact" column the KPI matrix compares a variant with, and
+    // always there, where a replayed base may be refused — is what the risk limits hold a point
+    // to (`risk`).
+    let fact_train = fact_tally(train);
+    let risky = std::sync::atomic::AtomicUsize::new(0);
+    let evaluate = |point: &Point| -> Option<Tally> {
+        let tally = score_point(point)?;
+        if params.risk.allows(&tally, &fact_train) {
+            Some(tally)
+        } else {
+            risky.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
     };
     // The fields that move in pairs: the Entry group's numbers, where a corridor's distance is
     // shared between the base fields and the modifiers and one field alone cannot move it.
@@ -1068,7 +1094,6 @@ pub fn suggest(
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
     // below its own base is a search that could not reach the base — or one whose typed range
     // leaves the base's value out, which no restart stands on ([`pinned`]) — and the log says so.
-    let base_score = evaluate(&Point::new());
     let brief = |t: &Option<Tally>| {
         t.as_ref()
             .map(|t| (t.n, (t.profit * 100.0).round() / 100.0))
@@ -1094,14 +1119,15 @@ pub fn suggest(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}",
         brief(&base_score),
         brief(&score),
         train_n,
         left_open.len(),
         base_why,
         cornered.load(std::sync::atomic::Ordering::Relaxed),
-        unclosed.load(std::sync::atomic::Ordering::Relaxed)
+        unclosed.load(std::sync::atomic::Ordering::Relaxed),
+        risky.load(std::sync::atomic::Ordering::Relaxed)
     );
     // The answer as it was scored — every field it switched on at a value — less what is in
     // effect on no strategy.
@@ -1117,7 +1143,10 @@ pub fn suggest(
         // The rule that refused the most points is the one to name.
         let load =
             |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
-        return Err(if load(&unclosed) > load(&cornered) {
+        let (unclosed, cornered, risky) = (load(&unclosed), load(&cornered), load(&risky));
+        return Err(if risky > unclosed.max(cornered) {
+            SearchMiss::Risk
+        } else if unclosed > cornered {
             SearchMiss::Unclosed
         } else {
             SearchMiss::Corridor
@@ -1141,7 +1170,6 @@ pub fn suggest(
     } else {
         (None, 0, 0.0)
     };
-    let fact_train = fact_tally(&deals[..train_n]);
     let fact_holdout = holdout.is_some().then(|| fact_tally(&deals[train_n..]));
     let holdout_loses = match (&holdout, &fact_holdout) {
         (Some(ours), Some(fact)) => holdout_open > 0 || ours.profit < fact.profit,
@@ -1440,6 +1468,8 @@ mod coupled;
 mod deps;
 mod nested;
 mod pinned;
+mod risk;
+pub use self::risk::{DEFAULT_WORSE_PCT, RiskLimits};
 mod size;
 pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
 pub use self::size::{SearchSize, point_cost, search_size};

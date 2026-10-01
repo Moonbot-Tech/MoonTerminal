@@ -2341,6 +2341,26 @@ analytics.ticks.cfg_gate_tip:
   ru: "Ниже этой доли воспроизведённых сделок заголовок группы (вход или выход) предупреждает, что ответ подбора говорит только за них; подбор при этом разрешён"
   en: "Under this share of reproduced trades the group's heading (entry or exit) warns that the search's answer speaks for them alone; the search still runs"
   es: "Por debajo de esta cuota de operaciones reproducidas el encabezado del grupo (entrada o salida) avisa de que la respuesta de la búsqueda vale solo para ellas; la búsqueda se ejecuta igualmente"
+analytics.ticks.cfg_dd_worse:
+  ru: "Просадка хуже факта, ≤ %"
+  en: "Drawdown worse than fact, ≤ %"
+  es: "Drawdown peor que el real, ≤ %"
+analytics.ticks.cfg_dd_worse_tip:
+  ru: "На сделках обучения просадка ответа может быть глубже фактической (колонка «Годные») не больше чем на эту долю: 20 — факт 10 может стать не глубже 12. Точку за пределом подбор отбрасывает. Пусто — %{default} %. Колонки считают весь период, вне выборки просадка может отличаться"
+  en: "On the training deals the answer's drawdown may be deeper than the fact's (the Reproduced column) by this share at most: 20 lets a fact of 10 go to 12. A point past it is refused. Empty — %{default} %. The columns count the whole period; out of sample the drawdown may differ"
+  es: "En las operaciones de entrenamiento el drawdown de la respuesta puede ser más profundo que el real (la columna Reproducidas) como mucho en esta proporción: 20 deja que un real de 10 llegue a 12. Un punto más allá se descarta. Vacío — %{default} %. Las columnas cuentan todo el período; fuera de muestra el drawdown puede diferir"
+analytics.ticks.cfg_wr_worse:
+  ru: "Винрейт хуже факта, ≤ %"
+  en: "Win rate worse than fact, ≤ %"
+  es: "Win rate peor que el real, ≤ %"
+analytics.ticks.cfg_wr_worse_tip:
+  ru: "На сделках обучения винрейт ответа может быть ниже фактического (колонка «Годные») не больше чем на эту долю: 20 — факт 85 % может стать не ниже 68 %. Точку за пределом подбор отбрасывает. Пусто — %{default} %"
+  en: "On the training deals the answer's win rate may be lower than the fact's (the Reproduced column) by this share at most: 20 lets a fact of 85 % go to 68 %. A point past it is refused. Empty — %{default} %"
+  es: "En las operaciones de entrenamiento el win rate de la respuesta puede ser menor que el real (la columna Reproducidas) como mucho en esta proporción: 20 deja que un real del 85 % llegue al 68 %. Un punto más allá se descarta. Vacío — %{default} %"
+analytics.ticks.sugg_risk:
+  ru: "Ни один вариант не удержал просадку и винрейт в пределах факта — ослабьте пределы в настройках подбора"
+  en: "No variant kept its drawdown and win rate within the fact's limits — loosen the limits in the search settings"
+  es: "Ninguna variante mantuvo su drawdown y win rate dentro de los límites del real — afloje los límites en los ajustes de búsqueda"
 analytics.ticks.cfg_steps:
   ru: "Шагов на параметр"
   en: "Steps per field"

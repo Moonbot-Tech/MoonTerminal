@@ -29,6 +29,7 @@ fn size_of(free: &[&str], restarts: usize) -> SearchSize {
         train_frac: 1.0,
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
+        risk: Default::default(),
         model: ModelSettings::default(),
     })
 }

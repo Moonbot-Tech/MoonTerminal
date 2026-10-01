@@ -351,6 +351,7 @@ impl AnalyticsView {
             .trigger_size(MoonButtonSize::density(cx))
             .menu_width_scaled(140.0)
             .items(me_items);
+        let risk_rows = self.ticks_risk_rows(p, window, cx);
         let box_of = |id: &'static str, state: &Entity<MoonInputState>, w: f32| {
             div()
                 .w(design::font_w_px(cx, w))
@@ -411,6 +412,7 @@ impl AnalyticsView {
                 p,
                 cx,
             ))
+            .children(risk_rows)
             .child(popup_section(
                 t!("analytics.ticks.cfg_entry_section").to_string(),
                 p,
@@ -616,7 +618,7 @@ impl AnalyticsView {
 
     /// A plain text box of a search setting, cached in the axis' inputs: every change is taken
     /// at once, as the filter's settings are, and persisted.
-    fn ticks_text_input(
+    pub(super) fn ticks_text_input(
         &mut self,
         id: &'static str,
         value: String,

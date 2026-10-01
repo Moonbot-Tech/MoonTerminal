@@ -46,6 +46,7 @@ mod lags;
 mod load;
 pub(in crate::analytics) mod model_cfg;
 mod ranges;
+mod risk;
 pub(in crate::analytics::tuner) mod rows;
 mod sections;
 pub(in crate::analytics) mod state;

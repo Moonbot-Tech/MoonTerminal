@@ -422,6 +422,11 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) passes: String,
     /// The group gate, per cent of reproduced trades; empty = [`DEFAULT_GATE_PCT`].
     pub(in crate::analytics::tuner) gate_pct: String,
+    /// How much deeper than the fact's max drawdown an answer may fall, per cent; empty = the
+    /// search's default ([`super::risk`]).
+    pub(in crate::analytics::tuner) dd_worse_pct: String,
+    /// How much lower than the fact's win rate an answer may be, per cent; empty = the default.
+    pub(in crate::analytics::tuner) wr_worse_pct: String,
     /// Whether the search keeps every trade's entry corridor at least as far from the price as
     /// the trade's own (`SearchParams::keep_corridor`). On unless the user turned it off.
     pub(in crate::analytics::tuner) keep_corridor: bool,
@@ -534,6 +539,8 @@ impl Default for TicksState {
             last_seed: None,
             passes: String::new(),
             gate_pct: String::new(),
+            dd_worse_pct: String::new(),
+            wr_worse_pct: String::new(),
             keep_corridor: true,
             sugg_cfg_open: false,
             model_cfg_open: false,
@@ -614,6 +621,14 @@ impl TicksState {
         self.seed = saved.seed.clone().unwrap_or_default();
         self.passes = saved.passes.map(|n| n.to_string()).unwrap_or_default();
         self.gate_pct = saved.gate_pct.map(|n| n.to_string()).unwrap_or_default();
+        self.dd_worse_pct = saved
+            .dd_worse_pct
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        self.wr_worse_pct = saved
+            .wr_worse_pct
+            .map(|n| n.to_string())
+            .unwrap_or_default();
         self.locked = saved.locked.iter().cloned().collect();
         self.trade.open = saved.trade_open;
         self.keep_corridor = !saved.allow_closer_corridor;
@@ -642,6 +657,8 @@ impl TicksState {
             seed: Some(self.seed.trim().to_string()).filter(|s| s.parse::<u64>().is_ok()),
             passes: number(&self.passes),
             gate_pct: number(&self.gate_pct),
+            dd_worse_pct: super::risk::typed_pct(&self.dd_worse_pct),
+            wr_worse_pct: super::risk::typed_pct(&self.wr_worse_pct),
             locked,
             model: super::model_cfg::current(),
             trade_open: self.trade.open,
