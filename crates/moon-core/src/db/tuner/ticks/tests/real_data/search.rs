@@ -115,6 +115,7 @@ fn run_one(mut deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<String, 
         model: ModelSettings::default(),
         keep_corridor: false,
         risk: Default::default(),
+        screen_entry: std::env::var("MOON_TICKS_SEARCH_SCREEN").map_or(true, |v| v != "0"),
     };
     let started = Instant::now();
     let answer = suggest(&deals, &params, &SearchHandle::new());
@@ -320,6 +321,7 @@ fn search_groups(
         model: ModelSettings::default(),
         keep_corridor: std::env::var("MOON_TICKS_KEEP_CORRIDOR").map_or(true, |v| v != "0"),
         risk: Default::default(),
+        screen_entry: std::env::var("MOON_TICKS_SEARCH_SCREEN").map_or(true, |v| v != "0"),
     };
     // What the axis would say before the run: the count and, at the measured cost of a point, the
     // time — held against what the run then took. `MOON_TICKS_SEARCH_DRY=1` stops there.
@@ -333,7 +335,7 @@ fn search_groups(
         params.restarts,
     );
     eprintln!(
-        "    estimate: {:.0} point(s), {:.0} entry point(s), {:?} a point, ≈ {:.1} s",
+        "    estimate: {:.0} point(s), {:.0} entry point(s), {:?} a whole replay, ≈ {:.1} s",
         size.points,
         size.entry_points,
         cost,
@@ -346,12 +348,17 @@ fn search_groups(
     let answer = suggest(deals, &params, &SearchHandle::new());
     let ms = started.elapsed().as_millis();
     if let Ok(found) = &answer {
+        let replays = crate::db::tuner::ticks::search::full_replays(
+            found.stats.evaluations as f64,
+            found.stats.fills_reused as f64,
+        );
         eprintln!(
-            "    actual: {} point(s) scored, {} entry point(s), {:.1} s, {:?} a scored point",
+            "    actual: {} point(s) scored, {} on fills read before, {} entry point(s), {:.1} s, {:?} a whole replay",
             found.stats.evaluations,
+            found.stats.fills_reused,
             found.stats.entry_points,
             ms as f64 / 1000.0,
-            started.elapsed() / found.stats.evaluations.max(1) as u32
+            started.elapsed().div_f64(replays.max(1.0))
         );
     }
     match &answer {

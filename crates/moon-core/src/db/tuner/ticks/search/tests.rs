@@ -126,6 +126,7 @@ fn the_search_raises_the_take_to_what_every_tape_reaches() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -256,6 +257,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -340,6 +342,7 @@ fn a_cancelled_run_answers_nothing_and_nothing_varied_answers_nothing() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -444,6 +447,7 @@ fn a_shift_does_not_search_the_path_only_fields() {
             max_passes: DEFAULT_MAX_PASSES,
             keep_corridor: true,
             risk: Default::default(),
+            screen_entry: false,
             model: ModelSettings {
                 entry_method: method,
                 ..ModelSettings::default()
@@ -531,6 +535,7 @@ fn a_search_holds_each_deals_own_value_and_reports_a_value_one_strategy_lacks() 
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model,
     };
     let result = suggest(&deals, &params, &SearchHandle::new()).expect("a result");
@@ -586,6 +591,7 @@ fn a_trade_floor_no_point_keeps_finds_nothing() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -764,6 +770,7 @@ fn a_pair_move_reaches_what_no_single_move_does() {
         &coupled::Coupling::none(),
         &start,
         &evaluate,
+        None,
         1,
         DEFAULT_MAX_PASSES,
         &SearchHandle::new(),
@@ -788,6 +795,23 @@ fn a_pair_move_reaches_what_no_single_move_does() {
     );
     assert!((walked.score.expect("scored").profit - 10.0).abs() < 1e-9);
     assert!(walked.converged);
+    // Screened, the paying pair ranks first among the pair moves and is still taken.
+    let quick = |p: &Point| screen::Screened::Scored(evaluate(p));
+    let screened = descend(
+        Point::new(),
+        crate::db::tuner::ticks::search::test_grids::legacy(),
+        &order,
+        &order,
+        &coupled::Coupling::none(),
+        &start,
+        &evaluate,
+        Some(&quick),
+        1,
+        DEFAULT_MAX_PASSES,
+        &SearchHandle::new(),
+    )
+    .expect("not stopped");
+    assert_eq!(screened.point, walked.point);
     // Without the pairs the walk stays where it began.
     let alone = descend(
         Point::new(),
@@ -797,6 +821,7 @@ fn a_pair_move_reaches_what_no_single_move_does() {
         &coupled::Coupling::none(),
         &start,
         &evaluate,
+        None,
         1,
         DEFAULT_MAX_PASSES,
         &SearchHandle::new(),
@@ -876,6 +901,7 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
         max_passes: 2,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()
@@ -886,6 +912,7 @@ fn a_search_that_no_point_can_keep_the_corridor_of_says_so() {
     let params = SearchParams {
         keep_corridor: false,
         risk: Default::default(),
+        screen_entry: false,
         ..params
     };
     let result = suggest(&deals, &params, &SearchHandle::new());

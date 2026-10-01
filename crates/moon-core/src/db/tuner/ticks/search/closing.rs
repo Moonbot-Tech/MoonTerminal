@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use super::{Bases, Point, PreparedDeal, SearchParams, Tally, params_of, point_of, results};
-use crate::db::tuner::ticks::EntryParams;
 use crate::db::tuner::ticks::exit::ExitParams;
 use crate::db::tuner::ticks::settings::ModelSettings;
+use crate::db::tuner::ticks::{EntryParams, Fill};
 
 /// Whether every strategy of the point keeps a guard that stands from the fill on: a stop, or a
 /// trailing stop without a take profit.
@@ -54,13 +54,16 @@ fn guarded(exit: &ExitParams) -> bool {
 /// sell — else `None`: a point that leaves one open is not one the search may pick, since the
 /// loss it would carry past the tape is on no record and dropping the deal would only reward it
 /// (the developer, 2026-09-24).
+///
+/// `fills` are each deal's entry fill under `params` ([`super::fills::FillCache`]).
 pub(super) fn closed_tally(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
+    fills: &[Option<Fill>],
 ) -> Option<Tally> {
     let mut tally = Tally::default();
-    for (result, open, _) in results(deals, of_deal, params) {
+    for (result, open, _) in results(deals, of_deal, params, Some(fills)) {
         if open {
             return None;
         }
@@ -105,7 +108,7 @@ pub(super) fn closable_at_base(
     let mut kept = Vec::with_capacity(deals.len());
     let mut of_kept = Vec::with_capacity(deals.len());
     let mut left_open = Vec::new();
-    for (((_, open, _), deal), &base_of) in results(deals, &bases.of_deal, &base)
+    for (((_, open, _), deal), &base_of) in results(deals, &bases.of_deal, &base, None)
         .into_iter()
         .zip(deals)
         .zip(&bases.of_deal)

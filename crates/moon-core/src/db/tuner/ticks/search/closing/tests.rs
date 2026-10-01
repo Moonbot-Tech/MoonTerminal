@@ -80,6 +80,7 @@ fn a_point_that_leaves_a_deal_open_is_refused() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings::default(),
     };
     let result = suggest(&deals, &params, &SearchHandle::new()).expect("the stop is a point");
@@ -128,6 +129,7 @@ fn a_deal_the_strategy_itself_leaves_open_leaves_the_sample() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()

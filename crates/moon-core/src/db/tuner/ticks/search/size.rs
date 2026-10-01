@@ -3,7 +3,8 @@
 //!
 //! The count is the descent's own arithmetic: one pass tries every other value of each field it
 //! varies, a pass that moves nothing then tries the Entry pairs, and a search of both groups
-//! runs a whole exit descent per entry point it scores ([`super::nested`]). What the count cannot
+//! runs a whole exit descent per entry point it scores ([`super::nested`]) — with the screen on,
+//! per entry move the screen keeps ([`super::screen`]). What the count cannot
 //! know is how many passes a descent takes before one changes nothing; it takes the typical
 //! number the bench measured ([`PASSES`], [`INNER_PASSES`]). The time is the count by what one
 //! point costs on this sample ([`point_cost`]), measured, never assumed.
@@ -27,6 +28,18 @@ const PASSES: f64 = 3.0;
 /// it.
 const INNER_PASSES: f64 = 2.0;
 
+/// What a point scored on the entry fills of a point before costs, as a share of a whole replay
+/// ([`super::fills`]): the exit replayed alone. Measured 2026-10-02 — 0.53–0.61 on three MoonShot
+/// strategies, 210 µs against 381 µs a point on the bench's search of both groups.
+const EXIT_SHARE: f64 = 0.55;
+
+/// Whole replays `scored` points come to when `reused` of them read the entry fills of a point
+/// before — what a point cost is a share of ([`point_cost`]).
+pub fn full_replays(scored: f64, reused: f64) -> f64 {
+    let reused = reused.clamp(0.0, scored.max(0.0));
+    (scored - reused) + reused * EXIT_SHARE
+}
+
 /// How much one search scores.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SearchSize {
@@ -39,6 +52,9 @@ pub struct SearchSize {
     pub entry_fields: usize,
     /// Fields of the Exit group the search varies.
     pub exit_fields: usize,
+    /// Points that replay their entry anew; the rest read the fills of a point before
+    /// ([`full_replays`]).
+    pub fresh: f64,
 }
 
 impl SearchSize {
@@ -47,9 +63,10 @@ impl SearchSize {
         self.entry_points > 0.0
     }
 
-    /// Roughly how long it runs, at `per_point` a scored point.
+    /// Roughly how long it runs, at `per_point` a whole replay ([`point_cost`]).
     pub fn time(&self, per_point: Duration) -> Duration {
-        Duration::from_secs_f64((self.points * per_point.as_secs_f64()).min(u32::MAX as f64))
+        let replays = full_replays(self.points, self.points - self.fresh);
+        Duration::from_secs_f64((replays * per_point.as_secs_f64()).min(u32::MAX as f64))
     }
 }
 
@@ -75,29 +92,54 @@ pub fn search_size(params: &SearchParams<'_>) -> SearchSize {
     let (entry_fields, exit_fields) = (of(ParamGroup::Entry).count(), of(ParamGroup::Exit).count());
     let both = entry_fields > 0 && exit_fields > 0;
     if both {
-        let entry_points = restarts * (passes * span(ParamGroup::Entry) + pairs);
         let per_entry = INNER_PASSES.min(cap) * span(ParamGroup::Exit);
+        let tried = restarts * (passes * span(ParamGroup::Entry) + pairs);
+        if params.screen_entry {
+            // Every move of a step scored once, under the exit found so far; the best few of
+            // each field, and of the pair moves, by a whole exit descent ([`super::screen`]).
+            let keep = super::screen::KEEP as f64;
+            let kept_fields: f64 = of(ParamGroup::Entry)
+                .map(|f| (params.grids.arity(f).saturating_sub(1) as f64).min(keep))
+                .sum();
+            let entry_points = restarts * (passes * kept_fields + pairs.min(keep));
+            // Each move the screen scores is a new entry; the exit descents under the kept ones
+            // read the fills their screening read.
+            return SearchSize {
+                points: tried + entry_points * per_entry,
+                entry_points,
+                entry_fields,
+                exit_fields,
+                fresh: tried,
+            };
+        }
+        let entry_points = tried;
+        // The first point of each exit descent replays its entry; the rest of it reads the fills.
         SearchSize {
             points: entry_points * per_entry,
             entry_points,
             entry_fields,
             exit_fields,
+            fresh: entry_points,
         }
     } else {
+        let points =
+            restarts * (passes * (span(ParamGroup::Entry) + span(ParamGroup::Exit)) + pairs);
         SearchSize {
-            points: restarts
-                * (passes * (span(ParamGroup::Entry) + span(ParamGroup::Exit)) + pairs),
+            points,
             entry_points: 0.0,
             entry_fields,
             exit_fields,
+            // Every point of an entry search moves the entry; an exit search reads its start's.
+            fresh: if entry_fields > 0 { points } else { restarts },
         }
     }
 }
 
-/// What one scored point costs on this sample: the strategies as they stand replayed over the
+/// What one whole replay costs on this sample: the strategies as they stand replayed over the
 /// training slice, `parallel` replays side by side on the search's own pool — the way a search
-/// runs its restarts — so the figure is the same quantity a finished search's time over its
-/// scored points is, and the two can stand in for each other.
+/// runs its restarts — so the figure is the same quantity a finished search's time over the
+/// whole replays its scored points come to is ([`full_replays`]), and the two can stand in for
+/// each other.
 ///
 /// Args:
 ///     deals: The sample, chronological, cut at its horizon (`clip_to_horizon`).

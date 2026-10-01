@@ -211,6 +211,7 @@ impl AnalyticsView {
                     model,
                     keep_corridor: false,
                     risk: Default::default(),
+                    screen_entry: false,
                 };
                 let (deals, base_open) = comparable(&deals, &base);
                 let cut = CutCache {
@@ -538,6 +539,7 @@ impl AnalyticsView {
         let train_frac = super::super::filter::state::train_frac(self.ticks.train_pct);
         let keep_corridor = self.ticks.keep_corridor;
         let risk = self.ticks.risk_limits();
+        let screen_entry = self.ticks.screen_entry;
         // The grids are resolved now, from the ranges as they stand: a range edited while the
         // search runs is the next search's.
         let (grids, set_aside) = self.ticks_search_grids();
@@ -601,6 +603,7 @@ impl AnalyticsView {
                     model,
                     keep_corridor,
                     risk,
+                    screen_entry,
                 };
                 // The search alone is timed for the point cost: the queue and the unpacking of
                 // the tapes above are no point's.
@@ -642,6 +645,7 @@ impl AnalyticsView {
                             cost_key,
                             searched_for,
                             result.stats.evaluations,
+                            result.stats.fills_reused,
                         );
                         land_answer(&mut this.ticks.variant, &result.searched, &result.values);
                         this.ticks_reset_variant_inputs();

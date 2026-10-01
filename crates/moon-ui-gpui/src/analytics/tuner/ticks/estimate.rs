@@ -1,14 +1,17 @@
 //! What "Search all" will cost before it runs (LinKvo, 2026-09-25): the points it scores and,
 //! at what one point costs on this sample, roughly how long — a line under the parameter grid,
 //! and a question before a run longer than [`LONG_SEARCH`]. A search of both groups nests a whole
-//! exit search under every entry point it scores (`moon_core::db::tuner::ticks::search`), and its
-//! count is the product: minutes to hours where one group takes seconds.
+//! exit search under the entry points it scores — every one, or the few the screen keeps
+//! (`moon_core::db::tuner::ticks::search`) — and its count is the product: minutes to hours where
+//! one group takes seconds.
 //!
-//! The count is the core's (`search_size`). The cost of a point is measured, never assumed, and
-//! kept with what it was measured under ([`CostKey`]: the rows, the training share, the model,
+//! The count is the core's (`search_size`). The cost of a whole replay is measured, never assumed
+//! — a point on the entry fills of a point before costs the exit's share of it — and kept with
+//! what it was measured under ([`CostKey`]: the rows, the training share, the model,
 //! the restarts side by side): replays of the training slice run side by side as a search runs
 //! its restarts (`point_cost`), measured again whenever one of those moves, and taken from every
-//! finished search — its time over the points it scored, the same quantity.
+//! finished search — its time over the whole replays its points come to (`full_replays`), the
+//! same quantity.
 
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
@@ -24,7 +27,9 @@ use super::variants::{passes_of, restarts_of};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::ticks::params::ParamGroup;
-use moon_core::db::tuner::ticks::search::{SearchParams, SearchSize, point_cost, search_size};
+use moon_core::db::tuner::ticks::search::{
+    SearchParams, SearchSize, full_replays, point_cost, search_size,
+};
 use moon_core::db::tuner::ticks::{ModelSettings, TICK_PARAMS};
 
 /// A search estimated to run longer than this asks before it starts.
@@ -139,6 +144,7 @@ impl AnalyticsView {
             model: model_cfg::current(),
             keep_corridor: self.ticks.keep_corridor,
             risk: self.ticks.risk_limits(),
+            screen_entry: self.ticks.screen_entry,
         }))
     }
 
@@ -312,16 +318,22 @@ impl AnalyticsView {
     /// settings it started with: it ran the restarts side by side, as the next search will. A
     /// search of a few points is left out — the replays it runs besides its points (the sample's
     /// filter, the base, the holdout) would weigh on the figure.
+    ///
+    /// `reused` of the `scored` points read the entry fills of a point before and cost the exit's
+    /// share of a replay, so the time is spread over the whole replays they come to
+    /// (`search::full_replays`) — the quantity `point_cost` measures, whichever search ran.
     pub(super) fn ticks_take_search_cost(
         &mut self,
         key: Option<CostKey>,
         elapsed: Duration,
         scored: usize,
+        reused: usize,
     ) {
         /// Points a search must score before its time says what one costs.
         const MIN_SCORED: usize = 200;
-        if let (Some(key), true) = (key, scored >= MIN_SCORED) {
-            self.ticks.point_cost = Some((key, elapsed / scored.min(u32::MAX as usize) as u32));
+        let replays = full_replays(scored as f64, reused as f64);
+        if let (Some(key), true) = (key, scored >= MIN_SCORED && replays > 0.0) {
+            self.ticks.point_cost = Some((key, elapsed.div_f64(replays)));
         }
     }
 

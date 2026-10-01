@@ -14,12 +14,14 @@
 //! per restart: the exit found under it is kept ([`ExitCache`]). Not across restarts: each walks
 //! from its own start, and an exit found from another restart's start would cap an entry point at
 //! what that start could reach. An entry point the corridor rules refuse is refused before its exit
-//! is searched: those rules read the entry alone.
+//! is searched: those rules read the entry alone. With the screen on ([`super::screen`]), only the
+//! few entry moves of each step that score best under the exit found so far get an exit descent.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+use super::screen::{Screen, Screened};
 use super::{Point, Walked, better_score, coupled, descend};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::SearchHandle;
@@ -83,6 +85,12 @@ pub(super) struct Nested<'a, 'c> {
     pub refused: &'a (dyn Fn(&Point) -> bool + Sync),
     /// Entry points scored by an exit descent of their own, over every restart.
     pub searched: &'a AtomicUsize,
+    /// Whether the entry moves of each step are screened first, under the exit of the best entry
+    /// point so far ([`super::screen`]).
+    pub screen: bool,
+    /// Whether two entry points come to the same entry on every strategy — a move the screen
+    /// skips: a field the point leaves at the strategies' value, set to that value, moves nothing.
+    pub same_entry: &'a (dyn Fn(&Point, &Point) -> bool + Sync),
 }
 
 /// The descent of one restart over both groups, from `point`: the outer descent walks the entry
@@ -108,12 +116,15 @@ pub(super) fn descend_nested(
     // entry point's exit descent starts. The outer descent keeps a point only when it beats the
     // score, so the best so far is the point it stands on.
     let warm: Mutex<(Option<Tally>, Point)> = Mutex::new((None, exit));
+    // The entry point the outer descent stands on: the best so far, as `warm` is.
+    let stands: Mutex<Point> = Mutex::new(entry.clone());
     let cache = ExitCache::default();
     // A point better than the best so far hands its exit on.
-    let keep_if_best = |score: &Option<Tally>, found: &Point| {
+    let keep_if_best = |score: &Option<Tally>, found: &Point, entry: &Point| {
         let mut best = warm.lock().unwrap_or_else(PoisonError::into_inner);
         if better_score(score, &best.0, nested.min_n) {
             *best = (score.clone(), found.clone());
+            *stands.lock().unwrap_or_else(PoisonError::into_inner) = entry.clone();
         }
     };
     let score_entry = |entry: &Point| -> Option<Tally> {
@@ -141,6 +152,7 @@ pub(super) fn descend_nested(
             nested.exit_coupling,
             nested.start,
             evaluate,
+            None,
             nested.min_n,
             nested.max_passes,
             nested.handle,
@@ -152,10 +164,35 @@ pub(super) fn descend_nested(
             .into_iter()
             .filter(|(key, _)| is_exit(key))
             .collect();
-        keep_if_best(&walked.score, &found);
+        keep_if_best(&walked.score, &found, entry);
         cache.put(key, (walked.score.clone(), found));
         walked.score
     };
+    // The screen's score of an entry point: one replay under the exit of the best entry point so
+    // far, the exit the point the descent stands on was scored with. A point the corridor refuses
+    // scores nothing whole either, one scored whole earlier in this restart is known to lose — the
+    // descent stands on the best it scored — and one that comes to the entry it stands on is no
+    // move, so none of them takes a place among the kept.
+    let quick_entry = |entry: &Point| -> Screened {
+        let unmoved = || {
+            let stands = stands
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            (nested.same_entry)(entry, &stands)
+        };
+        if (nested.refused)(entry) || cache.get(&key_of(entry)).is_some() || unmoved() {
+            return Screened::Skip;
+        }
+        let mut start = warm
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .1
+            .clone();
+        start.extend(entry.iter().map(|(k, v)| (*k, v.clone())));
+        Screened::Scored(evaluate(&start))
+    };
+    let screen: Option<&Screen<'_>> = nested.screen.then_some(&quick_entry);
     let walked = descend(
         entry,
         nested.grids,
@@ -164,6 +201,7 @@ pub(super) fn descend_nested(
         nested.entry_coupling,
         nested.start,
         &score_entry,
+        screen,
         nested.min_n,
         nested.max_passes,
         nested.handle,

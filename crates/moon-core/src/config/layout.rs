@@ -677,6 +677,11 @@ pub struct TicksAxisLayout {
     /// own. Off by default — and stored this way round so that a config written before the
     /// switch existed reads it off, the guard on (`SearchParams::keep_corridor`).
     pub allow_closer_corridor: bool,
+    /// Whether a search of both groups runs a whole exit search under every entry move it tries,
+    /// rather than under the few a quick score ranks first (`SearchParams::screen_entry`). Off by
+    /// default — stored this way round so that a config written before the switch existed reads
+    /// it off, the screen on.
+    pub exit_under_every_entry: bool,
     /// The shortest tape past the close, seconds, a deal must hold to be worked on — the sample
     /// the variant columns and the search run on; `None` = the axis default. The tape of an
     /// older trade cannot be fetched again, and one short tail cut every variant's exit at it.

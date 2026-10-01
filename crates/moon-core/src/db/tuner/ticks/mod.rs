@@ -660,11 +660,27 @@ pub fn simulate(
     exit: &ExitParams,
     entry_line: Option<&[(i64, f64)]>,
 ) -> Outcome {
-    let fact_fill = Fill {
-        t_ms: deal.buy_ms,
-        price: deal.buy_price,
-    };
-    let fill = match entry {
+    simulate_from(
+        deal,
+        ticks,
+        entry_fill(deal, ticks, entry, entry_line),
+        exit,
+    )
+}
+
+/// The entry half of [`simulate`]: where the entry fills, or `None` when no print reached it.
+///
+/// A fill depends on the entry's parameters, the deal and its tape alone, so a caller that
+/// replays one entry under many exits — the search's exit descent under an entry point — reads it
+/// once and hands it to [`simulate_from`]. Args as for [`simulate`].
+pub fn entry_fill(
+    deal: &Deal,
+    ticks: &[Tick],
+    entry: &EntryParams,
+    entry_line: Option<&[(i64, f64)]>,
+) -> Option<Fill> {
+    let fact_fill = fact_fill(deal);
+    match entry {
         EntryParams::Fact => Some(fact_fill),
         // The trade's own entry settings filled where the report says, whichever way and with
         // whatever latency a variant would be replayed — both are the model's, not the
@@ -679,7 +695,26 @@ pub fn simulate(
             Some(fact_fill)
         }
         EntryParams::MoonShot(params) => MshotEntry::new(params).fill(deal, ticks, entry_line),
-    };
+    }
+}
+
+/// Where the fact itself filled.
+fn fact_fill(deal: &Deal) -> Fill {
+    Fill {
+        t_ms: deal.buy_ms,
+        price: deal.buy_price,
+    }
+}
+
+/// The exit half of [`simulate`]: the trade from an entry `fill` already read
+/// ([`entry_fill`]) — `None` makes no trade.
+pub fn simulate_from(
+    deal: &Deal,
+    ticks: &[Tick],
+    fill: Option<Fill>,
+    exit: &ExitParams,
+) -> Outcome {
+    let fact_fill = fact_fill(deal);
     let Some(fill) = fill else {
         return Outcome {
             fill: None,

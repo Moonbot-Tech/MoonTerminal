@@ -2437,6 +2437,7 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
             locked: vec!["SellPrice".to_string()],
             trade_open: true,
             allow_closer_corridor: true,
+            exit_under_every_entry: true,
             model: crate::db::tuner::ticks::ModelSettings {
                 latency_ms: 250.0,
                 entry_method: crate::db::tuner::ticks::EntryMethod::Shift,
@@ -2459,8 +2460,17 @@ fn the_ticks_axis_settings_round_trip_and_never_cost_the_layout() {
     assert!(
         !before
             .analytics_ticks
+            .as_ref()
             .expect("the block")
             .allow_closer_corridor
+    );
+    // And the screen of a search of both groups on.
+    assert!(
+        !before
+            .analytics_ticks
+            .as_ref()
+            .expect("the block")
+            .exit_under_every_entry
     );
 
     let partial: WindowLayout =
