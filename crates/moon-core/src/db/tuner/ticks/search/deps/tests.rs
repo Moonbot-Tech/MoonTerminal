@@ -231,6 +231,7 @@ fn a_search_of_one_field_completes_what_the_variant_switched_on() {
         max_passes: DEFAULT_MAX_PASSES,
         keep_corridor: true,
         risk: Default::default(),
+        screen_entry: false,
         model: ModelSettings {
             latency_ms: 0.0,
             ..ModelSettings::default()

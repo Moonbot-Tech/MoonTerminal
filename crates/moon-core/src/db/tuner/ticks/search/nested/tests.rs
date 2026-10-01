@@ -59,6 +59,8 @@ fn the_nested_descent_reaches_an_entry_that_pays_only_with_its_own_exit() {
         handle: &handle,
         refused: &|_: &Point| false,
         searched: &searched,
+        screen: false,
+        same_entry: &|a: &Point, b: &Point| a == b,
     };
     let walked = descend_nested(Point::new(), &nested, &evaluate).expect("not stopped");
     let at = (
@@ -85,12 +87,61 @@ fn the_nested_descent_reaches_an_entry_that_pays_only_with_its_own_exit() {
         &none,
         &start,
         &evaluate,
+        None,
         1,
         DEFAULT_MAX_PASSES,
         &SearchHandle::new(),
     )
     .expect("not stopped");
     assert!((flat.score.expect("scored").profit - 6.0).abs() < 1e-9);
+}
+
+/// Screened, the entry that pays only with its own exit still ranks first under the old exit —
+/// every other entry value scores 1 there — and its exit descent reaches 10, with an exit descent
+/// under fewer entry points than the unscreened walk runs.
+#[test]
+fn the_screened_descent_still_reaches_the_entry_with_its_own_exit() {
+    let entry = field("MShotPrice");
+    let exit = field("SellPrice");
+    let start: HashMap<&'static str, usize> = [(entry.key, 10), (exit.key, 5)].into();
+    let evaluate = objective(entry, exit, &start);
+    let none = coupled::Coupling::none();
+    let walk = |screen: bool| {
+        let searched = std::sync::atomic::AtomicUsize::new(0);
+        let handle = SearchHandle::new();
+        let nested = Nested {
+            grids: legacy(),
+            start: &start,
+            entry: &[entry],
+            exit: &[exit],
+            pairs: &[],
+            entry_coupling: &none,
+            exit_coupling: &none,
+            min_n: 1,
+            max_passes: DEFAULT_MAX_PASSES,
+            handle: &handle,
+            refused: &|_: &Point| false,
+            searched: &searched,
+            screen,
+            same_entry: &|a: &Point, b: &Point| a == b,
+        };
+        let walked = descend_nested(Point::new(), &nested, &evaluate).expect("not stopped");
+        (walked, searched.load(std::sync::atomic::Ordering::Relaxed))
+    };
+    let (screened, screened_n) = walk(true);
+    let (whole, whole_n) = walk(false);
+    let at = |point: &Point| {
+        (
+            grid_index(legacy(), entry, point, &start),
+            grid_index(legacy(), exit, point, &start),
+        )
+    };
+    assert_eq!(at(&screened.point), (Some(11), Some(7)));
+    assert_eq!(at(&screened.point), at(&whole.point));
+    assert!(
+        screened_n < whole_n,
+        "screened {screened_n} against {whole_n}"
+    );
 }
 
 /// A stop inside the inner search stops the whole descent: nothing is answered.
@@ -116,6 +167,8 @@ fn a_stopped_nested_descent_answers_nothing() {
         handle: &handle,
         refused: &|_: &Point| false,
         searched: &std::sync::atomic::AtomicUsize::new(0),
+        screen: false,
+        same_entry: &|a: &Point, b: &Point| a == b,
     };
     assert!(descend_nested(Point::new(), &nested, &evaluate).is_none());
 }

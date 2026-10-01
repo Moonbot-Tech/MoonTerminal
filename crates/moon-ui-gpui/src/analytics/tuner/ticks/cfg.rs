@@ -412,6 +412,24 @@ impl AnalyticsView {
                 p,
                 cx,
             ))
+            .child(
+                MoonCheckbox::new("tun-cfg-screen-x")
+                    .label(t!("analytics.ticks.cfg_screen_entry").to_string())
+                    .description(t!("analytics.ticks.cfg_screen_entry_help").to_string())
+                    .checked(self.ticks.screen_entry)
+                    // `on_change` hands the callback an `&mut App`, not a `Context`.
+                    .on_change({
+                        let view = cx.entity();
+                        move |checked: &bool, _w, app| {
+                            let on = *checked;
+                            view.update(app, |this, cx| {
+                                this.ticks.screen_entry = on;
+                                this.persist_ticks_settings(cx);
+                                cx.notify();
+                            });
+                        }
+                    }),
+            )
             .children(risk_rows)
             .child(popup_section(
                 t!("analytics.ticks.cfg_entry_section").to_string(),

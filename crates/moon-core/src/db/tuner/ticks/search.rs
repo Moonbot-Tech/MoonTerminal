@@ -51,7 +51,10 @@ use super::params::{
 };
 use super::settings::ModelSettings;
 use super::unmodelled::same_value;
-use super::{Deal, Deltas, EntryParams, ExitModel, ExitParams, Outcome, entry_model_for, simulate};
+use super::{
+    Deal, Deltas, EntryParams, ExitModel, ExitParams, Fill, Outcome, entry_model_for, simulate,
+    simulate_from,
+};
 use crate::db::metrics::Tally;
 use crate::db::tuner::threshold_search::search::{install, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
@@ -158,6 +161,10 @@ pub struct SearchParams<'a> {
     /// How much riskier than the fact an answer may be, on the deals it is fitted on: a point
     /// past a limit is refused ([`risk`]).
     pub risk: RiskLimits,
+    /// Whether a search of both groups screens the entry moves of each step under the exit found
+    /// so far and runs a whole exit descent under the best few only ([`screen`]). Read only when
+    /// both groups are searched.
+    pub screen_entry: bool,
 }
 
 /// Why a search came back with nothing.
@@ -213,6 +220,9 @@ pub struct SearchStats {
     /// Entry points scored by a whole search of the exit under them — a search of both groups
     /// ([`nested`]); zero for a search of one.
     pub entry_points: usize,
+    /// Points scored on the entry fills of a point scored before ([`fills`]) — the exit replayed
+    /// alone.
+    pub fills_reused: usize,
 }
 
 /// What the search found.
@@ -265,6 +275,10 @@ struct Walked {
 /// same stalled pass walks each (coefficient, term) pair stuck at zero along a diagonal of their
 /// grids. The walk ends when a pass moves nothing, or at `max_passes`.
 ///
+/// With a `screen`, a field's other values and the pair moves are each first scored by it, and
+/// only the [`screen::KEEP`] best of a field, or of the pair moves, are scored by `evaluate`
+/// ([`screen`]).
+///
 /// Returns:
 ///     Where it stopped, or `None` when the run was stopped.
 #[allow(clippy::too_many_arguments)]
@@ -276,6 +290,7 @@ fn descend(
     coupling: &coupled::Coupling<'_>,
     start: &HashMap<&'static str, usize>,
     evaluate: &(dyn Fn(&Point) -> Option<Tally> + Sync),
+    screen: Option<&screen::Screen<'_>>,
     min_n: i64,
     max_passes: usize,
     handle: &SearchHandle,
@@ -294,7 +309,33 @@ fn descend(
                 continue;
             }
             let mut current = point.get(field.key).cloned();
-            for index in 0..grids.arity(field) {
+            let indices: Vec<usize> = match screen {
+                None => (0..grids.arity(field)).collect(),
+                Some(quick) => {
+                    // Nearest the point first: of moves the screen cannot tell apart, the
+                    // nearest are kept (`screen::best`).
+                    let mut nearest: Vec<usize> = (0..grids.arity(field)).collect();
+                    if let Some(at) = grid_index(grids, field, &point, start) {
+                        nearest.sort_by_key(|&index| index.abs_diff(at));
+                    }
+                    let mut scored = Vec::new();
+                    for index in nearest {
+                        let candidate = grids.spell(field, index);
+                        if current.as_deref() == Some(candidate.as_str()) {
+                            continue;
+                        }
+                        if handle.is_cancelled() {
+                            handle.note_abandoned();
+                            return None;
+                        }
+                        point.insert(field.key, candidate);
+                        scored.push((index, quick(&point)));
+                        restore(&mut point, field.key, current.clone());
+                    }
+                    screen::best(scored, screen::KEEP, min_n)
+                }
+            };
+            for index in indices {
                 let candidate = grids.spell(field, index);
                 if current.as_deref() == Some(candidate.as_str()) {
                     continue;
@@ -314,38 +355,40 @@ fn descend(
             // passes; within one pass every field is visited once.
         }
         if !improved {
-            for &down in pairs {
-                for &up in pairs {
-                    // Each pair is a replay of the sample: a stop is noticed between two of
-                    // them, not after a whole row.
+            let mut moves: Vec<(&'static TickParam, &'static TickParam)> = pairs
+                .iter()
+                .flat_map(|&down| pairs.iter().map(move |&up| (down, up)))
+                .filter(|(down, up)| down.key != up.key)
+                .collect();
+            if let Some(quick) = screen {
+                let mut scored = Vec::new();
+                for (down, up) in moves {
                     if handle.is_cancelled() {
                         handle.note_abandoned();
                         return None;
                     }
-                    if down.key == up.key {
-                        continue;
+                    if let Some(moved) = pair_moved(&point, grids, (down, up), start) {
+                        scored.push(((down, up), quick(&moved)));
                     }
-                    let (Some(d), Some(u)) = (
-                        grid_index(grids, down, &point, start),
-                        grid_index(grids, up, &point, start),
-                    ) else {
-                        continue;
-                    };
-                    if d == 0 || u + 1 >= grids.arity(up) {
-                        continue;
-                    }
-                    let (was_down, was_up) =
-                        (point.get(down.key).cloned(), point.get(up.key).cloned());
-                    point.insert(down.key, grids.spell(down, d - 1));
-                    point.insert(up.key, grids.spell(up, u + 1));
-                    let trial = evaluate(&point);
-                    if better_score(&trial, &score, min_n) {
-                        score = trial;
-                        improved = true;
-                    } else {
-                        restore(&mut point, down.key, was_down);
-                        restore(&mut point, up.key, was_up);
-                    }
+                }
+                moves = screen::best(scored, screen::KEEP, min_n);
+            }
+            for (down, up) in moves {
+                // Each pair is a replay of the sample: a stop is noticed between two of them,
+                // not after a whole row.
+                if handle.is_cancelled() {
+                    handle.note_abandoned();
+                    return None;
+                }
+                // Read where the point stands now: a pair kept earlier in this pass moved it.
+                let Some(moved) = pair_moved(&point, grids, (down, up), start) else {
+                    continue;
+                };
+                let trial = evaluate(&moved);
+                if better_score(&trial, &score, min_n) {
+                    score = trial;
+                    improved = true;
+                    point = moved;
                 }
             }
             for (coefficient, term) in coupling.stuck(&point) {
@@ -377,6 +420,25 @@ fn descend(
         passes,
         converged,
     })
+}
+
+/// `point` with `down` a grid step down and `up` a step up, or `None` where either has no step
+/// that way, or is not a number on its grid.
+fn pair_moved(
+    point: &Point,
+    grids: &Grids,
+    (down, up): (&'static TickParam, &'static TickParam),
+    start: &HashMap<&'static str, usize>,
+) -> Option<Point> {
+    let d = grid_index(grids, down, point, start)?;
+    let u = grid_index(grids, up, point, start)?;
+    if d == 0 || u + 1 >= grids.arity(up) {
+        return None;
+    }
+    let mut moved = point.clone();
+    moved.insert(down.key, grids.spell(down, d - 1));
+    moved.insert(up.key, grids.spell(up, u + 1));
+    Some(moved)
 }
 
 /// Put a field back to what the point held: a value, or none (the base's).
@@ -579,17 +641,24 @@ impl<'a> Bases<'a> {
 ///     deals: The deals.
 ///     of_deal: Each deal's index into `params` ([`Bases::of_deal`]), as long as `deals`.
 ///     params: The point's parameters per base ([`Bases::params`]).
+///     fills: Each deal's entry fill under `params`, when read already ([`fills::FillCache`]);
+///         `None` replays the entry too.
 fn results(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
+    fills: Option<&[Option<Fill>]>,
 ) -> Vec<(Option<(f64, f64)>, bool, Option<f64>)> {
     deals
         .par_iter()
+        .enumerate()
         .zip(of_deal.par_iter())
-        .map(|(d, &base)| {
+        .map(|((i, d), &base)| {
             let (entry, exit) = &params[base];
-            let outcome = simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref());
+            let outcome = match fills {
+                Some(fills) => simulate_from(&d.deal, &d.ticks, fills[i], exit),
+                None => simulate(&d.deal, &d.ticks, entry, exit, d.entry_line.as_deref()),
+            };
             let result = outcome
                 .profit_metric(&d.deal)
                 .map(|value| (value, d.deal.spent));
@@ -647,7 +716,7 @@ fn score(
 ) -> VariantScore {
     // The replay of every deal is independent; the score is folded in order afterwards.
     let mut score = VariantScore::default();
-    for (result, left_open, at_tape_end) in results(deals, of_deal, params) {
+    for (result, left_open, at_tape_end) in results(deals, of_deal, params, None) {
         score.push(result, left_open, at_tape_end);
     }
     score
@@ -983,6 +1052,9 @@ pub fn suggest(
         }
         refused
     };
+    // The fills of the entries scored lately: most points share their entry with the point
+    // before (`fills`).
+    let fill_cache = fills::FillCache::default();
     let score_point = |point: &Point| -> Option<Tally> {
         let per_base = per_base_at(point);
         if corridor_refuses(&per_base) {
@@ -993,7 +1065,10 @@ pub fn suggest(
         // A trade must be closed while it lasts: something that can close it stands on every
         // strategy, and none of the deals it bought is left open (`closing`).
         let closed = closing::protected(&per_base)
-            .then(|| closing::closed_tally(train, train_of, &per_base))
+            .then(|| {
+                let fills = fill_cache.fills(train, train_of, &per_base);
+                closing::closed_tally(train, train_of, &per_base, &fills)
+            })
             .flatten();
         if closed.is_none() {
             unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1037,6 +1112,12 @@ pub fn suggest(
     let exit_coupling = coupled::Coupling::of(&exit_fields, &per_base_at);
     let entry_scored = std::sync::atomic::AtomicUsize::new(0);
     let refuses_entry = |entry: &Point| corridor_refuses(&per_base_at(entry));
+    let same_entry = |a: &Point, b: &Point| {
+        per_base_at(a)
+            .iter()
+            .zip(per_base_at(b).iter())
+            .all(|((a, _), (b, _))| a == b)
+    };
     let runs: Vec<Run> = install(|| {
         (0..restarts)
             .into_par_iter()
@@ -1078,6 +1159,8 @@ pub fn suggest(
                         handle,
                         refused: &refuses_entry,
                         searched: &entry_scored,
+                        screen: params.screen_entry,
+                        same_entry: &same_entry,
                     };
                     nested::descend_nested(point, &walk, &evaluate)
                 } else {
@@ -1089,6 +1172,7 @@ pub fn suggest(
                         &coupling,
                         &start,
                         &evaluate,
+                        None,
                         min_n,
                         max_passes,
                         handle,
@@ -1154,6 +1238,7 @@ pub fn suggest(
         refused,
         left_open: left_open.len(),
         entry_points: entry_scored.load(std::sync::atomic::Ordering::Relaxed),
+        fills_reused: fill_cache.reused(),
     };
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
     // below its own base is a search that could not reach the base — or one whose typed range
@@ -1183,7 +1268,7 @@ pub fn suggest(
     });
     log::info!(
         target: crate::diagnostics::TICKS_AXIS_TARGET,
-        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}",
+        "[x] ticks search: base (n, profit) {:?} against best {:?} over {} training deal(s), {} left out; base refused by (inverts, deals nearer than their own corridor, guarded) {:?}; points refused by the corridor {}, by a deal left open {}, by the risk limits {}; points scored on entry fills read before {} of {}",
         brief(&base_score),
         brief(&score),
         train_n,
@@ -1191,7 +1276,9 @@ pub fn suggest(
         base_why,
         cornered_n,
         unclosed_n,
-        risky_n
+        risky_n,
+        stats.fills_reused,
+        stats.evaluations
     );
     // The answer as it was scored — every field it switched on at a value, the passengers already
     // dropped — less what is in effect on no strategy.
@@ -1528,13 +1615,15 @@ mod closing;
 pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
+mod fills;
 mod nested;
 mod pinned;
 mod risk;
+mod screen;
 pub use self::risk::{DEFAULT_WORSE_PCT, RiskLimits};
 mod size;
 pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
-pub use self::size::{SearchSize, point_cost, search_size};
+pub use self::size::{SearchSize, full_replays, point_cost, search_size};
 
 #[cfg(test)]
 pub(in crate::db::tuner::ticks) mod test_grids;

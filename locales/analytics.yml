@@ -2086,9 +2086,9 @@ analytics.ticks.est_time_pending:
   en: "timing it"
   es: "midiendo el tiempo"
 analytics.ticks.est_tip:
-  ru: "Оценка по отмеченным полям, сеткам, перезапускам и проходам. Отмечены и вход, и выход — на каждую точку входа подбирается весь выход, время растёт кратно. Время — по замеру одной точки на этой выборке, после каждого подбора уточняется. Порядок, не точное число."
-  en: "An estimate from the ticked fields, the grids, restarts and passes. With both the entry and the exit ticked, the whole exit is searched under every entry point, and the time multiplies. The time is one point measured on this sample, refined after every search. An order of magnitude, not an exact figure."
-  es: "Estimación a partir de los campos marcados, las rejillas, los reinicios y las pasadas. Con la entrada y la salida marcadas, se busca toda la salida en cada punto de entrada y el tiempo se multiplica. El tiempo sale de medir un punto en esta muestra y se afina tras cada búsqueda. Un orden de magnitud, no una cifra exacta."
+  ru: "Оценка по отмеченным полям, сеткам, перезапускам и проходам. Отмечены и вход, и выход — выход подбирается под точками входа, время растёт кратно; с галкой «Отсев точек входа» — только под тремя лучшими ходами каждого шага. Время — по замеру одной точки на этой выборке, после каждого подбора уточняется. Порядок, не точное число."
+  en: "An estimate from the ticked fields, the grids, restarts and passes. With both the entry and the exit ticked, the exit is searched under the entry points, and the time multiplies; with \"Screen entry points\" on, only under the three best moves of each step. The time is one point measured on this sample, refined after every search. An order of magnitude, not an exact figure."
+  es: "Estimación a partir de los campos marcados, las rejillas, los reinicios y las pasadas. Con la entrada y la salida marcadas, la salida se busca bajo los puntos de entrada y el tiempo se multiplica; con «Filtrar puntos de entrada», solo bajo los tres mejores movimientos de cada paso. El tiempo sale de medir un punto en esta muestra y se afina tras cada búsqueda. Un orden de magnitud, no una cifra exacta."
 analytics.ticks.acc_line:
   ru: "Точность модели: вход %{entry} · выход %{exit} — по %{n} сделкам с лентой"
   en: "Model accuracy: entry %{entry} · exit %{exit} — over %{n} trades with tape"
@@ -2269,6 +2269,14 @@ analytics.ticks.cfg_keep_corridor_help:
   ru: "Итоговый коридор варианта (MShotPrice, MShotPriceMin и прибавки MShotAdd по дельтам) ни в один момент жизни ордера не ближе к цене, чем был у сделки. Расстояние можно перераспределять между полями, но не сокращать: ордер ближе к цене ловит прострелы, которых нет в выборке."
   en: "The variant's resulting corridor (MShotPrice, MShotPriceMin and the MShotAdd delta additions) is at no moment of the order's life nearer the price than the trade's was. The distance may be moved between the fields, not shortened: an order nearer the price catches spikes that are not in the sample."
   es: "El corredor resultante de la variante (MShotPrice, MShotPriceMin y las adiciones MShotAdd por deltas) en ningún momento de la vida de la orden está más cerca del precio que el de la operación. La distancia puede repartirse entre los campos, no acortarse: una orden más cerca del precio atrapa picos que no están en la muestra."
+analytics.ticks.cfg_screen_entry:
+  ru: "Отсев точек входа"
+  en: "Screen entry points"
+  es: "Filtrar puntos de entrada"
+analytics.ticks.cfg_screen_entry_help:
+  ru: "Когда подбираются и вход, и выход: каждый ход входа сначала оценивается одним прогоном под выходом, найденным для лучшей точки, и полный подбор выхода идёт только под тремя лучшими ходами каждого шага. Быстрее в разы; ход, который проигрывает под старым выходом и выигрывает только со своим, может быть не найден. Без галки выход подбирается под каждым ходом — дольше, ничего не отсеивается."
+  en: "When both the entry and the exit are searched: each entry move is first scored by one replay under the exit found for the best point, and the whole exit search runs only under the three best moves of each step. Several times faster; a move that loses under the old exit and wins only with its own may be missed. Off, the exit is searched under every move — slower, nothing is screened out."
+  es: "Cuando se buscan la entrada y la salida: cada movimiento de entrada se evalúa primero con una reproducción bajo la salida hallada para el mejor punto, y la búsqueda completa de la salida se hace solo bajo los tres mejores movimientos de cada paso. Varias veces más rápido; un movimiento que pierde con la salida anterior y gana solo con la suya puede no encontrarse. Sin la casilla, la salida se busca bajo cada movimiento: más lento, no se descarta nada."
 analytics.ticks.sugg_floor:
   ru: "Ни один вариант не держит ≥ %{n} сделок"
   en: "No variant keeps ≥ %{n} trades"

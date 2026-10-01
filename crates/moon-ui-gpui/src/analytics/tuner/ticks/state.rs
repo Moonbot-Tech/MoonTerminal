@@ -435,6 +435,9 @@ pub(in crate::analytics) struct TicksState {
     /// Whether the search keeps every trade's entry corridor at least as far from the price as
     /// the trade's own (`SearchParams::keep_corridor`). On unless the user turned it off.
     pub(in crate::analytics::tuner) keep_corridor: bool,
+    /// Whether a search of both groups screens the entry moves before an exit search under each
+    /// (`SearchParams::screen_entry`). On unless the user turned it off.
+    pub(in crate::analytics::tuner) screen_entry: bool,
     /// Whether the search settings popover is open.
     pub(in crate::analytics::tuner) sugg_cfg_open: bool,
     /// Whether the model settings popover is open.
@@ -505,9 +508,9 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) schema_reload: Option<u64>,
     /// The grid's sections the user opened; every section starts folded (`grid.rs`).
     pub(in crate::analytics::tuner) open_sections: HashSet<ParamSection>,
-    /// What one scored point of a search costs, with what it was measured under — the time the
-    /// estimate under the grid prints (`estimate.rs`). Measured when what it is measured under
-    /// changes, and taken again from every finished search.
+    /// What one whole replay of a search costs (`search::full_replays`), with what it was measured
+    /// under — the time the estimate under the grid prints (`estimate.rs`). Measured when what it
+    /// is measured under changes, and taken again from every finished search.
     pub(in crate::analytics::tuner) point_cost:
         Option<(super::estimate::CostKey, std::time::Duration)>,
     /// What the measurement in flight is measured under, so a paint does not start another.
@@ -547,6 +550,7 @@ impl Default for TicksState {
             dd_worse_pct: String::new(),
             wr_worse_pct: String::new(),
             keep_corridor: true,
+            screen_entry: true,
             sugg_cfg_open: false,
             model_cfg_open: false,
             sugg: SuggState::Idle,
@@ -637,6 +641,7 @@ impl TicksState {
         self.locked = saved.locked.iter().cloned().collect();
         self.trade.open = saved.trade_open;
         self.keep_corridor = !saved.allow_closer_corridor;
+        self.screen_entry = !saved.exit_under_every_entry;
         self.steps = saved
             .steps_per_param
             .map(|n| n.to_string())
@@ -668,6 +673,7 @@ impl TicksState {
             model: super::model_cfg::current(),
             trade_open: self.trade.open,
             allow_closer_corridor: !self.keep_corridor,
+            exit_under_every_entry: !self.screen_entry,
             min_tail_s: Some(super::tail::current_s()),
             steps_per_param: number(&self.steps),
             ranges: self.ranges.clone(),
