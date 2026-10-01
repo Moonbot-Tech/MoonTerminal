@@ -264,7 +264,7 @@ pub(super) struct RepState {
     awaiting_resync: HashMap<u64, Option<u64>>,
 }
 
-/// Every index the replica's read paths need, as `(name, columns)`.
+/// Every index the replica's read paths need, as [`RepIndex`] entries.
 ///
 /// ONE list, so "which indexes exist" has a single answer: [`ensure_indexes`] creates each
 /// entry whose columns the replica already has, its guard is derived from those same columns,
@@ -293,15 +293,74 @@ pub(super) struct RepState {
 ///   and range-join `buydate` against the version's `valid_from` and `valid_to`.
 /// - `idx_rep_strategy_close` — strategy-scoped Analytics reads: select one strategy on one core
 ///   and apply the visible `closedate` period inside the same index search.
-pub(super) const REP_INDEXES: &[(&str, &[&str])] = &[
-    ("idx_rep_closedate", &["closedate"]),
-    ("idx_rep_core_close", &["core_uid", "closedate"]),
-    ("idx_rep_strat", &["core_uid", "strategyid", "buydate"]),
-    (
+/// - `idx_rep_open` — open trades: a partial index holding only rows that are not closed, so
+///   Report and chart reads of open positions seek O(open) rows instead of scanning the table.
+///   The writer pays only for open rows, which stay a tiny fraction of the history.
+/// - `idx_rep_coin_close` — one coin's trades: chart history, exact-coin lists and the
+///   exact/prefix ticker filter seek by coin and keep the period inside the index. The one
+///   full-width addition the writer pays for on every row.
+pub(super) const REP_INDEXES: &[RepIndex] = &[
+    RepIndex::plain("idx_rep_closedate", &["closedate"], "closedate"),
+    RepIndex::plain(
+        "idx_rep_core_close",
+        &["core_uid", "closedate"],
+        "core_uid, closedate",
+    ),
+    RepIndex::plain(
+        "idx_rep_strat",
+        &["core_uid", "strategyid", "buydate"],
+        "core_uid, strategyid, buydate",
+    ),
+    RepIndex::plain(
         "idx_rep_strategy_close",
         &["core_uid", "strategyid", "closedate"],
+        "core_uid, strategyid, closedate",
+    ),
+    RepIndex {
+        name: "idx_rep_open",
+        needs: &["core_uid", "buydate", "closedate"],
+        key_sql: "core_uid, buydate",
+        where_sql: Some(OPEN_ROW_WHERE),
+    },
+    RepIndex::plain(
+        "idx_rep_coin_close",
+        &["coin", "closedate"],
+        "coin COLLATE NOCASE, closedate",
     ),
 ];
+
+/// The open-rows index's `WHERE`: `NOT` of [`super::report_read::closed_test_sql`] over the
+/// bare column, spelled as a literal so it can live in a const table.
+pub(super) const OPEN_ROW_WHERE: &str =
+    "NOT (typeof(closedate) IN ('integer','real') AND closedate > 0)";
+
+/// One replica index: its name, the columns it waits for, its key and an optional partial filter.
+pub(super) struct RepIndex {
+    /// Index name.
+    pub(super) name: &'static str,
+    /// Columns that must exist before the index can be created.
+    pub(super) needs: &'static [&'static str],
+    /// The indexed key list, as written inside `ON table(...)`.
+    pub(super) key_sql: &'static str,
+    /// The partial-index filter, if any.
+    pub(super) where_sql: Option<&'static str>,
+}
+
+impl RepIndex {
+    /// A full (non-partial) index.
+    const fn plain(
+        name: &'static str,
+        needs: &'static [&'static str],
+        key_sql: &'static str,
+    ) -> Self {
+        Self {
+            name,
+            needs,
+            key_sql,
+            where_sql: None,
+        }
+    }
+}
 
 /// Create every [`REP_INDEXES`] entry whose columns the replica already has.
 ///
@@ -319,24 +378,38 @@ pub(super) const REP_INDEXES: &[(&str, &[&str])] = &[
 /// replica costs more. Nothing else reports that pause, so time the pass and log it when it
 /// actually cost something: a one-off delay with no line in the log is indistinguishable from a
 /// hang.
+///
+/// The first start on an existing large replica builds `idx_rep_coin_close` / `idx_rep_open` once
+/// (`IF NOT EXISTS` makes later starts no-ops) and holds the write lock meanwhile, so each slow
+/// build is also logged by name.
 fn ensure_indexes(conn: &Connection, cols: &HashSet<String>) -> rusqlite::Result<bool> {
     let started = std::time::Instant::now();
     let mut done = true;
-    for (name, index_cols) in REP_INDEXES {
+    for index in REP_INDEXES {
         // A column the core schema has not sent yet: the index waits for a later schema rather
         // than being created without it, and `done` stays false so the caller keeps retrying.
-        if !index_cols.iter().all(|c| cols.contains(*c)) {
+        if !index.needs.iter().all(|c| cols.contains(*c)) {
             done = false;
             continue;
         }
-        // Name and columns are the literals above, never data, so the interpolation is safe.
-        conn.execute(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS {name} ON {TABLE}({})",
-                index_cols.join(", ")
-            ),
-            [],
-        )?;
+        // Every piece is a literal above, never data, so the interpolation is safe.
+        let mut sql = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON {TABLE}({})",
+            index.name, index.key_sql
+        );
+        if let Some(w) = index.where_sql {
+            sql.push_str(" WHERE ");
+            sql.push_str(w);
+        }
+        let index_started = std::time::Instant::now();
+        conn.execute(&sql, [])?;
+        let index_took = index_started.elapsed();
+        if index_took >= std::time::Duration::from_millis(200) {
+            log::info!(
+                "reports(rep): replica index {} built in {index_took:?} (one-off)",
+                index.name
+            );
+        }
     }
     let took = started.elapsed();
     if took >= std::time::Duration::from_millis(200) {

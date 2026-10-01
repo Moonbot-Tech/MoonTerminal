@@ -17,9 +17,9 @@ use super::super::report_axis::ReportAxis;
 use super::super::sql_sum::{GroupKey, SqliteSum, SumColumn};
 use super::{
     CLOSEDATE, PeriodBasis, QuoteBreakdown, ReadResult, ReadSource, ReportFilter, ReportTotals,
-    RowScope, ValuationMode, build_where, entry_spend_sql, install_strategy_name_mask_function,
-    profit_column, read_fail, read_sources_res, source_partition, strategy_metadata_required,
-    traded_volume_sql, with_valuation_fallback,
+    RowScope, StrategyMeta, ValuationMode, build_where, entry_spend_sql, profit_column, read_fail,
+    read_sources_res, report_strategy_meta, source_partition, traded_volume_sql,
+    with_valuation_fallback,
 };
 
 /// The closed-row totals statement of one physical source, in its two shapes.
@@ -50,12 +50,12 @@ impl<'a> ClosedPass<'a> {
     ///     src: Physical source and its discovered columns.
     ///     f: Complete Report filter.
     ///     include_valuation: Whether the historical mode may join the attached derived cache.
-    ///     has_strategy_names: Whether liquidation attribution metadata is readable.
+    ///     meta: Strategy metadata of this read, with its resolved name mask.
     pub(super) fn new(
         src: &'a ReadSource,
         f: &ReportFilter,
         include_valuation: bool,
-        has_strategy_names: bool,
+        meta: &StrategyMeta,
     ) -> Self {
         let closed_scope = ReportFilter {
             rows: if src.cols.contains("closedate") {
@@ -65,7 +65,7 @@ impl<'a> ClosedPass<'a> {
             },
             ..f.clone()
         };
-        let (where_sql, params) = build_where(&closed_scope, &src.cols, has_strategy_names);
+        let (where_sql, params) = build_where(&closed_scope, &src.cols, meta);
         let (quote, group_by) = super::super::quote::trusted_quote_group("r", &src.cols);
         let valuation = super::super::valuation::projection(
             f.valuation,
@@ -304,8 +304,8 @@ pub fn query_totals_sliced(
     slices: &[TotalsSlice],
 ) -> ReadResult<Vec<ReportTotals>> {
     if one_pass_serves(base, slices) {
-        install_strategy_name_mask_function(conn, base)
-            .map_err(|error| read_fail("reports: install strategy mask", error))?;
+        let meta = report_strategy_meta(conn, base)
+            .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
         let sources = read_sources_res(conn)?;
         let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
         let sliced = with_valuation_fallback(
@@ -313,7 +313,7 @@ pub fn query_totals_sliced(
             "reports: query_totals_sliced",
             "reports: query_totals_sliced native retry",
             |include_valuation| {
-                sliced_attempt(conn, base, slices, &sources, include_valuation, now)
+                sliced_attempt(conn, base, slices, &sources, &meta, include_valuation, now)
             },
         )?;
         if let Some(totals) = sliced {
@@ -444,16 +444,15 @@ fn sliced_attempt(
     base: &ReportFilter,
     slices: &[TotalsSlice],
     sources: &[ReadSource],
+    meta: &StrategyMeta,
     include_valuation: bool,
     now: i64,
 ) -> rusqlite::Result<Option<Vec<Option<ReportTotals>>>> {
-    let has_strategy_names =
-        strategy_metadata_required(base) && super::super::analytics::strategies_attached(conn);
     let valuation_present = base.valuation == ValuationMode::Current || include_valuation;
     let plans = slices.iter().map(SlicePlan::new).collect::<Vec<_>>();
     let passes = sources
         .iter()
-        .map(|src| ClosedPass::new(src, base, include_valuation, has_strategy_names))
+        .map(|src| ClosedPass::new(src, base, include_valuation, meta))
         .collect::<Vec<_>>();
     let mut offsets: HashMap<i64, i32> = HashMap::new();
     // slice -> source -> quote key -> one fold per column

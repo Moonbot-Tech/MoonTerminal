@@ -1390,9 +1390,10 @@ fn exact_strategy_filters_rows_totals_and_unidentifiable_sources() {
 }
 
 /// `report_read::append_strategy_name_mask` must keep user text literal, case-insensitive, and
-/// correlated to the current core plus effective strategy id.
+/// scoped to the current core plus effective strategy id. The mask is resolved once per read
+/// through `strategy_query` into literal `(core, strategy ids)` groups, never a per-row subquery.
 ///
-/// Plausible breakages: replacing `instr` with an unescaped `LIKE` makes `_` or `%` a wildcard;
+/// Plausible breakages: a resolver that treats `_` or `%` as wildcards;
 /// dropping Unicode-aware folding loses lower-case or non-ASCII strategy names; matching raw
 /// `strategyid` loses attributed
 /// liquidations; dropping `core_uid` includes a same-pattern strategy from another core; treating
@@ -2239,6 +2240,7 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
         &conn,
         &filter(super::ValuationMode::Current),
         &sources,
+        &super::StrategyMeta::without_mask(false),
         false,
     )
     .expect("current-rate totals")
@@ -2253,6 +2255,7 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
         &conn,
         &filter(super::ValuationMode::Historical),
         &sources,
+        &super::StrategyMeta::without_mask(false),
         false,
     )
     .expect("historical totals")
@@ -2902,8 +2905,9 @@ fn capture_chart_history_sql(event: rusqlite::trace::TraceEvent<'_>) {
 /// the replica, so the chart draws the whole fleet's arrows with no error.
 ///
 /// The row oracle is the fixture's own record ids and close stamps. The plan oracle is SQLite's
-/// `EXPLAIN QUERY PLAN` of the SELECT this function actually prepared, which must search
-/// `idx_rep_core_close` rather than scan `orders_rep`.
+/// `EXPLAIN QUERY PLAN` of the SELECT this function actually prepared, which must search a
+/// coin- or core-leading index (`idx_rep_coin_close` / `idx_rep_core_close`) rather than scan
+/// `orders_rep`.
 #[test]
 fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
     let conn = Connection::open_in_memory().expect("open chart-history core-set fixture");
@@ -2974,7 +2978,8 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
                  isshort INTEGER
              );
              CREATE INDEX idx_rep_closedate ON orders_rep(closedate);
-             CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);",
+             CREATE INDEX idx_rep_core_close ON orders_rep(core_uid, closedate);
+             CREATE INDEX idx_rep_coin_close ON orders_rep(coin COLLATE NOCASE, closedate);",
         )
         .expect("create chart-history plan schema");
     {
@@ -3029,8 +3034,8 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(
-        plan.contains("idx_rep_core_close"),
-        "multi-core chart history must search idx_rep_core_close: {plan}; sql: {sql}"
+        plan.contains("idx_rep_coin_close") || plan.contains("idx_rep_core_close"),
+        "multi-core chart history must search the coin or core index: {plan}; sql: {sql}"
     );
     assert!(
         !plan.contains("SCAN orders_rep") && !plan.contains("SCAN TABLE orders_rep"),
@@ -3511,3 +3516,5 @@ fn a_wordless_mask_needs_no_metadata_but_a_real_query_fails_closed() {
         );
     }
 }
+
+mod seeks;
