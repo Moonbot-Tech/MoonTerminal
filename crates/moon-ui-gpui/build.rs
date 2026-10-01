@@ -13,6 +13,11 @@ fn main() {
     if std::env::var("PROFILE").is_ok_and(|profile| profile == "debug") {
         println!("cargo:rustc-cfg=moon_profile_debug");
     }
+    // MSVC gives the main thread 1 MiB, and the unoptimized translation table that `i18n!`
+    // builds on the first `t!` outgrows it as locales grow; match the 8 MiB of macOS and Linux.
+    if std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|env| env == "msvc") {
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+    }
 
     // Embed every numerically named group icon (assets/icons/<id>.png) in the executable,
     // avoiding runtime disk paths in development and deployment. Codegen: GROUP_ICONS[id] = Option<&[u8]>.

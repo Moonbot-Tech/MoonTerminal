@@ -95,6 +95,18 @@ station.error.BotNotReady:
   ru: "Бот станции не начал опрос вовремя. Проверьте состояние и журнал станции."
   en: "The station bot did not start polling in time. Check the station status and log."
   es: "El bot de la estación no comenzó a consultar a tiempo. Comprueba el estado y el registro de la estación."
+station.error.HostKeyUnconfirmed:
+  ru: "Ключ сервера не подтверждён; на сервер ничего не отправлено."
+  en: "The server's host key was not confirmed; nothing was sent to it."
+  es: "La clave del servidor no se confirmó; no se le envió nada."
+station.error.NoAptGet:
+  ru: "Система этого сервера не поддерживается: нужен Debian или Ubuntu. Ничего не изменено."
+  en: "This server's system is not supported: Debian or Ubuntu is needed. Nothing was changed."
+  es: "El sistema de este servidor no es compatible: se necesita Debian o Ubuntu. No se cambió nada."
+station.error.SshdNoInclude:
+  ru: "Настройки SSH на этом сервере устроены необычно, поэтому установка не может безопасно их изменить. Ничего не изменено."
+  en: "This server's SSH settings have an unusual layout, so the install cannot change them safely. Nothing was changed."
+  es: "La configuración SSH de este servidor tiene una estructura poco habitual, así que la instalación no puede cambiarla con seguridad. No se cambió nada."
 station.progress.Login:
   ru: "Вход на сервер выполнен."
   en: "Logged in to the server."
@@ -315,6 +327,10 @@ station.progress.AddressProbe:
   ru: "Проверяем отпечаток нового адреса."
   en: "Reading the new address fingerprint."
   es: "Comprobando la huella de la nueva dirección."
+station.progress.InstallProbe:
+  ru: "Читаем ключ сервера."
+  en: "Reading the server's host key."
+  es: "Leyendo la clave del servidor."
 station.progress.AddressVerify:
   ru: "Проверяем вход с подтверждённым отпечатком."
   en: "Verifying login with the confirmed fingerprint."
@@ -323,3 +339,11 @@ station.progress.StationRemove:
   ru: "Останавливаем станцию и удаляем ключи и бота."
   en: "Stopping the station and removing keys and the bot."
   es: "Deteniendo la estación y eliminando las claves y el bot."
+station.progress.FirewallWillClose:
+  ru: "Межсетевой экран закроет эти порты, которые сейчас используются: %{ports}."
+  en: "The firewall will close these ports that are in use now: %{ports}."
+  es: "El cortafuegos cerrará estos puertos que están en uso ahora: %{ports}."
+station.progress.FirewallPortsUnknown:
+  ru: "Не удалось перечислить используемые сейчас порты; межсетевой экран закроет все входящие порты, кроме SSH."
+  en: "Could not list the ports in use now; the firewall will close every incoming port except SSH."
+  es: "No se pudieron listar los puertos en uso ahora; el cortafuegos cerrará todos los puertos entrantes excepto SSH."

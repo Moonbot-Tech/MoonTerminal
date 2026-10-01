@@ -36,6 +36,8 @@ pub(crate) enum Job {
     AddressChange {
         change: station::access::AddressChange,
     },
+    /// Read a new server's host key before any credential goes to it, for the user to confirm.
+    InstallProbe { target: Target },
     /// Remove station credentials before forgetting the known host.
     Remove { source: moon_remote::hosts::Host },
     /// Prepare a new server, install the station, send the cores, set the bot.
@@ -119,6 +121,8 @@ pub(crate) enum Done {
     BotOff { returned: Option<bot::ReturnedBot> },
     /// The destination fingerprint awaits an explicit confirmation in the Station tab.
     AddressProbed(station::access::AddressChange),
+    /// A new server's host key awaits an explicit confirmation before the install.
+    InstallProbed(setup::HostKey),
     /// The destination was verified and saved; cached station state must be discarded.
     AddressChanged,
     /// All remote secrets were removed. Even if forgetting locally failed, queued core writes
@@ -204,6 +208,13 @@ fn run(
             ));
             station::access::change_address(&change)?;
             Ok(Done::AddressChanged)
+        }
+        Job::InstallProbe { target } => {
+            say(Progress::step(
+                Step::InstallProbe,
+                "probe new server host key",
+            ));
+            Ok(Done::InstallProbed(setup::probe_host_key(target)?))
         }
         Job::Remove { source } => {
             say(Progress::step(

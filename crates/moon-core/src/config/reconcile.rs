@@ -105,7 +105,8 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
     let core_sort = meta.core_sort;
     let report_valuation_mode = meta.report_valuation_mode;
     let hotkeys = meta.hotkeys;
-    let telegram = sf.telegram;
+    let mut telegram = sf.telegram;
+    dirty |= telegram.adopt_legacy_owner();
     let mut groups = meta.groups.clone();
     for group in &mut groups {
         if group.trade.repair() {

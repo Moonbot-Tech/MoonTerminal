@@ -84,6 +84,9 @@ fn station_error(kind: &StationError) -> String {
         StationError::BotAlreadyPresent => t!("station.error.BotAlreadyPresent").to_string(),
         StationError::BotStopped => t!("station.error.BotStopped").to_string(),
         StationError::BotNotReady => t!("station.error.BotNotReady").to_string(),
+        StationError::HostKeyUnconfirmed => t!("station.error.HostKeyUnconfirmed").to_string(),
+        StationError::NoAptGet => t!("station.error.NoAptGet").to_string(),
+        StationError::SshdNoInclude => t!("station.error.SshdNoInclude").to_string(),
     }
 }
 
@@ -102,6 +105,7 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
                     Step::AddressProbe => t!("station.progress.AddressProbe"),
                     Step::AddressVerify => t!("station.progress.AddressVerify"),
                     Step::StationRemove => t!("station.progress.StationRemove"),
+                    Step::InstallProbe => t!("station.progress.InstallProbe"),
                     Step::Login => t!("station.progress.Login"),
                     Step::Pin => t!("station.progress.Pin"),
                     Step::Probe => t!("station.progress.Probe"),
@@ -110,6 +114,10 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
                     Step::Service => t!("station.progress.Service"),
                     Step::Harden => t!("station.progress.Harden"),
                     Step::Firewall => t!("station.progress.Firewall"),
+                    Step::FirewallWillClose => {
+                        t!("station.progress.FirewallWillClose", ports = diagnostic)
+                    }
+                    Step::FirewallPortsUnknown => t!("station.progress.FirewallPortsUnknown"),
                     Step::Extras => t!("station.progress.Extras"),
                     Step::Install => t!("station.progress.Install"),
                     Step::Download => t!("station.progress.Download"),

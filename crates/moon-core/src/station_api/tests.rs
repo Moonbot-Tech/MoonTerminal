@@ -125,6 +125,27 @@ fn a_pairing_a_bot_cannot_run_is_refused() {
         chat_access: vec![chat(9, &[1])],
     };
     assert!(stray_profile.check().is_err());
+    let no_owner = Access {
+        authorized_chat_ids: vec![7, 9],
+        ..Access::default()
+    };
+    assert!(
+        no_owner.check().is_err(),
+        "paired chats need an explicit owner"
+    );
+}
+
+/// A saved pairing from before the owner existed gets its first chat as the explicit owner.
+#[test]
+fn a_legacy_pairing_gets_its_first_chat_as_owner() {
+    let mut legacy: Access = serde_json::from_str(r#"{"authorized_chat_ids":[7,9]}"#).unwrap();
+    assert!(legacy.adopt_legacy_owner());
+    assert_eq!(legacy.owner_chat_id, Some(7));
+    assert_eq!(legacy.check(), Ok(()));
+    assert!(!legacy.adopt_legacy_owner(), "an explicit owner stays");
+    let mut empty = Access::default();
+    assert!(!empty.adopt_legacy_owner());
+    assert_eq!(empty.owner_chat_id, None);
 }
 
 /// Access goes into a configuration without touching its token or its switches.

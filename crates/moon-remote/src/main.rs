@@ -4,6 +4,7 @@
 //! ```text
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>
 //!             [--login-key <file>] [--station-bin <file> | --station-release]
+//!             [--host-key <SHA256:...>]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
 //! moon-remote --data <dir> station-update --host <h> [--port 22]
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
@@ -11,6 +12,9 @@
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
 //!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es])
 //! ```
+//!
+//! A server not set up from this machine yet needs `--host-key`: without it `setup` only prints the
+//! key the server presents, to be checked in the provider's console, and sends nothing to it.
 //!
 //! The administrator is always `moon`, by key only. Passwords are asked without echo, or taken
 //! from `MOON_REMOTE_LOGIN_PASSWORD` (the provider's login, or sudo for `--login-key`) and, for a
@@ -21,6 +25,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use moon_core::config::Secret;
+use moon_remote::error::StationError;
 use moon_remote::setup::{FirstAccess, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::CoreKey;
@@ -61,6 +66,7 @@ fn run() -> anyhow::Result<()> {
     let mut say = |line: moon_remote::progress::Progress| println!("{line}");
     match command.as_str() {
         "setup" => {
+            let host_key = args.value("--host-key")?;
             let login = args
                 .value("--login")?
                 .ok_or_else(|| anyhow::anyhow!("--login <user> is required"))?;
@@ -101,8 +107,22 @@ fn run() -> anyhow::Result<()> {
                     .ok()
                     .map(Zeroizing::new),
                 station,
+                host_key,
             };
             if let Err(e) = setup::run(&setup, &mut say) {
+                if matches!(
+                    e.downcast_ref::<StationError>(),
+                    Some(StationError::HostKeyUnconfirmed)
+                ) {
+                    let seen = setup::probe_host_key(setup.target.clone())?;
+                    anyhow::bail!(
+                        "host key of {}: {}; re-run with --host-key {} after checking it in the \
+                         provider console",
+                        seen.target.addr(),
+                        seen.fingerprint,
+                        seen.fingerprint
+                    );
+                }
                 let Some(old) = e.downcast_ref::<setup::NeedsAdminPassword>() else {
                     return Err(e);
                 };
@@ -136,7 +156,7 @@ fn run() -> anyhow::Result<()> {
                 &target,
                 &admin,
                 &app,
-                Some(&host.fingerprint),
+                &host.fingerprint,
                 std::path::Path::new(&bin),
                 &mut say,
             )?;

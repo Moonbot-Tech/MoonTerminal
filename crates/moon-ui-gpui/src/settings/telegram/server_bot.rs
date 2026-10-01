@@ -20,6 +20,7 @@ use moon_core::config::{Secret, TelegramConfig};
 use moon_core::station_api::Access;
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
+use moon_core::update::ReleaseVersion;
 use moon_remote::setup::{FirstAccess, Setup, StationBinary};
 use moon_remote::ssh::Target;
 use moon_remote::station::BotChange;
@@ -191,6 +192,37 @@ fn bot_words(bot: &BotState) -> String {
             Some(TelegramStatus::Conflict) => t!("telegram.server.bot_conflict").to_string(),
             _ => t!("telegram.server.bot_starting").to_string(),
         }
+    }
+}
+
+/// Where the station's service stands against the newest release this terminal knows of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ServiceVersion {
+    /// A newer release exists: the one "Update" takes it to (at least this).
+    Behind(ReleaseVersion),
+    /// The service runs the newest known release (or a newer one).
+    Current(ReleaseVersion),
+    /// Not known: the service's version is unread or a development build, or no release scan
+    /// finished and the terminal's own release does not settle it.
+    Unknown,
+}
+
+/// The service's version as it reports it (`v0.51.0 (<rev>)`) against the newest known release.
+/// The terminal's own release is a floor for the newest: a service older than this terminal is
+/// behind even before a release scan finished.
+pub(super) fn service_version(
+    service: Option<&str>,
+    latest: Option<ReleaseVersion>,
+    terminal: Option<ReleaseVersion>,
+) -> ServiceVersion {
+    let Some(service) = service.and_then(|v| ReleaseVersion::parse(v.split_whitespace().next()?))
+    else {
+        return ServiceVersion::Unknown;
+    };
+    match (latest.max(terminal), latest) {
+        (Some(newest), _) if service < newest => ServiceVersion::Behind(newest),
+        (_, Some(latest)) => ServiceVersion::Current(latest.max(service)),
+        _ => ServiceVersion::Unknown,
     }
 }
 
@@ -401,7 +433,8 @@ impl SettingsView {
     }
 
     /// "Install": prepare the server, install the station, send every active core, move the bot.
-    fn server_bot_install_job(&self, cx: &App) -> Result<Job, String> {
+    /// `host_key` is the fingerprint the user confirmed after the probe.
+    fn server_bot_install_job(&self, host_key: String, cx: &App) -> Result<Job, String> {
         let ed = &self.telegram.server;
         let target = parse_target(&text(&ed.host, cx))
             .ok_or_else(|| t!("telegram.server.need_host").to_string())?;
@@ -414,6 +447,7 @@ impl SettingsView {
                 legacy_admin_password: secret(&ed.old_admin, cx),
                 // Only from the release (STATION.md §1 п. 21): no file to choose.
                 station: StationBinary::Release,
+                host_key: Some(host_key),
             },
             cores: self.server_bot_cores(cx),
             bot,
@@ -435,6 +469,7 @@ impl SettingsView {
                 legacy_admin_password: secret(&ed.old_admin, cx),
                 // The installed station stays; "Update the service" moves it to the release.
                 station: StationBinary::Keep,
+                host_key: None,
             },
         })
     }
@@ -921,9 +956,96 @@ impl SettingsView {
     }
 
     fn server_bot_hint(&self, key: &str, cx: &Context<Self>) -> impl IntoElement {
+        self.server_bot_note(t!(key).to_string(), cx)
+    }
+
+    /// Already localized text in the hint's style.
+    fn server_bot_note(&self, text: String, cx: &Context<Self>) -> impl IntoElement {
         div()
             .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
-            .child(t!(key).to_string())
+            .child(text)
+    }
+
+    /// The probed key of the server in the form, with what the install changes there: the
+    /// install starts only from here, with exactly the fingerprint shown.
+    fn server_bot_install_review(&self, section: MoonGroupBox, cx: &Context<Self>) -> MoonGroupBox {
+        let ed = &self.telegram.server;
+        let host = parse_target(&text(&ed.host, cx)).map(|t| t.addr());
+        let station = &self.backend.read(cx).station;
+        let busy = station.busy();
+        let Some(probe) = station
+            .install_probe
+            .clone()
+            .filter(|key| Some(key.target.addr()) == host)
+        else {
+            return section;
+        };
+        let fingerprint = probe.fingerprint.clone();
+        let p = MoonPalette::active(cx);
+        let bullet = |key: &str| self.server_bot_note(format!("\u{2022} {}", t!(key)), cx);
+        section
+            .child(
+                div().child(
+                    t!(
+                        "telegram.server.install_fingerprint",
+                        addr = probe.target.addr(),
+                        fingerprint = probe.fingerprint.clone()
+                    )
+                    .to_string(),
+                ),
+            )
+            .child(self.server_bot_hint("telegram.server.install_changes_title", cx))
+            .child(bullet("telegram.server.install_change_ssh"))
+            .child(bullet("telegram.server.install_change_firewall"))
+            .child(bullet("telegram.server.install_change_admin"))
+            .child(bullet("telegram.server.install_change_extras"))
+            .when(!ed.by_key, |s| {
+                s.child(
+                    div()
+                        .text_color(rgba_from(p.red_text, 1.0))
+                        .child(t!("telegram.server.install_password_warning").to_string()),
+                )
+            })
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        MoonButton::new("server-install-confirm")
+                            .primary()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.install_confirm").to_string())
+                            .disabled(busy)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                // The captured key is exactly the fingerprint displayed above;
+                                // starting the job clears the probe.
+                                let job = this.server_bot_install_job(fingerprint.clone(), cx);
+                                this.server_bot_run(job, cx);
+                            }))
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new("server-install-cancel")
+                            .ghost()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.cancel").to_string())
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.server_bot_clear_install_probe(cx);
+                            }))
+                            .render(),
+                    ),
+            )
+    }
+
+    /// Drop the probed key: a later install reads it again.
+    fn server_bot_clear_install_probe(&mut self, cx: &mut Context<Self>) {
+        self.backend.update(cx, |b, bcx| {
+            b.station.install_probe = None;
+            b.station.outcome = None;
+            b.station.revision = b.station.revision.wrapping_add(1);
+            bcx.notify();
+        });
+        cx.notify();
     }
 
     /// The old administrator password, asked only after a server set up by an older version said
@@ -1014,12 +1136,16 @@ impl SettingsView {
                         .label(t!("telegram.server.install").to_string())
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| {
-                            let job = this.server_bot_install_job(cx);
+                            // Nothing is sent before the user confirms the key this reads.
+                            let job = parse_target(&text(&this.telegram.server.host, cx))
+                                .map(|target| Job::InstallProbe { target })
+                                .ok_or_else(|| t!("telegram.server.need_host").to_string());
                             this.server_bot_run(job, cx);
                         }))
                         .render(),
                 ),
             )
+            .map(|s| self.server_bot_install_review(s, cx))
     }
 
     /// A server this terminal set up: the station's own actions (its bot is in the Telegram
@@ -1032,6 +1158,7 @@ impl SettingsView {
     ) -> MoonGroupBox {
         let p = MoonPalette::active(cx);
         let busy = self.backend.read(cx).station.busy();
+        let (service, version) = self.server_versions(cx);
         let button = |id: &'static str, label: String| {
             MoonButton::new(id)
                 .padding_x(12.0)
@@ -1053,12 +1180,20 @@ impl SettingsView {
                     .on_click(on(|_, target, _| Ok(Job::Status { target })))
                     .render(),
             )
-            .child(
-                button("server-update", t!("telegram.server.update").to_string())
+            .child({
+                let update = match version {
+                    ServiceVersion::Behind(newest) => button(
+                        "server-update",
+                        t!("telegram.server.update_to", version = newest.to_string()).to_string(),
+                    )
+                    .primary(),
+                    _ => button("server-update", t!("telegram.server.update").to_string()),
+                };
+                update
                     .tooltip(t!("telegram.server.update_hint").to_string())
                     .on_click(on(|_, target, _| Ok(Job::Update { target })))
-                    .render(),
-            )
+                    .render()
+            })
             .child(
                 button("server-resetup", t!("telegram.server.resetup").to_string())
                     .ghost()
@@ -1089,11 +1224,84 @@ impl SettingsView {
                 .text_color(rgba_from(p.text, 1.0))
                 .child(t!("telegram.server.known", addr = target.addr()).to_string()),
         );
+        let section = section.child(self.server_version_block(service, version, cx));
         // A server set up already updates from the release: no file to choose.
         self.server_bot_old_admin(section, cx)
             .child(actions)
             .child(self.station_access_block(target, cx))
             .child(self.server_tape_block(target, cx))
+    }
+
+    /// The service's version as last read — `Err` with the muted word while it is being read or
+    /// could not be — and where it stands against the newest known release.
+    fn server_versions(&self, cx: &App) -> (Result<String, String>, ServiceVersion) {
+        let b = self.backend.read(cx);
+        let st = &b.station;
+        let reported = st
+            .bot
+            .as_ref()
+            .and_then(|bot| bot.station.as_ref())
+            .map(|status| status.station_version.clone());
+        let latest = b.updater.read(cx).latest_release();
+        let version = service_version(
+            reported.as_deref(),
+            latest,
+            crate::update::terminal_release(),
+        );
+        let service = match reported {
+            Some(reported) => Ok(reported
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned()),
+            None if st.bot.is_none() && st.bot_error.is_none() => {
+                Err(t!("telegram.server.version_checking").to_string())
+            }
+            None => Err(t!("telegram.server.version_unknown").to_string()),
+        };
+        (service, version)
+    }
+
+    /// "On the server: vX" and "Latest: vY" — versions in mono, unknown states as muted words.
+    fn server_version_block(
+        &self,
+        service: Result<String, String>,
+        version: ServiceVersion,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let caption = |text: String| {
+            div()
+                .font_family(design::ui_font())
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(text)
+        };
+        let value = |value: Result<String, String>| match value {
+            Ok(text) => div()
+                .font_family(design::mono())
+                .text_color(rgba_from(p.text, 1.0))
+                .child(text),
+            Err(text) => caption(text),
+        };
+        let latest = match version {
+            ServiceVersion::Behind(newest) => value(Ok(newest.to_string())).into_any_element(),
+            ServiceVersion::Current(newest) => h_flex()
+                .gap(design::ui_px(cx, 6.0))
+                .child(value(Ok(newest.to_string())))
+                .child(caption(t!("telegram.server.version_current").to_string()))
+                .into_any_element(),
+            ServiceVersion::Unknown => {
+                caption(t!("telegram.server.version_unknown").to_string()).into_any_element()
+            }
+        };
+        h_flex()
+            .flex_wrap()
+            .gap(design::ui_px(cx, 6.0))
+            .child(caption(t!("telegram.server.version_server").to_string()))
+            .child(value(service))
+            .child(div().w(design::ui_px(cx, 10.0)))
+            .child(caption(t!("telegram.server.version_latest").to_string()))
+            .child(latest)
     }
 
     /// The shared job's loading, outcome and scrollable lines, shown where station or bot

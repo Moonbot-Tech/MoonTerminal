@@ -62,24 +62,83 @@ reload_sshd() {
         systemctl restart ssh 2>/dev/null || systemctl restart sshd
 }
 
+# The sockets listening beyond this machine, one unique `<port>/<tcp|udp>` per line. Loopback and
+# link-local addresses are left out. Without a working `ss` prints nothing and fails.
+listeners() {
+    command -v ss >/dev/null || return 1
+    out=$(LC_ALL=C ss -Hlntu) || return 1
+    printf '%s
+' "$out" | awk 'NF{print $1, $5}' | while read -r proto addr; do
+        port=${addr##*:}
+        host=${addr%:*}
+        case "$host" in
+        127.* | '[::1]' | '[::ffff:127.'* | 169.254.* | fe80* | '[fe80'* | *%lo) continue ;;
+        esac
+        case "$proto" in
+        tcp | udp) echo "$port/$proto" ;;
+        esac
+    done | sort -u
+}
+
+sshd_includes_dropins() {
+    grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config
+}
+
+# The ports sshd really listens on, one per line; nothing when sshd cannot say. A provider's NAT
+# may forward the port the client dials to another one here.
+ssh_ports() {
+    LC_ALL=C sshd -T 2>/dev/null | awk '$1=="port"{print $2}' | sort -u || true
+}
+
+# fw_ports <given_port>: the ports the firewall must keep open for SSH — sshd's own and the one
+# the client dials, unique.
+fw_ports() {
+    { ssh_ports; echo "$1"; } | sort -un
+}
+
+ufw_state() {
+    if command -v ufw >/dev/null; then
+        LC_ALL=C ufw status | awk 'NR==1{print ($2 == "active") ? "active" : "inactive"}'
+    else
+        echo none
+    fi
+}
+
+# probe <ssh_port>: read-only. Every other listening port is listed: the firewall will close it.
 step_probe() {
+    sshport=${1:-22}
     echo "arch=$(uname -m)"
     if [ -r /etc/os-release ]; then
         . /etc/os-release
         echo "os=${ID:-unknown} ${VERSION_ID:-}"
     fi
     if [ -d /run/systemd/system ]; then
-        echo "systemd=$(systemctl --version | awk 'NR==1{print $2}')"
+        echo "systemd=$(LC_ALL=C systemctl --version | awk 'NR==1{print $2}')"
     else
         echo "systemd=none"
     fi
     echo "tpm2=$(systemd-creds has-tpm2 2>/dev/null | head -n1 || true)"
-    echo "disk_free_mb=$(df -Pm /var/lib | awk 'NR==2{print $4}')"
+    echo "disk_free_mb=$(LC_ALL=C df -Pm /var/lib | awk 'NR==2{print $4}')"
     echo "rmem_max=$(cat /proc/sys/net/core/rmem_max)"
+    if command -v apt-get >/dev/null; then echo "apt=yes"; else echo "apt=no"; fi
+    if sshd_includes_dropins; then echo "sshd_include=yes"; else echo "sshd_include=no"; fi
+    echo "ufw=$(ufw_state)"
     if command -v ufw >/dev/null; then
-        echo "ufw=$(ufw status | awk 'NR==1{print $2}')"
+        echo "ufw_saved=$(LC_ALL=C ufw show added 2>/dev/null | grep -c '^ufw ' || true)"
     else
-        echo "ufw=none"
+        echo "ufw_saved=0"
+    fi
+    keep=$(fw_ports "$sshport")
+    if found=$(listeners); then
+        for listen in $found; do
+            open=no
+            for p in $keep; do
+                [ "$listen" = "$p/tcp" ] && open=yes
+            done
+            [ "$open" = yes ] || echo "listen=$listen"
+        done
+    else
+        echo "listen=unknown"
     fi
 }
 
@@ -217,7 +276,7 @@ step_service() {
 # harden: keys only, no root login. Our file sorts before cloud-init's 50-cloud-init.conf, and
 # sshd takes the first value it reads. Verified through `sshd -T`, rolled back on any doubt.
 step_harden() {
-    grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config ||
+    sshd_includes_dropins ||
         die "sshd_config does not include sshd_config.d"
     state=$(printf '%s\n' \
         '# moon-station: keys only, no root. Sorted first so no later file can reopen it.' \
@@ -248,20 +307,101 @@ step_unharden() {
     echo "sshd=reopened"
 }
 
-# firewall: incoming denied except SSH. SSH is allowed BEFORE the firewall is enabled.
-step_firewall() {
-    command -v ufw >/dev/null || apt_install ufw
-    ufw allow 22/tcp >/dev/null
-    ufw default deny incoming >/dev/null
-    ufw default allow outgoing >/dev/null
-    ufw --force enable >/dev/null
-    ufw status | sed 's/^/ufw: /'
+valid_port() {
+    case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
-# firewall-off: the rollback of firewall.
+# ufw-install: the firewall tool, when the server has none.
+step_ufw_install() {
+    if command -v ufw >/dev/null; then
+        echo "ufw=present"
+    else
+        apt_install ufw
+        echo "ufw=installed"
+    fi
+}
+
+# Prints `firewall_added=<port>` when `ufw allow` output $2 says a rule was added for port $1 and
+# none existed: `ufw delete` removes both families, so a half-existing port is never noted.
+note_added() {
+    case "$2" in
+        *"Skipping adding existing rule"*) return 1 ;;
+    esac
+    if printf '%s
+' "$2" | grep -q '^Rule added'; then
+        echo "firewall_added=$1"
+        return 0
+    fi
+    return 1
+}
+
+# firewall <ssh_port>: the SSH ports (sshd's own and the given one) are allowed; an active ufw
+# gains only them, an inactive one is turned on denying everything else incoming, enabled LAST.
+# Prints every `firewall_added=<port>`, `firewall_prev_in=<policy>` when it enables, and as its
+# last line `firewall=unchanged|rule-added|enabled` for the rollback.
+step_firewall() {
+    port=${1:-}
+    valid_port "$port" || die "not a usable SSH port: $port"
+    command -v ufw >/dev/null || die "no ufw on this server"
+    ports=$(fw_ports "$port")
+    if [ "$(ufw_state)" = active ]; then
+        any=no
+        for p in $ports; do
+            out=$(LC_ALL=C ufw allow "$p/tcp")
+            if note_added "$p" "$out"; then any=yes; fi
+        done
+        LC_ALL=C ufw status | sed 's/^/ufw: /' || true
+        if [ "$any" = yes ]; then echo "firewall=rule-added"; else echo "firewall=unchanged"; fi
+    else
+        prev=$(sed -n 's/^DEFAULT_INPUT_POLICY=//p' /etc/default/ufw 2>/dev/null | tr -d '"' | head -n1 || true)
+        echo "firewall_prev_in=${prev:-unknown}"
+        for p in $ports; do
+            out=$(LC_ALL=C ufw allow "$p/tcp")
+            note_added "$p" "$out" || true
+        done
+        LC_ALL=C ufw default deny incoming >/dev/null
+        LC_ALL=C ufw default allow outgoing >/dev/null
+        LC_ALL=C ufw --force enable >/dev/null
+        LC_ALL=C ufw status | sed 's/^/ufw: /' || true
+        echo "firewall=enabled"
+    fi
+}
+
+# firewall-off <prev_in> <port>...: the rollback of a firewall this setup enabled — off, the
+# rules it added gone, the incoming policy back to what it was.
 step_firewall_off() {
-    ufw --force disable >/dev/null
+    if ! command -v ufw >/dev/null; then
+        echo "ufw=absent"
+        return 0
+    fi
+    prev=${1:-unknown}
+    [ "$#" -gt 0 ] && shift
+    LC_ALL=C ufw --force disable >/dev/null
+    for p in "$@"; do
+        valid_port "$p" || die "not a usable port: $p"
+        LC_ALL=C ufw delete allow "$p/tcp" >/dev/null || true
+    done
+    case "$prev" in
+    DROP) policy=deny ;;
+    REJECT) policy=reject ;;
+    *) policy=allow ;;
+    esac
+    LC_ALL=C ufw default "$policy" incoming >/dev/null
     echo "ufw=disabled"
+}
+
+# firewall-unallow <port>...: the rollback of the rules added to an already active firewall.
+step_firewall_unallow() {
+    for p in "$@"; do
+        valid_port "$p" || die "not a usable port: $p"
+    done
+    for p in "$@"; do
+        LC_ALL=C ufw delete allow "$p/tcp" >/dev/null
+    done
+    echo "ufw=rule-removed"
 }
 
 # extras: fail2ban on sshd, unattended security upgrades.
@@ -283,14 +423,16 @@ step_extras() {
 step=${1:-}
 [ "$#" -gt 0 ] && shift
 case "$step" in
-probe) step_probe ;;
+probe) step_probe "$@" ;;
 admin) step_admin "$@" ;;
 helper) step_helper "$@" ;;
 service) step_service ;;
 harden) step_harden ;;
 unharden) step_unharden ;;
-firewall) step_firewall ;;
-firewall-off) step_firewall_off ;;
+ufw-install) step_ufw_install ;;
+firewall) step_firewall "$@" ;;
+firewall-off) step_firewall_off "$@" ;;
+firewall-unallow) step_firewall_unallow "$@" ;;
 extras) step_extras ;;
 *) die "unknown step: $step" ;;
 esac

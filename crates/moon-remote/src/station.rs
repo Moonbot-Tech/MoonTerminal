@@ -96,7 +96,7 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
             user: admin,
             key: &app,
         },
-        Some(&host.fingerprint),
+        &host.fingerprint,
     )?)
 }
 

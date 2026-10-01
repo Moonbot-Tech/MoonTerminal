@@ -104,7 +104,7 @@ impl crate::TgHost for StationHost {
 }
 
 /// Removing the gate exposes status and restarts the station for viewers with or without cores.
-/// Using the first chat instead also denies the explicitly selected owner.
+/// Using the first chat instead also denies the explicitly selected owner; no owner means no one.
 #[test]
 fn station_commands_require_current_owner_before_host_calls() {
     let _locale = crate::test_locale::force("en");
@@ -131,11 +131,15 @@ fn station_commands_require_current_owner_before_host_calls() {
     host.command(20, super::ParsedCommand::StationUpdate);
     assert_eq!(host.update_calls, 2);
     host.config.telegram.owner_chat_id = None;
+    host.command(10, super::ParsedCommand::StationStatus);
     host.command(20, super::ParsedCommand::StationStatus);
-    assert_eq!(host.status_calls, 2);
+    assert_eq!(
+        host.status_calls, 1,
+        "without an owner no chat is one implicitly"
+    );
     host.config.telegram.owner_chat_id = Some(99);
     host.command(20, super::ParsedCommand::StationStatus);
-    assert_eq!(host.status_calls, 2);
+    assert_eq!(host.status_calls, 1);
 }
 
 /// Dropping the role on a navigation path would advertise station status to observers.

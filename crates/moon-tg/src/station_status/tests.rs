@@ -1,4 +1,4 @@
-use moon_core::station_api::{DataFile, Disk, Memory};
+use moon_core::station_api::{CpuWindow, DataFile, Disk, Memory};
 
 use super::*;
 
@@ -20,11 +20,8 @@ fn status(host: Option<Host>) -> Status {
     }
 }
 
-/// Every part of the status reads as a line, sizes in their own unit (`size_text`).
-#[test]
-fn the_status_reads_line_by_line() {
-    let _locale = crate::test_locale::force("en");
-    let host = Host {
+fn host(files: Vec<DataFile>) -> Host {
+    Host {
         uptime_s: 3 * 3_600 + 12 * 60 + 5,
         cpu: vec![
             CpuWindow {
@@ -52,38 +49,68 @@ fn the_status_reads_line_by_line() {
             free_bytes: 15 * GIB + GIB / 2,
             total_bytes: 23 * GIB,
         }),
-        files: vec![
-            DataFile {
-                name: "reports.sqlite".into(),
-                bytes: 609 * MIB,
-            },
-            DataFile {
-                name: "telegram.json".into(),
-                bytes: 10,
-            },
-        ],
-    };
+        files,
+    }
+}
+
+fn file(name: &str, bytes: u64) -> DataFile {
+    DataFile {
+        name: name.into(),
+        bytes,
+    }
+}
+
+/// The terminal's lines are grouped under headings, one short `label: value` each, sizes in
+/// their own unit (`size_text`), files largest first — and never any markup.
+#[test]
+fn the_status_reads_in_short_grouped_lines() {
+    let _locale = crate::test_locale::force("en");
+    let host = host(vec![
+        file("telegram.json", 10),
+        file("reports.sqlite", 609 * MIB),
+    ]);
     let text = station_status_text(&status(Some(host)));
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines[0], "Station 0.1.0 — up 3 h 12 min");
-    assert_eq!(lines[1], "Cores: 26 of 27 ready");
     assert_eq!(
-        lines[2],
-        "Tape: 3 min around a trade, long trade from 10 min"
+        lines,
+        [
+            "Station 0.1.0 — up 3 h 12 min",
+            "Service",
+            "  Cores: 26 of 27 ready",
+            "Tape",
+            "  Around a trade: 3 min",
+            "  Long trade from: 10 min",
+            "Server",
+            "  Station CPU, hour: 12.3 % (peak 87.0 %)",
+            "  Server CPU, hour: 15.0 % (peak 100.0 %)",
+            "  Station CPU, 192 min: 0.5 % (peak 87.0 %)",
+            "  Server CPU, 192 min: 9.0 % (peak 100.0 %)",
+            "  Station memory: 420.0 MB (peak 520.0 MB)",
+            "  Server memory: 300.0 MB free of 955.0 MB",
+            "  Disk: 15.50 GB free of 23.00 GB",
+            "Largest files",
+            "  reports.sqlite: 609.0 MB",
+            "  telegram.json: 0 KB",
+        ]
     );
-    assert_eq!(
-        lines[3],
-        "Processor over the hour: station 12.3 % (peak 87.0 %), server 15.0 % (peak 100.0 %)"
-    );
-    assert!(lines[4].starts_with("Processor over 192 min: station 0.5 %"));
-    assert_eq!(
-        lines[5],
-        "Memory: station 420.0 MB (peak 520.0 MB), server has 300.0 MB free of 955.0 MB"
-    );
-    assert_eq!(lines[6], "Disk: 15.50 GB free of 23.00 GB");
-    assert_eq!(lines[7], "Files:");
-    assert_eq!(lines[8], "  reports.sqlite — 609.0 MB");
-    assert_eq!(lines[9], "  telegram.json — 0 KB");
+}
+
+/// The terminal shows the plain lines verbatim: no tag, even around a name that looks like one.
+#[test]
+fn the_terminal_text_carries_no_html() {
+    for locale in ["ru", "en", "es"] {
+        let _locale = crate::test_locale::force(locale);
+        let mut status = status(Some(host(vec![file("<b>x</b>.db", 1)])));
+        status.last_update = Some("2026-09-30T14:02Z future=<i>".into());
+        let text = station_status_text(&status);
+        for tag in ["<p>", "<table", "<tr", "<td", "&lt;", "&amp;"] {
+            assert!(!text.contains(tag), "{tag} in {text}");
+        }
+        assert!(
+            text.contains("<b>x</b>.db"),
+            "names are shown as they are: {text}"
+        );
+    }
 }
 
 /// A station older than the figures says so instead of showing nothing.
@@ -95,24 +122,62 @@ fn an_older_station_is_told_to_update() {
     assert!(text.ends_with("update it."));
 }
 
+/// The chat gets a rich message: every dynamic value is escaped, and a huge data root is cut to
+/// the few largest files so the message stays inside Telegram's limits.
+#[test]
+fn the_chat_status_is_escaped_and_bounded() {
+    let _locale = crate::test_locale::force("en");
+    let mut files: Vec<_> = (0..5_000u64)
+        .map(|n| file(&format!("<script>&{}{}", "x".repeat(300), n), n))
+        .collect();
+    files.push(file("big & <b>bold</b>.sqlite", 9 * GIB));
+    let mut status = status(Some(host(files)));
+    status.station_version = "0.1.0 <dev>".into();
+    status.last_update = Some("2026-09-30T14:02Z update=failed: <boom> & more".into());
+    let Response::Rich { html, keyboard, .. } =
+        station_status_reply(&status, &ReleaseCheck::Current)
+    else {
+        panic!("the status is a rich message");
+    };
+    assert!(crate::report::rich_message_fits(&html));
+    assert!(html.chars().count() < 4_096, "{}", html.chars().count());
+    assert!(html.contains("big &amp; &lt;b&gt;bold&lt;/b&gt;.sqlite"));
+    assert!(html.contains("0.1.0 &lt;dev&gt;"));
+    assert!(html.contains("&lt;boom&gt; &amp; more"));
+    assert!(!html.contains("<script>") && !html.contains("<boom>") && !html.contains("<dev>"));
+    assert!(html.contains("and 4996 more"), "{html}");
+    assert_eq!(html.matches("&lt;script&gt;").count(), 4);
+    let ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("rich messages carry an inline keyboard");
+    };
+    assert!(markup.inline_keyboard.is_empty());
+}
+
 /// The chat's "Update" button comes only with a newer release, carrying the callback the bot
-/// parses; otherwise the answer keeps the station's navigation, and a failed look says why.
+/// parses; the station's navigation always comes with the answer, and a failed look says why.
 #[test]
 fn the_update_button_comes_only_with_a_newer_release() {
     let _locale = crate::test_locale::force("en");
-    let Response::Text { text, keyboard } =
-        station_status_reply(&status(None), &ReleaseCheck::Newer("v0.52.0".into()))
+    let Response::Rich {
+        html,
+        keyboard,
+        navigation,
+    } = station_status_reply(&status(None), &ReleaseCheck::Newer("v0.52.0".into()))
     else {
-        panic!("the status is plain text");
+        panic!("the status is a rich message");
     };
-    assert!(text.ends_with("A new version of the station is out: v0.52.0."));
+    assert!(html.ends_with("<p>A new version of the station is out: v0.52.0.</p>"));
+    assert_eq!(
+        navigation.1,
+        crate::labels::navigation_keyboard(crate::HostKind::Station, true)
+    );
     let mut updated = status(None);
     updated.last_update = Some("2026-09-30T14:02Z health=ok".into());
     assert!(
         station_status_text(&updated)
-            .contains("\nLast update: 2026-09-30T14:02Z Updated; the service is healthy.\n")
+            .contains("\n  Last update: 2026-09-30T14:02Z Updated; the service is healthy.\n")
     );
-    let Some(ReplyMarkup::Inline(markup)) = keyboard else {
+    let ReplyMarkup::Inline(markup) = keyboard else {
         panic!("a newer release brings the inline Update button");
     };
     assert_eq!(markup.inline_keyboard[0][0].text, "Update to v0.52.0");
@@ -122,28 +187,26 @@ fn the_update_button_comes_only_with_a_newer_release() {
     );
 
     for (check, tail) in [
-        (ReleaseCheck::Current, None),
+        (ReleaseCheck::Current, "update it.</p>"),
         (
             ReleaseCheck::Failed(ReleaseFailure::Unavailable(
                 "GitHub releases returned HTTP 403".into(),
             )),
-            Some("Details: GitHub releases returned HTTP 403"),
+            "Details: GitHub releases returned HTTP 403</p>",
         ),
         (
             ReleaseCheck::Unversioned,
-            Some("updated from the terminal only."),
+            "updated from the terminal only.</p>",
         ),
     ] {
-        let Response::Text { text, keyboard } = station_status_reply(&status(None), &check) else {
-            panic!("the status is plain text");
+        let Response::Rich { html, keyboard, .. } = station_status_reply(&status(None), &check)
+        else {
+            panic!("the status is a rich message");
         };
-        match tail {
-            Some(tail) => assert!(text.ends_with(tail), "{text}"),
-            None => assert!(text.ends_with("update it."), "{text}"),
-        }
+        assert!(html.ends_with(tail), "{html}");
         assert!(
-            matches!(keyboard, Some(ReplyMarkup::Reply(_))),
-            "{check:?} keeps the navigation keyboard"
+            matches!(keyboard, ReplyMarkup::Inline(ref markup) if markup.inline_keyboard.is_empty()),
+            "{check:?} brings no Update button"
         );
     }
 }

@@ -19,8 +19,8 @@ use crate::labels::{answer, navigation_keyboard, section_label};
 
 mod render;
 
-pub(crate) use render::help;
-use render::{render, report_html, rich_message_fits};
+pub(crate) use render::{escape, help, rich_message_fits};
+use render::{render, report_html};
 
 /// Core lists are unbounded, so they still page; breakdown views try to show every row first.
 const PAGE_SIZE: usize = 6;

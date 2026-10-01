@@ -36,13 +36,16 @@ impl TelegramConfig {
         })
     }
 
-    /// Add a chat to the paired set.
+    /// Add a chat to the paired set; the first chat paired becomes the owner explicitly.
     ///
     /// Returns:
     ///     `true` when the chat was not paired before.
     pub fn pair_chat(&mut self, chat_id: i64) -> bool {
         let newly_paired = !self.authorized_chat_ids.contains(&chat_id);
         if newly_paired {
+            if self.authorized_chat_ids.is_empty() {
+                self.owner_chat_id = Some(chat_id);
+            }
             self.authorized_chat_ids.push(chat_id);
         }
         newly_paired
@@ -55,11 +58,26 @@ impl TelegramConfig {
         self.chat_access.clear();
     }
 
-    /// Resolve one owner while preserving the first pairing on upgrades from the flat chat list.
+    /// The owner: only the explicit `owner_chat_id`, and only while that chat is paired.
     pub fn owner(&self) -> Option<i64> {
         self.owner_chat_id
-            .or_else(|| self.authorized_chat_ids.first().copied())
             .filter(|id| self.authorized_chat_ids.contains(id))
+    }
+
+    /// Upgrade a saved flat chat list that predates the owner: its first chat, the first pairing,
+    /// becomes the explicit owner. Called once where the saved configuration is loaded.
+    ///
+    /// Returns:
+    ///     `true` when the owner was set, so the caller writes the configuration back.
+    pub fn adopt_legacy_owner(&mut self) -> bool {
+        if self.owner_chat_id.is_some() {
+            return false;
+        }
+        let Some(first) = self.authorized_chat_ids.first().copied() else {
+            return false;
+        };
+        self.owner_chat_id = Some(first);
+        true
     }
 
     /// Pairing is mandatory even when a stale profile still exists in the encrypted config.

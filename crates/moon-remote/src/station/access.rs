@@ -6,7 +6,7 @@ use anyhow::Context;
 use crate::app_key;
 use crate::hosts::{Host, HostEditError, Hosts};
 use crate::script::{self, STEP_TIMEOUT};
-use crate::ssh::{Auth, Conn, OpenError, Target};
+use crate::ssh::{self, Auth, Conn, OpenError, Target};
 
 /// The exact source record, destination and fingerprint the user must confirm together.
 #[derive(Clone)]
@@ -16,24 +16,20 @@ pub struct AddressChange {
     pub fingerprint: String,
 }
 
-/// Observe a destination key without authenticating or changing any pin. An impossible pin
-/// makes the existing SSH verifier refuse at key exchange, before it sends login credentials.
+/// Observe a destination key without authenticating or changing any pin
+/// ([`ssh::presented_key`]).
 pub fn probe_address(source: Host, target: Target) -> anyhow::Result<AddressChange> {
     Hosts::load(&Hosts::path())?.check_address(&source, &target.addr())?;
-    let app = app_key::load_or_create()?;
-    let auth = Auth::Key {
-        user: source.admin.as_deref().ok_or(HostEditError::NotSetUp)?,
-        key: &app,
-    };
-    match Conn::open(&target, &auth, Some("")) {
-        Err(OpenError::HostKeyChanged { presented, .. }) => Ok(AddressChange {
-            source,
-            target,
-            fingerprint: presented,
-        }),
-        Err(e) => Err(e.into()),
-        Ok(_) => Err(HostEditError::NoFingerprint.into()),
-    }
+    source.admin.as_deref().ok_or(HostEditError::NotSetUp)?;
+    let fingerprint = ssh::presented_key(&target).map_err(|e| match e {
+        OpenError::Other(e) => e,
+        e => e.into(),
+    })?;
+    Ok(AddressChange {
+        source,
+        target,
+        fingerprint,
+    })
 }
 
 /// After explicit UI confirmation, verify the same key and administrator at the destination,
@@ -52,7 +48,7 @@ pub fn change_address(change: &AddressChange) -> anyhow::Result<()> {
             user: admin,
             key: &app,
         },
-        Some(&change.fingerprint),
+        &change.fingerprint,
     )?;
     let path = Hosts::path();
     let mut hosts = Hosts::load(&path)?;

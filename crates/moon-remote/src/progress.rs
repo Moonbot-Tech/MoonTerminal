@@ -9,6 +9,8 @@ pub enum Step {
     AddressVerify,
     /// Stop remote polling and remove trading and bot credentials.
     StationRemove,
+    /// Read a new server's host key, before any credential, for the user to confirm.
+    InstallProbe,
     Login,
     Pin,
     Probe,
@@ -17,6 +19,11 @@ pub enum Step {
     Service,
     Harden,
     Firewall,
+    /// An inactive firewall is about to close the ports that listen now; the step's diagnostic
+    /// is their list (`443/tcp, 51820/udp`).
+    FirewallWillClose,
+    /// The ports that listen now could not be listed before the firewall closes them.
+    FirewallPortsUnknown,
     Extras,
     Install,
     Download,

@@ -1,5 +1,5 @@
-//! `remote/hosts.toml`: what the terminal knows about each server it prepared — the host key it
-//! pinned at first contact and the administrator it logs in as. Nothing here is secret; the app's
+//! `remote/hosts.toml`: what the terminal knows about each server it prepared — the host key the
+//! user confirmed and the administrator it logs in as. Nothing here is secret; the app's
 //! private key lives sealed in `app_key.enc`.
 //!
 //! ```toml
@@ -50,7 +50,8 @@ pub struct Hosts {
 pub struct Host {
     /// `host:port`, exactly as the user typed the host.
     pub addr: String,
-    /// The SHA256 fingerprint pinned at first contact. A different key later is a hard refusal.
+    /// The SHA256 fingerprint of the host key the user confirmed. A different key later is a hard
+    /// refusal.
     pub fingerprint: String,
     /// The administrator the setup created; `None` until that step has been verified.
     #[serde(default)]
