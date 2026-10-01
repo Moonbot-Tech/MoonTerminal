@@ -828,11 +828,36 @@ fn min_closedate(conn: &Connection, axis: &crate::db::ReportAxis) -> ReadResult<
         // core 0, and converts as the identity — which is the same answer it gave before offsets
         // existed.
         let has_core = src.cols.contains("core_uid");
-        let core_expr = if has_core { "core_uid" } else { "0" };
-        let sql = format!(
-            "SELECT {core_expr}, MIN(closedate) FROM {} WHERE closedate > 0 GROUP BY {core_expr}",
-            src.table
-        );
+        let table = src.table;
+        let sql = if !src.legacy && has_core {
+            // The replica's `core_uid` is NOT NULL and leads both its primary key and
+            // `idx_rep_core_close (core_uid, closedate)`, so walk the distinct cores by seeking
+            // past each one — the same loose index scan `report_read::distinct_cores` uses — and
+            // answer each core's MIN with one seek into that index instead of grouping every row
+            // of the table. Same rows as the grouped statement; a NULL MIN (a core with no dated
+            // row) is skipped below exactly as before.
+            format!(
+                "WITH RECURSIVE cores(uid) AS (
+                     SELECT MIN(core_uid) FROM {table}
+                     UNION ALL
+                     SELECT (SELECT MIN(core_uid) FROM {table} WHERE core_uid > cores.uid)
+                     FROM cores WHERE cores.uid IS NOT NULL
+                 )
+                 SELECT uid,
+                        (SELECT MIN(closedate) FROM {table}
+                         WHERE core_uid = cores.uid AND closedate > 0)
+                 FROM cores WHERE uid IS NOT NULL"
+            )
+        } else {
+            // The legacy table indexes `core_uid` and `closedate` only separately, so a per-core
+            // MIN would still read each core's rows; this read-only, transitional table keeps the
+            // single grouped pass.
+            let core_expr = if has_core { "core_uid" } else { "0" };
+            format!(
+                "SELECT {core_expr}, MIN(closedate) FROM {table} WHERE closedate > 0 \
+                 GROUP BY {core_expr}"
+            )
+        };
         let mut statement = conn.prepare(&sql).map_err(|e| read_fail_on(conn, CTX, e))?;
         let rows = statement
             .query_map([], |r| {

@@ -1343,3 +1343,60 @@ fn strategy_groups_name_a_renamed_core_by_its_configured_name() {
     assert_eq!(core_of("10@1"), "core-a-renamed");
     assert_eq!(core_of("10@2"), "core-b-gone");
 }
+
+/// `analytics/mod.rs:min_closedate` — the per-core seek must answer exactly what the former
+/// grouped `MIN(closedate) ... GROUP BY core_uid` pass answered. A seek that skipped a core,
+/// lost the `closedate > 0` filter or stopped walking early would move the "all history" start
+/// of every Analytics surface.
+///
+/// Many cores with interleaved raw stamps, several clock offsets, a core holding only
+/// non-positive stamps and core uid 0: the floor equals the smallest per-core converted MIN,
+/// computed here by brute force over the seeded rows.
+#[test]
+fn min_closedate_per_core_seek_matches_the_grouped_minimum() {
+    let mut rows = Vec::new();
+    let mut seed: i64 = 7;
+    for i in 0..600_i64 {
+        seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+        let core = u64::try_from(i % 9).expect("non-negative core");
+        let raw = if core == 5 {
+            -(seed % 50)
+        } else {
+            1_700_000_000 + seed % 9_000_000
+        };
+        rows.push((core, raw, 1.0, "SEEKCOIN"));
+    }
+    let offsets: std::collections::HashMap<u64, i32> =
+        [(1, -14_400), (3, 7_200), (6, -3_600), (8, 19_800)].into();
+    let expected = rows
+        .iter()
+        .filter(|(_, raw, _, _)| *raw > 0)
+        .map(|(core, raw, _, _)| raw - i64::from(offsets.get(core).copied().unwrap_or(0)))
+        .min()
+        .expect("positive rows seeded");
+
+    let path = temp_db("min-closedate-seek");
+    let conn = build_replica_multi_core(&path, &rows);
+    let axis = crate::db::ReportAxis::from_measured(
+        offsets
+            .iter()
+            .map(|(core, secs)| {
+                (
+                    *core,
+                    vec![crate::db::OffsetSegment {
+                        from_utc: 0,
+                        offset_secs: *secs,
+                    }],
+                )
+            })
+            .collect(),
+        chrono_tz::UTC,
+    );
+    assert_eq!(
+        min_closedate(&conn, &axis).expect("resolve seeked floor"),
+        expected,
+        "the per-core seek must yield the smallest converted per-core minimum"
+    );
+    drop(conn);
+    remove_db(&path);
+}

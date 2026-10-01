@@ -722,3 +722,288 @@ fn summary_strategy_rows_keep_identity_when_head_names_are_missing_or_blank() {
     );
     assert_eq!(row("named").strategy_alive, Some(2));
 }
+
+/// The current-stream statement as it stood before the five-term sort key: every observable
+/// value in the ORDER BY. Kept here as the oracle the tie runs must reproduce.
+fn former_full_tuple_sql(src: &str, true_time: &str) -> String {
+    format!(
+        "SELECT o.closedate, COALESCE(o.buydate, o.closedate), o.pnl,
+                o.core_uid, o.core_name, COALESCE(o.coin,''),
+                CAST(o.strategyid AS TEXT),
+                CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
+                COALESCE(o.isshort,0), o.profitbtc, o.spentbtc, o.basecurrency,
+                CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END
+         FROM {src}
+         WHERE {true_time} >= ?3 AND {true_time} < ?4
+         ORDER BY {true_time},
+                  o.closedate, o.core_uid, o.pnl IS NULL, o.pnl,
+                  COALESCE(o.buydate, o.closedate), o.core_name IS NULL, o.core_name,
+                  COALESCE(o.coin,''), typeof(o.strategyid), CAST(o.strategyid AS TEXT),
+                  COALESCE(o.isshort,0), o.profitbtc IS NULL, o.profitbtc,
+                  o.spentbtc IS NULL, o.spentbtc,
+                  typeof(o.basecurrency), CAST(o.basecurrency AS TEXT)"
+    )
+}
+
+/// Two-source UNION shaped like the production unified source, over the tie-heavy fixture.
+const TIE_SOURCE: &str = "(SELECT * FROM tie_rep WHERE closedate >= ?1 AND closedate < ?2
+                   UNION ALL
+                   SELECT * FROM tie_legacy WHERE closedate >= ?1 AND closedate < ?2) o";
+
+/// Seed a replica-shaped and a legacy-shaped table with `rows` synthetic trades each, drawn from
+/// tiny value sets so equal-closedate ties across cores, equal profits on one core and mixed
+/// storage classes (text strategy ids, text/NULL quotes, NULL money) are dense.
+fn seed_tie_heavy_sources(conn: &Connection, rows: i64) {
+    conn.execute_batch(
+        "CREATE TABLE tie_rep(
+            closedate INTEGER, buydate INTEGER, pnl REAL, core_uid INTEGER,
+            core_name TEXT, coin TEXT, strategyid, isshort INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency
+         );
+         CREATE TABLE tie_legacy AS SELECT * FROM tie_rep WHERE 0;
+         CREATE INDEX tie_rep_closedate ON tie_rep(closedate);
+         CREATE INDEX tie_legacy_closedate ON tie_legacy(closedate);",
+    )
+    .expect("tie-heavy schema");
+    let mut seed: u64 = 0x5eed;
+    let mut next = |modulo: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((seed >> 33) % modulo) as i64
+    };
+    for table in ["tie_rep", "tie_legacy"] {
+        let mut insert = conn
+            .prepare(&format!(
+                "INSERT INTO {table} VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+            ))
+            .expect("prepare seed insert");
+        for _ in 0..rows {
+            let closedate = 100_000 + next(rows as u64 / 4 + 1) * 60;
+            let core = 1 + next(4);
+            let pnl = match next(6) {
+                0 => Value::Null,
+                n => Value::Real((n - 3) as f64),
+            };
+            let strategy = match next(5) {
+                0 => Value::Text(format!("S{}", next(3))),
+                n => Value::Integer(n % 3),
+            };
+            let base = match next(6) {
+                0 => Value::Null,
+                1 => Value::Text("USDT".to_string()),
+                n => Value::Integer(n % 2),
+            };
+            let mut money = || match next(4) {
+                0 => Value::Null,
+                n => Value::Real(n as f64 * 0.1),
+            };
+            let profit = money();
+            let spent = money();
+            let buydate = closedate - next(3) * 30;
+            let name = format!("core-{}", core + next(2));
+            let coin = ["BTC", "ETH", ""][next(3) as usize];
+            let short = next(3);
+            insert
+                .execute(rusqlite::params![
+                    closedate, buydate, pnl, core, name, coin, strategy, short, profit, spent,
+                    base,
+                ])
+                .expect("seed row");
+        }
+    }
+}
+
+/// Stream every row of `sql` over `[from, to)` through one window, in statement order.
+fn stream_rows(conn: &Connection, sql: &str, from: i64, to: i64) -> Vec<TradeRow> {
+    let mut statement = conn.prepare(sql).expect("prepare stream");
+    statement
+        .query_map(
+            rusqlite::params![from - 200_000, to + 200_000, from, to],
+            TradeRow::from_stream,
+        )
+        .expect("run stream")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect stream")
+}
+
+/// Feed `rows` through the same tie-run loop `read_with_window` runs and return what the
+/// accumulator would receive, in order.
+fn through_tie_runs(rows: Vec<TradeRow>) -> Vec<TradeRow> {
+    let mut out = Vec::new();
+    let mut run: Vec<TradeRow> = Vec::new();
+    let mut sink = |row| {
+        out.push(row);
+        Ok(())
+    };
+    for row in rows {
+        if run.first().is_some_and(|first| !row.same_order_key(first)) {
+            flush_run(&mut run, &mut sink).expect("flush");
+        }
+        run.push(row);
+    }
+    flush_run(&mut run, &mut sink).expect("flush");
+    out
+}
+
+/// Accumulate `rows` and render every Summary figure the stream decides, for bitwise comparison.
+fn summary_figures(rows: Vec<TradeRow>, axis: &crate::db::ReportAxis) -> String {
+    let mut accumulator = Accumulator::default();
+    for row in rows {
+        accumulator
+            .push(row, 3_600, true, axis)
+            .expect("accumulate row");
+    }
+    accumulator
+        .finish_period(3_600, axis.zone(), 10_000)
+        .expect("finish period");
+    let mut cores = accumulator
+        .cores
+        .iter()
+        .map(|(uid, core)| {
+            let mut buckets = core.buckets.iter().collect::<Vec<_>>();
+            buckets.sort_by_key(|(start, _)| **start);
+            format!("{uid}:{}:{buckets:?}", core.name)
+        })
+        .collect::<Vec<_>>();
+    cores.sort();
+    let groups = |map: &HashMap<String, GroupAccumulator>| {
+        let mut out = map
+            .iter()
+            .map(|(key, group)| {
+                format!(
+                    "{key}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+                    group.n,
+                    group.profit,
+                    group.win_sum,
+                    group.loss_sum,
+                    group.best,
+                    group.worst,
+                    group.core_name,
+                    group.strategy_id,
+                    group.raw
+                )
+            })
+            .collect::<Vec<_>>();
+        out.sort();
+        out
+    };
+    format!(
+        "{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        accumulator.stats,
+        accumulator.days,
+        accumulator.hours,
+        cores,
+        groups(&accumulator.strategies),
+        groups(&accumulator.coins),
+        accumulator.best_rows,
+        accumulator.worst_rows,
+    )
+}
+
+/// `summary_stream.rs:current_stream_sql` + `flush_run` -- shortening the SQL key without the
+/// Rust tie-run sort changes which equal-profit trade a top list shows and the order raw money is
+/// summed in whenever one core closes several trades in one second. This pins the streamed
+/// sequence, and therefore every Summary figure, to the former full-tuple order on tie-heavy
+/// synthetic data from a replica-shaped and a legacy-shaped source, on a zero-offset and on a
+/// shifted axis.
+#[test]
+fn five_term_key_with_tie_runs_streams_the_former_full_tuple_order() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    seed_tie_heavy_sources(&conn, 4_000);
+    let shifted = crate::db::ReportAxis::from_measured(
+        HashMap::from([
+            (
+                1,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: 3_600,
+                }],
+            ),
+            (
+                3,
+                vec![crate::db::OffsetSegment {
+                    from_utc: 0,
+                    offset_secs: -1_800,
+                }],
+            ),
+        ]),
+        chrono_tz::UTC,
+    );
+    let identity = Query::default().axis;
+    for (axis, true_time) in [
+        (&identity, "o.closedate"),
+        (&shifted, "mt_to_utc(o.closedate, o.core_uid)"),
+    ] {
+        if !axis.is_utc_identity() {
+            super::super::time_zone::install(&conn, axis).expect("shifted scalar");
+        }
+        let (from, to) = (90_000, 200_000);
+        let former = stream_rows(
+            &conn,
+            &former_full_tuple_sql(TIE_SOURCE, true_time),
+            from,
+            to,
+        );
+        let current = through_tie_runs(stream_rows(
+            &conn,
+            &current_stream_sql(
+                TIE_SOURCE,
+                true_time,
+                "o.profitbtc, o.spentbtc, o.basecurrency",
+            ),
+            from,
+            to,
+        ));
+        assert_eq!(former.len(), 8_000);
+        let ties = former
+            .windows(2)
+            .filter(|pair| pair[0].same_order_key(&pair[1]))
+            .count();
+        assert!(ties > 500, "fixture must be tie-heavy, got {ties}");
+        assert_eq!(format!("{former:?}"), format!("{current:?}"), "{true_time}");
+        assert_eq!(
+            summary_figures(former, axis),
+            summary_figures(current, axis),
+            "{true_time}"
+        );
+    }
+}
+
+/// Synthetic timing of the former full-tuple sort against the five-term key plus tie runs, over
+/// a 200k-row two-source fixture. Run with `--ignored --nocapture`; prints milliseconds.
+#[test]
+#[ignore = "timing probe, not a regression"]
+fn five_term_key_timing_probe() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    seed_tie_heavy_sources(&conn, 100_000);
+    let (from, to) = (0, 1_000_000_000);
+    for round in 0..3 {
+        let started = std::time::Instant::now();
+        let former = stream_rows(
+            &conn,
+            &former_full_tuple_sql(TIE_SOURCE, "o.closedate"),
+            from,
+            to,
+        );
+        let former_ms = started.elapsed().as_millis();
+        let started = std::time::Instant::now();
+        let current = through_tie_runs(stream_rows(
+            &conn,
+            &current_stream_sql(
+                TIE_SOURCE,
+                "o.closedate",
+                "o.profitbtc, o.spentbtc, o.basecurrency",
+            ),
+            from,
+            to,
+        ));
+        let current_ms = started.elapsed().as_millis();
+        assert_eq!(former.len(), current.len());
+        println!(
+            "[timing] round {round}: rows {} former {former_ms} ms -> five-term {current_ms} ms",
+            former.len()
+        );
+    }
+}
