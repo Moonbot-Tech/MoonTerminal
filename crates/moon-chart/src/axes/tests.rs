@@ -77,3 +77,27 @@ fn price_decimals_changes_at_one_thousand() {
 fn price_decimals_uses_magnitude_below_zero() {
     assert_eq!(super::price_decimals(-1500.0), 1);
 }
+
+/// A rough spacing just below one and a half stays on one; equality rounds up to two.
+/// Existing time-step and decimal tests never exercise price-grid interval selection.
+#[test]
+fn price_grid_rounds_up_at_one_and_a_half() {
+    assert_eq!(super::nice_interval(14.0, 10.0), 1.0);
+    assert_eq!(super::nice_interval(15.0, 10.0), 2.0);
+}
+
+/// Three units of requested spacing must move the price grid from two to five.
+/// Existing axis tests do not reach this price-grid branch.
+#[test]
+fn price_grid_rounds_up_at_three() {
+    assert_eq!(super::nice_interval(29.0, 10.0), 2.0);
+    assert_eq!(super::nice_interval(30.0, 10.0), 5.0);
+}
+
+/// Seven units of requested spacing starts the next decade instead of retaining five.
+/// Existing axis tests do not reach this price-grid branch.
+#[test]
+fn price_grid_rounds_up_at_seven() {
+    assert_eq!(super::nice_interval(69.0, 10.0), 5.0);
+    assert_eq!(super::nice_interval(70.0, 10.0), 10.0);
+}
