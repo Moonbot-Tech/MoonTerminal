@@ -19,18 +19,26 @@ fn tick(time_ms: i64) -> Tick {
 /// A held file of one market: `(from, to, print times)`.
 fn held(
     spans: &'static [(i64, i64, &'static [i64])],
-) -> impl FnMut(&str, &str, i64, i64) -> Result<Vec<StoredSpan>, String> {
+) -> impl FnMut(
+    &str,
+    &str,
+    i64,
+    i64,
+) -> Result<Box<dyn Iterator<Item = Result<StoredSpan, String>>>, String> {
     move |_, _, from, to| {
-        Ok(spans
-            .iter()
-            .filter(|(a, b, _)| *b >= from && *a <= to)
-            .map(|&(from_ms, to_ms, times)| StoredSpan {
-                from_ms,
-                to_ms,
-                ticks: times.iter().map(|&t| tick(t)).collect(),
-                source: TileSource::Core,
-            })
-            .collect())
+        Ok(Box::new(
+            spans
+                .iter()
+                .filter(move |(a, b, _)| *b >= from && *a <= to)
+                .map(|&(from_ms, to_ms, times)| {
+                    Ok(StoredSpan {
+                        from_ms,
+                        to_ms,
+                        ticks: times.iter().map(|&t| tick(t)).collect(),
+                        source: TileSource::Core,
+                    })
+                }),
+        ))
     }
 }
 
@@ -165,4 +173,173 @@ fn a_traces_answer_stops_at_the_budget() {
     let tight = answer_traces(&[1, 3], &held, 10);
     assert_eq!(tight.answered, 1);
     assert!(tight.trades.is_empty());
+}
+
+/// Collecting the reader before budgeting decodes all 64 spans and breaks the read-count
+/// assertions; changing the resume cut loses or duplicates prints in the independent sequence.
+#[test]
+fn a_paged_pull_reads_only_through_its_cut_and_delivers_every_print_once() {
+    let mut from = 0;
+    let mut delivered = Vec::new();
+    let end = 64 * 1_000 - 1;
+    let mut pages = 0;
+    loop {
+        let reads = std::cell::RefCell::new(Vec::new());
+        let page = answer_tape(&[want(&[(from, end)])], 512, |_, _, a, b| {
+            Ok((0..64)
+                .filter(move |i| i * 1_000 + 999 >= a && i * 1_000 <= b)
+                .map(|i| {
+                    reads.borrow_mut().push(i);
+                    Ok(StoredSpan {
+                        from_ms: i * 1_000,
+                        to_ms: i * 1_000 + 999,
+                        ticks: (0..400).map(|j| tick(i * 1_000 + j / 2)).collect(),
+                        source: TileSource::Core,
+                    })
+                }))
+        })
+        .unwrap();
+        pages += 1;
+        delivered.extend(page.pieces.iter().flat_map(times));
+        let reads = reads.into_inner();
+        assert!(reads.len() <= page.pieces.len() + 1, "read past the cut");
+        assert_eq!(
+            reads[0],
+            from / 1_000,
+            "decoded a span before the page start"
+        );
+        if let Some(resume) = page.resume {
+            assert_eq!(*reads.last().unwrap(), resume.from_ms / 1_000);
+            assert!(resume.from_ms > from);
+            from = resume.from_ms;
+        } else {
+            break;
+        }
+    }
+    assert!(pages > 1);
+    let expected: Vec<_> = (0..64)
+        .flat_map(|i| (0..400).map(move |j| i * 1_000 + j / 2))
+        .collect();
+    assert_eq!(delivered, expected);
+}
+
+/// A reproducible synthetic tape workload; noisy values keep its compressed size substantial
+/// without using any user data. The expected prints come from this generator, not the reader.
+fn synthetic_ticks(span: i64) -> Vec<Tick> {
+    let mut state = span as u32 + 1;
+    (0..8_000)
+        .map(|i| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            Tick {
+                time_ms: (span * 30_000 + i * 3) as f64,
+                price: (state % 1_000_000) as f32 / 100.0,
+                qty: (state / 1_000_000 + 1) as f32 / 100.0,
+                side: if state & 1 == 0 {
+                    Side::Buy
+                } else {
+                    Side::Sell
+                },
+            }
+        })
+        .collect()
+}
+
+/// Drive the real page builder against a synthetic file, optionally collecting each whole
+/// remainder as the old TapeFile reader did. Count actual decoded spans and prints, not estimates.
+fn measured_pull(file: &TapeFile, eager: bool) -> (usize, usize, usize) {
+    let spans = std::cell::Cell::new(0usize);
+    let prints = std::cell::Cell::new(0usize);
+    let mut pages = 0;
+    let mut from = 0;
+    let mut delivered = Vec::new();
+    loop {
+        let page = answer_tape(
+            &[want(&[(from, 240 * 30_000 - 1)])],
+            TAPE_REPLY_BUDGET,
+            |exchange, market, a, b| {
+                let iter = file
+                    .spans(exchange, market, a, b)
+                    .map_err(|e| e.to_string())?
+                    .map(|span| {
+                        let span = span.map_err(|e| e.to_string())?;
+                        spans.set(spans.get() + 1);
+                        prints.set(prints.get() + span.ticks.len());
+                        Ok(span)
+                    });
+                let iter: Box<dyn Iterator<Item = Result<StoredSpan, String>> + '_> = if eager {
+                    Box::new(iter.collect::<Result<Vec<_>, _>>()?.into_iter().map(Ok))
+                } else {
+                    Box::new(iter)
+                };
+                Ok(iter)
+            },
+        )
+        .unwrap();
+        pages += 1;
+        for piece in page.pieces {
+            delivered.extend(
+                decode_prints(&piece.prints)
+                    .unwrap()
+                    .into_iter()
+                    .map(|t| (t.time_ms as i64, t.price.to_bits(), t.qty.to_bits(), t.side)),
+            );
+        }
+        match page.resume {
+            Some(resume) => {
+                assert!(resume.from_ms > from);
+                from = resume.from_ms;
+            }
+            None => break,
+        }
+    }
+    let expected: Vec<_> = (0..240)
+        .flat_map(synthetic_ticks)
+        .map(|t| (t.time_ms as i64, t.price.to_bits(), t.qty.to_bits(), t.side))
+        .collect();
+    assert_eq!(delivered, expected);
+    (pages, spans.get(), prints.get())
+}
+
+/// Reverting to eager collection raises full-pull decode work quadratically. Both modes use
+/// identical real pagination and must deliver all synthetic prints in order exactly once.
+#[test]
+#[ignore = "synthetic large-file before/after measurement"]
+fn synthetic_tape_paged_decode_measurement() {
+    use moon_core::market::trade_replay::trade_cache::TradeCache;
+    let path = std::env::temp_dir().join(format!(
+        "moon-station-synthetic-{}.sqlite",
+        std::process::id()
+    ));
+    assert!(!path.exists(), "synthetic file must be new");
+    let writer = TradeCache::open_with_ceiling(path.clone(), || None).unwrap();
+    for span in 0..240 {
+        writer.insert(
+            "x",
+            "M",
+            span * 30_000,
+            span * 30_000 + 29_999,
+            synthetic_ticks(span),
+            TileSource::Core,
+        );
+    }
+    assert!(writer.sync(std::time::Duration::from_secs(120)));
+    let file = TapeFile::open(&path).unwrap();
+    let before = measured_pull(&file, true);
+    let after = measured_pull(&file, false);
+    println!(
+        "synthetic: 240 spans, 1920000 prints; eager pages/spans/prints={before:?}; lazy={after:?}"
+    );
+    assert_eq!(before.0, after.0);
+    assert!(after.1 <= 240 + after.0);
+    assert!(before.2 > after.2 * 5);
+    drop(file);
+    drop(writer);
+    // The worker closes asynchronously after its sender disappears; allow that close to finish.
+    for _ in 0..100 {
+        if std::fs::remove_file(&path).is_ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("synthetic file could not be removed: {}", path.display());
 }

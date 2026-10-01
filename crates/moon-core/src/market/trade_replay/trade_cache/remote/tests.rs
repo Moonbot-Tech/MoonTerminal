@@ -65,7 +65,11 @@ fn a_tape_file_reads_without_owning() {
         .expect("broken row");
     }
     let file = TapeFile::open(&path).expect("read-only open");
-    let spans = file.spans("x", "M", 0, 1_000).expect("read");
+    let spans = file
+        .spans("x", "M", 0, 1_000)
+        .expect("bounds")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("read");
     assert_eq!(
         spans
             .iter()
@@ -83,4 +87,52 @@ fn a_tape_file_reads_without_owning() {
         "a reader that does not own the file deletes nothing"
     );
     let _ = std::fs::remove_file(&path);
+}
+
+/// Eagerly reading all blobs makes this fail before the first span: a page that stops there
+/// must not touch a later unreadable value. Legacy and packed spans still arrive in time order.
+#[test]
+fn tape_blobs_are_read_only_as_the_iterator_advances() {
+    let conn = rusqlite::Connection::open_in_memory().expect("file");
+    init_schema(&conn).expect("schema");
+    insert_span(
+        &conn,
+        "x",
+        "M",
+        100,
+        199,
+        &[tick(150, 2.0, Side::Buy)],
+        TileSource::Core,
+        1,
+    )
+    .expect("packed span");
+    let legacy = codec::encode_legacy(&[tick(50, 1.0, Side::Sell)]);
+    conn.execute(
+        "INSERT INTO spans VALUES('x', 'M', 0, 99, ?1, 1, 1)",
+        [legacy],
+    )
+    .expect("legacy span");
+    conn.execute(
+        "INSERT INTO packs VALUES('x', 'M', 200, 299, 'not a blob', 1, 1, 1)",
+        [],
+    )
+    .expect("unreadable later span");
+    let file = TapeFile { conn };
+    let mut spans = file.spans("x", "M", 0, 299).expect("only bounds read");
+    assert_eq!(spans.next().unwrap().unwrap().ticks[0].time_ms, 50.0);
+    assert_eq!(spans.next().unwrap().unwrap().ticks[0].time_ms, 150.0);
+    assert!(spans.next().unwrap().is_err());
+    assert!(spans.next().is_none());
+    drop(spans);
+    // A page resumed beyond earlier spans never reads their blobs.
+    file.conn
+        .execute("UPDATE spans SET ticks = 'not a blob'", [])
+        .unwrap();
+    let resumed = file
+        .spans("x", "M", 100, 199)
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(resumed[0].ticks[0].time_ms, 150.0);
 }
