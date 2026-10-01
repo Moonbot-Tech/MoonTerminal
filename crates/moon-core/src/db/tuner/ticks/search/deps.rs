@@ -49,6 +49,7 @@ const CONDITION_FALLBACKS: &[(&str, &str)] = &[
     ("pricedowntimer", "0"),
     ("sellleveldelay", "0"),
     ("sellleveltime", "0"),
+    ("selllevelcount", "0"),
     ("mshotsellatlastprice", "NO"),
 ];
 
