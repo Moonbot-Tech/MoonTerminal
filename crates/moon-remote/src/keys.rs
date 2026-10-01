@@ -1,10 +1,12 @@
 //! The provider's private key for the first login: read in any format a provider hands out.
 //!
-//! OpenSSH, PuTTY (`.ppk`) and PKCS#8 files carrying an ed25519 or ECDSA key. RSA is not built in
-//! (see `Cargo.toml`), and says so by name rather than as a parse error.
+//! OpenSSH, PuTTY (`.ppk`) and PKCS#8 files carrying an ed25519, ECDSA or RSA key, plus
+//! provider RSA keys in PKCS#1 PEM. Other key types are refused by name.
 
 use anyhow::Context;
 use russh::keys::PrivateKey;
+
+mod legacy_pem;
 
 /// Why a key file could not be used.
 #[derive(Debug, PartialEq)]
@@ -42,19 +44,29 @@ impl std::error::Error for KeyError {}
 ///     The decrypted key.
 pub fn parse(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, KeyError> {
     use russh::keys::Error;
-    // A PKCS#1 RSA file is refused by the reader before it looks at the passphrase.
-    if text.contains("-----BEGIN RSA PRIVATE KEY-----") {
-        return Err(KeyError::Unsupported("RSA".into()));
+    if text.contains("-----BEGIN DSA PRIVATE KEY-----") {
+        return Err(KeyError::Unsupported("DSA".into()));
     }
     // PuTTY and PKCS#8 fail to parse, rather than report "encrypted", without their passphrase.
     if passphrase.is_none() && encrypted_container(text) {
         return Err(KeyError::NeedsPassphrase);
     }
-    match russh::keys::decode_secret_key(text, passphrase) {
-        Ok(key) if matches!(key.algorithm(), russh::keys::Algorithm::Rsa { .. }) => {
-            Err(KeyError::Unsupported("RSA".into()))
-        }
-        Ok(key) => Ok(key),
+    if text.contains("-----BEGIN RSA PRIVATE KEY-----") && text.contains("DEK-Info: AES-256-CBC,") {
+        return legacy_pem::parse(text, passphrase);
+    }
+    // A plain PKCS#8 file must not be handed to russh's encrypted-PKCS#8 decoder.
+    let password = if text.contains("-----BEGIN PRIVATE KEY-----") && !encrypted_container(text) {
+        None
+    } else {
+        passphrase
+    };
+    match russh::keys::decode_secret_key(text, password) {
+        Ok(key) => match key.algorithm() {
+            russh::keys::Algorithm::Ed25519
+            | russh::keys::Algorithm::Ecdsa { .. }
+            | russh::keys::Algorithm::Rsa { .. } => Ok(key),
+            kind => Err(KeyError::Unsupported(kind.to_string())),
+        },
         Err(Error::KeyIsEncrypted) => Err(KeyError::NeedsPassphrase),
         Err(Error::UnsupportedKeyType {
             key_type_string, ..
