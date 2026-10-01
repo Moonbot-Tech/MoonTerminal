@@ -614,3 +614,32 @@ fn a_detect_line_is_elastic_prose() {
     assert!(cell.has_wrap());
     assert!(!cell.has_column());
 }
+
+/// A column line grows its row's wheel band; an ordinary caption registers nothing.
+#[test]
+fn only_column_lines_grow_a_wheel_band() {
+    let mut bands = Vec::new();
+    super::grow_column_band(&mut bands, &wrap_item(0, true), [0.0, 0.0, 10.0, 10.0]);
+    assert!(bands.is_empty());
+    let line = wrap_item(super::ARB_PART_BASE, true);
+    super::grow_column_band(&mut bands, &line, [4.0, 10.0, 20.0, 12.0]);
+    super::grow_column_band(&mut bands, &line, [4.0, 22.0, 30.0, 12.0]);
+    assert_eq!(bands.len(), 1);
+    assert_eq!(bands[0].rect, [4.0, 10.0, 30.0, 24.0]);
+}
+
+/// Strategy-filter lines are drawn through the wrapped branch, which `continue`s before the
+/// single-line registration; without its own call the list has no band and Alt+wheel pans.
+/// The draw loop needs a GPU text context, so the branch is checked in the source.
+#[test]
+fn the_wrapped_draw_branch_registers_column_lines() {
+    let src = include_str!("../captions.rs");
+    let start = src
+        .find("if item.wrap_ix < self.caption_wraps.len() {")
+        .expect("wrapped branch");
+    let end = start
+        + src[start..]
+            .find("self.caption_wraps[item.wrap_ix] = lines;")
+            .expect("wrapped branch end");
+    assert!(src[start..end].contains("grow_column_band("));
+}
