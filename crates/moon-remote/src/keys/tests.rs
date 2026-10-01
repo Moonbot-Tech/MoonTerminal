@@ -72,6 +72,7 @@ fn encrypted_provider_rsa_formats_require_the_right_passphrase() {
     for file in [
         include_str!("fixtures/rsa-pkcs1-encrypted.pem"),
         include_str!("fixtures/rsa-pkcs1-aes128.pem"),
+        include_str!("fixtures/rsa-pkcs1-aes192.pem"),
         include_str!("fixtures/rsa-openssh-encrypted.pem"),
         include_str!("fixtures/rsa-putty-encrypted.ppk"),
         include_str!("fixtures/rsa-pkcs8-encrypted.pem"),

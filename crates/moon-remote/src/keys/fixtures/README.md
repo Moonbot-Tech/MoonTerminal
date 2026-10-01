@@ -6,5 +6,6 @@ never provider or user credentials. The separate `rsa.pub` file is the independe
 serialized verification oracle; container comments are outside the key identity.
 
 The encrypted fixtures use the public test passphrase `fixture-passphrase`.
-The PKCS#1 envelopes cover AES-128-CBC (OpenSSL) and AES-256-CBC (cryptography).
+The PKCS#1 envelopes cover AES-128-CBC and AES-192-CBC (OpenSSL), and AES-256-CBC
+(cryptography).
 The DSA-1024 fixture exercises the unsupported-key error.

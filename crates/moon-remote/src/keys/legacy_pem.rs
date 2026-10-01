@@ -1,6 +1,6 @@
-//! Decode the AES-256-CBC envelope of legacy PKCS#1 RSA PEM files.
+//! Decode AES-192-CBC and AES-256-CBC envelopes of legacy PKCS#1 RSA PEM files.
 //!
-//! russh handles plain and AES-128-CBC PKCS#1 itself, but treats AES-256-CBC ciphertext
+//! russh handles plain and AES-128-CBC PKCS#1 itself, but treats the larger AES variants' ciphertext
 //! as plain DER. Keep this format adapter local to provider key import.
 
 use aes::cipher::{BlockModeDecrypt, KeyIvInit, block_padding::Pkcs7};
@@ -13,11 +13,12 @@ use super::KeyError;
 /// Decrypt OpenSSL's traditional PEM envelope, then let russh validate the RSA key.
 pub(super) fn parse(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, KeyError> {
     let passphrase = passphrase.ok_or(KeyError::NeedsPassphrase)?;
-    let iv_hex = text
+    let (cipher, iv_hex) = text
         .lines()
-        .find_map(|line| line.strip_prefix("DEK-Info: AES-256-CBC,"))
-        .map(str::trim)
-        .filter(|iv| iv.len() == 32 && iv.is_ascii())
+        .find_map(|line| line.strip_prefix("DEK-Info: "))
+        .and_then(|header| header.split_once(','))
+        .map(|(cipher, iv)| (cipher, iv.trim()))
+        .filter(|(_, iv)| iv.len() == 32 && iv.is_ascii())
         .ok_or_else(|| KeyError::Unreadable("invalid PEM cipher IV".into()))?;
     let mut iv = [0u8; 16];
     for (index, byte) in iv.iter_mut().enumerate() {
@@ -47,14 +48,20 @@ pub(super) fn parse(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, 
         *previous = digest.finalize().0;
         key[round * 16..round * 16 + 16].copy_from_slice(&*previous);
     }
-    let decrypted = cbc::Decryptor::<aes::Aes256>::new_from_slices(&*key, &iv)
-        .map_err(|_| KeyError::Unreadable("invalid PEM cipher parameters".into()))?
-        .decrypt_padded::<Pkcs7>(&mut ciphertext)
-        .map_err(|_| KeyError::WrongPassphrase)?;
+    let decrypted = match cipher {
+        "AES-192-CBC" => cbc::Decryptor::<aes::Aes192>::new_from_slices(&key[..24], &iv)
+            .map_err(|_| KeyError::Unreadable("invalid PEM cipher parameters".into()))?
+            .decrypt_padded::<Pkcs7>(&mut ciphertext),
+        "AES-256-CBC" => cbc::Decryptor::<aes::Aes256>::new_from_slices(&*key, &iv)
+            .map_err(|_| KeyError::Unreadable("invalid PEM cipher parameters".into()))?
+            .decrypt_padded::<Pkcs7>(&mut ciphertext),
+        _ => return Err(KeyError::Unsupported(cipher.into())),
+    }
+    .map_err(|_| KeyError::WrongPassphrase)?;
     let body = Zeroizing::new(BASE64.encode(decrypted));
     let pem = Zeroizing::new(format!(
         "-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----\n",
-        &*body
+        *body
     ));
     russh::keys::decode_secret_key(&pem, None).map_err(|_| KeyError::WrongPassphrase)
 }

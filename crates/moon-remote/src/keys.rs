@@ -51,7 +51,9 @@ pub fn parse(text: &str, passphrase: Option<&str>) -> Result<PrivateKey, KeyErro
     if passphrase.is_none() && encrypted_container(text) {
         return Err(KeyError::NeedsPassphrase);
     }
-    if text.contains("-----BEGIN RSA PRIVATE KEY-----") && text.contains("DEK-Info: AES-256-CBC,") {
+    if text.contains("-----BEGIN RSA PRIVATE KEY-----")
+        && (text.contains("DEK-Info: AES-192-CBC,") || text.contains("DEK-Info: AES-256-CBC,"))
+    {
         return legacy_pem::parse(text, passphrase);
     }
     // A plain PKCS#8 file must not be handed to russh's encrypted-PKCS#8 decoder.
