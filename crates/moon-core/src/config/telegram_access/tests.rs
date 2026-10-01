@@ -7,6 +7,7 @@ use super::{TelegramConfig, TelegramReportAccess};
 fn only_revocations_and_owner_transfer_break_an_additive_change() {
     let mut before = TelegramConfig {
         authorized_chat_ids: vec![11, 22],
+        owner_chat_id: Some(11),
         ..Default::default()
     };
     before.chat_profile_mut(22).core_uids = vec![3, 7];
@@ -26,10 +27,19 @@ fn only_revocations_and_owner_transfer_break_an_additive_change() {
     assert!(!after.only_adds_chats_to(&before));
 }
 
-/// Old multi-chat files keep exactly one owner; later pairings start without data access.
+/// Old multi-chat files keep exactly one owner once loaded; later pairings start without data
+/// access.
 #[test]
 fn legacy_pairing_order_has_one_owner_and_new_viewers_are_empty() {
     let mut cfg: TelegramConfig = toml::from_str("authorized_chat_ids = [11, 22]").unwrap();
+    assert_eq!(cfg.owner(), None, "no chat is the owner implicitly");
+    assert_eq!(
+        cfg.report_access(11),
+        Some(TelegramReportAccess::Viewer(vec![]))
+    );
+    assert!(cfg.adopt_legacy_owner());
+    assert_eq!(cfg.owner_chat_id, Some(11));
+    assert!(!cfg.adopt_legacy_owner());
     assert_eq!(cfg.report_access(11), Some(TelegramReportAccess::Owner));
     assert_eq!(
         cfg.report_access(22),
@@ -48,6 +58,7 @@ fn legacy_pairing_order_has_one_owner_and_new_viewers_are_empty() {
 fn transfer_revocation_and_round_trip_preserve_explicit_roles() {
     let mut cfg = TelegramConfig {
         authorized_chat_ids: vec![11, 22],
+        owner_chat_id: Some(11),
         ..Default::default()
     };
     cfg.chat_profile_mut(11).core_uids = vec![7];
@@ -74,6 +85,7 @@ fn transfer_revocation_and_round_trip_preserve_explicit_roles() {
 fn viewer_grants_are_canonical_and_do_not_authorize_unpaired_profiles() {
     let mut cfg = TelegramConfig {
         authorized_chat_ids: vec![11, 22],
+        owner_chat_id: Some(11),
         ..Default::default()
     };
     cfg.chat_profile_mut(22).core_uids = vec![7, 0, 3, 7];
@@ -83,4 +95,36 @@ fn viewer_grants_are_canonical_and_do_not_authorize_unpaired_profiles() {
         Some(TelegramReportAccess::Viewer(vec![3, 7]))
     );
     assert_eq!(cfg.report_access(33), None);
+}
+
+/// The first chat paired becomes the owner explicitly; later pairings never take it over.
+#[test]
+fn first_pairing_is_the_explicit_owner() {
+    let mut cfg = TelegramConfig::default();
+    assert!(cfg.pair_chat(11));
+    assert_eq!(cfg.owner_chat_id, Some(11));
+    assert!(cfg.pair_chat(22));
+    assert_eq!(cfg.owner_chat_id, Some(11));
+    assert_eq!(
+        cfg.report_access(22),
+        Some(TelegramReportAccess::Viewer(vec![]))
+    );
+    cfg.clear_pairing();
+    assert!(cfg.pair_chat(22));
+    assert_eq!(cfg.owner_chat_id, Some(22));
+}
+
+/// An owner who is no longer paired is nobody: the first remaining chat is not promoted.
+#[test]
+fn an_unpaired_owner_promotes_no_one() {
+    let cfg = TelegramConfig {
+        authorized_chat_ids: vec![22, 33],
+        owner_chat_id: Some(11),
+        ..Default::default()
+    };
+    assert_eq!(cfg.owner(), None);
+    assert_eq!(
+        cfg.report_access(22),
+        Some(TelegramReportAccess::Viewer(vec![]))
+    );
 }

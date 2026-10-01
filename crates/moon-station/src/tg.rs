@@ -101,7 +101,10 @@ impl StationTg {
             anyhow::anyhow!("no bot token: the credential telegram-token is missing or empty")
         })?;
         let pairing_path = data_root.join(PAIRING_FILE);
-        let pairing = load_pairing(&pairing_path)?;
+        let mut pairing = load_pairing(&pairing_path)?;
+        if pairing.adopt_legacy_owner() {
+            write_pairing(&pairing_path, &pairing)?;
+        }
         moon_tg::set_locale(telegram.language);
         let bot = &mut config.telegram;
         bot.token = token;
@@ -329,7 +332,7 @@ impl StationTg {
         };
         if self.logged_code.as_ref() != Some(code) {
             log::info!(
-                "telegram: no chat is paired — send /pair {code} to the bot within 10 minutes"
+                "telegram: no chat is paired — the pairing code is shown in the terminal's Settings"
             );
             self.logged_code = Some(code.clone());
         }

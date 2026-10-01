@@ -377,8 +377,6 @@ impl SettingsView {
                                                 if telegram.owner() == Some(chat) {
                                                     return false;
                                                 }
-                                                // Freeze legacy ownership before removing an entry from the ordered pairing list.
-                                                telegram.owner_chat_id = telegram.owner();
                                                 telegram
                                                     .authorized_chat_ids
                                                     .retain(|id| *id != chat);

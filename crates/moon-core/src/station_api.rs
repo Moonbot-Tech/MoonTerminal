@@ -358,18 +358,38 @@ impl Access {
         telegram.chat_access = self.chat_access.clone();
     }
 
-    /// Why a bot could not run with this access: a chat paired twice, an owner who is not a paired
-    /// chat, a profile for a chat that is not paired.
+    /// Upgrade a saved pairing that predates the owner: its first chat becomes the explicit owner.
+    /// Only for a pairing read from disk, never for one arriving over the control API.
+    ///
+    /// Returns:
+    ///     `true` when the owner was set.
+    pub fn adopt_legacy_owner(&mut self) -> bool {
+        if self.owner_chat_id.is_some() {
+            return false;
+        }
+        let Some(first) = self.authorized_chat_ids.first().copied() else {
+            return false;
+        };
+        self.owner_chat_id = Some(first);
+        true
+    }
+
+    /// Why a bot could not run with this access: a chat paired twice, paired chats with no owner,
+    /// an owner who is not a paired chat, a profile for a chat that is not paired.
     pub fn check(&self) -> Result<(), String> {
         for (i, chat) in self.authorized_chat_ids.iter().enumerate() {
             if self.authorized_chat_ids[..i].contains(chat) {
                 return Err(format!("chat {chat} is paired twice"));
             }
         }
-        if let Some(owner) = self.owner_chat_id {
-            if !self.authorized_chat_ids.contains(&owner) {
+        match self.owner_chat_id {
+            Some(owner) if !self.authorized_chat_ids.contains(&owner) => {
                 return Err(format!("the owner {owner} is not a paired chat"));
             }
+            None if !self.authorized_chat_ids.is_empty() => {
+                return Err("the paired chats have no owner".into());
+            }
+            _ => {}
         }
         if let Some(stray) = self
             .chat_access

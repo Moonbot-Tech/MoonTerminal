@@ -227,7 +227,7 @@ pub struct TelegramConfig {
     /// Chat ids allowed to issue commands after a successful `/pair`.
     #[serde(default)]
     pub authorized_chat_ids: Vec<i64>,
-    /// Sole owner. Legacy configurations resolve to their first paired chat.
+    /// Sole owner. Legacy configurations get their first paired chat written here once on load.
     #[serde(default)]
     pub owner_chat_id: Option<i64>,
     /// Named chat profiles; viewers receive only explicitly assigned stable core uids.

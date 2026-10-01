@@ -61,8 +61,9 @@ pub fn read_bot(target: &Target) -> anyhow::Result<ReturnedBot> {
         .run(&script::helper("get-pairing", &[]), &[], STEP_TIMEOUT)
         .map_err(|_| BotReturnError::ReadFailed)?;
     anyhow::ensure!(out.ok(), BotReturnError::ReadFailed);
-    let access: Access =
+    let mut access: Access =
         serde_json::from_slice(&out.stdout).map_err(|_| BotReturnError::ReadFailed)?;
+    access.adopt_legacy_owner();
     access.check().map_err(|_| BotReturnError::ReadFailed)?;
     Ok(ReturnedBot { token, access })
 }
@@ -129,8 +130,9 @@ pub fn return_bot(
                         .run(&script::helper("get-pairing", &[]), &[], STEP_TIMEOUT)
                         .map_err(|_| BotReturnError::ReadFailed)?;
                     anyhow::ensure!(out.ok(), BotReturnError::ReadFailed);
-                    let access: Access = serde_json::from_slice(&out.stdout)
+                    let mut access: Access = serde_json::from_slice(&out.stdout)
                         .map_err(|_| BotReturnError::ReadFailed)?;
+                    access.adopt_legacy_owner();
                     access.check().map_err(|_| BotReturnError::ReadFailed)?;
                     returned.access = access;
                     remember(returned.clone());
