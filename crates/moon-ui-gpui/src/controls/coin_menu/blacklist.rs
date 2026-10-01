@@ -16,6 +16,7 @@ use moon_ui::{MoonMenuItem, MoonWindowExt as _};
 use rust_i18n::t;
 
 use moon_core::config::TempBanSpan;
+use moon_core::market::{MarketLabel, pick_market_for_coin};
 use moon_core::session::CoreId;
 
 use super::{
@@ -328,7 +329,8 @@ fn send_temp_ban(b: &Backend, cores: &[CoreId], ctx: &CoinMenuCtx, ban: Option<D
 /// Resolved per CORE rather than reused across them: the row was clicked on one core's market, and
 /// the other selected cores may be on venues that spell it differently. The clicked core keeps its
 /// own exact market; the rest are looked up in their own catalogue, preferring the same spelling,
-/// then the same quote currency, and finally the best search hit.
+/// then the coin in the quote that core trades in, then in the clicked market's quote, and finally
+/// the best search hit.
 ///
 /// Args:
 ///     b: Terminal state holding the market catalogue.
@@ -356,6 +358,33 @@ fn temp_ban_symbol(b: &Backend, core: CoreId, ctx: &CoinMenuCtx) -> Option<Strin
         .find(|name| name.eq_ignore_ascii_case(&ctx.market))
     {
         return Some(exact.clone());
+    }
+    // The coin by the catalogue's labels in one quote: first the quote this core trades in, then
+    // the clicked market's own. Labels, not names, because a Hyperliquid spot market is an index
+    // (`@334`) that spells neither coin nor quote, and its catalogue lists KNTQ against USDH and
+    // USDC alike.
+    let source = b.session.market_source();
+    let refs: Vec<&str> = candidates.iter().map(String::as_str).collect();
+    let labelled: Vec<(String, MarketLabel)> = candidates
+        .iter()
+        .cloned()
+        .zip(source.market_labels(core, &refs))
+        .collect();
+    let in_quote = |quote: &str| -> Option<String> {
+        let only: Vec<(String, MarketLabel)> = labelled
+            .iter()
+            .filter(|(_, label)| !quote.is_empty() && label.quote.eq_ignore_ascii_case(quote))
+            .cloned()
+            .collect();
+        pick_market_for_coin(&only, &ctx.coin, quote).map(str::to_string)
+    };
+    let clicked_quote = source.market_label(ctx.core, &ctx.market).quote;
+    if let Some(market) = source
+        .traded_quote(core)
+        .and_then(|quote| in_quote(&quote))
+        .or_else(|| in_quote(&clicked_quote))
+    {
+        return Some(market);
     }
     // Same coin on another venue: keep the QUOTE the click was made against, so a USDT ban does not
     // land on a BTC-quoted market that happens to sort first.

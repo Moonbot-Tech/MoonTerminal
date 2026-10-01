@@ -1605,24 +1605,39 @@ pub fn pick_market_for_identity<'a>(
 ///
 /// Exact token first, then the folded [`MarketLabel::match_key`] so a bare `AAVE` still reaches
 /// the COIN-M market the core calls `AAVE_RP`. Within each pass an undated contract wins: a coin
-/// names an instrument family, not an expiry.
+/// names an instrument family, not an expiry. Among undated ones the market in `quote` wins: one
+/// catalog can list a token against several quotes — Hyperliquid spot has KNTQ against USDH
+/// (`@254`) and USDC (`@334`), Binance `BTCUSDT` beside `BTCUSDC` — and only one of them is where
+/// the core trades. Without a match in `quote` the first candidate stands, as before.
+///
+/// Args:
+///     candidates: `(market name, label)` pairs from ONE core, as `market_labels` builds them.
+///     coin: The token the core wrote — a report row's coin, a coin-list entry.
+///     quote: The quote currency the core trades in, uppercase; empty asks for no preference.
 pub fn pick_market_for_coin<'a>(
     candidates: &'a [(String, MarketLabel)],
     coin: &str,
+    quote: &str,
 ) -> Option<&'a str> {
     let wanted_key = crate::symbol::coin_match_key(coin);
+    let quote = quote.trim();
     let pick = |matches: &dyn Fn(&MarketLabel) -> bool| -> Option<&'a str> {
+        let mut undated = None;
         let mut dated = None;
         for (name, label) in candidates {
             if !matches(label) {
                 continue;
             }
-            if label.expiry().is_none() {
+            if label.expiry().is_some() {
+                dated.get_or_insert(name.as_str());
+                continue;
+            }
+            if !quote.is_empty() && label.quote.eq_ignore_ascii_case(quote) {
                 return Some(name.as_str());
             }
-            dated.get_or_insert(name.as_str());
+            undated.get_or_insert(name.as_str());
         }
-        dated
+        undated.or(dated)
     };
     pick(&|label: &MarketLabel| label.coin.eq_ignore_ascii_case(coin))
         .or_else(|| pick(&|label: &MarketLabel| label.match_key() == wanted_key))
