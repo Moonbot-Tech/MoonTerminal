@@ -14,13 +14,19 @@ fn main() {
         .expect("moon-station must live under crates/");
     git_meta::emit_release_metadata(workspace);
     // The tags on the built commit itself: only a build of a release tag updates itself
-    // (`auto_update.rs`). The rerun triggers above cover a tag added or moved.
+    // (`auto_update.rs`), and only from a clean tree: edited sources on a tagged commit are not
+    // the release. The rerun triggers above cover a tag added or moved and every tracked file.
+    let clean = std::process::Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(workspace)
+        .output()
+        .is_ok_and(|out| out.status.success() && out.stdout.is_empty());
     let exact = std::process::Command::new("git")
         .args(["tag", "--points-at", "HEAD", "--list", "v*"])
         .current_dir(workspace)
         .output()
         .ok()
-        .filter(|out| out.status.success())
+        .filter(|out| clean && out.status.success())
         .map(|out| {
             String::from_utf8_lossy(&out.stdout)
                 .split_whitespace()
