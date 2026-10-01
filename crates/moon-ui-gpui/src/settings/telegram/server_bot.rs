@@ -934,6 +934,7 @@ impl SettingsView {
         section.when(show_progress, |s| s.child(self.server_bot_progress(cx)))
     }
 
+    /// A labelled, manually editable provider credential field.
     fn server_bot_field(
         &self,
         id: &'static str,
@@ -956,6 +957,62 @@ impl SettingsView {
                     .child(label),
             )
             .child(div().w(design::font_w_px(cx, FIELD_W)).child(field))
+    }
+
+    /// Keep manual key-path entry beside a native single-file picker, wrapping at narrow widths.
+    fn server_bot_key_field(&self, cx: &Context<Self>) -> impl IntoElement {
+        let busy = self.backend.read(cx).station.busy();
+        h_flex()
+            .flex_wrap()
+            .items_center()
+            .gap(design::ui_px(cx, 10.0))
+            .child(self.server_bot_field(
+                "server-key",
+                t!("telegram.server.key_path").to_string(),
+                &self.telegram.server.key_path,
+                false,
+                cx,
+            ))
+            .child(
+                MoonButton::new("server-key-browse")
+                    .size(design::CONTROL_TIER)
+                    .label(t!("telegram.server.key_browse").to_string())
+                    .disabled(busy)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.server_bot_browse_key(window, cx);
+                    }))
+                    .render(),
+            )
+    }
+
+    /// Apply a selected file through a weak view handle; cancellation and a busy form keep edits.
+    fn server_bot_browse_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.backend.read(cx).station.busy() {
+            return;
+        }
+        let selection = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(t!("telegram.server.key_path").to_string().into()),
+        });
+        cx.spawn_in(window, async move |view, cx| match selection.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let _ = view.update_in(cx, |this, window, cx| {
+                        if !this.backend.read(cx).station.busy() {
+                            this.telegram.server.key_path.update(cx, |state, cx| {
+                                state.set_value(path.to_string_lossy().into_owned(), window, cx);
+                            });
+                            cx.notify();
+                        }
+                    });
+                }
+            }
+            Ok(Err(error)) => log::warn!("key file dialog failed: {error}"),
+            _ => {}
+        })
+        .detach();
     }
 
     fn server_bot_hint(&self, key: &str, cx: &Context<Self>) -> impl IntoElement {
@@ -1097,21 +1154,15 @@ impl SettingsView {
                     })),
             )
             .when(ed.by_key, |s| {
-                s.child(self.server_bot_field(
-                    "server-key",
-                    t!("telegram.server.key_path").to_string(),
-                    &ed.key_path,
-                    false,
-                    cx,
-                ))
-                .child(self.server_bot_field(
-                    "server-passphrase",
-                    t!("telegram.server.passphrase").to_string(),
-                    &ed.passphrase,
-                    true,
-                    cx,
-                ))
-                .child(self.server_bot_hint("telegram.server.key_hint", cx))
+                s.child(self.server_bot_key_field(cx))
+                    .child(self.server_bot_field(
+                        "server-passphrase",
+                        t!("telegram.server.passphrase").to_string(),
+                        &ed.passphrase,
+                        true,
+                        cx,
+                    ))
+                    .child(self.server_bot_hint("telegram.server.key_hint", cx))
             })
             .child(self.server_bot_field(
                 "server-password",

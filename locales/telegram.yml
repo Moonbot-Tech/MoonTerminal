@@ -721,6 +721,10 @@ telegram.server.key_path:
   ru: "Файл ключа"
   en: "Key file"
   es: "Archivo de clave"
+telegram.server.key_browse:
+  ru: "Обзор…"
+  en: "Browse…"
+  es: "Examinar…"
 telegram.server.passphrase:
   ru: "Пароль ключа"
   en: "Key passphrase"
