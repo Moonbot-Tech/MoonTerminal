@@ -576,3 +576,213 @@ fn empty_variant_is_fact() {
     };
     assert!(!v.is_empty());
 }
+
+/// The By-time statement as it stood before the column cut: the temp table copied `o.*`. Kept
+/// here as the oracle the narrowed projection must reproduce row for row.
+fn former_variant_stats_sql(src: &str, variants: &[Variant]) -> String {
+    let projections = [
+        format!("mt_core_minute_of_week({OPEN_TS}) AS __mt_week"),
+        format!("mt_core_minute_of_day({OPEN_TS}) AS __mt_day"),
+    ];
+    let matches = variants
+        .iter()
+        .enumerate()
+        .map(|(index, variant)| {
+            format!(
+                "CASE WHEN 1=1{} THEN 1 ELSE 0 END AS v{index}",
+                variant.where_sql()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "WITH projected AS MATERIALIZED (SELECT o.*, {} FROM {src}) \
+         SELECT COALESCE(o.pnl,0), COALESCE(o.spentbtc,0), {matches}
+         FROM projected o
+         ORDER BY o.closedate, COALESCE(o.pnl,0), COALESCE(o.spentbtc,0)",
+        projections.join(", ")
+    )
+}
+
+/// Seed `trades` with `rows` synthetic rows carrying every tuner field, a coin, and a padding
+/// column the unified source would also carry, from small value sets so equal closedates and
+/// equal profits are dense.
+fn seed_wide_trades(conn: &Connection, rows: i64) {
+    let fields = FIELDS
+        .iter()
+        .map(|spec| format!("\"{}\" REAL", spec.col))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute_batch(&format!(
+        "CREATE TABLE trades(
+            closedate INTEGER, buydate INTEGER, pnl REAL, spentbtc REAL, coin TEXT,
+            core_uid INTEGER, sellreason TEXT, {fields}
+         );"
+    ))
+    .expect("wide tuner schema");
+    let placeholders = (1..=7 + FIELDS.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut insert = conn
+        .prepare(&format!("INSERT INTO trades VALUES ({placeholders})"))
+        .expect("prepare wide insert");
+    let mut seed: u64 = 0x7e57;
+    let mut next = |modulo: u64| {
+        seed = seed
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((seed >> 33) % modulo) as i64
+    };
+    for _ in 0..rows {
+        let closedate = 1_767_200_000 + next(rows as u64 / 3 + 1) * 607;
+        let mut values: Vec<rusqlite::types::Value> = vec![
+            closedate.into(),
+            (closedate - next(5_000)).into(),
+            ((next(9) - 4) as f64).into(),
+            (next(5) as f64 * 10.0).into(),
+            ["BTC", "ETH", "SOL"][next(3) as usize].to_string().into(),
+            (1 + next(3)).into(),
+            "synthetic sell reason padding text".to_string().into(),
+        ];
+        for _ in FIELDS {
+            values.push(((next(21) - 10) as f64 * 0.5).into());
+        }
+        insert
+            .execute(rusqlite::params_from_iter(values))
+            .expect("seed wide row");
+    }
+}
+
+/// Per variant, the ordered `(profit, spend)` bit pairs `sql` hands the tallies — exactly what
+/// every KPI, max drawdown included, is computed from. Rows tied on the ORDER BY carry equal
+/// pairs, so the sequences are deterministic whatever order SQLite leaves such ties in.
+fn variant_rows(conn: &Connection, sql: &str, width: usize) -> Vec<Vec<(u64, u64)>> {
+    let mut statement = conn.prepare(sql).expect("prepare variant statement");
+    let rows = statement
+        .query_map(rusqlite::params![0, i64::MAX], |row| {
+            let mut matched = Vec::with_capacity(width);
+            for index in 0..width {
+                matched.push(row.get::<_, i64>(index + 2)? != 0);
+            }
+            Ok((row.get::<_, f64>(0)?, row.get::<_, f64>(1)?, matched))
+        })
+        .expect("run variant statement")
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .expect("collect variant rows");
+    (0..width)
+        .map(|index| {
+            rows.iter()
+                .filter(|(_, _, matched)| matched[index])
+                .map(|(profit, spent, _)| (profit.to_bits(), spent.to_bits()))
+                .collect()
+        })
+        .collect()
+}
+
+/// The By-time sweep's variants: weekday spans, day windows, hour windows, field bounds and coin
+/// lists, alone and combined.
+fn by_time_variants() -> Vec<Variant> {
+    vec![
+        Variant::default(),
+        Variant {
+            week_span: Some((1440, 3 * 1440 + 600)),
+            ..Default::default()
+        },
+        Variant {
+            week_span: Some((6 * 1440, 100)),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Hour(10, 40)),
+            bounds: vec![Bound {
+                field: FIELDS[0].col.into(),
+                from: Some(-2.0),
+                to: Some(3.0),
+            }],
+            coins_in: Some(vec!["BTC".into(), "SOL".into()]),
+            ..Default::default()
+        },
+        Variant {
+            tod: Some(TimeWindow::Day(60, 900)),
+            bounds: vec![Bound {
+                field: FIELDS[FIELDS.len() - 1].col.into(),
+                from: None,
+                to: Some(1.0),
+            }],
+            coins_out: vec!["ETH".into()],
+            ..Default::default()
+        },
+    ]
+}
+
+/// `tuner/mod.rs:variant_stats_sql` -- a narrowed `projected` temp table that drops a column a
+/// variant reads (a bound field, `coin`, `spentbtc`, `closedate`) fails to prepare or changes a
+/// match flag, profit, spend or the chronological order behind max drawdown; this pins every
+/// returned row, ties included, to the former `o.*` statement and the KPIs to the same values.
+#[test]
+fn by_time_projection_keeps_every_variant_row_of_the_full_copy() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    seed_wide_trades(&conn, 3_000);
+    let axis = crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
+    super::super::analytics::time_zone::install(&conn, &axis).expect("tuner scalars");
+    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let variants = by_time_variants();
+
+    let narrowed = variant_stats_sql(source, &variants);
+    assert!(!narrowed.contains("o.*"), "{narrowed}");
+    let former = variant_rows(
+        &conn,
+        &former_variant_stats_sql(source, &variants),
+        variants.len(),
+    );
+    let current = variant_rows(&conn, &narrowed, variants.len());
+    assert_eq!(former[0].len(), 3_000);
+    assert_eq!(former, current);
+
+    let query = Query {
+        axis,
+        from: 0,
+        to: i64::MAX,
+        ..Default::default()
+    };
+    let stats = variant_stats_from_source(&conn, &query, source, &variants).expect("KPIs");
+    assert!(
+        stats
+            .iter()
+            .skip(1)
+            .all(|stat| stat.n > 0 && stat.n < 3_000),
+        "{:?}",
+        stats.iter().map(|stat| stat.n).collect::<Vec<_>>()
+    );
+}
+
+/// Synthetic timing of the former `o.*` temp table against the narrowed projection over 200k
+/// wide rows. Run with `--ignored --nocapture`; prints milliseconds.
+#[test]
+#[ignore = "timing probe, not a regression"]
+fn by_time_projection_timing_probe() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    seed_wide_trades(&conn, 200_000);
+    let axis = crate::db::ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
+    super::super::analytics::time_zone::install(&conn, &axis).expect("tuner scalars");
+    let source = "(SELECT * FROM trades WHERE closedate >= ?1 AND closedate < ?2) o";
+    let variants = by_time_variants();
+    for round in 0..3 {
+        let started = std::time::Instant::now();
+        let former = variant_rows(
+            &conn,
+            &former_variant_stats_sql(source, &variants),
+            variants.len(),
+        );
+        let former_ms = started.elapsed().as_millis();
+        let started = std::time::Instant::now();
+        let current = variant_rows(&conn, &variant_stats_sql(source, &variants), variants.len());
+        let current_ms = started.elapsed().as_millis();
+        assert_eq!(former, current);
+        println!(
+            "[timing] round {round}: rows {} o.* {former_ms} ms -> narrowed {current_ms} ms",
+            former[0].len()
+        );
+    }
+}

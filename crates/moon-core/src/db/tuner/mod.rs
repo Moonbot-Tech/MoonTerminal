@@ -634,9 +634,33 @@ fn variant_stats_sql(src: &str, variants: &[Variant]) -> String {
     let (prefix, source) = if projections.is_empty() {
         (String::new(), src.to_string())
     } else {
+        // Only the columns the statement below reads are copied into the temp table: the
+        // unified source projects every report and tuner field, and `o.*` materialized all of
+        // them for every row of the period.
+        let mut columns = ["closedate", "pnl", "spentbtc"]
+            .iter()
+            .map(|column| format!("o.\"{column}\""))
+            .collect::<Vec<_>>();
+        if variants
+            .iter()
+            .any(|variant| variant.coins_in.is_some() || !variant.coins_out.is_empty())
+        {
+            columns.push("o.\"coin\"".to_string());
+        }
+        columns.extend(
+            FIELDS
+                .iter()
+                .filter(|spec| {
+                    variants
+                        .iter()
+                        .any(|variant| variant.bounds.iter().any(|b| b.field == spec.col))
+                })
+                .map(|spec| format!("o.\"{}\"", spec.col)),
+        );
         (
             format!(
-                "WITH projected AS MATERIALIZED (SELECT o.*, {} FROM {src}) ",
+                "WITH projected AS MATERIALIZED (SELECT {}, {} FROM {src}) ",
+                columns.join(", "),
                 projections.join(", ")
             ),
             "projected o".to_string(),

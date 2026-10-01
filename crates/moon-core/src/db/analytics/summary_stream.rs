@@ -160,7 +160,11 @@ struct TradeRow {
     coin: String,
     strategy_text: Option<String>,
     strategy_id: Option<i64>,
+    /// Rank of `typeof(strategyid)` in SQLite's text order (blob, integer, null, real, text).
+    strategy_type: i64,
     is_short: bool,
+    /// Raw `COALESCE(isshort, 0)`, kept for the tie order (`is_short` is its truthiness).
+    short_key: i64,
     raw_profit: Option<f64>,
     spent: Option<f64>,
     basecurrency: Value,
@@ -371,6 +375,156 @@ impl Accumulator {
     }
 }
 
+impl TradeRow {
+    /// Map one row of [`current_stream_sql`] into its typed form.
+    ///
+    /// Args:
+    ///     row: Statement row with the thirteen projected columns.
+    ///
+    /// Returns:
+    ///     The typed row, or the column conversion error.
+    fn from_stream(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        let short_key = row.get::<_, i64>(8)?;
+        Ok(Self {
+            closedate: row.get(0)?,
+            buydate: row.get(1)?,
+            pnl: row.get(2)?,
+            core_uid: row.get(3)?,
+            core_name: row.get(4)?,
+            coin: row.get(5)?,
+            strategy_text: row.get(6)?,
+            strategy_id: row.get(7)?,
+            strategy_type: row.get(12)?,
+            is_short: short_key != 0,
+            short_key,
+            raw_profit: row.get(9)?,
+            spent: row.get(10)?,
+            basecurrency: row.get(11)?,
+        })
+    }
+
+    /// Whether two consecutive stream rows share the SQL order key and form one tie run.
+    ///
+    /// The statement orders by true UTC, `closedate`, `core_uid` and `pnl` only. True UTC is a
+    /// function of `closedate` and `core_uid`, so equality on those three fields is equality on
+    /// the whole SQL key, compared as SQLite compares them (`-0.0 == 0.0`, NULL with NULL).
+    ///
+    /// Args:
+    ///     other: The row the run started with.
+    ///
+    /// Returns:
+    ///     Whether `self` belongs to the same tie run as `other`.
+    fn same_order_key(&self, other: &TradeRow) -> bool {
+        self.closedate == other.closedate
+            && self.core_uid == other.core_uid
+            && self.pnl == other.pnl
+    }
+
+    /// Order two rows of one tie run by every remaining value the [`Accumulator`] can observe.
+    ///
+    /// This is the tail the SQL statement used to sort EVERY row on. Ties on the SQL key are rare
+    /// (one core, one second, one profit), so ordering them here keeps the streamed sequence
+    /// identical — top-row picks and float summation order included — while SQLite's sorter
+    /// carries only the five-term key. Each step mirrors the SQL term it replaces: NULL last,
+    /// text by BINARY bytes, `typeof` by the text order of its name.
+    ///
+    /// Args:
+    ///     rhs: Row to compare against.
+    ///
+    /// Returns:
+    ///     The order the former SQL tail produced for these two rows.
+    fn tie_cmp(&self, rhs: &TradeRow) -> std::cmp::Ordering {
+        self.buydate
+            .cmp(&rhs.buydate)
+            .then_with(|| {
+                (self.core_name.is_none(), &self.core_name)
+                    .cmp(&(rhs.core_name.is_none(), &rhs.core_name))
+            })
+            .then_with(|| self.coin.cmp(&rhs.coin))
+            .then_with(|| self.strategy_type.cmp(&rhs.strategy_type))
+            .then_with(|| self.strategy_text.cmp(&rhs.strategy_text))
+            .then_with(|| self.short_key.cmp(&rhs.short_key))
+            .then_with(|| sql_num_cmp(self.raw_profit, rhs.raw_profit))
+            .then_with(|| sql_num_cmp(self.spent, rhs.spent))
+            .then_with(|| sql_value_cmp(&self.basecurrency, &rhs.basecurrency))
+    }
+}
+
+/// Order two nullable numbers as `x IS NULL, x` does in SQLite.
+///
+/// Args:
+///     left: First value, `None` for SQL NULL.
+///     right: Second value.
+///
+/// Returns:
+///     NULL after any number; equal numbers (including `-0.0` and `0.0`) tie.
+fn sql_num_cmp(left: Option<f64>, right: Option<f64>) -> std::cmp::Ordering {
+    match (left, right) {
+        (Some(left), Some(right)) => left
+            .partial_cmp(&right)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (left, right) => left.is_none().cmp(&right.is_none()),
+    }
+}
+
+/// Order two SQLite values as `typeof(v), CAST(v AS TEXT)` does.
+///
+/// Reals compare numerically rather than by SQLite's `%!.15g` text; a REAL quote ordinal does
+/// not occur in the report schema, and the two orders agree on equal values.
+///
+/// Args:
+///     left: First value.
+///     right: Second value.
+///
+/// Returns:
+///     The order of the two values under the former SQL tail terms.
+fn sql_value_cmp(left: &Value, right: &Value) -> std::cmp::Ordering {
+    /// Rank of the value's `typeof` name in text order: blob, integer, null, real, text.
+    fn rank(value: &Value) -> u8 {
+        match value {
+            Value::Blob(_) => 0,
+            Value::Integer(_) => 1,
+            Value::Null => 2,
+            Value::Real(_) => 3,
+            Value::Text(_) => 4,
+        }
+    }
+    rank(left)
+        .cmp(&rank(right))
+        .then_with(|| match (left, right) {
+            (Value::Integer(left), Value::Integer(right)) => {
+                left.to_string().cmp(&right.to_string())
+            }
+            (Value::Real(left), Value::Real(right)) => {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            }
+            (Value::Text(left), Value::Text(right)) => left.cmp(right),
+            (Value::Blob(left), Value::Blob(right)) => left.cmp(right),
+            _ => std::cmp::Ordering::Equal,
+        })
+}
+
+/// Feed one SQL tie run onward in the former full-tuple order.
+///
+/// Args:
+///     run: Rows sharing the SQL order key; drained by this call.
+///     sink: Consumer of each row in order, normally [`Accumulator::push`].
+///
+/// Returns:
+///     Success once every row was accepted, or the sink's first error.
+fn flush_run(
+    run: &mut Vec<TradeRow>,
+    sink: &mut impl FnMut(TradeRow) -> rusqlite::Result<()>,
+) -> rusqlite::Result<()> {
+    if run.len() > 1 {
+        run.sort_by(TradeRow::tie_cmp);
+    }
+    for row in run.drain(..) {
+        sink(row)?;
+    }
+    Ok(())
+}
+
 /// Retain one best-or-worst candidate in a stable five-row ranking.
 ///
 /// Args:
@@ -419,9 +573,11 @@ fn inner_window_bounds(axis: &crate::db::ReportAxis, outer_from: i64, outer_to: 
 
 /// Build the prepared current-stream SQL shared by production and plan-contract tests.
 ///
-/// The order tail covers every value observable by [`Accumulator`]. Rows still tied after the
-/// tuple are therefore sequence-equivalent for streaks, drawdown, aggregates, and displayed top
-/// rows even when SQLite changes UNION branch or index traversal order.
+/// SQLite sorts on the five-term key `true time, closedate, core_uid, pnl` only. Rows tied on it
+/// are put in the former full-tuple order by [`flush_run`], which covers every value observable
+/// by [`Accumulator`], so the stream stays sequence-equivalent for streaks, drawdown, aggregates
+/// and displayed top rows even when SQLite changes UNION branch or index traversal order — while
+/// the sorter no longer evaluates and stores twelve tail expressions per row.
 ///
 /// Args:
 ///     src: Unified filtered source retaining its inner `?1`/`?2` range.
@@ -436,16 +592,12 @@ fn current_stream_sql(src: &str, true_time: &str, inline_raw: &str) -> String {
                 o.core_uid, o.core_name, COALESCE(o.coin,''),
                 CAST(o.strategyid AS TEXT),
                 CASE WHEN typeof(o.strategyid) = 'integer' THEN o.strategyid END,
-                COALESCE(o.isshort,0), {inline_raw}
+                COALESCE(o.isshort,0), {inline_raw},
+                CASE typeof(o.strategyid) WHEN 'blob' THEN 0 WHEN 'integer' THEN 1
+                     WHEN 'null' THEN 2 WHEN 'real' THEN 3 ELSE 4 END
          FROM {src}
          WHERE {true_time} >= ?3 AND {true_time} < ?4
-         ORDER BY {true_time},
-                  o.closedate, o.core_uid, o.pnl IS NULL, o.pnl,
-                  COALESCE(o.buydate, o.closedate), o.core_name IS NULL, o.core_name,
-                  COALESCE(o.coin,''), typeof(o.strategyid), CAST(o.strategyid AS TEXT),
-                  COALESCE(o.isshort,0), o.profitbtc IS NULL, o.profitbtc,
-                  o.spentbtc IS NULL, o.spentbtc,
-                  typeof(o.basecurrency), CAST(o.basecurrency AS TEXT)"
+         ORDER BY {true_time}, o.closedate, o.core_uid, o.pnl IS NULL, o.pnl"
     )
 }
 
@@ -589,30 +741,21 @@ fn read_with_window(
         let rows = statement
             .query_map(
                 rusqlite::params![inner_from, inner_to, window_from, window_to],
-                |row| {
-                    Ok(TradeRow {
-                        closedate: row.get(0)?,
-                        buydate: row.get(1)?,
-                        pnl: row.get(2)?,
-                        core_uid: row.get(3)?,
-                        core_name: row.get(4)?,
-                        coin: row.get(5)?,
-                        strategy_text: row.get(6)?,
-                        strategy_id: row.get(7)?,
-                        is_short: row.get::<_, i64>(8)? != 0,
-                        raw_profit: row.get(9)?,
-                        spent: row.get(10)?,
-                        basecurrency: row.get(11)?,
-                    })
-                },
+                TradeRow::from_stream,
             )
             .map_err(|error| read_fail_on(conn, CTX, error))?;
+        // A tie run never crosses a window: its rows share `closedate` and `core_uid`, hence one
+        // true-UTC instant.
+        let mut run: Vec<TradeRow> = Vec::new();
+        let mut sink = |row| accumulator.push(row, bucket, raw_src.is_none(), axis);
         for row in rows {
             let row = row.map_err(|error| read_fail_on(conn, CTX, error))?;
-            accumulator
-                .push(row, bucket, raw_src.is_none(), axis)
-                .map_err(|error| read_fail_on(conn, CTX, error))?;
+            if run.first().is_some_and(|first| !row.same_order_key(first)) {
+                flush_run(&mut run, &mut sink).map_err(|error| read_fail_on(conn, CTX, error))?;
+            }
+            run.push(row);
         }
+        flush_run(&mut run, &mut sink).map_err(|error| read_fail_on(conn, CTX, error))?;
         window_from = window_to;
     }
     // Exact, not a second policy constant: `q.to - q.from` is already clamped by `clamp_period`
