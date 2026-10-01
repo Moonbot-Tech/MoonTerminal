@@ -5,6 +5,27 @@ use moon_core::telegram::{
     report::Period,
 };
 
+/// A station bot answering a non-owner keeps the terminal's two-row layout, without Status.
+#[test]
+fn station_non_owner_keyboard_matches_the_terminal() {
+    let rows = |host, owner| {
+        let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
+            super::navigation_keyboard(host, owner)
+        else {
+            panic!("expected persistent keyboard")
+        };
+        markup
+            .keyboard
+            .into_iter()
+            .map(|row| row.into_iter().map(|b| b.text).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rows(crate::HostKind::Station, false),
+        rows(crate::HostKind::Terminal, true)
+    );
+}
+
 /// The reply keyboard is two rows: short period labels with Help, then the two month labels.
 #[test]
 fn persistent_keyboard_fits_in_two_rows() {
@@ -60,8 +81,8 @@ fn persistent_navigation_buttons_have_recognized_commands() {
     }
 }
 
-/// A station's keyboard carries its "Status" after the months, and only a station's labels parse
-/// it: a terminal's bot has no station to report on.
+/// A station owner's keyboard is three rows of two — days, months, then Status with Help — and
+/// only a station's labels parse its Status: a terminal's bot has no station to report on.
 #[test]
 fn only_the_station_keyboard_has_its_status() {
     let labels = super::telegram_labels(crate::HostKind::Station);
@@ -70,13 +91,29 @@ fn only_the_station_keyboard_has_its_status() {
     else {
         panic!("expected persistent keyboard")
     };
-    assert_eq!(markup.keyboard[0].len(), 3);
-    assert_eq!(markup.keyboard[1].len(), 3);
-    let status = &markup.keyboard[1][2].text;
-    assert_eq!(
-        parse_reply_button(status, &labels),
-        ParsedCommand::StationStatus
-    );
+    assert_eq!(markup.keyboard.len(), 3);
+    assert!(markup.keyboard.iter().all(|row| row.len() == 2));
+    let command =
+        |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);
+    assert!(matches!(
+        command(0, 0),
+        ParsedCommand::Report(request) if request.period == Period::Today
+    ));
+    assert!(matches!(
+        command(0, 1),
+        ParsedCommand::Report(request) if request.period == Period::Yesterday
+    ));
+    assert!(matches!(
+        command(1, 0),
+        ParsedCommand::Report(request) if request.period == Period::Month
+    ));
+    assert!(matches!(
+        command(1, 1),
+        ParsedCommand::Report(request) if request.period == Period::LastMonth
+    ));
+    assert_eq!(command(2, 0), ParsedCommand::StationStatus);
+    assert!(matches!(command(2, 1), ParsedCommand::Help));
+    let status = &markup.keyboard[2][0].text;
     for row in &markup.keyboard {
         for button in row {
             assert_ne!(

@@ -68,12 +68,18 @@ pub(crate) fn navigation_keyboard(host: crate::HostKind, owner: bool) -> ReplyMa
         }
     };
     let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(button);
-    let mut months = vec![month, lastmonth];
-    if host == crate::HostKind::Station && owner {
-        months.push(button(STATION_STATUS_BUTTON));
-    }
+    // The station owner gets three rows of two so the month labels are never cut on a phone.
+    let keyboard = if host == crate::HostKind::Station && owner {
+        vec![
+            vec![today, yesterday],
+            vec![month, lastmonth],
+            vec![button(STATION_STATUS_BUTTON), help],
+        ]
+    } else {
+        vec![vec![today, yesterday, help], vec![month, lastmonth]]
+    };
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
-        keyboard: vec![vec![today, yesterday, help], months],
+        keyboard,
         resize_keyboard: true,
         is_persistent: true,
     })
