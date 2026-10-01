@@ -185,6 +185,7 @@ impl SettingsView {
     /// Render the bot's segment: without a station, the terminal bot's four sections; with one,
     /// the server's bot on top with the same sections of its own, a line pointing to the Station
     /// tab, and "Also a bot in the terminal" opening the terminal's four.
+    /// Server jobs show busy/outcome feedback here; status facts and the journal stay in Station.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -444,7 +445,7 @@ impl SettingsView {
                 )
                 .child(self.server_bot_block(cx))
                 .children(self.server_bot_sections(cx))
-                .child(self.server_bot_progress(cx))
+                .child(self.server_bot_progress(false, cx))
                 .child(self.server_bot_local_toggle(cx))
             })
             .when(local_on, |s| s.child(local))
