@@ -6,9 +6,9 @@
 //! silently, and the caption and the load log print the counts: a row without a millisecond
 //! stamp cannot be replayed (the tape is sub-second); a SERVICE row — funding, a liquidation, a
 //! joined sell, no strategy behind it — is not a trade the tape explains ([`scope`]); and a
-//! trade the tuner cannot be run on — a container kind, an unresolved one, a manual exit. The
-//! "Fact" column keeps them all: it is the scope's money, and this file decides only what the
-//! model reads.
+//! trade the tuner cannot be run on — a container kind, an unresolved one, an exit by hand or by
+//! the global panic sell. The "Fact" column keeps them all: it is the scope's money, and this
+//! file decides only what the model reads.
 
 use std::collections::HashMap;
 
@@ -33,8 +33,8 @@ pub struct DealsRead {
     /// Service rows with stamps — funding, liquidations, joined sells, no strategy, and a sale
     /// that moved more coins than the entry bought — left out; see [`scope`].
     pub service: usize,
-    /// Trades with stamps the tuner cannot be run on — a container or unresolved kind, a manual
-    /// exit — left out; see [`is_tunable`].
+    /// Trades with stamps the tuner cannot be run on — a container or unresolved kind, an exit
+    /// by hand or by the global panic sell — left out; see [`is_tunable`].
     pub untunable: usize,
 }
 

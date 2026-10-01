@@ -163,8 +163,8 @@ pub(in crate::analytics::tuner) struct TicksData {
     /// strategy, and a sale that moved more coins than the entry bought — a spot position
     /// topped up from the wallet balance) — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) service: usize,
-    /// Trades the tuner cannot be run on — container or unresolved kinds, manual exits — in
-    /// the Fact column, not in the table.
+    /// Trades the tuner cannot be run on — container or unresolved kinds, exits by hand or by
+    /// the global panic sell — in the Fact column, not in the table.
     pub(in crate::analytics::tuner) untunable: usize,
     /// One column: the rows fit for the search ([`DealRow::fit`]) whose tape is in memory — the
     /// sample the variants replay, and the baseline they are compared with. The whole scope is not shown: the axis

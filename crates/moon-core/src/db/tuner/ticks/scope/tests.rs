@@ -66,3 +66,15 @@ fn manual_exits_leave_the_tunable_set_and_rule_exits_stay() {
     assert!(!is_tunable("Alerts", "Sell Price"));
     assert!(!is_tunable("", "Sell Price"));
 }
+
+/// The global panic sell closes every position whatever the strategy — by the button or by an
+/// Autostart rule, one reason for both — so it leaves the tunable set; a strategy's own panic
+/// reasons and the hand's single-order panic are not this one.
+#[test]
+fn the_global_panic_sell_leaves_the_tunable_set() {
+    assert!(is_global_panic_exit("Global PanicSell"));
+    assert!(!is_global_panic_exit("Manual PanicSell"));
+    assert!(!is_global_panic_exit("StopLoss Market Sell"));
+    assert!(!is_tunable("MoonShot", "Global PanicSell"));
+    assert!(is_tunable("MoonShot", "Sell Price"));
+}

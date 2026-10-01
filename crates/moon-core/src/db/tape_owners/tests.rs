@@ -96,6 +96,10 @@ fn is_tunable_follows_the_axis_filter() {
         "manual exit"
     );
     assert!(
+        !owner(42, "MoonShot", "Global PanicSell").is_tunable(),
+        "global panic sell"
+    );
+    assert!(
         !owner(42, "MoonShot", "Funding").is_tunable(),
         "service row"
     );

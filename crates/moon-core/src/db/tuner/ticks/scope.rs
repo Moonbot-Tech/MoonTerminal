@@ -14,11 +14,15 @@
 //! trades close on a sell line the exit model has
 //! (every trading kind; a `Manual`, `Alerts` or `Watcher` strategy is a container, not a rule),
 //! resolved in `strategies.sqlite` (a kind the database does not know has no versions to take
-//! the parameters as of the buy from), and an exit the strategy made itself — a manual sell is
-//! a fact the model can only ever miss, and a miss the sample is then judged by.
+//! the parameters as of the buy from), and an exit the strategy made itself — a manual sell or
+//! the core's global panic sell is a fact the model can only ever miss, and a miss the sample
+//! is then judged by.
 
 /// `sellreason` values of the service rows; matched exactly, as the core writes them.
 pub const SERVICE_SELL_REASONS: [&str; 3] = ["Funding", "LIQUIDATION", "JoinedSell"];
+
+/// `sellreason` of the core's global panic sell, matched exactly ([`is_global_panic_exit`]).
+const GLOBAL_PANIC_SELL: &str = "Global PanicSell";
 
 /// Strategy kinds (`SignalType`) that hold no trading rule of their own.
 const CONTAINER_KINDS: [&str; 3] = ["Manual", "Alerts", "Watcher"];
@@ -76,14 +80,29 @@ pub fn is_manual_exit(sell_reason: &str) -> bool {
     sell_reason.starts_with("Manual") || sell_reason == "SellFromAssets"
 }
 
+/// Whether the exit was the core's global panic sell, which closes every position of the core at
+/// once whatever its strategy.
+///
+/// One reason for every trigger: the panic button and the Autostart tab's rules on an hourly BTC
+/// move and on the whole market's average drop (`cbGlobalPanicBTC`, `cbGlobalPanicMarket` in
+/// `MoonBot.exe`, whose list of sell reasons holds this one entry for all of them). Either way
+/// the strategy's rule did not make the exit. On this machine's replica (2026-10-01): 257 rows in
+/// 10 bursts, the large ones pressed by hand next to `SellFromAssets` and `Manual PanicSell`.
+///
+/// Args:
+///     sell_reason: The row's `sellreason`, as stored.
+fn is_global_panic_exit(sell_reason: &str) -> bool {
+    sell_reason == GLOBAL_PANIC_SELL
+}
+
 /// Whether a resolved deal is one the tuner can be run on: a tunable kind that closed by its
-/// own rule.
+/// own rule — neither by hand nor by the global panic sell.
 ///
 /// Args:
 ///     kind: The strategy kind, resolved.
 ///     sell_reason: The row's `sellreason`.
 pub fn is_tunable(kind: &str, sell_reason: &str) -> bool {
-    tunable_kind(kind) && !is_manual_exit(sell_reason)
+    tunable_kind(kind) && !is_manual_exit(sell_reason) && !is_global_panic_exit(sell_reason)
 }
 
 #[cfg(test)]
