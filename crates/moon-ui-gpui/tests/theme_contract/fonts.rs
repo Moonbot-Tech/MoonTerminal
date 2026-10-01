@@ -246,8 +246,11 @@ fn sells_zone_cursor_badge_uses_the_ui_face() {
 fn settings_values_and_connections_repin_the_mono_family() {
     let general = read_src("settings/general.rs");
     assert!(
-        code_only(braced_body(&general, "pub(super) fn stepper_controls("))
-            .contains(".font_family(design::mono())"),
+        code_only(braced_body(
+            &general,
+            "pub(super) fn stepper_controls_styled("
+        ))
+        .contains(".font_family(design::mono())"),
         "settings counters must keep their compared values mono"
     );
     let badges = read_src("settings/badges.rs");

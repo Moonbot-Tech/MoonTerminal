@@ -17,7 +17,7 @@ pub(super) struct StationProgress {
 }
 
 impl RenderOnce for StationProgress {
-    /// Render every fact in the parent Settings scroll; only the action log has a height cap.
+    /// Render uncapped facts and a capped log with one clipped row per entry and full-text tooltips.
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let mut content = v_flex()
@@ -115,7 +115,7 @@ impl RenderOnce for StationProgress {
                         .w_full()
                         .min_w(px(0.0))
                         .flex_shrink_0()
-                        .overflow_hidden()
+                        .truncate()
                         .tooltip(move |_, cx| cx.new(|_| MoonTooltipView::new(full.clone())).into())
                         .child(line),
                 );

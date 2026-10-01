@@ -1011,11 +1011,12 @@ impl SettingsView {
             })
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap(design::ui_px(cx, 8.0))
                     .child(
                         MoonButton::new("server-install-confirm")
                             .primary()
-                            .padding_x(12.0)
+                            .size(design::CONTROL_TIER)
                             .label(t!("telegram.server.install_confirm").to_string())
                             .disabled(busy)
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1028,8 +1029,7 @@ impl SettingsView {
                     )
                     .child(
                         MoonButton::new("server-install-cancel")
-                            .ghost()
-                            .padding_x(12.0)
+                            .size(design::CONTROL_TIER)
                             .label(t!("telegram.server.cancel").to_string())
                             .disabled(busy)
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1135,7 +1135,7 @@ impl SettingsView {
                 h_flex().child(
                     MoonButton::new("server-install")
                         .primary()
-                        .padding_x(12.0)
+                        .size(design::CONTROL_TIER)
                         .label(t!("telegram.server.install").to_string())
                         .disabled(busy)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1151,8 +1151,8 @@ impl SettingsView {
             .map(|s| self.server_bot_install_review(s, cx))
     }
 
-    /// A server this terminal set up: the station's own actions (its bot is in the Telegram
-    /// tab).
+    /// Group a known station's everyday and maintenance actions into wrapping button rows.
+    /// Destructive actions and their unchanged confirmations live in the separated access block.
     fn server_bot_known(
         &self,
         section: MoonGroupBox,
@@ -1164,7 +1164,7 @@ impl SettingsView {
         let (service, version) = self.server_versions(cx);
         let button = |id: &'static str, label: String| {
             MoonButton::new(id)
-                .padding_x(12.0)
+                .size(design::CONTROL_TIER)
                 .label(label)
                 .disabled(busy)
         };
@@ -1176,11 +1176,18 @@ impl SettingsView {
             })
         };
         let actions = h_flex()
+            .w_full()
+            .min_w(px(0.0))
             .flex_wrap()
             .gap(design::ui_px(cx, 8.0))
             .child(
                 button("server-status", t!("telegram.server.status").to_string())
                     .on_click(on(|_, target, _| Ok(Job::Status { target })))
+                    .render(),
+            )
+            .child(
+                button("server-logs", t!("telegram.server.logs").to_string())
+                    .on_click(on(|_, target, _| Ok(Job::Logs { target })))
                     .render(),
             )
             .child({
@@ -1196,20 +1203,18 @@ impl SettingsView {
                     .tooltip(t!("telegram.server.update_hint").to_string())
                     .on_click(on(|_, target, _| Ok(Job::Update { target })))
                     .render()
-            })
+            });
+        let maintenance = h_flex()
+            .w_full()
+            .min_w(px(0.0))
+            .flex_wrap()
+            .gap(design::ui_px(cx, 8.0))
             .child(
                 button("server-resetup", t!("telegram.server.resetup").to_string())
-                    .ghost()
                     .tooltip(t!("telegram.server.resetup_hint").to_string())
                     .on_click(on(|this, target, cx| {
                         this.server_bot_resetup_job(target, cx)
                     }))
-                    .render(),
-            )
-            .child(
-                button("server-logs", t!("telegram.server.logs").to_string())
-                    .ghost()
-                    .on_click(on(|_, target, _| Ok(Job::Logs { target })))
                     .render(),
             )
             .child(
@@ -1218,7 +1223,6 @@ impl SettingsView {
                     t!("telegram.server.change_address").to_string(),
                 )
                 .disabled(self.backend.read(cx).station.running)
-                .ghost()
                 .on_click(cx.listener(|this, _, window, cx| this.station_address_begin(window, cx)))
                 .render(),
             );
@@ -1231,6 +1235,7 @@ impl SettingsView {
         // A server set up already updates from the release: no file to choose.
         self.server_bot_old_admin(section, cx)
             .child(actions)
+            .child(maintenance)
             .child(self.station_access_block(target, cx))
             .child(self.server_tape_block(target, cx))
     }

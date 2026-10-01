@@ -426,16 +426,14 @@ fn show_status(state: &BotState, say: &mut dyn FnMut(Progress)) {
     }
 }
 
-/// The explicitly requested journal stays visible beneath a localized heading as details.
-/// This is diagnostic content, distinct from the helper's hidden status/progress tokens.
+/// Show the requested journal beneath one localized heading, preserving each raw line verbatim.
+/// Journal entries are visible content, unlike hidden helper status/progress diagnostics.
 fn show_journal(text: &str, say: &mut dyn FnMut(Progress)) {
     say(Progress::Text(
         rust_i18n::t!("station.progress.logs").to_string(),
     ));
     for line in text.lines() {
-        say(Progress::Text(
-            rust_i18n::t!("station.detail", detail = line).to_string(),
-        ));
+        say(Progress::Text(line.to_owned()));
     }
 }
 

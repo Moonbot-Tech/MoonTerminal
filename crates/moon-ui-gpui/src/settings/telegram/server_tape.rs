@@ -63,8 +63,8 @@ impl SettingsView {
         }
     }
 
-    /// The station's window: two steppers on the terminal's steps and "Set", live while the
-    /// draft differs from what the station records with.
+    /// Align the station's trade-window labels and visible steppers in a wrapping form.
+    /// "Set" stays live only while the draft differs from the station's recorded window.
     pub(super) fn server_tape_block(&self, target: &Target, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let busy = self.backend.read(cx).station.busy();
@@ -75,6 +75,7 @@ impl SettingsView {
                 .child(t!(key).to_string())
         };
         let title = div()
+            .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgba_from(p.text, 1.0))
             .child(t!("telegram.server.tape_title").to_string());
         let Some(draft) = ed.draft else {
@@ -84,23 +85,34 @@ impl SettingsView {
                 .child(hint("telegram.server.tape_unknown"))
                 .into_any_element();
         };
-        let row = |label: String, stepper: AnyElement| {
+        let row = |label: String, control: AnyElement| {
             h_flex()
+                .w_full()
+                .min_w(px(0.0))
                 .flex_wrap()
                 .gap(design::ui_px(cx, 8.0))
                 .items_center()
-                .child(div().text_color(rgba_from(p.text_soft, 1.0)).child(label))
-                .child(stepper)
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 150.0))
+                        .max_w_full()
+                        .flex_shrink_0()
+                        .text_color(rgba_from(p.text_soft, 1.0))
+                        .child(label),
+                )
+                .child(control)
         };
         let changed = ed.seen != Some(draft);
         let target = target.clone();
         v_flex()
+            .w_full()
+            .min_w(px(0.0))
             .gap(design::ui_px(cx, 6.0))
             .child(title)
             .child(hint("telegram.server.tape_hint"))
             .child(row(
                 t!("storage.trades_margin").to_string(),
-                self.stepper_controls(
+                self.stepper_controls_styled(
                     cx,
                     "server-tape-margin",
                     !busy,
@@ -108,12 +120,13 @@ impl SettingsView {
                     1,
                     3,
                     Self::server_tape_margin,
+                    true,
                 )
                 .into_any_element(),
             ))
             .child(row(
                 t!("storage.trades_long_position").to_string(),
-                self.stepper_controls(
+                self.stepper_controls_styled(
                     cx,
                     "server-tape-long",
                     !busy,
@@ -121,26 +134,27 @@ impl SettingsView {
                     1,
                     5,
                     Self::server_tape_long,
+                    true,
                 )
                 .into_any_element(),
             ))
-            .child(
-                h_flex().child(
-                    MoonButton::new("server-tape-set")
-                        .primary()
-                        .padding_x(12.0)
-                        .label(t!("telegram.server.tape_set").to_string())
-                        .disabled(busy || !changed)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            let job = Job::Tape {
-                                target: target.clone(),
-                                tape: draft,
-                            };
-                            this.server_bot_run(Ok(job), cx);
-                        }))
-                        .render(),
-                ),
-            )
+            .child(row(
+                String::new(),
+                MoonButton::new("server-tape-set")
+                    .primary()
+                    .size(design::CONTROL_TIER)
+                    .label(t!("telegram.server.tape_set").to_string())
+                    .disabled(busy || !changed)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let job = Job::Tape {
+                            target: target.clone(),
+                            tape: draft,
+                        };
+                        this.server_bot_run(Ok(job), cx);
+                    }))
+                    .render()
+                    .into_any_element(),
+            ))
             .into_any_element()
     }
 }
