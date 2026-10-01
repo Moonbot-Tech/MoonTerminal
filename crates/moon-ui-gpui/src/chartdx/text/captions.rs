@@ -419,6 +419,7 @@ impl RenderState {
         self.panes[idx].action_rects.clear();
         self.panes[idx].filter_header_hits.clear();
         self.panes[idx].column_bands.clear();
+        self.panes[idx].filter_strip = None;
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -459,6 +460,16 @@ impl RenderState {
                     crate::chartdx::ColumnBand::grow(&mut pane.column_bands, hit.row, hit.rect);
                 }
             }
+            pane.filter_strip = crate::chartdx::ColumnBand::filter_strip(
+                &pane.column_bands,
+                &cfg,
+                [
+                    geom.plot_left,
+                    geom.plot_top,
+                    geom.plot_right,
+                    geom.plot_bottom,
+                ],
+            );
         }
         for bar in &mut bars {
             let sf = geom.scale_factor;
@@ -1195,6 +1206,11 @@ impl RenderState {
                         let w = metrics.width.as_f32();
                         drawn_w = drawn_w.max(w);
                         let box_left = if rightwards { line_x } else { line_x - w };
+                        grow_column_band(
+                            &mut self.panes[idx].column_bands,
+                            item,
+                            [box_left, y, w, metrics.line_height.as_f32()],
+                        );
                         if item.plate {
                             match plates.iter_mut().find(|(row, _)| *row == item.row) {
                                 Some((_, box_)) => {
@@ -1366,14 +1382,11 @@ impl RenderState {
                             cfg: self.chart_labels.clone(),
                         });
                 }
-                // A scrollable column's wheel target grows with every line it drew.
-                if item.part >= ARB_PART_BASE {
-                    crate::chartdx::ColumnBand::grow(
-                        &mut self.panes[idx].column_bands,
-                        item.row,
-                        [box_left, y, w, line_h],
-                    );
-                }
+                grow_column_band(
+                    &mut self.panes[idx].column_bands,
+                    item,
+                    [box_left, y, w, line_h],
+                );
                 // The module's right-click target grows with every line of it — the heading, the
                 // figures and the bars beside them — so the menu opens from anywhere on the block.
                 // Independent of the plate: a module with its backing switched off is still a
@@ -1687,6 +1700,16 @@ impl RenderState {
             crate::diag::bump(&crate::diag::CHART_CAPTION_REBUILD);
         }
         changed
+    }
+}
+
+/// A scrollable column's wheel target grows with every line it drew, wrapped or not.
+///
+/// Both draw branches register through here: a column line drawn wrapped that skipped it would
+/// leave its list without a band, so the wheel over it would pan the chart instead.
+fn grow_column_band(bands: &mut Vec<crate::chartdx::ColumnBand>, item: &Item, rect: [f32; 4]) {
+    if item.part >= ARB_PART_BASE {
+        crate::chartdx::ColumnBand::grow(bands, item.row, rect);
     }
 }
 
