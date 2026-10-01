@@ -74,7 +74,8 @@ pub(super) fn closed_tally(
 /// The sample less the deals the strategies as they stand leave open inside the tape — the
 /// variant's held edits over them and nothing else moved, completed as every point is
 /// (`deps::Dependents::complete`), over the same bases the search then scores on: restart 0's
-/// very point — with the kept deals' indices into `bases.owns`, and the dropped deals' ids.
+/// point less the fields it pins on their grids (`pinned`) — with the kept deals' indices into
+/// `bases.owns`, and the dropped deals' ids.
 ///
 /// Such a deal is no point's doing: a gap in its tape, a rule the model does not have. Held in the
 /// sample it would refuse every point, the strategy itself among them, and the search could not

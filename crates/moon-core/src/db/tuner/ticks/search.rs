@@ -1,7 +1,8 @@
 //! The search of the "Entry/Exit" axis: coordinate descent with restarts over the discrete
 //! grids the caller hands it ([`SearchParams::grids`], `params::range`), scoring a point by REPLAYING every covered deal under it — the shape
 //! of `threshold_search`, with the SQL mask replaced by [`simulate`]. Restart 0 starts from the
-//! strategy itself; the others from the strategy moved a few steps on a few fields, each walking
+//! strategy itself, but for a field it holds off the field's grid ([`pinned`]); the others from
+//! the strategy moved a few steps on a few fields, each walking
 //! the fields in an order of its own. A pass that moves no single field then tries PAIRS of the
 //! Entry group's number fields, one a step down and another a step up, so a corridor's distance
 //! can move between the base fields and the modifiers ([`descend`]). A search of both groups
@@ -118,7 +119,8 @@ pub struct SearchParams<'a> {
     /// Values held over every deal's own base ([`PreparedDeal::own`]) before the point is laid
     /// on — the axis passes the variant's edits for every search, so the fields it leaves alone
     /// run at what the earlier searches found. The fields it varies are not held: their values
-    /// here are set aside, and each starts from the strategies ([`SearchResult::searched`]).
+    /// here are set aside, and each starts from the strategies, or from its grid step where a
+    /// strategy holds it off the grid (`pinned`; [`SearchResult::searched`]).
     /// Empty searches from the strategies as they stand.
     pub held: &'a HashMap<String, String>,
     /// Schema defaults for the keys a deal's base leaves out.
@@ -182,7 +184,8 @@ pub enum SearchMiss {
 pub struct SearchStats {
     /// Restarts that ran to the end (a stop leaves the rest out).
     pub restarts: usize,
-    /// The restart the answer came from: 0 starts from the strategy itself.
+    /// The restart the answer came from: 0 starts from the strategy itself, but for the fields
+    /// pinned on their grids ([`pinned`]).
     pub best_restart: usize,
     /// Passes of coordinate descent the winning restart took.
     pub passes: usize,
@@ -211,8 +214,8 @@ pub struct SearchResult {
     /// at least one deal.
     pub values: Vec<(String, String)>,
     /// The fields the search varied, sorted: each one's answer is in `values`, or it is at the
-    /// strategies' own value — never at what the held edits had it at, which the search set
-    /// aside.
+    /// strategies' own value where that value is on the field's grid ([`pinned`]) — never at what
+    /// the held edits had it at, which the search set aside.
     pub searched: Vec<String>,
     /// What they achieve on the deals they were fitted on.
     pub train: Tally,
@@ -815,9 +818,10 @@ pub fn suggest(
     handle: &SearchHandle,
 ) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
-    // A searched field starts from the strategies, never from what the held edits put there
-    // (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever В1 holds"): its held value
-    // is set aside, and only the fields the search leaves alone are held.
+    // A searched field starts from the strategies (or its grid step, `pinned`), never from what
+    // the held edits put there (LinKvo, 2026-09-25: "a ticked field is searched anew, whatever
+    // В1 holds"): its held value is set aside, and only the fields the search leaves alone are
+    // held.
     let held: HashMap<String, String> = params
         .held
         .iter()
@@ -866,6 +870,9 @@ pub fn suggest(
         of_deal: of_kept,
     };
     let train_of = &bases.of_deal[..train_n];
+    // A searched field some strategy holds off its grid starts every restart on the grid
+    // (`pinned`): the value the range leaves out is never an answer by standing still.
+    let pinned = pinned::off_grid(&fields, params.grids, &start, &bases.owns, params.defaults);
     // Held over the whole sample, the holdout included: a corridor nearer the price than a
     // trade's own is out whichever side of the cut the trade sits on.
     let guard = (params.keep_corridor && params.vary_entry).then(|| CorridorGuard::of(deals));
@@ -956,7 +963,8 @@ pub fn suggest(
                     handle.note_abandoned();
                     return None;
                 }
-                // Restart 0 starts from the base itself, in grid order. The others start from
+                // Restart 0 starts from the base itself, in grid order, the fields pinned on
+                // their grids aside. The others start from
                 // the base moved a few steps on a few fields, and walk the fields in an order of
                 // their own: a start anywhere on the grid lands far from anything a strategy
                 // would run and descends into a worse valley every time (2026-09-24: 19 of 20
@@ -967,6 +975,9 @@ pub fn suggest(
                     let mut state = restart_seed(seed, restart);
                     shuffle(&mut order, &mut state);
                     perturb(&mut point, params.grids, &order, &start, &mut state);
+                }
+                for (key, value) in &pinned {
+                    point.entry(key).or_insert_with(|| value.clone());
                 }
                 let walked = if nested_on {
                     // Each group in this restart's own order.
@@ -1018,7 +1029,7 @@ pub fn suggest(
     let mut runs = runs;
     runs.sort_by_key(|run| run.restart);
     // An end point by the parameters it comes to on every base, not by its spelling: restart 0
-    // leaves a field at its base by not holding it, a random restart by holding the base's
+    // leaves an on-grid field at its base by not holding it, a random restart by holding the base's
     // value — or the schema default's, for a field the strategy leaves out — and those are one
     // end point, not two.
     let mut ends: Vec<Vec<(EntryParams, ExitParams)>> = Vec::new();
@@ -1055,7 +1066,8 @@ pub fn suggest(
     };
     let (point, score) = (best.point, best.score);
     // The strategies as they stand against the answer, on the slice both were fitted on: a best
-    // below its own base is a search that could not reach the base, and the log says so.
+    // below its own base is a search that could not reach the base — or one whose typed range
+    // leaves the base's value out, which no restart stands on ([`pinned`]) — and the log says so.
     let base_score = evaluate(&Point::new());
     let brief = |t: &Option<Tally>| {
         t.as_ref()
@@ -1427,6 +1439,7 @@ pub use self::closing::unguarded_strategies;
 mod coupled;
 mod deps;
 mod nested;
+mod pinned;
 mod size;
 pub(in crate::db::tuner::ticks) use self::deps::strategy_values;
 pub use self::size::{SearchSize, point_cost, search_size};
