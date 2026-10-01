@@ -89,11 +89,11 @@ fn a_folded_token_finds_its_market() {
         listed("BTCUSDT", "BTC", "USDT"),
     ];
     assert_eq!(
-        pick_market_for_coin(&universe, "1kRATS"),
+        pick_market_for_coin(&universe, "1kRATS", ""),
         Some("1000RATSUSDT")
     );
     // The market's own name is NOT the coin, and must not be matched as one.
-    assert_eq!(pick_market_for_coin(&universe, "1000RATS"), None);
+    assert_eq!(pick_market_for_coin(&universe, "1000RATS", ""), None);
 }
 
 /// A bare coin reaches the contract-qualified market through the folded key.
@@ -101,11 +101,11 @@ fn a_folded_token_finds_its_market() {
 fn a_bare_coin_reaches_a_contract_market() {
     let universe = [listed("AAVEUSD_PERP", "AAVE_RP", "USD")];
     assert_eq!(
-        pick_market_for_coin(&universe, "AAVE"),
+        pick_market_for_coin(&universe, "AAVE", ""),
         Some("AAVEUSD_PERP")
     );
     assert_eq!(
-        pick_market_for_coin(&universe, "AAVE_RP"),
+        pick_market_for_coin(&universe, "AAVE_RP", ""),
         Some("AAVEUSD_PERP")
     );
 }
@@ -117,10 +117,13 @@ fn the_undated_contract_wins() {
         listed("BTCUSD_260925", "BTC_0925", "USD"),
         listed("BTCUSD_PERP", "BTC_RP", "USD"),
     ];
-    assert_eq!(pick_market_for_coin(&universe, "BTC"), Some("BTCUSD_PERP"));
+    assert_eq!(
+        pick_market_for_coin(&universe, "BTC", ""),
+        Some("BTCUSD_PERP")
+    );
     // Asking for one expiry by its exact token still gets that expiry.
     assert_eq!(
-        pick_market_for_coin(&universe, "BTC_0925"),
+        pick_market_for_coin(&universe, "BTC_0925", ""),
         Some("BTCUSD_260925")
     );
 }
@@ -130,8 +133,63 @@ fn the_undated_contract_wins() {
 #[test]
 fn an_absent_coin_picks_nothing() {
     let universe = [listed("BTCUSDT", "BTC", "USDT")];
-    assert_eq!(pick_market_for_coin(&universe, "ETH"), None);
-    assert_eq!(pick_market_for_coin(&[], "BTC"), None);
+    assert_eq!(pick_market_for_coin(&universe, "ETH", ""), None);
+    assert_eq!(pick_market_for_coin(&[], "BTC", ""), None);
+}
+
+/// The reported case: Hyperliquid spot lists KNTQ against USDH (`@254`) and USDC (`@334`) under
+/// one token, and a USDC core's trade was recorded on the dead USDH pair — zero prints, filed as
+/// covered.
+#[test]
+fn a_coin_listed_in_two_quotes_takes_the_cores_quote() {
+    let universe = [
+        listed("@254", "KNTQ", "USDH"),
+        listed("@334", "KNTQ", "USDC"),
+    ];
+    assert_eq!(
+        pick_market_for_coin(&universe, "KNTQ", "USDC"),
+        Some("@334")
+    );
+    assert_eq!(
+        pick_market_for_coin(&universe, "KNTQ", "USDH"),
+        Some("@254")
+    );
+    // No quote, or one the catalog does not list the coin in: the first candidate, as before.
+    assert_eq!(pick_market_for_coin(&universe, "KNTQ", ""), Some("@254"));
+    assert_eq!(
+        pick_market_for_coin(&universe, "KNTQ", "USDT"),
+        Some("@254")
+    );
+}
+
+/// The same on a named venue, where the folded pass has to honour the quote too.
+#[test]
+fn the_cores_quote_wins_on_a_named_venue_as_well() {
+    let universe = [
+        listed("BTCUSDT", "BTC", "USDT"),
+        listed("BTCUSDC", "BTC", "USDC"),
+    ];
+    assert_eq!(
+        pick_market_for_coin(&universe, "BTC", "USDC"),
+        Some("BTCUSDC")
+    );
+    assert_eq!(
+        pick_market_for_coin(&universe, "btc", "usdc"),
+        Some("BTCUSDC")
+    );
+}
+
+/// A quote never pulls a coin onto an expiry: the undated market wins even in another quote.
+#[test]
+fn the_quote_never_beats_the_undated_contract() {
+    let universe = [
+        listed("BTCUSDC_260925", "BTC_0925", "USDC"),
+        listed("BTCUSD_PERP", "BTC_RP", "USD"),
+    ];
+    assert_eq!(
+        pick_market_for_coin(&universe, "BTC", "USDC"),
+        Some("BTCUSD_PERP")
+    );
 }
 
 /// The empty label a caller gets for an unknown core must render as nothing, not as a stray dash.

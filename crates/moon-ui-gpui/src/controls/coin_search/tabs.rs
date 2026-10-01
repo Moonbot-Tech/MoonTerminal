@@ -27,6 +27,7 @@ use crate::Backend;
 use crate::design;
 use crate::display_text::fmt_ban_left;
 use moon_core::config::ChartBucket;
+use moon_core::market::{MarketLabel, pick_market_for_coin};
 use moon_core::session::CoreId;
 
 /// Which list the coin dropdown is showing while the field is empty.
@@ -335,7 +336,9 @@ pub(crate) fn favorites(b: &Backend, group: &str, bucket: Option<&ChartBucket>) 
 ///     coin: The coin, as that core spells it.
 ///
 /// Returns:
-///     The first market of that core carrying this coin, or `None` when its catalogue has none.
+///     That core's market carrying this coin — the one in the quote the core trades in when the
+///     catalogue lists the coin in several (Hyperliquid spot: KNTQ against USDH and USDC) —
+///     or `None` when its catalogue has none.
 fn market_of_coin(
     b: &Backend,
     group: &str,
@@ -343,9 +346,23 @@ fn market_of_coin(
     core: CoreId,
     coin: &str,
 ) -> Option<CoinHit> {
-    super::search_limited(b, group, bucket, coin, super::COIN_MATCH_LIMIT)
-        .into_iter()
-        .find(|hit| hit.core == core && hit.label.coin.eq_ignore_ascii_case(coin))
+    let mut hits: Vec<CoinHit> =
+        super::search_limited(b, group, bucket, coin, super::COIN_MATCH_LIMIT)
+            .into_iter()
+            .filter(|hit| hit.core == core && hit.label.coin.eq_ignore_ascii_case(coin))
+            .collect();
+    let labelled: Vec<(String, MarketLabel)> = hits
+        .iter()
+        .map(|hit| (hit.market.clone(), hit.label.clone()))
+        .collect();
+    let quote = b
+        .session
+        .market_source()
+        .traded_quote(core)
+        .unwrap_or_default();
+    let picked = pick_market_for_coin(&labelled, coin, &quote)?;
+    let ix = hits.iter().position(|hit| hit.market == picked)?;
+    Some(hits.swap_remove(ix))
 }
 
 /// Joins labelled hits back to the bans they were built from, soonest first.

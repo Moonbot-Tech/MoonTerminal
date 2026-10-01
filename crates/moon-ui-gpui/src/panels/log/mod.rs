@@ -733,9 +733,9 @@ impl LogPanel {
     ///
     /// A Core source searches only that core. Aggregate first resolves the row's `target` to a
     /// configured core, while Exchange does the same strictly inside its current membership.
-    /// Unresolved aggregate sources and Local scan their allowed cores. Each candidate uses market
-    /// search for `base` and the first result rather than guessing a quote suffix. Main is not
-    /// activated.
+    /// Unresolved aggregate sources and Local scan their allowed cores. Each candidate resolves
+    /// `base` through its catalogue (`resolve_market`), falling back to the first market search
+    /// result rather than guessing a quote suffix. Main is not activated.
     ///
     /// Args:
     ///     base: Detected base ticker from the clicked log line.
@@ -781,9 +781,18 @@ impl LogPanel {
                 LogSource::Local => scoped_candidates(),
             };
             candidates.into_iter().find_map(|id| {
-                ms.search_markets(id, &base, 1)
-                    .into_iter()
-                    .next()
+                // The catalogue's own answer first — it picks the market in the quote the core
+                // trades in where one coin is listed in several (Hyperliquid spot: KNTQ against
+                // USDH and USDC) — and the best search hit for a ticker the log spells otherwise.
+                let quote = b
+                    .config
+                    .servers
+                    .iter()
+                    .find(|server| server.id == id)
+                    .map(|server| server.market.as_str())
+                    .unwrap_or_default();
+                ms.resolve_market(id, quote, &base)
+                    .or_else(|| ms.search_markets(id, &base, 1).into_iter().next())
                     .map(|market| (id, market))
             })
         };

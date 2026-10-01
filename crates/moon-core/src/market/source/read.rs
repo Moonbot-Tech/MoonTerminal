@@ -385,6 +385,11 @@ impl MarketDataSource {
     /// never by reading the name. An empty universe is catalog-not-ready, never permission to
     /// return an unverified key.
     ///
+    /// Where the catalog lists the token against several quotes, the market in the core's own
+    /// account currency (BaseCheck `base_currency_name`) wins, and the quote setting only while
+    /// the core has not stated one: the setting defaults to `BTCUSDT` and is not what the core
+    /// trades in.
+    ///
     /// Args:
     ///     core: Core that recorded the row.
     ///     quote: That core's quote setting (`ServerConfig::market`).
@@ -419,7 +424,8 @@ impl MarketDataSource {
             .cloned()
             .zip(self.market_labels(core, &refs))
             .collect();
-        if let Some(name) = crate::market::pick_market_for_coin(&labelled, coin) {
+        let traded_quote = self.traded_quote(core).unwrap_or_else(|| quote.clone());
+        if let Some(name) = crate::market::pick_market_for_coin(&labelled, coin, &traded_quote) {
             return Some(name.to_string());
         }
         // The historical format where the stored value is already a full market name.
@@ -427,6 +433,24 @@ impl MarketDataSource {
             .iter()
             .find(|market| market.eq_ignore_ascii_case(&candidate))
             .cloned()
+    }
+
+    /// The quote currency `core` trades in — its account currency from BaseCheck
+    /// (`base_currency_name`), uppercase — for choosing among one coin's markets in several
+    /// quotes ([`crate::market::pick_market_for_coin`]).
+    ///
+    /// Read off the core's OWN client, not its market provider's: the account is the core's.
+    /// BaseCheck is the first step of a connection, before the market list, so a core whose
+    /// catalog is in has this too.
+    ///
+    /// Returns:
+    ///     The currency, or `None` while the core is not connected or stated none.
+    pub fn traded_quote(&self, core: CoreId) -> Option<String> {
+        self.core_client(core)
+            .and_then(|client| client.snapshot_versioned())
+            .and_then(|snapshot| snapshot.server_info().base_currency_name.clone())
+            .map(|name| name.trim().to_ascii_uppercase())
+            .filter(|name| !name.is_empty())
     }
 
     /// The naming family of the exchange `core` reads market data from.
