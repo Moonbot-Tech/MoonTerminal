@@ -210,6 +210,8 @@ impl AnalyticsView {
                     if overlay {
                         this.op_finished(cx);
                     }
+                    // Adopt an axis move deferred while this read was a first load.
+                    this.observe_report_axis(cx);
                     this.schedule_report_refresh(cx);
                 });
             });
@@ -234,6 +236,8 @@ impl AnalyticsView {
         store: impl FnOnce(&mut Self, R, &mut Context<Self>) + 'static,
     ) {
         let cancellation = self.latest_reads.replace(lanes);
+        let lane_names = format!("{lanes:?}");
+        let started = std::time::Instant::now();
         let worker_cancellation = cancellation.clone();
         self.db_ops += 1;
         if overlay {
@@ -245,12 +249,18 @@ impl AnalyticsView {
                 .await;
             cx.update(|cx| {
                 let _ = this.update(cx, |this, cx| {
+                    log::debug!(
+                        "analytics: read {lane_names} took {} ms",
+                        started.elapsed().as_millis()
+                    );
                     this.latest_reads.finish(&cancellation);
                     this.db_ops = this.db_ops.saturating_sub(1);
                     store(this, result, cx);
                     if overlay {
                         this.op_finished(cx);
                     }
+                    // Adopt an axis move deferred while this read was a first load.
+                    this.observe_report_axis(cx);
                     this.schedule_report_refresh(cx);
                 });
             });

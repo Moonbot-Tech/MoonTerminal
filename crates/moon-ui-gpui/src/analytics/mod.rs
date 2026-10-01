@@ -1192,6 +1192,14 @@ impl AnalyticsView {
         if axis == self.axis {
             return;
         }
+        if refresh::defer_axis_adoption(
+            self.visible_first_load_pending(),
+            // `db_ops` only: those reads finish through `bg`, whose completion re-polls the
+            // axis; a save or purge counted in `busy_ops` alone never would.
+            self.db_ops > 0,
+        ) {
+            return;
+        }
         self.axis = axis;
         self.seq = self.seq.wrapping_add(1);
         self.cal_seq = self.cal_seq.wrapping_add(1);
@@ -1204,6 +1212,18 @@ impl AnalyticsView {
         self.mark_report_data_stale();
         self.request_report_refresh(RefreshUrgency::Writer, false, cx);
         cx.notify();
+    }
+
+    /// Whether the visible tab still has no settled result to keep on screen.
+    ///
+    /// Returns:
+    ///     `true` while the visible surface shows its initial loading state.
+    fn visible_first_load_pending(&self) -> bool {
+        match self.tab {
+            Tab::Summary => matches!(self.data, ProfitLoadState::Loading),
+            Tab::Strategies => matches!(self.strategy_data, ProfitLoadState::Loading),
+            Tab::Calendar => matches!(self.cal_days, ProfitLoadState::Loading),
+        }
     }
 
     /// Adopt a valuation mode saved in Settings, and reload if it moved.

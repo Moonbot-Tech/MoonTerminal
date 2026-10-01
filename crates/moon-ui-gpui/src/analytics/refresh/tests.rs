@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use super::{
     BusyRetryBudget, CatchUpOutcome, RefreshGate, RefreshPlan, RefreshUrgency, VisibleRefresh,
-    core_metadata_wait, preserve_on_catch_up, report_result_is_stale, strategy_base_allows_axis,
-    visible_refresh,
+    core_metadata_wait, defer_axis_adoption, preserve_on_catch_up, report_result_is_stale,
+    strategy_base_allows_axis, visible_refresh,
 };
 use crate::analytics::Tab;
 use moon_core::db::{
@@ -486,4 +486,19 @@ fn current_strategy_base_skips_the_redundant_summary_scan() {
         visible_refresh(Tab::Calendar, false),
         VisibleRefresh::Calendar
     );
+}
+
+#[test]
+fn axis_move_waits_for_a_first_load_in_flight() {
+    // Nothing settled on screen and a read running: restarting it would hold the spinner.
+    assert!(defer_axis_adoption(true, true));
+}
+
+#[test]
+fn axis_move_is_adopted_once_nothing_would_be_restarted() {
+    // A settled snapshot stays visible through the catch-up, so the move is adopted now.
+    assert!(!defer_axis_adoption(false, true));
+    // No read in flight: nothing to restart, and the completion poll would never come.
+    assert!(!defer_axis_adoption(true, false));
+    assert!(!defer_axis_adoption(false, false));
 }
