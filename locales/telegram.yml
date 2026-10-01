@@ -1001,6 +1001,30 @@ telegram.server.update:
   ru: "Обновить службу"
   en: "Update the service"
   es: "Actualizar el servicio"
+telegram.server.version_server:
+  ru: "На сервере:"
+  en: "On the server:"
+  es: "En el servidor:"
+telegram.server.version_latest:
+  ru: "Последняя:"
+  en: "Latest:"
+  es: "Última:"
+telegram.server.version_current:
+  ru: "актуальная"
+  en: "up to date"
+  es: "actualizada"
+telegram.server.version_unknown:
+  ru: "неизвестно"
+  en: "unknown"
+  es: "desconocida"
+telegram.server.version_checking:
+  ru: "проверяю…"
+  en: "checking…"
+  es: "comprobando…"
+telegram.server.update_to:
+  ru: "Обновить до %{version}"
+  en: "Update to %{version}"
+  es: "Actualizar a %{version}"
 telegram.server.older_service:
   ru: "Служба %{station} старше этого терминала %{terminal}: нажмите «%{button}»."
   en: "The service %{station} is older than this terminal %{terminal}: press «%{button}»."

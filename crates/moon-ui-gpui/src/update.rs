@@ -312,6 +312,11 @@ fn later_unix(local: u64, server: Option<u64>) -> u64 {
     server.map_or(local, |server| local.max(server))
 }
 
+/// This terminal's own stable release; `None` for a development build.
+pub(crate) fn terminal_release() -> Option<ReleaseVersion> {
+    BuildIdentity::from_release_base(option_env!("MOONTERMINAL_RELEASE_BASE")?).baseline()
+}
+
 /// Single process-wide authority for discovery and one installation attempt.
 pub(crate) struct UpdateController {
     state: UpdateState,
@@ -319,6 +324,8 @@ pub(crate) struct UpdateController {
     /// Disk image saved and opened for `candidate` (macOS), reopened on the next click.
     installer_image: Option<PathBuf>,
     polling_started: bool,
+    /// A release scan has completed at least once: with no candidate, this build is the latest.
+    scanned: bool,
     install_generation: u64,
 }
 
@@ -330,6 +337,7 @@ impl UpdateController {
             candidate: None,
             installer_image: None,
             polling_started: false,
+            scanned: false,
             install_generation: 0,
         }
     }
@@ -337,6 +345,16 @@ impl UpdateController {
     /// Return a snapshot used by every group header.
     pub(crate) fn state(&self) -> UpdateState {
         self.state.clone()
+    }
+
+    /// The newest stable release this terminal's discovery knows of: its candidate, or after a
+    /// completed scan without one the terminal's own release. `None` before any scan finished.
+    pub(crate) fn latest_release(&self) -> Option<ReleaseVersion> {
+        match &self.candidate {
+            Some(candidate) => Some(candidate.version()),
+            None if self.scanned => terminal_release(),
+            None => None,
+        }
     }
 
     /// Start the idempotent process-wide release discovery loop.
@@ -401,6 +419,7 @@ impl UpdateController {
     ///     eligibility: Complete discovery result for the current executable baseline.
     ///     cx: Entity context used to notify observers after a visible state change.
     fn adopt_discovery(&mut self, eligibility: UpdateEligibility, cx: &mut Context<Self>) {
+        self.scanned = true;
         if self.state.busy() {
             return;
         }

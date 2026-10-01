@@ -44,3 +44,49 @@ fn station_and_telegram_tabs_both_show_the_shared_job_result() {
         .unwrap();
     assert!(section.contains("s.child(self.server_bot_progress(cx))"));
 }
+
+/// The Station tab's version line: behind a newer known release (or this terminal's own) offers
+/// that version, at or past the newest says so, and an unread or development service is unknown.
+#[test]
+fn the_service_version_is_behind_current_or_unknown() {
+    use super::{ServiceVersion, service_version};
+    use moon_core::update::ReleaseVersion;
+    let v = |tag: &str| ReleaseVersion::parse(tag).unwrap();
+    assert_eq!(
+        service_version(
+            Some("v0.51.0 (abc1234)"),
+            Some(v("v0.52.0")),
+            Some(v("v0.51.0"))
+        ),
+        ServiceVersion::Behind(v("v0.52.0"))
+    );
+    // No scan finished yet: the terminal's own release still shows an older service.
+    assert_eq!(
+        service_version(Some("v0.50.2 (abc1234)"), None, Some(v("v0.51.0"))),
+        ServiceVersion::Behind(v("v0.51.0"))
+    );
+    assert_eq!(
+        service_version(
+            Some("v0.52.0 (abc1234)"),
+            Some(v("v0.52.0")),
+            Some(v("v0.51.0"))
+        ),
+        ServiceVersion::Current(v("v0.52.0"))
+    );
+    assert_eq!(
+        service_version(Some("v0.53.0 (abc1234)"), Some(v("v0.52.0")), None),
+        ServiceVersion::Current(v("v0.53.0"))
+    );
+    assert_eq!(
+        service_version(Some("v0.51.0 (abc1234)"), None, Some(v("v0.51.0"))),
+        ServiceVersion::Unknown
+    );
+    assert_eq!(
+        service_version(Some("dev (abc1234)"), Some(v("v0.52.0")), None),
+        ServiceVersion::Unknown
+    );
+    assert_eq!(
+        service_version(None, Some(v("v0.52.0")), None),
+        ServiceVersion::Unknown
+    );
+}
