@@ -9,6 +9,13 @@
 //! trade cannot be fetched again — its exchange no longer serves it — so the deal is left out
 //! instead (LinKvo, 2026-09-24).
 //!
+//! A tape with a hole between the buy and the close (`Deal::gap`) is left out the same way. A
+//! variant whose rules reach into the hole ends there unanswered (`ExitKind::InGap`), which the
+//! search counts as left open, and one such deal refused every point of a search: over six
+//! MainShotS strategies (118 deals with a 120 s tail, 18 of them holed, 2026-10-01) the entry
+//! search answered the strategies as they stand after one pass; with the holed deals out it
+//! moved.
+//!
 //! Held for the whole process like the model's settings (`model_cfg`): every path that asks
 //! whether a row is fit reads it here. Seeded from the saved layout when an analytics view
 //! opens; written by the model popover's "Sample" section.
@@ -89,13 +96,17 @@ impl TicksData {
     fn short_tail(&self) -> usize {
         self.rows
             .iter()
-            .filter(|r| {
-                r.tape == super::state::TapeStatus::Covered
-                    && r.verdict
-                        .as_ref()
-                        .is_some_and(moon_core::db::tuner::ticks::fit_for_search)
-                    && !holds(r.held)
-            })
+            .filter(|r| r.reproduced() && !holds(r.held))
+            .count()
+    }
+
+    /// Rows the model reproduces, with their tape and its tail, left out only for a hole in
+    /// the tape — what the footer counts beside the short tails; a row both short and holed is
+    /// counted under the tail.
+    fn holed(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|r| r.reproduced() && holds(r.held) && r.deal.gap.is_some())
             .count()
     }
 }
@@ -109,6 +120,15 @@ impl AnalyticsView {
                 " · {}",
                 t!("analytics.ticks.tail_short", n = n, s = effective_s())
             ),
+            _ => String::new(),
+        }
+    }
+
+    /// The footer's note on the rows a hole in the tape left out, with its leading separator;
+    /// empty when none.
+    pub(super) fn ticks_holed_note(&self) -> String {
+        match self.ticks.data.data().map(|d| d.holed()) {
+            Some(n) if n > 0 => format!(" · {}", t!("analytics.ticks.holed", n = n)),
             _ => String::new(),
         }
     }

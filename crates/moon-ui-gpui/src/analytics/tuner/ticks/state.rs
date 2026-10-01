@@ -80,13 +80,18 @@ pub(in crate::analytics::tuner) struct DealRow {
 }
 
 impl DealRow {
-    /// Whether the variants and the search run on this row: its tape covers the window, holds
-    /// the shortest tail past the close (`tail`) and the model reproduced it (`fit_for_search`).
-    /// The table shows every row; this is the sample.
+    /// Whether the variants and the search run on this row: it is [`Self::reproduced`], holds
+    /// the shortest tail past the close (`tail`) and has no hole between the buy and the close
+    /// (`Deal::gap`). The table shows every row; this is the sample.
     pub(in crate::analytics::tuner) fn fit(&self) -> bool {
-        self.tape == TapeStatus::Covered
-            && self.verdict.as_ref().is_some_and(fit_for_search)
-            && super::tail::holds(self.held)
+        self.reproduced() && super::tail::holds(self.held) && self.deal.gap.is_none()
+    }
+
+    /// Whether the tape covers the window and the model reproduced the trade on its own
+    /// settings (`fit_for_search`) — the part of [`Self::fit`] the footer's counts of the rows
+    /// left out for their tape (a short tail, a hole) start from.
+    pub(in crate::analytics::tuner) fn reproduced(&self) -> bool {
+        self.tape == TapeStatus::Covered && self.verdict.as_ref().is_some_and(fit_for_search)
     }
 
     /// Whether the row is fit but holds no tape — one the memory cap let go under a wider scope.

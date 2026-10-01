@@ -15,6 +15,10 @@
 //! ([`crate::db::tuner::ticks::ExitKind::InGap`]). So is one whose rule follows the price through
 //! the hole — SellLevel, the pump move, the trailing stop, a stop ladder rung still to take — since
 //! where such a rule stood is a function of prints nobody holds.
+//!
+//! The terminal's tuner leaves a holed deal out of its sample (2026-10-01): a variant left
+//! unjudged counts as left open, and one such deal refused every point of a search. The proof
+//! here still judges the trade's own replay (the verdict) and the real-data bench.
 
 use std::sync::Arc;
 

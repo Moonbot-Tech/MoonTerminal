@@ -299,7 +299,7 @@ pub struct Deal {
     /// The hole between a long position's two held ends and the fact's record of it
     /// ([`gap::TapeGap`]); filled by the caller that holds the tape's coverage, `None` for a
     /// window held whole. A variant that may have closed inside it is not judged on the trade
-    /// ([`ExitKind::InGap`]).
+    /// ([`ExitKind::InGap`]); the terminal's tuner leaves a holed deal out of its sample.
     pub gap: Option<gap::TapeGap>,
 }
 

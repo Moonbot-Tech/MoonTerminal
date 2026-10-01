@@ -225,7 +225,8 @@ impl AnalyticsView {
         // hides the rest. How well the MODEL does on that sample is the KPI caption's ✓
         // shares (`ticks_kpi`), not a size.
         let status = coverage_caption(covered, fit, total, without_ms, left_out.1, left_out.2)
-            + &self.ticks_short_tail_note();
+            + &self.ticks_short_tail_note()
+            + &self.ticks_holed_note();
         // How many rows read live deltas, and — in the tooltip — how well each one's history
         // reproduces the core (`delta_summary`).
         let deltas = self
