@@ -226,7 +226,7 @@
 "SellLevelAllowedDrop" = "AutoSell=YES;SellLevelDelay<>0;SellLevelTime<>0"
 "SellLevelCount" = "AutoSell=YES;SellLevelDelay<>0;SellLevelTime<>0"
 "SellLevelDelay" = "AutoSell=YES"
-"SellLevelDelayNext" = "AutoSell=YES"
+"SellLevelDelayNext" = "AutoSell=YES;SellLevelDelay<>0;SellLevelTime<>0;SellLevelCount>1"
 "SellLevelRelative" = "AutoSell=YES;SellLevelDelay<>0;SellLevelTime<>0"
 "SellLevelTime" = "AutoSell=YES"
 "SellLevelWorkTime" = "AutoSell=YES;SellLevelDelay<>0;SellLevelTime<>0"

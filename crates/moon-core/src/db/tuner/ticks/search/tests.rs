@@ -931,3 +931,96 @@ fn a_sample_under_the_floor_is_refused_with_its_size() {
     let holdout = MIN_SEARCH_DEALS - train_len(&closes, 0.7);
     assert!(holdout as i64 >= MIN_HOLDOUT, "holdout {holdout}");
 }
+
+/// A field the score does not depend on leaves the answer; one it does stays, and so does one
+/// whose removal the scoring refuses.
+#[test]
+fn a_field_that_moves_nothing_leaves_the_answer() {
+    let tally = |profit: f64| {
+        let mut t = Tally::default();
+        for _ in 0..10 {
+            t.push(profit / 10.0);
+        }
+        t
+    };
+    // `SellPrice` pays; `SellLevelDelayNext` moves nothing; without `PriceDownTimer` the point is
+    // refused.
+    let evaluate = |p: &Point| -> Option<Tally> {
+        if !p.contains_key("PriceDownTimer") {
+            return None;
+        }
+        Some(tally(if p.contains_key("SellPrice") {
+            5.0
+        } else {
+            1.0
+        }))
+    };
+    let point: Point = [
+        ("SellPrice", "1.2".to_string()),
+        ("SellLevelDelayNext", "1".to_string()),
+        ("PriceDownTimer", "3".to_string()),
+    ]
+    .into_iter()
+    .collect();
+    let score = evaluate(&point);
+    let (kept, kept_score) = drop_passengers(
+        point.clone(),
+        score.clone(),
+        &Point::new(),
+        &evaluate,
+        5,
+        &|| false,
+    );
+    let mut keys: Vec<&str> = kept.keys().copied().collect();
+    keys.sort_unstable();
+    assert_eq!(keys, ["PriceDownTimer", "SellPrice"]);
+    assert_eq!(
+        kept_score.map(|t| t.profit),
+        score.as_ref().map(|t| t.profit)
+    );
+    // A refused point is answered as it stands.
+    let refused: Point = [("SellLevelDelayNext", "1".to_string())]
+        .into_iter()
+        .collect();
+    let (same, none) = drop_passengers(refused.clone(), None, &Point::new(), &evaluate, 5, &|| {
+        false
+    });
+    assert_eq!(same, refused);
+    assert!(none.is_none());
+    // A field held on its grid is never put back, however little it moves.
+    let pinned: Point = [("SellLevelDelayNext", "1".to_string())]
+        .into_iter()
+        .collect();
+    let (held, _) = drop_passengers(point.clone(), score.clone(), &pinned, &evaluate, 5, &|| {
+        false
+    });
+    assert!(held.contains_key("SellLevelDelayNext"), "{held:?}");
+    // A stopped search answers its point as it stands.
+    let (stopped, _) = drop_passengers(
+        point.clone(),
+        score.clone(),
+        &Point::new(),
+        &evaluate,
+        5,
+        &|| true,
+    );
+    assert!(stopped.contains_key("SellLevelDelayNext"), "{stopped:?}");
+    // A field that trades another number of deals for the same result is not a passenger.
+    let fewer = |p: &Point| -> Option<Tally> {
+        let mut t = Tally::default();
+        let n = if p.contains_key("SellLevelDelayNext") {
+            10
+        } else {
+            5
+        };
+        // Exact halves and ones: both sum to 5.0 to the bit.
+        let each = if n == 10 { 0.5 } else { 1.0 };
+        for _ in 0..n {
+            t.push(each);
+        }
+        Some(t)
+    };
+    let at_point = fewer(&point);
+    let (kept, _) = drop_passengers(point, at_point, &Point::new(), &fewer, 1, &|| false);
+    assert!(kept.contains_key("SellLevelDelayNext"), "{kept:?}");
+}

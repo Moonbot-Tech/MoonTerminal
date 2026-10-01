@@ -17,12 +17,41 @@ fn the_stop_fires_on_the_print_after_its_delay() {
         stop_loss_delay_s: 2.0,
         ..params()
     };
-    // A print through the stop inside the delay does not fire; one after it does, at the
-    // print's price (a market exit).
+    // A print through the stop inside the delay does not fire; one after it does as its series
+    // tick closes, at the print's price (a market exit).
     let ticks = tape(&[(1_000, 98.5), (3_000, 98.7)]);
     let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 3_000));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 3_000 + SERIES_TICK_MS)
+    );
     assert!((w.exit.price - 98.7).abs() < 1e-4);
+}
+
+/// The fast stop holds the LAST price of a series tick against the level: a sweep through it
+/// that prints back inside the same tick does not fire; a tick that closes past it does.
+#[test]
+fn the_fast_stop_reads_the_last_price_of_its_tick() {
+    let p = ExitParams {
+        stop_loss_pct: -1.0,
+        fast_stop_loss: true,
+        ..params()
+    };
+    let ticks = tape(&[
+        (1_000, 98.5),
+        (1_100, 99.6),
+        (2_000, 99.5),
+        (3_010, 98.9),
+        (3_200, 98.8),
+        (4_000, 99.5),
+    ]);
+    let w = walk(&deal(false), &ticks, fill(), 101.0, &p);
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 3_000 + SERIES_TICK_MS),
+        "{w:?}"
+    );
+    assert!((w.exit.price - 98.8).abs() < 1e-4);
 }
 
 /// A short's stop is the buy DIVIDED by `1 + StopLoss/100`, not the long's product mirrored:
@@ -36,7 +65,11 @@ fn a_short_stop_divides_the_buy() {
     };
     let inside = tape(&[(1_000, 102.53), (2_000, 102.57)]);
     let w = walk(&deal(true), &inside, fill(), 99.0, &p);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 2_000), "{w:?}");
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 2_000 + SERIES_TICK_MS),
+        "{w:?}"
+    );
     assert!((level_off_buy(100.0, -2.5, false) - 100.0 / 0.975).abs() < 1e-9);
     assert!((level_off_buy(100.0, -2.5, true) - 97.5).abs() < 1e-9);
     // A stop on the profit side of a short sits below the buy, by the same division.
@@ -82,13 +115,17 @@ fn the_book_stop_fires_on_a_sample_of_the_bid_not_on_a_print() {
         (ExitKind::Stop, 2 * TICKER_PERIOD_MS)
     );
     assert!((w.exit.price - 98.8).abs() < 1e-4);
-    // The fast stop takes the first print through the level, whichever side it hit.
+    // The fast stop takes the first series tick closing through the level, whichever side its
+    // last print hit.
     let fast = ExitParams {
         fast_stop_loss: true,
         ..book.clone()
     };
     let w = walk(&deal(false), &ticks, fill(), 101.0, &fast);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 1_000));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 1_000 + SERIES_TICK_MS)
+    );
 }
 
 /// A sample due exactly at the tape's last print reads that print — the loop only reaches the

@@ -522,6 +522,29 @@ fn a_reproduced_row_with_a_short_tail_is_not_fit() {
     assert!(row.fit());
 }
 
+/// A reproduced row with a hole in its tape is out of the sample: a variant reaching into the
+/// hole ends there unanswered, and the search refuses every point that leaves a deal so.
+#[test]
+fn a_reproduced_row_with_a_hole_in_its_tape_is_not_fit() {
+    let mut row = DealRow {
+        deal: deal(1, 1_000, 100.0, 101.0, false),
+        tape: TapeStatus::Covered,
+        verdict: Some(verdict(Some(true), Some(true))),
+        address: None,
+        ticks: Some(tape_of(3)),
+        entry_line: None,
+        held: Some((60_000, 7_200_000)),
+    };
+    assert!(row.fit());
+    row.deal.gap = Some(moon_core::db::tuner::ticks::gap::TapeGap {
+        from_ms: 1_500,
+        to_ms: 2_500,
+        fact_line: None,
+        fact_stop: None,
+    });
+    assert!(!row.fit());
+}
+
 /// A percent that rounds to zero must not read `-0.00`. The sign the colour uses is the same
 /// rounded value, so the cell cannot be red and unsigned at once.
 #[test]

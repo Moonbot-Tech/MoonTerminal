@@ -119,7 +119,11 @@ fn the_walk_stops_at_the_second_level() {
     };
     let ticks = [sell(500, 100.8), sell(4_000, 100.9), sell(6_000, 100.3)];
     let w = walk(&deal(false), &ticks, fill(), 105.0, &p);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 6_000), "{w:?}");
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 6_000 + super::super::SERIES_TICK_MS),
+        "{w:?}"
+    );
     assert!(
         w.stop_level.is_some_and(|l| (l - 100.4).abs() < 1e-9),
         "{w:?}"

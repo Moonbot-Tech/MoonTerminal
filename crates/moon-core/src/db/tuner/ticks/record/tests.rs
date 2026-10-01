@@ -126,14 +126,19 @@ fn a_trade_its_stop_never_fired_on_keeps_it_quiet_until_the_close() {
         ..book()
     };
     let ticks = vec![tick(1_000, 98.5), tick(7_000, 98.5)];
+    let tick_ms = crate::db::tuner::ticks::exit::stops::SERIES_TICK_MS;
     let w = walk(&d, &ticks, fact_fill(), 101.0, &fast);
     assert_eq!(
-        w.exit.t_ms, 1_000,
-        "without the anchor the first print fires"
+        w.exit.t_ms,
+        1_000 + tick_ms,
+        "without the anchor the first print's tick fires"
     );
     d.stop_anchor = Some(StopAnchor::of(&d, &fast, None));
     let w = walk(&d, &ticks, fact_fill(), 101.0, &fast);
-    assert_eq!((w.exit.kind, w.exit.t_ms), (ExitKind::Stop, 7_000));
+    assert_eq!(
+        (w.exit.kind, w.exit.t_ms),
+        (ExitKind::Stop, 7_000 + tick_ms)
+    );
 }
 
 /// The anchor is the trade's own stop and entry, nothing near them.

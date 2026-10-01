@@ -87,6 +87,39 @@ fn a_field_in_effect_nowhere_is_pruned() {
     assert!(out.contains_key("TakeProfit"));
 }
 
+/// `SellLevelDelayNext` spaces SellLevel's moves from the second on (FAQ): with SellLevel off
+/// (`SellLevelDelay` 0) or a single move it moves nothing, and a search that drifted it there is
+/// not answered with it.
+#[test]
+fn sell_level_delay_next_is_pruned_where_it_spaces_no_move() {
+    let p = point(&[("SellLevelDelayNext", "1")]);
+    let off = own(&[("SellLevelTime", "3600"), ("SellLevelCount", "1")]);
+    let out = deps().prune(&p, &[&off], &HashMap::new(), &HashMap::new());
+    assert!(out.is_empty(), "SellLevel off: {out:?}");
+    let once = own(&[
+        ("SellLevelDelay", "5"),
+        ("SellLevelTime", "3600"),
+        ("SellLevelCount", "1"),
+    ]);
+    let out = deps().prune(&p, &[&once], &HashMap::new(), &HashMap::new());
+    assert!(out.is_empty(), "one move: {out:?}");
+    // No look-back window: SellLevel is off whatever its delay.
+    let no_window = own(&[("SellLevelDelay", "5"), ("SellLevelCount", "3")]);
+    let out = deps().prune(&p, &[&no_window], &HashMap::new(), &HashMap::new());
+    assert!(out.is_empty(), "SellLevelTime 0: {out:?}");
+    // A count the dump leaves out reads the model's own fallback, no move at all.
+    let no_count = own(&[("SellLevelDelay", "5"), ("SellLevelTime", "3600")]);
+    let out = deps().prune(&p, &[&no_count], &HashMap::new(), &HashMap::new());
+    assert!(out.is_empty(), "SellLevelCount absent: {out:?}");
+    let repeated = own(&[
+        ("SellLevelDelay", "5"),
+        ("SellLevelTime", "3600"),
+        ("SellLevelCount", "3"),
+    ]);
+    let out = deps().prune(&p, &[&repeated], &HashMap::new(), &HashMap::new());
+    assert!(out.contains_key("SellLevelDelayNext"), "{out:?}");
+}
+
 /// Two strategies, one holding the per cent and one not: the point carries it — one value for
 /// both, as Save writes it — at the start step.
 #[test]

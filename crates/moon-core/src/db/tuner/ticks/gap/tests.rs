@@ -117,13 +117,16 @@ fn a_quicker_trigger_is_not_bounded_by_a_slower_one() {
     };
     assert!(
         !trigger_not_quicker(true, 0.0, &book),
-        "any print beats the ticker"
+        "a tick's last price can be a print the ticker never sampled"
     );
     assert!(!trigger_not_quicker(false, 0.0, &book), "another average");
     assert!(trigger_not_quicker(false, 3.0, &book));
     let fast = GapStop { fast: true, ..book };
     assert!(trigger_not_quicker(true, 0.0, &fast));
-    assert!(trigger_not_quicker(false, 5.0, &fast));
+    assert!(
+        !trigger_not_quicker(false, 5.0, &fast),
+        "a ticker sample can read a print inside a tick the fast stop never checked"
+    );
 }
 
 // ---- the walk across the hole -------------------------------------------------------------
@@ -246,7 +249,11 @@ fn a_stop_nearer_than_the_facts_is_not_judged_and_a_deeper_one_is() {
         "99 stands above the core's 97"
     );
     let quick = walk(&d, &two_ends(), fill(), 101.0, &stop(-5.0, true));
-    assert_eq!(quick.exit.kind, ExitKind::InGap, "a print beats the ticker");
+    assert_eq!(
+        quick.exit.kind,
+        ExitKind::InGap,
+        "a tick's last price can be a print the ticker never sampled"
+    );
     let deep = walk(&d, &two_ends(), fill(), 101.0, &stop(-5.0, false));
     assert_eq!(deep.exit.kind, ExitKind::Take, "{:?}", deep.exit);
     // No stop of the core's to lean on.

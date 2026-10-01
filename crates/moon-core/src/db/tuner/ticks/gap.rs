@@ -15,6 +15,10 @@
 //! ([`crate::db::tuner::ticks::ExitKind::InGap`]). So is one whose rule follows the price through
 //! the hole — SellLevel, the pump move, the trailing stop, a stop ladder rung still to take — since
 //! where such a rule stood is a function of prints nobody holds.
+//!
+//! The terminal's tuner leaves a holed deal out of its sample (2026-10-01): a variant left
+//! unjudged counts as left open, and one such deal refused every point of a search. The proof
+//! here still judges the trade's own replay (the verdict) and the real-data bench.
 
 use std::sync::Arc;
 
@@ -56,9 +60,10 @@ pub struct TapeGap {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GapStop {
     /// The deepest level the fact's stop could stand at inside the hole: the first stop's, or a
-    /// ladder rung's deeper still — every price of the hole stayed on the position's side of it.
+    /// ladder rung's deeper still — every price the fact's trigger read in the hole stayed on the
+    /// position's side of it (for a fast stop, the last price of each series tick).
     pub level: f64,
-    /// `FastStopLoss` of the fact: its stop fired on any print through the level.
+    /// `FastStopLoss` of the fact: its stop checked the last price of each series tick.
     pub fast: bool,
     /// `StopLossEMA` of the fact: the average a book-watching stop compares.
     pub ema: f64,
@@ -199,12 +204,17 @@ pub(super) fn stop_not_nearer(variant: f64, bound: f64, long: bool) -> bool {
     }
 }
 
-/// Whether a variant's stop trigger is no quicker than the fact's: a stop firing on any print
-/// (`FastStopLoss`) is the quickest, so any trigger is no quicker than it; otherwise the same
-/// trigger — a book-watching stop averaged differently fires at other moments, and neither is
-/// bounded by the other.
+/// Whether a variant's stop trigger is no quicker than the fact's: the same trigger only. The
+/// fast stop reads the last price of each series tick, so a quiet fast fact proves nothing about
+/// a print inside a tick — the one a book-watching variant's ticker sample may read; a
+/// book-watching stop averaged differently fires at other moments, and neither is bounded by the
+/// other.
 pub(super) fn trigger_not_quicker(variant_fast: bool, variant_ema: f64, fact: &GapStop) -> bool {
-    fact.fast || (!variant_fast && variant_ema == fact.ema)
+    if fact.fast {
+        variant_fast
+    } else {
+        !variant_fast && variant_ema == fact.ema
+    }
 }
 
 #[cfg(test)]
