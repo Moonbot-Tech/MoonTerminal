@@ -631,8 +631,11 @@ impl TradeSource {
 /// Args:
 ///     conn: Sole report-writer connection during schema initialization.
 ///
+/// `seq` is the table's rowid, so it needs no separate index; an older build's redundant one is
+/// dropped here.
+///
 /// Returns:
-///     SQLite success after the table and lookup index exist.
+///     SQLite success after the table exists.
 pub(super) fn init_report_outbox(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {OUTBOX_TABLE} (
@@ -642,8 +645,7 @@ pub(super) fn init_report_outbox(conn: &Connection) -> rusqlite::Result<()> {
              row_id INTEGER NOT NULL,
              action INTEGER NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_valuation_outbox_seq
-             ON {OUTBOX_TABLE}(seq);"
+         DROP INDEX IF EXISTS idx_valuation_outbox_seq;"
     ))
 }
 
@@ -1348,9 +1350,14 @@ pub(crate) fn store_fault(error: rusqlite::Error) -> FaultCause {
 pub(crate) fn open_store(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     crate::db::wal::enable(&conn)?;
-    // The cache has many small autocommits during backfill. A less frequent checkpoint reduces
-    // checkpoint pressure while the fixed SQLite WAL implementation coordinates attached readers.
+    // The worker writes one transaction per batch. A less frequent checkpoint reduces checkpoint
+    // pressure while the fixed SQLite WAL implementation coordinates attached readers.
     conn.pragma_update(None, "wal_autocheckpoint", 8_192)?;
+    // A rebuildable cache: NORMAL keeps WAL atomicity and only risks the last commits on power
+    // loss, which the worker re-derives from the report rows.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // Room for every statement the worker repeats per trade, so none is re-prepared per event.
+    conn.set_prepared_statement_cache_capacity(32);
     conn.busy_timeout(Duration::from_secs(3))?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS rates (
@@ -1743,12 +1750,14 @@ pub(crate) fn cached_rate(
     quote_ordinal: i64,
     minute_utc: i64,
 ) -> rusqlite::Result<Option<ResolvedRate>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT resolved_minute_utc, rate_usdt, price_basis, provider, symbol, orientation,
                 candle_open_ms, candle_close_ms, leg1_rate, leg2_provider, leg2_symbol,
                 leg2_orientation, leg2_rate
          FROM rates
          WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+    )?
+    .query_row(
         params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
         |row| decode_rate_row(row, quote_ordinal, minute_utc),
     )
@@ -1773,7 +1782,7 @@ pub(crate) fn covering_successor_rate(
     quote_ordinal: i64,
     minute_utc: i64,
 ) -> rusqlite::Result<Option<ResolvedRate>> {
-    conn.query_row(
+    conn.prepare_cached(
         "SELECT resolved_minute_utc, rate_usdt, price_basis, provider, symbol, orientation,
                 candle_open_ms, candle_close_ms, leg1_rate, leg2_provider, leg2_symbol,
                 leg2_orientation, leg2_rate
@@ -1781,6 +1790,8 @@ pub(crate) fn covering_successor_rate(
          WHERE algorithm_version=?1 AND quote_ordinal=?2 AND price_basis=?3
            AND minute_utc<?4 AND resolved_minute_utc>?4
          ORDER BY minute_utc DESC LIMIT 1",
+    )?
+    .query_row(
         params![
             ALGORITHM_VERSION,
             quote_ordinal,
@@ -1864,9 +1875,11 @@ pub(crate) fn rate_search_start(
     now_ms: i64,
 ) -> rusqlite::Result<Option<i64>> {
     let state = conn
-        .query_row(
+        .prepare_cached(
             "SELECT searched_through_minute, next_retry_at_ms FROM rate_searches
              WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+        )?
+        .query_row(
             params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
         )
@@ -1916,8 +1929,9 @@ pub(crate) fn store_rate(
     rate: &ResolvedRate,
     fetched_at_ms: i64,
 ) -> rusqlite::Result<usize> {
-    let changed = conn.execute(
-        "INSERT INTO rates (
+    let changed = conn
+        .prepare_cached(
+            "INSERT INTO rates (
              algorithm_version, quote_ordinal, minute_utc, resolved_minute_utc, rate_usdt,
              price_basis, provider, symbol, orientation, candle_open_ms, candle_close_ms,
              leg1_rate, leg2_provider, leg2_symbol, leg2_orientation, leg2_rate, fetched_at_ms
@@ -1931,7 +1945,8 @@ pub(crate) fn store_rate(
              leg2_provider=excluded.leg2_provider, leg2_symbol=excluded.leg2_symbol,
              leg2_orientation=excluded.leg2_orientation, leg2_rate=excluded.leg2_rate,
              fetched_at_ms=excluded.fetched_at_ms",
-        params![
+        )?
+        .execute(params![
             ALGORITHM_VERSION,
             rate.quote_ordinal,
             rate.minute_utc,
@@ -1949,13 +1964,16 @@ pub(crate) fn store_rate(
             rate.leg2_orientation.map(RateOrientation::code),
             rate.leg2_rate,
             fetched_at_ms,
-        ],
-    )?;
-    conn.execute(
+        ])?;
+    conn.prepare_cached(
         "DELETE FROM rate_searches
          WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
-        params![ALGORITHM_VERSION, rate.quote_ordinal, rate.minute_utc],
-    )?;
+    )?
+    .execute(params![
+        ALGORITHM_VERSION,
+        rate.quote_ordinal,
+        rate.minute_utc
+    ])?;
     Ok(changed)
 }
 
@@ -1983,9 +2001,11 @@ pub(crate) fn store_rate_search(
     grow: bool,
 ) -> rusqlite::Result<usize> {
     let existing: Option<(i64, i64)> = conn
-        .query_row(
+        .prepare_cached(
             "SELECT attempts, searched_through_minute FROM rate_searches
              WHERE algorithm_version=?1 AND quote_ordinal=?2 AND minute_utc=?3",
+        )?
+        .query_row(
             params![ALGORITHM_VERSION, quote_ordinal, minute_utc],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -1998,7 +2018,7 @@ pub(crate) fn store_rate_search(
         }
         _ => rate_search_retry_ms(0),
     };
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO rate_searches (
              algorithm_version, quote_ordinal, minute_utc, searched_through_minute,
              next_retry_at_ms, attempts, updated_at_ms
@@ -2009,16 +2029,16 @@ pub(crate) fn store_rate_search(
              next_retry_at_ms=excluded.next_retry_at_ms,
              attempts=rate_searches.attempts+?7,
              updated_at_ms=excluded.updated_at_ms",
-        params![
-            ALGORITHM_VERSION,
-            quote_ordinal,
-            minute_utc,
-            searched_through_minute,
-            now_ms.saturating_add(delay_ms),
-            now_ms,
-            i64::from(grow)
-        ],
-    )
+    )?
+    .execute(params![
+        ALGORITHM_VERSION,
+        quote_ordinal,
+        minute_utc,
+        searched_through_minute,
+        now_ms.saturating_add(delay_ms),
+        now_ms,
+        i64::from(grow)
+    ])
 }
 
 /// Delay before re-searching a minute that already had `prior_attempts` no-route searches.
@@ -2059,7 +2079,7 @@ pub(crate) fn store_trade_value(
 ) -> rusqlite::Result<usize> {
     let profit_usdt = input.profit_quote * rate.rate_usdt;
     let spent_usdt = input.spent_quote.map(|spent| spent * rate.rate_usdt);
-    conn.execute(
+    conn.prepare_cached(
         "INSERT INTO trade_values (
              source_kind, core_uid, row_id, algorithm_version, closedate, quote_ordinal,
              profit_quote, spent_quote, rate_minute_utc, rate_usdt, profit_usdt,
@@ -2080,20 +2100,20 @@ pub(crate) fn store_trade_value(
             OR trade_values.rate_usdt IS NOT excluded.rate_usdt
             OR trade_values.profit_usdt IS NOT excluded.profit_usdt
             OR trade_values.spent_usdt IS NOT excluded.spent_usdt",
-        params![
-            input.source.code(),
-            input.core_uid,
-            input.row_id,
-            ALGORITHM_VERSION,
-            input.closedate,
-            input.quote_ordinal,
-            input.profit_quote,
-            input.spent_quote,
-            rate.minute_utc,
-            rate.rate_usdt,
-            profit_usdt,
-            spent_usdt,
-            valued_at_ms,
-        ],
-    )
+    )?
+    .execute(params![
+        input.source.code(),
+        input.core_uid,
+        input.row_id,
+        ALGORITHM_VERSION,
+        input.closedate,
+        input.quote_ordinal,
+        input.profit_quote,
+        input.spent_quote,
+        rate.minute_utc,
+        rate.rate_usdt,
+        profit_usdt,
+        spent_usdt,
+        valued_at_ms,
+    ])
 }

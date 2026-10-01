@@ -3,6 +3,25 @@
 use super::*;
 use crate::db::valuation::{RateOrientation, RatePriceBasis, ResolvedRate};
 
+/// Load one current eligible report row after a durable outbox event.
+///
+/// Args:
+///     conn: Report reader observing committed source data.
+///     source: Typed or legacy physical source.
+///     core_uid: Runtime core identity.
+///     row_id: `newrecid` or `db_id` according to `source`.
+///
+/// Returns:
+///     Complete valuation inputs, no eligible/current row, or a classified read failure.
+fn load_trade(
+    conn: &Connection,
+    source: TradeSource,
+    core_uid: i64,
+    row_id: i64,
+) -> ReadResult<Option<TradeInput>> {
+    TradeLoader::default().load(conn, source, core_uid, row_id)
+}
+
 /// Time axis every worker call below resolves its rate minutes against.
 ///
 /// Returns:
@@ -2042,4 +2061,152 @@ fn collision_purge_hands_poisoned_rows_back_to_startup_reconciliation() {
     );
     drop(reports);
     std::fs::remove_dir_all(&dir).expect("remove purge reconciliation fixture directory");
+}
+
+/// Synthetic closed trades spread over a few minutes, all priced through one scripted route.
+///
+/// Args:
+///     count: Number of trades to build.
+///     first_minute: UTC minute the oldest trade closes in.
+///
+/// Returns:
+///     Typed-source inputs with distinct row ids.
+fn batch_inputs(count: i64, first_minute: i64) -> Vec<TradeInput> {
+    (0..count)
+        .map(|row_id| TradeInput {
+            source: TradeSource::Typed,
+            core_uid: 1 + row_id % 3,
+            row_id,
+            closedate: first_minute + (row_id % 4) * 60 + 7,
+            quote_ordinal: 8,
+            profit_quote: 0.25 * row_id as f64 - 3.0,
+            spent_quote: (row_id % 2 == 0).then_some(10.0 + row_id as f64),
+        })
+        .collect()
+}
+
+/// Open a fresh file-backed valuation store, as production does, in its own directory.
+///
+/// Args:
+///     tag: Distinguishes stores opened by one test.
+///
+/// Returns:
+///     Fixture directory and the open store.
+fn file_store(tag: &str) -> (std::path::PathBuf, Connection) {
+    let dir = std::env::temp_dir().join(format!(
+        "moonterminal-valuation-batch-{tag}-{}-{}",
+        std::process::id(),
+        crate::util::now_unix_ms_i64()
+    ));
+    std::fs::create_dir_all(&dir).expect("create valuation batch fixture directory");
+    let store = super::super::open_store(&dir.join("valuation.sqlite")).expect("open store");
+    (dir, store)
+}
+
+/// Every stored value and rate, without the wall-clock stamps.
+///
+/// Args:
+///     store: Valuation store to read.
+///
+/// Returns:
+///     Prepared values and cached rates, ordered by identity.
+fn stored_values(store: &Connection) -> (Vec<String>, Vec<String>) {
+    let read = |sql: &str| {
+        let mut stmt = store.prepare(sql).expect("prepare snapshot");
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .expect("read snapshot")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("decode snapshot")
+    };
+    (
+        read(
+            "SELECT printf('%d|%d|%d|%d|%d|%d|%!.17g|%s|%d|%!.17g|%!.17g|%s', source_kind,
+                    core_uid, row_id, algorithm_version, closedate, quote_ordinal, profit_quote,
+                    quote(spent_quote), rate_minute_utc, rate_usdt, profit_usdt, quote(spent_usdt))
+             FROM trade_values ORDER BY source_kind, core_uid, row_id",
+        ),
+        read(
+            "SELECT printf('%d|%d|%d|%!.17g|%s|%s', quote_ordinal, minute_utc,
+                    resolved_minute_utc, rate_usdt, provider, symbol)
+             FROM rates ORDER BY quote_ordinal, minute_utc",
+        ),
+    )
+}
+
+/// One transaction per batch must store exactly what one autocommit per statement stored.
+/// Breakage: a `commit_batch` that dropped or rolled back the batch's writes in
+/// `worker.rs` would leave the batched store empty or short while the per-statement one is full.
+#[test]
+fn a_batched_transaction_stores_the_same_values_as_per_trade_commits() {
+    let first_minute = current_minute_utc() - 600;
+    let inputs = batch_inputs(200, first_minute);
+    let source = CountingSource::new(&[("USDCUSDT", 1.001)]);
+    let (single_dir, single) = file_store("single");
+    let (batched_dir, batched) = file_store("batched");
+
+    for input in &inputs {
+        assert!(matches!(
+            prepare_trade(&single, &source, &axis(), input, false),
+            PrepareResult::Complete { .. }
+        ));
+    }
+    let results = commit_batch(&batched, || {
+        inputs
+            .iter()
+            .map(|input| prepare_trade(&batched, &source, &axis(), input, false))
+            .collect::<Vec<_>>()
+    })
+    .expect("commit the batch");
+    assert!(
+        results
+            .iter()
+            .all(|result| matches!(result, PrepareResult::Complete { .. }))
+    );
+
+    let expected = stored_values(&single);
+    assert_eq!(expected.0.len(), inputs.len());
+    assert_eq!(stored_values(&batched), expected);
+    drop((single, batched));
+    std::fs::remove_dir_all(&single_dir).expect("remove single fixture");
+    std::fs::remove_dir_all(&batched_dir).expect("remove batched fixture");
+}
+
+/// Synthetic write-path timing: 50k trades, one commit per trade versus one per outbox batch.
+///
+/// Run on demand: `cargo test -p moon-core valuation_batch_timing -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing probe, prints numbers"]
+fn valuation_batch_timing() {
+    let inputs = batch_inputs(50_000, current_minute_utc() - 600);
+    let source = CountingSource::new(&[("USDCUSDT", 1.001)]);
+    let (single_dir, single) = file_store("timing-single");
+    let (batched_dir, batched) = file_store("timing-batched");
+    // The pre-change store: synchronous FULL, one autocommit per statement.
+    single
+        .pragma_update(None, "synchronous", "FULL")
+        .expect("restore the old sync level");
+
+    let started = std::time::Instant::now();
+    for input in &inputs {
+        prepare_trade(&single, &source, &axis(), input, false);
+    }
+    let per_trade = started.elapsed();
+    let started = std::time::Instant::now();
+    for chunk in inputs.chunks(OUTBOX_BATCH) {
+        commit_batch(&batched, || {
+            for input in chunk {
+                prepare_trade(&batched, &source, &axis(), input, false);
+            }
+        })
+        .expect("commit the batch");
+    }
+    let per_batch = started.elapsed();
+    eprintln!(
+        "valuation write path, {} trades: per-trade commits {per_trade:?}, batched {per_batch:?}",
+        inputs.len()
+    );
+    assert_eq!(stored_values(&batched), stored_values(&single));
+    drop((single, batched));
+    std::fs::remove_dir_all(&single_dir).expect("remove single fixture");
+    std::fs::remove_dir_all(&batched_dir).expect("remove batched fixture");
 }

@@ -1007,49 +1007,66 @@ fn reconcile_step(
             state.after = None;
             continue;
         }
-        let prefetched = settle_prefetch(
-            prefetch_rates(store, source, axis, &inputs),
-            generation,
-            dirty,
-        )?;
-        let mut changed = prefetched.changed;
-        let mut provider_fault = prefetched.provider_fault;
-        for input in &inputs {
-            let minute = valuation_minute(axis, input);
-            match prepare_trade(
-                store,
-                source,
-                axis,
-                input,
-                prefetched
-                    .canonical_exact_missing
-                    .contains(&(input.quote_ordinal, minute)),
-            ) {
-                PrepareResult::Complete {
-                    changed: input_changed,
-                } => changed |= input_changed,
-                PrepareResult::Deferred {
-                    changed: input_changed,
-                } => {
-                    changed |= input_changed;
-                    deferred.insert(trade_key(input), input.clone());
+        let turn = commit_batch(store, || {
+            let mut turn = BatchTurn::default();
+            let prefetched = match prefetch_rates(store, source, axis, &inputs) {
+                Ok(prefetched) => prefetched,
+                Err(error) => {
+                    turn.changed = error.changed;
+                    turn.fault = Some(error.fault);
+                    return turn;
                 }
-                PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
-                    changed |= defer_provider_trade(store, axis, input)?;
-                    deferred.insert(trade_key(input), input.clone());
-                    provider_fault.get_or_insert(error);
-                }
-                PrepareResult::Retry(error) => {
-                    if changed {
-                        publish(generation, dirty);
+            };
+            turn.changed = prefetched.changed;
+            let mut provider_fault = prefetched.provider_fault;
+            for input in &inputs {
+                let minute = valuation_minute(axis, input);
+                match prepare_trade(
+                    store,
+                    source,
+                    axis,
+                    input,
+                    prefetched
+                        .canonical_exact_missing
+                        .contains(&(input.quote_ordinal, minute)),
+                ) {
+                    PrepareResult::Complete {
+                        changed: input_changed,
+                    } => turn.changed |= input_changed,
+                    PrepareResult::Deferred {
+                        changed: input_changed,
+                    } => {
+                        turn.changed |= input_changed;
+                        deferred.insert(trade_key(input), input.clone());
                     }
-                    return Err(error);
+                    PrepareResult::Retry(error) if error.kind == FailureKind::Provider => {
+                        match defer_provider_trade(store, axis, input) {
+                            Ok(input_changed) => turn.changed |= input_changed,
+                            Err(error) => {
+                                turn.fault = Some(error);
+                                return turn;
+                            }
+                        }
+                        deferred.insert(trade_key(input), input.clone());
+                        provider_fault.get_or_insert(error);
+                    }
+                    PrepareResult::Retry(error) => {
+                        turn.fault = Some(error);
+                        return turn;
+                    }
                 }
             }
-        }
-        if changed {
+            turn.provider_fault = provider_fault;
+            turn
+        })?;
+        if turn.changed {
             publish(generation, dirty);
         }
+        // A batch that ended early leaves the cursor where it is, so the walk retries it.
+        if let Some(error) = turn.fault {
+            return Err(error);
+        }
+        let provider_fault = turn.provider_fault;
         // A short batch means this source is drained: advance to the next one and start it above
         // its newest row. Otherwise the cursor follows the batch's last (oldest) row.
         if inputs.len() < RECONCILE_BATCH {
@@ -1173,9 +1190,12 @@ fn consume_outbox(
     // than being lost behind it. It also lets pass 2 take ownership of each `TradeInput` by
     // value, so inserting one into `deferred` needs no clone.
     let mut loaded: Vec<Option<TradeInput>> = Vec::with_capacity(events.len());
+    let mut loader = TradeLoader::default();
     for event in events {
         let input = if event.action == OutboxAction::Row {
-            load_trade(&conn, event.source, event.core_uid, event.row_id).map_err(report_fault)?
+            loader
+                .load(&conn, event.source, event.core_uid, event.row_id)
+                .map_err(report_fault)?
         } else {
             None
         };
@@ -1184,68 +1204,108 @@ fn consume_outbox(
         }
         loaded.push(input);
     }
-    let prefetched = settle_prefetch(
-        prefetch_rates(store, source, axis, &row_inputs),
-        generation,
-        dirty,
-    )?;
-    let mut changed = prefetched.changed;
-    let mut provider_fault = prefetched.provider_fault;
-    let mut acknowledged = None;
-    for (event, input) in events.iter().zip(loaded) {
-        match process_event(
-            store,
-            source,
-            axis,
-            *event,
-            input.clone(),
-            deferred,
-            &prefetched.canonical_exact_missing,
-        ) {
-            PrepareResult::Complete {
-                changed: event_changed,
-            } => {
-                changed |= event_changed;
-                acknowledged = Some(event.seq);
+    let turn = commit_batch(store, || {
+        let mut turn = BatchTurn::default();
+        let prefetched = match prefetch_rates(store, source, axis, &row_inputs) {
+            Ok(prefetched) => prefetched,
+            Err(error) => {
+                turn.changed = error.changed;
+                turn.fault = Some(error.fault);
+                return turn;
             }
-            PrepareResult::Deferred {
-                changed: event_changed,
-            } => {
-                changed |= event_changed;
-                acknowledged = Some(event.seq);
-            }
-            PrepareResult::Retry(error)
-                if error.kind == FailureKind::Provider && input.is_some() =>
-            {
-                let input = input.as_ref().expect("provider row failure has input");
-                changed |= defer_provider_trade(store, axis, input)?;
-                deferred.insert(trade_key(input), input.clone());
-                provider_fault.get_or_insert(error);
-                acknowledged = Some(event.seq);
-            }
-            PrepareResult::Retry(error) => {
-                if let Some(through_seq) = acknowledged {
-                    send_ack(report_tx, pending_ack, through_seq);
+        };
+        turn.changed = prefetched.changed;
+        let mut provider_fault = prefetched.provider_fault;
+        for (event, input) in events.iter().zip(loaded) {
+            match process_event(
+                store,
+                source,
+                axis,
+                *event,
+                input.clone(),
+                deferred,
+                &prefetched.canonical_exact_missing,
+            ) {
+                PrepareResult::Complete {
+                    changed: event_changed,
                 }
-                if changed {
-                    publish(generation, dirty);
+                | PrepareResult::Deferred {
+                    changed: event_changed,
+                } => {
+                    turn.changed |= event_changed;
+                    turn.acknowledged = Some(event.seq);
                 }
-                return Err(error);
+                PrepareResult::Retry(error)
+                    if error.kind == FailureKind::Provider && input.is_some() =>
+                {
+                    let input = input.as_ref().expect("provider row failure has input");
+                    match defer_provider_trade(store, axis, input) {
+                        Ok(event_changed) => turn.changed |= event_changed,
+                        Err(error) => {
+                            turn.fault = Some(error);
+                            return turn;
+                        }
+                    }
+                    deferred.insert(trade_key(input), input.clone());
+                    provider_fault.get_or_insert(error);
+                    turn.acknowledged = Some(event.seq);
+                }
+                PrepareResult::Retry(error) => {
+                    turn.fault = Some(error);
+                    return turn;
+                }
             }
         }
-    }
-    if let Some(through_seq) = acknowledged {
+        turn.provider_fault = provider_fault;
+        turn
+    })?;
+    // Acknowledge and publish only what the batch transaction made durable.
+    if let Some(through_seq) = turn.acknowledged {
         send_ack(report_tx, pending_ack, through_seq);
     }
-    if changed {
+    if turn.changed {
         publish(generation, dirty);
     }
-    if let Some(error) = provider_fault {
+    if let Some(error) = turn.fault.or(turn.provider_fault) {
         return Err(error);
     }
     Ok(StageTurn::Ran {
         more: batch_was_full,
     })
+}
+
+/// What one batch transaction did, settled by the caller only after it commits.
+#[derive(Default)]
+struct BatchTurn {
+    /// Highest outbox sequence whose effect the batch wrote.
+    acknowledged: Option<i64>,
+    /// Whether any prepared value or cached rate changed.
+    changed: bool,
+    /// Failure that ended the batch early.
+    fault: Option<FaultCause>,
+    /// Provider outage met by rows the batch deferred; surfaced after the batch settles.
+    provider_fault: Option<FaultCause>,
+}
+
+/// Run one batch of valuation-store writes as a single transaction.
+///
+/// The store is a rebuildable cache with this worker as its only writer, so one commit per batch
+/// replaces one disk-synced autocommit per statement. The work done before an early failure is
+/// committed as well, exactly as the per-statement autocommits persisted it; a crash before the
+/// commit loses the whole batch, which the unacknowledged outbox or the unadvanced
+/// reconciliation cursor re-derives.
+///
+/// Args:
+///     store: Open valuation writer connection, outside any transaction.
+///     body: The batch's writes; its outcome is returned once they are durable.
+///
+/// Returns:
+///     The body's outcome, or the store fault when the transaction cannot begin or commit.
+fn commit_batch<T>(store: &Connection, body: impl FnOnce() -> T) -> Result<T, FaultCause> {
+    let transaction = store.unchecked_transaction().map_err(super::store_fault)?;
+    let outcome = body();
+    transaction.commit().map_err(super::store_fault)?;
+    Ok(outcome)
 }
 
 /// Apply one durable report event to the prepared valuation store.
@@ -1655,22 +1715,71 @@ fn settle_prefetch(
     }
 }
 
-/// Load one current eligible report row after a durable outbox event.
+/// Per-batch report-row loader: probes each source's layout once and reuses its statement.
+///
+/// The layout is derived from the replica schema, which cannot change under one reader
+/// connection's batch, so resolving it per event only repeated two `PRAGMA table_info` probes and
+/// the COIN-M scan for every row.
+#[derive(Default)]
+struct TradeLoader {
+    /// Lazily built single-row query per source; inner `None` means the source cannot be valued.
+    sql: [Option<Option<String>>; 2],
+}
+
+impl TradeLoader {
+    /// Load one current eligible report row through the batch's cached layout and statement.
+    ///
+    /// Args:
+    ///     conn: Report reader observing committed source data, the same for the whole batch.
+    ///     source: Typed or legacy physical source.
+    ///     core_uid: Runtime core identity.
+    ///     row_id: `newrecid` or `db_id` according to `source`.
+    ///
+    /// Returns:
+    ///     Complete valuation inputs, no eligible/current row, or a classified read failure.
+    fn load(
+        &mut self,
+        conn: &Connection,
+        source: TradeSource,
+        core_uid: i64,
+        row_id: i64,
+    ) -> ReadResult<Option<TradeInput>> {
+        let slot = &mut self.sql[usize::from(source == TradeSource::Legacy)];
+        if slot.is_none() {
+            *slot = Some(load_trade_sql(conn, source)?);
+        }
+        let Some(Some(sql)) = slot.as_ref() else {
+            return Ok(None);
+        };
+        let read_fail =
+            |error| super::read_fail::read_fail_on(conn, "valuation: load report row", error);
+        let mut stmt = conn.prepare_cached(sql).map_err(read_fail)?;
+        stmt.query_row(rusqlite::params![core_uid, row_id], |row| {
+            Ok(TradeInput {
+                source,
+                core_uid: row.get(0)?,
+                row_id: row.get(1)?,
+                closedate: row.get(2)?,
+                quote_ordinal: row.get(3)?,
+                profit_quote: row.get(4)?,
+                spent_quote: row.get(5)?,
+            })
+        })
+        .optional()
+        .map_err(read_fail)
+    }
+}
+
+/// Build the single-row eligibility query for one source's current layout.
 ///
 /// Args:
 ///     conn: Report reader observing committed source data.
 ///     source: Typed or legacy physical source.
-///     core_uid: Runtime core identity.
-///     row_id: `newrecid` or `db_id` according to `source`.
 ///
 /// Returns:
-///     Complete valuation inputs, no eligible/current row, or a classified read failure.
-fn load_trade(
-    conn: &Connection,
-    source: TradeSource,
-    core_uid: i64,
-    row_id: i64,
-) -> ReadResult<Option<TradeInput>> {
+///     The query, `None` when the source is absent, incomplete, or lacks valuation inputs, or a
+///     classified schema-probe failure.
+fn load_trade_sql(conn: &Connection, source: TradeSource) -> ReadResult<Option<String>> {
     let (table, columns, id_column) = match source_layout(conn, source)? {
         SourceLayout::Found {
             table,
@@ -1696,27 +1805,14 @@ fn load_trade(
     // Cached under the SETTLED amount, so a reader that corrects a COIN-M liquidation still
     // matches the entry the worker wrote for it.
     let settled_profit = super::super::quote::settled_amount_expr("r", &columns, "profitbtc");
-    let sql = format!(
+    Ok(Some(format!(
         "SELECT r.core_uid, r.{id_column}, r.closedate, ({quote}), {settled_profit}, {spent}
          FROM {table} r
          WHERE r.core_uid=?1 AND r.{id_column}=?2
            AND typeof(r.closedate)='integer' AND r.closedate>0
            AND ({quote}) BETWEEN 0 AND 20
            AND typeof(r.profitbtc) IN ('integer','real')"
-    );
-    conn.query_row(&sql, rusqlite::params![core_uid, row_id], |row| {
-        Ok(TradeInput {
-            source,
-            core_uid: row.get(0)?,
-            row_id: row.get(1)?,
-            closedate: row.get(2)?,
-            quote_ordinal: row.get(3)?,
-            profit_quote: row.get(4)?,
-            spent_quote: row.get(5)?,
-        })
-    })
-    .optional()
-    .map_err(|error| super::read_fail::read_fail_on(conn, "valuation: load report row", error))
+    )))
 }
 
 /// Read one keyset batch whose prepared inputs are absent or stale, newest trade first.
@@ -2329,10 +2425,13 @@ fn delete_trade(
     core_uid: i64,
     row_id: i64,
 ) -> PrepareResult {
-    match store.execute(
-        "DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2 AND row_id=?3",
-        rusqlite::params![source.code(), core_uid, row_id],
-    ) {
+    match store
+        .prepare_cached(
+            "DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2 AND row_id=?3",
+        )
+        .and_then(|mut statement| {
+            statement.execute(rusqlite::params![source.code(), core_uid, row_id])
+        }) {
         Ok(changed) => PrepareResult::Complete {
             changed: changed > 0,
         },
@@ -2350,10 +2449,10 @@ fn delete_trade(
 /// Returns:
 ///     Completed result carrying the delete-change flag, or a retry result on SQLite failure.
 fn delete_partition(store: &Connection, source: TradeSource, core_uid: i64) -> PrepareResult {
-    match store.execute(
-        "DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2",
-        rusqlite::params![source.code(), core_uid],
-    ) {
+    match store
+        .prepare_cached("DELETE FROM trade_values WHERE source_kind=?1 AND core_uid=?2")
+        .and_then(|mut statement| statement.execute(rusqlite::params![source.code(), core_uid]))
+    {
         Ok(changed) => PrepareResult::Complete {
             changed: changed > 0,
         },
