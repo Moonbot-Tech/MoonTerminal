@@ -125,6 +125,8 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
                     Step::TapeWritten => t!("station.progress.TapeWritten"),
                     Step::TapeReload => t!("station.progress.TapeReload"),
                     Step::TapeApplied => t!("station.progress.TapeApplied"),
+                    Step::AutoUpdateWritten => t!("station.progress.AutoUpdateWritten"),
+                    Step::AutoUpdateApplied => t!("station.progress.AutoUpdateApplied"),
                     Step::TokenWritten => t!("station.progress.TokenWritten"),
                     Step::TokenDropped => t!("station.progress.TokenDropped"),
                     Step::ChatsDropped => t!("station.progress.ChatsDropped"),

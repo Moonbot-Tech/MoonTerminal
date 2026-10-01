@@ -22,6 +22,14 @@
 //! long_position_min = 10
 //! ```
 //!
+//! `[update]` is whether the station updates itself from the release; on when absent, set from
+//! the terminal's Settings:
+//!
+//! ```toml
+//! [update]
+//! auto = false
+//! ```
+//!
 //! `[telegram]` runs the bot, its token the systemd credential `telegram-token` (written by
 //! `moon-remote telegram`). `mini_app` also opens the Mini App — and with it switches the station
 //! to its account profile (`feed::station::Profile::Account`): orders, balances, strategies and
@@ -64,6 +72,16 @@ struct StationFile {
     #[serde(default)]
     tape: Tape,
     telegram: Option<TelegramSection>,
+    #[serde(default)]
+    update: UpdateSection,
+}
+
+/// `[update]`: whether the station updates itself from the release (`auto_update.rs`).
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateSection {
+    /// Absent means on.
+    auto: Option<bool>,
 }
 
 /// `[tape]`: the station's window around a trade. Absent fields keep the station's own
@@ -116,6 +134,8 @@ pub struct Station {
     pub config: AppConfig,
     pub tape: Tape,
     pub telegram: Option<Telegram>,
+    /// `[update] auto`: the station updates itself from the release.
+    pub auto_update: bool,
     /// Active cores skipped because their credentials are unavailable, for status reporting.
     pub skipped_cores: Vec<String>,
 }
@@ -251,6 +271,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         config: AppConfig::headless(servers),
         tape: file.tape,
         telegram,
+        auto_update: file.update.auto.unwrap_or(true),
         skipped_cores,
     };
     let profile = station.profile();
@@ -310,6 +331,7 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         config: AppConfig::load(None, false)?,
         tape: Tape::default(),
         telegram: None,
+        auto_update: true,
         skipped_cores: Vec::new(),
     })
 }

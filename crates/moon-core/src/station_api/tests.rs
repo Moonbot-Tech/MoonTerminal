@@ -78,6 +78,7 @@ fn a_status_reads_back_whole() {
             }],
         })),
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
+        auto_update: Some(false),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
@@ -87,6 +88,10 @@ fn a_status_reads_back_whole() {
         panic!("not a status");
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
+    assert_eq!(
+        old.auto_update, None,
+        "a station older than the switch reads as unknown, not as on or off"
+    );
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
 }

@@ -101,7 +101,8 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
 }
 
 /// `new` with the server's own sections carried over from `current`: `[telegram]` (set by the
-/// bot's own command) and `[tape]` (set by hand, `push_tape`) — the window `new` brings is only
+/// bot's own command), `[tape]` (set by hand, `push_tape`) and `[update]` (`push_auto_update`) —
+/// the window `new` brings is only
 /// what a station without one starts with. The cores are the terminal's to push whole.
 ///
 /// Args:
@@ -114,7 +115,7 @@ pub fn keep_server_sections(new: &str, current: Option<&str>) -> anyhow::Result<
     let current: toml::Table = toml::from_str(current).context("the server's station.toml")?;
     let mut merged: toml::Table = toml::from_str(new)?;
     let mut changed = false;
-    for section in ["telegram", "tape"] {
+    for section in ["telegram", "tape", "update"] {
         let Some(value) = current.get(section) else {
             continue;
         };
@@ -305,6 +306,111 @@ fn confirm_tape(
             Err(_) => {}
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// `current` with `[update] auto` set to `on`, or `None` when it already says exactly that — the
+/// other sections as they were. An absent switch is on, so a file without one already says `on`.
+///
+/// Args:
+///     current: The server's `station.toml`.
+///     on: Whether the station updates itself from the release.
+pub fn with_auto_update(current: &str, on: bool) -> anyhow::Result<Option<String>> {
+    let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
+    let section = file
+        .entry("update")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[update] in station.toml is not a table"))?;
+    let now = section
+        .get("auto")
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(true);
+    if now == on {
+        return Ok(None);
+    }
+    section.insert("auto".to_owned(), toml::Value::Boolean(on));
+    Ok(Some(toml::to_string_pretty(&file)?))
+}
+
+/// Switch the station's own updates from the release (the user's switch in the station's
+/// section): `[update] auto` in its `station.toml`, then a reload (SIGHUP), the way `push_tape`
+/// sets the window — the cores and the bot stay connected. A stopped station takes it at its next
+/// start; a server without `station.toml` yet is refused, there is nothing to switch.
+pub fn push_auto_update(
+    target: &Target,
+    on: bool,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<()> {
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    anyhow::ensure!(
+        script::value(&status, "config") == Some("yes"),
+        "the station has no station.toml yet: send its cores first"
+    );
+    let wrote = edit_config(&conn, true, |current| match current {
+        Some(current) => with_auto_update(current, on),
+        None => Ok(None),
+    })?;
+    let status = script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
+        .stdout_text();
+    if script::value(&status, "active") != Some("active")
+        || script::value(&status, "api") != Some("yes")
+    {
+        if script::value(&status, "active") == Some("active") {
+            script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
+        }
+        say(Progress::step(
+            Step::AutoUpdateWritten,
+            format!("auto-update {}: written to station.toml", on_off(on)),
+        ));
+        return Ok(());
+    }
+    if wrote || reported_auto_update(&conn)? != Some(on) {
+        script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
+    }
+    let deadline = std::time::Instant::now() + TAPE_APPLIED_WITHIN;
+    loop {
+        let last_chance = std::time::Instant::now() >= deadline;
+        match reported_auto_update(&conn) {
+            Ok(Some(applied)) if applied == on => {
+                say(Progress::step(
+                    Step::AutoUpdateApplied,
+                    format!("auto-update on the station: {}", on_off(on)),
+                ));
+                return Ok(());
+            }
+            // A service older than the switch: written, it takes it once updated.
+            Ok(None) => {
+                say(Progress::step(
+                    Step::AutoUpdateWritten,
+                    format!("auto-update {}: written to station.toml", on_off(on)),
+                ));
+                return Ok(());
+            }
+            Ok(Some(_)) => anyhow::ensure!(
+                !last_chance,
+                "the station did not take the auto-update switch (its journal says why)"
+            ),
+            Err(e) if last_chance => {
+                return Err(e.context("the switch is written; the station did not confirm it"));
+            }
+            Err(_) => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
+/// `on` or `off`, for a progress diagnostic.
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+/// The switch the running station reports; `None` from a service older than it.
+fn reported_auto_update(conn: &Conn) -> anyhow::Result<Option<bool>> {
+    match api::call(conn, &Request::Status)? {
+        Answer::Status(status) => Ok(status.auto_update),
+        other => anyhow::bail!("the station answered a status request with {other:?}"),
     }
 }
 

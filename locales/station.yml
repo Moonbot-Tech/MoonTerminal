@@ -167,6 +167,14 @@ station.progress.TapeApplied:
   ru: "Станция подтвердила новое окно ленты."
   en: "The station confirmed the new tape window."
   es: "La estación confirmó la nueva ventana de la cinta."
+station.progress.AutoUpdateWritten:
+  ru: "Автообновление сохранено; станция применит его при перечитывании настроек или следующем запуске."
+  en: "Auto-update saved; the station applies it when it re-reads its settings or at its next start."
+  es: "Actualización automática guardada; la estación la aplicará al releer su configuración o al iniciar."
+station.progress.AutoUpdateApplied:
+  ru: "Станция подтвердила настройку автообновления."
+  en: "The station confirmed the auto-update setting."
+  es: "La estación confirmó la actualización automática."
 station.progress.TokenWritten:
   ru: "Токен бота сохранён в шифрованных данных."
   en: "Bot token saved as an encrypted credential."

@@ -34,7 +34,7 @@ const STALE_REQUEST: Duration = Duration::from_secs(15 * 60);
 const CHECK_WAIT: Duration = Duration::from_secs(10);
 
 /// The release tag the station was built from, `unknown` for a build outside a tagged history.
-fn release_base() -> &'static str {
+pub(crate) fn release_base() -> &'static str {
     option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown")
 }
 
@@ -132,7 +132,7 @@ fn request_update_file(data_root: &Path) -> Result<(), UpdateRefusal> {
         .open(&request)
     {
         Ok(_) => {
-            log::info!("update: requested from the bot's chat");
+            log::info!("update: requested");
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

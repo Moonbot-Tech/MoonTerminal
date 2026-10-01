@@ -272,3 +272,32 @@ remove_station=no
     ));
     assert!(!helper_is_current("remove_station=yes\n"));
 }
+
+/// The switch is written only when it changes, and only `[update]` is touched; a cores push keeps
+/// the server's switch — otherwise sending the cores again would silently switch updates back on.
+#[test]
+fn the_auto_update_switch_is_written_once_and_kept_by_a_cores_push() {
+    let bare =
+        "[[core]]\nuid = 3\nname = \"A\"\n\n[tape]\nmargin_s = 180\nlong_position_min = 10\n";
+    assert_eq!(
+        with_auto_update(bare, true).unwrap(),
+        None,
+        "no switch already means on"
+    );
+    let off = with_auto_update(bare, false)
+        .unwrap()
+        .expect("switched off");
+    let parsed: toml::Value = toml::from_str(&off).unwrap();
+    assert_eq!(parsed["update"]["auto"].as_bool(), Some(false));
+    assert_eq!(parsed["tape"]["margin_s"].as_integer(), Some(180));
+    assert_eq!(parsed["core"][0]["uid"].as_integer(), Some(3));
+    assert_eq!(with_auto_update(&off, false).unwrap(), None);
+    let on: toml::Value =
+        toml::from_str(&with_auto_update(&off, true).unwrap().expect("switched on")).unwrap();
+    assert_eq!(on["update"]["auto"].as_bool(), Some(true));
+
+    let new = "[[core]]\nuid = 4\nname = \"B\"\n";
+    let merged: toml::Value =
+        toml::from_str(&keep_server_sections(new, Some(&off)).unwrap()).unwrap();
+    assert_eq!(merged["update"]["auto"].as_bool(), Some(false));
+}

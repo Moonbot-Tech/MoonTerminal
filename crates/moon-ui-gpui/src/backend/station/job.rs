@@ -56,6 +56,8 @@ pub(crate) enum Job {
     Cores { target: Target, cores: Vec<u64> },
     /// Set the station's window around a trade.
     Tape { target: Target, tape: TapeWindow },
+    /// Switch the station's own updates from the release: `[update] auto`, then a reload.
+    AutoUpdate { target: Target, on: bool },
     /// Set the station's bot.
     Bot { target: Target, bot: BotPlan },
     /// Remove the station bot, recovering it only when the terminal has none.
@@ -301,6 +303,14 @@ fn run(
         }
         Job::Tape { target, tape } => {
             station::push_tape(&target, tape, say)?;
+            Ok(Done::Ok {
+                transferred: false,
+                bot: None,
+                bot_off: false,
+            })
+        }
+        Job::AutoUpdate { target, on } => {
+            station::push_auto_update(&target, on, say)?;
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,

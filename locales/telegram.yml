@@ -857,6 +857,18 @@ telegram.station.last_update_label:
   ru: "Обновление"
   en: "Last update"
   es: "Última actualización"
+telegram.station.auto_update_label:
+  ru: "Автообновление"
+  en: "Auto-update"
+  es: "Actualización automática"
+telegram.station.auto_update_on:
+  ru: "вкл"
+  en: "on"
+  es: "activada"
+telegram.station.auto_update_off:
+  ru: "выкл"
+  en: "off"
+  es: "desactivada"
 telegram.station.section_tape:
   ru: "Лента"
   en: "Tape"
@@ -945,6 +957,22 @@ telegram.station.update_not_requested:
   ru: "Обновление не запущено: %{reason}"
   en: "The update did not start: %{reason}"
   es: "La actualización no se inició: %{reason}"
+telegram.server.auto_update:
+  ru: "Обновлять станцию автоматически"
+  en: "Update the station automatically"
+  es: "Actualizar la estación automáticamente"
+telegram.server.auto_update_hint:
+  ru: "Станция сама проверяет новые релизы и при обновлении перезапускается примерно на 30 секунд. Выключено — обновление только кнопкой."
+  en: "The station checks for new releases itself and restarts for about 30 seconds when it updates. Off: update with the button."
+  es: "La estación busca nuevas versiones por sí misma y se reinicia unos 30 segundos al actualizarse. Desactivado: actualiza con el botón."
+telegram.server.auto_update_old:
+  ru: "Служба станции старше этой настройки — сначала «Обновить службу»."
+  en: "The station's service is older than this setting: press «Update the service» first."
+  es: "El servicio de la estación es anterior a este ajuste: primero «Actualizar el servicio»."
+telegram.server.auto_update_unknown:
+  ru: "Настройка станции ещё не прочитана: станция не запущена или не отвечает."
+  en: "The station's setting is not read yet: the station is not running or not answering."
+  es: "El ajuste de la estación aún no se ha leído: la estación no está en marcha o no responde."
 telegram.server.tape_title:
   ru: "Лента вокруг сделок на станции"
   en: "The station's tape around trades"
