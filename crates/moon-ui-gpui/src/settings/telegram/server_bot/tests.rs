@@ -19,8 +19,8 @@ fn an_empty_or_bad_address_is_refused() {
     assert!(parse_target(":22").is_none());
 }
 
-/// Removing the shared progress child from either tab hides validation errors and job results
-/// where its buttons are pressed. This binary crate's rendering wiring is checked as source.
+/// Enabling station details in Telegram leaks status/journal; removing shared feedback hides
+/// job results. This binary crate's tab ownership contract is checked against render wiring.
 #[test]
 fn station_and_telegram_tabs_both_show_the_shared_job_result() {
     let telegram = include_str!("../../telegram.rs");
@@ -32,7 +32,7 @@ fn station_and_telegram_tabs_both_show_the_shared_job_result() {
         .unwrap();
     assert!(
         telegram[bot_sections..bot_sections + local_toggle]
-            .contains(".child(self.server_bot_progress(cx))")
+            .contains(".child(self.server_bot_progress(false, cx))")
     );
     let station = include_str!("../server_bot.rs");
     let section = station
@@ -42,7 +42,18 @@ fn station_and_telegram_tabs_both_show_the_shared_job_result() {
         .split("fn server_bot_field(")
         .next()
         .unwrap();
-    assert!(section.contains("s.child(self.server_bot_progress(cx))"));
+    assert!(section.contains("s.child(self.server_bot_progress(true, cx))"));
+    let progress = station.split("fn server_bot_progress(").nth(1).unwrap();
+    let (feedback, details) = progress.split_once(".when(station_details, |s|").unwrap();
+    assert!(feedback.contains(".when(st.busy(),"));
+    assert!(feedback.contains(".when_some(outcome,"));
+    assert!(!feedback.contains("StationProgress"));
+    assert!(!feedback.contains("st.status"));
+    assert!(!feedback.contains("st.lines"));
+    assert!(details.contains("s.child(progress::StationProgress"));
+    assert!(details.contains("status: st.status.clone()"));
+    assert!(details.contains("lines: st.lines.clone()"));
+    assert!(details.contains("scroll: self.telegram.server.lines_scroll.clone()"));
 }
 
 /// The Station tab's version line: behind a newer known release (or this terminal's own) offers

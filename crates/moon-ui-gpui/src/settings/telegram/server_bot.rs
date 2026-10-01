@@ -931,7 +931,9 @@ impl SettingsView {
             Some(target) => self.server_bot_known(section, &target, cx),
             None => self.server_bot_new(section, cx),
         };
-        section.when(show_progress, |s| s.child(self.server_bot_progress(cx)))
+        section.when(show_progress, |s| {
+            s.child(self.server_bot_progress(true, cx))
+        })
     }
 
     /// A labelled, manually editable provider credential field.
@@ -1364,9 +1366,13 @@ impl SettingsView {
             .child(latest)
     }
 
-    /// Show loading and outcome above uncapped status facts and a framed, scrolling progress log.
-    /// Both tabs use the same backend result and the existing newest-line scroll cursor.
-    pub(in crate::settings) fn server_bot_progress(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// Show shared busy/outcome feedback; only Station requests status facts and the journal.
+    /// `station_details` retains Station's full view and newest-line scroll cursor when true.
+    pub(in crate::settings) fn server_bot_progress(
+        &self,
+        station_details: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let st = &self.backend.read(cx).station;
         let outcome = st.outcome.as_ref().map(|o| match o {
@@ -1383,10 +1389,12 @@ impl SettingsView {
             .when_some(outcome, |s, (text, color)| {
                 s.child(div().text_color(color).child(text))
             })
-            .child(progress::StationProgress {
-                status: st.status.clone(),
-                lines: st.lines.clone(),
-                scroll: self.telegram.server.lines_scroll.clone(),
+            .when(station_details, |s| {
+                s.child(progress::StationProgress {
+                    status: st.status.clone(),
+                    lines: st.lines.clone(),
+                    scroll: self.telegram.server.lines_scroll.clone(),
+                })
             })
     }
 }
