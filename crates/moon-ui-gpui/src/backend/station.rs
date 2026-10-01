@@ -61,6 +61,8 @@ pub(crate) struct StationJobs {
     /// A new server's host key awaiting explicit UI confirmation before the install.
     pub(crate) install_probe: Option<moon_remote::setup::HostKey>,
     pub(crate) lines: Vec<String>,
+    /// Facts from the last explicit Status action, independent of background bot reads.
+    pub(crate) status: Option<moon_tg::StatusFacts>,
     /// Bumped per line, so a view follows the newest one even once the list is full.
     pub(crate) line_seq: u64,
     pub(crate) running: bool,
@@ -159,6 +161,7 @@ impl StationJobs {
         st.pending_refresh = false;
         st.waiting = None;
         st.lines.clear();
+        st.status = None;
         st.outcome = Some(outcome);
         st.revision = st.revision.wrapping_add(1);
     }
@@ -330,6 +333,7 @@ impl Backend {
                 st.install_probe = None;
                 st.outcome = None;
                 st.lines.clear();
+                st.status = None;
             }
             Kind::Auto => st.push_line(t!("telegram.server.auto_cores").to_string()),
             Kind::Quiet | Kind::Recovery => {}
@@ -404,6 +408,10 @@ impl Backend {
             }
             job::Event::Line(line) => {
                 self.station.push_line(line);
+                return false;
+            }
+            job::Event::Status(facts) => {
+                self.station.status = Some(facts);
                 return false;
             }
             job::Event::Done(done) => done,

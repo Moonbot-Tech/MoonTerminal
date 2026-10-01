@@ -37,6 +37,8 @@ use super::access::{ChatEd, ChatsOf};
 use crate::backend::station::job::{self, BotPlan, Job};
 use crate::design;
 
+mod progress;
+
 /// Field width in unscaled pixels, as the token field of the terminal's bot.
 const FIELD_W: f32 = 260.0;
 /// Label column width in unscaled pixels.
@@ -918,7 +920,8 @@ impl SettingsView {
     /// The station section: the install form, or the station's own actions, and the last job.
     pub(in crate::settings) fn server_bot_section(&self, cx: &Context<Self>) -> impl IntoElement {
         let st = &self.backend.read(cx).station;
-        let show_progress = st.outcome.is_some() || !st.lines.is_empty() || st.busy();
+        let show_progress =
+            st.outcome.is_some() || st.status.is_some() || !st.lines.is_empty() || st.busy();
         let section = MoonGroupBox::new("telegram-station-section")
             .title(t!("telegram.server.section").to_string())
             .padding(14.0)
@@ -1304,8 +1307,8 @@ impl SettingsView {
             .child(latest)
     }
 
-    /// The shared job's loading, outcome and scrollable lines, shown where station or bot
-    /// actions are pressed. The backend owns the same state in either tab.
+    /// Show loading and outcome above uncapped status facts and a framed, scrolling progress log.
+    /// Both tabs use the same backend result and the existing newest-line scroll cursor.
     pub(in crate::settings) fn server_bot_progress(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let st = &self.backend.read(cx).station;
@@ -1313,16 +1316,9 @@ impl SettingsView {
             Ok(text) => (text.clone(), rgba_from(p.text, 1.0)),
             Err(text) => (text.clone(), rgba_from(p.red_text, 1.0)),
         });
-        let mut lines = v_flex()
-            .id("server-bot-lines")
-            .max_h(design::ui_px(cx, 260.0))
-            .overflow_y_scroll()
-            .track_scroll(&self.telegram.server.lines_scroll)
-            .font_family(design::mono());
-        for line in &st.lines {
-            lines = lines.child(div().child(line.clone()));
-        }
         v_flex()
+            .w_full()
+            .min_w(px(0.0))
             .gap(design::ui_px(cx, 8.0))
             .when(st.busy(), |s| {
                 s.child(div().child(t!("telegram.server.running").to_string()))
@@ -1330,7 +1326,11 @@ impl SettingsView {
             .when_some(outcome, |s, (text, color)| {
                 s.child(div().text_color(color).child(text))
             })
-            .child(lines)
+            .child(progress::StationProgress {
+                status: st.status.clone(),
+                lines: st.lines.clone(),
+                scroll: self.telegram.server.lines_scroll.clone(),
+            })
     }
 }
 

@@ -30,7 +30,8 @@ pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::status_text;
 pub use state::TelegramState;
 pub use station_status::{
-    ReleaseCheck, ReleaseFailure, UpdateRefusal, station_status_reply, station_status_text,
+    ReleaseCheck, ReleaseFailure, Section, StatusFacts, UpdateRefusal, station_status_reply,
+    station_status_text,
 };
 pub use units::size_text;
 

@@ -133,22 +133,29 @@ pub fn station_status_text(status: &Status) -> String {
 }
 
 /// The station's status as grouped label/value facts, shared by the chat's rich message and the
-/// terminal's plain lines.
-struct StatusFacts {
-    title: String,
-    sections: Vec<Section>,
+/// terminal's structured view and plain lines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusFacts {
+    /// Localized title including the version and any available uptime.
+    pub title: String,
+    /// Ordered headings and their label/value rows.
+    pub sections: Vec<Section>,
     /// Sentences that are not a value: missing readings and what to do about them.
-    notes: Vec<String>,
+    pub notes: Vec<String>,
 }
 
 /// One heading and its rows; a row with an empty value is a caption on its own.
-struct Section {
-    title: String,
-    rows: Vec<(String, String)>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Section {
+    /// Localized section heading.
+    pub title: String,
+    /// Localized labels paired with formatted values, without display markup.
+    pub rows: Vec<(String, String)>,
 }
 
 impl StatusFacts {
-    fn of(status: &Status) -> Self {
+    /// Build localized facts without flattening rows or escaping their content for chat.
+    pub fn of(status: &Status) -> Self {
         let title = match &status.host {
             Some(host) => t!(
                 "telegram.station.title_uptime",
