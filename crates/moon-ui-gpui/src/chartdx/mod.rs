@@ -488,6 +488,8 @@ struct PaneRender {
     filter_header_hits: Vec<FilterHeaderHit>,
     /// Where each scrollable label column was drawn, rebuilt with [`Self::filter_header_hits`].
     column_bands: Vec<ColumnBand>,
+    /// The plot's left strip where the wheel scrolls the expanded strategy-filter column.
+    filter_strip: Option<ColumnBand>,
     /// Where each pressable caption reserved its room, on the same terms as [`Self::volume_hits`]:
     /// rebuilt every frame, because the panel places a control at what the LAST frame laid out.
     pub(super) action_rects: Vec<ActionPlacement>,
@@ -953,6 +955,7 @@ impl PaneRender {
             volume_hits: Vec::new(),
             filter_header_hits: Vec::new(),
             column_bands: Vec::new(),
+            filter_strip: None,
             action_rects: Vec::new(),
             action_draws: Vec::new(),
             labels: text::LabelState::default(),

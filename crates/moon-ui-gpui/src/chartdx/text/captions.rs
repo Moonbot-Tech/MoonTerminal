@@ -419,6 +419,7 @@ impl RenderState {
         self.panes[idx].action_rects.clear();
         self.panes[idx].filter_header_hits.clear();
         self.panes[idx].column_bands.clear();
+        self.panes[idx].filter_strip = None;
         // The wrapped lines belong to THIS pane's pass. Cleared rather than dropped so the
         // allocation is reused, and cleared HERE because the indices `Item` holds are handed out
         // during the pass: carrying entries across panes would leak a Vec per frame and let a
@@ -459,6 +460,16 @@ impl RenderState {
                     crate::chartdx::ColumnBand::grow(&mut pane.column_bands, hit.row, hit.rect);
                 }
             }
+            pane.filter_strip = crate::chartdx::ColumnBand::filter_strip(
+                &pane.column_bands,
+                &cfg,
+                [
+                    geom.plot_left,
+                    geom.plot_top,
+                    geom.plot_right,
+                    geom.plot_bottom,
+                ],
+            );
         }
         for bar in &mut bars {
             let sf = geom.scale_factor;
