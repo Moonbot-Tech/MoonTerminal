@@ -696,8 +696,19 @@ fn rep_indexes_created_for_preexisting_columns() {
     )
     .unwrap();
     test_support::rep_init(&conn);
-    // Against the declaration itself, so a new entry there cannot be missed here.
-    for (name, _) in rep::REP_INDEXES {
+    // Against the declaration itself, so a new entry there cannot be missed here. The fixture
+    // has no `coin`, so an entry needing it waits; every other entry must exist.
+    let fixture_cols = [
+        "core_uid",
+        "core_name",
+        "newrecid",
+        "closedate",
+        "strategyid",
+        "buydate",
+    ];
+    for index in rep::REP_INDEXES {
+        let name = index.name;
+        let expected = i64::from(index.needs.iter().all(|c| fixture_cols.contains(c)));
         let n: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name=?1",
@@ -705,7 +716,10 @@ fn rep_indexes_created_for_preexisting_columns() {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 1, "индекс {name} не создан после init");
+        assert_eq!(
+            n, expected,
+            "индекс {name}: ожидалось {expected} после init"
+        );
     }
     // The planner actually uses the index for the default period filter.
     let plan: String = conn

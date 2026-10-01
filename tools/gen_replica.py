@@ -276,13 +276,23 @@ def _build_reports(conn, cores, rows, span_days, rng, btc_cores, margin_cores):
     if batch:
         conn.executemany(sql, batch)
     conn.commit()
-    for name, index_cols in [
-        ("idx_rep_closedate", "closedate"),
-        ("idx_rep_core_close", "core_uid, closedate"),
-        ("idx_rep_strat", "core_uid, strategyid, buydate"),
-        ("idx_rep_strategy_close", "core_uid, strategyid, closedate"),
+    # Mirrors REP_INDEXES in crates/moon-core/src/db/rep.rs - keep in sync.
+    for name, key_sql, where_sql in [
+        ("idx_rep_closedate", "closedate", None),
+        ("idx_rep_core_close", "core_uid, closedate", None),
+        ("idx_rep_strat", "core_uid, strategyid, buydate", None),
+        ("idx_rep_strategy_close", "core_uid, strategyid, closedate", None),
+        ("idx_rep_coin_close", "coin COLLATE NOCASE, closedate", None),
+        (
+            "idx_rep_open",
+            "core_uid, buydate",
+            "NOT (typeof(closedate) IN ('integer','real') AND closedate > 0)",
+        ),
     ]:
-        conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON orders_rep({index_cols})")
+        sql = f"CREATE INDEX IF NOT EXISTS {name} ON orders_rep({key_sql})"
+        if where_sql is not None:
+            sql += f" WHERE {where_sql}"
+        conn.execute(sql)
     conn.commit()
 
     stats["to_value"] = to_value

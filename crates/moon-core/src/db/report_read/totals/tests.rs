@@ -245,5 +245,6 @@ fn one_pass(
 ) -> Option<Vec<Option<super::ReportTotals>>> {
     let sources = super::read_sources_res(conn).expect("discover sources");
     let now = crate::util::now_unix_ms_i64().div_euclid(1_000);
-    super::sliced_attempt(conn, base, slices, &sources, false, now).expect("single pass")
+    let meta = super::super::report_strategy_meta(conn, base).expect("strategy meta");
+    super::sliced_attempt(conn, base, slices, &sources, &meta, false, now).expect("single pass")
 }

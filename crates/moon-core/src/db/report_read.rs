@@ -1,9 +1,9 @@
 //! Read layer for the Reports window: filters, source projection, sort/merge, and aggregates.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use rusqlite::Connection;
-use rusqlite::types::Value;
+use rusqlite::types::{Value, ValueRef};
 
 use crate::strategy_query::StrategyQuery;
 
@@ -11,7 +11,6 @@ use super::read_fail::read_fail;
 use super::rep;
 use super::report_axis::ReportStamp;
 use super::sql_sum::{SumColumn, SumZero};
-use super::strategy_name_match::install_strategy_name_match;
 use super::valuation::ValuationMode;
 use super::{
     QuoteBreakdown, QuoteCurrency, ReadResult, ReadSource, read_sources_res, table_columns_res,
@@ -767,7 +766,21 @@ fn source_sort_expression(
 ///     The predicate, or `None` when the source cannot express `closedate` at all.
 pub(super) fn closed_row_predicate(cols: &std::collections::HashSet<String>) -> Option<String> {
     cols.contains("closedate")
-        .then(|| format!("(typeof({CLOSEDATE}) IN ('integer','real') AND {CLOSEDATE} > 0)"))
+        .then(|| closed_test_sql(CLOSEDATE))
+}
+
+/// Spell the closed test over one column expression.
+///
+/// Shared with the replica's open-rows partial index, whose `WHERE` must be this exact
+/// expression for SQLite to use it.
+///
+/// Args:
+///     col: The close-date column expression, aliased or bare.
+///
+/// Returns:
+///     The parenthesised "has a numeric close time" test.
+pub(crate) fn closed_test_sql(col: &str) -> String {
+    format!("(typeof({col}) IN ('integer','real') AND {col} > 0)")
 }
 
 /// The close-date column as the row-scope predicates spell it.
@@ -936,9 +949,9 @@ fn append_row_scope(
             if !current {
                 continue;
             }
+            // The open test itself is hoisted once after the loop; the group keeps its guard.
             parts.push(GroupPredicate {
                 guard,
-                open: Some(open_row_predicate(cols).unwrap_or_else(|| "1=0".to_string())),
                 ..GroupPredicate::default()
             });
             continue;
@@ -985,6 +998,27 @@ fn append_row_scope(
         }
         parts.push(part);
     }
+    if f.rows == RowScope::OpenIfCurrent {
+        // Every group carries the same open test and no bounds, so it is hoisted out of the
+        // disjunction: `A AND g1 OR A AND g2` is `A AND (g1 OR g2)`, and only a top-level `A`
+        // matches `idx_rep_open`'s WHERE. It is the plain `open_row_predicate` text, never passed
+        // through `close_test_off_index`: a partial index is matched structurally.
+        if parts.is_empty() {
+            sql.push_str(" AND 1=0");
+            return;
+        }
+        let open = open_row_predicate(cols).unwrap_or_else(|| "1=0".to_string());
+        let guards = parts
+            .iter()
+            .map(|p| format!("({}1=1)", p.guard))
+            .collect::<Vec<_>>();
+        if guards.len() == 1 {
+            sql.push_str(&format!(" AND {open} AND {}", guards[0]));
+        } else {
+            sql.push_str(&format!(" AND {open} AND ({})", guards.join(" OR ")));
+        }
+        return;
+    }
     if let Some((from, to)) = coarse_range(&parts) {
         // Inside the disjunction the column is spelled `+r."closedate"`: same value, same type,
         // and every comparison on it sits behind the `typeof` test, so no row changes sides. What
@@ -1028,9 +1062,7 @@ fn append_row_scope(
         params.append(&mut part.bounds);
     }
     match branches.len() {
-        // An open-only pass with no current group has nothing to show and must SAY so; every
-        // other scope reaching zero branches had no predicate to apply in the first place.
-        0 if f.rows == RowScope::OpenIfCurrent => sql.push_str(" AND 1=0"),
+        // `OpenIfCurrent` returned above, so zero branches here means no predicate to apply.
         0 => {}
         1 => sql.push_str(&format!(" AND {}", branches[0])),
         // A one-sided or unbounded window with two or more groups: the branches keep their own
@@ -1102,6 +1134,13 @@ fn append_open_basis_scope(
         RowScope::OpenIfCurrent => RowScope::Open,
         other => other,
     };
+    // Same hoist as `append_row_scope`: one top-level open test lets `idx_rep_open` seek.
+    if resolved == RowScope::Open {
+        match open_row_predicate(cols) {
+            Some(open) => sql.push_str(&format!(" AND {open}")),
+            None => sql.push_str(" AND 1=0"),
+        }
+    }
     let mut branches: Vec<String> = Vec::new();
     for (offset, cores) in &offset_groups(f, now) {
         let Some(guard) = group_guard(cores, f) else {
@@ -1119,7 +1158,8 @@ fn append_open_basis_scope(
         }
         let state = match resolved {
             RowScope::Closed => Some(closed_row_predicate(cols).unwrap_or_else(|| "1=0".into())),
-            RowScope::Open => Some(open_row_predicate(cols).unwrap_or_else(|| "1=0".into())),
+            // Hoisted above the branches.
+            RowScope::Open => None,
             _ => match (closed_row_predicate(cols), open_row_predicate(cols)) {
                 (Some(closed), Some(open)) => Some(format!("({closed}) OR {open}")),
                 // Without `closedate` there is no row state to test; the window alone applies.
@@ -1278,14 +1318,14 @@ fn catch_all_exclusion(f: &ReportFilter) -> Option<String> {
 /// Args:
 ///     f: Complete Report filter.
 ///     cols: Columns available on this source.
-///     has_strategy_names: Whether liquidation attribution metadata is readable.
+///     meta: Strategy metadata of this read: name readability and the resolved name mask.
 ///
 /// Returns:
 ///     Parameterized SQL suffix and its ordered bound values.
 fn build_where(
     f: &ReportFilter,
     cols: &std::collections::HashSet<String>,
-    has_strategy_names: bool,
+    meta: &StrategyMeta,
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let has = |n: &str| cols.contains(n);
     let mut sql = String::from(" WHERE 1=1");
@@ -1300,20 +1340,20 @@ fn build_where(
             .join(",");
         sql.push_str(&format!(" AND r.core_uid IN ({ids})"));
     }
-    append_strategy_filter(&mut sql, f, cols, has_strategy_names);
-    append_strategy_name_mask(&mut sql, &mut params, f, cols, has_strategy_names);
+    append_strategy_filter(&mut sql, f, cols, meta.names);
+    append_strategy_name_mask(&mut sql, f, cols, meta);
     append_row_scope(&mut sql, &mut params, f, cols);
     let coin = f.coin.trim();
     if let Some(coins) = &f.exact_coins {
         if coins.is_empty() || !has("coin") {
             sql.push_str(" AND 1=0");
         } else {
-            sql.push_str(" AND (");
+            sql.push_str(" AND r.coin COLLATE NOCASE IN (");
             for (index, exact) in coins.iter().enumerate() {
                 if index > 0 {
-                    sql.push_str(" OR ");
+                    sql.push_str(", ");
                 }
-                sql.push_str("r.coin COLLATE NOCASE = ?");
+                sql.push('?');
                 params.push(Box::new(exact.clone()));
             }
             sql.push(')');
@@ -1324,7 +1364,16 @@ fn build_where(
             // `SOL_0925`); `SOLV` is another coin. The tail pattern escapes the ticker, since
             // `_` and `%` are LIKE wildcards.
             let ticker = coin.to_uppercase();
-            sql.push_str(" AND (r.coin COLLATE NOCASE = ? OR r.coin LIKE ? ESCAPE '\\')");
+            // The NOCASE range is a superset of every match (ASCII fold; '_' < '`'), so it gives
+            // the coin index a seek while the unchanged residual keeps the result set. A coin
+            // stored as BLOB sorts above all TEXT and would fall outside the range; accepted
+            // because the replica writer stores coin as TEXT.
+            sql.push_str(
+                " AND r.coin COLLATE NOCASE >= ? AND r.coin COLLATE NOCASE < ? \
+                 AND (r.coin COLLATE NOCASE = ? OR r.coin LIKE ? ESCAPE '\\')",
+            );
+            params.push(Box::new(ticker.clone()));
+            params.push(Box::new(format!("{ticker}`")));
             params.push(Box::new(ticker.clone()));
             params.push(Box::new(format!("{}\\_%", escape_like(&ticker))));
         } else {
@@ -1390,6 +1439,25 @@ fn strategy_name_query(filter: &ReportFilter) -> Option<StrategyQuery> {
     (!query.is_empty()).then_some(query)
 }
 
+/// Strategy metadata of one rows/totals read, resolved on the connection the read runs on.
+///
+/// Names are readable only when the filter needs them; the name mask is resolved here once, so
+/// a valuation retry reuses the same pairs.
+///
+/// Args:
+///     conn: Open report reader or snapshot.
+///     f: Complete Report filter.
+///
+/// Errors:
+///     Returns the SQLite error of the strategy-name lookup.
+fn report_strategy_meta(conn: &Connection, f: &ReportFilter) -> rusqlite::Result<StrategyMeta> {
+    let names = strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
+    Ok(StrategyMeta {
+        names,
+        name_mask: resolve_strategy_name_mask(conn, f, names)?,
+    })
+}
+
 /// Append the exact multi-strategy predicate without consuming SQLite bind-variable capacity.
 ///
 /// Strategy and core ids are typed integers, so grouping their numeric literals by core is safe and
@@ -1418,114 +1486,227 @@ fn append_strategy_filter(
         return;
     }
 
-    let mut by_core: std::collections::BTreeMap<u64, std::collections::BTreeSet<i64>> =
-        std::collections::BTreeMap::new();
+    let mut by_core: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
     for strategy in strategies {
         by_core
-            .entry(strategy.core_uid)
+            .entry(strategy.core_uid as i64)
             .or_default()
             .insert(strategy.strategy_id);
     }
     let sid = super::analytics::effective_sid_expr("r", columns, has_strategy_names);
-    let groups = by_core
-        .into_iter()
+    let groups = core_sid_groups_sql(&sid, &by_core);
+    sql.push_str(&format!(" AND ({groups})"));
+}
+
+/// Render `(core, strategy ids)` groups as literal SQL, one per core, joined by `OR`.
+///
+/// Both keys are integers, so inlining them as literals is safe and spends no bind variable; the
+/// expression depth grows with the number of cores, not strategies.
+///
+/// Args:
+///     sid: SQL expression of the row's effective strategy id.
+///     by_core: Strategy ids grouped by the stored (`i64`) core uid.
+///
+/// Returns:
+///     The groups joined by ` OR `, without outer parentheses.
+fn core_sid_groups_sql(sid: &str, by_core: &BTreeMap<i64, BTreeSet<i64>>) -> String {
+    by_core
+        .iter()
         .map(|(core_uid, strategy_ids)| {
             let ids = strategy_ids
-                .into_iter()
+                .iter()
                 .map(|strategy_id| strategy_id.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
-            format!(
-                "(r.core_uid = {} AND COALESCE({sid}, 0) IN ({ids}))",
-                core_uid as i64
-            )
+            format!("(r.core_uid = {core_uid} AND COALESCE({sid}, 0) IN ({ids}))")
         })
         .collect::<Vec<_>>()
-        .join(" OR ");
-    sql.push_str(&format!(" AND ({groups})"));
+        .join(" OR ")
+}
+
+/// Render exclusion pairs as CASE: 60 ms versus 1706 ms for per-row OR groups at 200k rows / 100 cores.
+///
+/// Args:
+///     sid: SQL expression of the row's effective strategy id.
+///     by_core: Strategy ids grouped by the stored (`i64`) core uid.
+///
+/// Returns:
+///     A CASE expression selecting one core's IN list, or zero for an unlisted or NULL core.
+fn core_sid_case_sql(sid: &str, by_core: &BTreeMap<i64, BTreeSet<i64>>) -> String {
+    let mut sql = String::from("CASE r.core_uid");
+    for (core_uid, strategy_ids) in by_core {
+        let ids = strategy_ids
+            .iter()
+            .map(|strategy_id| strategy_id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(&format!(
+            " WHEN {core_uid} THEN COALESCE({sid}, 0) IN ({ids})"
+        ));
+    }
+    sql.push_str(" ELSE 0 END");
+    sql
+}
+
+/// The `(core, strategy)` pairs a strategy-name mask selects, resolved once per read.
+#[derive(Clone, Debug)]
+struct NameMaskSet {
+    /// Whether the mask has a positive term: keep these pairs, rather than drop them.
+    positive: bool,
+    /// Strategy ids keyed by the stored (`i64`) core uid.
+    pairs: BTreeMap<i64, BTreeSet<i64>>,
+}
+
+/// Strategy metadata one Report read shares across its statements and its valuation retry.
+#[derive(Clone, Debug)]
+struct StrategyMeta {
+    /// Whether liquidation attribution metadata is readable.
+    names: bool,
+    /// The resolved name mask, `None` when the filter has none or it cannot be resolved.
+    name_mask: Option<NameMaskSet>,
+}
+
+impl StrategyMeta {
+    /// Metadata for a read whose filter carries no strategy-name mask.
+    ///
+    /// Args:
+    ///     names: Whether liquidation attribution metadata is readable.
+    fn without_mask(names: bool) -> Self {
+        Self {
+            names,
+            name_mask: None,
+        }
+    }
+}
+
+/// Resolve the strategy-name mask to the `(core, strategy)` pairs it selects.
+///
+/// Positive: the pairs with at least one named row the query matches, as the old per-row
+/// `EXISTS (.. match = 1)`. Exclusion-only: the pairs with at least one named row the query
+/// rejects, as the old `NOT EXISTS (.. name IS NOT NULL AND match = 0)`. Like that subquery, deleted
+/// strategies stay in. Rows whose core uid is not an integer, whose strategy id is not integral,
+/// or whose name is not valid text are skipped.
+///
+/// Args:
+///     conn: Open report reader or snapshot, with `strat` attached when `has_strategy_names`.
+///     f: Complete Report filter.
+///     has_strategy_names: Whether the attached strategy metadata is readable.
+///
+/// Returns:
+///     `None` when the filter has no mask or the metadata is unreadable; the caller fails closed.
+///
+/// Errors:
+///     Returns the SQLite error of the lookup.
+fn resolve_strategy_name_mask(
+    conn: &Connection,
+    f: &ReportFilter,
+    has_strategy_names: bool,
+) -> rusqlite::Result<Option<NameMaskSet>> {
+    let Some(query) = strategy_name_query(f) else {
+        return Ok(None);
+    };
+    if !has_strategy_names {
+        return Ok(None);
+    }
+    let positive = query.has_positive();
+    let mut pairs: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT core_uid, strategy_id, name FROM strat.strategies WHERE name IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        // The old SQL join compared numerically, so an integral REAL id matched too.
+        let Some(core_uid) = integral_id(row.get_ref(0)?) else {
+            continue;
+        };
+        let Some(strategy_id) = integral_id(row.get_ref(1)?) else {
+            continue;
+        };
+        let ValueRef::Text(bytes) = row.get_ref(2)? else {
+            continue;
+        };
+        let Ok(name) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        if query.matches(name) == positive {
+            pairs.entry(core_uid).or_default().insert(strategy_id);
+        }
+    }
+    Ok(Some(NameMaskSet { positive, pairs }))
+}
+
+/// An id stored as INTEGER, or as an integral in-range REAL; anything else is no id.
+fn integral_id(v: ValueRef<'_>) -> Option<i64> {
+    match v {
+        ValueRef::Integer(i) => Some(i),
+        ValueRef::Real(r) if r.fract() == 0.0 && r >= i64::MIN as f64 && r < i64::MAX as f64 => {
+            Some(r as i64)
+        }
+        _ => None,
+    }
 }
 
 /// Append the strategy-name predicate in the shared `moon_core::strategy_query` syntax.
 ///
-/// `mt_strategy_name_match` runs the same parser as the Strategies tree, so `%`, `_` and `\` stay
-/// literal, while the bound parameter keeps arbitrary user text outside SQL syntax. The name is
-/// joined by the same effective strategy id as the exact selector so liquidation attribution and
-/// physical strategy ids agree.
+/// The mask is resolved ONCE per read ([`resolve_strategy_name_mask`]) to the `(core, strategy)`
+/// pairs it selects, and rows are filtered by those pairs as integer literals, joined by the same
+/// effective strategy id as the exact selector so liquidation attribution and physical strategy
+/// ids agree. That selects exactly what the per-row subquery it replaces did: a pair is listed
+/// exactly when that subquery would have found a matching (positive) or rejecting (exclusion)
+/// named row. Positive `OR` depth is bounded by the number of cores, as in [`append_strategy_filter`];
+/// exclusions use `CASE` to select one core's strategy ids per row.
+/// A TEXT `strategyid` compares by affinity differently from the old join; the exact selector
+/// already compares the same way, so both filters agree.
 ///
-/// Two shapes. A query with a positive term keeps rows whose strategy name matches (`EXISTS`), so
-/// rows without a named strategy drop out. An exclusion-only query means "everything except", so it
-/// drops only rows whose named strategy fails it (`NOT EXISTS`): manual, sid-0 and
-/// unknown-strategy rows survive.
+/// Two shapes. A query with a positive term keeps rows whose strategy name matches, so rows
+/// without a named strategy drop out. An exclusion-only query means "everything except", so it
+/// drops only rows whose named strategy fails it: manual, sid-0, unknown-strategy and NULL-core
+/// rows survive (`CASE` defaults to zero and `COALESCE` keeps a NULL result from dropping the row).
 ///
 /// Args:
 ///     sql: Mutable WHERE clause receiving the name predicate.
-///     params: Ordered SQL parameters paired with the WHERE clause.
 ///     filter: Complete Report filter containing the optional name mask.
 ///     columns: Columns available on the current report source.
-///     has_strategy_names: Whether the attached strategy metadata is readable.
+///     meta: Strategy metadata of this read, carrying the resolved mask.
 ///
 /// Returns:
 ///     Nothing; a non-empty mask of either shape fails closed when its identity or name metadata
 ///     is unavailable, since not even an exclusion can be proven then.
 fn append_strategy_name_mask(
     sql: &mut String,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
     filter: &ReportFilter,
     columns: &std::collections::HashSet<String>,
-    has_strategy_names: bool,
+    meta: &StrategyMeta,
 ) {
-    let Some(query) = strategy_name_query(filter) else {
-        return;
-    };
-    if !has_strategy_names || !columns.contains("core_uid") || !columns.contains("strategyid") {
-        sql.push_str(" AND 1=0");
-        return;
-    }
-
-    let sid = super::analytics::effective_sid_expr("r", columns, has_strategy_names);
-    if query.has_positive() {
-        sql.push_str(&format!(
-            " AND EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
-             WHERE mask_strategy.core_uid = r.core_uid \
-             AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
-             AND mt_strategy_name_match(mask_strategy.name, ?) = 1)"
-        ));
-    } else {
-        // `name IS NOT NULL` is load-bearing: `mt_strategy_name_match` returns 0 for a NULL name,
-        // which `= 0` would otherwise read as excluded.
-        sql.push_str(&format!(
-            " AND NOT EXISTS (SELECT 1 FROM strat.strategies mask_strategy \
-             WHERE mask_strategy.core_uid = r.core_uid \
-             AND mask_strategy.strategy_id = COALESCE({sid}, 0) \
-             AND mask_strategy.name IS NOT NULL \
-             AND mt_strategy_name_match(mask_strategy.name, ?) = 0)"
-        ));
-    }
-    // The raw text, exactly what `strategy_name_query` parsed; the parser ignores edge whitespace.
-    params.push(Box::new(filter.strategy_name_mask.clone()));
-}
-
-/// Install the strategy-name match function for a Report read, only when its filter has a mask.
-///
-/// Registration is skipped when the query has no mask, keeping unrelated Report reads unchanged.
-///
-/// Args:
-///     conn: Open report reader or snapshot receiving the deterministic scalar function.
-///     filter: Complete Report filter whose mask decides whether registration is required.
-///
-/// Returns:
-///     Success after the function is installed or when no mask needs it.
-///
-/// Errors:
-///     Returns SQLite's registration error when the function cannot be installed.
-fn install_strategy_name_mask_function(
-    conn: &Connection,
-    filter: &ReportFilter,
-) -> rusqlite::Result<()> {
     if strategy_name_query(filter).is_none() {
-        return Ok(());
+        return;
     }
-    install_strategy_name_match(conn)
+    let mask = match &meta.name_mask {
+        Some(mask)
+            if meta.names && columns.contains("core_uid") && columns.contains("strategyid") =>
+        {
+            mask
+        }
+        _ => {
+            sql.push_str(" AND 1=0");
+            return;
+        }
+    };
+
+    let sid = super::analytics::effective_sid_expr("r", columns, meta.names);
+    if mask.pairs.is_empty() {
+        if mask.positive {
+            sql.push_str(" AND 1=0");
+        }
+        return;
+    }
+    if mask.positive {
+        let groups = core_sid_groups_sql(&sid, &mask.pairs);
+        sql.push_str(&format!(" AND ({groups})"));
+    } else {
+        let case = core_sid_case_sql(&sid, &mask.pairs);
+        sql.push_str(&format!(" AND NOT COALESCE({case}, 0)"));
+    }
 }
 
 /// SQL projecting the rec id the soft-delete protocol addresses a row by.
@@ -1609,7 +1790,7 @@ pub fn strategy_purge_rows(
     key: ReportStrategyKey,
 ) -> ReadResult<StrategyPurgeRows> {
     const CTX: &str = "reports: strategy_purge_rows";
-    let has_strategy_names = super::analytics::strategies_attached(conn);
+    let meta = StrategyMeta::without_mask(super::analytics::strategies_attached(conn));
     let filter = ReportFilter {
         strategies: Some(vec![key]),
         rows: RowScope::Closed,
@@ -1623,7 +1804,7 @@ pub fn strategy_purge_rows(
     for src in read_sources_res(conn)? {
         // `build_where` already turns a source without the identity columns into a no-match
         // constraint, so a partial schema contributes nothing instead of failing to prepare.
-        let (mut where_sql, params) = build_where(&filter, &src.cols, has_strategy_names);
+        let (mut where_sql, params) = build_where(&filter, &src.cols, &meta);
         // A narrowing clause the strategy predicate already implies, added so the index can serve
         // it. `append_strategy_filter` matches the EFFECTIVE id, whose `CASE` expression is not
         // sargable, leaving only the `core_uid` prefix of `idx_rep_strat` usable — and this read
@@ -1674,14 +1855,14 @@ pub fn strategy_purge_rows(
 /// Errors:
 ///     Returns `Failed` for source, SQL, or row conversion errors.
 pub fn query_totals(conn: &Connection, f: &ReportFilter) -> ReadResult<ReportTotals> {
-    install_strategy_name_mask_function(conn, f)
-        .map_err(|error| read_fail("reports: install strategy mask", error))?;
+    let meta = report_strategy_meta(conn, f)
+        .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
     let sources = read_sources_res(conn)?;
     with_valuation_fallback(
         conn,
         "reports: query_totals",
         "reports: query_totals native retry",
-        |include_valuation| query_totals_attempt(conn, f, &sources, include_valuation),
+        |include_valuation| query_totals_attempt(conn, f, &sources, &meta, include_valuation),
     )
 }
 
@@ -1984,6 +2165,7 @@ fn entry_spend_sql(src: &ReadSource, rate: Option<&str>) -> EntrySpendSql {
 ///     conn: Open report reader or snapshot.
 ///     f: Complete Report filter.
 ///     sources: Physical report sources discovered from `main`.
+///     meta: Strategy metadata of this read, resolved once for both attempts.
 ///     include_valuation: Whether the historical mode may join the attached derived cache; the
 ///         current-rate mode does not depend on it.
 ///
@@ -1999,12 +2181,11 @@ fn query_totals_attempt(
     conn: &Connection,
     f: &ReportFilter,
     sources: &[ReadSource],
+    meta: &StrategyMeta,
     include_valuation: bool,
 ) -> rusqlite::Result<ReportTotals> {
     let mut sink = totals::TotalsSink::default();
     let mut open_groups = Vec::new();
-    let has_strategy_names =
-        strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
     // Loop-invariant: `projection` yields a builder for the current-rate mode whatever the cache is
     // doing, and for the historical one exactly when the cache may be joined.
     let valuation_present = f.valuation == ValuationMode::Current || include_valuation;
@@ -2025,8 +2206,7 @@ fn query_totals_attempt(
     // still fails CLOSED on the same source — an unprovable position must never be invented. The
     // realized pass's scope choice lives in `totals::ClosedPass::new`.
     for src in sources {
-        totals::ClosedPass::new(src, f, include_valuation, has_strategy_names)
-            .run_grouped(conn, &mut sink)?;
+        totals::ClosedPass::new(src, f, include_valuation, meta).run_grouped(conn, &mut sink)?;
     }
     // The open pass: a plain per-quote tally, with no window, no coverage and no volume — none of
     // those mean anything for a position that has not closed. Skipped entirely for a caller that
@@ -2037,7 +2217,7 @@ fn query_totals_attempt(
             ..f.clone()
         };
         for src in sources {
-            let (where_sql, params) = build_where(&open_scope, &src.cols, has_strategy_names);
+            let (where_sql, params) = build_where(&open_scope, &src.cols, meta);
             let profit = profit_column(src).aggregate_sql();
             let (quote, group_by) = super::quote::trusted_quote_group("r", &src.cols);
             let sql = format!(
@@ -2075,8 +2255,8 @@ struct ReportPass<'a> {
     limit: usize,
     /// Physical report sources discovered from `main`.
     sources: &'a [ReadSource],
-    /// Whether liquidation attribution metadata is readable.
-    has_strategy_names: bool,
+    /// Strategy metadata of this read, resolved once for both attempts.
+    meta: &'a StrategyMeta,
 }
 
 /// Execute one complete Report row request: the closed rows, and the open ones ahead of them.
@@ -2187,7 +2367,7 @@ fn run_row_pass(
     // Query the top N from EACH source separately so indexes work, then merge below.
     let mut merged: Vec<(u64, i64, Vec<Value>)> = Vec::new();
     for src in pass.sources {
-        let (where_sql, mut params) = build_where(&scoped, &src.cols, pass.has_strategy_names);
+        let (where_sql, mut params) = build_where(&scoped, &src.cols, pass.meta);
         let valuation = super::valuation::projection(
             pass.filter.valuation,
             include_valuation,
@@ -2323,13 +2503,11 @@ pub fn query_reports(
     desc: bool,
     limit: usize,
 ) -> ReadResult<ReportTable> {
-    install_strategy_name_mask_function(conn, f)
-        .map_err(|error| read_fail("reports: install strategy mask", error))?;
+    let meta = report_strategy_meta(conn, f)
+        .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
     let cols = display_columns(conn)?;
     let col = sort_column(&cols, sort_key);
     let sources = read_sources_res(conn)?;
-    let has_strategy_names =
-        strategy_metadata_required(f) && super::analytics::strategies_attached(conn);
     // The column set is deliberately resolved ONCE, outside the retry: both attempts must project
     // the same `cols`, or a cache-free retry would desynchronise `cols` from `rows`.
     let merged = {
@@ -2340,7 +2518,7 @@ pub fn query_reports(
             desc,
             limit,
             sources: &sources,
-            has_strategy_names,
+            meta: &meta,
         };
         with_valuation_fallback(
             conn,
@@ -2425,9 +2603,7 @@ pub fn query_chart_trade_history_for_cores(
     scope.rows = RowScope::Closed;
 
     let requested = limit.saturating_add(1);
-    install_strategy_name_mask_function(conn, &scope).map_err(|error| read_fail(CONTEXT, error))?;
-    let has_strategy_names =
-        strategy_metadata_required(&scope) && super::analytics::strategies_attached(conn);
+    let meta = report_strategy_meta(conn, &scope).map_err(|error| read_fail(CONTEXT, error))?;
     let mut compatible_source = false;
     let mut records = Vec::new();
     for source in read_sources_res(conn)? {
@@ -2438,7 +2614,7 @@ pub fn query_chart_trade_history_for_cores(
             continue;
         }
         compatible_source = true;
-        let (where_sql, mut params) = build_where(&scope, &source.cols, has_strategy_names);
+        let (where_sql, mut params) = build_where(&scope, &source.cols, &meta);
         let record_id = record_identity_expr(&source);
         // Money is OPTIONAL here, deliberately: `REQUIRED_COLUMNS` names none of these columns, so
         // a source that cannot produce a figure still returns every trade and the chart still draws
@@ -2969,7 +3145,11 @@ pub fn distinct_strategies(
             continue;
         }
         let strategy_id = super::analytics::effective_sid_expr("r", &src.cols, has_strategy_names);
-        let (where_sql, params) = build_where(&scope, &src.cols, has_strategy_names);
+        let (where_sql, params) = build_where(
+            &scope,
+            &src.cols,
+            &StrategyMeta::without_mask(has_strategy_names),
+        );
         // `COALESCE(r."strategyid",0)` never yields NULL, so `<> 0` / `= 0` partition every row
         // with no third case, and identity is set equality (this function sorts its whole output
         // in Rust below, so SQL row order never matters). When `strategy_id` is already the plain

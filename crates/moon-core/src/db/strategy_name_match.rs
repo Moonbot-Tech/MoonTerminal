@@ -8,6 +8,7 @@
 
 use rusqlite::Connection;
 use rusqlite::functions::FunctionFlags;
+use rusqlite::types::ValueRef;
 
 use crate::strategy_query::StrategyQuery;
 
@@ -33,8 +34,11 @@ use crate::strategy_query::StrategyQuery;
 pub(in crate::db) fn install_strategy_name_match(conn: &Connection) -> rusqlite::Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
     conn.create_scalar_function("mt_strategy_name_match", 2, flags, |ctx| {
-        let Some(name) = ctx.get::<Option<String>>(0)? else {
-            return Ok(0i64);
+        let name = match ctx.get_raw(0) {
+            ValueRef::Null => return Ok(0i64),
+            value => value
+                .as_str()
+                .map_err(|error| rusqlite::Error::UserFunctionError(Box::new(error)))?,
         };
         if ctx.get_raw(1).data_type() == rusqlite::types::Type::Null {
             return Ok(1i64);
@@ -45,6 +49,6 @@ pub(in crate::db) fn install_strategy_name_match(conn: &Connection) -> rusqlite:
                 .map(StrategyQuery::parse)
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)
         })?;
-        Ok(i64::from(query.matches(&name)))
+        Ok(i64::from(query.matches(name)))
     })
 }
