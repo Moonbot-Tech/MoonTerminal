@@ -13,6 +13,7 @@ fn result(holdout_n: Option<i64>, holdout_open: usize) -> SearchResult {
             tally
         }),
         holdout_open,
+        holdout_open_profit: 0.0,
         fact_train: Default::default(),
         fact_holdout: None,
         holdout_loses: false,
@@ -37,6 +38,12 @@ fn every_answer_states_its_out_of_sample_status() {
         assert_eq!(part.short, whole);
     }
     assert!(open.warn && open.short != whole);
+    // The open deals' tape-end estimate and their count follow the holdout's profit.
+    let mut with_estimate = result(Some(MIN_HOLDOUT), 2);
+    with_estimate.holdout_open_profit = 20.0;
+    let estimate = holdout_part(&with_estimate);
+    assert!(estimate.warn);
+    assert!(estimate.short.contains("(+20 (2))"), "{}", estimate.short);
     assert!(!real.warn && real.short != whole && !real.short.is_empty());
 }
 

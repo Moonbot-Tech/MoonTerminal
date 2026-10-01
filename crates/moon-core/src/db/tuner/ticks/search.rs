@@ -221,6 +221,9 @@ pub struct SearchResult {
     /// How many of the deals held back the answer bought and left open inside the tape — none
     /// may be among the deals it was fitted on; the holdout is only scored, so it says them.
     pub holdout_open: usize,
+    /// What the `holdout_open` deals would make closed at the last print of their tapes
+    /// ([`VariantScore::open_profit`]) — an estimate beside `holdout`, never part of it.
+    pub holdout_open_profit: f64,
     /// The fact over the deals the search was fitted on ([`fact_tally`]).
     pub fact_train: Tally,
     /// The fact over the deals held back, when any were — the slice `holdout` is scored on.
@@ -558,7 +561,8 @@ impl<'a> Bases<'a> {
 
 /// Every deal's result under one point, in order — `(result, spent)`, the result in the scope's
 /// metric as the "Fact" column holds it ([`super::Outcome::profit_metric`]), `None` where the
-/// point makes no trade of the deal — and whether it bought the deal and left it open.
+/// point makes no trade of the deal — whether it bought the deal and left it open, and what
+/// such a deal would make at the tape's end ([`super::Outcome::open_metric_at_tape_end`]).
 ///
 /// Args:
 ///     deals: The deals.
@@ -568,7 +572,7 @@ fn results(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
-) -> Vec<(Option<(f64, f64)>, bool)> {
+) -> Vec<(Option<(f64, f64)>, bool, Option<f64>)> {
     deals
         .par_iter()
         .zip(of_deal.par_iter())
@@ -578,7 +582,8 @@ fn results(
             let result = outcome
                 .profit_metric(&d.deal)
                 .map(|value| (value, d.deal.spent));
-            (result, outcome.left_open())
+            let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
+            (result, outcome.left_open(), at_tape_end)
         })
         .collect()
 }
@@ -594,6 +599,11 @@ pub struct VariantScore {
     pub spent: f64,
     /// Deals the variant bought and left open inside the tape — no result on record.
     pub open: usize,
+    /// What the `open` deals would make closed at the last print of their tapes, summed in the
+    /// tally's metric ([`super::Outcome::open_metric_at_tape_end`]). An estimate shown beside
+    /// the tally, never part of it; NaN once an open deal has no estimate (no print, no price,
+    /// nothing spent under the percent metric), so the sum never claims deals it did not value.
+    pub open_profit: f64,
     /// Deals the variant has no result for: not bought (its entry did not fill on the tape), or
     /// bought and closed with no result in the scope's metric (nothing spent under the percent
     /// metric).
@@ -602,14 +612,17 @@ pub struct VariantScore {
 
 impl VariantScore {
     /// Count one deal's replay: its `(metric, spent)` when it made a trade, whether the
-    /// position was left open.
-    fn push(&mut self, result: Option<(f64, f64)>, left_open: bool) {
+    /// position was left open, and what an open one makes at the tape's end.
+    fn push(&mut self, result: Option<(f64, f64)>, left_open: bool, at_tape_end: Option<f64>) {
         match result {
             Some((value, size)) => {
                 self.tally.push(value);
                 self.spent += size;
             }
-            None if left_open => self.open += 1,
+            None if left_open => {
+                self.open += 1;
+                self.open_profit += at_tape_end.unwrap_or(f64::NAN);
+            }
             None => self.untraded += 1,
         }
     }
@@ -623,8 +636,8 @@ fn score(
 ) -> VariantScore {
     // The replay of every deal is independent; the score is folded in order afterwards.
     let mut score = VariantScore::default();
-    for (result, left_open) in results(deals, of_deal, params) {
-        score.push(result, left_open);
+    for (result, left_open, at_tape_end) in results(deals, of_deal, params) {
+        score.push(result, left_open, at_tape_end);
     }
     score
 }
@@ -1109,12 +1122,12 @@ pub fn suggest(
         .map(|(key, value)| ((*key).to_string(), value.clone()))
         .collect();
     values.sort();
-    let (holdout, holdout_open) = if train_n < deals.len() {
+    let (holdout, holdout_open, holdout_open_profit) = if train_n < deals.len() {
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
         let held_back = self::score(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
-        (Some(held_back.tally), held_back.open)
+        (Some(held_back.tally), held_back.open, held_back.open_profit)
     } else {
-        (None, 0)
+        (None, 0, 0.0)
     };
     let fact_train = fact_tally(&deals[..train_n]);
     let fact_holdout = holdout.is_some().then(|| fact_tally(&deals[train_n..]));
@@ -1130,6 +1143,7 @@ pub fn suggest(
         train: train_tally,
         holdout,
         holdout_open,
+        holdout_open_profit,
         fact_train,
         fact_holdout,
         holdout_loses,
@@ -1148,7 +1162,8 @@ pub fn fact_tally(deals: &[PreparedDeal]) -> Tally {
 /// The deals a variant and the fact are compared over: `deals` less those the strategies as
 /// they stand leave open inside the tape — the cut the search makes before it fits
 /// ([`closing::closable_at_base`]), so the search's fact and the "Fact" column over the variant
-/// columns are one set. A variant that leaves one of the kept deals open cannot be scored.
+/// columns are one set. A kept deal a variant leaves open stays out of its tally; its tape-end
+/// estimate is counted beside it ([`VariantScore::open_profit`]).
 ///
 /// Args:
 ///     deals: The covered deals, chronological.
@@ -1372,16 +1387,23 @@ pub fn variant_tally_by_deal(
                 let metric = outcome
                     .profit_metric(&d.deal)
                     .map(|value| (value, d.deal.spent));
-                (d.deal.report_uid, result, metric, outcome.left_open())
+                let at_tape_end = outcome.open_metric_at_tape_end(&d.deal, &d.ticks);
+                (
+                    d.deal.report_uid,
+                    result,
+                    metric,
+                    outcome.left_open(),
+                    at_tape_end,
+                )
             })
             .collect();
         let mut score = VariantScore::default();
-        for (_, _, metric, left_open) in &scored {
-            score.push(*metric, *left_open);
+        for (_, _, metric, left_open, at_tape_end) in &scored {
+            score.push(*metric, *left_open, *at_tape_end);
         }
         let money = scored
             .into_iter()
-            .map(|(uid, result, _, _)| (uid, result))
+            .map(|(uid, result, _, _, _)| (uid, result))
             .collect();
         (score, money)
     })

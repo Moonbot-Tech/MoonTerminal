@@ -60,7 +60,7 @@ pub(super) fn closed_tally(
     params: &[(EntryParams, ExitParams)],
 ) -> Option<Tally> {
     let mut tally = Tally::default();
-    for (result, open) in results(deals, of_deal, params) {
+    for (result, open, _) in results(deals, of_deal, params) {
         if open {
             return None;
         }
@@ -104,7 +104,7 @@ pub(super) fn closable_at_base(
     let mut kept = Vec::with_capacity(deals.len());
     let mut of_kept = Vec::with_capacity(deals.len());
     let mut left_open = Vec::new();
-    for (((_, open), deal), &base_of) in results(deals, &bases.of_deal, &base)
+    for (((_, open, _), deal), &base_of) in results(deals, &bases.of_deal, &base)
         .into_iter()
         .zip(deals)
         .zip(&bases.of_deal)

@@ -61,6 +61,7 @@ struct Scored {
     stats: VarStats,
     plan: HashMap<i64, (f64, f64)>,
     open: usize,
+    open_profit: f64,
     untraded: usize,
     n: usize,
     /// The cut the score was taken over, fresh or reused.
@@ -82,6 +83,7 @@ fn scored_of(
         stats: stats_of(score.tally, score.spent),
         plan,
         open: score.open,
+        open_profit: score.open_profit,
         untraded: score.untraded,
         n,
         cut,
@@ -229,6 +231,7 @@ impl AnalyticsView {
                     Some(s) => {
                         this.ticks.var_stats = Some(s.stats);
                         this.ticks.var_open = s.open;
+                        this.ticks.var_open_profit = s.open_profit;
                         this.ticks.var_untraded = s.untraded;
                         this.ticks.set_fact = Some(s.cut.fact.clone());
                         this.ticks.base_open = s.cut.base_open;

@@ -312,6 +312,7 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
         train: Default::default(),
         holdout: Some(Default::default()),
         holdout_open: 0,
+        holdout_open_profit: 0.0,
         fact_train: Default::default(),
         fact_holdout: None,
         holdout_loses: false,

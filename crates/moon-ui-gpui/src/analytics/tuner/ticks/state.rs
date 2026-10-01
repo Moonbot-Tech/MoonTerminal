@@ -373,9 +373,12 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) var_stats: Option<VarStats>,
     /// How many replayable rows the variant KPI was computed over, for its caption.
     pub(in crate::analytics::tuner) var_n: usize,
-    /// Deals the variant bought and left open inside the tape: above zero its column is not
-    /// scored ([`super::variants`]).
+    /// Deals the variant bought and left open inside the tape: out of its tally, their estimate
+    /// beside its profit ([`super::variants`]).
     pub(in crate::analytics::tuner) var_open: usize,
+    /// What the `var_open` deals would make closed at the last print of their tapes, in the
+    /// tally's metric (`VariantScore::open_profit`).
+    pub(in crate::analytics::tuner) var_open_profit: f64,
     /// Deals the variant never bought — its entry did not fill.
     pub(in crate::analytics::tuner) var_untraded: usize,
     /// The fact over the very deals the variant was scored over — the replayable rows less
@@ -511,6 +514,7 @@ impl Default for TicksState {
             var_stats: None,
             var_n: 0,
             var_open: 0,
+            var_open_profit: 0.0,
             var_untraded: 0,
             set_fact: None,
             base_open: 0,
@@ -886,6 +890,7 @@ impl TicksState {
         self.var_stats = None;
         self.var_n = 0;
         self.var_open = 0;
+        self.var_open_profit = 0.0;
         self.var_untraded = 0;
         self.set_fact = None;
         self.base_open = 0;

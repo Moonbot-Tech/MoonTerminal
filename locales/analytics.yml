@@ -350,6 +350,10 @@ analytics.tuner.kpi_collapse:
   ru: "Свернуть — только сделки и профит"
   en: "Collapse — trades and profit only"
   es: "Contraer — solo operaciones y beneficio"
+analytics.tuner.kpi_open_tip:
+  ru: "закрытые: %{closed} · не закрылись в ленте: %{n}, по последней цене ленты %{open} — в итог не входят"
+  en: "closed: %{closed} · not closed inside the tape: %{n}, at the tape's last price %{open} — not in the total"
+  es: "cerradas: %{closed} · sin cerrar dentro de la cinta: %{n}, al último precio de la cinta %{open} — fuera del total"
 analytics.tuner.kpi_expand:
   ru: "Развернуть все показатели"
   en: "Expand all metrics"
@@ -2154,9 +2158,13 @@ analytics.ticks.sugg_unclosed:
   en: "No variant closes its trades inside the tape: a stop or a trailing without a take profit is needed, and every trade bought must close by its stop or its sell"
   es: "Ninguna variante cierra sus operaciones dentro de la cinta: hace falta un stop o un trailing sin take profit, y cada operación comprada debe cerrarse por su stop o su venta"
 analytics.ticks.holdout_open:
-  ru: "открытыми остались %{n}"
-  en: "%{n} left open"
-  es: "%{n} quedaron abiertas"
+  ru: "отложено, закрыто %{n}: %{profit}; ещё %{k} не закрылись в ленте — по её последней цене %{open}; факт %{fact}"
+  en: "holdout, %{n} closed: %{profit}; %{k} more not closed inside the tape — at its last price %{open}; fact %{fact}"
+  es: "reservado, %{n} cerradas: %{profit}; otras %{k} sin cerrar dentro de la cinta — a su último precio %{open}; hecho %{fact}"
+analytics.ticks.holdout_open_short:
+  ru: "вне %{profit} (%{open} (%{k})) / факт %{fact}"
+  en: "oos %{profit} (%{open} (%{k})) / fact %{fact}"
+  es: "fuera %{profit} (%{open} (%{k})) / hecho %{fact}"
 analytics.ticks.holdout_vs_fact:
   ru: "отложено %{n}: %{profit} против факта %{fact}"
   en: "holdout %{n}: %{profit} vs fact %{fact}"
@@ -2182,9 +2190,9 @@ analytics.ticks.warn_holdout_loses:
   en: "The found point loses to the fact on the held-back deals."
   es: "El punto encontrado pierde frente al hecho en las operaciones reservadas."
 analytics.ticks.var_open:
-  ru: "открытыми осталось: %{n} — колонка не оценена"
-  en: "left open: %{n} — column not scored"
-  es: "quedaron abiertas: %{n} — columna sin evaluar"
+  ru: "не закрылись в ленте: %{n} — в итог не входят, их прибыль по последней цене ленты в скобках у прибыли"
+  en: "not closed inside the tape: %{n} — out of the total; their profit at the tape's last price is in brackets beside the profit"
+  es: "sin cerrar dentro de la cinta: %{n} — fuera del total; su beneficio al último precio de la cinta va entre paréntesis junto al beneficio"
 analytics.ticks.var_untraded:
   ru: "без результата: %{n}"
   en: "not scored: %{n}"
@@ -2202,9 +2210,9 @@ analytics.ticks.set_counts_short:
   en: "deals: %{n}"
   es: "operac.: %{n}"
 analytics.ticks.var_open_short:
-  ru: "открыто: %{n}, без оценки"
-  en: "open: %{n}, not scored"
-  es: "abiertas: %{n}, sin evaluar"
+  ru: "открыто: %{n}"
+  en: "open: %{n}"
+  es: "abiertas: %{n}"
 analytics.ticks.holdout_short:
   ru: "вне %{profit} / факт %{fact}"
   en: "oos %{profit} / fact %{fact}"

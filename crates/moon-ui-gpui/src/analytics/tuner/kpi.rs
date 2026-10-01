@@ -60,7 +60,7 @@ struct Figure {
     signed: f64,
 }
 
-/// The cell of a column that is not scored, or of a figure that does not exist: "—".
+/// The cell of a figure that does not exist: "—".
 fn blank_figure() -> Figure {
     Figure {
         text: KpiCellText {
@@ -69,6 +69,47 @@ fn blank_figure() -> Figure {
         },
         tone: FigureTone::Muted,
         signed: 0.0,
+    }
+}
+
+/// The deals a column bought and left open inside the tape: how many, and what they would make
+/// closed at the last print of their tapes — in the tally's metric, an estimate shown beside the
+/// column's profit and never added to it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct OpenTail {
+    pub(super) profit: f64,
+    pub(super) n: usize,
+}
+
+/// The profit cell of a column with deals left open: the closed deals' profit, then the open
+/// ones' estimate and their count in brackets — `-4.94 (+1.20 (5))`. The colour stays the
+/// closed profit's; the tooltip spells every part out.
+///
+/// Args:
+///     closed: The column's profit figure, from [`figure_of`].
+///     tail: The deals left open.
+///
+/// Returns:
+///     The cell with the bracket appended.
+fn with_open_tail(closed: Figure, tail: OpenTail) -> Figure {
+    let open = fmt_signed(tail.profit);
+    let tooltip = t!(
+        "analytics.tuner.kpi_open_tip",
+        closed = closed
+            .text
+            .tooltip
+            .clone()
+            .unwrap_or_else(|| closed.text.display.clone()),
+        open = open.clone(),
+        n = tail.n
+    )
+    .to_string();
+    Figure {
+        text: KpiCellText {
+            display: format!("{} ({open} ({}))", closed.text.display, tail.n),
+            tooltip: Some(tooltip),
+        },
+        ..closed
     }
 }
 
@@ -257,8 +298,9 @@ pub(super) struct VarLabel {
     pub(super) tip: Option<String>,
     /// The second line is a warning, drawn in the warn colour.
     pub(super) sub_warn: bool,
-    /// The column cannot be scored: every cell reads "—" whatever its stats say.
-    pub(super) blank: bool,
+    /// Deals the column left open inside the tape; their estimate follows its profit
+    /// ([`with_open_tail`]).
+    pub(super) open: Option<OpenTail>,
     /// The column is scored on too few deals to recommend: its signed figures are drawn
     /// muted, never green as a gain.
     pub(super) muted: bool,
@@ -271,7 +313,7 @@ impl VarLabel {
             sub: None,
             tip: None,
             sub_warn: false,
-            blank: false,
+            open: None,
             muted: false,
         }
     }
@@ -282,7 +324,7 @@ impl VarLabel {
             sub: Some(sub),
             tip: None,
             sub_warn: false,
-            blank: false,
+            open: None,
             muted: false,
         }
     }
@@ -301,12 +343,15 @@ impl VarLabel {
         self
     }
 
-    /// Mark the column as not scored: its cells read "—".
+    /// Attach the deals the column left open: its profit cell carries their estimate.
+    ///
+    /// Args:
+    ///     tail: The deals left open.
     ///
     /// Returns:
-    ///     The same label, blanked.
-    pub(super) fn blanked(mut self) -> Self {
-        self.blank = true;
+    ///     The same label with the open deals.
+    pub(super) fn with_open(mut self, tail: OpenTail) -> Self {
+        self.open = Some(tail);
         self
     }
 
@@ -441,7 +486,6 @@ pub(super) fn kpi_matrix_card_over(
             MetricKind::MaxDrawdown,
         ),
     ];
-    let col_w = 92.0;
     let headings: Vec<VarLabel> = (0..stats.len())
         .map(|i| {
             if i == 0 {
@@ -456,7 +500,13 @@ pub(super) fn kpi_matrix_card_over(
         .collect();
     // A second line only when some heading still carries one. A short title plus a tooltip
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
-    let blank: Vec<bool> = headings.iter().map(|label| label.blank).collect();
+    let open: Vec<Option<OpenTail>> = headings.iter().map(|label| label.open).collect();
+    // A profit cell with an open tail carries a bracket the usual width would cut.
+    let col_w = if open.iter().any(Option::is_some) {
+        128.0
+    } else {
+        92.0
+    };
     let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
     let head_h = if headings.iter().any(|label| label.sub.is_some()) {
         34.0
@@ -531,10 +581,11 @@ pub(super) fn kpi_matrix_card_over(
                     .child(label),
             );
         for (i, s) in stats.iter().enumerate() {
-            let figure = if blank.get(i).copied().unwrap_or(false) {
-                blank_figure()
-            } else {
-                figure_of(kind, s)
+            let figure = match open.get(i).copied().flatten() {
+                Some(tail) if kind == MetricKind::Profit => {
+                    with_open_tail(figure_of(kind, s), tail)
+                }
+                _ => figure_of(kind, s),
             };
             let color = match figure.tone {
                 FigureTone::Signed if muted.get(i).copied().unwrap_or(false) => p.text_muted,
