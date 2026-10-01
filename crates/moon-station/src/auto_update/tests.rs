@@ -21,8 +21,8 @@ fn a_newer_release_is_requested() {
     );
 }
 
-/// An equal or older release is never installed over the running one: otherwise the station
-/// would restart itself every few hours, or roll itself back.
+/// Changing `auto_update.rs:decide` from `latest > own` to `latest >= own`, or dropping
+/// that filter, must fail: equal or older releases would restart or roll back the station.
 #[test]
 fn an_equal_or_older_release_is_not_requested() {
     assert_eq!(
@@ -51,20 +51,22 @@ fn the_switch_off_or_a_dev_build_never_updates() {
     );
 }
 
-/// A version asked for less than a day ago is not asked for again: a failed update restarts the
-/// old binary, and without this it would file the same request at every start.
+/// Shortening `auto_update.rs:RETRY_AFTER_S` or `decide`'s retry comparison must fail:
+/// a failed update would request another restart before its one-day hold expires.
+/// Removing `decide`'s `last.version == latest` guard must fail: an older attempt would
+/// delay a newer release. The 86,400-second boundary comes from the one-day contract.
 #[test]
 fn a_tried_version_waits_a_day() {
     let tried = Attempt {
         version: v(0, 31, 0),
-        at_s: NOW - (RETRY_AFTER_S - 1),
+        at_s: NOW - 86_399,
     };
     assert_eq!(
         decide(true, Some(v(0, 30, 0)), Some(v(0, 31, 0)), Some(tried), NOW),
         Decision::Tried(v(0, 31, 0))
     );
     let day_old = Attempt {
-        at_s: NOW - RETRY_AFTER_S,
+        at_s: NOW - 86_400,
         ..tried
     };
     assert_eq!(
