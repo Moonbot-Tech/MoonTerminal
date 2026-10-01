@@ -42,6 +42,7 @@ fn tape(items: &[TapeWant]) -> Result<Answer, String> {
     let file = TapeFile::open(&path).map_err(|e| format!("open the tape: {e}"))?;
     let read = |exchange: &str, market: &str, from_ms, to_ms| {
         file.spans(exchange, market, from_ms, to_ms)
+            .map(|spans| spans.map(|span| span.map_err(|e| format!("read the tape: {e}"))))
             .map_err(|e| format!("read the tape of {exchange} {market}: {e}"))
     };
     Ok(Answer::Tape(answer_tape(items, TAPE_REPLY_BUDGET, read)?))
@@ -84,11 +85,12 @@ fn check_wants(items: &[TapeWant]) -> Result<(), String> {
 /// Args:
 ///     items: The wanted stretches.
 ///     budget: Most bytes of packed prints, JSON overhead included.
-///     read: `(exchange, market, from_ms, to_ms)` → the held spans intersecting it, ascending.
-pub(crate) fn answer_tape(
+///     read: `(exchange, market, from_ms, to_ms)` → lazy held spans intersecting it, ascending;
+///         only spans through the page's cut are requested, and read errors are returned.
+pub(crate) fn answer_tape<I: Iterator<Item = Result<StoredSpan, String>>>(
     items: &[TapeWant],
     budget: usize,
-    mut read: impl FnMut(&str, &str, i64, i64) -> Result<Vec<StoredSpan>, String>,
+    mut read: impl FnMut(&str, &str, i64, i64) -> Result<I, String>,
 ) -> Result<Tape, String> {
     let mut tape = Tape::default();
     let mut used = 0usize;
@@ -96,6 +98,7 @@ pub(crate) fn answer_tape(
         let item = item as u32;
         for &(from, to) in &want.spans {
             for span in read(&want.exchange, &want.market, from, to)? {
+                let span = span?;
                 let (a, b) = (from.max(span.from_ms), to.min(span.to_ms));
                 if a > b {
                     continue;
