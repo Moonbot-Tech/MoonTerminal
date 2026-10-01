@@ -241,3 +241,24 @@ fn a_broken_telegram_section_is_refused() {
         );
     }
 }
+
+/// The switch is on unless the file turns it off: a parse that read a missing `[update]` as off
+/// would stop every existing station from updating itself.
+#[test]
+fn update_auto_is_on_unless_the_file_turns_it_off() {
+    let dir = creds("update-auto", &[(3, "k1")]);
+    let core = "[[core]]\nuid = 3\nname = \"BinF1\"\n";
+    let parse = |extra: &str| {
+        from_station_file(&format!("{core}{extra}"), Some(&dir))
+            .expect("parses")
+            .auto_update
+    };
+    assert!(parse(""), "no [update] section: on");
+    assert!(parse("[update]\n"), "an empty [update]: on");
+    assert!(parse("[update]\nauto = true\n"));
+    assert!(!parse("[update]\nauto = false\n"));
+    assert!(
+        from_station_file(&format!("{core}[update]\nauto = 1\n"), Some(&dir)).is_err(),
+        "a switch that is not a boolean is refused, not guessed"
+    );
+}

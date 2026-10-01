@@ -16,7 +16,8 @@ use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use moon_core::update::{
-    BuildIdentity, GitHubReleaseClient, ReleaseDiscovery, UpdateEligibility, station_asset_name,
+    BuildIdentity, GitHubReleaseClient, ReleaseDiscovery, ReleaseVersion, UpdateEligibility,
+    station_asset_name,
 };
 use moon_tg::{ReleaseCheck, ReleaseFailure, UpdateRefusal};
 
@@ -34,8 +35,20 @@ const STALE_REQUEST: Duration = Duration::from_secs(15 * 60);
 const CHECK_WAIT: Duration = Duration::from_secs(10);
 
 /// The release tag the station was built from, `unknown` for a build outside a tagged history.
-fn release_base() -> &'static str {
+pub(crate) fn release_base() -> &'static str {
     option_env!("MOONTERMINAL_RELEASE_BASE").unwrap_or("unknown")
+}
+
+/// The release this binary was built from exactly: the release base, when the build's commit
+/// carries that tag itself (`build.rs`). `None` for a build of any other commit, whose base is
+/// only the latest tag behind it, and for a build outside a tagged history.
+pub(crate) fn exact_release() -> Option<ReleaseVersion> {
+    let base = BuildIdentity::from_release_base(release_base()).baseline()?;
+    option_env!("MOONSTATION_EXACT_TAGS")
+        .unwrap_or("")
+        .split_whitespace()
+        .any(|tag| ReleaseVersion::parse(tag) == Some(base))
+        .then_some(base)
 }
 
 /// The station's version as it reports it: the release tag and the exact revision.
@@ -132,7 +145,7 @@ fn request_update_file(data_root: &Path) -> Result<(), UpdateRefusal> {
         .open(&request)
     {
         Ok(_) => {
-            log::info!("update: requested from the bot's chat");
+            log::info!("update: requested");
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {

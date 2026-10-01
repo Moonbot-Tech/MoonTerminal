@@ -35,7 +35,8 @@
 //! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
 //! the process exits; the report replica and the order traces need no such step, the replica
 //! resuming from its last committed checkpoint and the traces backfilled at the next start.
-//! SIGHUP re-reads `station.toml`: cores removed or switched off disconnect, the tape window moves.
+//! SIGHUP re-reads `station.toml`: cores removed or switched off disconnect, the tape window moves,
+//! the `[update] auto` switch follows (`auto_update.rs`).
 //! A core ADDED needs its credential, which systemd hands over only at a start, so that one takes
 //! a restart.
 //!
@@ -43,6 +44,7 @@
 //! idle, and resident memory at twice the size and growing — not worth it on a 1 GB server.
 
 mod api;
+mod auto_update;
 mod cores;
 mod host;
 mod pull;
@@ -117,6 +119,7 @@ fn main() -> anyhow::Result<()> {
     apply_tape(&station.tape);
     let profile = station.profile();
     let telegram = station.telegram;
+    let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
     let mut cfg = station.config;
     log_cores(&cfg);
@@ -198,6 +201,7 @@ fn main() -> anyhow::Result<()> {
             match reload(&config_path) {
                 Ok(reloaded) => {
                     skipped_cores = reloaded.skipped_cores;
+                    auto_update.set(reloaded.auto_update);
                     if !same_bot(reloaded.telegram.as_ref(), telegram.as_ref()) {
                         log::warn!(
                             "[telegram] changed: it takes effect on the next start, not a reload"
@@ -237,6 +241,7 @@ fn main() -> anyhow::Result<()> {
             host: &host,
             data_root: &data_root,
             skipped_cores: &skipped_cores,
+            auto_update: &auto_update,
         };
         if let Some(bot) = bot.as_mut() {
             // The chats' "Status" asked during the tick above.
@@ -313,6 +318,7 @@ struct StationNow<'a> {
     data_root: &'a Path,
     /// Load failures remain in the total even though they have no connection session.
     skipped_cores: &'a [String],
+    auto_update: &'a auto_update::AutoUpdate,
 }
 
 impl StationNow<'_> {
@@ -332,6 +338,7 @@ impl StationNow<'_> {
             }),
             host: Some(Box::new(self.host.host())),
             last_update: release::last_update(self.data_root),
+            auto_update: Some(self.auto_update.on()),
         }
     }
 }

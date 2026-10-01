@@ -31,6 +31,10 @@ pub enum Step {
     TapeWritten,
     TapeReload,
     TapeApplied,
+    /// `[update] auto` written; the station takes it at its next start or reload.
+    AutoUpdateWritten,
+    /// The running station confirmed the auto-update switch.
+    AutoUpdateApplied,
     TokenWritten,
     TokenDropped,
     ChatsDropped,

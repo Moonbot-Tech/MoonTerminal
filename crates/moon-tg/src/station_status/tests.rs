@@ -60,6 +60,7 @@ fn status(host: Option<Host>) -> Status {
         }),
         host: host.map(Box::new),
         last_update: None,
+        auto_update: None,
     }
 }
 
@@ -311,4 +312,23 @@ fn automatic_rollback_verdict_describes_the_restored_service() {
         assert!(!shown.contains("error:"));
         assert!(shown.starts_with("2026-09-30T14:02Z "));
     }
+}
+
+/// The Service section says whether the station updates itself; a station older than the switch
+/// shows no row rather than a guess.
+#[test]
+fn the_service_section_shows_the_auto_update_switch() {
+    let _locale = crate::test_locale::force("en");
+    let row = |on: Option<bool>| {
+        let mut s = status(None);
+        s.auto_update = on;
+        StatusFacts::of(&s).sections[0]
+            .rows
+            .iter()
+            .find(|(label, _)| label == "Auto-update")
+            .map(|(_, value)| value.clone())
+    };
+    assert_eq!(row(Some(true)).as_deref(), Some("on"));
+    assert_eq!(row(Some(false)).as_deref(), Some("off"));
+    assert_eq!(row(None), None);
 }

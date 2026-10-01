@@ -186,6 +186,16 @@ impl StatusFacts {
                 update_verdict(verdict),
             ));
         }
+        if let Some(on) = status.auto_update {
+            service.push((
+                t!("telegram.station.auto_update_label").to_string(),
+                match on {
+                    true => t!("telegram.station.auto_update_on"),
+                    false => t!("telegram.station.auto_update_off"),
+                }
+                .to_string(),
+            ));
+        }
         let mut sections = vec![Section {
             title: t!("telegram.station.section_service").to_string(),
             rows: service,

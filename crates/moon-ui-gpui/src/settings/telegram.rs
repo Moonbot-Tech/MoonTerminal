@@ -22,6 +22,7 @@ use moon_core::config::Secret;
 mod access;
 mod core_section;
 mod qr;
+mod server_auto_update;
 mod server_bot;
 mod server_tape;
 mod station_access;

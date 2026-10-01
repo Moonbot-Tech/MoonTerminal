@@ -1288,6 +1288,7 @@ impl SettingsView {
             .child(actions)
             .child(maintenance)
             .child(self.station_access_block(target, cx))
+            .child(self.server_auto_update_block(target, cx))
             .child(self.server_tape_block(target, cx))
     }
 

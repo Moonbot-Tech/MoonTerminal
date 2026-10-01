@@ -236,6 +236,11 @@ pub struct Status {
     /// default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub last_update: Option<String>,
+    /// Whether the station updates itself from the release (`[update] auto`). `None` from a
+    /// station older than the switch — an added field with a default, so neither end of version 2
+    /// misreads the other.
+    #[serde(default)]
+    pub auto_update: Option<bool>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the
