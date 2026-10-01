@@ -279,6 +279,26 @@ pub(super) fn strategy_base_allows_axis(
     !data_failed && !undated_failed && !cores_failed
 }
 
+/// Decide whether a moved report axis must wait for the visible surface's first load.
+///
+/// Every core's first offset measurement moves the axis, and at startup dozens of cores report
+/// one after another. Adopting each move retires the in-flight read and re-queues it behind the
+/// writer's debounce, so a first load that has nothing settled on screen yet would restart on
+/// every measurement and keep its loading spinner until the fleet stops reporting. Deferring the
+/// move instead lets that read publish on the axis the window is still showing — window and data
+/// stay on one axis — and the move is adopted at the read's completion, followed by the usual
+/// writer-driven catch-up that keeps the published snapshot on screen.
+///
+/// Args:
+///     first_load_pending: Whether the visible surface has no settled result yet.
+///     db_active: Whether any Analytics database operation is still running.
+///
+/// Returns:
+///     `true` when the axis move must be adopted after the running read completes.
+pub(super) fn defer_axis_adoption(first_load_pending: bool, db_active: bool) -> bool {
+    first_load_pending && db_active
+}
+
 /// Return the remaining core-list throttle interval after the last successful scan.
 ///
 /// Args:
