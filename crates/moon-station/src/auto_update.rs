@@ -6,6 +6,9 @@
 //! the service" file ([`crate::release::request_update`]): the root updater does the rest, and
 //! its verdict lands in `Status.last_update` as for any update.
 //!
+//! Only a build of a release tag itself updates itself: a build of a later commit carries the tag
+//! as its baseline too ([`crate::release::exact_release`]), and a release must not replace it.
+//!
 //! One automatic attempt per newer version per day: the attempt is kept in the data root
 //! ([`ATTEMPT_FILE`]), so an update that failed and restarted the old binary does not file the
 //! same request again right after the start.
@@ -23,7 +26,7 @@ use moon_core::update::{
 const ATTEMPT_FILE: &str = "update.auto";
 /// How soon after the start the first look runs, before its jitter.
 const FIRST_LOOK: Duration = Duration::from_secs(5 * 60);
-/// How often the station looks again, before its jitter.
+/// How often the station looks again, on the UTC clock's multiples of it, before its jitter.
 const LOOK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// The most jitter added to the first look.
 const FIRST_JITTER: Duration = Duration::from_secs(5 * 60);
@@ -44,7 +47,7 @@ pub struct Attempt {
 pub enum Decision {
     /// `[update] auto = false`: updates only by the button.
     Off,
-    /// A build without a release version is never replaced by a release behind the user's back.
+    /// A build that is not a release tag's own is never replaced by a release behind the user's back.
     Unversioned,
     /// No release newer than this station carries its binary.
     Current,
@@ -58,7 +61,7 @@ pub enum Decision {
 ///
 /// Args:
 ///     auto: The `[update] auto` switch.
-///     own: This station's release version; `None` for a dev or unversioned build.
+///     own: This station's release version; `None` for a build that is not a release tag's own.
 ///     latest: The newest release that carries this station's binary for its architecture;
 ///         `None` when there is none.
 ///     last: The last automatic attempt, if any.
@@ -147,15 +150,15 @@ impl AutoUpdate {
                 }
                 logged = decision;
             }
-            std::thread::sleep(LOOK_EVERY + jitter(LOOK_JITTER));
+            std::thread::sleep(until_next_slot(unix_now_s()) + jitter(LOOK_JITTER));
         }
     }
 
-    /// One look: GitHub is asked only while the switch is on and the build has a version.
+    /// One look: GitHub is asked only while the switch is on and the build is a release's.
     /// `None` when the releases could not be read (logged).
     fn look(&self, data_root: &Path, discovery: &mut Option<ReleaseDiscovery>) -> Option<Decision> {
         let identity = BuildIdentity::from_release_base(crate::release::release_base());
-        let own = identity.baseline();
+        let own = crate::release::exact_release();
         let now_s = unix_now_s();
         let last = std::fs::read_to_string(data_root.join(ATTEMPT_FILE))
             .ok()
@@ -184,13 +187,17 @@ impl AutoUpdate {
         };
         let decision = decide(self.on(), own, latest, last, now_s);
         if let Decision::Update(version) = decision {
+            // Recorded first: an attempt that cannot be recorded is not made, or a failed update
+            // would be requested again at every start.
+            let line = format!("{version} {now_s}\n");
+            if let Err(e) = std::fs::write(data_root.join(ATTEMPT_FILE), line) {
+                log::warn!(
+                    "auto-update: {version} not requested, the attempt cannot be recorded: {e}"
+                );
+                return None;
+            }
             match crate::release::request_update(data_root) {
-                Ok(()) | Err(moon_tg::UpdateRefusal::AlreadyRunning) => {
-                    let line = format!("{version} {now_s}\n");
-                    if let Err(e) = std::fs::write(data_root.join(ATTEMPT_FILE), line) {
-                        log::warn!("auto-update: the attempt was not recorded: {e}");
-                    }
-                }
+                Ok(()) | Err(moon_tg::UpdateRefusal::AlreadyRunning) => {}
                 Err(refusal) => {
                     log::warn!("auto-update: {version} not requested: {refusal:?}");
                     return None;
@@ -206,7 +213,7 @@ fn log_decision(decision: Decision) {
     match decision {
         Decision::Off => log::info!("auto-update: off; the station updates only by the button"),
         Decision::Unversioned => {
-            log::info!("auto-update: this build has no release version; not updating itself")
+            log::info!("auto-update: this build is not a release's own; not updating itself")
         }
         Decision::Current => log::info!("auto-update: no newer release"),
         Decision::Tried(version) => log::info!(
@@ -214,6 +221,13 @@ fn log_decision(decision: Decision) {
         ),
         Decision::Update(version) => log::info!("auto-update: {version} is out, update requested"),
     }
+}
+
+/// How long from `now_s` to the next multiple of [`LOOK_EVERY`] on the UTC clock: the looks keep
+/// their times across restarts and slow scans.
+fn until_next_slot(now_s: u64) -> Duration {
+    let every = LOOK_EVERY.as_secs();
+    Duration::from_secs(every - now_s % every)
 }
 
 /// Unix seconds now; 0 before the epoch.

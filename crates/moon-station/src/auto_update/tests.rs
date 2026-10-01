@@ -97,3 +97,12 @@ fn the_attempt_file_reads_back_what_was_written() {
     assert_eq!(parse_attempt(""), None);
     assert_eq!(parse_attempt("garbage 12"), None);
 }
+
+/// Later looks land on the UTC clock's six-hour marks, whatever the start or the scan took.
+#[test]
+fn the_next_look_is_on_the_clocks_mark() {
+    let every = LOOK_EVERY.as_secs();
+    assert_eq!(until_next_slot(every * 10).as_secs(), every);
+    assert_eq!(until_next_slot(every * 10 + 1).as_secs(), every - 1);
+    assert_eq!(until_next_slot(every * 11 - 1).as_secs(), 1);
+}
