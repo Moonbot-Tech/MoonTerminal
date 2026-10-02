@@ -355,10 +355,14 @@ telegram.mini_partial:
   ru: "Не учтено ядер: {n}"
   en: "Cores left out: {n}"
   es: "Núcleos excluidos: {n}"
-telegram.mini_orders_qty:
-  ru: "Кол-во"
-  en: "Qty"
-  es: "Cantidad"
+telegram.mini_orders_volume:
+  ru: "Объём"
+  en: "Volume"
+  es: "Volumen"
+telegram.mini_trade_volume:
+  ru: "Объём"
+  en: "Volume"
+  es: "Volumen"
 telegram.mini_orders_entry:
   ru: "Вход"
   en: "Entry"

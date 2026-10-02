@@ -508,7 +508,7 @@ fn read_mini_report_on(
 /// Most closed trades the Mini App Trades tab lists.
 pub(crate) const MINI_TRADES_LIMIT: usize = 50;
 
-/// One closed trade read for the Mini App, with its dates already on UTC.
+/// One closed Mini App trade, with UTC dates and the Report-gated entry-volume inputs.
 pub(crate) struct MiniTrade {
     /// Core that made the trade.
     pub core_uid: u64,
@@ -529,6 +529,10 @@ pub(crate) struct MiniTrade {
     pub buy_price: f64,
     pub sell_price: f64,
     pub quantity: f64,
+    /// Entry quantity, distinct from exit quantity that can include a spot wallet top-up.
+    pub bought_quantity: Option<f64>,
+    /// Report valuation rate, withheld unless entry notional can safely share the money quote.
+    pub entry_volume_rate: Option<f64>,
     /// Strategy id; `None` or `0` for a manual trade.
     pub strategy_id: Option<i64>,
     /// Stored `channelname`: the strategy's name when the row was written, empty when absent.
@@ -560,7 +564,7 @@ pub(crate) fn read_mini_trades(
     read_mini_trades_on(&conn, zone, access, names, limit)
 }
 
-/// Connection-injected body of [`read_mini_trades`], so fixtures exercise the production query.
+/// Read Mini App rows and safe entry-volume inputs on the same snapshot as their valued profit.
 fn read_mini_trades_on(
     conn: &rusqlite::Connection,
     zone: Tz,
@@ -588,7 +592,7 @@ fn read_mini_trades_on(
         core_names: names,
         ..Default::default()
     };
-    let table = db::query_reports(&snap, &filter, "closedate", true, limit + 25)?;
+    let table = db::query_mini_trades(&snap, &filter, limit + 25)?;
     let index = |name: &str| table.cols.iter().position(|col| col == name);
     let (coin, core_name, is_short, quantity) = (
         index("coin"),
@@ -604,6 +608,8 @@ fn read_mini_trades_on(
         index("strategyid"),
     );
     let (rec_id, channel_name) = (index("id"), index("channelname"));
+    let bought_quantity = index("boughtq");
+    let entry_volume_rate = index(db::MINI_ENTRY_VOLUME_RATE_COLUMN);
     let (profit, pct) = (
         index(db::VALUATION_PROFIT_COLUMN),
         index(db::PROFIT_PERCENT_COLUMN),
@@ -636,6 +642,8 @@ fn read_mini_trades_on(
             buy_price: cell(buy_price).and_then(value_f64).unwrap_or_default(),
             sell_price: cell(sell_price).and_then(value_f64).unwrap_or_default(),
             quantity: cell(quantity).and_then(value_f64).unwrap_or_default(),
+            bought_quantity: cell(bought_quantity).and_then(value_f64),
+            entry_volume_rate: cell(entry_volume_rate).and_then(value_f64),
             strategy_id: cell(strategy).and_then(value_i64),
             channel_name: cell(channel_name).map(value_text).unwrap_or_default(),
         });

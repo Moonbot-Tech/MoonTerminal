@@ -58,13 +58,13 @@ pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};
 pub use report_read::{
     CHART_TRADE_HISTORY_ATTACH, COLUMNS_ADDED_SINCE_V2, ChartTradeHistory, ChartTradeRecord,
-    DISPLAY_COLUMNS, PROFIT_PERCENT_COLUMN, PeriodBasis, ProfitMetric, ReportFilter,
-    ReportStrategy, ReportStrategyKey, ReportTable, ReportTotals, RowScope, SideFilter,
-    StrategyPurgeRows, TotalsSlice, VALUATION_PROFIT_COLUMN, VALUATION_RATE_COLUMN,
-    VALUATION_SOURCE_COLUMN, display_columns, distinct_cores, distinct_strategies, max_core_uid,
-    open_rows_for_bound, query_chart_trade_history, query_chart_trade_history_for_cores,
-    query_reports, query_totals, query_totals_sliced, report_coin_is_exact, rows_by_core,
-    strategy_purge_rows,
+    DISPLAY_COLUMNS, MINI_ENTRY_VOLUME_RATE_COLUMN, PROFIT_PERCENT_COLUMN, PeriodBasis,
+    ProfitMetric, ReportFilter, ReportStrategy, ReportStrategyKey, ReportTable, ReportTotals,
+    RowScope, SideFilter, StrategyPurgeRows, TotalsSlice, VALUATION_PROFIT_COLUMN,
+    VALUATION_RATE_COLUMN, VALUATION_SOURCE_COLUMN, display_columns, distinct_cores,
+    distinct_strategies, max_core_uid, open_rows_for_bound, query_chart_trade_history,
+    query_chart_trade_history_for_cores, query_mini_trades, query_reports, query_totals,
+    query_totals_sliced, report_coin_is_exact, rows_by_core, strategy_purge_rows,
 };
 pub(crate) use report_read::{count_by_core, max_core_uid_in};
 pub use trade_meta::{TradeMeta, query_trade_meta};
