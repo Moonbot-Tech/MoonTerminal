@@ -9,7 +9,8 @@ The bottom reply keyboard opens a global overview for the selected period. Butto
 work on that report: select an exchange to see its cores, switch to days, go back to all exchanges,
 or page. Tap a period again in the reply keyboard for fresh data; there is no inline Refresh button.
 Period choices are not duplicated inline. Button glyphs distinguish those actions.
-Mini App and its tunnel are not needed. Keep MoonTerminal running for history synchronization.
+Mini App and its tunnel are not needed. A terminal-hosted bot needs MoonTerminal running for
+history synchronization; a station-hosted bot runs independently and reads the station's history.
 
 Groups without trades are hidden before pagination. Zero-profit trades remain visible.
 By-exchange and by-day views list every active row in one message; pagination appears only
@@ -50,7 +51,10 @@ roles, assignments or an individual unpairing. Ownership transfer requires confi
 the previous owner as a viewer with no assigned cores. Reset pairing revokes every chat and role.
 Changing saved permissions cancels pending deliveries through the previous service generation;
 already delivered Telegram messages are not recalled. Existing Telegram functionality remains
-reporting: assigning the owner role does not add trading or core-control commands.
+reporting: assigning the owner role does not add trading or core-control commands in the chat.
+On a station-hosted bot, the owner also has a Status reply button and `/status`. Its status answer
+offers Update when a newer release contains the station binary. Status and Update are refused for
+viewers; a terminal-hosted bot cannot run either station action.
 
 Reports
 include closed real trades and exclude emulator and deleted trades. Offline bots' local history
