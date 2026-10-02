@@ -172,6 +172,23 @@ const openTrade = async (page, nth) => {
     await page.locator('section[data-tab="trades"] .trade-row').nth(nth).click(); await settle(page);
 };
 
+// Reversing the segment order, resetting an explicit choice, or changing only the pressed button
+// must fail: the rendered order, selected button and visible pane form one navigation contract.
+async function checkDealsSelection(page, expected) {
+    const state = await page.evaluate(() => {
+        const nodes = [...document.querySelectorAll('[data-seg]')];
+        const panes = [...document.querySelectorAll('section[data-tab="orders"], section[data-tab="trades"]')];
+        return {
+            order: nodes.map((n) => n.getAttribute("data-seg")),
+            selected: nodes.filter((n) => n.getAttribute("aria-pressed") === "true").map((n) => n.getAttribute("data-seg")),
+            visible: panes.filter((n) => !n.hidden).map((n) => n.getAttribute("data-tab")),
+        };
+    });
+    if (state.order.join(",") !== "trades,orders" || state.selected.join(",") !== expected || state.visible.join(",") !== expected) {
+        throw new Error(`Trades navigation must show Closed first and select ${expected}: ${JSON.stringify(state)}`);
+    }
+}
+
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
 const SCREENS = [
     { name: "report-today", run: async () => {} },
@@ -192,6 +209,17 @@ const SCREENS = [
     } },
     { name: "trades-open-group-open", run: async (p) => {
         await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
+    } },
+    { name: "deals-default-and-memory", run: async (p) => {
+        await nav(p, "deals");
+        await checkDealsSelection(p, "trades");
+        await p.click('[data-seg="orders"]'); await settle(p);
+        await checkDealsSelection(p, "orders");
+        await nav(p, "cores"); await nav(p, "deals");
+        await checkDealsSelection(p, "orders");
+        await p.click('[data-seg="trades"]'); await settle(p);
+        await nav(p, "report"); await nav(p, "deals");
+        await checkDealsSelection(p, "trades");
     } },
     { name: "trades-closed", run: async (p) => {
         await nav(p, "deals"); await p.click('[data-seg="trades"]');

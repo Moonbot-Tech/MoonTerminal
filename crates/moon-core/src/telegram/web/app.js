@@ -34,8 +34,8 @@
     var main = document.getElementById("app-main");
     var nav = document.getElementById("app-nav");
     var sections = {};
-    // One nav tab holds open orders and closed trades; this is the segment it shows.
-    var dealsSegment = "orders";
+    // Start with closed trades; later visits keep the segment the user last selected.
+    var dealsSegment = "trades";
     var dealsSwitch = null;
     var buttons = {};
     var payloads = {};
@@ -983,10 +983,10 @@
         }
     }
 
-    // Open | Closed switch of the merged trades tab; it sits outside both panes like the period bar.
+    // Closed | Open switch of the merged trades tab; it sits outside both panes like the period bar.
     function dealsBar() {
         var bar = el("div", "segments");
-        var segs = [["orders", "mini_deals_open"], ["trades", "mini_deals_closed"]];
+        var segs = [["trades", "mini_deals_closed"], ["orders", "mini_deals_open"]];
         var i;
         for (i = 0; i < segs.length; i++) {
             (function (value, key) {
