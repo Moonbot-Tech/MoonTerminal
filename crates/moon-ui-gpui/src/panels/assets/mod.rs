@@ -330,8 +330,8 @@ impl AssetsView {
         // Top-bar threshold slider: 0 through 100, step 1, initialized from the persisted value.
         let min_value_slider = cx.new(|_| {
             MoonSliderState::new()
-                .min(0.0)
                 .max(100.0)
+                .min(0.0)
                 .step(1.0)
                 .default_value(min_value_usd as f32)
         });

@@ -197,6 +197,8 @@ pub struct SettingsView {
     conn: Vec<ConnRow>,
     /// UI-zoom slider for the personal geometry scale in settings.toml.
     ui_zoom: Entity<MoonSliderState>,
+    /// Immediate, automatically persisted trade-only loudness slider.
+    trade_volume: Entity<MoonSliderState>,
     /// Interface-theme selector for the General tab.
     theme_mode: Entity<MoonSelectState<UiThemeMode>>,
     /// Language selector for the General tab.
@@ -362,6 +364,7 @@ impl SettingsView {
 
         // The zoom slider reinstalls the draft theme only on release; dragging keeps its percentage caption live.
         let ui_zoom = general::build_zoom(&backend, cx);
+        let trade_volume = trade_sounds::build_volume(&backend, cx);
 
         // Persist the Settings window position and size in layout so it reopens in the same place.
         // The debounced persistence loop drains `layout_dirty`, as it does for Strategies/Assets.
@@ -609,6 +612,7 @@ impl SettingsView {
             badges,
             conn,
             ui_zoom,
+            trade_volume,
             theme_mode,
             lang,
             valuation,

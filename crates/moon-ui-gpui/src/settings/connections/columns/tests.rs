@@ -251,6 +251,50 @@ fn data_trigger_fits_every_count_at_each_zoom() {
     }
 }
 
+/// Restoring Total's preset-sized basis clips the default selected mode. Read the dictionary
+/// independently and budget each complete label and caret against MoonUI's fitting font,
+/// including its padding, so a longer translation must still fit without a locale switch.
+#[test]
+fn total_trigger_fits_every_localized_option_at_each_zoom() {
+    use moon_core::config::UiThemeMode;
+
+    let dictionary = include_str!("../../../../../../locales/connections.yml");
+    let mut in_total_mode = false;
+    let mut labels = Vec::new();
+    for line in dictionary.lines() {
+        if !line.starts_with(' ') {
+            in_total_mode = line.starts_with("conn.total.");
+        } else if in_total_mode {
+            let (_, value) = line.split_once(':').expect("locale value");
+            labels.push(value.trim().trim_matches('"'));
+        }
+    }
+    assert_eq!(labels.len(), 9, "three modes in each shipped locale");
+    for zoom in [0.75, 1.0, 1.5] {
+        let tokens =
+            crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom).dark;
+        let font = tokens.tier().control_metrics().font_size;
+        let fitting_font = tokens.font(font);
+        let trigger_width = ConnColId::Total.spec().basis * fitting_font / font;
+        for (index, label) in labels.iter().enumerate() {
+            let required =
+                (label.chars().count() + 2) as f32 * 0.6 * fitting_font.max(tokens.ui(font))
+                    + tokens.ui(14.0);
+            assert!(
+                trigger_width >= required,
+                "label {index} clipped at zoom {zoom}"
+            );
+            assert!(
+                ConnColId::Total.width(MicroTriggerMetrics {
+                    scale: tokens.font(10.0) / 10.0,
+                    min_width: 0.0,
+                }) >= trigger_width,
+                "Total trigger must fit its shared header/row column"
+            );
+        }
+    }
+}
+
 /// `columns.rs:CONN_COLS` must leave Name as the only uncapped growing column and resolve Name
 /// wider than Key wider than Group at every finite Font scale. Changing `h-key` from `TextScaled`
 /// to `Raw` makes Group outrank the masked Key at a hand-edited +10 Font delta, leaving less room

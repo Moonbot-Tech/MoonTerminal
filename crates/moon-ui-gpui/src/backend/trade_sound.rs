@@ -102,7 +102,7 @@ impl Backend {
         let mut playback = std::mem::take(&mut self.trade_playback);
         playback.pump(
             |edge| self.trade_sound_name(edge),
-            crate::media::sound::pump,
+            |trade| crate::media::sound::pump(trade, self.layout.trade_sound_volume_percent()),
         );
         self.trade_playback = playback;
     }

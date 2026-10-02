@@ -779,6 +779,7 @@ fn proto_dropdown(
 /// always has one -- there is no unset state to represent with a dash. Its three items are the
 /// whole enforcement of "a core may not be excluded from both presets": `WorkspaceMembership`
 /// has no fourth variant, so there is nothing else to offer.
+/// The popup fits its localized rows, including check marks and padding, without a width cap.
 ///
 /// Args:
 ///     view: Settings state read for the row's current draft value.
@@ -852,7 +853,7 @@ fn preset_dropdown(
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ConnColId::Preset.spec().basis)
-        .menu_width_scaled(140.0)
+        .fit_menu_width(0.0, f32::INFINITY)
         .items(items)
         .open(open)
         // Controlled mode leaves the repaint to us, as on the transport menu beside it.
@@ -879,6 +880,7 @@ fn preset_label(m: WorkspaceMembership) -> String {
 /// A twin of [`preset_dropdown`]: controlled, items built only for the open row, writing the
 /// draft so the choice lands on Save like every other column. Changing it never respawns a feed
 /// (`AppConfig::structural_sig` neutralizes `total_mode`).
+/// The popup fits its localized rows, including check marks and padding, without a width cap.
 ///
 /// Args:
 ///     view: Settings state read for the row's current draft value.
@@ -951,7 +953,7 @@ fn total_dropdown(
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ConnColId::Total.spec().basis)
-        .menu_width_scaled(160.0)
+        .fit_menu_width(0.0, f32::INFINITY)
         .items(items)
         .open(open)
         .on_open_change(move |now_open, _window, app| {

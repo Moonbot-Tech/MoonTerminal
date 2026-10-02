@@ -91,8 +91,8 @@ impl AnalyticsView {
         let cur = self.coins.min_trades_pct as f32;
         let state = cx.new(|_| {
             MoonSliderState::new()
-                .min(0.0)
                 .max(100.0)
+                .min(0.0)
                 .step(1.0)
                 .default_value(cur)
         });

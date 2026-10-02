@@ -533,6 +533,30 @@ fn ordinary_queue_is_bounded_without_evicting_accepted_clips() {
     );
 }
 
+/// Routing a trade preview through ordinary `play` would ignore its gain; scaling the shared
+/// catalog instead would also lower subsequent detect/alert sounds using the same file.
+#[test]
+fn trade_preview_gain_leaves_ordinary_playback_and_catalog_unchanged() {
+    super::discard_pending();
+    let original = clip("ringin");
+    super::play_trade_preview("ringin", 37);
+    play("ringin");
+    super::PLAYBACK.with(|player| {
+        let player = player.borrow();
+        let preview = &player.normal[0];
+        let ordinary = &player.normal[1];
+        assert_eq!(
+            preview.wav,
+            super::volume::scale(original.wav.clone(), 37).unwrap()
+        );
+        assert!(!Arc::ptr_eq(&preview.wav, &original.wav));
+        assert!(Arc::ptr_eq(&ordinary.wav, &original.wav));
+        assert_eq!(preview.duration, original.duration);
+    });
+    assert!(Arc::ptr_eq(&clip("ringin").wav, &original.wav));
+    super::discard_pending();
+}
+
 /// Entering quiet spends the old backlog without rejecting later producer-approved exceptions.
 #[test]
 fn quiet_transition_discards_backlog_but_accepts_later_bypass() {

@@ -6,6 +6,35 @@
 
 use super::support::{Path, braced_body, code_only, read_src, rust_sources};
 
+/// Reversing slider bound setters crashes Settings when a range starts above MoonUI's default 100.
+///
+/// MoonUI clamps the thumb after each setter, so all constructor chains must install the maximum
+/// before the minimum. Scan every source, including fixtures, to keep one initialization rule.
+#[test]
+fn slider_constructors_set_max_before_min() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut sources = Vec::new();
+    rust_sources(&root, &mut sources);
+    for path in sources {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+        let code: String = code_only(&source)
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        for after in code.split("MoonSliderState::new()").skip(1) {
+            let chain = after.split([';', '}']).next().expect("constructor suffix");
+            if let Some(min) = chain.find(".min(") {
+                assert!(
+                    chain.find(".max(").is_some_and(|max| max < min),
+                    "{}: slider constructor must set max before min to avoid a thumb-clamp panic",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
 /// Terminal production code must not return to MoonUI's legacy font channel outside its one mirror.
 ///
 /// Breakage: adding `tokens.font(` or `design::font_value(` to a terminal surface sizes that text

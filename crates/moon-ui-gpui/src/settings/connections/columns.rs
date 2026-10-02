@@ -59,6 +59,30 @@ const ENDPOINT_CONTENT_CAP: f32 = ENDPOINT_CONTENT + 2.0;
 /// trigger scales this budget itself.
 const DATA_TRIGGER_BASIS: f32 = 5.0 * 0.6 * 16.0 + 14.0 + 2.0;
 
+/// Budget the longest translated total-mode label in MoonUI's mono trigger font.
+///
+/// Returns a design-reference width including the space and caret, MoonUI's 14px visual
+/// padding and 2px rounding room. Like the endpoint budget, each Geist Mono glyph is 0.6 em;
+/// unlike a fixed character count, reading all translations keeps future label edits fitted.
+/// The control tier supplies the font size and the trigger applies its own font scale.
+fn total_trigger_basis() -> f32 {
+    let longest = ["ru", "en", "es"]
+        .into_iter()
+        .flat_map(|locale| {
+            [
+                "conn.total.auto",
+                "conn.total.exclude",
+                "conn.total.separate",
+            ]
+            .map(|key| rust_i18n::t!(key, locale = locale).chars().count())
+        })
+        .max()
+        .unwrap_or(0);
+    (longest + 2) as f32 * 0.6 * crate::design::CONTROL_TIER.control_metrics().font_size
+        + 14.0
+        + 2.0
+}
+
 /// Where a column's header label sits over the control below it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum ConnColAlign {
@@ -235,12 +259,13 @@ const CONN_COLS: [ConnCol; 14] = [
         align: ConnColAlign::Center,
         head_pad: 0.0,
     },
-    // Sized like `h-preset` beside it: the longest option label is about as long as "Classic".
+    // The basis is filled from the longest localized option by `ConnColId::spec`, including
+    // caret and padding; these labels are substantially longer than the preset names.
     ConnCol {
         id: "h-total",
         label: Some("conn.col.total"),
         tip: Some("conn.tip.total"),
-        basis: 72.0,
+        basis: 0.0,
         grow: false,
         max: None,
         width: ConnColWidth::MicroTrigger,
@@ -458,9 +483,18 @@ impl ConnColId {
     /// Look up this column's shared specification.
     ///
     /// Returns:
-    ///     The one [`ConnCol`] both the header cell and the row cell are built from.
+    ///     The shared [`ConnCol`], with Total's text budget derived from all shipped locales.
     pub(super) fn spec(self) -> &'static ConnCol {
-        &CONN_COLS[self as usize]
+        // Compiled translations and the design tier are immutable; each row shares this budget.
+        static TOTAL: std::sync::LazyLock<ConnCol> = std::sync::LazyLock::new(|| ConnCol {
+            basis: total_trigger_basis(),
+            ..CONN_COLS[ConnColId::Total as usize]
+        });
+        if self == Self::Total {
+            &TOTAL
+        } else {
+            &CONN_COLS[self as usize]
+        }
     }
 }
 

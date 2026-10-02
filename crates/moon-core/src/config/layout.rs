@@ -1437,6 +1437,9 @@ pub struct WindowLayout {
     /// Immediate Settings preferences for actual trade edges, keyed by platform and DEX.
     #[serde(default, deserialize_with = "de_lenient_map")]
     pub trade_sounds: HashMap<String, crate::config::trade_sounds::TradeSounds>,
+    /// Trade-only loudness in percent; absent preserves the original 100% loudness.
+    #[serde(default, deserialize_with = "de_lenient_u32")]
+    pub trade_sound_volume: Option<u32>,
     /// Sound stem for a drawn-figure alert whose strategy names no sound, chosen in the Alerts
     /// panel. Empty means the player's built-in default. Persisted here because the choice used to
     /// live only in memory and reset to the default on every start.

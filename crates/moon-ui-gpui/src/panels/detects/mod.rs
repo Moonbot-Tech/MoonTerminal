@@ -236,7 +236,7 @@ impl DetectsPanel {
         .detach();
         let initial_backend = backend.clone();
         let mk_slider = |cx: &mut Context<Self>, min: f32, max: f32, step: f32| {
-            cx.new(|_| MoonSliderState::new().min(min).max(max).step(step))
+            cx.new(|_| MoonSliderState::new().max(max).min(min).step(step))
         };
         let w_slider = mk_slider(cx, 20.0, 320.0, 2.0);
         let h_slider = mk_slider(cx, 20.0, 320.0, 2.0);

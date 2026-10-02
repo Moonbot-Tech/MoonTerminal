@@ -1,4 +1,4 @@
-//! Per-chat role and core assignment editor, for either bot: the terminal's (edits the Settings
+//! Chats box with pairing, role and core assignment, for the terminal's bot (edits the Settings
 //! draft, saved by the shared Save transaction) or the station's (edits a draft of its own, sent
 //! to the server by "Apply on the server").
 use gpui::prelude::FluentBuilder;
@@ -25,7 +25,7 @@ pub(in crate::settings) enum ChatsOf {
 }
 
 impl ChatsOf {
-    /// An element id unique to this editor: both can be on screen at once.
+    /// An element id unique to this editor and its retained input entities.
     fn id(self, what: impl std::fmt::Display) -> SharedString {
         match self {
             Self::Terminal => format!("tg-{what}").into(),
@@ -217,11 +217,13 @@ impl SettingsView {
     ///
     /// Args:
     ///     side: Whose chats.
-    ///     footer: What ends the section: the terminal's save hint, the station's Apply row.
+    ///     pairing: Live pairing actions, always shown even when the chat list is empty.
+    ///     footer: The station's Apply/Discard row; terminal edits use the shared Settings Save.
     pub(in crate::settings) fn telegram_chat_access(
         &self,
         side: ChatsOf,
-        footer: AnyElement,
+        pairing: AnyElement,
+        footer: Option<AnyElement>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let palette = MoonPalette::active(cx);
@@ -231,19 +233,16 @@ impl SettingsView {
             .padding(14.0)
             .gap(10.0)
             .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.access_roles_hint").to_string()),
+                div().text_color(muted).child(
+                    t!(match side {
+                        ChatsOf::Terminal => "telegram.chats_hint",
+                        ChatsOf::Station => "telegram.server.chats_hint",
+                    })
+                    .to_string(),
+                ),
             );
-        let telegram = match self.chats(side, cx) {
-            Some(telegram) if !telegram.authorized_chat_ids.is_empty() => telegram,
-            _ => {
-                return section.child(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.access_first_owner").to_string()),
-                );
-            }
+        let Some(telegram) = self.chats(side, cx) else {
+            return section.child(pairing).children(footer);
         };
         let ed = self.chat_ed(side);
         let mut section = section;
@@ -395,7 +394,7 @@ impl SettingsView {
             }
             section = section.child(card);
         }
-        section.child(footer)
+        section.child(pairing).children(footer)
     }
 
     /// Viewer assignments use stable saved core IDs; selecting today's list never grants future cores.
