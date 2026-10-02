@@ -211,6 +211,8 @@ pub(super) enum Row {
     SameForMove,
     /// The wheel modifier that scrolls the chart's label column.
     LabelScroll,
+    /// The modifier that turns a left drag over the plot into the percent ruler.
+    RulerDrag,
     /// The "pull layout from core" preview — the whole of its own page.
     CorePull,
 }
@@ -222,6 +224,7 @@ impl Row {
             Self::Slot(spec) => spec.group,
             Self::SameForMove => HotkeyGroup::Mouse,
             Self::LabelScroll => HotkeyGroup::Chart,
+            Self::RulerDrag => HotkeyGroup::Chart,
             Self::CorePull => HotkeyGroup::CorePull,
         }
     }
@@ -287,6 +290,7 @@ fn build_rows() -> Vec<Row> {
         key(G::Chart, KeySlot::ToggleLive),
         key(G::Chart, KeySlot::ChartShot),
         Row::LabelScroll,
+        Row::RulerDrag,
         key(G::Draw, KeySlot::SwitchFigure),
         key(G::Draw, KeySlot::DrawHline),
         key(G::Draw, KeySlot::DrawHorizontalRay),

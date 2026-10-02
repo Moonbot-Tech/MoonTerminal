@@ -176,6 +176,11 @@ fn mouse_down_handlers_offer_a_press_to_their_layers_in_a_fixed_order() {
                 "try_action_click",
                 "try_place_order_click",
                 "try_move_orders_click",
+                "try_cancel_order_click",
+                "grab_order_line",
+                // Last: it takes only a press that would otherwise have panned, so a Shift press
+                // on an order line still grabs it and a key half on Shift still fires.
+                "try_start_ruler",
             ],
         ),
         (

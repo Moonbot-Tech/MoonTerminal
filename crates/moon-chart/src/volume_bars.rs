@@ -389,6 +389,64 @@ pub fn visible_interval_max_sorted(
     (max > 0.0).then_some(max)
 }
 
+/// Quote turnover the candles state over `[from_ms, to_ms]`, and whether they reach back to its start.
+///
+/// The percent ruler's fallback when the trade history cannot split the period by side: the candle
+/// series reaches far deeper than any retained trade ring. A candle only partly inside the period
+/// counts by the share of its own span that is — an estimate, which is why the caller marks it — so
+/// a ruler dragged across half a 1h candle does not claim the whole hour's turnover.
+///
+/// Args:
+///     samples: The pane's retained samples, sorted by opening time.
+///     max_tf_ms: Widest timeframe among them, bounding how far back a candle can still reach in.
+///     from_ms: Period start, Unix milliseconds.
+///     to_ms: Period end, Unix milliseconds.
+///     now_ms: The present. The still-open candle's turnover is that of its ELAPSED part, so it
+///         is shared over that part rather than its whole timeframe; read over the full span, a
+///         period ending at the live edge would get a fraction of it.
+///
+/// Returns:
+///     `None` when no candle overlaps the period. Otherwise the turnover and whether the first
+///     overlapping candle opens at or before `from_ms` — `false` means the series starts inside the
+///     period and the figure covers only its later part.
+pub fn quote_turnover_between(
+    samples: &[VolumeSample],
+    max_tf_ms: f64,
+    from_ms: f64,
+    to_ms: f64,
+    now_ms: f64,
+) -> Option<(f64, bool)> {
+    if !(to_ms > from_ms) {
+        return None;
+    }
+    let start = samples.partition_point(|s| s.t_open_ms + max_tf_ms <= from_ms);
+    let end = samples.partition_point(|s| s.t_open_ms < to_ms).max(start);
+    let mut total = 0.0f64;
+    let mut first_open: Option<f64> = None;
+    for s in &samples[start..end] {
+        // A candle opening AFTER the local clock means the clock runs behind the venue; its own
+        // timeframe is then the only span there is, rather than dropping the live candle whole.
+        let span = if now_ms > s.t_open_ms {
+            s.tf_ms.min(now_ms - s.t_open_ms)
+        } else {
+            s.tf_ms
+        };
+        if !(span > 0.0) {
+            continue;
+        }
+        let overlap = (s.t_open_ms + span).min(to_ms) - s.t_open_ms.max(from_ms);
+        if !(overlap > 0.0) {
+            continue;
+        }
+        let share = f64::from(s.quote_volume) * overlap / span;
+        if share.is_finite() {
+            total += share;
+        }
+        first_open.get_or_insert(s.t_open_ms);
+    }
+    first_open.map(|open| (total, open <= from_ms))
+}
+
 /// A visible, pre-boundary sample's turnover read at the rolling interval; the per-row figure of
 /// both band maxima. `None` when the sample does not count or the figure is not finite.
 fn interval_figure(

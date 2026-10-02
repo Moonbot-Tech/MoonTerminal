@@ -32,7 +32,9 @@
 
 use std::collections::HashMap;
 
-use moon_core::config::{GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKindSlot};
+use moon_core::config::{
+    GestureSlot, HotkeysConfig, KeySlot, MouseGestureBinding, MoveKindSlot, RulerDrag,
+};
 use rust_i18n::t;
 
 use crate::hotkeys::{BindingId, Builtin, DISPATCH, HotkeyAction, Step, binding_id};
@@ -68,6 +70,8 @@ enum Layer {
     Draw,
     /// Deletes the figure under the pointer — only over a figure.
     FigDelete,
+    /// The percent ruler — only on the chart plot, and only for its configured modifier.
+    Ruler,
     /// Performs a keyboard slot's action from its click half. Offered right after the figure
     /// layer on every button, before placement: a bound action is the user's own choice, and the
     /// two collide on the page's captions rather than by one silently winning.
@@ -105,6 +109,7 @@ impl Layer {
             Self::FigMenu => "hotkeys.clash.layer.fig_menu",
             Self::OrderMenu => "hotkeys.clash.layer.order_menu",
             Self::XScale => "hotkeys.clash.layer.x_scale",
+            Self::Ruler => "hotkeys.clash.layer.ruler",
             Self::FigDelete | Self::Action | Self::Place | Self::Move => return None,
         })
     }
@@ -134,6 +139,7 @@ fn button_layers(gesture: MouseGestureBinding) -> &'static [Layer] {
             Layer::Action,
             Layer::Place,
             Layer::Move,
+            Layer::Ruler,
         ],
         G::Middle | G::MiddleCtrl | G::MiddleShift | G::MiddleAlt => &[
             Layer::FigDelete,
@@ -173,12 +179,18 @@ fn slot_layer(slot: GestureSlot) -> Layer {
 /// rather than losing it — which is what the caption says, and why this arm covers both.
 ///
 /// The X-scale sync is Shift+Middle alone. Both context menus answer any press of their button over
-/// their object.
-fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer) -> bool {
+/// their object. The ruler answers a left press of its configured modifier at any click count.
+fn ownerless_layer(gesture: MouseGestureBinding, layer: Layer, ruler: RulerDrag) -> bool {
     use MouseGestureBinding as G;
     match layer {
         Layer::Draw => matches!(gesture, G::LeftCtrl | G::LeftCtrlDouble),
         Layer::XScale => gesture == G::MiddleShift,
+        Layer::Ruler => match ruler {
+            RulerDrag::None => false,
+            RulerDrag::Shift => matches!(gesture, G::LeftShift | G::LeftShiftDouble),
+            RulerDrag::Alt => matches!(gesture, G::LeftAlt | G::LeftAltDouble),
+            RulerDrag::Ctrl => matches!(gesture, G::LeftCtrl | G::LeftCtrlDouble),
+        },
         Layer::FigMenu | Layer::OrderMenu => true,
         Layer::FigDelete | Layer::Action | Layer::Place | Layer::Move => false,
     }
@@ -212,6 +224,8 @@ pub(super) struct Clashes {
     /// for every rival of every row, and building the list per rival made one render of the page
     /// quadratic in its own length.
     order: Vec<GestureSlot>,
+    /// The ruler's modifier, which decides whether its layer claims a left gesture at all.
+    ruler: RulerDrag,
 }
 
 impl Clashes {
@@ -244,6 +258,7 @@ impl Clashes {
             keys,
             gestures,
             order,
+            ruler: hotkeys.ruler_drag,
         }
     }
 
@@ -314,6 +329,12 @@ impl Clashes {
         let mut wins: Vec<String> = Vec::new();
         let mut beside: Vec<String> = Vec::new();
         for layer in layers {
+            // The ruler and the trading layers never meet: it starts on the plot only, and placement
+            // and moves act in the order book only. Captioning Move Open "shares Shift with the
+            // ruler" on every default install would describe a collision that cannot happen.
+            if *layer == Layer::Ruler && matches!(mine, Layer::Place | Layer::Move) {
+                continue;
+            }
             let position = layer_position(layers, *layer, mine);
             if position == Position::Same {
                 // The same layer, asked once: whichever row its own dispatcher reaches first
@@ -331,7 +352,7 @@ impl Clashes {
                 }
                 continue;
             }
-            let holders = layer_holders(*layer, rows, slot, gesture);
+            let holders = layer_holders(*layer, rows, slot, gesture, self.ruler);
             match position {
                 // Above and unconditional: it takes every press and this row is dead.
                 Position::Above if layer.unconditional() => kills.extend(holders),
@@ -380,6 +401,62 @@ impl Clashes {
     }
 }
 
+impl Clashes {
+    /// The captions for the ruler's own row: what answers its press before it does.
+    ///
+    /// The ruler is the LAST layer of the left button, so it never takes a press from a row — it
+    /// only loses them. A key half on its single press is offered the press first everywhere on the
+    /// plot, so the ruler never starts there; the figure layers and a key half on the DOUBLE press
+    /// take it only over a figure or on the second press, so both live.
+    pub(super) fn ruler(&self, hotkeys: &HotkeysConfig) -> Vec<Clash> {
+        use MouseGestureBinding as G;
+        let (single, double) = match hotkeys.ruler_drag {
+            RulerDrag::None => return Vec::new(),
+            RulerDrag::Shift => (G::LeftShift, G::LeftShiftDouble),
+            RulerDrag::Alt => (G::LeftAlt, G::LeftAltDouble),
+            RulerDrag::Ctrl => (G::LeftCtrl, G::LeftCtrlDouble),
+        };
+        let rows = |gesture| {
+            self.gestures
+                .get(&gesture)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+        };
+        let label = |slot: &GestureSlot| target_label(GestureTarget::Gesture(*slot));
+        let mut kills: Vec<String> = Vec::new();
+        let mut beside: Vec<String> = Vec::new();
+        for slot in rows(single) {
+            match slot_layer(*slot) {
+                Layer::Action => kills.push(label(slot)),
+                Layer::FigDelete => beside.push(label(slot)),
+                // Placement and moves act in the order book only; the ruler never starts there.
+                _ => {}
+            }
+        }
+        for slot in rows(double) {
+            if matches!(slot_layer(*slot), Layer::Action | Layer::FigDelete) {
+                beside.push(label(slot));
+            }
+        }
+        if ownerless_layer(single, Layer::Draw, hotkeys.ruler_drag) {
+            beside.push(t!("hotkeys.clash.layer.draw").to_string());
+        }
+        if !kills.is_empty() {
+            return vec![Clash {
+                severity: Severity::Shadowed,
+                text: t!("hotkeys.clash.gesture", rows = kills.join(", ")).to_string(),
+            }];
+        }
+        if beside.is_empty() {
+            return Vec::new();
+        }
+        vec![Clash {
+            severity: Severity::Shares,
+            text: t!("hotkeys.clash.shares_gesture", rows = beside.join(", ")).to_string(),
+        }]
+    }
+}
+
 /// What has to be under the pointer for a layer to answer at all.
 ///
 /// The missing half of [`Layer::unconditional`]: that one asks whether a layer answers EVERY press,
@@ -407,7 +484,7 @@ fn layer_object(layer: Layer) -> Option<Object> {
     match layer {
         Layer::Draw | Layer::FigDelete | Layer::FigMenu => Some(Object::Figure),
         Layer::OrderMenu => Some(Object::OrderLine),
-        Layer::Action | Layer::Place | Layer::Move | Layer::XScale => None,
+        Layer::Action | Layer::Place | Layer::Move | Layer::XScale | Layer::Ruler => None,
     }
 }
 
@@ -514,9 +591,10 @@ fn layer_holders(
     rows: &[GestureSlot],
     asking: GestureSlot,
     gesture: MouseGestureBinding,
+    ruler: RulerDrag,
 ) -> Vec<String> {
     if let Some(name) = layer.layer_name() {
-        return if ownerless_layer(gesture, layer) {
+        return if ownerless_layer(gesture, layer, ruler) {
             vec![t!(name).to_string()]
         } else {
             Vec::new()

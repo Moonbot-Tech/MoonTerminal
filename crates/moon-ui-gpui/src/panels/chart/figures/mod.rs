@@ -79,7 +79,13 @@ impl ChartPanel {
 
     /// Resolve a drawing endpoint from the plotted market data while the modifier is held.
     /// Trading bands keep their existing pointer prices and never use the drawing magnet.
-    fn fig_pointer_node(&self, pane: usize, pos: (f32, f32), map: &PaneMap, snap: bool) -> FigNode {
+    pub(in crate::panels::chart) fn fig_pointer_node(
+        &self,
+        pane: usize,
+        pos: (f32, f32),
+        map: &PaneMap,
+        snap: bool,
+    ) -> FigNode {
         if snap
             && let Some(node) = self.chart.nearest_figure_snap(
                 pane,

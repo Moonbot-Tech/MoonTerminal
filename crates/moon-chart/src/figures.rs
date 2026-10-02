@@ -43,12 +43,6 @@ const FIG_ARMED_THICKNESS: f32 = 2.2;
 const FIG_KNOT_SIZE: f32 = 4.5;
 /// Outline thickness of that knot, in pixels.
 const FIG_KNOT_THICKNESS: f32 = 1.5;
-/// A figure's text readout, drawn by the chart's text pass.
-///
-/// Carries a VALUE rather than a finished string: the text pass formats a price with the same
-/// precision as the axis it sits beside. Most tools label only the figure under the cursor and
-/// the one being drawn; a ratio scale labels its levels always, because a level whose price shows
-/// only under the cursor cannot be read at a glance.
 /// What a figure's readout says, resolved for the renderer.
 ///
 /// A price and a percentage stay VALUES so the text pass can format them with the price axis's
@@ -65,6 +59,12 @@ pub enum LabelValue {
     Ready(Arc<str>),
 }
 
+/// A figure's text readout, drawn by the chart's text pass.
+///
+/// Carries a VALUE rather than a finished string: the text pass formats a price with the same
+/// precision as the axis it sits beside. Most tools label only the figure under the cursor and
+/// the one being drawn; a ratio scale labels its levels always, and a zone its width, because a
+/// reading that shows only under the cursor cannot be taken at a glance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FigureLabel {
     /// Time relative to the chart epoch, in milliseconds. Unused by [`LabelPlace::RightEdge`] and
@@ -77,9 +77,10 @@ pub struct FigureLabel {
     /// Whether this readout belongs to a figure that is already on the chart, rather than to the
     /// one being drawn.
     ///
-    /// A permanent readout is what the per-tab "line labels" switch hides, exactly as it hides the
-    /// order column. The figure being DRAWN keeps its readout regardless: the numbers are what the
-    /// user is aiming with.
+    /// The per-tab "line labels" switch hides a permanent readout placed `LineSpan` — the ones a
+    /// figure draws at rest — exactly as it hides the order column; a hover readout stays, since
+    /// pointing at a figure is asking for it. The figure being DRAWN keeps its readout regardless:
+    /// the numbers are what the user is aiming with.
     pub permanent: bool,
     /// `0xRRGGBB` for the text layer, which has no alpha of its own.
     pub color: u32,
@@ -184,8 +185,8 @@ struct Sink<'a, 'b> {
     fills: bool,
     /// Whether the figure being built is the DRAFT, whose labels are transient by nature.
     ///
-    /// Everything else's labels are permanent: they stay on the chart after the pointer leaves,
-    /// which is what the per-tab "line labels" switch is for. Deriving this from hover instead
+    /// Everything else's labels are permanent; those a figure draws at rest are what the per-tab
+    /// "line labels" switch hides (see `FigureLabel::permanent`). Deriving this from hover instead
     /// would let pointing at a figure defeat that switch.
     draft: bool,
     out: &'a mut FigureBuffers<'b>,

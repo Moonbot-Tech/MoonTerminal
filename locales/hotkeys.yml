@@ -113,6 +113,10 @@ hotkeys.clash.layer.fig_menu:
   ru: "встроенное меню фигуры (ПКМ по фигуре)"
   en: "the built-in figure menu (right click on a figure)"
   es: "el menú de figura integrado (clic derecho en una figura)"
+hotkeys.clash.layer.ruler:
+  ru: "линейка % (только на графике, не на стакане)"
+  en: "the percent ruler (on the chart plot only, not in the order book)"
+  es: "la regla de porcentaje (solo en el gráfico, no en el libro de órdenes)"
 hotkeys.clash.layer.x_scale:
   ru: "встроенная синхронизация X-масштаба (Shift+средняя кнопка)"
   en: "the built-in X-scale sync (Shift+middle button)"
@@ -784,3 +788,27 @@ hotkeys.wheel.shift:
   ru: "Shift + колесо"
   en: "Shift + wheel"
   es: "Shift + rueda"
+hotkeys.ruler_drag:
+  ru: "Линейка %"
+  en: "Percent ruler"
+  es: "Regla de porcentaje"
+hotkeys.ruler_drag_hint:
+  ru: "Зажмите модификатор и тяните левой кнопкой по графику: видно, на сколько процентов ушла цена, за какое время и сколько купили и продали за этот отрезок. Отпустили — ничего не осталось. Пока зажат магнит рисования (Ctrl, на macOS Cmd), концы прилипают к ценам свечей; если сама линейка на Ctrl, магнит работает, пока Ctrl держится. Работает только на графике: на стакане те же нажатия остаются торговыми жестами, а линия ордера под курсором тащится как раньше."
+  en: "Hold the modifier and drag with the left button over the chart: it shows how far the price moved in percent, how long it took and how much was bought and sold over that stretch. Release and nothing is left behind. While the drawing magnet (Ctrl, Cmd on macOS) is held, the ends snap to candle prices; with the ruler itself on Ctrl, the magnet works as long as Ctrl is held. Works on the chart only: in the order book the same presses stay trading gestures, and an order line under the pointer still drags as before."
+  es: "Mantenga el modificador y arrastre con el botón izquierdo sobre el gráfico: muestra cuánto se movió el precio en porcentaje, en cuánto tiempo y cuánto se compró y vendió en ese tramo. Al soltar no queda nada. Mientras se mantiene el imán de dibujo (Ctrl, Cmd en macOS), los extremos se ajustan a los precios de las velas; con la regla en Ctrl, el imán funciona mientras Ctrl esté pulsado. Solo en el gráfico: en el libro de órdenes las mismas pulsaciones siguen siendo gestos de trading, y una línea de orden bajo el puntero se arrastra como antes."
+hotkeys.ruler.none:
+  ru: "Выкл"
+  en: "Off"
+  es: "Desactivado"
+hotkeys.ruler.shift:
+  ru: "Shift + ЛКМ"
+  en: "Shift + left drag"
+  es: "Shift + arrastre izq."
+hotkeys.ruler.alt:
+  ru: "Alt + ЛКМ"
+  en: "Alt + left drag"
+  es: "Alt + arrastre izq."
+hotkeys.ruler.ctrl:
+  ru: "Ctrl + ЛКМ"
+  en: "Ctrl + left drag"
+  es: "Ctrl + arrastre izq."

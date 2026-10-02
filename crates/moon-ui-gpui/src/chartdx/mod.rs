@@ -51,6 +51,8 @@ pub mod pane;
 #[cfg(windows)]
 pub mod readout;
 mod render_state;
+mod ruler;
+pub use ruler::RulerSpan;
 #[cfg(windows)]
 pub mod side_volume;
 pub(crate) use render_state::arrival_flash_enabled;
@@ -1357,6 +1359,9 @@ struct RenderState {
     /// A `&'static str` because a mode marker is a GLYPH, not a sentence: nothing to translate and
     /// nothing to allocate on the present path that redraws it.
     cursor_badge: Option<&'static str>,
+    /// The percent ruler while a drag holds it (`ruler.rs`): its band rides the readout batch and
+    /// its text the text pass, both redrawn per present, so moving it costs no layer rebuild.
+    ruler: Option<ruler::RulerReadout>,
     pixel_scale: f32,
     /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
     /// the panel so price-positioned order books and orders cannot spill beyond the plot onto

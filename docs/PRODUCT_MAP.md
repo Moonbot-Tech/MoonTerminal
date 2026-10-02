@@ -61,7 +61,12 @@ feature — a row in the map, a new user word — a row in the dictionary.
   use that same 3-second floor and are unbound by default (#493).
 - **«Фигуры»** (“Figures”) — drawing: Segment, Ray, Rectangle, Triangle,
   “Position”, two kinds of Fibonacci (including Moonbot's), fills, line styles,
-  Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags.
+  Ctrl+Z, magnet on Ctrl, figure alerts with sound and flags. A Zone prints its width in
+  percent at both lines, always, like Moonbot's rectangle (#660).
+- **«Линейка %»** (“percent ruler”) — Shift + left drag on the chart plot shows the move in
+  percent, how long it took and the Bv/Sv traded over the stretch; release and nothing is
+  left behind (#485). The modifier is set in Hotkeys → Chart; the order book keeps its own
+  Shift gesture (Move Open).
 - **«Флешки»** (“screenshot dumps”) — batches of screenshots with bugs and UX complaints from Kostya
   (@kostmain), a genre of the project chat; after each — a wave of fixes.
 
@@ -164,8 +169,8 @@ only by an explicit Silent/`NONE`.
 
 ## Known gaps (frequently requested)
 
-A % ruler without creating a figure (#485), and Moonbot's HMap — large trades under
-the volume bars (#496). A Bookmap-style order-book heatmap is also absent; #489 was
+Moonbot's HMap — large trades under the volume bars (#496). A Bookmap-style
+order-book heatmap is also absent; #489 was
 closed because that description was the wrong ask. Before
 answering the user “no” or “yes” — check the open issues and the code:
 the list grows, and something on it may already have been done.

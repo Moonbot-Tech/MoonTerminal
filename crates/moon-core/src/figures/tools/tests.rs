@@ -376,16 +376,31 @@ fn only_a_selected_knot_tool_emits_handles() {
 }
 
 #[test]
-fn only_a_ratio_scale_labels_an_idle_chart() {
-    // A readout that appears on hover costs nothing at rest; a Fibonacci scale is the exception,
-    // because a level whose price shows only under the cursor cannot be read at a glance.
+fn only_a_reading_tool_labels_an_idle_chart() {
+    // A readout that appears on hover costs nothing at rest. The exceptions are the tools whose
+    // numbers ARE the reading — a Fibonacci scale's levels, a zone's width — because a reading that
+    // shows only under the cursor cannot be taken at a glance. Each of those labels at rest through
+    // `LineSpan`, the placement the per-tab "line labels" switch hides by.
     for def in REGISTRY {
         let kind = (def.make)(&nodes(def.clicks as usize)).expect("full node set must build");
-        let idle = build(&kind, ctx(false, false)).labels.len();
-        if matches!(def.tool, FigureTool::FibRetracement | FigureTool::MbFib) {
-            assert!(idle > 0, "a scale must name its levels at rest");
+        let idle = build(&kind, ctx(false, false)).labels;
+        if matches!(
+            def.tool,
+            FigureTool::FibRetracement | FigureTool::MbFib | FigureTool::Channel
+        ) {
+            assert!(
+                !idle.is_empty(),
+                "{} must show its reading at rest",
+                def.key
+            );
+            assert!(
+                idle.iter()
+                    .all(|(_, place, _)| matches!(place, LabelPlace::LineSpan { .. })),
+                "{} labels at rest outside `LineSpan`, past the line-labels switch",
+                def.key
+            );
         } else {
-            assert_eq!(idle, 0, "{} labels an idle chart", def.key);
+            assert!(idle.is_empty(), "{} labels an idle chart", def.key);
         }
     }
 }

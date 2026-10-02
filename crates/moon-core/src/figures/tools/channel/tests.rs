@@ -58,14 +58,105 @@ fn it_draws_both_lines_and_labels_both_prices_when_hot() {
     assert_eq!((p0.min(p1), p0.max(p1)), (100.0, 110.0));
 
     let hot = build(&kind, ctx(true, false));
-    let prices: Vec<LabelText> = hot.labels.iter().map(|(_, _, t)| *t).collect();
+    let prices: Vec<LabelText> = hot
+        .labels
+        .iter()
+        .filter(|(_, p, _)| *p == LabelPlace::RightEdge)
+        .map(|(_, _, t)| *t)
+        .collect();
     assert_eq!(
         prices,
         vec![LabelText::Price(100.0), LabelText::Price(110.0)]
     );
-    assert!(
-        hot.labels
-            .iter()
-            .all(|(_, p, _)| *p == LabelPlace::RightEdge)
+}
+
+const FULL_WIDTH: LabelPlace = LabelPlace::LineSpan {
+    t0_ms: f64::NEG_INFINITY,
+    t1_ms: f64::INFINITY,
+};
+
+fn span_readout(c: Channel, hot: bool) -> Vec<(f64, LabelText)> {
+    build(&FigureKind::Channel(c), ctx(hot, false))
+        .labels
+        .into_iter()
+        .filter(|(_, p, _)| *p == FULL_WIDTH)
+        .map(|(at, _, t)| (at.price, t))
+        .collect()
+}
+
+/// Moonbot's zone is a ruler: its width is printed at both lines with nothing under the pointer.
+#[test]
+fn the_width_is_printed_at_both_lines_at_rest() {
+    let expected = vec![
+        (
+            110.0,
+            LabelText::PctDelta {
+                from: 100.0,
+                to: 110.0,
+            },
+        ),
+        (
+            100.0,
+            LabelText::PctDelta {
+                from: 110.0,
+                to: 100.0,
+            },
+        ),
+    ];
+    assert_eq!(span_readout(channel(), false), expected);
+    assert_eq!(
+        span_readout(channel(), true),
+        expected,
+        "hover adds the prices at the right edge, it does not change the readout"
     );
+}
+
+/// The sign follows the geometry, not the order the lines were placed in.
+#[test]
+fn a_zone_drawn_downward_reads_the_same() {
+    let down = Channel {
+        price1: 110.0,
+        price2: 100.0,
+    };
+    assert_eq!(span_readout(down, false), span_readout(channel(), false));
+}
+
+/// A zone dragged flat prints its price once instead of `+0.00%` twice.
+#[test]
+fn a_thin_zone_prints_its_price() {
+    let thin = Channel {
+        price1: 100.0,
+        price2: 100.0005,
+    };
+    assert_eq!(
+        span_readout(thin, false),
+        vec![(100.0005, LabelText::Price(100.0005))]
+    );
+    // 0.004% would still print `+0.00%`: below the two-decimal print it is a price.
+    let rounds_to_zero = Channel {
+        price1: 100.0,
+        price2: 100.004,
+    };
+    assert_eq!(span_readout(rounds_to_zero, false).len(), 1);
+    let wide_enough = Channel {
+        price1: 100.0,
+        price2: 100.01,
+    };
+    assert_eq!(span_readout(wide_enough, false).len(), 2);
+}
+
+/// A corridor with no positive base has no percentage to print, but must not print a wrong one.
+#[test]
+fn a_zone_at_zero_or_below_prints_no_readout() {
+    for (price1, price2) in [
+        (0.0, 10.0),
+        (-100.0, -90.0),
+        (f64::NAN, 10.0),
+        (1.0, f64::INFINITY),
+    ] {
+        assert!(
+            span_readout(Channel { price1, price2 }, false).is_empty(),
+            "{price1} .. {price2}"
+        );
+    }
 }

@@ -156,7 +156,7 @@ fn fmt_amount(v: f32) -> String {
 /// Returns:
 ///     `None` when `quote` is empty — a unitless figure would read as a coin count.
 ///     Otherwise the scale format (`compact_scale`: `1.6 k$`, `875.3 m BTC`).
-fn quote_turnover_label(value: f32, quote: &str) -> Option<String> {
+pub(in crate::chartdx) fn quote_turnover_label(value: f32, quote: &str) -> Option<String> {
     if quote.is_empty() {
         return None;
     }
@@ -691,7 +691,9 @@ mod caption;
 mod captions;
 mod column_scroll;
 mod labels;
+pub(in crate::chartdx) use labels::hours_and_minutes;
 mod prepare;
+mod ruler;
 mod runs;
 mod tick_volume;
 

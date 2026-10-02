@@ -463,9 +463,10 @@ impl RenderState {
 
             // Figure readouts: a price at the right edge for a full-width line, the move a trend
             // line describes at the end it points to, and a ratio scale's level beside each of its
-            // lines. For every tool but the scale the list is empty unless the pointer is on a
-            // figure or one is being drawn — a merely selected figure has none — so an idle chart
-            // with no scale on it does no work here.
+            // lines. Only the readouts placed `LineSpan` — a scale's levels, a zone's width — are
+            // there at rest; every other one appears while the pointer is on its figure or one is
+            // being drawn — a merely selected figure has none — so an idle chart with no scale or
+            // zone on it does no work here.
             // Room a ratio scale's readouts need, taken as the WIDEST of them: the side they sit
             // on has to be decided for the whole column at once. Per label, the wide levels would
             // flip while the narrow ones stayed, tearing the column the placement exists to make.
@@ -484,21 +485,20 @@ impl RenderState {
                 // Cloned out: a level's text is an `Arc<str>`, so this is a refcount bump, and
                 // holding a borrow of the pane would block measuring through `&mut self` below.
                 let label = self.panes[idx].figure_labels[li].clone();
-                // The per-tab "line labels" switch hides the readouts a figure draws AT REST,
-                // whichever placement they use: a ratio scale's, whether it spans a box like ours
-                // or the whole chart like Moonbot's. It used to be applied inside the `LineSpan`
-                // arm alone, which let a scale placing its readouts at the right edge draw straight
-                // past a switch the user had turned off.
+                // The per-tab "line labels" switch hides the readouts a figure draws AT REST: a
+                // ratio scale's, whether it spans a box like ours or the whole chart like
+                // Moonbot's, and a zone's width. Applied here, before any placement arm, so the
+                // test below is the only place that decides it.
                 //
                 // A readout that appears only under the POINTER is not one of those and stays.
-                // `permanent` cannot tell them apart — it means "not the draft" — so the VALUE does:
-                // a hover readout is a typed number the tool leaves to this layer to format, a
-                // `Price` or a `PctDelta`, while a scale's level arrives already formatted as
-                // `Ready`. Naming the hover kinds one by one was tried and was wrong the moment a
-                // second one existed; this asks the positive question instead.
+                // `permanent` cannot tell them apart — it means "not the draft" — so the PLACEMENT
+                // does: `LineSpan` is the one a figure uses for what it draws at rest (a scale's
+                // levels, a Moonbot scale's end percentages, a zone's width), while hover readouts
+                // sit `Above` a node or at the `RightEdge`. Asking the value instead was wrong both
+                // ways: a resting percentage passed the switch, a hover `R:R` was hidden by it.
                 if label.permanent
                     && !self.line_labels
-                    && matches!(label.text, FigLabelValue::Ready(_))
+                    && matches!(label.place, FigLabelPlace::LineSpan { .. })
                 {
                     continue;
                 }
@@ -519,12 +519,11 @@ impl RenderState {
                         x
                     }
                     // The label rides the line's LEFT end, clipped INTO the plot: a scale must
-                    // stay readable while any part of its lines is on screen. A scale's levels are
-                    // the one readout that stays after the pointer leaves, so the per-tab "line
-                    // A ratio scale's column of levels, placed at the box's anchor rather than
-                    // under the pointer: with the left end as the anchor, a box drawn rightward
-                    // keeps its column still while the prices in it change. The "line labels"
-                    // switch is applied above, for every placement rather than only for this one.
+                    // stay readable while any part of its lines is on screen. A ratio scale's
+                    // column of levels sits at the box's anchor rather than under the pointer: with
+                    // the left end as the anchor, a box drawn rightward keeps its column still while
+                    // the prices in it change. A full-width line's end is the plot's left edge. The
+                    // "line labels" switch is applied above, before any placement arm.
                     FigLabelPlace::LineSpan { t0_ms, t1_ms } => {
                         let (x0, x1) = (
                             x_of((t0_ms - epoch_ms) as f32),
@@ -718,6 +717,16 @@ impl RenderState {
                     });
                 }
             }
+
+            // The percent ruler's readout, beside the end the pointer holds. Before the cursor's own
+            // values, which are drawn later and so stay on top where the two meet.
+            self.prepare_ruler_text(
+                ctx,
+                idx,
+                sf,
+                [plot_left, plot_top, plot_right, plot_bottom],
+                &mut placed,
+            )?;
 
             // A per-tab "crosshair label" checkbox in the settings popup disables cursor readout.
             let cursor = self

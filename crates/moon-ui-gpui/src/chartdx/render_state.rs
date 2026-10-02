@@ -555,6 +555,7 @@ impl RenderState {
         let arrival_alpha =
             arrival_alpha(self.arrival_pulse.map(|at| at.elapsed()), self.arrival_hold);
         let arrival_color = self.arrival_pulse_color;
+        let ruler = self.ruler.as_ref().map(|r| r.span);
 
         for (idx, pr) in self.panes.iter_mut().enumerate() {
             pr.readout_rects.clear();
@@ -581,6 +582,26 @@ impl RenderState {
                         arrival_color[3] * alpha,
                     ],
                     m: [w, 1.0, 1.0, 0.0],
+                });
+            }
+
+            // The percent ruler's band, in the order book's own buy or sell colour by the move's
+            // direction, translucent so the candles under it stay readable. Pushed right after the
+            // arrival frame, so every plate and label below lands above it. In this batch rather
+            // than the figure layer: a fill there re-bakes the base cache on every pointer move.
+            if let Some(span) = ruler.filter(|span| span.pane == idx)
+                && let Some(dst) = super::ruler::band_rect_px(&pr.view, pr.epoch_ms, &span)
+            {
+                let hue = if span.up() {
+                    pr.book_style.bid
+                } else {
+                    pr.book_style.ask
+                };
+                pr.readout_rects.push(ReadoutRect {
+                    dst,
+                    bg: [hue[0], hue[1], hue[2], hue[3] * super::ruler::FILL_ALPHA],
+                    border: [hue[0], hue[1], hue[2], hue[3] * super::ruler::BORDER_ALPHA],
+                    m: [sf, 1.0, 1.0, 0.0],
                 });
             }
 
