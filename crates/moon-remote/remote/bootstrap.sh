@@ -152,8 +152,8 @@ step_admin() {
     [ -s "$keys_in" ] || die "no public key on stdin"
     while IFS= read -r pub; do
         case "$pub" in
-        "ssh-ed25519 "* | "ecdsa-sha2-"*) ;;
-        *) die "not an ed25519 or ECDSA public key" ;;
+        "ssh-ed25519 "* | "ecdsa-sha2-"* | "ssh-rsa "*) ;;
+        *) die "not an ed25519, ECDSA or RSA public key" ;;
         esac
     done <"$keys_in"
     if id "$name" >/dev/null 2>&1; then

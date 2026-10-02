@@ -1,6 +1,6 @@
 //! Safe-install regressions: the host key is confirmed before anything is sent, the firewall keeps
 //! the SSH ports open and rolls back exactly, an unsupported server is refused by the probe.
-//! Nothing here connects anywhere; the one shell fixture runs `bootstrap.sh` against stub tools.
+//! Nothing here connects anywhere; the shell fixtures run `bootstrap.sh` against stub tools.
 
 use super::*;
 
@@ -190,6 +190,74 @@ rm -f "$OUT" "$LOG"
     let (stdout, log) = rest.split_once("==LOG==\n").expect("fixture marker");
     let lines = |s: &str| s.lines().map(str::to_owned).collect();
     (lines(stdout), lines(log))
+}
+
+/// Removing RSA from `step_admin`'s filter aborts setup and loses the provider key as an
+/// administrator login. Run the embedded step and check both input lines reach authorized_keys.
+#[test]
+fn the_administrator_keeps_the_app_key_and_the_provider_rsa_key() {
+    let app_line = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH fixture-app";
+    let provider = crate::keys::parse(include_str!("../keys/fixtures/rsa-pkcs1.pem"), None)
+        .expect("synthetic provider RSA key");
+    let provider_line = crate::keys::authorized_line(&provider).expect("provider public line");
+    let input = format!("{app_line}\n{provider_line}\n");
+    let (functions, _) = script::BOOTSTRAP
+        .split_once("\nstep=${1:-}\n")
+        .expect("bootstrap.sh has a dispatcher");
+    let code = format!(
+        r#"FIXTURE_HOME=$(mktemp -d)
+trap 'rm -f "${{keys_in:-}}"; rm -rf "$FIXTURE_HOME"' EXIT
+id() {{
+    case "$1" in
+    -u) printf '0\n' ;;
+    -gn) printf 'fixture-group\n' ;;
+    *) return 1 ;;
+    esac
+}}
+getent() {{ printf 'fixture-admin:x:1000:1000::%s:/bin/sh\n' "$FIXTURE_HOME"; }}
+useradd() {{ :; }}
+chown() {{ :; }}
+chmod() {{ :; }}
+install() {{
+    case "$1" in
+    -d) mkdir -p "$8" ;;
+    -m) : >"$8" ;;
+    *) return 1 ;;
+    esac
+}}
+{functions}
+step_admin fixture-admin <<'FIXTURE_KEYS'
+{input}FIXTURE_KEYS
+printf '==KEYS==\n'
+cat "$FIXTURE_HOME/.ssh/authorized_keys"
+"#,
+    );
+    // As in the firewall fixture, stdin carries code without Windows argv length limits.
+    let mut child = std::process::Command::new("sh")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Git Bash sh or POSIX sh is required for the administrator fixture");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(code.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "administrator step failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout).replace('\r', "");
+    let (stdout, authorized_keys) = text.split_once("==KEYS==\n").expect("fixture marker");
+    assert_eq!(
+        stdout.lines().filter(|line| *line == "key=added").count(),
+        2
+    );
+    assert_eq!(authorized_keys, input);
 }
 
 fn allows(log: &[String]) -> Vec<&str> {
