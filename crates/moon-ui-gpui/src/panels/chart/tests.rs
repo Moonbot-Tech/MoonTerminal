@@ -105,10 +105,11 @@ fn chart_stacks_pass_their_workspace_group_into_every_panel() {
     );
 }
 
-/// `panels/chart/mod.rs:ChartSettingsSig::eq` must compare the report axis.
+/// `panels/chart/mod.rs:ChartSettingsSig::eq` must compare report axes and global book widths.
 ///
 /// Dropping that comparison leaves an idle chart asleep after a core's clock offset is measured,
 /// so its closed-trade arrows continue to use stale timestamps until an unrelated repaint.
+/// Omitting the width comparison similarly leaves a quiet chart at the previous book width.
 #[test]
 fn chart_settings_signature_changes_when_the_report_axis_changes() {
     let identity_axis = ReportAxis::from_measured(Default::default(), chrono_tz::UTC);
@@ -123,6 +124,7 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
         chrono_tz::UTC,
     );
     let identity = ChartSettingsSig {
+        order_book_width_px: moon_core::config::book_width::DEFAULT,
         theme: ChartTheme::default(),
         orders: OrdersStyleSet::default(),
         follow: false,
@@ -139,6 +141,14 @@ fn chart_settings_signature_changes_when_the_report_axis_changes() {
     assert!(
         identity != offset,
         "a newly measured core offset must wake an idle chart"
+    );
+    let wider_book = ChartSettingsSig {
+        order_book_width_px: 340.0,
+        ..identity.clone()
+    };
+    assert!(
+        identity != wider_book,
+        "a global width edit must wake an idle chart"
     );
 }
 

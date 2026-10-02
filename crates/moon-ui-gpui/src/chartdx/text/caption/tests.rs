@@ -4,7 +4,7 @@ use crate::chartdx::text::caption::{CaptionBox, caption_geom};
 
 /// Pane 1000 wide, plot 760 wide, a 220-wide book occupying the right side.
 fn with_book() -> Option<crate::chartdx::text::caption::CaptionGeom> {
-    caption_geom(0.0, 1000.0, 0.0, 780.0, 50.0, true, 780.0, 30.0, 4.0)
+    caption_geom(0.0, 1000.0, 0.0, 780.0, 50.0, true, 780.0, 220.0, 30.0, 4.0)
 }
 
 /// Catches replacing the live order-book edge with a second fixed-width calculation, which would
@@ -23,10 +23,10 @@ fn the_caption_zone_is_the_books_own_rectangle() {
 #[test]
 fn a_narrowed_book_narrows_the_caption_with_it() {
     // The engine shrinks the book on a cramped pane; the caption must follow it rather than keep
-    // assuming GLASS_ZONE_PX, which is what let the core name spill past the book's left edge.
+    // assuming default book width, which is what let the core name spill past the book's left edge.
     let wide = with_book().expect("wide");
     let narrow =
-        caption_geom(0.0, 1000.0, 0.0, 850.0, 50.0, true, 850.0, 30.0, 4.0).expect("narrow");
+        caption_geom(0.0, 1000.0, 0.0, 850.0, 50.0, true, 850.0, 220.0, 30.0, 4.0).expect("narrow");
     assert!(narrow.max_w < wide.max_w);
     assert_eq!(narrow.zone_left, 850.0);
 }
@@ -35,12 +35,23 @@ fn a_narrowed_book_narrows_the_caption_with_it() {
 /// zone instead of remaining inside the plot.
 #[test]
 fn without_a_book_the_zone_is_carved_off_the_plot_not_the_pane() {
-    let g = caption_geom(0.0, 1000.0, 0.0, 800.0, 50.0, false, f32::NAN, 30.0, 4.0)
-        .expect("a plot-only pane still captions");
+    let g = caption_geom(
+        0.0,
+        1000.0,
+        0.0,
+        800.0,
+        50.0,
+        false,
+        f32::NAN,
+        220.0,
+        30.0,
+        4.0,
+    )
+    .expect("a plot-only pane still captions");
     // Anchored at the PLOT's right edge, not the pane's.
     assert_eq!(g.right_x, 770.0);
     // And bounded by a book-sized budget rather than running across the whole chart.
-    assert!(g.max_w <= moon_chart::GLASS_ZONE_PX);
+    assert!(g.max_w <= moon_core::config::book_width::DEFAULT);
     assert!(g.zone_left >= 0.0);
 }
 
@@ -48,8 +59,19 @@ fn without_a_book_the_zone_is_carved_off_the_plot_not_the_pane() {
 #[test]
 fn a_very_narrow_plot_gets_half_of_it_at_most() {
     // Half the plot, so a caption can never occupy the entire width of a thin pane.
-    let g = caption_geom(0.0, 200.0, 0.0, 180.0, 10.0, false, f32::NAN, 30.0, 4.0)
-        .expect("narrow but usable");
+    let g = caption_geom(
+        0.0,
+        200.0,
+        0.0,
+        180.0,
+        10.0,
+        false,
+        f32::NAN,
+        220.0,
+        30.0,
+        4.0,
+    )
+    .expect("narrow but usable");
     assert!(g.max_w <= 90.0, "max_w was {}", g.max_w);
 }
 
@@ -58,11 +80,39 @@ fn a_very_narrow_plot_gets_half_of_it_at_most() {
 fn a_degenerate_pane_draws_no_caption() {
     // Zero-width, inverted, and non-finite panes must answer "nothing", never a negative budget
     // that a truncation routine would then have to defend against.
-    assert!(caption_geom(0.0, 0.0, 0.0, 0.0, 0.0, false, f32::NAN, 30.0, 4.0).is_none());
-    assert!(caption_geom(500.0, 100.0, 0.0, 80.0, 0.0, false, f32::NAN, 30.0, 4.0).is_none());
-    assert!(caption_geom(f32::NAN, 1000.0, 0.0, 800.0, 0.0, true, 780.0, 30.0, 4.0).is_none());
+    assert!(caption_geom(0.0, 0.0, 0.0, 0.0, 0.0, false, f32::NAN, 220.0, 30.0, 4.0).is_none());
+    assert!(
+        caption_geom(
+            500.0,
+            100.0,
+            0.0,
+            80.0,
+            0.0,
+            false,
+            f32::NAN,
+            220.0,
+            30.0,
+            4.0
+        )
+        .is_none()
+    );
+    assert!(
+        caption_geom(
+            f32::NAN,
+            1000.0,
+            0.0,
+            800.0,
+            0.0,
+            true,
+            780.0,
+            220.0,
+            30.0,
+            4.0
+        )
+        .is_none()
+    );
     // A pane narrower than the close-button inset leaves no room at all.
-    assert!(caption_geom(0.0, 20.0, 0.0, 20.0, 0.0, true, 0.0, 30.0, 4.0).is_none());
+    assert!(caption_geom(0.0, 20.0, 0.0, 20.0, 0.0, true, 0.0, 220.0, 30.0, 4.0).is_none());
 }
 
 /// `caption.rs:caption_geom` must bail as soon as the right anchor lands left of the pane's own
@@ -76,7 +126,19 @@ fn a_degenerate_pane_draws_no_caption() {
 #[test]
 fn an_anchor_left_of_the_pane_draws_no_caption() {
     assert!(
-        caption_geom(100.0, 1000.0, 0.0, 200.0, 0.0, false, f32::NAN, 150.0, 4.0).is_none(),
+        caption_geom(
+            100.0,
+            1000.0,
+            0.0,
+            200.0,
+            0.0,
+            false,
+            f32::NAN,
+            220.0,
+            150.0,
+            4.0
+        )
+        .is_none(),
         "right_x (200-150=50) sits left of pane_left (100); this must bail rather than \
          reach the zone/max_w arithmetic"
     );
@@ -88,7 +150,10 @@ fn an_anchor_left_of_the_pane_draws_no_caption() {
 fn a_stale_book_rectangle_is_clamped_into_the_pane() {
     // A book rect left over from a previous layout can sit outside the pane for one frame; the
     // zone must stay inside it rather than produce a caption budget wider than the pane.
-    let g = caption_geom(0.0, 1000.0, 0.0, 780.0, 50.0, true, -400.0, 30.0, 4.0).expect("clamped");
+    let g = caption_geom(
+        0.0, 1000.0, 0.0, 780.0, 50.0, true, -400.0, 220.0, 30.0, 4.0,
+    )
+    .expect("clamped");
     assert_eq!(g.zone_left, 0.0);
     assert!(g.max_w <= 1000.0);
 }
@@ -122,4 +187,28 @@ fn a_plate_is_measured_from_the_runs_that_were_drawn() {
     // The device scale factor multiplies the finished rectangle, it does not enter the padding.
     let scaled = empty.plate(2.0);
     assert_eq!(scaled, [x * 2.0, y * 2.0, w * 2.0, h * 2.0]);
+}
+
+/// Catches a no-book caption retaining the old budget after the global width changes.
+#[test]
+fn configured_fallback_width_and_drawn_book_keep_caption_inside_the_zone() {
+    let hidden = caption_geom(
+        0.0,
+        1200.0,
+        0.0,
+        1100.0,
+        10.0,
+        false,
+        f32::NAN,
+        320.0,
+        30.0,
+        4.0,
+    )
+    .expect("fallback caption");
+    assert_eq!(hidden.zone_left, 750.0);
+    assert_eq!(hidden.max_w, 320.0);
+    let drawn = caption_geom(0.0, 1200.0, 0.0, 880.0, 10.0, true, 880.0, 320.0, 30.0, 4.0)
+        .expect("book caption");
+    assert_eq!(drawn.zone_left, 880.0);
+    assert_eq!(drawn.max_w, 290.0);
 }

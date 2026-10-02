@@ -392,6 +392,7 @@ impl RenderState {
             geom.plot_top,
             geom.orderbook_enabled,
             geom.orderbook_left,
+            self.order_book_width_px,
             CAPTION_PAD_X,
             CAPTION_PAD_Y,
         );

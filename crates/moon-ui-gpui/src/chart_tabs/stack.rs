@@ -107,15 +107,15 @@ impl ChartStackEntry {
 /// Default Scroll slot size in pixels when the tab has no override.
 pub(super) const DEFAULT_SCROLL_HEIGHT: u16 = 300;
 
-/// Narrow comparison-follower width: order-book `GLASS_ZONE_PX` plus framing.
-pub(super) const COMPARE_BOOK_W: f32 = moon_chart::GLASS_ZONE_PX + 2.0;
+/// Narrow comparison-follower width: default order-book width plus framing.
+pub(super) const COMPARE_BOOK_W: f32 = moon_core::config::book_width::DEFAULT + 2.0;
 
 /// Minimum comparison-anchor slot width in FIT stretch mode (`width=0`).
 ///
 /// The chart itself is at least 1.5 times the order book, plus the price axis and anchor's own order
 /// book (`1.5 * GLASS + PRICE_AXIS_W + GLASS`). The anchor flexes and grows but not below this floor.
 pub(super) const COMPARE_ANCHOR_MIN_W: f32 =
-    moon_chart::GLASS_ZONE_PX * 2.5 + moon_chart::PRICE_AXIS_W;
+    moon_core::config::book_width::DEFAULT * 2.5 + moon_chart::PRICE_AXIS_W;
 
 /// Slot role for comparison-mode sizing; `Normal` uses ordinary sizing.
 #[derive(Clone, Copy, PartialEq, Eq)]

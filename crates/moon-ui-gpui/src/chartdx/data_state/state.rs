@@ -36,6 +36,7 @@ impl ChartDataState {
             container,
             render,
             theme,
+            order_book_width_px: moon_core::config::book_width::DEFAULT,
             orders: OrdersStyle::default(),
             follow: true,
             present_rate_hz: 60.0,

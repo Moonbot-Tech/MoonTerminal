@@ -1,8 +1,8 @@
 //! Interface tab for chart-theme editing, ported from egui's `settings/interface.rs`.
 //!
 //! It exposes chart, crosshair, candle, volume, trade, order-book and panel colors plus numeric
-//! controls. Edits update the draft for live preview; Save writes `theme.toml`. [`Iface`] owns
-//! editor controls.
+//! controls. Edits update the draft for live preview; Save writes `theme.toml` and the global
+//! order-book width in `settings.toml`. [`Iface`] owns editor controls.
 //!
 //! The trade-mark sizes and the bottom-volume band are NOT here. They describe a chart tab rather
 //! than a colour scheme, so they live on `ChartGraphicsCfg` and are edited from the chart's palette
@@ -50,6 +50,8 @@ pub(super) struct Iface {
     book_level_ask: Entity<MoonColorPickerState>,
     book_level_alpha: Entity<MoonSliderState>,
     book_level_width: Entity<MoonSliderState>,
+    /// Global width slider, independent of the active theme.
+    order_book_width: Entity<MoonSliderState>,
     panel_bg: Entity<MoonColorPickerState>,
 }
 
@@ -345,6 +347,26 @@ pub(super) fn build(
             4.0,
             0.1,
         ),
+        order_book_width: {
+            let b = backend.read(cx);
+            let width = moon_core::config::book_width::normalize(
+                b.preview.as_ref().unwrap_or(&b.config).order_book_width_px,
+            );
+            super::draft_slider(
+                cx,
+                moon_core::config::book_width::MIN,
+                moon_core::config::book_width::MAX,
+                10.0,
+                width,
+                |p, width, _| {
+                    if p.order_book_width_px == width {
+                        return false;
+                    }
+                    p.order_book_width_px = width;
+                    true
+                },
+            )
+        },
         panel_bg: color_field(backend, window, cx, |t| t.panel_bg, |t, v| t.panel_bg = v),
     }
 }
@@ -546,6 +568,13 @@ impl SettingsView {
             .child(separator(p, cx))
             // Order book.
             .child(section(&t!("iface.sec_book"), p, cx))
+            .child(slider_row(
+                &t!("iface.order_book_width"),
+                &i.order_book_width,
+                moon_core::config::book_width::MIN..=moon_core::config::book_width::MAX,
+                |v| format!("{} px", fmt::compact(v as f64, 0)),
+                cx,
+            ))
             .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))
             .child(color_row(&t!("iface.book_bg_ask"), &i.book_bg_ask, p, cx))
             .child(color_row(&t!("iface.book_bg_bid"), &i.book_bg_bid, p, cx))

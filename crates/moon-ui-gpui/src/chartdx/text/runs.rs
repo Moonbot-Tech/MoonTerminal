@@ -348,6 +348,7 @@ impl RenderState {
             pane_right,
             orderbook_enabled,
             orderbook_view.bounds[0] / sf,
+            self.order_book_width_px,
         );
         let right_x = zone_left + READOUT_PAD_X;
         // Keep the label badge from cutting through the horizontal line; see cursor_label_gap.

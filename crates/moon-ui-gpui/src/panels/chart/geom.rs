@@ -268,8 +268,11 @@ impl ChartPanel {
     fn local_pane_areas(&self, rect: moon_chart::view::Rect) -> crate::chartdx::PaneAreas {
         crate::chartdx::pane_layout(
             rect,
-            self.orderbook_only,
-            self.orderbook_enabled,
+            crate::chartdx::BookLayout {
+                only: self.orderbook_only,
+                enabled: self.orderbook_enabled,
+                width_px: self.settings_sig.order_book_width_px,
+            },
             self.time_axis_visible,
             self.price_axis_pos,
             // The same zone the engine lays out, gated by this panel's role.
@@ -339,7 +342,13 @@ impl ChartPanel {
     /// already holds; see [`order_zone_in`] for the three answers it gives.
     pub(super) fn control_zone_of(&self, rect: moon_chart::view::Rect) -> moon_chart::view::Rect {
         let areas = self.local_pane_areas(rect);
-        order_zone_in(rect, &areas, self.orderbook_drawn(), self.show_zone)
+        order_zone_in(
+            rect,
+            &areas,
+            self.orderbook_drawn(),
+            self.show_zone,
+            self.settings_sig.order_book_width_px,
+        )
     }
 
     pub(super) fn glass_pane_at(&self, pos: (f32, f32)) -> Option<usize> {
@@ -393,8 +402,8 @@ fn local_pane_rect_at(
 ///
 /// Three answers. The book's OWN area whenever one is drawn, so a cramped pane's narrowed book and
 /// a book-only broom pane's full-width one are each exactly the zone they look like. With no book
-/// but the zone toggle on, `GLASS_ZONE_PX.min(rect.w * 0.5)` reserved over the chart's right edge,
-/// so order interaction and the boundary marker still have somewhere to live. With no book and the
+/// but the zone toggle on, the configured width capped at half the pane is reserved at the right
+/// edge, so order interaction and the boundary marker still have somewhere to live. With no book and the
 /// toggle off, a ZERO-WIDTH rectangle at the right edge: no strip is reserved, and every hit test
 /// that reads the zone — `glass_pane_at` first — finds nothing to be inside, which hands the whole
 /// width back to chart gestures (`ChartPanel::order_gestures_allowed`).
@@ -403,12 +412,13 @@ pub(super) fn order_zone_in(
     areas: &crate::chartdx::PaneAreas,
     book_drawn: bool,
     reserve_strip: bool,
+    book_width_px: f32,
 ) -> moon_chart::view::Rect {
     if book_drawn {
         return areas.glass;
     }
     let w = if reserve_strip {
-        moon_chart::GLASS_ZONE_PX.min(rect.w * 0.5)
+        moon_core::config::book_width::normalize(book_width_px).min(rect.w * 0.5)
     } else {
         0.0
     };
