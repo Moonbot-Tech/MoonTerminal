@@ -23,6 +23,7 @@ mod catalog;
 mod embedded;
 mod missing;
 mod sources;
+mod volume;
 
 #[cfg(test)]
 use catalog::Source;
@@ -169,6 +170,18 @@ pub fn play(name: &str) {
     }
 }
 
+/// Queue a trade preview at the chosen gain without changing ordinary notification sounds.
+pub(crate) fn play_trade_preview(name: &str, percent: u8) {
+    if let Some(mut clip) = resolve(MissingSound::Name(name.to_string())) {
+        let Some(wav) = volume::scale(clip.wav, percent) else {
+            log::warn!("trade preview skipped: unsupported PCM sample format");
+            return;
+        };
+        clip.wav = wav;
+        PLAYBACK.with(|player| player.borrow_mut().enqueue(clip));
+    }
+}
+
 /// Play the sound a 1-based Moonbot ordinal names; one past the table plays the default and is
 /// reported once.
 pub fn play_ordinal(ordinal: i32) {
@@ -287,11 +300,21 @@ pub(crate) fn discard_pending() {
 /// Offer the trade-lane head and advance one fair, noninterrupting playback turn. A trade sound
 /// whose file is gone plays the default and is reported, like every other lane.
 /// Returns true only when the trade was selected, so contention never consumes its edge.
-pub(crate) fn pump(trade: Option<&str>) -> bool {
+/// The current trade gain applies at playback time; ordinary detects and alerts keep their bytes.
+pub(crate) fn pump(trade: Option<&str>, trade_volume: u8) -> bool {
     let trade = trade.and_then(|name| resolve(MissingSound::Name(name.to_string())));
     let next = PLAYBACK.with(|player| player.borrow_mut().next(std::time::Instant::now(), trade));
     if let Some((clip, is_trade)) = next {
-        play_bytes(clip.wav);
+        let wav = if is_trade {
+            volume::scale(clip.wav, trade_volume)
+        } else {
+            Some(clip.wav)
+        };
+        if let Some(wav) = wav {
+            play_bytes(wav);
+        } else {
+            log::warn!("trade sound skipped: unsupported PCM sample format");
+        }
         is_trade
     } else {
         false

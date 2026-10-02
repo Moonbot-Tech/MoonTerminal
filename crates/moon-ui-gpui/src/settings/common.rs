@@ -269,6 +269,8 @@ pub(super) enum DraftSliderApplyOn {
 /// Release-driven sliders repaint Settings on `Change` so captions read the live slider value
 /// without notifying the backend or applying the draft. `apply` notifies the backend only when
 /// it returns true, just as it does for change-driven sliders.
+/// Set the maximum first: MoonUI recomputes the thumb after each bound setter, and a minimum
+/// above its default maximum of 100 would panic before the requested maximum is installed.
 pub(super) fn draft_slider_on(
     cx: &mut Context<SettingsView>,
     min: f32,
@@ -280,8 +282,8 @@ pub(super) fn draft_slider_on(
 ) -> Entity<MoonSliderState> {
     let st = cx.new(|_| {
         MoonSliderState::new()
-            .min(min)
             .max(max)
+            .min(min)
             .step(step)
             .default_value(init)
     });

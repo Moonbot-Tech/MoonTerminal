@@ -2,17 +2,9 @@
 _version: 2
 
 telegram.access_title:
-  ru: "Чаты и доступ к ядрам"
-  en: "Chats and core access"
-  es: "Chats y acceso a núcleos"
-telegram.access_roles_hint:
-  ru: "Один владелец имеет полный доступ ко всем ядрам. Наблюдатели видят только данные и отчёты выбранных ядер."
-  en: "One owner has full access to all cores. Viewers see only data and reports for their assigned cores."
-  es: "Un propietario tiene acceso completo a todos los núcleos. Los observadores solo ven datos e informes de los núcleos asignados."
-telegram.access_first_owner:
-  ru: "Первый привязанный чат станет владельцем. Следующие чаты добавляются как наблюдатели без доступа к данным до назначения ядер."
-  en: "The first paired chat becomes the owner. Later chats are viewers with no data access until cores are assigned."
-  es: "El primer chat vinculado será el propietario. Los siguientes serán observadores sin acceso a datos hasta que se les asignen núcleos."
+  ru: "Чаты"
+  en: "Chats"
+  es: "Chats"
 telegram.access_chat:
   ru: "Чат %{id}"
   en: "Chat %{id}"
@@ -65,10 +57,6 @@ telegram.access_remove:
   ru: "Отвязать чат"
   en: "Unpair chat"
   es: "Desvincular chat"
-telegram.access_save_hint:
-  ru: "Названия, роли и доступ к ядрам применяются кнопкой «Сохранить». Новые ядра наблюдателям автоматически не добавляются."
-  en: "Names, roles and core access take effect when you press Save. New cores are not automatically assigned to viewers."
-  es: "Los nombres, roles y permisos se aplican al pulsar Guardar. Los núcleos nuevos no se asignan automáticamente a los observadores."
 telegram.access_cores:
   ru: "Доступные ядра: только просмотр"
   en: "Available cores: read only"
@@ -105,3 +93,8 @@ telegram.access_retry:
   ru: "Повторить"
   en: "Retry"
   es: "Reintentar"
+
+telegram.chats_hint:
+  ru: "Добавьте чат по коду; первый — владелец, остальные видят выбранные ядра после «Сохранить»."
+  en: "Add chats by code; the first is the owner, others see assigned cores after Save."
+  es: "Añade chats por código; el primero es propietario, los demás ven núcleos asignados al Guardar."

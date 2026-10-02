@@ -153,8 +153,8 @@ impl Shell {
     pub(super) fn make_tp_fine_slider(cx: &mut Context<Self>) -> Entity<MoonSliderState> {
         let s = cx.new(|_| {
             MoonSliderState::new()
-                .min(0.0)
                 .max(controls::TP_FINE_CAP)
+                .min(0.0)
                 .step(0.01)
                 .default_value(0.0)
         });
@@ -224,7 +224,7 @@ impl Shell {
                     // `Shell::init` registers a subscription on THIS entity that mirrors drags into
                     // the leverage field, and a replacement entity drops it silently — the slider
                     // would keep moving while the field, which is what Apply actually sends, froze.
-                    *st = MoonSliderState::new().min(lo).max(hi).step(step);
+                    *st = MoonSliderState::new().max(hi).min(lo).step(step);
                     st.set_value(val, window, c);
                 });
                 self.lev_input.update(cx, |st, c| {
