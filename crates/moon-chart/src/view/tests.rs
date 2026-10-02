@@ -1426,3 +1426,47 @@ fn the_future_ceiling_is_measured_from_the_corrected_edge() {
     plain.clamp_future_anchor(NOW, WIDTH);
     assert_eq!(shifted.right_time_ms, plain.right_time_ms + SOURCE_AHEAD_MS);
 }
+
+/// An invalid scale broadcast must leave a follower's time scale and position usable.
+/// Existing view tests never call the external X-scale synchronization entry point.
+#[test]
+fn x_sync_rejects_invalid_broadcasts_after_a_valid_scale() {
+    for ppm in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -0.25] {
+        let mut view = ChartView::new(1000.0);
+        assert!(view.set_px_per_ms_sync(0.25, 2000.0));
+        assert!(!view.set_px_per_ms_sync(ppm, 3000.0));
+        assert_eq!(view.px_per_ms, 0.25);
+        assert_eq!(view.right_time_ms, 2000.0);
+    }
+}
+
+/// A historical follower accepts a changed scale without being pulled to the live edge.
+/// Existing pan tests do not exercise synchronization while browsing history.
+#[test]
+fn x_sync_preserves_history_and_stops_rebroadcasting_an_unchanged_scale() {
+    let mut view = ChartView::new(1000.0);
+    view.set_manual_persistent();
+    assert!(view.set_px_per_ms_sync(0.25, 2000.0));
+    assert_eq!(view.px_per_ms, 0.25);
+    assert_eq!(view.right_time_ms, 1000.0);
+    assert!(!view.follow);
+    assert!(!view.set_px_per_ms_sync(0.25, 3000.0));
+}
+
+/// A live scale broadcast follows the source clock and replaces retained interval framing.
+/// Existing framing tests cover local gestures, not an external synchronized zoom.
+#[test]
+fn x_sync_tracks_the_live_clock_and_supersedes_retained_framing() {
+    let mut view = ChartView::new(1000.0);
+    view.set_live_offset_ms(-250.0);
+    assert!(view.set_px_per_ms_sync(0.25, 3000.0));
+    assert_eq!(view.right_time_ms, 2750.0);
+    assert!(view.follow);
+
+    assert!(view.request_time_range(100.0, 500.0, 0.0));
+    assert!(view.apply_frame_request(800.0));
+    assert!(view.set_px_per_ms_sync(0.25, 4000.0));
+    assert!(!view.apply_frame_request(1200.0));
+    view.ensure_default_window(1200.0, 60.0, None);
+    assert_eq!(view.px_per_ms, 0.25);
+}
