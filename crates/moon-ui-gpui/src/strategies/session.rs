@@ -51,6 +51,8 @@ pub(crate) struct StrategiesSessionState {
     pub(crate) exchange: Option<moon_core::session::core_order::ExchangeSection>,
     /// Empty UI folders that are tree structure without live strategies.
     pub(crate) ui_folders: HashSet<(CoreId, String)>,
+    /// Whether the right side showed the "WL distribution" tab.
+    pub(crate) distribution_tab: bool,
 }
 
 impl StrategiesSessionState {
@@ -77,6 +79,7 @@ impl StrategiesSessionState {
             dir: view.filter.dir,
             exchange: view.filter.exchange,
             ui_folders: view.ui_folders.clone(),
+            distribution_tab: view.dist.open,
         }
     }
 }

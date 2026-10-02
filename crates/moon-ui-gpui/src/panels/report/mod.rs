@@ -16,7 +16,7 @@
 //! [`export`] for file export; and [`totals`] for footer fact priority and recovery text.
 
 mod actions;
-mod columns;
+pub(crate) mod columns;
 mod comment;
 mod controls;
 mod export;

@@ -41,13 +41,16 @@ fn buy_refresh_requires_supported_moonshot_fields_and_no_open_edit() {
 }
 
 /// Dropping the flag at either UI boundary silently turns the explicit action into plain Save.
+///
+/// The buttons live on the tab strip above both tabs (`distribution/view.rs`,
+/// `field_edit_actions`), not in the parameters header any more.
 #[test]
 fn refresh_button_dispatches_one_flagged_edit_and_rechecks_eligibility() {
-    let params = include_str!("../params.rs");
+    let buttons = include_str!("../distribution/view.rs");
     let actions = include_str!("../actions.rs");
-    assert!(params.contains("this.apply_field_edits(apply_plan.as_ref(), true, cx)"));
-    assert!(params.contains("this.apply_field_edits(apply_plan.as_ref(), false, cx)"));
-    assert!(params.contains(".disabled(!can_refresh)"));
+    assert!(buttons.contains("this.apply_field_edits(apply_plan.as_ref(), true, cx)"));
+    assert!(buttons.contains("this.apply_field_edits(apply_plan.as_ref(), false, cx)"));
+    assert!(buttons.contains(".disabled(!can_refresh)"));
     let apply = actions
         .split_once("pub(super) fn apply_field_edits(")
         .unwrap()

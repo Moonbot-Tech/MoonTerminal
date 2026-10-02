@@ -3428,3 +3428,193 @@ strat.list_stale:
   ru: "Выбор стратегий или доступность поля изменились. Закройте окно и откройте действие заново."
   en: "The strategy selection or field availability changed. Close this dialog and open the action again."
   es: "La selección de estrategias o la disponibilidad del campo han cambiado. Cierre este diálogo y vuelva a abrir la acción."
+
+# "WL distribution" tab: how the selected strategies split one exchange's coins between cores.
+strat.tab_params:
+  ru: "Параметры"
+  en: "Parameters"
+  es: "Parámetros"
+strat.tab_distribution:
+  ru: "Распределение ВЛ"
+  en: "WL distribution"
+  es: "Distribución de WL"
+strat.tab_distribution_tip:
+  ru: "Как выбранные стратегии делят монеты биржи между ядрами: белый и чёрный список каждого ядра. Правки здесь — черновики, отправляет «Применить»."
+  en: "How the selected strategies split the exchange's coins between cores: each core's whitelist and blacklist. Edits here are drafts; Apply sends them."
+  es: "Cómo las estrategias seleccionadas reparten las monedas del exchange entre núcleos: la lista blanca y negra de cada núcleo. Los cambios aquí son borradores; «Aplicar» los envía."
+strat.dist_no_selection:
+  ru: "Выделите в дереве стратегии, которые делят между собой монеты."
+  en: "Select the strategies that share the coins between them in the tree."
+  es: "Seleccione en el árbol las estrategias que se reparten las monedas."
+strat.dist_mixed_venues:
+  ru: "Выбраны стратегии разных бирж — распределение показывается для стратегий одной биржи."
+  en: "The selected strategies are on different exchanges; the distribution is shown for one exchange at a time."
+  es: "Las estrategias seleccionadas están en exchanges distintos; la distribución se muestra para un solo exchange."
+strat.dist_unknown_venue:
+  ru: "Биржа одного из выбранных ядер ещё неизвестна — подождите подключения."
+  en: "The exchange of a selected core is not known yet; wait for it to connect."
+  es: "Aún no se conoce el exchange de un núcleo seleccionado; espere a que se conecte."
+strat.dist_coverage:
+  ru: "всего монет: %{total} · торгуется: %{traded} · без ядра: %{idle}"
+  en: "coins: %{total} · traded: %{traded} · no core: %{idle}"
+  es: "monedas: %{total} · operadas: %{traded} · sin núcleo: %{idle}"
+strat.dist_no_catalog:
+  ru: "список рынков биржи ещё не загружен"
+  en: "the exchange's market list has not loaded yet"
+  es: "la lista de mercados del exchange aún no se ha cargado"
+strat.dist_move_up:
+  ru: "Выше: верхнее ядро получает монеты первым"
+  en: "Up: the top core receives coins first"
+  es: "Arriba: el núcleo superior recibe monedas primero"
+strat.dist_move_down:
+  ru: "Ниже"
+  en: "Down"
+  es: "Abajo"
+strat.dist_lists_differ:
+  ru: "списки стратегий ядра различаются — показано объединение"
+  en: "this core's strategies hold different lists; the union is shown"
+  es: "las estrategias de este núcleo tienen listas distintas; se muestra la unión"
+strat.dist_white:
+  ru: "ВЛ %{n}"
+  en: "WL %{n}"
+  es: "LB %{n}"
+strat.dist_black:
+  ru: "БЛ %{n}"
+  en: "BL %{n}"
+  es: "LN %{n}"
+strat.dist_white_empty:
+  ru: "пусто — торгует все монеты, кроме БЛ"
+  en: "empty: trades every coin except the BL"
+  es: "vacía: opera todas las monedas excepto la LN"
+strat.dist_black_empty:
+  ru: "пусто"
+  en: "empty"
+  es: "vacía"
+strat.dist_collapse:
+  ru: "свернуть"
+  en: "collapse"
+  es: "contraer"
+strat.dist_sort_name:
+  ru: "по имени"
+  en: "by name"
+  es: "por nombre"
+strat.dist_sort_profit:
+  ru: "по профиту"
+  en: "by profit"
+  es: "por beneficio"
+strat.dist_sort_profit_tip:
+  ru: "Сначала прибыльные монеты за период, потом без сделок, потом убыточные; повторный клик — в обратную сторону. На стратегии не влияет."
+  en: "Profitable coins over the period first, then coins without trades, then losing ones; click again to reverse. Does not change the strategies."
+  es: "Primero las monedas con beneficio en el período, luego las que no tienen operaciones y después las de pérdida; otro clic invierte el orden. No cambia las estrategias."
+strat.dist_col_strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+strat.dist_profit_failed:
+  ru: "профит не прочитан: %{error}"
+  en: "profit not read: %{error}"
+  es: "beneficio no leído: %{error}"
+strat.dist_trades_summary:
+  ru: "сделок: %{n} · профит: %{profit}"
+  en: "trades: %{n} · profit: %{profit}"
+  es: "operaciones: %{n} · beneficio: %{profit}"
+strat.dist_trades_close:
+  ru: "Скрыть сделки"
+  en: "Hide the trades"
+  es: "Ocultar las operaciones"
+strat.dist_trades_loading:
+  ru: "загрузка сделок…"
+  en: "loading trades…"
+  es: "cargando operaciones…"
+strat.dist_trades_empty:
+  ru: "За период закрытых сделок по монете нет."
+  en: "No closed trades of this coin in the period."
+  es: "No hay operaciones cerradas de esta moneda en el período."
+strat.dist_trades_capped:
+  ru: "показаны последние %{n}, сортировка — внутри них"
+  en: "the newest %{n} shown; sorting applies to them"
+  es: "se muestran las %{n} más recientes; el orden se aplica a ellas"
+strat.dist_traded:
+  ru: "Торгует %{n}"
+  en: "Trades %{n}"
+  es: "Opera %{n}"
+strat.dist_traded_tip:
+  ru: "ВЛ пуст, поэтому ядро торгует все монеты биржи, кроме БЛ. Эти тикеры нигде не записаны — это вывод: каталог биржи минус БЛ."
+  en: "The WL is empty, so the core trades every coin of the exchange except the BL. These tickers are written nowhere: they are the exchange's catalog less the BL."
+  es: "La LB está vacía, así que el núcleo opera todas las monedas del exchange excepto la LN. Estos tickers no están escritos en ningún sitio: son el catálogo del exchange menos la LN."
+strat.dist_traded_empty:
+  ru: "ничего — все монеты биржи в БЛ"
+  en: "nothing: every coin of the exchange is in the BL"
+  es: "nada: todas las monedas del exchange están en la LN"
+strat.dist_distribute:
+  ru: "Распределить"
+  en: "Distribute"
+  es: "Distribuir"
+strat.dist_distribute_tip:
+  ru: "Делит монеты биржи поровну между строками, подряд по алфавиту: торгуемые монеты и монеты общего БЛ — отдельно, чтобы каждое ядро торговало одинаковое число (±1). Остаток — по монете верхним строкам. Старые БЛ складываются в общий и пишутся всем. Ничего не отправляет — только черновик; отправит «Применить». Недоступна, пока список рынков пришёл не у всех ядер строк."
+  en: "Splits the exchange's coins evenly between the rows in name order: the coins that will trade and the common BL's coins apart, so every core trades the same number (±1). The remainder goes one coin each to the top rows. The old BLs are pooled into one common BL written to every row. Sends nothing, only drafts; Apply sends them. Unavailable until every row core's market list has arrived."
+  es: "Reparte las monedas del exchange a partes iguales entre las filas por orden de nombre: las que se operarán y las de la LN común por separado, para que cada núcleo opere el mismo número (±1). El resto, de una en una a las filas superiores. Las LN antiguas se juntan en una LN común que reciben todas. No envía nada, solo borradores; «Aplicar» los envía. No disponible hasta que llegue la lista de mercados de todos los núcleos de las filas."
+strat.dist_first_bl:
+  ru: "БЛ на первом"
+  en: "BL on the first"
+  es: "LN en el primero"
+strat.dist_skip_common:
+  ru: "не делить монеты общего БЛ"
+  en: "do not deal the common BL's coins"
+  es: "no repartir las monedas de la LN común"
+strat.dist_reset:
+  ru: "Сбросить ВЛ/БЛ"
+  en: "Reset WL/BL"
+  es: "Restablecer LB/LN"
+strat.dist_reset_tip:
+  ru: "Убрать черновики ВЛ и БЛ этих стратегий; другие черновики не трогает."
+  en: "Drop the WL and BL drafts of these strategies; other drafts stay."
+  es: "Quita los borradores de LB y LN de estas estrategias; los demás borradores se quedan."
+strat.dist_menu_remove_white:
+  ru: "Убрать %{coin} из ВЛ"
+  en: "Remove %{coin} from the WL"
+  es: "Quitar %{coin} de la LB"
+strat.dist_menu_restore_white:
+  ru: "Вернуть %{coin} в ВЛ"
+  en: "Put %{coin} back on the WL"
+  es: "Devolver %{coin} a la LB"
+strat.dist_menu_remove_black:
+  ru: "Убрать %{coin} из БЛ"
+  en: "Remove %{coin} from the BL"
+  es: "Quitar %{coin} de la LN"
+strat.dist_menu_restore_black:
+  ru: "Вернуть %{coin} в БЛ"
+  en: "Put %{coin} back on the BL"
+  es: "Devolver %{coin} a la LN"
+strat.dist_menu_add_black:
+  ru: "Добавить %{coin} в БЛ"
+  en: "Add %{coin} to the BL"
+  es: "Añadir %{coin} a la LN"
+strat.dist_changes:
+  ru: " · −%{removed} +%{added}"
+  en: " · −%{removed} +%{added}"
+  es: " · −%{removed} +%{added}"
+strat.dist_white_trading:
+  ru: "ВЛ %{n} (%{traded})"
+  en: "WL %{n} (%{traded})"
+  es: "LB %{n} (%{traded})"
+strat.dist_white_trading_tip:
+  ru: "Первое число — сколько монет в ВЛ после «Применить». В скобках — сколько из них ядро действительно торгует: без тех, что стоят и в БЛ (⊘ — БЛ сильнее), и без тех, которых уже нет на бирже (серые). Жёлтые — их торгует и другое ядро — считаются. Это то же, что «Торгует» у ядра с пустым ВЛ."
+  en: "The first number is how many coins the WL holds after Apply. In brackets, how many of them the core actually trades: without those also in the BL (⊘ — the BL wins) and those no longer on the exchange (grey). Yellow ones, traded by another core too, count. The same figure as \"Trades\" on a core with an empty WL."
+  es: "El primer número es cuántas monedas tiene la LB tras «Aplicar». Entre paréntesis, cuántas opera realmente el núcleo: sin las que también están en la LN (⊘ — la LN prevalece) ni las que ya no están en el exchange (grises). Las amarillas, que opera también otro núcleo, cuentan. La misma cifra que «Opera» en un núcleo con la LB vacía."
+strat.dist_skip_common_tip:
+  ru: "Включено — монеты общего БЛ ни в чей ВЛ не попадают. Выключено — они тоже делятся поровну и встают в ВЛ (с ⊘, пока стоят в БЛ): уберёте монету из БЛ — она начнёт торговаться на том ядре, где стоит в ВЛ (доля первого ядра при «БЛ на первом» — без ВЛ, его торгует всё, кроме БЛ)."
+  en: "On: the common BL's coins go into no WL. Off: they are dealt evenly too and sit in the WLs (marked ⊘ while blacklisted): take a coin off the BL and it trades on the core whose WL holds it (the first core's share under \"BL on the first\" has no WL: it trades everything outside its BL)."
+  es: "Activado: las monedas de la LN común no entran en ninguna LB. Desactivado: también se reparten a partes iguales y quedan en las LB (con ⊘ mientras estén en la LN): quite una moneda de la LN y se operará en el núcleo cuya LB la tiene (la parte del primer núcleo con «LN en el primero» no tiene LB: opera todo lo que no está en su LN)."
+strat.dist_menu_copy_to_black:
+  ru: "Скопировать %{coin} в БЛ"
+  en: "Copy %{coin} to the BL"
+  es: "Copiar %{coin} a la LN"
+strat.dist_menu_copy_to_white:
+  ru: "Скопировать %{coin} в ВЛ"
+  en: "Copy %{coin} to the WL"
+  es: "Copiar %{coin} a la LB"
+strat.dist_menu_restore_traded:
+  ru: "Вернуть %{coin} в торговлю (убрать из БЛ)"
+  en: "Trade %{coin} again (take it off the BL)"
+  es: "Volver a operar %{coin} (quitarla de la LN)"

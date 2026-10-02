@@ -568,6 +568,10 @@ diag_counters!(
     //     monitor rate. The two climbing together means a key churns per frame, and the cost above
     //     is the old per-frame walk back under a new name.
     //   * `strat_sections_us` / `strat_params_us` — the schema-section list and the parameter rows.
+    //   * `strat_dist_us` — the "WL distribution" tab, built instead of the three panes above
+    //     while it is open. `strat_dist_build` counts its model REBUILDS: a hover sweep should
+    //     hold it at zero, and it legitimately moves only when a selected strategy's list, the
+    //     row order, a row's catalog revision or the quote its core trades in changes.
     //   * `strat_model_us` — the COMPUTED half of those two: dependency values and the parameter
     //     model, both of which are pure functions of the selection and could be cached the way the
     //     tree is. The two above are then the element trees, which cannot: GPUI only reuses a view
@@ -600,6 +604,8 @@ diag_counters!(
     STRAT_PANE_BUILD => "strat_pane_build",
     STRAT_SECTIONS_US => "strat_sections_us",
     STRAT_PARAMS_US => "strat_params_us",
+    STRAT_DIST_US => "strat_dist_us",
+    STRAT_DIST_BUILD => "strat_dist_build",
     STRAT_MODEL_US => "strat_model_us",
     // The crowd statistics on an empty Main. Six counters, because the surface makes six
     // different claims — three about its own cost, two about the wire, one about the rule — and

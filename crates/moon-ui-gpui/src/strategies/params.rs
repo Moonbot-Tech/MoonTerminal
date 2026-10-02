@@ -1412,21 +1412,9 @@ impl StrategiesView {
         } else {
             t!("strat.fields_count", n = field_total).to_string()
         };
+        // The amber edge still marks a pane holding drafts; the buttons that act on them sit on
+        // the tab strip above both tabs (`field_edit_actions`).
         let dirty = field_edit_count(self);
-        // Capture the complete visible draft set in the rendered Apply button. If the singleton
-        // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
-        let apply_plan = Arc::new(self.field_edit_plan(cx));
-        // What Apply will actually land: drafts the core would refuse are not part of it.
-        let (sendable, can_refresh) = {
-            let backend = self.backend.read(cx);
-            let store = backend.session.store();
-            let keys: Vec<_> = self
-                .sendable_field_edits(apply_plan.edit_keys(), store)
-                .into_iter()
-                .cloned()
-                .collect();
-            (keys.len(), self.can_refresh_buys(&keys, store))
-        };
         // Two-item switch between per-section and full mode, built per the pinned MoonUI source:
         // `on_click` takes a plain indexed `Fn`, not a `cx.listener`.
         let mode_view = cx.entity();
@@ -1471,49 +1459,7 @@ impl StrategiesView {
                             .text_size(design::t_body(cx))
                             .text_color(moon(p.text_muted))
                             .child(count),
-                    )
-                    .when(dirty > 0, |row| {
-                        // Apply counts what the plan will actually send, which excludes every
-                        // draft the core would refuse: promising "Apply 3" and landing 2 is the
-                        // silence this change exists to end. Revert stays on the full draft count,
-                        // because a refused draft is exactly what one wants to take back.
-                        row.when(sendable > 0, |row| {
-                            row.child(
-                                MoonButton::new("strat-fields-apply")
-                                    .success()
-                                    .label(t!("strat.fields_apply", n = sendable).to_string())
-                                    .on_click({
-                                        let apply_plan = apply_plan.clone();
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.apply_field_edits(apply_plan.as_ref(), false, cx)
-                                        })
-                                    })
-                                    .render(),
-                            )
-                        })
-                        .child(
-                            MoonButton::new("strat-fields-refresh-buys")
-                                .label(t!("strat.fields_refresh_buys"))
-                                .tooltip(t!("strat.fields_refresh_buys_tip"))
-                                .disabled(!can_refresh)
-                                .on_click({
-                                    let apply_plan = apply_plan.clone();
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.apply_field_edits(apply_plan.as_ref(), true, cx)
-                                    })
-                                })
-                                .render(),
-                        )
-                        .child(
-                            MoonButton::new("strat-fields-revert")
-                                .ghost()
-                                .label(t!("strat.fields_revert").to_string())
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.discard_field_edits(cx)),
-                                )
-                                .render(),
-                        )
-                    }),
+                    ),
             );
         if dirty > 0 {
             header = header

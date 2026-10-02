@@ -807,6 +807,13 @@ pub struct WindowLayout {
     /// discard the complete window layout.
     #[serde(default, deserialize_with = "de_lenient")]
     pub strategies_human_labels: Option<bool>,
+    /// Strategies, "WL distribution" tab: the order its core rows were arranged in, as core
+    /// uids. The top row receives coins first. Cores it does not name follow in tree order, so
+    /// an absent or partial list is complete by construction. Read leniently so a malformed hand
+    /// edit cannot discard the complete window layout.
+    // wire-id-exempt: terminal-issued core uids, never a core id — see `config::wire_id`.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub strategies_dist_order: Option<Vec<u64>>,
     /// Global "Assets" window geometry (singleton), so it reopens in its previous position.
     #[serde(default)]
     pub assets_window: Option<GeomRect>,
