@@ -305,8 +305,8 @@ pub(super) fn build_volume(
     let volume = backend.read(cx).layout.trade_sound_volume_percent();
     let state = cx.new(|_| {
         MoonSliderState::new()
-            .min(0.0)
             .max(100.0)
+            .min(0.0)
             .step(1.0)
             .default_value(f32::from(volume))
     });

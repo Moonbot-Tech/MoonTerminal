@@ -244,13 +244,7 @@ pub(crate) fn slider_state<V: CoreDraftHost>(
             state
         }
         Entry::Vacant(slot) => {
-            let state = cx.new(|_| {
-                MoonSliderState::new()
-                    .min(min)
-                    .max(max)
-                    .step(step)
-                    .default_value(value)
-            });
+            let state = cx.new(|_| slider_with_bounds(min, max).step(step).default_value(value));
             slot.insert(state.clone());
             cx.subscribe(
                 &state,
@@ -283,3 +277,14 @@ pub(crate) fn slider_state<V: CoreDraftHost>(
         }
     }
 }
+
+/// Initialize slider bounds without crossing MoonUI's default `0..=100` during either setter.
+///
+/// The temporary maximum includes zero so an entirely negative range can lower its minimum
+/// before installing its final maximum. Each setter immediately clamps the thumb position.
+fn slider_with_bounds(min: f32, max: f32) -> MoonSliderState {
+    MoonSliderState::new().max(max.max(0.0)).min(min).max(max)
+}
+
+#[cfg(test)]
+mod tests;
