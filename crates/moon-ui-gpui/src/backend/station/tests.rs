@@ -9,6 +9,50 @@ use moon_remote::ssh::Target;
 use moon_remote::station::access::AddressChange;
 use moon_remote::station::bot::ReturnedBot;
 
+/// Ignoring station presence would start a second bot even without a pending hand-over journal.
+/// Removal permits local polling again, but cannot bypass unresolved or unreadable ownership.
+#[test]
+fn telegram_station_presence_blocks_local_polling_until_removed() {
+    let mut jobs = StationJobs {
+        known: true,
+        ..StationJobs::default()
+    };
+    assert!(!jobs.holds_bot());
+    assert!(!jobs.allows_terminal_bot());
+    jobs.clear_known(Ok("synthetic removal".into()));
+    assert!(jobs.allows_terminal_bot());
+    jobs.pending = Some(super::recovery::Pending::new(&Target {
+        host: "synthetic".into(),
+        port: 22,
+    }));
+    assert!(!jobs.allows_terminal_bot());
+    jobs.pending = None;
+    jobs.journal_unreadable = true;
+    assert!(!jobs.allows_terminal_bot());
+}
+
+/// Clearing only the token leaves stale ownership/grants; clearing all settings loses Mini App choice.
+#[test]
+fn telegram_handover_erases_bot_identity_and_preserves_mini_app_choice() {
+    let mut config = TelegramConfig {
+        token: Secret::new("synthetic-obsolete"),
+        authorized_chat_ids: vec![42, 73],
+        owner_chat_id: Some(42),
+        chat_access: vec![TelegramChatAccess {
+            chat_id: 73,
+            name: "Synthetic viewer".into(),
+            core_uids: vec![9],
+        }],
+        mini_app_enabled: true,
+    };
+    super::forget_bot(&mut config);
+    assert!(config.token.is_empty());
+    assert!(config.authorized_chat_ids.is_empty());
+    assert!(config.owner_chat_id.is_none());
+    assert!(config.chat_access.is_empty());
+    assert!(config.mini_app_enabled);
+}
+
 /// Overwriting either a saved or unsaved local token discards the user's second bot.
 #[test]
 fn local_saved_or_draft_bots_block_restoration() {

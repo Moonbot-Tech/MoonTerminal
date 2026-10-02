@@ -2,17 +2,17 @@
 
 use super::support::*;
 
-/// Moving saved transport construction before the ownership check briefly starts a second poller.
+/// Moving saved transport construction before station/ownership admission starts a second poller.
 #[test]
 fn station_handover_gates_saved_transport_before_startup() {
     let boot = code_only(&read_src("startup/boot.rs"));
     let load = boot.find("StationJobs::load()").unwrap();
-    let gate = boot.find("if station.holds_bot()").unwrap();
+    let gate = boot.find("if !station.allows_terminal_bot()").unwrap();
     let saved = boot
         .find("moon_tg::TelegramState::new(&cfg.telegram")
         .unwrap();
     assert!(load < gate && gate < saved);
-    let held = braced_body(&boot, "if station.holds_bot()");
+    let held = braced_body(&boot, "if !station.allows_terminal_bot()");
     assert!(held.contains("TelegramConfig::default()") && held.contains("state.suspend()"));
     assert!(!held.contains("&cfg.telegram"));
     assert!(boot.contains("b.station_recover(cx)"));
@@ -40,7 +40,7 @@ fn station_handover_publishes_before_suspend_and_remote_work() {
     );
     assert!(
         erase.find("self.station_clear_handover()?").unwrap()
-            < erase.find("self.telegram.resume(").unwrap()
+            < erase.find("self.resume_terminal_telegram()").unwrap()
     );
 }
 

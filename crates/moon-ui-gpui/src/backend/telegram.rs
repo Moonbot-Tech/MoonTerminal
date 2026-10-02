@@ -120,8 +120,16 @@ impl TgHost for GuiTgHost<'_, '_> {
 }
 
 impl Backend {
-    /// Reconcile a successfully persisted token or identity change; retain saved failures.
+    /// Revoke local transport when station presence or durable ownership forbids it.
+    pub(crate) fn gate_terminal_telegram(&mut self) {
+        if !self.station.allows_terminal_bot() && !self.telegram.suspended() {
+            self.telegram.suspend();
+        }
+    }
+
+    /// Keep saved tokens gated through Save while a station owns the terminal's only bot.
     pub(crate) fn reconcile_telegram(&mut self, before: &TelegramConfig) {
+        self.gate_terminal_telegram();
         moon_tg::reconcile(&mut self.telegram, &self.config.telegram, before);
     }
 
@@ -135,8 +143,9 @@ impl Backend {
         moon_tg::reset_pairing(&mut GuiTgHost { backend: self, cx });
     }
 
-    /// Drain bounded transport work on the 100 ms owner loop.
+    /// Drain bounded work after preserving station ownership through any service retirement.
     pub(crate) fn tick_telegram(&mut self, cx: &mut Context<Self>) {
+        self.gate_terminal_telegram();
         moon_tg::tick(&mut GuiTgHost { backend: self, cx });
     }
 
