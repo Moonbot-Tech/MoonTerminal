@@ -3494,3 +3494,67 @@ strat.dist_collapse:
   ru: "свернуть"
   en: "collapse"
   es: "contraer"
+strat.dist_sort_name:
+  ru: "по имени"
+  en: "by name"
+  es: "por nombre"
+strat.dist_sort_profit:
+  ru: "по профиту"
+  en: "by profit"
+  es: "por beneficio"
+strat.dist_sort_profit_tip:
+  ru: "Сначала прибыльные монеты за период, потом без сделок, потом убыточные; повторный клик — в обратную сторону. На стратегии не влияет."
+  en: "Profitable coins over the period first, then coins without trades, then losing ones; click again to reverse. Does not change the strategies."
+  es: "Primero las monedas con beneficio en el período, luego las que no tienen operaciones y después las de pérdida; otro clic invierte el orden. No cambia las estrategias."
+strat.dist_col_strategy:
+  ru: "Стратегия"
+  en: "Strategy"
+  es: "Estrategia"
+strat.dist_chip_tip:
+  ru: "%{coin} · сделок: %{n} · винрейт: %{wr}% · профит: %{profit}\nПо выбранным стратегиям на ядрах этого распределения. Клик — сделки внизу."
+  en: "%{coin} · trades: %{n} · win rate: %{wr}% · profit: %{profit}\nFor the selected strategies on the cores of this distribution. Click for the trades below."
+  es: "%{coin} · operaciones: %{n} · tasa de acierto: %{wr}% · beneficio: %{profit}\nDe las estrategias seleccionadas en los núcleos de esta distribución. Clic para ver las operaciones abajo."
+strat.dist_chip_tip_none:
+  ru: "%{coin} · закрытых сделок за период нет. Клик — сделки внизу."
+  en: "%{coin} · no closed trades in the period. Click for the trades below."
+  es: "%{coin} · sin operaciones cerradas en el período. Clic para ver las operaciones abajo."
+strat.dist_profit_failed:
+  ru: "профит не прочитан: %{error}"
+  en: "profit not read: %{error}"
+  es: "beneficio no leído: %{error}"
+strat.dist_trades_summary:
+  ru: "сделок: %{n} · профит: %{profit}"
+  en: "trades: %{n} · profit: %{profit}"
+  es: "operaciones: %{n} · beneficio: %{profit}"
+strat.dist_trades_close:
+  ru: "Скрыть сделки"
+  en: "Hide the trades"
+  es: "Ocultar las operaciones"
+strat.dist_trades_loading:
+  ru: "загрузка сделок…"
+  en: "loading trades…"
+  es: "cargando operaciones…"
+strat.dist_trades_empty:
+  ru: "За период закрытых сделок по монете нет."
+  en: "No closed trades of this coin in the period."
+  es: "No hay operaciones cerradas de esta moneda en el período."
+strat.dist_trades_capped:
+  ru: "показаны последние %{n}, сортировка — внутри них"
+  en: "the newest %{n} shown; sorting applies to them"
+  es: "se muestran las %{n} más recientes; el orden se aplica a ellas"
+strat.dist_chip_blocked:
+  ru: "⊘ Стоит и в БЛ этого ядра — БЛ сильнее, ядро монету не торгует."
+  en: "⊘ Also in this core's BL — the BL wins, so the core does not trade the coin."
+  es: "⊘ También en la LN de este núcleo — la LN prevalece, el núcleo no opera la moneda."
+strat.dist_traded:
+  ru: "Торгует %{n}"
+  en: "Trades %{n}"
+  es: "Opera %{n}"
+strat.dist_traded_tip:
+  ru: "ВЛ пуст, поэтому ядро торгует все монеты биржи, кроме БЛ. Эти тикеры нигде не записаны — это вывод: каталог биржи минус БЛ."
+  en: "The WL is empty, so the core trades every coin of the exchange except the BL. These tickers are written nowhere: they are the exchange's catalog less the BL."
+  es: "La LB está vacía, así que el núcleo opera todas las monedas del exchange excepto la LN. Estos tickers no están escritos en ningún sitio: son el catálogo del exchange menos la LN."
+strat.dist_traded_empty:
+  ru: "ничего — все монеты биржи в БЛ"
+  en: "nothing: every coin of the exchange is in the BL"
+  es: "nada: todas las monedas del exchange están en la LN"

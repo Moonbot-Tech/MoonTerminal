@@ -44,7 +44,7 @@ impl Tab {
 
 /// Period presets resolved as civil dates in the selected header-clock zone.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Period {
+pub(crate) enum Period {
     Today,
     Yesterday,
     Week,
@@ -68,7 +68,7 @@ pub(super) enum Period {
 }
 
 impl Period {
-    pub(super) const ALL: [Period; 9] = [
+    pub(crate) const ALL: [Period; 9] = [
         Period::Today,
         Period::Yesterday,
         Period::Week,
@@ -131,7 +131,7 @@ impl Period {
         }
         Period::ALL.into_iter().find(|p| p.id() == id)
     }
-    pub(super) fn id(self) -> &'static str {
+    pub(crate) fn id(self) -> &'static str {
         match self {
             Period::Today => "p-today",
             Period::Yesterday => "p-yesterday",
@@ -159,7 +159,7 @@ impl Period {
     ///
     /// Returns:
     ///     Localized preset name or formatted custom range.
-    pub(super) fn title(self, zone: Tz) -> String {
+    pub(crate) fn title(self, zone: Tz) -> String {
         match self {
             Period::Today => t!("analytics.period.today"),
             Period::Yesterday => t!("analytics.period.yesterday"),
@@ -192,7 +192,7 @@ impl Period {
     ///
     /// Returns:
     ///     UTC Unix-second bounds; `from = -1` means the whole history.
-    pub(super) fn range(self, zone: Tz) -> (i64, i64) {
+    pub(crate) fn range(self, zone: Tz) -> (i64, i64) {
         let now = moon_core::util::now_unix_ms_i64() / 1000;
         self.range_at(now, zone)
     }

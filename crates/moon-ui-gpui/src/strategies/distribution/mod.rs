@@ -3,17 +3,20 @@
 //!
 //! One ROW per core (a "slot"): every selected strategy of that core belongs to it and is meant to
 //! carry the same `CoinsWhiteList` / `CoinsBlackList` — a long/short pair, typically. The rows
-//! split the market between them, so the screen answers three questions at a glance: which coins
-//! each core trades, which coin is traded by two cores at once, and which listed coin the exchange
-//! no longer trades at all.
+//! split the market between them, so the screen answers four questions at a glance: which coins
+//! each core trades, which coin is traded by two cores at once, which whitelisted coin its own
+//! core blacklists as well (and so does not trade), and which listed coin the exchange no longer
+//! trades at all. A row with an EMPTY whitelist also shows what that emptiness trades — its
+//! catalog less its blacklist — since those coins are its share although no list names them.
 //!
 //! "Trades" follows Moonbot's own reading of the two fields, and nothing else here may re-decide
 //! it: an EMPTY whitelist admits every coin, a non-empty one admits only its entries, and the
 //! blacklist removes coins from either. That is what lets a core with no whitelist and a blacklist
 //! of everybody else's coins stand for "the rest of the market" — and be counted as such.
 //!
-//! This module is the model only: pure functions over plain inputs, so every rule above is
-//! testable without a session. Rendering lives in [`view`].
+//! This file is the model: pure functions over plain inputs, so every rule above is testable
+//! without a session. Rendering lives in [`view`]; the report reads behind the chips' colours and
+//! the trades table live in `stats`, the table itself in `trades`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,6 +24,8 @@ use moon_core::session::CoreId;
 use moon_core::session::core_order::ExchangeSection;
 use moon_core::symbol::{coin_match_key, split_coin_list};
 
+mod stats;
+mod trades;
 pub(super) mod view;
 
 #[cfg(test)]
@@ -70,6 +75,56 @@ pub(super) enum ChipState {
     Gone,
     /// A whitelisted coin that another row trades as well.
     Duplicate,
+    /// A whitelisted coin the same row also blacklists: the blacklist wins, so the row does not
+    /// trade it although its whitelist names it.
+    Blocked,
+}
+
+/// What a chip's colour says, most important first: a coin the exchange no longer trades, a
+/// whitelisted coin its own row blacklists, a coin two rows trade, then how the coin did for the
+/// selected strategies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Look {
+    Gone,
+    Blocked,
+    Duplicate,
+    Profit,
+    Loss,
+    /// No closed trade in the period, or a flat result.
+    Flat,
+}
+
+/// The colour a chip is drawn in.
+///
+/// Args:
+///     state: The chip's list-level state.
+///     profit: The coin's profit over the period, `None` without a closed trade.
+pub(super) fn look(state: ChipState, profit: Option<f64>) -> Look {
+    match state {
+        ChipState::Gone => Look::Gone,
+        ChipState::Blocked => Look::Blocked,
+        ChipState::Duplicate => Look::Duplicate,
+        ChipState::Normal => match profit {
+            Some(p) if p > 0.0 => Look::Profit,
+            Some(p) if p < 0.0 => Look::Loss,
+            _ => Look::Flat,
+        },
+    }
+}
+
+/// Chips ordered best result first; coins without a trade sit between winners and losers, and a
+/// tie keeps the name order the list already has.
+///
+/// Args:
+///     chips: One list, in name order.
+///     profit: Profit per coin match key; a coin it lacks counts as zero.
+pub(super) fn by_profit(chips: &[Chip], profit: impl Fn(&str) -> Option<f64>) -> Vec<&Chip> {
+    // A non-finite or absent figure sorts as zero; `+ 0.0` folds -0.0 onto 0.0 so a flat result
+    // does not sink below coins without trades.
+    let key = |c: &Chip| profit(&c.coin).filter(|p| p.is_finite()).unwrap_or(0.0) + 0.0;
+    let mut out: Vec<&Chip> = chips.iter().collect();
+    out.sort_by(|a, b| key(b).total_cmp(&key(a)));
+    out
 }
 
 /// One coin of one list, folded to its match key.
@@ -90,6 +145,10 @@ pub(super) struct Slot {
     pub(super) lists_differ: bool,
     /// Whitelist, sorted by coin. Empty means "every coin the blacklist leaves".
     pub(super) white: Vec<Chip>,
+    /// What an EMPTY whitelist actually trades: the core's catalog less its blacklist, sorted.
+    /// `None` when the whitelist is not empty (it names the coins itself) or the catalog has not
+    /// arrived. These coins are written nowhere; they are drawn so the row's share has a face.
+    pub(super) traded: Option<Vec<Chip>>,
     /// Blacklist, sorted by coin.
     pub(super) black: Vec<Chip>,
 }
@@ -200,6 +259,7 @@ pub(super) fn build(
         .map(|(slot, list)| {
             let state = |coin: &str, white: bool| match list.catalog {
                 Some(c) if !c.contains(coin) => ChipState::Gone,
+                _ if white && list.black.contains(coin) => ChipState::Blocked,
                 _ if white && traders.get(coin).is_some_and(|n| *n > 1) => ChipState::Duplicate,
                 _ => ChipState::Normal,
             };
@@ -214,12 +274,25 @@ pub(super) fn build(
                     })
                     .collect()
             };
+            let traded = match list.catalog {
+                Some(catalog) if list.white.is_empty() => {
+                    let set: HashSet<String> = catalog
+                        .iter()
+                        .filter(|coin| list.trades(coin))
+                        .cloned()
+                        .collect();
+                    // Judged as whitelist entries: a coin another row trades too is a duplicate.
+                    Some(chips(&set, true))
+                }
+                _ => None,
+            };
             Slot {
                 core: slot.core,
                 core_name: slot.core_name.clone(),
                 strategies: slot.strategies.iter().map(|s| s.name.clone()).collect(),
                 lists_differ: lists_differ(&slot),
                 white: chips(&list.white, true),
+                traded,
                 black: chips(&list.black, false),
             }
         })

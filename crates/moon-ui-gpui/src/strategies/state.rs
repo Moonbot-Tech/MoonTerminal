@@ -482,6 +482,18 @@ impl StrategiesView {
         })
         .detach();
 
+        // Report commits and valuation-mode changes wake only this dedicated channel, never the
+        // backend observer above. The distribution tab's profits and trades are report reads, so
+        // without this they would wait for an unrelated repaint to notice a new trade. Repaint
+        // only while that tab is open: nothing else in this window reads the reports.
+        let report_revision = backend.read(cx).report_revision.clone();
+        cx.observe(&report_revision, |this, _revision, cx| {
+            if this.dist.open {
+                cx.notify();
+            }
+        })
+        .detach();
+
         let display_time_revision = backend.read(cx).display_time_revision.clone();
         cx.observe(&display_time_revision, |this, _revision, cx| {
             let zone = moon_core::util::display_time::zone_or_utc(

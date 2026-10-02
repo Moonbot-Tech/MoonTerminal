@@ -224,3 +224,168 @@ fn a_coin_missing_from_its_own_catalog_is_not_traded_by_that_row() {
         })
     );
 }
+
+/// A coin the exchange dropped stays grey and a duplicate stays yellow whatever it earned; only a
+/// normal chip takes its colour from the result.
+#[test]
+fn a_chip_reads_its_state_before_its_result() {
+    assert_eq!(look(ChipState::Gone, Some(5.0)), Look::Gone);
+    assert_eq!(look(ChipState::Duplicate, Some(-5.0)), Look::Duplicate);
+    assert_eq!(look(ChipState::Normal, Some(5.0)), Look::Profit);
+    assert_eq!(look(ChipState::Normal, Some(-5.0)), Look::Loss);
+    assert_eq!(look(ChipState::Normal, Some(0.0)), Look::Flat);
+    assert_eq!(look(ChipState::Normal, None), Look::Flat);
+}
+
+#[test]
+fn profit_order_puts_untraded_coins_between_winners_and_losers() {
+    let chips: Vec<Chip> = ["AAA", "BBB", "CCC", "DDD"]
+        .iter()
+        .map(|c| Chip {
+            coin: c.to_string(),
+            state: ChipState::Normal,
+        })
+        .collect();
+    let profit = |coin: &str| match coin {
+        "AAA" => Some(-3.0),
+        "CCC" => Some(7.0),
+        "DDD" => Some(1.0),
+        _ => None,
+    };
+    let order: Vec<&str> = by_profit(&chips, profit)
+        .into_iter()
+        .map(|c| c.coin.as_str())
+        .collect();
+    assert_eq!(order, vec!["CCC", "DDD", "BBB", "AAA"]);
+}
+
+/// Report rows name a coin as the core spelled it; the chips name it by match key. Spellings of
+/// one coin add up, and a unit they disagree on is dropped rather than mislabelled.
+#[test]
+fn report_groups_fold_onto_the_chip_key() {
+    let mut units = moon_core::db::QuoteCurrency::all();
+    let (a, b) = (units.next(), units.next());
+    let folded = stats::fold_coins([
+        ("BTC".to_string(), 3, 2, 10.0, a),
+        ("btc_0626".to_string(), 1, 0, -4.0, a),
+        ("ETH".to_string(), 2, 1, 1.0, a),
+        ("eth".to_string(), 1, 1, 1.0, b),
+    ]);
+    let btc = folded.stats["BTC"];
+    assert_eq!(
+        (btc.trades, btc.wins, btc.profit, btc.currency),
+        (4, 2, 6.0, a)
+    );
+    assert_eq!(folded.spellings["BTC"], vec!["BTC", "btc_0626"]);
+    assert_eq!(folded.stats["ETH"].currency, None);
+    // Sums in two units compare with nothing: no colour, no place in the profit order.
+    assert_eq!(folded.stats["ETH"].comparable_profit(), None);
+}
+
+#[test]
+fn win_rate_rounds_and_needs_a_trade() {
+    let stat = |trades, wins| stats::CoinStat {
+        trades,
+        wins,
+        ..Default::default()
+    };
+    assert_eq!(stat(3, 2).win_rate(), Some(67));
+    assert_eq!(stat(200, 199).win_rate(), Some(100));
+    assert_eq!(stat(0, 0).win_rate(), None);
+}
+
+/// A loss too small for the unit's precision prints as an unsigned zero, not "-0.00".
+#[test]
+fn profit_text_signs_what_it_prints() {
+    let usdt = moon_core::db::QuoteCurrency::usdt();
+    let text = |profit| {
+        trades::profit_text(&stats::CoinStat {
+            trades: 1,
+            wins: 0,
+            profit,
+            currency: Some(usdt),
+        })
+    };
+    assert_eq!(text(12.345), "+12.35 USDT");
+    assert_eq!(text(-3.0), "-3.00 USDT");
+    assert_eq!(text(-0.004), "0.00 USDT");
+    assert_eq!(text(-0.0), "0.00 USDT");
+    assert_eq!(
+        trades::profit_text(&stats::CoinStat {
+            trades: 1,
+            ..Default::default()
+        }),
+        "—"
+    );
+}
+
+/// The trades table sorts numbers by value, not as text ("10" after "9"), text caselessly, and an
+/// empty cell first.
+#[test]
+fn trade_cells_compare_by_kind() {
+    use rusqlite::types::Value;
+    use std::cmp::Ordering;
+    let cmp = trades::cmp_values;
+    assert_eq!(cmp(&Value::Integer(9), &Value::Integer(10)), Ordering::Less);
+    assert_eq!(cmp(&Value::Real(-2.5), &Value::Integer(1)), Ordering::Less);
+    assert_eq!(
+        cmp(&Value::Text("abc".into()), &Value::Text("ABD".into())),
+        Ordering::Less
+    );
+    assert_eq!(cmp(&Value::Null, &Value::Integer(0)), Ordering::Less);
+    // Mixed types order by type first, so the comparison stays transitive.
+    assert_eq!(
+        cmp(&Value::Integer(5), &Value::Text("a".into())),
+        Ordering::Less
+    );
+    assert_eq!(
+        cmp(&Value::Text("a".into()), &Value::Integer(1)),
+        Ordering::Greater
+    );
+}
+
+/// A coin a row both whitelists and blacklists is not traded by that row: its chip says so, and
+/// it neither covers the coin nor makes another row's chip a duplicate.
+#[test]
+fn a_whitelisted_coin_the_row_blacklists_is_blocked() {
+    let inputs = vec![
+        slot(1, vec![strat("A", "SYN, PROM", "SYN")]),
+        slot(2, vec![strat("A", "SYN", "")]),
+    ];
+    let cat = catalog(&["SYN", "PROM"]);
+    let catalogs = HashMap::from([(1, cat.clone()), (2, cat)]);
+    let board = build(inputs, &[], &catalogs).unwrap();
+
+    assert_eq!(state_of(&board.slots[0].white, "SYN"), ChipState::Blocked);
+    assert_eq!(state_of(&board.slots[0].white, "PROM"), ChipState::Normal);
+    assert_eq!(state_of(&board.slots[1].white, "SYN"), ChipState::Normal);
+    assert_eq!(look(ChipState::Blocked, Some(5.0)), Look::Blocked);
+}
+
+/// An empty whitelist still has a share: the coins its core's catalog lists less its blacklist.
+/// A coin another row whitelists is a duplicate there too; a row that names its coins, or whose
+/// catalog has not arrived, draws no such line.
+#[test]
+fn an_empty_whitelist_shows_what_it_trades() {
+    let inputs = vec![
+        slot(1, vec![strat("A", "", "CCC")]),
+        slot(2, vec![strat("A", "BBB", "")]),
+    ];
+    let cat = catalog(&["AAA", "BBB", "CCC"]);
+    let catalogs = HashMap::from([(1, cat.clone()), (2, cat)]);
+    let board = build(inputs, &[], &catalogs).unwrap();
+
+    let traded = board.slots[0].traded.as_ref().unwrap();
+    assert_eq!(coins(traded), vec!["AAA", "BBB"]);
+    assert_eq!(state_of(traded, "AAA"), ChipState::Normal);
+    assert_eq!(state_of(traded, "BBB"), ChipState::Duplicate);
+    assert!(board.slots[1].traded.is_none());
+
+    let unknown = build(
+        vec![slot(3, vec![strat("A", "", "")])],
+        &[],
+        &HashMap::new(),
+    )
+    .unwrap();
+    assert!(unknown.slots[0].traded.is_none());
+}

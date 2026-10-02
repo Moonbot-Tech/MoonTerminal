@@ -18,7 +18,7 @@
 mod bg;
 mod calendar;
 /// Period presets, window tabs and date helpers — the time axis shared by every page.
-mod period;
+pub(crate) mod period;
 /// Typed load-state algebra for Analytics profit queries.
 mod profit_load;
 pub(crate) mod profit_monitor;

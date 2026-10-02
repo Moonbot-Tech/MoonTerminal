@@ -739,7 +739,7 @@ pub(super) fn cell_color(col: &str, p: MoonPalette) -> u32 {
 }
 
 /// Return whether a Report column uses right-aligned numeric presentation.
-fn is_numeric_report_column(col: &str) -> bool {
+pub(crate) fn is_numeric_report_column(col: &str) -> bool {
     matches!(
         col,
         "quantity"
@@ -794,7 +794,7 @@ fn money_decimals(quote: Option<QuoteCurrency>) -> usize {
 ///
 /// Returns:
 ///     Display text and optional text color.
-pub(super) fn cell(
+pub(crate) fn cell(
     col: &str,
     v: &Value,
     quote: Option<QuoteCurrency>,
@@ -891,7 +891,7 @@ pub(super) fn cell(
 ///
 /// Returns:
 ///     The row's currency, or `None` when the schema omits it or the value is untrusted.
-pub(super) fn row_quote(cols: &[String], row: &[Value]) -> Option<QuoteCurrency> {
+pub(crate) fn row_quote(cols: &[String], row: &[Value]) -> Option<QuoteCurrency> {
     let index = cols.iter().position(|column| column == "basecurrency")?;
     QuoteCurrency::from_report_value(row.get(index)?)
 }
@@ -1055,7 +1055,7 @@ fn is_keyed_report_header(col: &str) -> bool {
 ///
 /// Returns:
 ///     Translated label for a keyed column, otherwise the raw DB name.
-pub(super) fn header_label(col: &str) -> String {
+pub(crate) fn header_label(col: &str) -> String {
     if is_keyed_report_header(col) {
         t!(format!("report.col.{col}")).to_string()
     } else {
@@ -1085,7 +1085,7 @@ pub(super) fn column_menu_label(col: &str) -> String {
     }
 }
 
-pub(super) fn width_for(col: &str) -> f32 {
+pub(crate) fn width_for(col: &str) -> f32 {
     match col {
         "buydate" | "closedate" => 120.0,
         "sellsetdate" | "last_update_at" => 116.0,

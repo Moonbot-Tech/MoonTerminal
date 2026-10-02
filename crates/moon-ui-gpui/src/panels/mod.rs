@@ -57,6 +57,12 @@ pub(crate) use common::{
 };
 pub(crate) use label_edit::open_label_edit;
 pub(crate) use order_edit::open_order_edit;
+/// The Report's own cell formatting, for surfaces that list report rows outside the Report: one
+/// formatter, so a trade reads the same wherever it is shown.
+pub(crate) use report::columns::{
+    cell as report_cell, header_label as report_header_label, is_numeric_report_column,
+    row_quote as report_row_quote, width_for as report_width_for,
+};
 
 pub use alerts::AlertsPanel;
 pub use assets::{AssetsView, open as open_assets_window};
