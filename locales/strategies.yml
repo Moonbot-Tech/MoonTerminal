@@ -3428,3 +3428,69 @@ strat.list_stale:
   ru: "Выбор стратегий или доступность поля изменились. Закройте окно и откройте действие заново."
   en: "The strategy selection or field availability changed. Close this dialog and open the action again."
   es: "La selección de estrategias o la disponibilidad del campo han cambiado. Cierre este diálogo y vuelva a abrir la acción."
+
+# "WL distribution" tab: how the selected strategies split one exchange's coins between cores.
+strat.tab_params:
+  ru: "Параметры"
+  en: "Parameters"
+  es: "Parámetros"
+strat.tab_distribution:
+  ru: "Распределение ВЛ"
+  en: "WL distribution"
+  es: "Distribución de WL"
+strat.tab_distribution_tip:
+  ru: "Как выбранные стратегии делят монеты биржи между ядрами: белый и чёрный список каждого ядра."
+  en: "How the selected strategies split the exchange's coins between cores: each core's whitelist and blacklist."
+  es: "Cómo las estrategias seleccionadas reparten las monedas del exchange entre núcleos: la lista blanca y negra de cada núcleo."
+strat.dist_no_selection:
+  ru: "Выделите в дереве стратегии, которые делят между собой монеты."
+  en: "Select the strategies that share the coins between them in the tree."
+  es: "Seleccione en el árbol las estrategias que se reparten las monedas."
+strat.dist_mixed_venues:
+  ru: "Выбраны стратегии разных бирж — распределение показывается для стратегий одной биржи."
+  en: "The selected strategies are on different exchanges; the distribution is shown for one exchange at a time."
+  es: "Las estrategias seleccionadas están en exchanges distintos; la distribución se muestra para un solo exchange."
+strat.dist_unknown_venue:
+  ru: "Биржа одного из выбранных ядер ещё неизвестна — подождите подключения."
+  en: "The exchange of a selected core is not known yet; wait for it to connect."
+  es: "Aún no se conoce el exchange de un núcleo seleccionado; espere a que se conecte."
+strat.dist_coverage:
+  ru: "всего монет: %{total} · торгуется: %{traded} · без ядра: %{idle}"
+  en: "coins: %{total} · traded: %{traded} · no core: %{idle}"
+  es: "monedas: %{total} · operadas: %{traded} · sin núcleo: %{idle}"
+strat.dist_no_catalog:
+  ru: "список рынков биржи ещё не загружен"
+  en: "the exchange's market list has not loaded yet"
+  es: "la lista de mercados del exchange aún no se ha cargado"
+strat.dist_move_up:
+  ru: "Выше: верхнее ядро получает монеты первым"
+  en: "Up: the top core receives coins first"
+  es: "Arriba: el núcleo superior recibe monedas primero"
+strat.dist_move_down:
+  ru: "Ниже"
+  en: "Down"
+  es: "Abajo"
+strat.dist_lists_differ:
+  ru: "списки стратегий ядра различаются — показано объединение"
+  en: "this core's strategies hold different lists; the union is shown"
+  es: "las estrategias de este núcleo tienen listas distintas; se muestra la unión"
+strat.dist_white:
+  ru: "ВЛ %{n}"
+  en: "WL %{n}"
+  es: "LB %{n}"
+strat.dist_black:
+  ru: "БЛ %{n}"
+  en: "BL %{n}"
+  es: "LN %{n}"
+strat.dist_white_empty:
+  ru: "пусто — торгует все монеты, кроме БЛ"
+  en: "empty: trades every coin except the BL"
+  es: "vacía: opera todas las monedas excepto la LN"
+strat.dist_black_empty:
+  ru: "пусто"
+  en: "empty"
+  es: "vacía"
+strat.dist_collapse:
+  ru: "свернуть"
+  en: "collapse"
+  es: "contraer"

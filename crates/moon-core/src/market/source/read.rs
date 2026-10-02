@@ -165,6 +165,19 @@ fn exchange_kind_label(info: &moonproto::ServerInfo) -> String {
 }
 
 impl MarketDataSource {
+    /// Version of the market CATALOG `core` reads — its provider's: which markets exist, their
+    /// quotes and trading status. Unlike [`Self::snapshot_revision`] it does not move on price
+    /// updates, so a consumer of [`Self::tradable_coins`] can key a cache on it.
+    ///
+    /// Returns:
+    ///     `(provider, client epoch, catalog count)`, or `None` while there is no provider client.
+    pub fn catalog_revision(&self, core: CoreId) -> Option<(CoreId, u64, u64)> {
+        let inner = self.inner.read().expect("market source poisoned");
+        let provider = inner.core_provider.get(&core).copied()?;
+        let (epoch, catalog) = inner.clients.get(&provider)?.catalog_revision()?;
+        Some((provider, epoch, catalog))
+    }
+
     /// Cheap hot-path revision for a consumer core. This reads one monotonic
     /// MoonProto snapshot number and does not clone the snapshot or drain rings.
     pub fn snapshot_revision(&self, core: CoreId) -> Option<(CoreId, u64)> {
@@ -1408,6 +1421,52 @@ impl MarketDataSource {
             .into_iter()
             .map(|handle| handle.name().to_string())
             .collect()
+    }
+
+    /// The coins `core` can trade right now: one list token per market of its provider's catalog
+    /// that the exchange reports as trading and that is quoted in the core's own currency.
+    ///
+    /// The token is the market's `market_currency` — what a strategy's `CoinsWhiteList` /
+    /// `CoinsBlackList` names (see [`MarketLabel::coin`]) — so a caller compares it with list
+    /// entries through [`crate::symbol::coin_match_key`]. The quote filter keeps a USDT core from
+    /// counting the USDC twins of its markets as coins of its own; while the core has not stated
+    /// its quote yet, every trading market counts.
+    ///
+    /// Returns:
+    ///     The tokens, sorted and deduplicated; `None` while the core has no provider, client or
+    ///     market list yet — "unknown", which a caller must not read as "nothing trades".
+    pub fn tradable_coins(&self, core: CoreId) -> Option<Vec<String>> {
+        let client = {
+            let inner = self.inner.read().expect("market source poisoned");
+            let provider = inner.core_provider.get(&core).copied()?;
+            inner
+                .clients
+                .get(&provider)
+                .and_then(SharedMoonClient::get)?
+        };
+        let snapshot = client.snapshot_versioned()?;
+        // A snapshot exists before its market list arrives; an empty catalog is "not yet", not
+        // "the exchange trades nothing".
+        if snapshot.markets().market_count() == 0 {
+            return None;
+        }
+        let quote = self.traded_quote(core);
+        let mut coins: Vec<String> = snapshot
+            .markets()
+            .iter()
+            .filter_map(|handle| {
+                handle.with(|m| {
+                    let quoted = quote
+                        .as_deref()
+                        .is_none_or(|q| m.base_currency.eq_ignore_ascii_case(q));
+                    (m.status_trading && quoted && !m.market_currency.is_empty())
+                        .then(|| m.market_currency.clone())
+                })
+            })
+            .collect();
+        coins.sort_unstable();
+        coins.dedup();
+        Some(coins)
     }
 
     pub fn with_orderbook_view<R>(

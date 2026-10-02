@@ -1219,6 +1219,7 @@ pub(super) fn run(
         // Read before the station filter, which has no reason to keep market-list events: a hot
         // exchange switch shows only as a refresh that adds most of a new venue's universe.
         let mut list_applied = false;
+        let mut catalog_changed = false;
         for ev in &events {
             let Event::Markets(markets_ev) = ev else {
                 continue;
@@ -1226,6 +1227,11 @@ pub(super) fn run(
             list_applied |= matches!(
                 markets_ev,
                 moonproto::state::MarketsEvent::MarketsListReplaced { .. }
+            );
+            catalog_changed |= matches!(
+                markets_ev,
+                moonproto::state::MarketsEvent::MarketsListReplaced { .. }
+                    | moonproto::state::MarketsEvent::NewMarketsAdded { .. }
             );
             if !turnover_armed {
                 continue;
@@ -1240,6 +1246,9 @@ pub(super) fn run(
             }
         }
         turnover_armed |= list_applied;
+        if catalog_changed {
+            client_slot.note_catalog_change();
+        }
         if let Some(profile) = station {
             events.retain(|event| profile.keeps(event));
         }

@@ -60,8 +60,10 @@ pub(super) struct VersionsState {
     /// Select the LATEST version once the list finishes loading.
     ///
     /// This follows a click on a deleted strategy, which has no live mode and opens directly on its
-    /// final parameters.
-    pub pending_latest: bool,
+    /// final parameters. Keyed to THAT strategy: the list may load long after the click — the
+    /// versions pane is not built while the distribution tab is open — and by then the selection
+    /// can have moved to a live strategy, which must open live, not on its latest version.
+    pub pending_latest: Option<Key>,
     /// Select THIS version (`valid_from`) of THIS strategy once its list finishes loading.
     ///
     /// Set by a reveal that names a version — the trade window's stamp — and consumed by the load
@@ -175,11 +177,10 @@ impl StrategiesView {
                     if this.versions.key == Some((core, id)) {
                         this.versions.list = list;
                         // A deleted strategy has no live mode, so open its latest known version immediately.
-                        if this.versions.pending_latest {
-                            this.versions.pending_latest = false;
-                            if let Some(vf) = this.versions.list.first().map(|v| v.valid_from) {
-                                this.select_version(Some(vf), cx);
-                            }
+                        if this.versions.pending_latest.take() == Some((core, id))
+                            && let Some(vf) = this.versions.list.first().map(|v| v.valid_from)
+                        {
+                            this.select_version(Some(vf), cx);
                         }
                         // A reveal that named a version wins over the deleted default above: it
                         // is the more specific ask, and it arrived from the same click.
@@ -515,10 +516,10 @@ impl StrategiesView {
         self.focus_strategy(key);
         if self.versions.key == Some(key) && !self.versions.list.is_empty() {
             let vf = self.versions.list[0].valid_from;
-            self.versions.pending_latest = false;
+            self.versions.pending_latest = None;
             self.select_version(Some(vf), cx);
         } else {
-            self.versions.pending_latest = true;
+            self.versions.pending_latest = Some(key);
         }
         self.persist_session(cx);
         cx.notify();

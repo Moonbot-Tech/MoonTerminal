@@ -11,6 +11,7 @@
 
 mod actions;
 mod adjusted;
+mod distribution;
 mod fields;
 mod filter;
 mod full_params;
@@ -291,6 +292,8 @@ pub struct StrategiesView {
     /// A one-shot request rather than a comparison against `selected_section`: clicking the section
     /// already on screen must scroll to it again.
     pending_param_scroll: Option<usize>,
+    /// The "WL distribution" tab: whether it is open, and its cached model.
+    dist: distribution::view::DistState,
     focus: FocusHandle,
 }
 
@@ -444,36 +447,71 @@ impl Render for StrategiesView {
         //
         // Each pane is timed on its own: a mouse-over repaints this whole window, so the question
         // "which pane does that cost" has to be answerable without a second measuring run.
+        //
+        // The versions pane belongs to the Parameters tab and is built only while that tab is
+        // open; the deleted-strategy cache feeds the tree and is kept current either way.
         let t = crate::diag::timer();
         self.ensure_deleted(cx);
-        let versions = self.versions_panel(cx);
+        let versions = (!self.dist.open).then(|| self.versions_panel(cx));
         crate::diag::record_us(&crate::diag::STRAT_VERSIONS_US, t);
-        let (tree, sections, params_model) = {
+        let tree = {
             let store = self.backend.read(cx).session.store();
             let t = crate::diag::timer();
             let tree = self.tree_panel(store, &cores, node_data, &pane, cx);
             crate::diag::record_us(&crate::diag::STRAT_TREEPANE_US, t);
-            // Both panels read the same dependency values; build them once. The computed halves are
-            // timed apart from the element trees because only they could be cached the way the tree
-            // adapter is — see `strat_model_us`.
-            let t = crate::diag::timer();
-            let values = selected_values(self, store);
-            crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
-            let t = crate::diag::timer();
-            let sections = self.sections_panel(store, &values, cx);
-            crate::diag::record_us(&crate::diag::STRAT_SECTIONS_US, t);
-            let t = crate::diag::timer();
-            let params_model = self.params_model(store, values);
-            crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
-            (tree, sections, params_model)
+            tree
         };
-        let t = crate::diag::timer();
-        let params = self.params_panel(params_model, window, cx);
-        crate::diag::record_us(&crate::diag::STRAT_PARAMS_US, t);
         let split_tree = self.panel_splitter(PanelSplit::Tree, cx);
-        let split_versions =
-            (!self.versions.collapsed).then(|| self.panel_splitter(PanelSplit::Versions, cx));
-        let split_sections = self.panel_splitter(PanelSplit::Sections, cx);
+        // The right side is one of two tabs, and only the open one is built: the parameter panes
+        // cost their model and element trees on every hover repaint, and the distribution its own.
+        let right = if let Some(versions) = versions {
+            let (sections, params_model) = {
+                let store = self.backend.read(cx).session.store();
+                // Both panels read the same dependency values; build them once. The computed
+                // halves are timed apart from the element trees because only they could be cached
+                // the way the tree adapter is — see `strat_model_us`.
+                let t = crate::diag::timer();
+                let values = selected_values(self, store);
+                crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
+                let t = crate::diag::timer();
+                let sections = self.sections_panel(store, &values, cx);
+                crate::diag::record_us(&crate::diag::STRAT_SECTIONS_US, t);
+                let t = crate::diag::timer();
+                let params_model = self.params_model(store, values);
+                crate::diag::record_us(&crate::diag::STRAT_MODEL_US, t);
+                (sections, params_model)
+            };
+            let t = crate::diag::timer();
+            let params = self.params_panel(params_model, window, cx);
+            crate::diag::record_us(&crate::diag::STRAT_PARAMS_US, t);
+            let split_versions =
+                (!self.versions.collapsed).then(|| self.panel_splitter(PanelSplit::Versions, cx));
+            let split_sections = self.panel_splitter(PanelSplit::Sections, cx);
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(versions)
+                .children(split_versions)
+                .child(sections)
+                .child(split_sections)
+                .child(params)
+                .into_any_element()
+        } else {
+            let t = crate::diag::timer();
+            let pane = self.distribution_pane(&cores, cx);
+            crate::diag::record_us(&crate::diag::STRAT_DIST_US, t);
+            pane
+        };
+        // `h_full`: the row this sits in centres its children vertically, and the panes it replaced
+        // each stretched themselves the same way.
+        let right = v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .min_h_0()
+            .child(self.right_tab_switch(cx))
+            .child(right);
 
         let p = MoonPalette::active(cx);
         let mut root = v_flex()
@@ -504,11 +542,7 @@ impl Render for StrategiesView {
                     .min_h_0()
                     .child(tree)
                     .child(split_tree)
-                    .child(versions)
-                    .children(split_versions)
-                    .child(sections)
-                    .child(split_sections)
-                    .child(params),
+                    .child(right),
             );
         root = root.child(
             MoonWindowFrame::tool("strategies-window-frame-hit", chrome_width)

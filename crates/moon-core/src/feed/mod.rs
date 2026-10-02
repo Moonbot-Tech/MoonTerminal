@@ -88,6 +88,11 @@ struct MoonClientSlot {
     /// cached anything derived from the client's retained state compares this number to know it
     /// must start over.
     epoch: u64,
+    /// Counts market-list applications the feed has seen on this slot's clients — moonproto's
+    /// `MarketsListReplaced` / `NewMarketsAdded`, the only events after which a market can appear,
+    /// disappear or change its trading status. Paired with `epoch`, it versions the catalog alone,
+    /// where the client's snapshot revision moves on every price tick.
+    catalog: u64,
 }
 
 #[derive(Clone, Default)]
@@ -109,6 +114,22 @@ impl SharedMoonClient {
 
     pub fn get(&self) -> Option<Arc<MoonClient>> {
         self.get_with_epoch().map(|(client, _)| client)
+    }
+
+    /// Record that the installed client applied a market list.
+    pub(crate) fn note_catalog_change(&self) {
+        let mut slot = self.inner.write().expect("moon client slot poisoned");
+        slot.catalog = slot.catalog.wrapping_add(1);
+    }
+
+    /// Version of the installed client's market catalog: `(epoch, catalog)`, which moves when the
+    /// client is replaced or applies a market list, and NOT on price updates.
+    ///
+    /// Returns:
+    ///     The version, or `None` while the slot holds no client.
+    pub fn catalog_revision(&self) -> Option<(u64, u64)> {
+        let slot = self.inner.read().expect("moon client slot poisoned");
+        slot.client.as_ref().map(|_| (slot.epoch, slot.catalog))
     }
 
     /// The live client together with the epoch it was installed under.

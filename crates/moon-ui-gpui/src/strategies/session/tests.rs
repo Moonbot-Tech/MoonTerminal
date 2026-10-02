@@ -135,6 +135,7 @@ fn collapse_drops_expansion_and_folder_selection_only() {
         dir: Some(true),
         exchange: Some(ExchangeSection::Unidentified),
         ui_folders: HashSet::from([(core, "empty".to_string())]),
+        distribution_tab: true,
     };
 
     collapse_strategies_expansion(&mut state);
@@ -156,4 +157,6 @@ fn collapse_drops_expansion_and_folder_selection_only() {
         state.ui_folders,
         HashSet::from([(core, "empty".to_string())])
     );
+    // The open tab is which pane the user reads, not expansion: an idle collapse keeps it.
+    assert!(state.distribution_tab);
 }
