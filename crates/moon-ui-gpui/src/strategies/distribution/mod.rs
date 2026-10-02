@@ -15,8 +15,9 @@
 //! of everybody else's coins stand for "the rest of the market" — and be counted as such.
 //!
 //! This file is the model: pure functions over plain inputs, so every rule above is testable
-//! without a session. Rendering lives in [`view`]; the report reads behind the chips' colours and
-//! the trades table live in `stats`, the table itself in `trades`.
+//! without a session. Rendering lives in [`view`] (the board) and `chips` (one line of chips);
+//! editing in `edit` (pure) and `edit_view` (menu, Distribute, Reset); the report reads behind
+//! the chips' colours and the trades table in `stats`, the table itself in `trades`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +25,9 @@ use moon_core::session::CoreId;
 use moon_core::session::core_order::ExchangeSection;
 use moon_core::symbol::{coin_match_key, split_coin_list};
 
+mod chips;
+pub(super) mod edit;
+mod edit_view;
 mod stats;
 mod trades;
 pub(super) mod view;
@@ -39,11 +43,17 @@ pub(super) const BLACK_FIELD: &str = "CoinsBlackList";
 /// One selected strategy, reduced to what the distribution reads.
 #[derive(Clone, Debug)]
 pub(super) struct StrategyInput {
+    pub(super) id: u64,
     pub(super) name: String,
-    /// `CoinsWhiteList` as the core stores it; a field the core omitted is empty.
+    /// `CoinsWhiteList` as it will be once the drafts are applied: the draft, else an edit still
+    /// on its way, else what the core stores. A field the core omitted is empty.
     pub(super) white: String,
-    /// `CoinsBlackList` as the core stores it.
+    /// `CoinsBlackList`, resolved the same way.
     pub(super) black: String,
+    /// `CoinsWhiteList` as the core stores it now — what a draft is compared against.
+    pub(super) live_white: String,
+    /// `CoinsBlackList` as the core stores it now.
+    pub(super) live_black: String,
 }
 
 /// Every selected strategy of one core, with what the core is connected to.
@@ -127,11 +137,22 @@ pub(super) fn by_profit(chips: &[Chip], profit: impl Fn(&str) -> Option<f64>) ->
     out
 }
 
+/// Whether a chip is part of a change not yet on the core.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Edit {
+    Same,
+    /// On the list once the drafts are applied, not on it now.
+    Added,
+    /// On the list now, gone once the drafts are applied — drawn struck through.
+    Removed,
+}
+
 /// One coin of one list, folded to its match key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Chip {
     pub(super) coin: String,
     pub(super) state: ChipState,
+    pub(super) edit: Edit,
 }
 
 /// One core of the distribution, as drawn.
@@ -139,6 +160,11 @@ pub(super) struct Chip {
 pub(super) struct Slot {
     pub(super) core: CoreId,
     pub(super) core_name: String,
+    /// Ids of the selected strategies on this core — the strategies an edit of the row writes.
+    pub(super) ids: Vec<u64>,
+    /// The row's lists as they will be, as ordered match keys: what a chip action and
+    /// "Distribute" start from.
+    pub(super) lists: edit::RowLists,
     /// Names of the selected strategies on this core, in tree order.
     pub(super) strategies: Vec<String>,
     /// Whether those strategies do not all hold the same two lists. The row then shows the union.
@@ -170,6 +196,9 @@ pub(super) struct Board {
     pub(super) slots: Vec<Slot>,
     /// `None` while no row's catalog has arrived — unknown, not zero.
     pub(super) coverage: Option<Coverage>,
+    /// The coins the rows' catalogs trade, sorted — what "Distribute" deals. `None` until EVERY
+    /// row's catalog has arrived: a deal over some rows' markets would leave the rest's coins out.
+    pub(super) universe: Option<Vec<String>>,
 }
 
 /// One row's lists as match-key sets, the form every rule reads.
@@ -230,6 +259,7 @@ pub(super) fn build(
         .iter()
         .map(|slot| slot_lists(slot, catalog_of(slot.core)))
         .collect();
+    let slots_cores_complete = slots.iter().all(|s| catalog_of(s.core).is_some());
     let mut universe: Option<HashSet<&String>> = None;
     for slot in &slots {
         if let Some(coins) = catalog_of(slot.core) {
@@ -271,8 +301,30 @@ pub(super) fn build(
                     .map(|coin| Chip {
                         coin: coin.clone(),
                         state: state(coin, white),
+                        edit: Edit::Same,
                     })
-                    .collect()
+                    .collect::<Vec<Chip>>()
+            };
+            // A list as it will be, marked against the list as it is: an entry the drafts add is
+            // `Added`, one they drop is kept in place as `Removed` so it can be seen and undone.
+            let (live_white, live_black) = live_keys(&slot);
+            let marked = |set: &HashSet<String>, live: &HashSet<String>, white: bool| {
+                let mut out = chips(set, white);
+                for chip in &mut out {
+                    if !live.contains(&chip.coin) {
+                        chip.edit = Edit::Added;
+                    }
+                }
+                out.extend(live.iter().filter(|c| !set.contains(*c)).map(|coin| Chip {
+                    coin: coin.clone(),
+                    state: match list.catalog {
+                        Some(c) if !c.contains(coin) => ChipState::Gone,
+                        _ => ChipState::Normal,
+                    },
+                    edit: Edit::Removed,
+                }));
+                out.sort_by(|a, b| a.coin.cmp(&b.coin));
+                out
             };
             let traded = match list.catalog {
                 Some(catalog) if list.white.is_empty() => {
@@ -281,26 +333,48 @@ pub(super) fn build(
                         .filter(|coin| list.trades(coin))
                         .cloned()
                         .collect();
+                    // Marked against what the core trades NOW, as a written list is against its
+                    // stored text: after a redistribution this line is where the first row's
+                    // share visibly changes.
+                    let live = Lists {
+                        white: live_white.clone(),
+                        black: live_black.clone(),
+                        catalog: list.catalog,
+                    };
+                    let live_set: HashSet<String> = catalog
+                        .iter()
+                        .filter(|coin| live.trades(coin))
+                        .cloned()
+                        .collect();
                     // Judged as whitelist entries: a coin another row trades too is a duplicate.
-                    Some(chips(&set, true))
+                    Some(marked(&set, &live_set, true))
                 }
                 _ => None,
             };
             Slot {
                 core: slot.core,
                 core_name: slot.core_name.clone(),
+                ids: slot.strategies.iter().map(|s| s.id).collect(),
+                lists: row_lists(&slot),
                 strategies: slot.strategies.iter().map(|s| s.name.clone()).collect(),
                 lists_differ: lists_differ(&slot),
-                white: chips(&list.white, true),
+                white: marked(&list.white, &live_white, true),
                 traded,
-                black: chips(&list.black, false),
+                black: marked(&list.black, &live_black, false),
             }
         })
         .collect();
+    let complete = slots_cores_complete;
+    let universe = universe.filter(|_| complete).map(|u| {
+        let mut coins: Vec<String> = u.into_iter().cloned().collect();
+        coins.sort_unstable();
+        coins
+    });
     Ok(Board {
         section,
         slots: drawn,
         coverage,
+        universe,
     })
 }
 
@@ -345,6 +419,36 @@ pub(super) fn moved(
     out.swap(at, to);
     out.extend(saved.iter().filter(|c| !shown.contains(c)));
     Some(out)
+}
+
+/// The union of a row's lists as the core stores them now, as match keys.
+fn live_keys(slot: &SlotInput) -> (HashSet<String>, HashSet<String>) {
+    let mut white = HashSet::new();
+    let mut black = HashSet::new();
+    for s in &slot.strategies {
+        white.extend(split_coin_list(&s.live_white).map(coin_match_key));
+        black.extend(split_coin_list(&s.live_black).map(coin_match_key));
+    }
+    (white, black)
+}
+
+/// The row's lists as they will be, as ordered match keys: the first strategy's order, then
+/// whatever the others add.
+fn row_lists(slot: &SlotInput) -> edit::RowLists {
+    let mut lists = edit::RowLists::default();
+    for s in &slot.strategies {
+        for key in edit::list_keys(&s.white) {
+            if !lists.white.contains(&key) {
+                lists.white.push(key);
+            }
+        }
+        for key in edit::list_keys(&s.black) {
+            if !lists.black.contains(&key) {
+                lists.black.push(key);
+            }
+        }
+    }
+    lists
 }
 
 /// The union of a row's lists, as match keys.

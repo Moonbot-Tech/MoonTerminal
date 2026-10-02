@@ -7,9 +7,12 @@ fn venue(code: u8) -> ExchangeSection {
 
 fn strat(name: &str, white: &str, black: &str) -> StrategyInput {
     StrategyInput {
+        id: 1,
         name: name.to_string(),
         white: white.to_string(),
         black: black.to_string(),
+        live_white: white.to_string(),
+        live_black: black.to_string(),
     }
 }
 
@@ -244,6 +247,7 @@ fn profit_order_puts_untraded_coins_between_winners_and_losers() {
         .map(|c| Chip {
             coin: c.to_string(),
             state: ChipState::Normal,
+            edit: Edit::Same,
         })
         .collect();
     let profit = |coin: &str| match coin {
@@ -280,18 +284,6 @@ fn report_groups_fold_onto_the_chip_key() {
     assert_eq!(folded.stats["ETH"].currency, None);
     // Sums in two units compare with nothing: no colour, no place in the profit order.
     assert_eq!(folded.stats["ETH"].comparable_profit(), None);
-}
-
-#[test]
-fn win_rate_rounds_and_needs_a_trade() {
-    let stat = |trades, wins| stats::CoinStat {
-        trades,
-        wins,
-        ..Default::default()
-    };
-    assert_eq!(stat(3, 2).win_rate(), Some(67));
-    assert_eq!(stat(200, 199).win_rate(), Some(100));
-    assert_eq!(stat(0, 0).win_rate(), None);
 }
 
 /// A loss too small for the unit's precision prints as an unsigned zero, not "-0.00".
@@ -388,4 +380,33 @@ fn an_empty_whitelist_shows_what_it_trades() {
     )
     .unwrap();
     assert!(unknown.slots[0].traded.is_none());
+}
+
+/// A draft is drawn against what the core stores: an entry it adds is marked, one it drops stays
+/// in place as removed — and only the draft decides what the row trades.
+#[test]
+fn drafts_mark_added_and_removed_chips() {
+    let mut s = strat("A", "AAA, CCC", "");
+    s.live_white = "AAA, BBB".to_string();
+    let board = build(vec![slot(1, vec![s])], &[], &HashMap::new()).unwrap();
+    let white = &board.slots[0].white;
+    let edit_of = |coin: &str| white.iter().find(|c| c.coin == coin).unwrap().edit;
+    assert_eq!(edit_of("AAA"), Edit::Same);
+    assert_eq!(edit_of("BBB"), Edit::Removed);
+    assert_eq!(edit_of("CCC"), Edit::Added);
+    assert_eq!(board.slots[0].lists.white, vec!["AAA", "CCC"]);
+}
+
+/// The "Trades" line is marked against what the core trades now: emptying a whitelist in the
+/// draft shows the coins it starts trading as added, the one it kept as unchanged.
+#[test]
+fn the_trades_line_marks_its_change_against_the_core() {
+    let mut s = strat("A", "", "");
+    s.live_white = "AAA".to_string();
+    let catalogs = HashMap::from([(1, catalog(&["AAA", "BBB"]))]);
+    let board = build(vec![slot(1, vec![s])], &[], &catalogs).unwrap();
+    let traded = board.slots[0].traded.as_ref().unwrap();
+    let edit_of = |coin: &str| traded.iter().find(|c| c.coin == coin).unwrap().edit;
+    assert_eq!(edit_of("AAA"), Edit::Same);
+    assert_eq!(edit_of("BBB"), Edit::Added);
 }

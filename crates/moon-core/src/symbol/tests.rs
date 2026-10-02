@@ -1,4 +1,4 @@
-use super::{coin_match_key, coin_of_market, strip_contract_suffix};
+use super::{coin_list_separator, coin_match_key, coin_of_market, strip_contract_suffix};
 
 /// One key, both spellings: the report side and the list side must land on it.
 /// The list side and the report side must land on the same keys, deduplicated.
@@ -62,4 +62,16 @@ fn quote_is_canonical_uppercase_or_empty() {
     assert_eq!(super::resolve_quote("btcusdt"), "USDT");
     assert_eq!(super::resolve_quote("KAITO"), "");
     assert_eq!(super::resolve_quote("@206"), "");
+}
+
+/// A list is rewritten with the separator it already uses; a field of one entry or none gets the
+/// default, and a leading separator run is not taken for the convention.
+#[test]
+fn coin_list_separator_reuses_the_fields_own() {
+    assert_eq!(coin_list_separator("A, B"), ", ");
+    assert_eq!(coin_list_separator("a b"), " ");
+    assert_eq!(coin_list_separator("A;B"), ";");
+    assert_eq!(coin_list_separator(", A,B"), ",");
+    assert_eq!(coin_list_separator("A"), ", ");
+    assert_eq!(coin_list_separator(""), ", ");
 }

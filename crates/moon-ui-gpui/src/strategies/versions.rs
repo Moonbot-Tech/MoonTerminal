@@ -84,7 +84,7 @@ pub(super) struct VersionsState {
 }
 
 /// What a "restore into current" actually did, so the pane never states a number that disagrees
-/// with the Apply button beside it.
+/// with the Apply button on the tab strip.
 ///
 /// The count in `Staged` is what Apply will SEND — never the wider set of fields the restore
 /// touched. A restore that clears three stale drafts and stages one field changes one field in the
@@ -343,7 +343,7 @@ impl StrategiesView {
                     // for a staged restore is `diff_n` — what Apply will SEND — never the wider
                     // set of fields the restore touched: a cleared draft ends up matching the
                     // version without re-entering `field_edits`, so counting it here would print a
-                    // figure the Apply button beside it contradicts.
+                    // figure the Apply button on the tab strip contradicts.
                     let outcome = if diff_n > 0 {
                         StagedOutcome::Staged(diff_n)
                     } else if cleared_count > 0 {

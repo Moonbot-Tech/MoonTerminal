@@ -190,12 +190,12 @@ fn detects_toolbar_keeps_the_shared_band_and_drops_tabbar() {
 
 /// Every `MoonDataTable::new` builder must apply `design::table_style(p)`.
 ///
-/// Breakage this pins: add a tenth table, or remove this adapter from one of the nine named
+/// Breakage this pins: add an eleventh table, or remove this adapter from one of the ten named
 /// builders. Its column headers would then fall back to the low-contrast muted ink while every
 /// sibling table remains readable, making the missing call look like a panel-local rendering bug.
 #[test]
 fn every_data_table_applies_the_chrome_header_style() {
-    const TABLES: [(&str, &str); 9] = [
+    const TABLES: [(&str, &str); 10] = [
         ("panels/alerts/table.rs", "pub(super) fn table("),
         ("panels/assets/table.rs", "pub(super) fn assets_table("),
         (
@@ -217,6 +217,7 @@ fn every_data_table_applies_the_chrome_header_style() {
         ("panels/orders/table.rs", "pub(super) fn orders_table("),
         ("panels/report/render.rs", "pub(super) fn table_el("),
         ("screener/view.rs", "fn table(&self, cx: &Context<Self>)"),
+        ("strategies/distribution/trades.rs", "fn trades_table("),
     ];
 
     let mut sources = Vec::new();
@@ -233,8 +234,8 @@ fn every_data_table_applies_the_chrome_header_style() {
         })
         .sum();
     assert_eq!(
-        table_count, 9,
-        "the nine planned MoonDataTable builders are the complete app-side table surface"
+        table_count, 10,
+        "the ten planned MoonDataTable builders are the complete app-side table surface"
     );
 
     for (path, signature) in TABLES {

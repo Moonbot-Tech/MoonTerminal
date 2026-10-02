@@ -312,29 +312,6 @@ impl AnalyticsView {
     }
 }
 
-/// The separator the strategy itself uses, reused verbatim.
-///
-/// `split_coin_list` accepts commas, semicolons, whitespace and JSON punctuation alike, so
-/// picking one unconditionally rewrote every line of a field that happened to use another —
-/// the same "one coin edited, the whole field changed" this module exists to avoid. The first
-/// run of separator characters between two entries IS the field's convention.
-fn separator_of(fresh: &str) -> &str {
-    const SEP: [char; 6] = [',', ';', ' ', '\t', '\n', '\r'];
-    // A LEADING run is skipped first: a field written as `, A, B` would otherwise offer its
-    // opening comma as the convention. (JSON punctuation is NOT in `SEP`, so a JSON-shaped
-    // value is not handled here at all — `apply_delta` returns it untouched when the edit is
-    // empty, and reformats it otherwise.)
-    let body = fresh.trim().trim_start_matches(SEP);
-    let Some(start) = body.find(SEP) else {
-        // One entry, or none: nothing to separate, and a second entry is the caller's first.
-        return ", ";
-    };
-    let end = body[start..]
-        .find(|c: char| !SEP.contains(&c))
-        .map_or(body.len(), |off| start + off);
-    &body[start..end]
-}
-
 /// A strategy's own list with the user's EDIT replayed on top: its entries, its order, minus
 /// what was unticked, plus what was ticked.
 ///
@@ -384,7 +361,7 @@ fn apply_delta(fresh: &str, added: &[String], removed: &[String]) -> String {
         .collect();
     // Sorted only so two identical edits produce the same string.
     fresh_ticks.sort_unstable();
-    let sep = separator_of(fresh);
+    let sep = moon_core::symbol::coin_list_separator(fresh);
     fresh_ticks
         .into_iter()
         .chain(kept)

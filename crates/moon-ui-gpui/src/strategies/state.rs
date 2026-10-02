@@ -666,6 +666,8 @@ impl StrategiesView {
             dist: {
                 let mut dist = super::distribution::view::DistState::default();
                 dist.open = session.as_ref().is_some_and(|s| s.distribution_tab);
+                // The layout the developer runs: the first core takes the rest of the market.
+                dist.first_blacklists = true;
                 dist
             },
             focus: cx.focus_handle(),

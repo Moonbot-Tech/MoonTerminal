@@ -209,11 +209,6 @@ impl CoinStat {
         (self.trades > 0 && self.currency.is_some() && self.profit.is_finite())
             .then_some(self.profit)
     }
-
-    /// Wins as a whole percentage of closed trades, rounded to nearest.
-    pub(super) fn win_rate(&self) -> Option<i64> {
-        (self.trades > 0).then(|| (self.wins as f64 * 100.0 / self.trades as f64).round() as i64)
-    }
 }
 
 impl StrategiesView {
@@ -463,6 +458,15 @@ impl StrategiesView {
             });
         })
         .detach();
+    }
+
+    /// Show the trades of one coin, keeping them when it is the coin already shown: the right
+    /// click that opens a chip's menu must not hide them (a second LEFT click does, through
+    /// `toggle_distribution_coin`; so does "×").
+    pub(super) fn show_distribution_coin(&mut self, coin: &str, cx: &mut Context<Self>) {
+        if self.dist.stats.coin.as_deref() != Some(coin) {
+            self.toggle_distribution_coin(coin, cx);
+        }
     }
 
     /// Show, or hide again, the trades of one coin.

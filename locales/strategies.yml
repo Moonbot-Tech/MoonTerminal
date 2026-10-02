@@ -3439,9 +3439,9 @@ strat.tab_distribution:
   en: "WL distribution"
   es: "Distribución de WL"
 strat.tab_distribution_tip:
-  ru: "Как выбранные стратегии делят монеты биржи между ядрами: белый и чёрный список каждого ядра."
-  en: "How the selected strategies split the exchange's coins between cores: each core's whitelist and blacklist."
-  es: "Cómo las estrategias seleccionadas reparten las monedas del exchange entre núcleos: la lista blanca y negra de cada núcleo."
+  ru: "Как выбранные стратегии делят монеты биржи между ядрами: белый и чёрный список каждого ядра. Правки здесь — черновики, отправляет «Применить»."
+  en: "How the selected strategies split the exchange's coins between cores: each core's whitelist and blacklist. Edits here are drafts; Apply sends them."
+  es: "Cómo las estrategias seleccionadas reparten las monedas del exchange entre núcleos: la lista blanca y negra de cada núcleo. Los cambios aquí son borradores; «Aplicar» los envía."
 strat.dist_no_selection:
   ru: "Выделите в дереве стратегии, которые делят между собой монеты."
   en: "Select the strategies that share the coins between them in the tree."
@@ -3510,14 +3510,6 @@ strat.dist_col_strategy:
   ru: "Стратегия"
   en: "Strategy"
   es: "Estrategia"
-strat.dist_chip_tip:
-  ru: "%{coin} · сделок: %{n} · винрейт: %{wr}% · профит: %{profit}\nПо выбранным стратегиям на ядрах этого распределения. Клик — сделки внизу."
-  en: "%{coin} · trades: %{n} · win rate: %{wr}% · profit: %{profit}\nFor the selected strategies on the cores of this distribution. Click for the trades below."
-  es: "%{coin} · operaciones: %{n} · tasa de acierto: %{wr}% · beneficio: %{profit}\nDe las estrategias seleccionadas en los núcleos de esta distribución. Clic para ver las operaciones abajo."
-strat.dist_chip_tip_none:
-  ru: "%{coin} · закрытых сделок за период нет. Клик — сделки внизу."
-  en: "%{coin} · no closed trades in the period. Click for the trades below."
-  es: "%{coin} · sin operaciones cerradas en el período. Clic para ver las operaciones abajo."
 strat.dist_profit_failed:
   ru: "профит не прочитан: %{error}"
   en: "profit not read: %{error}"
@@ -3542,10 +3534,6 @@ strat.dist_trades_capped:
   ru: "показаны последние %{n}, сортировка — внутри них"
   en: "the newest %{n} shown; sorting applies to them"
   es: "se muestran las %{n} más recientes; el orden se aplica a ellas"
-strat.dist_chip_blocked:
-  ru: "⊘ Стоит и в БЛ этого ядра — БЛ сильнее, ядро монету не торгует."
-  en: "⊘ Also in this core's BL — the BL wins, so the core does not trade the coin."
-  es: "⊘ También en la LN de este núcleo — la LN prevalece, el núcleo no opera la moneda."
 strat.dist_traded:
   ru: "Торгует %{n}"
   en: "Trades %{n}"
@@ -3558,3 +3546,75 @@ strat.dist_traded_empty:
   ru: "ничего — все монеты биржи в БЛ"
   en: "nothing: every coin of the exchange is in the BL"
   es: "nada: todas las monedas del exchange están en la LN"
+strat.dist_distribute:
+  ru: "Распределить"
+  en: "Distribute"
+  es: "Distribuir"
+strat.dist_distribute_tip:
+  ru: "Делит монеты биржи поровну между строками, подряд по алфавиту: торгуемые монеты и монеты общего БЛ — отдельно, чтобы каждое ядро торговало одинаковое число (±1). Остаток — по монете верхним строкам. Старые БЛ складываются в общий и пишутся всем. Ничего не отправляет — только черновик; отправит «Применить». Недоступна, пока список рынков пришёл не у всех ядер строк."
+  en: "Splits the exchange's coins evenly between the rows in name order: the coins that will trade and the common BL's coins apart, so every core trades the same number (±1). The remainder goes one coin each to the top rows. The old BLs are pooled into one common BL written to every row. Sends nothing, only drafts; Apply sends them. Unavailable until every row core's market list has arrived."
+  es: "Reparte las monedas del exchange a partes iguales entre las filas por orden de nombre: las que se operarán y las de la LN común por separado, para que cada núcleo opere el mismo número (±1). El resto, de una en una a las filas superiores. Las LN antiguas se juntan en una LN común que reciben todas. No envía nada, solo borradores; «Aplicar» los envía. No disponible hasta que llegue la lista de mercados de todos los núcleos de las filas."
+strat.dist_first_bl:
+  ru: "БЛ на первом"
+  en: "BL on the first"
+  es: "LN en el primero"
+strat.dist_skip_common:
+  ru: "не делить монеты общего БЛ"
+  en: "do not deal the common BL's coins"
+  es: "no repartir las monedas de la LN común"
+strat.dist_reset:
+  ru: "Сбросить ВЛ/БЛ"
+  en: "Reset WL/BL"
+  es: "Restablecer LB/LN"
+strat.dist_reset_tip:
+  ru: "Убрать черновики ВЛ и БЛ этих стратегий; другие черновики не трогает."
+  en: "Drop the WL and BL drafts of these strategies; other drafts stay."
+  es: "Quita los borradores de LB y LN de estas estrategias; los demás borradores se quedan."
+strat.dist_menu_remove_white:
+  ru: "Убрать %{coin} из ВЛ"
+  en: "Remove %{coin} from the WL"
+  es: "Quitar %{coin} de la LB"
+strat.dist_menu_restore_white:
+  ru: "Вернуть %{coin} в ВЛ"
+  en: "Put %{coin} back on the WL"
+  es: "Devolver %{coin} a la LB"
+strat.dist_menu_remove_black:
+  ru: "Убрать %{coin} из БЛ"
+  en: "Remove %{coin} from the BL"
+  es: "Quitar %{coin} de la LN"
+strat.dist_menu_restore_black:
+  ru: "Вернуть %{coin} в БЛ"
+  en: "Put %{coin} back on the BL"
+  es: "Devolver %{coin} a la LN"
+strat.dist_menu_add_black:
+  ru: "Добавить %{coin} в БЛ"
+  en: "Add %{coin} to the BL"
+  es: "Añadir %{coin} a la LN"
+strat.dist_changes:
+  ru: " · −%{removed} +%{added}"
+  en: " · −%{removed} +%{added}"
+  es: " · −%{removed} +%{added}"
+strat.dist_white_trading:
+  ru: "ВЛ %{n} (%{traded})"
+  en: "WL %{n} (%{traded})"
+  es: "LB %{n} (%{traded})"
+strat.dist_white_trading_tip:
+  ru: "Первое число — сколько монет в ВЛ после «Применить». В скобках — сколько из них ядро действительно торгует: без тех, что стоят и в БЛ (⊘ — БЛ сильнее), и без тех, которых уже нет на бирже (серые). Жёлтые — их торгует и другое ядро — считаются. Это то же, что «Торгует» у ядра с пустым ВЛ."
+  en: "The first number is how many coins the WL holds after Apply. In brackets, how many of them the core actually trades: without those also in the BL (⊘ — the BL wins) and those no longer on the exchange (grey). Yellow ones, traded by another core too, count. The same figure as \"Trades\" on a core with an empty WL."
+  es: "El primer número es cuántas monedas tiene la LB tras «Aplicar». Entre paréntesis, cuántas opera realmente el núcleo: sin las que también están en la LN (⊘ — la LN prevalece) ni las que ya no están en el exchange (grises). Las amarillas, que opera también otro núcleo, cuentan. La misma cifra que «Opera» en un núcleo con la LB vacía."
+strat.dist_skip_common_tip:
+  ru: "Включено — монеты общего БЛ ни в чей ВЛ не попадают. Выключено — они тоже делятся поровну и встают в ВЛ (с ⊘, пока стоят в БЛ): уберёте монету из БЛ — она начнёт торговаться на том ядре, где стоит в ВЛ (доля первого ядра при «БЛ на первом» — без ВЛ, его торгует всё, кроме БЛ)."
+  en: "On: the common BL's coins go into no WL. Off: they are dealt evenly too and sit in the WLs (marked ⊘ while blacklisted): take a coin off the BL and it trades on the core whose WL holds it (the first core's share under \"BL on the first\" has no WL: it trades everything outside its BL)."
+  es: "Activado: las monedas de la LN común no entran en ninguna LB. Desactivado: también se reparten a partes iguales y quedan en las LB (con ⊘ mientras estén en la LN): quite una moneda de la LN y se operará en el núcleo cuya LB la tiene (la parte del primer núcleo con «LN en el primero» no tiene LB: opera todo lo que no está en su LN)."
+strat.dist_menu_copy_to_black:
+  ru: "Скопировать %{coin} в БЛ"
+  en: "Copy %{coin} to the BL"
+  es: "Copiar %{coin} a la LN"
+strat.dist_menu_copy_to_white:
+  ru: "Скопировать %{coin} в ВЛ"
+  en: "Copy %{coin} to the WL"
+  es: "Copiar %{coin} a la LB"
+strat.dist_menu_restore_traded:
+  ru: "Вернуть %{coin} в торговлю (убрать из БЛ)"
+  en: "Trade %{coin} again (take it off the BL)"
+  es: "Volver a operar %{coin} (quitarla de la LN)"

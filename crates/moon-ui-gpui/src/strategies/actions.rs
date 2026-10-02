@@ -357,7 +357,7 @@ impl StrategiesView {
 
     /// The drafts among `keys` that the core would actually accept.
     ///
-    /// Borrowed, not cloned, because the params header calls this every frame only to count them.
+    /// Borrowed, not cloned, because the tab strip's Apply calls this every frame only to count them.
     ///
     /// The rejection test needs live store state (a draft is keyed by field NAME, and only the
     /// strategy's own kind says what type that name has), so it deliberately stays OUT of

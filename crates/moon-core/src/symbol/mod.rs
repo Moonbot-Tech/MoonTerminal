@@ -117,5 +117,29 @@ pub fn split_coin_list(text: &str) -> impl Iterator<Item = &str> {
         .filter(|s| !s.is_empty())
 }
 
+/// The separator the strategy itself uses, reused verbatim.
+///
+/// `split_coin_list` accepts commas, semicolons, whitespace and JSON punctuation alike, so
+/// picking one unconditionally rewrote every line of a field that happened to use another —
+/// the same "one coin edited, the whole field changed" every list edit must avoid. The first
+/// run of separator characters between two entries IS the field's convention; a field of one
+/// entry or none gets `", "`.
+pub fn coin_list_separator(fresh: &str) -> &str {
+    const SEP: [char; 6] = [',', ';', ' ', '\t', '\n', '\r'];
+    // A LEADING run is skipped first: a field written as `, A, B` would otherwise offer its
+    // opening comma as the convention. (JSON brackets and quotes are NOT in `SEP`: in a
+    // JSON-shaped value they read as entry text, and the comma between the elements is what
+    // comes back.)
+    let body = fresh.trim().trim_start_matches(SEP);
+    let Some(start) = body.find(SEP) else {
+        // One entry, or none: nothing to separate, and a second entry is the caller's first.
+        return ", ";
+    };
+    let end = body[start..]
+        .find(|c: char| !SEP.contains(&c))
+        .map_or(body.len(), |off| start + off);
+    &body[start..end]
+}
+
 #[cfg(test)]
 mod tests;

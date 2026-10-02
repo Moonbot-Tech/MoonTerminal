@@ -16,7 +16,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonMenuItem,
-    MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonTag, MoonTone, h_flex, v_flex,
+    MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -25,18 +25,14 @@ use moon_core::session::core_order::{OrderedCores, section_of};
 use moon_core::symbol::coin_match_key;
 
 use super::{
-    BLACK_FIELD, Board, Chip, ChipState, Look, SlotInput, StrategyInput, Unavailable, WHITE_FIELD,
-    build, by_profit, look, moved, ordered,
+    BLACK_FIELD, Board, Edit, SlotInput, StrategyInput, Unavailable, WHITE_FIELD, build, moved,
+    ordered,
 };
 use crate::analytics::period::Period;
 use crate::design;
-use crate::design::{moon, moon_alpha};
+use crate::design::moon;
 use crate::strategies::StrategiesView;
 use crate::strategies::logic::selected_keys;
-
-/// Chips a collapsed list draws before its "+N" button. A first core holding everybody else's
-/// coins as its blacklist runs to hundreds of chips, and a hover repaints the whole window.
-const CHIP_CAP: usize = 60;
 
 /// The tab's own state on the Strategies view.
 #[derive(Default)]
@@ -44,11 +40,15 @@ pub(in crate::strategies) struct DistState {
     /// Whether the right side shows this tab instead of the parameter panes.
     pub(in crate::strategies) open: bool,
     /// The last model and the signature of the inputs it was built from.
-    cache: Option<(u64, Rc<Result<Board, Unavailable>>)>,
+    pub(super) cache: Option<(u64, Rc<Result<Board, Unavailable>>)>,
     /// Lists drawn in full.
-    expanded: HashSet<(CoreId, ListKind)>,
+    pub(super) expanded: HashSet<(CoreId, ListKind)>,
     /// Report figures: the period, the chip order, the clicked coin and the reads behind them.
     pub(super) stats: super::stats::StatsState,
+    /// "Distribute": the first row keeps no whitelist and blacklists every other part.
+    pub(in crate::strategies) first_blacklists: bool,
+    /// "Distribute": leave the common blacklist's coins out of the parts.
+    pub(super) skip_common_black: bool,
     /// Column widths and scroll of the trades table, kept across repaints.
     pub(super) trades_table: Option<Entity<moon_ui::MoonDataTableState>>,
     /// The trades table's rows in header order, with their strategy names.
@@ -57,7 +57,7 @@ pub(in crate::strategies) struct DistState {
 
 /// Which line of a row a chip list is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum ListKind {
+pub(super) enum ListKind {
     White,
     /// What an empty whitelist trades — derived, not written in the strategy.
     Traded,
@@ -66,7 +66,7 @@ enum ListKind {
 
 impl ListKind {
     /// Stable fragment for element ids.
-    fn id(self) -> &'static str {
+    pub(super) fn id(self) -> &'static str {
         match self {
             ListKind::White => "w",
             ListKind::Traded => "t",
@@ -75,8 +75,32 @@ impl ListKind {
     }
 }
 
+/// A list field as it will be: this window's draft, else an edit still on its way to the core,
+/// else what the core stores — the same tiers the parameters pane shows.
+pub(super) fn effective(
+    view: &StrategiesView,
+    store: &moon_core::session::CoreStore,
+    core: CoreId,
+    row: &moon_core::feed::StrategyRow,
+    name: &str,
+) -> String {
+    use crate::strategies::logic::{edited_field_value, schema_field_in_kind};
+    match schema_field_in_kind(store, core, row.kind_ordinal, name) {
+        Some(schema) => {
+            let pending = store.core(core).and_then(|cd| cd.strategy_edit(row.id));
+            edited_field_value(view, (core, row.id), row, schema, pending)
+        }
+        // No schema yet: a draft or the stored value, never a guess at the pending one.
+        None => view
+            .field_edits
+            .get(&(core, row.id, name.to_string()))
+            .cloned()
+            .unwrap_or_else(|| field(&row.fields, name).to_string()),
+    }
+}
+
 /// The value of a strategy field as the core sent it; an omitted field is empty.
-fn field<'a>(fields: &'a [(String, String)], name: &str) -> &'a str {
+pub(super) fn field<'a>(fields: &'a [(String, String)], name: &str) -> &'a str {
     fields
         .iter()
         .find(|(n, _)| n == name)
@@ -111,10 +135,86 @@ impl StrategiesView {
         h_flex()
             .w_full()
             .flex_none()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
             .px(design::ui_px(cx, 8.0))
             .py(design::ui_px(cx, 4.0))
             .child(switch)
+            .child(div().flex_1())
+            .children(self.field_edit_actions(cx))
             .into_any_element()
+    }
+
+    /// Apply, Apply-and-refresh-buys and Revert for every draft of the window — ONE set above
+    /// both tabs, since a whitelist edited in the distribution is a strategy field draft like any
+    /// other and leaves through the same path.
+    ///
+    /// Moved here verbatim from the parameters header.
+    fn field_edit_actions(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let dirty = crate::strategies::logic::field_edit_count(self);
+        if dirty == 0 {
+            return None;
+        }
+        // Capture the complete visible draft set in the rendered Apply button. If the singleton
+        // workspace moves before its callback runs, `apply_field_edits` rejects this plan whole.
+        let apply_plan = std::sync::Arc::new(self.field_edit_plan(cx));
+        // What Apply will actually land: drafts the core would refuse are not part of it.
+        let (sendable, can_refresh) = {
+            let backend = self.backend.read(cx);
+            let store = backend.session.store();
+            let keys: Vec<_> = self
+                .sendable_field_edits(apply_plan.edit_keys(), store)
+                .into_iter()
+                .cloned()
+                .collect();
+            (keys.len(), self.can_refresh_buys(&keys, store))
+        };
+        // Apply counts what the plan will actually send, which excludes every draft the core
+        // would refuse: promising "Apply 3" and landing 2 is the silence this change exists to
+        // end. Revert stays on the full draft count, because a refused draft is exactly what one
+        // wants to take back.
+        Some(
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap_2()
+                .when(sendable > 0, |row| {
+                    row.child(
+                        MoonButton::new("strat-fields-apply")
+                            .success()
+                            .label(t!("strat.fields_apply", n = sendable).to_string())
+                            .on_click({
+                                let apply_plan = apply_plan.clone();
+                                cx.listener(move |this, _, _, cx| {
+                                    this.apply_field_edits(apply_plan.as_ref(), false, cx)
+                                })
+                            })
+                            .render(),
+                    )
+                })
+                .child(
+                    MoonButton::new("strat-fields-refresh-buys")
+                        .label(t!("strat.fields_refresh_buys"))
+                        .tooltip(t!("strat.fields_refresh_buys_tip"))
+                        .disabled(!can_refresh)
+                        .on_click({
+                            let apply_plan = apply_plan.clone();
+                            cx.listener(move |this, _, _, cx| {
+                                this.apply_field_edits(apply_plan.as_ref(), true, cx)
+                            })
+                        })
+                        .render(),
+                )
+                .child(
+                    MoonButton::new("strat-fields-revert")
+                        .ghost()
+                        .label(t!("strat.fields_revert").to_string())
+                        .on_click(cx.listener(|this, _, _, cx| this.discard_field_edits(cx)))
+                        .render(),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The tab's pane, filling the space the parameter panes otherwise take.
@@ -216,9 +316,14 @@ impl StrategiesView {
             source.catalog_revision(*core).hash(&mut h);
             source.traded_quote(*core).hash(&mut h);
             for r in picked {
+                // The id too: the board bakes it into its rows, and an edit writes to it.
+                r.id.hash(&mut h);
                 r.name.hash(&mut h);
                 field(&r.fields, WHITE_FIELD).hash(&mut h);
                 field(&r.fields, BLACK_FIELD).hash(&mut h);
+                // Drafts and edits on their way change what the row will hold.
+                effective(self, store, *core, r, WHITE_FIELD).hash(&mut h);
+                effective(self, store, *core, r, BLACK_FIELD).hash(&mut h);
             }
         }
         let sig = h.finish();
@@ -244,9 +349,12 @@ impl StrategiesView {
                     strategies: picked
                         .iter()
                         .map(|r| StrategyInput {
+                            id: r.id,
                             name: r.name.clone(),
-                            white: field(&r.fields, WHITE_FIELD).to_string(),
-                            black: field(&r.fields, BLACK_FIELD).to_string(),
+                            white: effective(self, store, *core, r, WHITE_FIELD),
+                            black: effective(self, store, *core, r, BLACK_FIELD),
+                            live_white: field(&r.fields, WHITE_FIELD).to_string(),
+                            live_black: field(&r.fields, BLACK_FIELD).to_string(),
                         })
                         .collect(),
                 }
@@ -333,17 +441,28 @@ impl StrategiesView {
             .child(self.distribution_sort_switch(cx))
             .child(self.distribution_period_dropdown(cx));
 
+        // Before the rows: their builder holds `cx` for as long as the iterator lives.
+        let toolbar = self.distribution_toolbar(board, cx);
         let last = board.slots.len().saturating_sub(1);
+        // Whether any list holds a draft: then the unchanged chips step back.
+        let edited = board.slots.iter().any(|slot| {
+            [&slot.white, &slot.black]
+                .into_iter()
+                .chain(slot.traded.as_ref())
+                .flatten()
+                .any(|c| c.edit != Edit::Same)
+        });
         let rows = board
             .slots
             .iter()
             .enumerate()
-            .map(|(ix, slot)| self.slot_row(ix, ix == last, slot, cx));
+            .map(|(ix, slot)| self.slot_row(ix, ix == last, slot, edited, cx));
         v_flex()
             .flex_1()
             .w_full()
             .min_h_0()
             .child(header)
+            .child(toolbar)
             .child(
                 v_flex()
                     .id("strat-dist-rows")
@@ -433,6 +552,7 @@ impl StrategiesView {
         ix: usize,
         last: bool,
         slot: &super::Slot,
+        edited: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
@@ -495,13 +615,13 @@ impl StrategiesView {
             .flex_1()
             .min_w_0()
             .gap(design::ui_px(cx, 4.0))
-            .child(self.list_line(core, ListKind::White, &slot.white, cx))
+            .child(self.list_line(core, ListKind::White, &slot.white, edited, cx))
             .children(
                 slot.traded
                     .as_ref()
-                    .map(|traded| self.list_line(core, ListKind::Traded, traded, cx)),
+                    .map(|traded| self.list_line(core, ListKind::Traded, traded, edited, cx)),
             )
-            .child(self.list_line(core, ListKind::Black, &slot.black, cx));
+            .child(self.list_line(core, ListKind::Black, &slot.black, edited, cx));
         h_flex()
             .w_full()
             .items_start()
@@ -513,151 +633,5 @@ impl StrategiesView {
             .child(left)
             .child(lists)
             .into_any_element()
-    }
-
-    /// One list of one core as a wrapped line of chips; the blacklist sits on a red tint.
-    fn list_line(
-        &self,
-        core: CoreId,
-        kind: ListKind,
-        chips: &[Chip],
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        let black = kind == ListKind::Black;
-        let expanded = self.dist.expanded.contains(&(core, kind));
-        let shown = if expanded {
-            chips.len()
-        } else {
-            chips.len().min(CHIP_CAP)
-        };
-        let caption = match kind {
-            ListKind::White => t!("strat.dist_white", n = chips.len()),
-            ListKind::Traded => t!("strat.dist_traded", n = chips.len()),
-            ListKind::Black => t!("strat.dist_black", n = chips.len()),
-        };
-        let mut line = h_flex()
-            .w_full()
-            .flex_wrap()
-            .items_center()
-            .gap(design::ui_px(cx, 4.0))
-            .p(design::ui_px(cx, 4.0))
-            .rounded(design::ui_px(cx, 4.0))
-            .when(black, |el| el.bg(moon_alpha(p.red, 0.08)))
-            .child(
-                div()
-                    .id(ElementId::Name(
-                        format!("strat-dist-caption-{core}-{}", kind.id()).into(),
-                    ))
-                    .flex_none()
-                    .w(design::ui_px(cx, 80.0))
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .when(kind == ListKind::Traded, |el| {
-                        el.tooltip(crate::panels::common::text_tooltip(
-                            t!("strat.dist_traded_tip").to_string(),
-                        ))
-                    })
-                    .child(caption.to_string()),
-            );
-        if chips.is_empty() {
-            let empty = match kind {
-                ListKind::White => t!("strat.dist_white_empty"),
-                ListKind::Traded => t!("strat.dist_traded_empty"),
-                ListKind::Black => t!("strat.dist_black_empty"),
-            };
-            return line
-                .child(
-                    div()
-                        .text_size(design::t_caption(cx))
-                        .text_color(moon(p.text_faint))
-                        .child(empty.to_string()),
-                )
-                .into_any_element();
-        }
-        let stats = self.dist.stats.coin_stats();
-        let stat_of = |coin: &str| stats.and_then(|s| s.get(coin));
-        let mut ordered: Vec<&Chip> = match self.dist.stats.by_profit {
-            true => by_profit(chips, |coin| {
-                stat_of(coin).and_then(|s| s.comparable_profit())
-            }),
-            false => chips.iter().collect(),
-        };
-        if self.dist.stats.reversed {
-            ordered.reverse();
-        }
-        let selected = self.dist.stats.coin.as_deref();
-        let side = kind.id();
-        line = line.children(ordered[..shown].iter().map(|chip| {
-            let stat = stat_of(&chip.coin);
-            let tone = match look(chip.state, stat.and_then(|s| s.comparable_profit())) {
-                Look::Gone => MoonTone::Muted,
-                Look::Blocked => MoonTone::Danger,
-                Look::Duplicate => MoonTone::Warning,
-                Look::Profit => MoonTone::Positive,
-                Look::Loss => MoonTone::Negative,
-                Look::Flat => MoonTone::Default,
-            };
-            let tip = match stat.and_then(|s| s.win_rate().map(|wr| (s, wr))) {
-                Some((s, wr)) => t!(
-                    "strat.dist_chip_tip",
-                    coin = chip.coin,
-                    n = s.trades,
-                    wr = wr,
-                    profit = super::trades::profit_text(s)
-                )
-                .to_string(),
-                None => t!("strat.dist_chip_tip_none", coin = chip.coin).to_string(),
-            };
-            // The reason a chip is not traded leads its tooltip: the figures below it are history.
-            let blocked = chip.state == ChipState::Blocked;
-            let tip = match blocked {
-                true => format!("{}\n{tip}", t!("strat.dist_chip_blocked")),
-                false => tip,
-            };
-            let coin = chip.coin.clone();
-            // The selection is a tint BEHIND the chip, not a tone of its own: a selected coin that
-            // is gone from the exchange or traded twice must still say so.
-            let is_selected = selected == Some(chip.coin.as_str());
-            div()
-                .id(ElementId::Name(
-                    format!("strat-dist-chip-{core}-{side}-{}", chip.coin).into(),
-                ))
-                .flex_none()
-                .rounded_full()
-                .cursor_pointer()
-                .when(is_selected, |el| el.bg(moon_alpha(p.accent, 0.35)))
-                .tooltip(crate::panels::common::text_tooltip(tip))
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.toggle_distribution_coin(&coin, cx)),
-                )
-                .child(MoonTag::new().tone(tone).label(match blocked {
-                    // A mark the colour alone could not carry: the blacklist line under it is drawn
-                    // on a red tint, so a red chip by itself would read as "this is the BL".
-                    true => format!("⊘ {}", chip.coin),
-                    false => chip.coin.clone(),
-                }))
-        }));
-        if chips.len() > CHIP_CAP {
-            let label = match expanded {
-                true => t!("strat.dist_collapse").to_string(),
-                false => format!("+{}", chips.len() - shown),
-            };
-            line = line.child(
-                MoonButton::new(ElementId::Name(
-                    format!("strat-dist-more-{core}-{side}").into(),
-                ))
-                .ghost()
-                .label(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.dist.expanded.remove(&(core, kind)) {
-                        this.dist.expanded.insert((core, kind));
-                    }
-                    cx.notify();
-                }))
-                .render(),
-            );
-        }
-        line.into_any_element()
     }
 }
