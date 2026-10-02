@@ -99,6 +99,7 @@ impl ChartEngine {
     pub fn new_kind(epoch: f64, theme: ChartTheme, kind: ContainerKind) -> Self {
         let container = Rc::new(RefCell::new(Container::new(kind)));
         let state = Rc::new(RefCell::new(RenderState {
+            order_book_width_px: moon_core::config::book_width::DEFAULT,
             panes: Vec::new(),
             cursor_params_scratch: Vec::new(),
             needs_present: true,
@@ -507,6 +508,21 @@ impl ChartEngine {
 
     // ── Settings ported from the former chart.rs::ChartGpu ───────────────────────
 
+    /// Apply the global width to geometry and text, waking an otherwise idle chart on change.
+    pub fn set_order_book_width(&mut self, width: f32) -> bool {
+        let width = moon_core::config::book_width::normalize(width);
+        let mut data = self.data.borrow_mut();
+        if data.order_book_width_px == width {
+            return false;
+        }
+        data.order_book_width_px = width;
+        data.render.borrow_mut().order_book_width_px = width;
+        data.last_order_sig = u64::MAX;
+        data.mark_view_dirty();
+        true
+    }
+
+    /// Apply the active theme to the retained chart render state.
     pub fn set_theme(&mut self, theme: ChartTheme) -> bool {
         if self.theme != theme {
             let mut cursor_color = rgb4(theme.cross);

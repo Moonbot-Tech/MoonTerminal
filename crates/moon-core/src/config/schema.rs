@@ -358,6 +358,9 @@ pub struct SettingsFile {
     /// an older file is ignored on load and not written back.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    /// App-wide order-book width in physical pixels, independent of chart tabs and themes.
+    #[serde(default = "super::book_width::default_width")]
+    pub order_book_width_px: f32,
     /// Startup retained-history depth percentage passed to MoonProto.
     ///
     /// The legacy field name is retained for on-disk compatibility. Dense market/category

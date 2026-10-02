@@ -74,6 +74,7 @@ fn cull_out() -> CandleOut {
 }
 
 @vertex
+// Builds the body and wick quads for an instance, aligning outline bodies to pixel boundaries.
 fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -> CandleOut {
     let cd = candles[iid];
     let part = vid / 6u; // 0 body, 1 upper wick, 2 lower wick
@@ -120,6 +121,12 @@ fn candles_vertex(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid:
     var p0: vec2<f32>;
     var sz: vec2<f32>;
     if part == 0u {
+        if outline {
+            // Fractional gaps can put the right edge on an excluded pixel centre. Snap outward
+            // so the nearest covered column is 0.5 px inside, safely within a 1 px stroke.
+            bx0 = floor(bx0);
+            bx1 = ceil(bx1);
+        }
         p0 = vec2<f32>(bx0, y_top_body);
         sz = vec2<f32>(bx1 - bx0, y_bot_body - y_top_body);
     } else {

@@ -1205,6 +1205,8 @@ impl UdScratch {
 ///
 /// The UI is single-threaded, and `prepare` never overlaps frame callbacks in time.
 struct RenderState {
+    /// App-wide order-book width in physical pixels.
+    order_book_width_px: f32,
     panes: Vec<PaneRender>,
     /// Buffer for the previous frame's cursor params, reused by the market sync.
     cursor_params_scratch: Vec<CursorParams>,
@@ -1512,6 +1514,17 @@ pub(crate) struct PaneAreas {
     pub hvol: Rect,
 }
 
+/// Order-book layout inputs shared by rendering and hit testing.
+#[derive(Clone, Copy)]
+pub(crate) struct BookLayout {
+    /// Broom mode gives the book the entire pane.
+    pub only: bool,
+    /// Whether the ordinary book is drawn.
+    pub enabled: bool,
+    /// App-wide width in physical pixels, before the automatic pane limits.
+    pub width_px: f32,
+}
+
 /// Lay one pane out into its horizontal-volume, plot and order-book areas.
 ///
 /// Left to right: `[hvol]` `[axis]` plot `[book]` `[axis]` — the horizontal-volume zone sits at
@@ -1520,8 +1533,7 @@ pub(crate) struct PaneAreas {
 ///
 /// Args:
 ///     rect: The pane's full rectangle in device pixels.
-///     orderbook_only: Whether the plot collapses behind the order book (broom mode).
-///     orderbook_enabled: Whether the ordinary order-book zone is drawn.
+///     book: App-wide book width and the pane's book/broom flags.
 ///     time_axis_visible: Whether the time axis reserves its gutter under every area.
 ///     price_axis_pos: Configured per-tab price-axis position.
 ///     hvol: The horizontal volumes' width, `None` when they are off.
@@ -1531,15 +1543,14 @@ pub(crate) struct PaneAreas {
 ///     The pane's [`PaneAreas`].
 pub(crate) fn pane_layout(
     rect: Rect,
-    orderbook_only: bool,
-    orderbook_enabled: bool,
+    book: BookLayout,
     time_axis_visible: bool,
     price_axis_pos: crate::persistence::chart_persist::PriceAxisPos,
     hvol: Option<moon_chart::hvol::HvolZoneSpec>,
     pixel_scale: f32,
 ) -> PaneAreas {
     use crate::persistence::chart_persist::PriceAxisPos;
-    let axis_pos = if orderbook_only {
+    let axis_pos = if book.only {
         PriceAxisPos::Hide
     } else {
         price_axis_pos
@@ -1549,15 +1560,16 @@ pub(crate) fn pane_layout(
     } else {
         moon_chart::PRICE_AXIS_W * pixel_scale
     };
+    let book_width = moon_core::config::book_width::normalize(book.width_px);
     let glass_cap = rect.w * 0.5;
-    let glass_base = moon_chart::GLASS_ZONE_PX.min(glass_cap);
+    let glass_base = book_width.min(glass_cap);
     let chart_w_base = rect.w - price_axis_w - glass_base;
-    let glass_w = if orderbook_only {
+    let glass_w = if book.only {
         (rect.w - price_axis_w).max(1.0)
-    } else if !orderbook_enabled {
+    } else if !book.enabled {
         0.0
     } else if chart_w_base < glass_base * 2.0 {
-        (moon_chart::GLASS_ZONE_PX * 0.8).min(glass_cap)
+        (book_width * 0.8).min(glass_cap)
     } else {
         glass_base
     };
@@ -1568,7 +1580,7 @@ pub(crate) fn pane_layout(
     // zone narrows the plot here; the overlaid one is sized below, once the plot is known.
     let hvol_floor = moon_chart::hvol::ZONE_MIN_PX * pixel_scale;
     let hvol_asked = match hvol {
-        Some(spec) if !orderbook_only => Some(((rect.w * spec.width_frac).round(), spec.overlay)),
+        Some(spec) if !book.only => Some(((rect.w * spec.width_frac).round(), spec.overlay)),
         _ => None,
     };
     let hvol_overlay = hvol_asked.is_some_and(|(_, overlay)| overlay);
@@ -1636,6 +1648,8 @@ struct ChartDataState {
     container: Rc<RefCell<Container>>,
     render: Rc<RefCell<RenderState>>,
     theme: ChartTheme,
+    /// App-wide order-book width in physical pixels.
+    order_book_width_px: f32,
     orders: OrdersStyle,
     follow: bool,
     present_rate_hz: f32,

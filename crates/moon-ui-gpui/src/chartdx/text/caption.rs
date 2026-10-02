@@ -25,7 +25,8 @@ pub(super) struct CaptionGeom {
 /// The shared primitive: the caption sits inside this zone, and the ghost cursor's labels anchor
 /// against it. The engine can narrow the book on a cramped pane or widen it to the whole pane in
 /// book-only broom mode, so consumers read the REAL rectangle whenever one exists and reserve
-/// [`moon_chart::GLASS_ZONE_PX`] only for the no-book fallback.
+/// the configured book width only for the no-book fallback. That text-only fallback retains the
+/// original logical-pixel budget so the default appearance also stays unchanged at higher DPI.
 ///
 /// Args:
 ///     pane_left: Left edge of the whole pane.
@@ -34,6 +35,7 @@ pub(super) struct CaptionGeom {
 ///     plot_right: Right edge of the plot area.
 ///     orderbook_enabled: Whether the order book is drawn for this pane.
 ///     orderbook_left: Left edge of the order book, meaningful only when it is enabled.
+///     book_width_px: Configured width used as the legacy logical-pixel no-book text budget.
 ///
 /// Returns:
 ///     The zone's left edge, always within `[pane_left, right_bound]`.
@@ -44,6 +46,7 @@ pub(super) fn book_zone_left(
     plot_right: f32,
     orderbook_enabled: bool,
     orderbook_left: f32,
+    book_width_px: f32,
 ) -> f32 {
     if orderbook_enabled && orderbook_left.is_finite() {
         // Clamp into the pane: a book rectangle from a previous layout can briefly sit outside it.
@@ -51,15 +54,15 @@ pub(super) fn book_zone_left(
     }
     // No book: reserve the same slice the book would have taken, never crossing the plot's left
     // edge, so the anchor cannot walk across the whole chart.
-    let budget = moon_chart::GLASS_ZONE_PX.min((plot_right - plot_left).max(0.0) * 0.5);
+    let budget = book_width_px.min((plot_right - plot_left).max(0.0) * 0.5);
     (right_bound - budget).max(plot_left)
 }
 
 /// Resolve where the caption may draw for one pane, or `None` when there is no room at all.
 ///
-/// The order book's real rectangle is READ rather than re-derived from [`moon_chart::GLASS_ZONE_PX`]:
+/// The order book's real rectangle is READ rather than re-derived from the configured book width:
 /// the engine narrows the book on a cramped pane and widens it to the whole pane in book-only broom
-/// mode, and a second copy of that decision here would drift from it. The constant is used only for
+/// mode, and a second copy of that decision here would drift from it. The setting is used only for
 /// the no-book case, where there is no rectangle to read.
 ///
 /// Args:
@@ -70,6 +73,7 @@ pub(super) fn book_zone_left(
 ///     plot_top: Top of the plot area.
 ///     orderbook_enabled: Whether the order book is drawn for this pane.
 ///     orderbook_left: Left edge of the order book, meaningful only when it is enabled.
+///     book_width_px: Configured width used as the legacy logical-pixel no-book text budget.
 ///     pad_x: Inset from the right edge that clears the pane's close button.
 ///     pad_y: Inset from the plot's top edge.
 ///
@@ -84,6 +88,7 @@ pub(super) fn caption_geom(
     plot_top: f32,
     orderbook_enabled: bool,
     orderbook_left: f32,
+    book_width_px: f32,
     pad_x: f32,
     pad_y: f32,
 ) -> Option<CaptionGeom> {
@@ -113,6 +118,7 @@ pub(super) fn caption_geom(
         plot_right,
         orderbook_enabled,
         orderbook_left,
+        book_width_px,
     );
     let max_w = right_x - zone_left;
     if !max_w.is_finite() || max_w <= 1.0 {

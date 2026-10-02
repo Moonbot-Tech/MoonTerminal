@@ -219,3 +219,8 @@ iface.book_level_width:
   ru: "Толщина линий уровней, пкс"
   en: "Level-line thickness, px"
   es: "Grosor de líneas de niveles, px"
+
+iface.order_book_width:
+  ru: "Ширина стакана, пкс"
+  en: "Order book width, px"
+  es: "Ancho del libro de órdenes, px"

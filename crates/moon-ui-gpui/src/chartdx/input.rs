@@ -116,6 +116,8 @@ impl LiveHold {
 
 #[derive(Default)]
 pub struct ChartInput {
+    /// App-wide order-book width, published together with render layout.
+    pub order_book_width_px: f32,
     /// Crosshair position in device pixels, or `None` outside the chart zone.
     pub cursor: Option<(f32, f32)>,
     /// Most recent pointer position in device pixels.
@@ -173,8 +175,11 @@ impl ChartInput {
     fn areas_of(&self, rect: &Rect, ppp: f32) -> crate::chartdx::PaneAreas {
         crate::chartdx::pane_layout(
             *rect,
-            self.orderbook_only,
-            self.orderbook_enabled,
+            crate::chartdx::BookLayout {
+                only: self.orderbook_only,
+                enabled: self.orderbook_enabled,
+                width_px: self.order_book_width_px,
+            },
             self.time_axis_visible,
             self.price_axis_pos,
             self.hvol,

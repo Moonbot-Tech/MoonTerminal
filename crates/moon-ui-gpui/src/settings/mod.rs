@@ -667,6 +667,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.log_retention_days.hash(&mut h);
     cfg.ui_theme_mode.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
+    cfg.order_book_width_px.to_bits().hash(&mut h);
     cfg.hotkeys.hash(&mut h);
     format!("{:?}", cfg.theme).hash(&mut h);
     format!("{:?}", cfg.orders).hash(&mut h);
@@ -884,6 +885,7 @@ fn draft_sig(cfg: &AppConfig) -> u64 {
     cfg.log_retention_days.hash(&mut h);
     cfg.chart_memory_percent.hash(&mut h);
     cfg.ui_scale.to_bits().hash(&mut h);
+    cfg.order_book_width_px.to_bits().hash(&mut h);
 
     h.finish()
 }
@@ -912,6 +914,9 @@ fn backend_dirty(b: &Backend) -> bool {
         .as_ref()
         .is_some_and(|draft| draft_dirty(&b.config, draft))
 }
+
+#[cfg(test)]
+mod tests;
 
 /// Open Settings on its default tab, in a separate OS window backed by a live-preview draft.
 ///

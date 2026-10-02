@@ -12,7 +12,7 @@ pub(in crate::chart_tabs) const MAX_COLUMNS: u8 = 6;
 /// Narrowest a column may become while the divider is working UP to its number on its own, in
 /// LOGICAL px.
 ///
-/// Deliberately NOT `moon_chart::GLASS_ZONE_PX + 20`: that constant is 220 PHYSICAL px (see its own
+/// Deliberately NOT `moon_core::config::book_width::DEFAULT + 20`: that constant is 220 PHYSICAL px (see its own
 /// doc), while everything the divider measures comes from the render probe in logical px. Deriving
 /// this from it read as "the order book plus a little", and on a 150% display it silently became a
 /// third stricter than intended — the arithmetic here has one unit and this is it.

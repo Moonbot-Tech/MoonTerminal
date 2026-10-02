@@ -102,6 +102,7 @@ fn retired_keys_leave_the_persistence_pipeline_quietly() {
         merged.log_retention_days,
         merged.ui_theme_mode,
         merged.ui_scale,
+        merged.order_book_width_px,
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
@@ -114,6 +115,40 @@ fn retired_keys_leave_the_persistence_pipeline_quietly() {
     let reloaded = merge(servers, toml::from_str(&saved).unwrap(), None);
     assert!(!reloaded.dirty, "a clean save reloads clean");
     assert_eq!(reloaded.ui_scale, 1.25);
+}
+
+/// Catches either merge or split dropping a saved width while preserving other settings.
+#[test]
+fn global_book_width_survives_runtime_reconciliation_and_save() {
+    let stored: SettingsFile = toml::from_str("order_book_width_px = 340.0").unwrap();
+    let merged = merge(ServersFile::default(), stored, None);
+    assert_eq!(merged.order_book_width_px, 340.0);
+    let (_, stored) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.order_book_width_px,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.next_uid.get(),
+        merged.telegram,
+    );
+    let saved = toml::to_string(&stored).unwrap();
+    let reloaded: SettingsFile = toml::from_str(&saved).unwrap();
+    assert_eq!(reloaded.order_book_width_px, 340.0);
 }
 
 #[test]
@@ -388,6 +423,7 @@ fn a_clean_core_group_list_round_trips_through_merge_and_split() {
         merged.log_retention_days,
         merged.ui_theme_mode,
         merged.ui_scale,
+        merged.order_book_width_px,
         merged.chart_memory_percent,
         merged.core_sort,
         merged.report_valuation_mode,
@@ -472,6 +508,7 @@ fn the_transport_survives_a_split() {
         14,
         UiThemeMode::default(),
         default_ui_scale(),
+        super::super::book_width::DEFAULT,
         100,
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
@@ -534,6 +571,7 @@ id = 2981",
         14,
         UiThemeMode::default(),
         default_ui_scale(),
+        super::super::book_width::DEFAULT,
         100,
         crate::config::CoreSortMode::default(),
         crate::db::valuation::ValuationMode::default(),
@@ -583,6 +621,7 @@ fn the_total_mode_survives_a_split_and_reload() {
             14,
             UiThemeMode::default(),
             default_ui_scale(),
+            super::super::book_width::DEFAULT,
             100,
             crate::config::CoreSortMode::default(),
             crate::db::valuation::ValuationMode::default(),

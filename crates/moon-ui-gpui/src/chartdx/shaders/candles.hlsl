@@ -73,6 +73,7 @@ CandleOut cull_out() {
     return o;
 }
 
+// Builds the body and wick quads for an instance, aligning outline bodies to pixel boundaries.
 CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     iid += (uint)round(cv_instance_offset); // the draw submits only the visible slice
     Candle cd = candles[iid];
@@ -120,6 +121,12 @@ CandleOut candles_vertex(uint vid : SV_VertexID, uint iid : SV_InstanceID) {
     float2 p0; // top-left corner of the quad
     float2 sz;
     if (part == 0u) {
+        if (outline) {
+            // Fractional gaps can put the right edge on an excluded pixel centre. Snap outward
+            // so the nearest covered column is 0.5 px inside, safely within a 1 px stroke.
+            bx0 = floor(bx0);
+            bx1 = ceil(bx1);
+        }
         p0 = float2(bx0, y_top_body);
         sz = float2(bx1 - bx0, y_bot_body - y_top_body);
     } else {

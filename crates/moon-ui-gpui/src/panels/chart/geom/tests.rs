@@ -40,7 +40,7 @@ fn areas(glass_w: f32) -> PaneAreas {
 fn drawn_book_is_the_zone_whatever_the_toggle_says() {
     let a = areas(150.0);
     for reserve_strip in [true, false] {
-        let zone = order_zone_in(PANE, &a, true, reserve_strip);
+        let zone = order_zone_in(PANE, &a, true, reserve_strip, 220.0);
         assert_eq!(zone.x, a.glass.x, "reserve_strip={reserve_strip}");
         assert_eq!(zone.w, a.glass.w, "reserve_strip={reserve_strip}");
     }
@@ -49,7 +49,7 @@ fn drawn_book_is_the_zone_whatever_the_toggle_says() {
 #[test]
 fn hidden_book_with_the_toggle_on_reserves_the_capped_strip() {
     let a = areas(0.0);
-    let zone = order_zone_in(PANE, &a, false, true);
+    let zone = order_zone_in(PANE, &a, false, true, 220.0);
     // 220 px would be more than half of this 400 px pane, so the cap wins.
     assert_eq!(zone.w, PANE.w * 0.5);
     assert_eq!(
@@ -63,7 +63,7 @@ fn hidden_book_with_the_toggle_on_reserves_the_capped_strip() {
 #[test]
 fn hidden_book_with_the_toggle_off_has_no_zone() {
     let a = areas(0.0);
-    let zone = order_zone_in(PANE, &a, false, false);
+    let zone = order_zone_in(PANE, &a, false, false, 220.0);
     assert_eq!(
         zone.w, 0.0,
         "no strip is reserved: the pane is chart edge to edge"

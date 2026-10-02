@@ -309,7 +309,8 @@ impl RenderState {
             let zone_left = if orderbook_enabled {
                 plot_right
             } else {
-                let zone_w = moon_chart::GLASS_ZONE_PX.min((pane_right - pane_left) * 0.5);
+                // Preserve the no-book text budget's existing logical-pixel convention.
+                let zone_w = self.order_book_width_px.min((pane_right - pane_left) * 0.5);
                 pane_right - zone_w
             };
             let label_x = zone_left - READOUT_PAD_X;

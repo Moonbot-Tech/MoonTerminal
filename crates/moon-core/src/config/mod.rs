@@ -46,6 +46,7 @@ pub mod theme_legacy;
 pub mod trade_sounds;
 
 mod backup;
+pub mod book_width;
 mod key_endpoint;
 mod migrate;
 mod reconcile;
@@ -304,6 +305,8 @@ pub struct AppConfig {
     pub ui_theme_mode: UiThemeMode,
     /// Window content zoom applied to every window. Defaults to 1.0.
     pub ui_scale: f32,
+    /// App-wide order-book width in physical pixels, persisted in settings.toml.
+    pub order_book_width_px: f32,
     /// Startup retained-history depth percentage passed to MoonProto.
     ///
     /// Dense market/category histories allocate lazily. The legacy field name remains for config
@@ -374,6 +377,7 @@ impl AppConfig {
             log_retention_days: Default::default(),
             ui_theme_mode: Default::default(),
             ui_scale: Default::default(),
+            order_book_width_px: book_width::DEFAULT,
             chart_memory_percent: Default::default(),
             core_sort: Default::default(),
             report_valuation_mode: Default::default(),
@@ -492,6 +496,7 @@ impl AppConfig {
                 log_retention_days: merged.log_retention_days,
                 ui_theme_mode: merged.ui_theme_mode,
                 ui_scale: merged.ui_scale,
+                order_book_width_px: merged.order_book_width_px,
                 chart_memory_percent: merged.chart_memory_percent,
                 core_sort: merged.core_sort,
                 report_valuation_mode: merged.report_valuation_mode,
@@ -612,6 +617,7 @@ impl AppConfig {
                 profile_age(),
             ),
             ui_scale: schema::repair_ui_scale(meta.ui_scale),
+            order_book_width_px: book_width::normalize(meta.order_book_width_px),
             chart_memory_percent: schema::default_chart_memory_percent(),
             hotkeys: hotkeys_file.unwrap_or_default(),
             // Set explicitly instead of inheriting it from `blank` because the serde default is
@@ -810,6 +816,7 @@ impl AppConfig {
             log_retention_days: settings.log_retention_days,
             ui_theme_mode: settings.ui_theme_mode,
             ui_scale: settings.ui_scale,
+            order_book_width_px: book_width::normalize(settings.order_book_width_px),
             chart_memory_percent: settings.chart_memory_percent,
             core_sort: settings.core_sort,
             report_valuation_mode: settings.report_valuation_mode,
@@ -915,6 +922,7 @@ impl AppConfig {
             self.log_retention_days,
             self.ui_theme_mode,
             self.ui_scale,
+            self.order_book_width_px,
             self.chart_memory_percent,
             self.core_sort,
             self.report_valuation_mode,
@@ -1058,6 +1066,7 @@ impl AppConfig {
             14,
             UiThemeMode::default(),
             schema::default_ui_scale(),
+            book_width::DEFAULT,
             schema::default_chart_memory_percent(),
             // Sort mode affects presentation only. The server Vec order remains in the signature:
             // it builds `SessionManager::config_order`, which determines a reactivated session's

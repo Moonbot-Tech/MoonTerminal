@@ -263,6 +263,7 @@ static inline CandleOut candle_cull_out() {
     return { float4(2.0, 2.0, 0.0, 1.0), float2(0.0), float2(1.0), 0.0, float4(0.0) };
 }
 
+// Builds the body and wick quads for an instance, aligning outline bodies to pixel boundaries.
 vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                                 constant ChartView& cv [[buffer(0)]],
                                 constant CandleStyle& cs [[buffer(1)]],
@@ -308,6 +309,12 @@ vertex CandleOut candles_vertex(uint vid [[vertex_id]], uint iid [[instance_id]]
     float2 p0;
     float2 sz;
     if (part == 0u) {
+        if (outline) {
+            // Fractional gaps can put the right edge on an excluded pixel centre. Snap outward
+            // so the nearest covered column is 0.5 px inside, safely within a 1 px stroke.
+            bx0 = floor(bx0);
+            bx1 = ceil(bx1);
+        }
         p0 = float2(bx0, y_top_body);
         sz = float2(bx1 - bx0, y_bot_body - y_top_body);
     } else {

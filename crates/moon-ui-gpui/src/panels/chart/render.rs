@@ -134,7 +134,10 @@ impl Render for ChartPanel {
         // repaint, and it costs no userdata rebuild — so nothing about it belongs here.
         // Scale is PER TAB: use self.scale, updated through set_scale by the active-tab toolbar or
         // detached-window header, rather than the global backend.price_scale.
-        let mut settings_changed = self.chart.set_theme(theme)
+        let mut settings_changed = self
+            .chart
+            .set_order_book_width(self.settings_sig.order_book_width_px)
+            | self.chart.set_theme(theme)
             | self.chart.set_orders(orders_style)
             | self.chart.set_scale(self.scale)
             | self.chart.set_orderbook_enabled(self.orderbook_enabled)
@@ -185,6 +188,7 @@ impl Render for ChartPanel {
         // handed a pre-resolved one that only half the arithmetic knew about.
         self.input.price_axis_pos = self.price_axis_pos;
         self.input.orderbook_only = self.orderbook_only;
+        self.input.order_book_width_px = self.settings_sig.order_book_width_px;
         self.input.orderbook_enabled = self.orderbook_enabled;
         self.input.time_axis_visible = self.time_axis_visible;
         // The same zone the engine lays out: the tab's setting gated by this panel's role.

@@ -341,8 +341,11 @@ impl ChartDataState {
             }
             let areas = pane_layout(
                 *rect,
-                self.orderbook_only,
-                self.orderbook_enabled,
+                crate::chartdx::BookLayout {
+                    only: self.orderbook_only,
+                    enabled: self.orderbook_enabled,
+                    width_px: self.order_book_width_px,
+                },
                 self.time_axis_visible,
                 self.price_axis_pos,
                 self.hvol_zone_spec(),
