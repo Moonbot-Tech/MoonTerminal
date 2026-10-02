@@ -506,11 +506,13 @@ fn the_shipped_figure_delete_gesture_is_the_middle_click() {
 /// looking — and because being explicit is the point: a new keystroke field has nowhere to hide.
 /// Adding a gesture without adding it here fails the test too, which is the right direction to
 /// fail in.
-const NOT_KEYSTROKES: [&str; 19] = [
+const NOT_KEYSTROKES: [&str; 20] = [
     // Not a binding at all: the tools excluded from the switch cycle.
     "switch_figure_skip",
     // A wheel modifier (`WheelModifier`), read at the chart's one wheel entry point.
     "label_scroll_wheel",
+    // A drag modifier (`RulerDrag`), read by the chart's left-press handler.
+    "ruler_drag",
     "fig_delete_click",
     "buy_set_click",
     "short_set_click",
@@ -1214,6 +1216,67 @@ fn the_label_scroll_wheel_defaults_to_alt_and_survives_a_round_trip() {
     assert_eq!(
         unknown.new_long, "f9",
         "other fields survive an unknown wheel value"
+    );
+}
+
+/// The ruler's modifier tolerates company — the drawing magnet rides Ctrl beside a Shift ruler —
+/// and `None` never starts it. Oracle: the literal modifier triples, not the boolean form.
+#[test]
+fn a_ruler_drag_matches_its_modifier_whatever_rides_along() {
+    // (ctrl, shift, alt)
+    let all = [
+        (false, false, false),
+        (false, true, false),
+        (true, true, false),
+        (false, false, true),
+        (true, false, false),
+    ];
+    let cases = [
+        (
+            RulerDrag::Shift,
+            vec![(false, true, false), (true, true, false)],
+        ),
+        (RulerDrag::Alt, vec![(false, false, true)]),
+        (
+            RulerDrag::Ctrl,
+            vec![(true, true, false), (true, false, false)],
+        ),
+        (RulerDrag::None, vec![]),
+    ];
+    for (binding, expected) in cases {
+        let matched: Vec<_> = all
+            .iter()
+            .copied()
+            .filter(|(c, s, a)| binding.matches(*c, *s, *a))
+            .collect();
+        assert_eq!(matched, expected, "{binding:?}");
+    }
+}
+
+/// `HotkeysConfig::ruler_drag` losing its serde default or its tolerant reader makes an old
+/// `hotkeys.toml` fail to load or a newer build's value reset every hotkey; the default is Shift,
+/// the gesture the request named.
+#[test]
+fn the_ruler_drag_defaults_to_shift_and_survives_a_round_trip() {
+    assert_eq!(HotkeysConfig::default().ruler_drag, RulerDrag::Shift);
+    let empty: HotkeysConfig = toml::from_str("").unwrap();
+    assert_eq!(empty.ruler_drag, RulerDrag::Shift);
+
+    let cfg = HotkeysConfig {
+        ruler_drag: RulerDrag::None,
+        ..Default::default()
+    };
+    let text = toml::to_string(&cfg).unwrap();
+    assert!(text.contains("ruler_drag = \"none\""), "{text}");
+    let back: HotkeysConfig = toml::from_str(&text).unwrap();
+    assert_eq!(back.ruler_drag, RulerDrag::None);
+
+    let unknown: HotkeysConfig =
+        toml::from_str("new_long = \"f9\"\nruler_drag = \"hyper\"\n").unwrap();
+    assert_eq!(unknown.ruler_drag, RulerDrag::Shift);
+    assert_eq!(
+        unknown.new_long, "f9",
+        "other fields survive an unknown value"
     );
 }
 

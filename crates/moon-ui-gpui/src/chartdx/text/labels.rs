@@ -1344,7 +1344,7 @@ fn fmt_countdown(remaining_ms: i64) -> Option<String> {
 /// Shared rather than typed twice: the two callers round differently and suppress differently, but
 /// what they PRINT at this range is one string, and two copies of it drift the moment a locale unit
 /// or the zero-padding changes.
-fn hours_and_minutes(hours: i64, minutes: i64) -> String {
+pub(in crate::chartdx) fn hours_and_minutes(hours: i64, minutes: i64) -> String {
     format!(
         "{hours}{} {minutes:02}{}",
         t!("chart_labels.unit_hour"),

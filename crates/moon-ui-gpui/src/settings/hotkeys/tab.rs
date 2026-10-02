@@ -37,6 +37,8 @@ use crate::design;
 use crate::hotkeys::meta::{self, Origin, SlotMeta};
 use crate::settings::SettingsView;
 
+mod ruler_row;
+
 /// The least the title column gets. Two columns GROW — this one and the problems column, which
 /// split what the window has left over — while every other cell is fixed and pushed to the right
 /// edge.
@@ -145,6 +147,7 @@ fn scope_column_px(cx: &App) -> Pixels {
             Row::Slot(spec) => Some(spec.meta().scope),
             Row::SameForMove => Some(meta::SAME_FOR_MOVE.scope),
             Row::LabelScroll => Some(meta::LABEL_SCROLL.scope),
+            Row::RulerDrag => Some(meta::RULER_DRAG.scope),
             Row::CorePull => None,
         })
         .map(|scope| width(&scope.label()))
@@ -308,6 +311,7 @@ impl SettingsView {
                 Row::Slot(spec) => out.push(self.slot_row(spec, hotkeys, &clashes, scope_w, cx)),
                 Row::SameForMove => out.push(self.same_move_row(hotkeys, scope_w, cx)),
                 Row::LabelScroll => out.push(self.label_scroll_row(hotkeys, scope_w, cx)),
+                Row::RulerDrag => out.push(self.ruler_drag_row(hotkeys, &clashes, scope_w, cx)),
                 Row::CorePull => out.extend(self.core_pull_section(hotkeys, cx)),
             }
         }

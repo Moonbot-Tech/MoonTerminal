@@ -2843,6 +2843,10 @@ chart_labels.funding_soon:
   ru: "вот-вот"
   en: "any moment"
   es: "ya mismo"
+chart_labels.unit_day:
+  ru: "д"
+  en: "d"
+  es: "d"
 chart_labels.unit_hour:
   ru: "ч"
   en: "h"

@@ -426,6 +426,9 @@ pub(super) fn mouse_down_left(
         return;
     }
     this.book_zone_press = None;
+    // A ruler still held here lost its release outside the slot: a new press is a new gesture, and
+    // left alive the ruler would claim the drag that follows — an ordinary pan included.
+    this.end_ruler(cx);
     // Count the press against the series THIS panel saw before a trading gesture reads it as a
     // double click; `e.click_count` pairs presses per window, blind to which chart received them.
     // The `<= 1` gates below stay on the NATIVE count: their question is "is this the second press
@@ -613,6 +616,15 @@ pub(super) fn mouse_down_left(
     if within && !band_claims && grab_order_line(this, TradeMouseButton::Left, e, clicks, pos, cx) {
         return;
     }
+    // The percent ruler (`hotkeys.ruler_drag`, Shift by default): its modifier on a left press over
+    // the plot measures instead of panning. LAST of the layers, so it takes only what would have
+    // panned: a key half bound to the same press, the start-cross cancel and the order-line grab —
+    // which accepts any modifier — all answer first, and the order book never starts it at all.
+    // Any click count: measuring ten times in a row lands presses inside the double-click box.
+    if within && !band_claims && this.try_start_ruler(pos, e.modifiers, cx) {
+        cx.stop_propagation();
+        return;
+    }
     // Left clicks in the control area (book/reserved strip) do not open-on-Main. When the toggle
     // grants pan inside that zone, park the press: a later move starts pan, a still release is
     // the order click. Off, the zone is orders only and the press ends here.
@@ -673,6 +685,12 @@ pub(super) fn mouse_up_left(
 ) {
     // Before every early return below: the release ends the gesture whichever branch takes it.
     settle_paced_drag(this, cx);
+    // The ruler's release: it was the press's whole gesture, and nothing it measured is kept.
+    if this.end_ruler(cx) {
+        this.book_zone_press = None;
+        cx.stop_propagation();
+        return;
+    }
     // A draw-drag-release gesture (Command/Ctrl down, drag, release) completes a segment/channel
     // without a second click. A stationary click is not a drag gesture and waits for click two.
     if let Some((pos, within)) = this.chart_local(e.position) {
@@ -997,6 +1015,12 @@ pub(super) fn mouse_move(
         if within && this.fig_drag.is_some() {
             this.finish_fig_drag(cx);
         }
+        // Same for a ruler whose release landed outside the slot: no button, no ruler. Leaving the
+        // slot does NOT end it — measuring up to the plot's edge routinely overshoots it, and
+        // coming back with the button still held picks the ruler up again.
+        if within {
+            this.end_ruler(cx);
+        }
         // No button held means no press held either, including one whose mouse-up never reached a
         // handler — released outside the slot, or stolen with the capture. A draft's `down` is the
         // figure layer's record of an accepted, still-held press, so it recovers here the same way
@@ -1079,6 +1103,20 @@ pub(super) fn mouse_move(
         e.pressed_button == Some(MouseButton::Left),
         e.pressed_button == Some(MouseButton::Right),
     );
+    // The ruler owns the pointer while the left button holds it: the crosshair follows, the chart
+    // does not pan. The modifier may be let go mid-drag — the press already chose the gesture.
+    if this.ruler_held() && e.pressed_button == Some(MouseButton::Left) {
+        this.input.cursor = within.then_some(pos);
+        this.input.hovered_pane = if within {
+            this.input.pane_at(pos.0, pos.1)
+        } else {
+            None
+        };
+        this.sync_native_cursor(cx);
+        this.update_ruler(pos, e.modifiers, cx);
+        cx.stop_propagation();
+        return;
+    }
     if this.fig_drag.is_some() {
         this.update_fig_pointer(pos, within, true, e.modifiers.secondary(), cx);
         cx.stop_propagation();

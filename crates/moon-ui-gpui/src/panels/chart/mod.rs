@@ -24,6 +24,7 @@ mod refs;
 mod render;
 mod render_input;
 mod report_trades;
+mod ruler;
 pub(crate) mod shot;
 #[cfg(test)]
 mod tests;
@@ -353,6 +354,8 @@ pub struct ChartPanel {
     trace_lines: trace_lines::TraceLinesState,
     /// Hover over a drawn closed-trade arrow, and the card it opens; see [`trade_history_hover`].
     trade_hover: trade_history_hover::TradeHoverState,
+    /// The percent ruler while the left button holds it; see [`ruler`].
+    ruler: Option<ruler::RulerHold>,
     /// Figure-drawing state for this panel: draft, hover, and drag.
     fig_draft: Option<figures::FigDraft>,
     fig_hover: Option<u64>,
@@ -788,6 +791,7 @@ impl ChartPanel {
             report_trades: report_trades::ReportTradesState::default(),
             trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),
+            ruler: None,
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,
@@ -1015,6 +1019,7 @@ impl ChartPanel {
             report_trades: report_trades::ReportTradesState::default(),
             trace_lines: trace_lines::TraceLinesState::default(),
             trade_hover: trade_history_hover::TradeHoverState::default(),
+            ruler: None,
             fig_draft: None,
             fig_settings: None,
             last_fig_store_rev: 0,

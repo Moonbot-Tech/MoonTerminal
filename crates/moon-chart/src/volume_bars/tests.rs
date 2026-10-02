@@ -304,3 +304,52 @@ fn sorted_lookups_equal_the_linear_references() {
     }
     assert!(hits > 0 && ties > 0, "{hits} {ties}");
 }
+
+/// `quote_turnover_between` — the ruler's candle fallback. Whole candles count whole, a candle cut
+/// by either end counts by the share inside, and a series that opens inside the period says so.
+#[test]
+fn turnover_between_prorates_the_edges_and_reports_reach() {
+    // Three 100 ms candles: [0,100) 10, [100,200) 20, [200,300) 40.
+    let samples = [
+        sample(0.0, 100.0, 10.0),
+        sample(100.0, 100.0, 20.0),
+        sample(200.0, 100.0, 40.0),
+    ];
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 0.0, 300.0, f64::INFINITY),
+        Some((70.0, true))
+    );
+    // Half of the first, all of the second, a quarter of the third.
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 50.0, 225.0, f64::INFINITY),
+        Some((5.0 + 20.0 + 10.0, true))
+    );
+    // The series starts at 0: a period from -100 is only partly covered.
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, -100.0, 100.0, f64::INFINITY),
+        Some((10.0, false))
+    );
+    // Past the last candle, or an empty / inverted period: nothing to state.
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 300.0, 400.0, f64::INFINITY),
+        None
+    );
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 150.0, 150.0, f64::INFINITY),
+        None
+    );
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 200.0, 100.0, f64::INFINITY),
+        None
+    );
+    // The candle [200,300) is still open at 250: its 40 traded over 50 ms, not over 100. A period
+    // reaching past the present counts nothing beyond it.
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 200.0, 225.0, 250.0),
+        Some((20.0, true))
+    );
+    assert_eq!(
+        quote_turnover_between(&samples, 100.0, 200.0, 900.0, 250.0),
+        Some((40.0, true))
+    );
+}

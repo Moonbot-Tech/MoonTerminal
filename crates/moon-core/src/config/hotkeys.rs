@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use super::paths;
 
+mod ruler;
 #[cfg(test)]
 mod tests;
+
+pub use ruler::RulerDrag;
 
 pub const ORDER_SIZE_KEYS: usize = 6;
 pub const SELL_PRESET_KEYS: usize = 6;
@@ -1256,6 +1259,12 @@ pub struct HotkeysConfig {
         deserialize_with = "tolerant_label_scroll_wheel"
     )]
     pub label_scroll_wheel: WheelModifier,
+    /// The modifier that turns a left drag over the chart plot into the percent ruler.
+    #[serde(
+        default = "ruler::default_ruler_drag",
+        deserialize_with = "ruler::tolerant_ruler_drag"
+    )]
+    pub ruler_drag: RulerDrag,
 }
 
 impl Default for HotkeysConfig {
@@ -1320,6 +1329,7 @@ impl Default for HotkeysConfig {
             short_sell_move_click2: MouseGestureBinding::None,
             action_clicks: BTreeMap::new(),
             label_scroll_wheel: default_label_scroll_wheel(),
+            ruler_drag: ruler::default_ruler_drag(),
         }
     }
 }

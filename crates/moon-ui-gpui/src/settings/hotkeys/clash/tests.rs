@@ -507,3 +507,48 @@ fn a_key_half_takes_the_press_from_the_placement_row_below_it() {
     let clashes = Clashes::build(&hotkeys);
     assert!(clashes.mouse(&hotkeys, GestureSlot::BuySet).is_empty());
 }
+
+/// The ruler is the LAST layer of the left button: a key half on its press is asked first and
+/// takes it, and the ruler's own row says it will not fire. Placement and moves act in the book
+/// only and never meet the ruler, so Move Open on its default Shift says nothing about it.
+///
+/// Plausible breakage: the ruler layer missing from `button_layers`, captioned against the trading
+/// rows it can never collide with, or its own row left without the caption.
+#[test]
+fn the_ruler_yields_to_a_key_half_and_leaves_the_book_gestures_alone() {
+    let _locale = crate::test_locale::force("en");
+    let ruler = rust_i18n::t!("hotkeys.clash.layer.ruler").to_string();
+    let mut hotkeys = quiet();
+    let half = GestureSlot::ForKey(KeySlot::CancelBuy);
+    hotkeys.set_gesture(half, MouseGestureBinding::LeftShift);
+    hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::LeftShift);
+    let clashes = Clashes::build(&hotkeys);
+
+    let action = clashes.mouse(&hotkeys, half);
+    assert!(
+        action
+            .iter()
+            .any(|c| c.severity == Severity::Shares && c.text.contains(&ruler)),
+        "{action:?}"
+    );
+    let book = clashes.mouse(&hotkeys, GestureSlot::BuyMove);
+    assert!(book.iter().all(|c| !c.text.contains(&ruler)), "{book:?}");
+    let own = clashes.ruler(&hotkeys);
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(own[0].severity, Severity::Shadowed);
+    assert!(own[0].text.contains("Cancel Buy"), "{}", own[0].text);
+    assert!(
+        !own[0].text.contains("Move"),
+        "the book rows are not its rivals: {}",
+        own[0].text
+    );
+
+    hotkeys.ruler_drag = moon_core::config::RulerDrag::None;
+    let clashes = Clashes::build(&hotkeys);
+    let action = clashes.mouse(&hotkeys, half);
+    assert!(
+        action.iter().all(|c| !c.text.contains(&ruler)),
+        "{action:?}"
+    );
+    assert!(clashes.ruler(&hotkeys).is_empty());
+}

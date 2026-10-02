@@ -90,8 +90,8 @@ pub use groups::{
 pub use hotkeys::{
     GestureSlot, HotkeysConfig, KeySlot, MANUAL_STRATEGY_KEYS, MouseGestureBinding,
     MoveGestureCommand, MoveHalf, MoveKind, MoveKindSlot, MoveSide, ORDER_SIZE_KEYS, Placement,
-    SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX, SPLIT_PARTS_MIN,
-    WheelModifier,
+    RulerDrag, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX,
+    SPLIT_PARTS_MIN, WheelModifier,
 };
 pub use key_endpoint::endpoint_from_key;
 pub(crate) use key_endpoint::endpoint_from_network;
