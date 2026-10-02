@@ -19,7 +19,8 @@
       "qty_text": "1000",
       "duration_secs": 40,
       "strategy": null,
-      "manual": true
+      "manual": true,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1006,
@@ -40,7 +41,8 @@
       "qty_text": "1000",
       "duration_secs": 137,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1011,
@@ -61,7 +63,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1016,
@@ -82,7 +85,8 @@
       "qty_text": "1000",
       "duration_secs": 331,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1021,
@@ -103,7 +107,8 @@
       "qty_text": "1000",
       "duration_secs": 428,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1026,
@@ -124,7 +129,8 @@
       "qty_text": "1000",
       "duration_secs": 525,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1031,
@@ -145,7 +151,8 @@
       "qty_text": "1000",
       "duration_secs": 622,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1036,
@@ -166,7 +173,8 @@
       "qty_text": "1000",
       "duration_secs": 719,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1041,
@@ -187,7 +195,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1046,
@@ -208,7 +217,8 @@
       "qty_text": "1000",
       "duration_secs": 913,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1051,
@@ -229,7 +239,8 @@
       "qty_text": "1000",
       "duration_secs": 1010,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1056,
@@ -250,7 +261,8 @@
       "qty_text": "1000",
       "duration_secs": 1107,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1003,
@@ -271,7 +283,8 @@
       "qty_text": "1000",
       "duration_secs": 1204,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1008,
@@ -292,7 +305,8 @@
       "qty_text": "1000",
       "duration_secs": 1301,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1013,
@@ -313,7 +327,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1018,
@@ -334,7 +349,8 @@
       "qty_text": "1000",
       "duration_secs": 1495,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1023,
@@ -355,7 +371,8 @@
       "qty_text": "1000",
       "duration_secs": 1592,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1028,
@@ -376,7 +393,8 @@
       "qty_text": "1000",
       "duration_secs": 1689,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1033,
@@ -397,7 +415,8 @@
       "qty_text": "1000",
       "duration_secs": 1786,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1038,
@@ -418,7 +437,8 @@
       "qty_text": "1000",
       "duration_secs": 1883,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1043,
@@ -439,7 +459,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1048,
@@ -460,7 +481,8 @@
       "qty_text": "1000",
       "duration_secs": 2077,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1053,
@@ -481,7 +503,8 @@
       "qty_text": "1000",
       "duration_secs": 2174,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1058,
@@ -502,7 +525,8 @@
       "qty_text": "1000",
       "duration_secs": 2271,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1005,
@@ -523,7 +547,8 @@
       "qty_text": "1000",
       "duration_secs": 2368,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1010,
@@ -544,7 +569,8 @@
       "qty_text": "1000",
       "duration_secs": 2465,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1015,
@@ -565,7 +591,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1020,
@@ -586,7 +613,8 @@
       "qty_text": "1000",
       "duration_secs": 2659,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1025,
@@ -607,7 +635,8 @@
       "qty_text": "1000",
       "duration_secs": 2756,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1030,
@@ -628,7 +657,8 @@
       "qty_text": "1000",
       "duration_secs": 2853,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1035,
@@ -649,7 +679,8 @@
       "qty_text": "1000",
       "duration_secs": 2950,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1040,
@@ -670,7 +701,8 @@
       "qty_text": "1000",
       "duration_secs": 3047,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1045,
@@ -691,7 +723,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1050,
@@ -712,7 +745,8 @@
       "qty_text": "1000",
       "duration_secs": 3241,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1055,
@@ -733,7 +767,8 @@
       "qty_text": "1000",
       "duration_secs": 3338,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1002,
@@ -754,7 +789,8 @@
       "qty_text": "1000",
       "duration_secs": 3435,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1007,
@@ -775,7 +811,8 @@
       "qty_text": "1000",
       "duration_secs": 3532,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1012,
@@ -796,7 +833,8 @@
       "qty_text": "1000",
       "duration_secs": 3629,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1017,
@@ -817,7 +855,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1022,
@@ -838,7 +877,8 @@
       "qty_text": "1000",
       "duration_secs": 3823,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1027,
@@ -859,7 +899,8 @@
       "qty_text": "1000",
       "duration_secs": 3920,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1032,
@@ -880,7 +921,8 @@
       "qty_text": "1000",
       "duration_secs": 4017,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1037,
@@ -901,7 +943,8 @@
       "qty_text": "1000",
       "duration_secs": 4114,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1042,
@@ -922,7 +965,8 @@
       "qty_text": "1000",
       "duration_secs": 4211,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1047,
@@ -943,7 +987,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1052,
@@ -964,7 +1009,8 @@
       "qty_text": "1000",
       "duration_secs": 4405,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1057,
@@ -985,7 +1031,8 @@
       "qty_text": "1000",
       "duration_secs": 4502,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1004,
@@ -1006,7 +1053,8 @@
       "qty_text": "1000",
       "duration_secs": 4599,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1009,
@@ -1027,7 +1075,8 @@
       "qty_text": "1000",
       "duration_secs": 4696,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1014,
@@ -1048,7 +1097,8 @@
       "qty_text": "1000",
       "duration_secs": 4793,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1019,
@@ -1069,7 +1119,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1024,
@@ -1090,7 +1141,8 @@
       "qty_text": "1000",
       "duration_secs": 4987,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1029,
@@ -1111,7 +1163,8 @@
       "qty_text": "1000",
       "duration_secs": 5084,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1034,
@@ -1132,7 +1185,8 @@
       "qty_text": "1000",
       "duration_secs": 5181,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1039,
@@ -1153,7 +1207,8 @@
       "qty_text": "1000",
       "duration_secs": 5278,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1044,
@@ -1174,7 +1229,8 @@
       "qty_text": "1000",
       "duration_secs": 5375,
       "strategy": null,
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1049,
@@ -1195,7 +1251,8 @@
       "qty_text": "1000",
       "duration_secs": null,
       "strategy": "Demo Strategy 01",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1054,
@@ -1216,7 +1273,8 @@
       "qty_text": "1000",
       "duration_secs": 5569,
       "strategy": "Demo Strategy 02",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1001,
@@ -1237,7 +1295,8 @@
       "qty_text": "1000",
       "duration_secs": 5666,
       "strategy": "Demo Strategy 03",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1006,
@@ -1258,7 +1317,8 @@
       "qty_text": "1000",
       "duration_secs": 5763,
       "strategy": "Demo Strategy 04",
-      "manual": false
+      "manual": false,
+      "volume_text": "1 000.0$"
     }
   ],
   "limit": 200

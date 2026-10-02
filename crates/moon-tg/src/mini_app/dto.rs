@@ -27,6 +27,7 @@ const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
 ///
 /// The change percent uses the desktop orders table's arithmetic and precision.
 /// Adaptive price text cannot be parsed back into that percent.
+/// Entry volume uses the market quote and is absent for unusable entry inputs.
 pub(super) fn order_dto(
     host: &dyn TgHost,
     id: u64,
@@ -45,7 +46,7 @@ pub(super) fn order_dto(
         coin: order.coin.clone(),
         market: order.market.clone(),
         side: if order.is_short { "sell" } else { "buy" }.to_string(),
-        qty_text: fmt::qty(order.size),
+        volume_text: entry_volume_text(order.size, order.buy_price, 1.0, &order.quote),
         entry_text: price_text(order.buy_price),
         mark_text: price_text(f64::from(order.price)),
         pnl,
@@ -94,6 +95,7 @@ pub(super) fn order_to_entry_pct(order: &OrderRow) -> Option<f64> {
 ///
 /// Returns:
 ///     The row, its strategy attributed by [`trade_strategy`].
+///     Entry volume uses bought quantity and the Report-gated rate, never exit quantity.
 pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &MiniTrade) -> TradeDto {
     let profit = trade.profit_usdt.filter(|value| value.is_finite());
     let pct = trade.pct.filter(|value| value.is_finite());
@@ -122,12 +124,52 @@ pub(super) fn trade_dto(host: &dyn TgHost, zone: Tz, now_secs: i64, trade: &Mini
         entry_text: price_text(trade.buy_price),
         exit_text: price_text(trade.sell_price),
         qty_text: fmt::qty(trade.quantity),
+        volume_text: trade_volume_text(trade),
         duration_secs: trade
             .buy_utc
             .map(|buy| trade.close_utc - buy)
             .filter(|secs| *secs >= 0),
         strategy,
         manual,
+    }
+}
+
+/// Closed entry notional in USDT, using bought quantity and only a Report-approved rate.
+pub(super) fn trade_volume_text(trade: &MiniTrade) -> Option<String> {
+    trade
+        .bought_quantity
+        .zip(trade.entry_volume_rate)
+        .and_then(|(qty, rate)| entry_volume_text(qty, trade.buy_price, rate, "USDT"))
+}
+
+/// Format a positive finite entry notional, omitting unavailable inputs instead of inventing zero.
+///
+/// `rate` converts closed trades to USDT; open orders use 1 and their native market quote.
+/// Known USD/USDT quotes use dollars. An empty quote means unavailable market metadata and
+/// cannot establish a currency; known COIN-M names already resolve to USD in the feed.
+/// Other quotes retain adaptive precision so small BTC positions do not round to zero.
+pub(super) fn entry_volume_text(qty: f64, entry: f64, rate: f64, quote: &str) -> Option<String> {
+    if [qty, entry, rate]
+        .iter()
+        .any(|v| !v.is_finite() || *v <= 0.0)
+    {
+        return None;
+    }
+    let amount = qty * entry * rate;
+    if !amount.is_finite() || amount <= 0.0 {
+        return None;
+    }
+    let quote = quote.trim();
+    if quote.is_empty() {
+        return None;
+    }
+    if quote.eq_ignore_ascii_case("USD") || quote.eq_ignore_ascii_case("USDT") {
+        Some(format!("{}$", fmt::usd_grouped(amount)))
+    } else {
+        Some(format!(
+            "{} {quote}",
+            fmt::group_decimal(&fmt::adaptive(amount))
+        ))
     }
 }
 

@@ -86,6 +86,9 @@ pub const VALUATION_PROFIT_COLUMN: &str = "valuation_profit_usdt";
 /// Synthetic report column carrying the USDT rate applied to one trade.
 pub const VALUATION_RATE_COLUMN: &str = "valuation_rate";
 
+/// Mini App-only rate for an entry notional proven safe by the Report volume gates.
+pub const MINI_ENTRY_VOLUME_RATE_COLUMN: &str = "mini_entry_volume_rate";
+
 /// Synthetic report column naming where that rate came from.
 pub const VALUATION_SOURCE_COLUMN: &str = "valuation_rate_source";
 
@@ -624,7 +627,13 @@ fn source_select(
 ) -> String {
     cols.iter()
         .map(|c| {
-            if let Some(entry) = synthetic(c) {
+            if c == MINI_ENTRY_VOLUME_RATE_COLUMN {
+                let volume = traded_volume_sql(src, valuation.map(|v| v.per_row.rate.as_str()));
+                format!(
+                    "CASE WHEN {} THEN ({}) END AS \"{c}\"",
+                    volume.reconstructed, volume.rate
+                )
+            } else if let Some(entry) = synthetic(c) {
                 let sql = synthetic_expression(entry, src, valuation)
                     .unwrap_or_else(|| "NULL".to_string());
                 format!("{sql} AS \"{c}\"")
@@ -2503,9 +2512,39 @@ pub fn query_reports(
     desc: bool,
     limit: usize,
 ) -> ReadResult<ReportTable> {
+    query_reports_with_columns(conn, f, sort_key, desc, limit, display_columns(conn)?)
+}
+
+/// Read closed Mini App trades with the Report's safe entry-notional conversion rate.
+///
+/// The extra column is confined to this read, leaving desktop display/export columns intact.
+/// Missing inputs, inverse denomination, Funding and liquidation withhold the rate; database
+/// failures retain the same `ReadFail` contract as [`query_reports`].
+pub fn query_mini_trades(
+    conn: &Connection,
+    f: &ReportFilter,
+    limit: usize,
+) -> ReadResult<ReportTable> {
+    let mut cols = display_columns(conn)?;
+    cols.push(MINI_ENTRY_VOLUME_RATE_COLUMN.to_string());
+    let closed = ReportFilter {
+        rows: RowScope::Closed,
+        ..f.clone()
+    };
+    query_reports_with_columns(conn, &closed, "closedate", true, limit, cols)
+}
+
+/// Execute the shared row reader with a caller-specific column projection.
+fn query_reports_with_columns(
+    conn: &Connection,
+    f: &ReportFilter,
+    sort_key: &str,
+    desc: bool,
+    limit: usize,
+    cols: Vec<String>,
+) -> ReadResult<ReportTable> {
     let meta = report_strategy_meta(conn, f)
         .map_err(|error| read_fail("reports: resolve strategy mask", error))?;
-    let cols = display_columns(conn)?;
     let col = sort_column(&cols, sort_key);
     let sources = read_sources_res(conn)?;
     // The column set is deliberately resolved ONCE, outside the retry: both attempts must project

@@ -8,7 +8,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -17,7 +16,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1001,
@@ -27,7 +27,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -36,7 +35,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1002,
@@ -46,7 +46,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -55,7 +54,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": true
+      "panic_armed": true,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1002,
@@ -65,7 +65,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -74,7 +73,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1002,
@@ -84,7 +84,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -93,7 +92,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1003,
@@ -103,7 +103,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -112,7 +111,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1003,
@@ -122,7 +122,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -131,7 +130,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1003,
@@ -141,7 +141,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -150,7 +149,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1003,
@@ -160,7 +160,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -169,7 +168,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1004,
@@ -179,7 +179,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -188,7 +187,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1004,
@@ -198,7 +198,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -207,7 +206,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1004,
@@ -217,7 +217,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -226,7 +225,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1004,
@@ -236,7 +236,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -245,7 +244,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1004,
@@ -255,7 +255,6 @@
       "coin": "EEE",
       "market": "EEEUSDT",
       "side": "buy",
-      "qty_text": "3000",
       "entry_text": "0.2000",
       "mark_text": "0.2100",
       "pnl": null,
@@ -264,7 +263,8 @@
       "change_text": null,
       "to_entry_pct": 5,
       "to_entry_text": "5.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "600.0$"
     },
     {
       "core": 1005,
@@ -274,7 +274,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -283,7 +282,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1005,
@@ -293,7 +293,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -302,7 +301,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1005,
@@ -312,7 +312,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -321,7 +320,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1005,
@@ -331,7 +331,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -340,7 +339,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1005,
@@ -350,7 +350,6 @@
       "coin": "EEE",
       "market": "EEEUSDT",
       "side": "buy",
-      "qty_text": "3000",
       "entry_text": "0.2000",
       "mark_text": "0.2100",
       "pnl": null,
@@ -359,7 +358,8 @@
       "change_text": null,
       "to_entry_pct": 5,
       "to_entry_text": "5.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "600.0$"
     },
     {
       "core": 1005,
@@ -369,7 +369,6 @@
       "coin": "FFF",
       "market": "FFFUSDT",
       "side": "buy",
-      "qty_text": "10",
       "entry_text": null,
       "mark_text": null,
       "pnl": null,
@@ -378,7 +377,8 @@
       "change_text": null,
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": null
     },
     {
       "core": 1006,
@@ -388,7 +388,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -397,7 +396,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1006,
@@ -407,7 +407,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -416,7 +415,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1007,
@@ -426,7 +426,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -435,7 +434,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1007,
@@ -445,7 +445,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -454,7 +453,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1007,
@@ -464,7 +464,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -473,7 +472,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1008,
@@ -483,7 +483,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -492,7 +491,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1008,
@@ -502,7 +502,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -511,7 +510,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1008,
@@ -521,7 +521,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -530,7 +529,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1008,
@@ -540,7 +540,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -549,7 +548,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1009,
@@ -559,7 +559,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -568,7 +567,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1009,
@@ -578,7 +578,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -587,7 +586,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1009,
@@ -597,7 +597,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -606,7 +605,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1009,
@@ -616,7 +616,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -625,7 +624,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1009,
@@ -635,7 +635,6 @@
       "coin": "EEE",
       "market": "EEEUSDT",
       "side": "buy",
-      "qty_text": "3000",
       "entry_text": "0.2000",
       "mark_text": "0.2100",
       "pnl": null,
@@ -644,7 +643,8 @@
       "change_text": null,
       "to_entry_pct": 5,
       "to_entry_text": "5.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "600.0$"
     },
     {
       "core": 1010,
@@ -654,7 +654,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -663,7 +662,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1010,
@@ -673,7 +673,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -682,7 +681,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1010,
@@ -692,7 +692,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -701,7 +700,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1010,
@@ -711,7 +711,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -720,7 +719,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1010,
@@ -730,7 +730,6 @@
       "coin": "EEE",
       "market": "EEEUSDT",
       "side": "buy",
-      "qty_text": "3000",
       "entry_text": "0.2000",
       "mark_text": "0.2100",
       "pnl": null,
@@ -739,7 +738,8 @@
       "change_text": null,
       "to_entry_pct": 5,
       "to_entry_text": "5.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "600.0$"
     },
     {
       "core": 1010,
@@ -749,7 +749,6 @@
       "coin": "FFF",
       "market": "FFFUSDT",
       "side": "buy",
-      "qty_text": "10",
       "entry_text": null,
       "mark_text": null,
       "pnl": null,
@@ -758,7 +757,8 @@
       "change_text": null,
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": null
     },
     {
       "core": 1011,
@@ -768,7 +768,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -777,7 +776,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1011,
@@ -787,7 +787,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -796,7 +795,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1012,
@@ -806,7 +806,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -815,7 +814,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1012,
@@ -825,7 +825,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -834,7 +833,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1012,
@@ -844,7 +844,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -853,7 +852,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1013,
@@ -863,7 +863,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -872,7 +871,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1013,
@@ -882,7 +882,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -891,7 +890,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1013,
@@ -901,7 +901,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -910,7 +909,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1013,
@@ -920,7 +920,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -929,7 +928,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1014,
@@ -939,7 +939,6 @@
       "coin": "AAA",
       "market": "AAAUSDT",
       "side": "buy",
-      "qty_text": "1000",
       "entry_text": "1.0000",
       "mark_text": "1.0100",
       "pnl": 10,
@@ -948,7 +947,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1014,
@@ -958,7 +958,6 @@
       "coin": "BBB",
       "market": "BBBUSDT",
       "side": "sell",
-      "qty_text": "200",
       "entry_text": "5.000",
       "mark_text": "5.100",
       "pnl": -20,
@@ -967,7 +966,8 @@
       "change_text": "-2.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "1 000.0$"
     },
     {
       "core": 1014,
@@ -977,7 +977,6 @@
       "coin": "CCC",
       "market": "CCCUSDT",
       "side": "buy",
-      "qty_text": "0.5",
       "entry_text": "100 000",
       "mark_text": "101 000",
       "pnl": 500,
@@ -986,7 +985,8 @@
       "change_text": "+1.00%",
       "to_entry_pct": null,
       "to_entry_text": null,
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "50 000.0$"
     },
     {
       "core": 1014,
@@ -996,7 +996,6 @@
       "coin": "DDD",
       "market": "DDDUSDT",
       "side": "sell",
-      "qty_text": "1000000",
       "entry_text": "0.00001000",
       "mark_text": "0.00000970",
       "pnl": null,
@@ -1005,7 +1004,8 @@
       "change_text": null,
       "to_entry_pct": -3,
       "to_entry_text": "3.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "10.0$"
     },
     {
       "core": 1014,
@@ -1015,7 +1015,6 @@
       "coin": "EEE",
       "market": "EEEUSDT",
       "side": "buy",
-      "qty_text": "3000",
       "entry_text": "0.2000",
       "mark_text": "0.2100",
       "pnl": null,
@@ -1024,7 +1023,8 @@
       "change_text": null,
       "to_entry_pct": 5,
       "to_entry_text": "5.00%",
-      "panic_armed": false
+      "panic_armed": false,
+      "volume_text": "600.0$"
     }
   ],
   "can_control": true

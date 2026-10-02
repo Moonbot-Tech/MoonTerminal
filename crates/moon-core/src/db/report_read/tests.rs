@@ -1,4 +1,4 @@
-//! Regression tests for exact Report strategy filtering.
+//! Regression tests for Report filtering, money, Mini App entry rates and trade history.
 
 use rusqlite::types::Value;
 use rusqlite::{Connection, params};
@@ -510,6 +510,8 @@ fn average_order_spend_excludes_positive_spend_funding_rows() {
 /// Removing the exit leg, signing short quantity, reusing `spentbtc`, moving the closed/Funding
 /// predicates into `build_where`, or coupling volume completeness to profit coverage turns one of
 /// these exact assertions red and would misstate the current filtered Report footer.
+/// The Mini App-only rate projection must follow the same mode and omit Funding without adding
+/// a column to the desktop grid.
 #[test]
 fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() {
     let filter = |valuation| ReportFilter {
@@ -519,6 +521,34 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     };
 
     let current_conn = traded_volume_report(1);
+    let mini = super::query_mini_trades(&current_conn, &filter(super::ValuationMode::Current), 50)
+        .expect("query Mini App entry rates");
+    let rate_ix = mini
+        .cols
+        .iter()
+        .position(|c| c == super::MINI_ENTRY_VOLUME_RATE_COLUMN)
+        .unwrap();
+    for (id, row) in mini.rec_ids.iter().zip(&mini.rows) {
+        assert_eq!(
+            row[rate_ix],
+            if *id == 4 {
+                Value::Null
+            } else {
+                Value::Real(1.0)
+            }
+        );
+    }
+    assert_eq!(
+        mini.rows.len(),
+        3,
+        "open and other-core decoys stay excluded"
+    );
+    assert!(
+        !super::display_columns(&current_conn)
+            .unwrap()
+            .iter()
+            .any(|c| c == super::MINI_ENTRY_VOLUME_RATE_COLUMN)
+    );
     current_conn
         .execute("UPDATE orders_rep SET profitbtc=NULL WHERE newrecid=2", [])
         .expect("remove profit without changing the short trade's price legs");
@@ -570,6 +600,27 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     drop(store);
     let historical_conn = traded_volume_report(8);
     attach_valuation(&historical_conn, &valuation_path);
+    let mini = super::query_mini_trades(
+        &historical_conn,
+        &filter(super::ValuationMode::Historical),
+        50,
+    )
+    .expect("query historical Mini App entry rates");
+    let rate_ix = mini
+        .cols
+        .iter()
+        .position(|c| c == super::MINI_ENTRY_VOLUME_RATE_COLUMN)
+        .unwrap();
+    for (id, row) in mini.rec_ids.iter().zip(&mini.rows) {
+        assert_eq!(
+            row[rate_ix],
+            if *id == 4 {
+                Value::Null
+            } else {
+                Value::Real(0.5)
+            }
+        );
+    }
     let historical_result =
         query_totals(&historical_conn, &filter(super::ValuationMode::Historical))
             .expect("query historical traded volume");
@@ -1154,6 +1205,7 @@ fn window_bound_stays_on_a_bare_unwrapped_closedate_column() {
 /// subtotal is dimensionally sound and its shortfall is recoverable. Widening the summed predicate
 /// would mix incomparable quotes into one figure; dropping the reconstruction count would leave the
 /// reader unable to tell a partial subtotal from the whole filter total.
+/// The Mini App rate must also withhold these unsafe rows before the DTO multiplies entry legs.
 #[test]
 fn traded_volume_sums_only_provable_rows_and_publishes_its_shortfall() {
     let conn = Connection::open_in_memory().expect("open incomplete-volume fixture");
@@ -1183,6 +1235,33 @@ fn traded_volume_sums_only_provable_rows_and_publishes_its_shortfall() {
              (3, 5, 1700000240, 1, 5.0, 5.0, 8.0, 10.0, 11.0);",
     )
     .expect("seed incomplete-volume rows");
+
+    let mini = super::query_mini_trades(
+        &conn,
+        &ReportFilter {
+            valuation: super::ValuationMode::Current,
+            ..Default::default()
+        },
+        50,
+    )
+    .expect("read fail-closed Mini App entry rates");
+    let rate_ix = mini
+        .cols
+        .iter()
+        .position(|c| c == super::MINI_ENTRY_VOLUME_RATE_COLUMN)
+        .unwrap();
+    assert_eq!(mini.rows.len(), 6);
+    for ((core, id), row) in mini.core_uids.iter().zip(&mini.rec_ids).zip(&mini.rows) {
+        let ordinary = *core == 2 && *id == 1;
+        assert_eq!(
+            row[rate_ix],
+            if ordinary {
+                Value::Real(1.0)
+            } else {
+                Value::Null
+            }
+        );
+    }
 
     let totals = query_totals(&conn, &ReportFilter::default())
         .expect("query incomplete volume")

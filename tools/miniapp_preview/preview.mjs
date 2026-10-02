@@ -1,5 +1,5 @@
 // Headless preview of the Telegram Mini App: renders every screen from fixture payloads and
-// checks the owner commands the page sends. No core, no bot, no network.
+// checks entry-volume rendering and the owner commands the page sends. No core, no bot, no network.
 //
 //   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es] [--only <screen>]
 //
@@ -86,6 +86,8 @@ const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name
 const VIEWPORTS = [
     { width: 421, height: 900 },
     { width: 390, height: 844 },
+    { width: 320, height: 740 },
+    { width: 1024, height: 768 },
 ];
 const THEMES = ["light", "dark"];
 const OK = { ok: true, armed: null, error: null };
@@ -170,6 +172,23 @@ const openTrade = async (page, nth) => {
     await page.locator('section[data-tab="trades"] .trade-row').nth(nth).click(); await settle(page);
 };
 
+// Reversing the segment order, resetting an explicit choice, or changing only the pressed button
+// must fail: the rendered order, selected button and visible pane form one navigation contract.
+async function checkDealsSelection(page, expected) {
+    const state = await page.evaluate(() => {
+        const nodes = [...document.querySelectorAll('[data-seg]')];
+        const panes = [...document.querySelectorAll('section[data-tab="orders"], section[data-tab="trades"]')];
+        return {
+            order: nodes.map((n) => n.getAttribute("data-seg")),
+            selected: nodes.filter((n) => n.getAttribute("aria-pressed") === "true").map((n) => n.getAttribute("data-seg")),
+            visible: panes.filter((n) => !n.hidden).map((n) => n.getAttribute("data-tab")),
+        };
+    });
+    if (state.order.join(",") !== "trades,orders" || state.selected.join(",") !== expected || state.visible.join(",") !== expected) {
+        throw new Error(`Trades navigation must show Closed first and select ${expected}: ${JSON.stringify(state)}`);
+    }
+}
+
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
 const SCREENS = [
     { name: "report-today", run: async () => {} },
@@ -191,6 +210,17 @@ const SCREENS = [
     { name: "trades-open-group-open", run: async (p) => {
         await nav(p, "deals"); await p.click('[data-seg="orders"]'); await openFirstGroup(p, "orders");
     } },
+    { name: "deals-default-and-memory", run: async (p) => {
+        await nav(p, "deals");
+        await checkDealsSelection(p, "trades");
+        await p.click('[data-seg="orders"]'); await settle(p);
+        await checkDealsSelection(p, "orders");
+        await nav(p, "cores"); await nav(p, "deals");
+        await checkDealsSelection(p, "orders");
+        await p.click('[data-seg="trades"]'); await settle(p);
+        await nav(p, "report"); await nav(p, "deals");
+        await checkDealsSelection(p, "trades");
+    } },
     { name: "trades-closed", run: async (p) => {
         await nav(p, "deals"); await p.click('[data-seg="trades"]');
         await p.waitForSelector('section[data-tab="trades"] .trade-row, section[data-tab="trades"] .group-head');
@@ -202,6 +232,9 @@ const SCREENS = [
         if (head) { await head.click(); await settle(p); }
         await p.click('section[data-tab="trades"] .trade-row'); await settle(p);
     } },
+    { name: "trade-sheet-no-volume", api: {
+        "/api/trades": { trades: [{ ...fixture("trades").trades[0], volume_text: null }], limit: 50 },
+    }, run: async (p) => { await openTrade(p, 0); } },
     // Row 2 names its strategy, row 6 carries none and is not marked manual (row 1 is manual).
     { name: "trade-sheet-strategy", run: async (p) => { await openTrade(p, 1); } },
     { name: "trade-sheet-unknown", run: async (p) => { await openTrade(p, 5); } },
@@ -218,8 +251,36 @@ const SCREENS = [
     { name: "session-denied", api: { "/api/session": () => ({ status: 403, body: {} }) }, ready: "#startup", run: async () => {} },
 ];
 
+// Check the actual rendered entry-volume contract, including omission of unavailable figures.
+async function volumeChecks(page, screen, texts) {
+    if (screen === "trades-open-group-open") {
+        const row = page.locator('section[data-tab="orders"] .order-row').first();
+        const text = await row.innerText();
+        const expected = fixture("orders").orders[0].volume_text;
+        if (!text.includes(texts.mini_orders_volume) || !text.includes(expected)) {
+            throw new Error("open order must display localized entry volume");
+        }
+        if (await row.locator('.order-flow .order-bit').count() !== 2) {
+            throw new Error("open order must contain prices and volume without an extra quantity");
+        }
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+        if (overflow) throw new Error("open-order volume must wrap without horizontal overflow");
+    }
+    if (screen === "trade-sheet" || screen === "trade-sheet-no-volume") {
+        const text = await page.locator('#sheet').innerText();
+        if (!text.includes(texts.mini_trade_qty)) throw new Error("closed card must retain quantity");
+        const hasVolume = text.includes(texts.mini_trade_volume);
+        if (hasVolume !== (screen === "trade-sheet")) {
+            throw new Error("closed card must show volume only when the DTO supplies it");
+        }
+        if (hasVolume && !text.includes(fixture("trades").trades[0].volume_text)) {
+            throw new Error("closed card must render the Rust-formatted volume unchanged");
+        }
+    }
+}
+
 // Every screen at every viewport and theme; returns the files and unexpected page errors.
-async function shoot(browser, html, opts) {
+async function shoot(browser, html, opts, texts) {
     const shots = [];
     const log = { errors: [], sent: [] };
     for (const screen of SCREENS) {
@@ -230,6 +291,7 @@ async function shoot(browser, html, opts) {
             await page.waitForSelector(screen.ready || "#app-nav:not([hidden])");
             await settle(page);
             await screen.run(page);
+            await volumeChecks(page, screen.name, texts);
             const file = path.join(opts.out, `${screen.name}-${viewport.width}x${viewport.height}-${theme}.png`);
             await page.screenshot({ path: file });
             shots.push(file);
@@ -309,7 +371,7 @@ async function main() {
         .replace("__TELEGRAM_LABELS__", () => JSON.stringify(texts).replace(/</g, "\\u003c"));
     const browser = await chromium.launch({ executablePath: chromePath() });
     try {
-        const { shots, errors } = await shoot(browser, html, opts);
+        const { shots, errors } = await shoot(browser, html, opts, texts);
         console.log(`[OK] ${shots.length} screenshots -> ${opts.out}`);
         const failures = errors.map((e) => `page error: ${e}`);
         if (!opts.only) failures.push(...(await interactions(browser, html, texts)));
