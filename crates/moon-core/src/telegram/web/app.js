@@ -890,7 +890,7 @@
         var result = orderResult(order);
         if (result) top.appendChild(result);
         main.appendChild(top);
-        // Entry -> current price, then the quantity. Each figure is one unbreakable unit and the
+        // Entry -> current price, then entry volume. Each figure is one unbreakable unit and the
         // line wraps between them, so no price is ever cut to an ellipsis.
         var flow = el("div", "sub order-flow");
         if (order.entry_text || order.mark_text) {
@@ -903,11 +903,11 @@
             }
             flow.appendChild(prices);
         }
-        if (order.qty_text) {
-            var qty = el("span", "order-bit");
-            qty.appendChild(el("span", "k", tr("mini_orders_qty")));
-            qty.appendChild(el("span", "num", order.qty_text));
-            flow.appendChild(qty);
+        if (order.volume_text) {
+            var volume = el("span", "order-bit");
+            volume.appendChild(el("span", "k", tr("mini_orders_volume")));
+            volume.appendChild(el("span", "num", order.volume_text));
+            flow.appendChild(volume);
         }
         main.appendChild(flow);
         row.appendChild(main);
@@ -1579,6 +1579,7 @@
         restoreScroll(y);
     }
 
+    // Closed-trade details retain exchange quantity and add safe entry volume when available.
     function openTradeSheet(trade) {
         if (!sheet) return;
         hapticSelection();
@@ -1607,6 +1608,7 @@
         sheet.appendChild(result);
         detailLine(sheet, tr("mini_trade_entry"), trade.entry_text);
         detailLine(sheet, tr("mini_trade_exit"), trade.exit_text);
+        if (trade.volume_text) detailLine(sheet, tr("mini_trade_volume"), trade.volume_text);
         detailLine(sheet, tr("mini_trade_qty"), trade.qty_text);
         detailLine(sheet, tr("mini_trade_duration"), fmtDuration(trade.duration_secs));
         detailLine(sheet, tr("mini_trade_strategy"), trade.strategy || (trade.manual ? tr("mini_trade_manual") : "—"));

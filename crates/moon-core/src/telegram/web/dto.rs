@@ -165,7 +165,7 @@ pub struct BalancesDto {
     pub stale: u32,
 }
 
-/// One open order. Quantity and prices are preformatted text.
+/// One open order. Quote-money volume and prices are preformatted text.
 ///
 /// `side` is the closed set `"buy"` (long) or `"sell"` (short).
 /// `change_pct` and `change_text` are the directional move from entry to the
@@ -191,7 +191,8 @@ pub struct OrderDto {
     pub coin: String,
     pub market: String,
     pub side: String,
-    pub qty_text: String,
+    /// Entry notional in the market quote; absent when the entry inputs are unavailable.
+    pub volume_text: Option<String>,
     pub entry_text: Option<String>,
     pub mark_text: Option<String>,
     pub pnl: Option<f64>,
@@ -214,6 +215,7 @@ pub struct OrdersDto {
 ///
 /// `side` is the closed set `"buy"` (long) or `"sell"` (short). `closed_at` is UTC seconds.
 /// `profit` and `profit_pct` are `None` when the trade could not be valued.
+/// `volume_text` is the safe entry notional in USDT, absent when it cannot be reconstructed.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct TradeDto {
     pub core: u64,
@@ -234,6 +236,7 @@ pub struct TradeDto {
     pub entry_text: Option<String>,
     pub exit_text: Option<String>,
     pub qty_text: String,
+    pub volume_text: Option<String>,
     /// Seconds from entry to close; `None` when the entry time is unknown.
     pub duration_secs: Option<i64>,
     /// Strategy name; `None` for a manual trade or one whose strategy is unknown.

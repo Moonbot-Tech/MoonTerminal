@@ -970,6 +970,63 @@ fn mini_app_names_a_renamed_core_by_its_configured_name() {
     );
 }
 
+/// Substituting exit quantity for bought quantity inflates spot top-ups; a missing entry or
+/// conversion must stay absent even though the closed trade remains visible.
+#[test]
+fn mini_app_trades_keep_safe_entry_inputs_separate_from_exit_quantity() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+        core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, buydate INTEGER, closedate INTEGER,
+        boughtq REAL, quantity REAL, buyprice REAL, sellprice REAL, sellreason TEXT,
+        basecurrency INTEGER, profitbtc REAL, spentbtc REAL);
+        INSERT INTO orders_rep VALUES
+        (2,'Demo',1,'DEMO',100,150,2,9,250,260,'Sell Price',1,20,500),
+        (2,'Demo',2,'DEMO',100,160,2,9,NULL,260,'Sell Price',1,20,500),
+        (2,'Demo',3,'DEMO',100,170,2,9,250,260,'Sell Price',8,20,500);
+        ATTACH ':memory:' AS valuation;
+        CREATE TABLE valuation.trade_values (
+            source_kind INTEGER, core_uid INTEGER, row_id INTEGER, algorithm_version INTEGER,
+            closedate INTEGER, quote_ordinal INTEGER, profit_quote REAL, spent_quote REAL,
+            rate_minute_utc INTEGER, rate_usdt REAL, profit_usdt REAL, spent_usdt REAL);
+        CREATE TABLE valuation.rates (
+            algorithm_version INTEGER, quote_ordinal INTEGER, minute_utc INTEGER,
+            provider TEXT, symbol TEXT, orientation INTEGER, leg2_provider TEXT,
+            leg2_symbol TEXT, leg2_orientation INTEGER, resolved_minute_utc INTEGER);",
+    )
+    .unwrap();
+    let trades = super::read_mini_trades_on(
+        &conn,
+        chrono_tz::UTC,
+        super::TelegramReportAccess::Owner,
+        Default::default(),
+        10,
+    )
+    .unwrap();
+    assert_eq!(trades.len(), 3);
+    let ordinary = trades.iter().find(|t| t.close_utc == 150).unwrap();
+    assert_eq!(ordinary.bought_quantity, Some(2.0));
+    assert_eq!(ordinary.quantity, 9.0);
+    assert_eq!(ordinary.entry_volume_rate, Some(1.0));
+    assert_eq!(ordinary.profit_usdt, Some(20.0));
+    assert_eq!(
+        trades
+            .iter()
+            .find(|t| t.close_utc == 160)
+            .unwrap()
+            .entry_volume_rate,
+        None
+    );
+    assert_eq!(
+        trades
+            .iter()
+            .find(|t| t.close_utc == 170)
+            .unwrap()
+            .entry_volume_rate,
+        None
+    );
+}
+
 /// A window ending now learns whether any closed row lies past its end, on the production query.
 #[test]
 fn a_window_ending_now_learns_whether_rows_lie_past_its_end() {

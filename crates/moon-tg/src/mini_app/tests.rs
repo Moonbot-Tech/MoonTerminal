@@ -1,4 +1,4 @@
-//! Unit regressions for Mini App mass-action targeting and per-core list order.
+//! Unit regressions for Mini App targeting, ordering and safe entry-notional display.
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -11,7 +11,10 @@ use moon_core::telegram::web::dto::StrategyPendingDto;
 
 use moon_core::feed::OrderRow;
 
-use super::dto::{distance_text, order_to_entry_pct, strategy_pending, trade_strategy};
+use super::dto::{
+    distance_text, entry_volume_text, order_to_entry_pct, strategy_pending, trade_strategy,
+    trade_volume_text,
+};
 use super::{by_section, natural_cmp, scope_targets};
 
 /// `mini_app/mod.rs:scope_targets` keeps only visible cores, in visible order, once each.
@@ -196,6 +199,79 @@ fn the_telegram_log_prefix_still_matches_this_module() {
 fn distance_to_entry_text_carries_no_sign() {
     assert_eq!(distance_text(1.5).as_deref(), Some("1.50%"));
     assert_eq!(distance_text(-1.5).as_deref(), Some("1.50%"));
+}
+
+/// Replacing size-times-entry with coin quantity, hard-coding dollars, or rounding BTC to cents
+/// misstates a position on the phone. The independent notionals are 2 * 617 = 1234 and 3 * .004.
+#[test]
+fn entry_volume_uses_entry_notional_and_native_quote() {
+    assert_eq!(
+        entry_volume_text(2.0, 617.0, 1.0, "USDT").as_deref(),
+        Some("1 234.0$")
+    );
+    assert_eq!(
+        entry_volume_text(3.0, 0.004, 1.0, "BTC").as_deref(),
+        Some("0.012 BTC")
+    );
+    assert_eq!(
+        entry_volume_text(2.0, 240.0, 1.0, "USDC").as_deref(),
+        Some("480 USDC")
+    );
+    assert_eq!(
+        entry_volume_text(2.0, 250.0, 1.0, "USD").as_deref(),
+        Some("500.0$")
+    );
+    assert_eq!(
+        entry_volume_text(3.0, 0.004, 50_000.0, "USDT").as_deref(),
+        Some("600.0$")
+    );
+}
+
+/// Defaulting a missing entry/rate to zero or an unknown quote to dollars fabricates a figure;
+/// overflow must also stay absent. Known COIN-M USD quotes are covered by the positive case.
+#[test]
+fn entry_volume_withholds_unavailable_or_invalid_inputs() {
+    for invalid in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(entry_volume_text(2.0, invalid, 1.0, "USDT"), None);
+        assert_eq!(entry_volume_text(invalid, 100.0, 1.0, "USDT"), None);
+        assert_eq!(entry_volume_text(2.0, 100.0, invalid, "USDT"), None);
+    }
+    assert_eq!(entry_volume_text(f64::MAX, 2.0, 1.0, "USDT"), None);
+    assert_eq!(entry_volume_text(2.0, 250.0, 1.0, ""), None);
+    assert_eq!(entry_volume_text(2.0, 250.0, 1.0, "   "), None);
+}
+
+/// Using exit quantity or omitting the historical rate would show 1125 or 500 dollars instead
+/// of the independently calculated 2 * 250 * .5 = 250; unavailable conversion shows no figure.
+#[test]
+fn closed_volume_uses_bought_quantity_and_safe_rate() {
+    let mut trade = crate::report::MiniTrade {
+        core_uid: 2,
+        rec_id: 1,
+        coin: "DEMO".into(),
+        core_name: "Demo".into(),
+        is_short: true,
+        profit_usdt: Some(10.0),
+        pct: Some(2.0),
+        buy_utc: Some(100),
+        close_utc: 150,
+        buy_price: 250.0,
+        sell_price: 260.0,
+        quantity: 9.0,
+        bought_quantity: Some(2.0),
+        entry_volume_rate: Some(0.5),
+        strategy_id: Some(0),
+        channel_name: String::new(),
+    };
+    assert_eq!(trade_volume_text(&trade).as_deref(), Some("250.0$"));
+    trade.entry_volume_rate = None;
+    assert_eq!(trade_volume_text(&trade), None);
+    trade.entry_volume_rate = Some(0.5);
+    trade.bought_quantity = None;
+    assert_eq!(trade_volume_text(&trade), None);
+    trade.bought_quantity = Some(2.0);
+    trade.buy_price = 0.0;
+    assert_eq!(trade_volume_text(&trade), None);
 }
 
 /// `mini_app/dto.rs:trade_strategy` names strategy trades, marks only `0` manual, and leaves a missing
