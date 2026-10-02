@@ -1,6 +1,6 @@
 //! Telegram Settings navigation between the terminal bot and the core reader. With a station on a
-//! Linux server the bot on the server gets the same sections as the terminal's own — access, chats
-//! and their cores, the Mini App — and the terminal's bot is an extra below. The station itself
+//! Linux server the station is the only bot host; otherwise the terminal hosts it. Both show
+//! the bot, one Chats box and the Mini App. The station itself
 //! (install, status, actions, tape window) has its own Settings tab, hosted here as well because
 //! its editors are part of [`TelegramEd`].
 //!
@@ -182,10 +182,8 @@ impl SettingsView {
             .child(self.server_bot_section(cx))
     }
 
-    /// Render the bot's segment: without a station, the terminal bot's four sections; with one,
-    /// the server's bot on top with the same sections of its own, a line pointing to the Station
-    /// tab, and "Also a bot in the terminal" opening the terminal's four.
-    /// Server jobs show busy/outcome feedback here; status facts and the journal stay in Station.
+    /// Render exactly one bot: the station's when known, otherwise the terminal's.
+    /// Pairing and role edits share one Chats box; server jobs retain their outcome feedback.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -199,6 +197,20 @@ impl SettingsView {
     fn terminal_bot_segment(&self, cx: &Context<Self>) -> impl IntoElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
+        if self.telegram.server.known().is_some() {
+            return v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 16.0))
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.server.on_station").to_string()),
+                )
+                .child(self.server_bot_block(cx))
+                .children(self.server_bot_sections(cx))
+                .child(self.server_bot_progress(false, cx))
+                .into_any_element();
+        }
         let cfg = self.backend.read(cx);
         let draft = cfg.preview.as_ref().unwrap_or(&cfg.config);
         let telegram = &draft.telegram;
@@ -255,10 +267,72 @@ impl SettingsView {
         };
         let mini_app = telegram.mini_app_enabled;
 
-        // With a station on a server the bot runs there; the terminal's own bot is an extra, shown
-        // on demand. Without one, the terminal's bot is the only one.
-        let station_known = self.telegram.server.known().is_some();
-        let local_on = !station_known || self.server_bot_local_on(cx);
+        let pairing_actions = v_flex()
+            .gap(design::ui_px(cx, 8.0))
+            .child(div().text_color(muted).child(paired))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        MoonButton::new("telegram-pair")
+                            .primary()
+                            .padding_x(12.0)
+                            .label(t!("telegram.pair_new").to_string())
+                            .disabled(cfg.telegram.service.is_none() || token_changed)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.backend.update(cx, |b, bcx| {
+                                    b.issue_telegram_pairing();
+                                    bcx.notify();
+                                });
+                            }))
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new("telegram-reset")
+                            .ghost()
+                            .padding_x(12.0)
+                            .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
+                            .label(t!("telegram.pair_reset").to_string())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.backend.update(cx, |b, bcx| {
+                                    b.reset_telegram_pairing(bcx);
+                                    bcx.notify();
+                                });
+                            }))
+                            .render(),
+                    ),
+            )
+            .when(!pairing.is_empty() && !token_changed, |section| {
+                section.child(
+                    v_flex()
+                        .gap(design::ui_px(cx, 8.0))
+                        .child(div().font_family(design::mono()).child(pairing))
+                        .child(
+                            MoonButton::new("telegram-copy-pair")
+                                .label(t!("telegram.pair_copy").to_string())
+                                .padding_x(12.0)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    let command = this
+                                        .backend
+                                        .read(cx)
+                                        .telegram
+                                        .pairing
+                                        .as_ref()
+                                        .filter(|(_, expiry)| std::time::Instant::now() < *expiry)
+                                        .map(|(code, _)| format!("/pair {code}"));
+                                    if let Some(command) = command {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(command));
+                                        this.status =
+                                            Some((super::StatusMsg::Key("settings.copied"), false));
+                                        cx.notify();
+                                    }
+                                }))
+                                .render(),
+                        ),
+                )
+            })
+            .into_any_element();
         let local = v_flex()
             .w_full()
             .gap(design::ui_px(cx, 16.0))
@@ -301,96 +375,7 @@ impl SettingsView {
                         )
                     }),
             )
-            .child(
-                MoonGroupBox::new("telegram-access-section")
-                    .title(t!("telegram.section_access").to_string())
-                    .padding(14.0)
-                    .gap(10.0)
-                    .child(div().text_color(muted).child(paired))
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.access_hint").to_string()),
-                    )
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap(design::ui_px(cx, 8.0))
-                            .child(
-                                MoonButton::new("telegram-pair")
-                                    .primary()
-                                    .padding_x(12.0)
-                                    .label(t!("telegram.pair_new").to_string())
-                                    .disabled(cfg.telegram.service.is_none() || token_changed)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.backend.update(cx, |b, bcx| {
-                                            b.issue_telegram_pairing();
-                                            bcx.notify();
-                                        });
-                                    }))
-                                    .render(),
-                            )
-                            .child(
-                                MoonButton::new("telegram-reset")
-                                    .ghost()
-                                    .padding_x(12.0)
-                                    .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
-                                    .label(t!("telegram.pair_reset").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.backend.update(cx, |b, bcx| {
-                                            b.reset_telegram_pairing(bcx);
-                                            bcx.notify();
-                                        });
-                                    }))
-                                    .render(),
-                            ),
-                    )
-                    .when(!pairing.is_empty() && !token_changed, |section| {
-                        section.child(
-                            v_flex()
-                                .gap(design::ui_px(cx, 8.0))
-                                .child(div().font_family(design::mono()).child(pairing))
-                                .child(
-                                    MoonButton::new("telegram-copy-pair")
-                                        .label(t!("telegram.pair_copy").to_string())
-                                        .padding_x(12.0)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let command = this
-                                                .backend
-                                                .read(cx)
-                                                .telegram
-                                                .pairing
-                                                .as_ref()
-                                                .filter(|(_, expiry)| {
-                                                    std::time::Instant::now() < *expiry
-                                                })
-                                                .map(|(code, _)| format!("/pair {code}"));
-                                            if let Some(command) = command {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    command,
-                                                ));
-                                                this.status = Some((
-                                                    super::StatusMsg::Key("settings.copied"),
-                                                    false,
-                                                ));
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .render(),
-                                ),
-                        )
-                    }),
-            )
-            .child(
-                self.telegram_chat_access(
-                    access::ChatsOf::Terminal,
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.access_save_hint").to_string())
-                        .into_any_element(),
-                    cx,
-                ),
-            )
+            .child(self.telegram_chat_access(access::ChatsOf::Terminal, pairing_actions, None, cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
                     .title(t!("telegram.section_mini_app").to_string())
@@ -429,26 +414,13 @@ impl SettingsView {
         v_flex()
             .w_full()
             .gap(design::ui_px(cx, 16.0))
-            // The terminal bot's own introduction; with a station the server's bot block leads.
-            .when(!station_known, |s| {
-                s.child(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.intro").to_string()),
-                )
-            })
-            .when(station_known, |s| {
-                s.child(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.server.on_station").to_string()),
-                )
-                .child(self.server_bot_block(cx))
-                .children(self.server_bot_sections(cx))
-                .child(self.server_bot_progress(false, cx))
-                .child(self.server_bot_local_toggle(cx))
-            })
-            .when(local_on, |s| s.child(local))
+            .child(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.intro").to_string()),
+            )
+            .child(local)
+            .into_any_element()
     }
 }
 

@@ -734,6 +734,26 @@ fn connections_headers_are_muted_labels_not_links() {
     );
 }
 
+/// Restoring a fixed or capped popup width clips the longest localized option beside its check.
+/// Keep both Connections menus on MoonUI's content measurement at the active menu density.
+#[test]
+fn connections_total_and_preset_menus_fit_all_localized_rows() {
+    let table = read_src("settings/connections/table.rs");
+    for signature in ["fn total_dropdown(", "fn preset_dropdown("] {
+        let body = code_only(braced_body(&table, signature));
+        assert!(
+            body.contains(".fit_menu_width(0.0, f32::INFINITY)"),
+            "{signature} must fit its localized labels, check column and padding without a width cap"
+        );
+        for fixed_width in [".menu_width(", ".menu_width_scaled("] {
+            assert!(
+                !body.contains(fixed_width),
+                "{signature} must not override its content-fitted popup with {fixed_width}"
+            );
+        }
+    }
+}
+
 /// `settings/render.rs` must show dirty and clean captions and leave Save enabled in either state.
 /// Breakage: disabling Save when clean rejects the explicit no-fence contract, while removing the
 /// neutral variant or caption hides whether the current draft has changes.

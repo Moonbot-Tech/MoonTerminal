@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonPalette,
-    MoonScrollableElement, h_flex, rgba_from, v_flex,
+    MoonScrollableElement, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::SettingsView;
+use super::{SettingsView, slider_row};
 use crate::design;
 use crate::panels::common::SoundChoices;
 use crate::panels::{RadioMark, radio_items};
@@ -19,7 +19,7 @@ use moon_core::feed::ExchangeId;
 impl SettingsView {
     /// Align exchange and sound columns when they fit; narrow windows use labelled compact cards.
     ///
-    /// The tab is BOUNDED, not scrolled whole (see `render.rs`): the help text sits on top, the
+    /// The tab is BOUNDED, not scrolled whole (see `render.rs`): help and volume sit on top, the
     /// exchange table takes whatever height is left and scrolls on its own, and the folder block
     /// stays pinned at the bottom — with a long exchange list the buttons would otherwise leave
     /// the window before the table did.
@@ -67,6 +67,13 @@ impl SettingsView {
                     .text_color(rgba_from(palette.text, 1.0))
                     .child(t!("trade_sounds.help").to_string()),
             );
+        head = head.child(slider_row(
+            &t!("trade_sounds.volume"),
+            &self.trade_volume,
+            0.0..=100.0,
+            |value| format!("{value:.0}%"),
+            cx,
+        ));
         if backend.quiet_sleeping {
             head = head.child(
                 div()
@@ -279,10 +286,44 @@ impl SettingsView {
                     .disabled(preview_disabled)
                     .on_click(move |_, _, cx| {
                         if !preview_backend.read(cx).quiet_sleeping {
-                            crate::media::sound::play(&preview);
+                            crate::media::sound::play_trade_preview(
+                                &preview,
+                                preview_backend.read(cx).layout.trade_sound_volume_percent(),
+                            );
                         }
                     }),
                 ),
         )
     }
+}
+
+/// Build a retained slider that applies trade loudness immediately, like the sound pickers.
+pub(super) fn build_volume(
+    backend: &Entity<crate::Backend>,
+    cx: &mut Context<SettingsView>,
+) -> Entity<MoonSliderState> {
+    let volume = backend.read(cx).layout.trade_sound_volume_percent();
+    let state = cx.new(|_| {
+        MoonSliderState::new()
+            .max(100.0)
+            .min(0.0)
+            .step(1.0)
+            .default_value(f32::from(volume))
+    });
+    cx.subscribe(&state, |this, _, event: &MoonSliderEvent, cx| {
+        let MoonSliderEvent::Change(value) = event else {
+            return;
+        };
+        let volume = value.end().round().clamp(0.0, 100.0) as u32;
+        this.backend.update(cx, |backend, bcx| {
+            if backend.layout.trade_sound_volume != Some(volume) {
+                backend.layout.trade_sound_volume = Some(volume);
+                backend.layout_dirty = true;
+                bcx.notify();
+            }
+        });
+        cx.notify();
+    })
+    .detach();
+    state
 }

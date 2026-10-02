@@ -60,8 +60,6 @@ pub(in crate::settings) struct ServerBotEd {
     server_token: Entity<MoonInputState>,
     /// First login by a key file rather than a password.
     by_key: bool,
-    /// "Also a bot in the terminal", set by the user; `None` follows whether the terminal has one.
-    local_bot: Option<bool>,
     /// The server this terminal already set up, from `remote/hosts.toml`.
     known: Option<Target>,
     /// The progress lines' scroll: kept at the newest line.
@@ -128,7 +126,6 @@ pub(in crate::settings) fn build<T: 'static>(
         old_admin: input(window, cx, true),
         server_token: input(window, cx, true),
         by_key: false,
-        local_bot: None,
         known,
         lines_scroll: ScrollHandle::new(),
         seen_line_seq: 0,
@@ -236,24 +233,22 @@ fn draft_of(access: &Access) -> TelegramConfig {
 }
 
 impl SettingsView {
-    /// After each job end: forget the secrets typed for it, empty the bot's token input after a
-    /// hand-over erased or returned the token, re-read which server is set up, and keep the newest progress
+    /// After each job end: forget submitted secrets, refresh the token input after hand-over
+    /// erasure or return, re-read which server is set up, and keep the newest progress
     /// line in view.
     pub(in crate::settings) fn server_bot_sync(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (finished, erased, line_seq, bot_unknown, local_token, new_access, bot_gone) = {
+        let (finished, erased, line_seq, bot_unknown, new_access, bot_gone) = {
             let b = self.backend.read(cx);
-            let draft = b.preview.as_ref().unwrap_or(&b.config);
             let access = b.station.bot.as_ref().and_then(|s| s.access.as_ref());
             (
                 b.station.finished,
                 b.station.erased,
                 b.station.line_seq,
                 b.station.bot.is_none() && b.station.bot_error.is_none(),
-                !draft.telegram.token.is_empty(),
                 // Cloned only when it differs from the last read.
                 (access != self.telegram.server.access_seen.as_ref()).then(|| access.cloned()),
                 // Known to run no bot: its chats are gone, not merely unread for a moment.
@@ -292,11 +287,6 @@ impl SettingsView {
         }
         self.server_tape_sync(cx);
         let ed = &mut self.telegram.server;
-        // "Also a bot in the terminal" is fixed on first sight of a station: following the draft
-        // token live would hide the block while its token is being retyped.
-        if ed.known.is_some() && ed.local_bot.is_none() {
-            ed.local_bot = Some(local_token);
-        }
         // A window opened straight on this tab never "activated" it: the first render asks.
         let ask = self.active == super::super::Tab::Telegram
             && ed.known.is_some()
@@ -308,7 +298,6 @@ impl SettingsView {
             let known = known_server();
             if ed.known.as_ref().map(Target::addr) != known.as_ref().map(Target::addr) {
                 ed.station_access.clear();
-                ed.local_bot = None;
                 ed.bot_asked = false;
                 ed.access_seen = None;
                 ed.access_base = None;
@@ -336,7 +325,6 @@ impl SettingsView {
         let ed = &mut self.telegram.server;
         if erased != ed.seen_erased {
             ed.seen_erased = erased;
-            ed.local_bot = Some(false);
             self.telegram
                 .token
                 .update(cx, |st, c| st.set_value("", window, c));
@@ -344,7 +332,6 @@ impl SettingsView {
         let restored = self.backend.read(cx).station.restored;
         if restored != self.telegram.server.seen_restored {
             self.telegram.server.seen_restored = restored;
-            self.telegram.server.local_bot = Some(true);
             let token = self.backend.read(cx).config.telegram.token.clone();
             self.telegram
                 .token
@@ -509,7 +496,6 @@ impl SettingsView {
             }
         };
         let ed = &mut self.telegram.server;
-        ed.local_bot = None;
         ed.bot_asked = false;
         ed.access_seen = None;
         ed.access_base = None;
@@ -521,41 +507,6 @@ impl SettingsView {
             bcx.notify();
         });
         cx.notify();
-    }
-
-    /// Whether the terminal also runs a bot of its own next to the server's.
-    pub(in crate::settings) fn server_bot_local_on(&self, cx: &App) -> bool {
-        self.telegram.server.local_bot.unwrap_or_else(|| {
-            let b = self.backend.read(cx);
-            !b.preview
-                .as_ref()
-                .unwrap_or(&b.config)
-                .telegram
-                .token
-                .is_empty()
-        })
-    }
-
-    /// "Also a bot in the terminal": opens the terminal's own bot below; off empties its token in
-    /// the draft, and Save stops it.
-    pub(in crate::settings) fn server_bot_local_toggle(
-        &self,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        MoonCheckbox::new("server-local-bot")
-            .checked(self.server_bot_local_on(cx))
-            .label(t!("telegram.server.local_bot").to_string())
-            .description(t!("telegram.server.local_bot_hint").to_string())
-            .on_change(cx.listener(|this, v: &bool, window, cx| {
-                this.telegram.server.local_bot = Some(*v);
-                if !*v {
-                    // The token field writes the draft on Change.
-                    this.telegram
-                        .token
-                        .update(cx, |st, c| st.set_value("", window, c));
-                }
-                cx.notify();
-            }))
     }
 
     /// The bot on the server, on top of the bot's segment: how it is, its token.
@@ -699,8 +650,8 @@ impl SettingsView {
             )
     }
 
-    /// The running bot's own sections, as the terminal's bot has them: access with its pairing
-    /// code, the chats with their cores, the Mini App. None until the station has told its chats.
+    /// Render one Chats box with pairing and role actions, then the station's Mini App.
+    /// Sections appear once the station has reported its bot and access state.
     pub(in crate::settings) fn server_bot_sections(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let b = self.backend.read(cx);
         let Some(state) = b.station.bot.as_ref().filter(|s| s.access.is_some()) else {
@@ -721,17 +672,10 @@ impl SettingsView {
         };
         let code = state.pairing_code().map(str::to_owned);
 
-        let access =
-            MoonGroupBox::new("telegram-server-access")
-                .title(t!("telegram.server.access_title").to_string())
-                .padding(14.0)
-                .gap(10.0)
+        let pairing =
+            v_flex()
+                .gap(design::ui_px(cx, 8.0))
                 .child(div().text_color(muted).child(paired))
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.access_hint").to_string()),
-                )
                 .child(
                     h_flex()
                         .flex_wrap()
@@ -810,11 +754,6 @@ impl SettingsView {
 
         let apply_row = v_flex()
             .gap(design::ui_px(cx, 8.0))
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.access_apply_hint").to_string()),
-            )
             .child(
                 h_flex()
                     .flex_wrap()
@@ -910,9 +849,13 @@ impl SettingsView {
             });
 
         vec![
-            access.into_any_element(),
-            self.telegram_chat_access(ChatsOf::Station, apply_row, cx)
-                .into_any_element(),
+            self.telegram_chat_access(
+                ChatsOf::Station,
+                pairing.into_any_element(),
+                Some(apply_row),
+                cx,
+            )
+            .into_any_element(),
             mini.into_any_element(),
         ]
     }

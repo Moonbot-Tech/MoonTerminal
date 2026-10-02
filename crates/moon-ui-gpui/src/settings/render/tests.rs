@@ -183,7 +183,7 @@ fn a_slider_row_with_a_wrapped_label_keeps_the_tab_reachable(cx: &mut gpui::Test
     let scroll = ScrollHandle::new();
     let window = cx.add_window(|_, cx| SliderRowFixture {
         scroll: scroll.clone(),
-        slider: cx.new(|_| moon_ui::MoonSliderState::new().min(0.0).max(100.0)),
+        slider: cx.new(|_| moon_ui::MoonSliderState::new().max(100.0).min(0.0)),
     });
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     visual.update(|window, cx| {

@@ -27,13 +27,7 @@ fn station_and_telegram_tabs_both_show_the_shared_job_result() {
     let bot_sections = telegram
         .find(".children(self.server_bot_sections(cx))")
         .unwrap();
-    let local_toggle = telegram[bot_sections..]
-        .find(".child(self.server_bot_local_toggle(cx))")
-        .unwrap();
-    assert!(
-        telegram[bot_sections..bot_sections + local_toggle]
-            .contains(".child(self.server_bot_progress(false, cx))")
-    );
+    assert!(telegram[bot_sections..].contains(".child(self.server_bot_progress(false, cx))"));
     let station = include_str!("../server_bot.rs");
     let section = station
         .split("fn server_bot_section(")

@@ -432,8 +432,8 @@ impl Shell {
         let mk_slider = |cx: &mut Context<Self>, (min, max, step): (f32, f32, f32), def: f32| {
             cx.new(|_| {
                 MoonSliderState::new()
-                    .min(min)
                     .max(max)
+                    .min(min)
                     .step(step)
                     .default_value(def)
             })

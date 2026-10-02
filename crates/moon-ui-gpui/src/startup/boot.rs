@@ -51,7 +51,7 @@ pub(super) struct BootInput {
     pub instance: Option<super::instance::InstanceGuard>,
 }
 
-/// Build sessions, windows and the coordination loop for a configuration that is now open.
+/// Build sessions and windows, gating local Telegram before constructing any saved transport.
 pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let BootInput {
         layout,
@@ -148,9 +148,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
     let (feed_wake_tx, feed_wake_rx) = std::sync::mpsc::channel::<()>();
     let updater = cx.new(|_| crate::update::UpdateController::new());
 
-    // Read ownership BEFORE creating TelegramState: its constructor starts saved transport.
+    // Read station presence and ownership before the constructor can start saved transport.
     let station = crate::backend::station::StationJobs::load();
-    let telegram = if station.holds_bot() {
+    let telegram = if !station.allows_terminal_bot() {
         let mut state = moon_tg::TelegramState::new(
             &moon_core::config::TelegramConfig::default(),
             moon_tg::HostKind::Terminal,

@@ -15,14 +15,6 @@ telegram.intro:
   ru: "Подключите своего бота и привяжите чат для отчётов в Telegram. Mini App включается отдельно."
   en: "Connect your bot and pair your chat for Telegram reports. Mini App is enabled separately."
   es: "Conecta tu bot y vincula tu chat para recibir informes en Telegram. Mini App se activa por separado."
-telegram.section_access:
-  ru: "Доступ к терминалу"
-  en: "Terminal access"
-  es: "Acceso al terminal"
-telegram.access_hint:
-  ru: "Только привязанные чаты получают доступ. Для нового чата создайте код и отправьте команду своему боту."
-  en: "Only paired chats have access. For a new chat, generate a code and send the command to your bot."
-  es: "Solo los chats vinculados tienen acceso. Para un chat nuevo, genera un código y envía el comando a tu bot."
 telegram.state.connected:
   ru: "Бот подключён"
   en: "Bot connected"
@@ -118,9 +110,9 @@ telegram.token_hint:
   es: "Se guarda solo en la configuración cifrada. Un token vacío desactiva Telegram por completo."
 
 telegram.onboarding:
-  ru: "Создайте бота: отправьте /newbot в @BotFather. Вставьте полученный токен сюда и нажмите «Сохранить». Затем подключите свой чат в блоке «Доступ к терминалу»."
-  en: "Create a bot: send /newbot to @BotFather. Paste the token here and press Save. Then pair your chat in Terminal access."
-  es: "Crea un bot: envía /newbot a @BotFather. Pega el token aquí y pulsa Guardar. Después vincula tu chat en Acceso al terminal."
+  ru: "Создайте бота: отправьте /newbot в @BotFather. Вставьте токен и нажмите «Сохранить», затем добавьте чат в блоке «Чаты»."
+  en: "Create a bot: send /newbot to @BotFather. Paste the token and press Save, then add your chat in Chats."
+  es: "Crea un bot: envía /newbot a @BotFather. Pega el token y pulsa Guardar, luego añade tu chat en Chats."
 
 telegram.mini_app:
   ru: "Включить Mini App"
@@ -769,10 +761,6 @@ telegram.server.mini_app_hint:
   ru: "Вход в Mini App идёт через туннель Cloudflare: где Cloudflare заблокирован, Mini App не откроется — тогда выключите. Переключение перезапускает станцию."
   en: "The Mini App is reached through a Cloudflare tunnel: where Cloudflare is blocked it will not open, so switch it off there. Switching restarts the station."
   es: "La Mini App se abre a través de un túnel de Cloudflare: donde Cloudflare está bloqueado no se abrirá, así que desactívala. Cambiarlo reinicia la estación."
-telegram.server.access_title:
-  ru: "Доступ к боту на сервере"
-  en: "Access to the bot on the server"
-  es: "Acceso al bot en el servidor"
 telegram.server.access_apply:
   ru: "Применить на сервере"
   en: "Apply on the server"
@@ -781,10 +769,6 @@ telegram.server.access_revert:
   ru: "Отменить правки"
   en: "Discard edits"
   es: "Descartar cambios"
-telegram.server.access_apply_hint:
-  ru: "Правки чатов уходят на сервер кнопкой «Применить на сервере»; «Сохранить» их не касается."
-  en: "Chat edits go to the server with «Apply on the server»; Save does not touch them."
-  es: "Los cambios de chats van al servidor con «Aplicar en el servidor»; Guardar no los toca."
 telegram.server.bot_no_api:
   ru: "Станция не отвечает: запускается или её служба старше этого терминала — нажмите «Обновить службу»."
   en: "The station does not answer: it is starting, or its service is older than this terminal — press «Update the service»."
@@ -1261,14 +1245,6 @@ telegram.server.refresh:
   ru: "Обновить"
   en: "Refresh"
   es: "Actualizar"
-telegram.server.local_bot:
-  ru: "Также бот в терминале"
-  en: "Also a bot in the terminal"
-  es: "También un bot en el terminal"
-telegram.server.local_bot_hint:
-  ru: "Второй бот со своим токеном работает, пока открыт терминал. Токен должен быть другим: один токен — один бот."
-  en: "A second bot with its own token runs while the terminal is open. The token must differ: one token, one bot."
-  es: "Un segundo bot con su propio token funciona mientras el terminal está abierto. El token debe ser otro: un token, un bot."
 telegram.server.need_server_token:
   ru: "Укажите токен бота для сервера."
   en: "Enter the bot token for the server."
@@ -1338,3 +1314,8 @@ telegram.server.install_confirm:
   ru: "Доверять ключу и установить"
   en: "Trust this key and install"
   es: "Confiar en esta clave e instalar"
+
+telegram.server.chats_hint:
+  ru: "Добавьте чат по коду; первый — владелец, остальные видят выбранные ядра после «Применить на сервере»."
+  en: "Add chats by code; the first is the owner, others see assigned cores after Apply on the server."
+  es: "Añade chats por código; el primero es propietario, los demás ven núcleos asignados al Aplicar en el servidor."
