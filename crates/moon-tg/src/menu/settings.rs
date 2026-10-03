@@ -8,7 +8,7 @@
 
 use std::sync::mpsc::SyncSender;
 
-use moon_core::config::telegram_menu::{BotSettings, MenuItem, MenuLevel, ReportBasis, ReportView};
+use moon_core::config::telegram_menu::{BotSettings, MenuItem, ReportBasis, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
 use moon_core::telegram::notify::{CoreScope, NotifySettings};
@@ -111,10 +111,10 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
     Ok(match action {
         A::Root => Screen::Root,
         A::Buttons => Screen::Buttons,
-        A::ShowButton(level, item, show) => {
+        A::ShowButton(item, show) => {
             // The Settings button is how the chat reaches this; it stays on the keyboard here.
             if item != MenuItem::Settings {
-                bot(host, &|bot| bot.menu.set_shown(level, item, show))?;
+                bot(host, &|bot| bot.menu.set_shown(item, show))?;
             }
             Screen::Buttons
         }
@@ -284,41 +284,37 @@ fn root(host: &dyn TgHost, notify: bool) -> Rendered {
     )
 }
 
-/// The buttons a chat can show or hide, as ticks: the keyboard's, then the Report section's.
-/// Settings itself is not offered (it is how the chat got here), nor Status on a terminal.
+/// The keyboard buttons a chat can show or hide, as ticks. Settings itself is not offered (it is
+/// how the chat got here), nor Status on a terminal.
 fn buttons(bot: &BotSettings, host: HostKind) -> Rendered {
     let locale = rust_i18n::locale();
-    let mut rows = Vec::new();
-    for (level, title) in [
-        (MenuLevel::Keyboard, t!("telegram.menu_editor.keyboard")),
-        (MenuLevel::Report, t!("telegram.menu_editor.report")),
-    ] {
-        rows.push(vec![caption(title.to_string())]);
-        let entries: Vec<_> = bot
-            .menu
-            .rows(level)
-            .iter()
-            .flatten()
-            .filter(|entry| entry.item != MenuItem::Settings)
-            .filter(|entry| entry.item != MenuItem::Status || host == HostKind::Station)
-            .copied()
-            .collect();
-        for pair in entries.chunks(2) {
-            rows.push(
-                pair.iter()
-                    .map(|entry| {
-                        button(
-                            format!(
-                                "{} {}",
-                                tick(entry.show),
-                                button_text(entry.item, locale.as_ref())
-                            ),
-                            SettingsAction::ShowButton(level, entry.item, !entry.show),
-                        )
-                    })
-                    .collect(),
-            );
-        }
+    let mut rows = vec![vec![caption(
+        t!("telegram.menu_editor.keyboard").to_string(),
+    )]];
+    let entries: Vec<_> = bot
+        .menu
+        .keyboard
+        .iter()
+        .flatten()
+        .filter(|entry| entry.item != MenuItem::Settings)
+        .filter(|entry| entry.item != MenuItem::Status || host == HostKind::Station)
+        .copied()
+        .collect();
+    for pair in entries.chunks(2) {
+        rows.push(
+            pair.iter()
+                .map(|entry| {
+                    button(
+                        format!(
+                            "{} {}",
+                            tick(entry.show),
+                            button_text(entry.item, locale.as_ref())
+                        ),
+                        SettingsAction::ShowButton(entry.item, !entry.show),
+                    )
+                })
+                .collect(),
+        );
     }
     rows.push(back(SettingsAction::Root));
     (

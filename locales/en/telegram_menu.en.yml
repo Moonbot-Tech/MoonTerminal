@@ -1,5 +1,7 @@
 # Telegram bot menu: configurable reply-keyboard items and the inline section screens.
 # Button keys are `telegram.button_{item id}` — the ids are stable, never rename them.
+# `telegram.button_miniapp` names no item any more: it is the text of the keyboard's former Mini App
+# button, still matched when a chat presses one installed before it was removed. Keep it.
 _version: 1
 
 telegram.button_report: "Report"
@@ -18,9 +20,8 @@ telegram.menu.weekdays: "Mo Tu We Th Fr Sa Su"
 telegram.menu.months: "January February March April May June July August September October November December"
 # Settings → Telegram: the bot's menu box.
 telegram.menu_editor.title: "Bot menu"
-telegram.menu_editor.hint: "Buttons under the chat and in the Report section. The tick shows a button, \"new row\" starts a row, the arrows change the order."
+telegram.menu_editor.hint: "Buttons under the chat. The tick shows a button, \"new row\" starts a row, the arrows change the order."
 telegram.menu_editor.keyboard: "Keyboard under the chat"
-telegram.menu_editor.report: "Report section"
 telegram.menu_editor.new_row: "new row"
 telegram.menu_editor.up: "Up"
 telegram.menu_editor.down: "Down"

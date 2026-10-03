@@ -239,7 +239,7 @@ fn mini_app_session_guard_rechecks_both_live_authorization_conditions() {
 /// screen comes back.
 #[test]
 fn the_settings_section_is_the_owners() {
-    use moon_core::config::telegram_menu::{MenuItem, MenuLevel, ReportView};
+    use moon_core::config::telegram_menu::{MenuItem, ReportView};
     use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
     let _locale = crate::test_locale::force("en");
     let mut host = StationHost::new();
@@ -255,17 +255,13 @@ fn the_settings_section_is_the_owners() {
             .telegram
             .bot
             .menu
-            .rows(MenuLevel::Keyboard)
+            .keyboard
             .iter()
             .flatten()
             .any(|e| e.item == item && e.show)
     };
     assert!(!shown(&host, MenuItem::Report));
-    let show_report = settings(SettingsAction::ShowButton(
-        MenuLevel::Keyboard,
-        MenuItem::Report,
-        true,
-    ));
+    let show_report = settings(SettingsAction::ShowButton(MenuItem::Report, true));
     host.command(10, show_report.clone());
     assert!(shown(&host, MenuItem::Report));
     // A second press of the same (now stale) button does not undo it.
@@ -274,11 +270,7 @@ fn the_settings_section_is_the_owners() {
     // Settings itself stays on: the chat would lose its way back here.
     host.command(
         10,
-        settings(SettingsAction::ShowButton(
-            MenuLevel::Keyboard,
-            MenuItem::Settings,
-            false,
-        )),
+        settings(SettingsAction::ShowButton(MenuItem::Settings, false)),
     );
     assert!(shown(&host, MenuItem::Settings));
     // The station's Mini App is switched by its administrator, not from the chat.

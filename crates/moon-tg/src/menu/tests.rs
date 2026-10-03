@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use moon_core::config::telegram_menu::{BotMenu, ReportView};
+use moon_core::config::telegram_menu::ReportView;
 use moon_core::telegram::api::InlineKeyboardButton;
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
@@ -33,10 +33,10 @@ fn cell<'a>(rows: &'a [Vec<InlineKeyboardButton>], number: &str) -> &'a InlineKe
         .unwrap_or_else(|| panic!("no cell {number}"))
 }
 
-/// The Report section lays its buttons out as the menu says and opens reports in the bot's view.
+/// The Report section lays out its fixed buttons and opens reports in the bot's view.
 #[test]
 fn the_report_section_opens_reports_in_the_bot_view() {
-    let rows = super::report_rows(&BotMenu::default(), ReportView::Cores);
+    let rows = super::report_rows(ReportView::Cores);
     assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), vec![2, 2, 2]);
     let Press::Report(today) = press(&rows[0][0]) else {
         panic!("Today opens a report")

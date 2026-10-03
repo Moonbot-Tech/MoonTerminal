@@ -100,7 +100,7 @@ fn the_service_version_is_behind_current_or_unknown() {
 /// unedited when it holds what was read — whatever zone the station reports.
 #[test]
 fn the_station_draft_asks_for_what_the_station_knows() {
-    use moon_core::config::telegram_menu::{MenuItem, MenuLevel};
+    use moon_core::config::telegram_menu::MenuItem;
     use moon_core::station_api::Access;
     let read = Access {
         authorized_chat_ids: vec![7],
@@ -113,12 +113,7 @@ fn the_station_draft_asks_for_what_the_station_knows() {
     assert!(!super::access_edited(Some(&draft), Some(&read)));
     let asked = super::draft_access(&draft, &read);
     assert_eq!(asked.zone, None, "an edit never carries the zone back");
-    assert!(
-        draft
-            .bot
-            .menu
-            .set_shown(MenuLevel::Keyboard, MenuItem::Report, true)
-    );
+    assert!(draft.bot.menu.set_shown(MenuItem::Report, true));
     assert!(super::access_edited(Some(&draft), Some(&read)));
     // A station that predates the bot's settings: they are neither asked nor an edit.
     let old = Access {

@@ -211,7 +211,9 @@ pub fn parse_reply_button(
         .into_iter()
         .map(|item| (item.id(), button_command(item)))
         // The old "Home" button opened today's report through /start.
-        .chain(std::iter::once(("home", ParsedCommand::Start)));
+        .chain(std::iter::once(("home", ParsedCommand::Start)))
+        // The keyboard's former Mini App button: the chat's menu button opens the app now.
+        .chain(std::iter::once(("miniapp", ParsedCommand::MiniApp)));
     for (name, command) in buttons {
         for locale in crate::config::Language::ALL.map(crate::config::Language::code) {
             if [
@@ -244,7 +246,6 @@ pub fn button_command(item: MenuItem) -> ParsedCommand {
         }),
         MenuItem::Help => ParsedCommand::Help,
         MenuItem::Status => ParsedCommand::StationStatus,
-        MenuItem::MiniApp => ParsedCommand::MiniApp,
         MenuItem::Report => ParsedCommand::Menu(MenuAction::Report),
         MenuItem::Settings => ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
     }

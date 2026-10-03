@@ -7,7 +7,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use super::report::Preset;
-use crate::config::telegram_menu::{MenuItem, MenuLevel, ReportBasis, ReportView};
+use crate::config::telegram_menu::{MenuItem, ReportBasis, ReportView};
 
 /// What an inline menu button asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,10 +35,10 @@ pub enum MenuAction {
 pub enum SettingsAction {
     /// The section itself.
     Root,
-    /// Which buttons the keyboard and the Report section show.
+    /// Which buttons the keyboard shows.
     Buttons,
-    /// Show (`true`) or hide one button.
-    ShowButton(MenuLevel, MenuItem, bool),
+    /// Show (`true`) or hide one keyboard button.
+    ShowButton(MenuItem, bool),
     /// The view reports open in.
     View,
     SetView(ReportView),
@@ -68,17 +68,12 @@ pub enum SettingsAction {
 impl SettingsAction {
     /// The data after `m:s`, empty for the section itself.
     fn encode(self) -> String {
-        let level = |level: MenuLevel| match level {
-            MenuLevel::Keyboard => "k",
-            MenuLevel::Report => "r",
-        };
         let flag = |on: bool| if on { "1" } else { "0" };
         match self {
             Self::Root => String::new(),
             Self::Buttons => ":b".into(),
-            Self::ShowButton(lv, item, show) => {
-                format!(":b:{}:{}:{}", level(lv), item.id(), flag(show))
-            }
+            // `k` is the keyboard, kept from when the Report section had buttons of its own.
+            Self::ShowButton(item, show) => format!(":b:k:{}:{}", item.id(), flag(show)),
             Self::View => ":v".into(),
             Self::SetView(view) => format!(":v:{}", view.id()),
             Self::Basis => ":p".into(),
@@ -97,11 +92,6 @@ impl SettingsAction {
 
     /// Decode the parts after `m:s`; anything malformed is `None`.
     fn decode(parts: &[&str]) -> Option<Self> {
-        let level = |code: &str| match code {
-            "k" => Some(MenuLevel::Keyboard),
-            "r" => Some(MenuLevel::Report),
-            _ => None,
-        };
         let flag = |code: &str| match code {
             "1" => Some(true),
             "0" => Some(false),
@@ -110,11 +100,7 @@ impl SettingsAction {
         Some(match parts {
             [] => Self::Root,
             ["b"] => Self::Buttons,
-            ["b", lv, id, show] => {
-                let level = level(lv)?;
-                let item = MenuItem::from_id(id).filter(|item| level.allowed().contains(item))?;
-                Self::ShowButton(level, item, flag(show)?)
-            }
+            ["b", "k", id, show] => Self::ShowButton(MenuItem::from_id(id)?, flag(show)?),
             ["v"] => Self::View,
             ["v", id] => Self::SetView(ReportView::ALL.into_iter().find(|v| v.id() == *id)?),
             ["p"] => Self::Basis,

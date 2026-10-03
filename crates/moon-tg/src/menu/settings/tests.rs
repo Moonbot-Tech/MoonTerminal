@@ -1,4 +1,4 @@
-use moon_core::config::telegram_menu::{BotSettings, MenuItem, MenuLevel, ReportView};
+use moon_core::config::telegram_menu::{BotSettings, MenuItem, ReportView};
 use moon_core::telegram::api::InlineKeyboardButton;
 use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
 use moon_core::telegram::notify::NotifySettings;
@@ -34,16 +34,18 @@ fn the_buttons_screen_offers_what_a_chat_may_toggle() {
         let toggles: Vec<_> = actions(&rows)
             .into_iter()
             .filter_map(|action| match action {
-                SettingsAction::ShowButton(level, item, _) => Some((level, item)),
+                SettingsAction::ShowButton(item, _) => Some(item),
                 _ => None,
             })
             .collect();
-        assert!(!toggles.iter().any(|(_, item)| *item == MenuItem::Settings));
+        assert!(!toggles.contains(&MenuItem::Settings));
         assert_eq!(
-            toggles.contains(&(MenuLevel::Keyboard, MenuItem::Status)),
+            toggles.contains(&MenuItem::Status),
             host == HostKind::Station
         );
-        assert!(toggles.contains(&(MenuLevel::Report, MenuItem::Custom)));
+        // Keyboard buttons only, each once: the Report section is fixed.
+        let expected = MenuItem::ALL.len() - 1 - usize::from(host == HostKind::Terminal);
+        assert_eq!(toggles.len(), expected);
         assert_eq!(actions(&rows).last(), Some(&SettingsAction::Root));
     }
 }

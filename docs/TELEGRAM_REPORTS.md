@@ -46,8 +46,9 @@ daily grouping on the next request; a station-hosted bot receives the new zone w
 
 ## Bot menu
 
-Settings -> Telegram -> Bot menu lays out the reply keyboard and the Report section as rows of
-buttons: a tick shows a button, "new row" starts a row, the arrows change the order. The same box
+Settings -> Telegram -> Bot menu lays out the reply keyboard as rows of buttons: a tick shows a
+button, "new row" starts a row, the arrows change the order. The Report section always shows all
+its periods; the Mini App opens from the chat's menu button, not from the keyboard. The same box
 sets the view reports open in (by exchange, by core, by day) and whether periods count trades by
 close time (the default, as the terminal's Report) or by open time; a report read by open time
 says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot takes

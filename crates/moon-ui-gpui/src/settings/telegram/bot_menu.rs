@@ -1,5 +1,5 @@
-//! The bot's menu box: the reply keyboard and the Report section as a tree of buttons, the view
-//! a report opens in, and the time its period is counted by (`TelegramConfig::bot`).
+//! The bot's menu box: the reply keyboard as a tree of buttons, the view a report opens in, and
+//! the time its period is counted by (`TelegramConfig::bot`). The Report section is fixed.
 //!
 //! It edits whichever bot this terminal has: its own (the Settings draft, saved by Save) or the
 //! station's (the station's draft, sent by "Apply on the server" with the chats). Rows are never
@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::telegram_menu::{
-    BotMenu, BotSettings, MenuEntry, MenuItem, MenuLevel, ReportBasis, ReportView,
+    BotMenu, BotSettings, MenuEntry, MenuItem, ReportBasis, ReportView,
 };
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
@@ -44,51 +44,35 @@ impl BotMenuEd {
     }
 }
 
-/// The levels in the order the tree shows them, with their tree ids.
-const LEVELS: [(MenuLevel, &str); 2] = [(MenuLevel::Keyboard, "kb"), (MenuLevel::Report, "rp")];
+/// The tree id of the keyboard's root.
+const ROOT: &str = "kb";
 
 /// Unscaled height of one tree row.
 const ROW_H: f32 = 30.0;
 
-/// The button order of every level and the language its labels are in: all the tree's items
-/// depend on.
+/// The button order and the language its labels are in: all the tree's items depend on.
 fn shape_sig(menu: &BotMenu) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     rust_i18n::locale().hash(&mut hasher);
-    for (level, _) in LEVELS {
-        for (entry, _) in menu.flat(level) {
-            entry.item.hash(&mut hasher);
-        }
-        0xffu8.hash(&mut hasher);
+    for (entry, _) in menu.flat() {
+        entry.item.hash(&mut hasher);
     }
     hasher.finish()
 }
 
-/// The tree's items: a root per level, a child per button in order.
+/// The tree's items: the keyboard's root, a child per button in order.
 fn tree_items(menu: &BotMenu) -> Vec<MoonTreeItem> {
-    LEVELS
-        .into_iter()
-        .map(|(level, key)| {
-            MoonTreeItem::new(key, level_title(level))
-                .expanded(true)
-                .children(menu.flat(level).into_iter().map(|(entry, _)| {
-                    MoonTreeItem::new(
-                        format!("{key}:{}", entry.item.id()),
-                        item_caption(entry.item),
-                    )
-                    .folder(false)
-                }))
-        })
-        .collect()
-}
-
-/// A level's title.
-fn level_title(level: MenuLevel) -> String {
-    match level {
-        MenuLevel::Keyboard => t!("telegram.menu_editor.keyboard"),
-        MenuLevel::Report => t!("telegram.menu_editor.report"),
-    }
-    .to_string()
+    vec![
+        MoonTreeItem::new(ROOT, t!("telegram.menu_editor.keyboard").to_string())
+            .expanded(true)
+            .children(menu.flat().into_iter().map(|(entry, _)| {
+                MoonTreeItem::new(
+                    format!("{ROOT}:{}", entry.item.id()),
+                    item_caption(entry.item),
+                )
+                .folder(false)
+            })),
+    ]
 }
 
 /// A button's caption as the bot shows it, without its glyph.
@@ -100,7 +84,6 @@ fn item_caption(item: MenuItem) -> String {
 /// One button as a row shows it.
 #[derive(Clone, Copy)]
 struct Row {
-    level: MenuLevel,
     entry: MenuEntry,
     starts_row: bool,
     /// Its row's number, from 1.
@@ -112,24 +95,21 @@ struct Row {
 /// Every button of `menu` by tree id.
 fn rows_by_id(menu: &BotMenu) -> HashMap<String, Row> {
     let mut rows = HashMap::new();
-    for (level, key) in LEVELS {
-        let flat = menu.flat(level);
-        let count = flat.len();
-        let mut row = 0;
-        for (index, (entry, starts_row)) in flat.into_iter().enumerate() {
-            row += usize::from(starts_row);
-            rows.insert(
-                format!("{key}:{}", entry.item.id()),
-                Row {
-                    level,
-                    entry,
-                    starts_row,
-                    row,
-                    first: index == 0,
-                    last: index + 1 == count,
-                },
-            );
-        }
+    let flat = menu.flat();
+    let count = flat.len();
+    let mut row = 0;
+    for (index, (entry, starts_row)) in flat.into_iter().enumerate() {
+        row += usize::from(starts_row);
+        rows.insert(
+            format!("{ROOT}:{}", entry.item.id()),
+            Row {
+                entry,
+                starts_row,
+                row,
+                first: index == 0,
+                last: index + 1 == count,
+            },
+        );
     }
     rows
 }
@@ -215,7 +195,7 @@ impl SettingsView {
                 .into_any_element();
         }
         let rows = rows_by_id(&settings.menu);
-        let count = LEVELS.len() + rows.len();
+        let count = 1 + rows.len();
         let row_h = design::ui_px(cx, ROW_H);
         let weak = cx.entity().downgrade();
         let tree = MoonTree::custom(
@@ -359,7 +339,6 @@ fn item_row(
     app: &App,
 ) -> impl IntoElement {
     let item = row.entry.item;
-    let level = row.level;
     let key = |what: &str| -> SharedString {
         let side = match side {
             ChatsOf::Terminal => "t",
@@ -380,30 +359,24 @@ fn item_row(
         let edit = edit.clone();
         move |show: &bool, _: &mut Window, app: &mut App| {
             let show = *show;
-            edit(app, Box::new(move |menu| menu.set_shown(level, item, show)));
+            edit(app, Box::new(move |menu| menu.set_shown(item, show)));
         }
     };
     let starts = {
         let edit = edit.clone();
         move |starts: &bool, _: &mut Window, app: &mut App| {
             let starts = *starts;
-            edit(
-                app,
-                Box::new(move |menu| menu.set_row_start(level, item, starts)),
-            );
+            edit(app, Box::new(move |menu| menu.set_row_start(item, starts)));
         }
     };
     let up = {
         let edit = edit.clone();
         move |_: &ClickEvent, _: &mut Window, app: &mut App| {
-            edit(app, Box::new(move |menu| menu.move_item(level, item, true)));
+            edit(app, Box::new(move |menu| menu.move_item(item, true)));
         }
     };
     let down = move |_: &ClickEvent, _: &mut Window, app: &mut App| {
-        edit(
-            app,
-            Box::new(move |menu| menu.move_item(level, item, false)),
-        );
+        edit(app, Box::new(move |menu| menu.move_item(item, false)));
     };
     h_flex()
         .h(row_h)

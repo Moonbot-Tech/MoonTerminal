@@ -1,5 +1,7 @@
 # Telegram bot menu: configurable reply-keyboard items and the inline section screens.
 # Button keys are `telegram.button_{item id}` — the ids are stable, never rename them.
+# `telegram.button_miniapp` names no item any more: it is the text of the keyboard's former Mini App
+# button, still matched when a chat presses one installed before it was removed. Keep it.
 _version: 1
 
 telegram.button_report: "Informe"
@@ -18,9 +20,8 @@ telegram.menu.weekdays: "Lu Ma Mi Ju Vi Sá Do"
 telegram.menu.months: "Enero Febrero Marzo Abril Mayo Junio Julio Agosto Septiembre Octubre Noviembre Diciembre"
 # Settings → Telegram: the bot's menu box.
 telegram.menu_editor.title: "Menú del bot"
-telegram.menu_editor.hint: "Botones bajo el chat y en la sección Informe. La casilla muestra el botón, «nueva fila» empieza una fila, las flechas cambian el orden."
+telegram.menu_editor.hint: "Botones bajo el chat. La casilla muestra el botón, «nueva fila» empieza una fila, las flechas cambian el orden."
 telegram.menu_editor.keyboard: "Teclado bajo el chat"
-telegram.menu_editor.report: "Sección Informe"
 telegram.menu_editor.new_row: "nueva fila"
 telegram.menu_editor.up: "Arriba"
 telegram.menu_editor.down: "Abajo"

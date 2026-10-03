@@ -30,11 +30,7 @@ fn an_old_servers_file_loads_with_the_old_menu() {
     assert_eq!(file.telegram.owner_chat_id, Some(7));
     assert!(file.telegram.mini_app_enabled);
     assert_eq!(file.telegram.chat_access[0].core_uids, vec![3]);
-    let keyboard = file
-        .telegram
-        .bot
-        .menu
-        .visible(MenuLevel::Keyboard, |_| true);
+    let keyboard = file.telegram.bot.menu.visible(|_| true);
     assert_eq!(
         keyboard,
         vec![
@@ -57,7 +53,6 @@ fn settings_survive_the_servers_file_round_trip() {
                 vec![MenuEntry::shown(Report), MenuEntry::shown(Help)],
                 vec![MenuEntry::hidden(Today)],
             ],
-            report: vec![vec![MenuEntry::shown(Custom)]],
         }
         .normalized(),
     };
@@ -84,48 +79,72 @@ fn unknown_ids_degrade_instead_of_failing() {
     assert_eq!(bot.period_basis, ReportBasis::Open);
     assert_eq!(bot.menu.keyboard[0], vec![MenuEntry::shown(Today)]);
     assert_eq!(bot.menu.keyboard[1], vec![MenuEntry::hidden(Help)]);
-    // A level the file did not carry keeps its default.
-    assert_eq!(bot.menu.report, BotMenu::default().report);
     let back: BotSettings = serde_json::from_str(&serde_json::to_string(&bot).unwrap()).unwrap();
     assert_eq!(back, bot);
 }
 
-/// Normalizing keeps every allowed item exactly once and nothing the level does not allow.
+/// A menu saved while the Report section was configurable and the keyboard had a Mini App button
+/// loads: the section's own rows are ignored, the Mini App entry is dropped, the rest stays.
 #[test]
-fn normalizing_repairs_a_level() {
+fn a_menu_with_the_retired_report_level_and_mini_app_loads() {
+    let json = r#"{
+        "menu": {
+            "keyboard": [
+                [{"item": "today", "show": true}, {"item": "miniapp", "show": true}],
+                [{"item": "help", "show": false}]
+            ],
+            "report": [[{"item": "custom", "show": false}], [{"item": "today", "show": true}]]
+        }
+    }"#;
+    let bot: BotSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(bot.menu.keyboard[0], vec![MenuEntry::shown(Today)]);
+    assert_eq!(bot.menu.keyboard[1], vec![MenuEntry::hidden(Help)]);
+    assert_eq!(
+        bot.menu.keyboard.iter().flatten().count(),
+        MenuItem::ALL.len()
+    );
+    let text = serde_json::to_string(&bot).unwrap();
+    assert!(!text.contains("\"report\":"), "{text}");
+    assert!(!text.contains("miniapp"), "{text}");
+}
+
+/// The Report section is fixed: every period once, in three rows.
+#[test]
+fn the_report_section_lists_every_period_once() {
+    let items: Vec<MenuItem> = REPORT_SECTION
+        .iter()
+        .flat_map(|row| row.iter().copied())
+        .collect();
+    assert_eq!(
+        items,
+        vec![Today, Yesterday, Month, LastMonth, Daily, Custom]
+    );
+}
+
+/// Normalizing keeps every item exactly once.
+#[test]
+fn normalizing_repairs_the_keyboard() {
     let wide: Vec<MenuEntry> = MenuItem::ALL.into_iter().map(MenuEntry::shown).collect();
     let menu = BotMenu {
         keyboard: vec![Vec::new(), wide, vec![MenuEntry::hidden(Today)]],
-        report: vec![vec![
-            MenuEntry::shown(Report),
-            MenuEntry::shown(Month),
-            MenuEntry::shown(Month),
-        ]],
     }
     .normalized();
     assert_eq!(
         menu.keyboard.len(),
         2,
-        "empty row dropped, eleven split as 8 + 3"
+        "empty row dropped, ten split as 8 + 2"
     );
     assert_eq!(menu.keyboard[0].len(), MAX_ROW);
-    assert_eq!(menu.keyboard[1].len(), 3);
+    assert_eq!(menu.keyboard[1].len(), 2);
     assert!(
         menu.keyboard.iter().flatten().all(|e| e.show),
         "the repeated hidden Today is dropped, the first shown one stays"
     );
-    assert_eq!(menu.report[0], vec![MenuEntry::shown(Month)]);
-    let rest: Vec<MenuItem> = menu.report[1..].iter().flatten().map(|e| e.item).collect();
-    assert_eq!(rest, vec![Today, Yesterday, LastMonth, Daily, Custom]);
-    // A missing item takes its default visibility: the Report section shows all by default.
-    assert!(menu.report[1..].iter().flatten().all(|e| e.show));
-    for level in [MenuLevel::Keyboard, MenuLevel::Report] {
-        let mut items: Vec<MenuItem> = menu.rows(level).iter().flatten().map(|e| e.item).collect();
-        items.sort_by_key(|item| item.id());
-        let mut allowed = level.allowed().to_vec();
-        allowed.sort_by_key(|item| item.id());
-        assert_eq!(items, allowed);
-    }
+    let mut items: Vec<MenuItem> = menu.keyboard.iter().flatten().map(|e| e.item).collect();
+    items.sort_by_key(|item| item.id());
+    let mut all = MenuItem::ALL.to_vec();
+    all.sort_by_key(|item| item.id());
+    assert_eq!(items, all);
 }
 
 /// Every id reads back as its item, and no two items share one.
@@ -135,13 +154,13 @@ fn ids_are_stable_and_distinct() {
         assert_eq!(MenuItem::from_id(item.id()), Some(item));
     }
     assert_eq!(MenuItem::from_id("control"), None);
+    assert_eq!(MenuItem::from_id("miniapp"), None);
     assert_eq!(LastMonth.id(), "lastmonth");
-    assert_eq!(MiniApp.id(), "miniapp");
 }
 
-/// The items of a level, row by row.
-fn layout(menu: &BotMenu, level: MenuLevel) -> Vec<Vec<MenuItem>> {
-    menu.rows(level)
+/// The keyboard's items, row by row.
+fn layout(menu: &BotMenu) -> Vec<Vec<MenuItem>> {
+    menu.keyboard
         .iter()
         .map(|row| row.iter().map(|e| e.item).collect())
         .collect()
@@ -151,50 +170,32 @@ fn layout(menu: &BotMenu, level: MenuLevel) -> Vec<Vec<MenuItem>> {
 #[test]
 fn moving_swaps_neighbours_across_rows() {
     let mut menu = BotMenu::default();
-    let level = MenuLevel::Report;
-    // [Today, Yesterday] [Month, LastMonth] [Daily, Custom]
-    assert!(menu.move_item(level, Month, true));
+    // [Today, Yesterday, Help] [Month, LastMonth] [Status, Settings] [Report, Daily, Custom]
+    assert!(menu.move_item(Month, true));
     assert_eq!(
-        layout(&menu, level),
-        vec![
-            vec![Today, Month],
-            vec![Yesterday, LastMonth],
-            vec![Daily, Custom]
-        ]
+        layout(&menu)[..2],
+        [vec![Today, Yesterday, Month], vec![Help, LastMonth]]
     );
-    assert!(!menu.move_item(level, Today, true));
-    assert!(!menu.move_item(level, Custom, false));
-    assert!(menu.move_item(level, Today, false));
-    assert_eq!(layout(&menu, level)[0], vec![Month, Today]);
+    assert!(!menu.move_item(Today, true));
+    assert!(!menu.move_item(Custom, false));
+    assert!(menu.move_item(Today, false));
+    assert_eq!(layout(&menu)[0], vec![Yesterday, Today, Month]);
 }
 
 /// A row starts and joins at an item; the first item always starts one, and no row is empty.
 #[test]
 fn row_starts_split_and_join() {
     let mut menu = BotMenu::default();
-    let level = MenuLevel::Report;
-    assert!(menu.set_row_start(level, Yesterday, true));
+    assert!(menu.set_row_start(Yesterday, true));
     assert_eq!(
-        layout(&menu, level),
-        vec![
-            vec![Today],
-            vec![Yesterday],
-            vec![Month, LastMonth],
-            vec![Daily, Custom]
-        ]
+        layout(&menu)[..3],
+        [vec![Today], vec![Yesterday, Help], vec![Month, LastMonth]]
     );
-    assert!(menu.set_row_start(level, Month, false));
-    assert!(menu.set_row_start(level, Daily, false));
-    assert_eq!(
-        layout(&menu, level),
-        vec![
-            vec![Today],
-            vec![Yesterday, Month, LastMonth, Daily, Custom]
-        ]
-    );
-    assert!(!menu.set_row_start(level, Today, false));
-    assert!(!menu.set_row_start(level, Month, false), "already joined");
-    assert!(menu.rows(level).iter().all(|row| !row.is_empty()));
+    assert!(menu.set_row_start(Month, false));
+    assert_eq!(layout(&menu)[1], vec![Yesterday, Help, Month, LastMonth]);
+    assert!(!menu.set_row_start(Today, false));
+    assert!(!menu.set_row_start(Month, false), "already joined");
+    assert!(menu.keyboard.iter().all(|row| !row.is_empty()));
     assert_eq!(
         menu.clone().normalized(),
         menu,
@@ -206,27 +207,23 @@ fn row_starts_split_and_join() {
 #[test]
 fn showing_flips_one_entry() {
     let mut menu = BotMenu::default();
-    assert!(menu.set_shown(MenuLevel::Keyboard, Report, true));
-    assert!(!menu.set_shown(MenuLevel::Keyboard, Report, true));
-    assert_eq!(
-        menu.visible(MenuLevel::Keyboard, |_| true).last(),
-        Some(&vec![Report])
-    );
+    assert!(menu.set_shown(Report, true));
+    assert!(!menu.set_shown(Report, true));
+    assert_eq!(menu.visible(|_| true).last(), Some(&vec![Report]));
 }
 
 /// Joining a button onto a full row changes nothing, and says so: the tick does not lie.
 #[test]
 fn joining_a_full_row_is_no_change() {
     let mut menu = BotMenu::default();
-    let level = MenuLevel::Keyboard;
     for item in MenuItem::ALL {
-        menu.set_row_start(level, item, false);
+        menu.set_row_start(item, false);
     }
     // Ten buttons: a full row of eight and two more that cannot join it.
-    assert_eq!(menu.rows(level).len(), 2);
-    let ninth = menu.rows(level)[1][0].item;
+    assert_eq!(menu.keyboard.len(), 2);
+    let ninth = menu.keyboard[1][0].item;
     let before = menu.clone();
-    assert!(!menu.set_row_start(level, ninth, false));
+    assert!(!menu.set_row_start(ninth, false));
     assert_eq!(menu, before);
 }
 
@@ -236,12 +233,11 @@ fn joining_a_full_row_is_no_change() {
 fn a_new_item_takes_its_default_visibility() {
     let menu = BotMenu {
         keyboard: vec![vec![MenuEntry::shown(Today)]],
-        report: Vec::new(),
     }
     .normalized();
     let entry = |item| {
         *menu
-            .rows(MenuLevel::Keyboard)
+            .keyboard
             .iter()
             .flatten()
             .find(|e| e.item == item)
@@ -250,5 +246,4 @@ fn a_new_item_takes_its_default_visibility() {
     assert!(entry(Settings).show);
     assert!(entry(Status).show);
     assert!(!entry(Report).show);
-    assert!(!entry(MiniApp).show);
 }

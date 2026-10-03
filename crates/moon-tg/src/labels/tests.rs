@@ -200,7 +200,7 @@ fn the_keyboard_follows_the_configured_menu() {
         vec![
             MenuEntry::shown(Custom),
             MenuEntry::hidden(Today),
-            MenuEntry::shown(MiniApp),
+            MenuEntry::shown(Yesterday),
             MenuEntry::shown(Daily),
         ],
         vec![MenuEntry::shown(Settings)],
@@ -211,7 +211,7 @@ fn the_keyboard_follows_the_configured_menu() {
         keyboard_texts(crate::HostKind::Station, true, &telegram),
         vec![
             vec![text(Report), text(Status)],
-            vec![text(Custom), text(MiniApp), text(Daily)],
+            vec![text(Custom), text(Yesterday), text(Daily)],
             vec![text(Settings)],
         ]
     );
@@ -219,7 +219,7 @@ fn the_keyboard_follows_the_configured_menu() {
         keyboard_texts(crate::HostKind::Terminal, true, &telegram),
         vec![
             vec![text(Report)],
-            vec![text(Custom), text(MiniApp), text(Daily)],
+            vec![text(Custom), text(Yesterday), text(Daily)],
             vec![text(Settings)],
         ]
     );
@@ -228,17 +228,34 @@ fn the_keyboard_follows_the_configured_menu() {
             keyboard_texts(host, false, &telegram),
             vec![
                 vec![text(Report)],
-                vec![text(Custom), text(MiniApp), text(Daily)]
+                vec![text(Custom), text(Yesterday), text(Daily)]
             ]
         );
     }
     let labels = super::telegram_labels(crate::HostKind::Station);
-    for item in [Report, Status, Custom, MiniApp, Daily, Settings] {
+    for item in [Report, Status, Custom, Yesterday, Daily, Settings] {
         assert_eq!(
             parse_reply_button(&text(item), &labels),
             moon_core::telegram::commands::button_command(item),
             "{}",
             item.id()
+        );
+    }
+}
+
+/// The keyboard's former Mini App button, still installed in a chat, opens the app in any language.
+#[test]
+fn a_former_mini_app_button_still_opens_the_app() {
+    let labels = super::telegram_labels(crate::HostKind::Terminal);
+    for locale in ["ru", "en", "es"] {
+        let text = format!(
+            "\u{1f4f1} {}",
+            rust_i18n::t!("telegram.button_miniapp", locale = locale)
+        );
+        assert_eq!(
+            parse_reply_button(&text, &labels),
+            moon_core::telegram::commands::ParsedCommand::MiniApp,
+            "{text}"
         );
     }
 }
@@ -285,21 +302,16 @@ fn button_texts_are_distinct_in_every_locale() {
 fn full_menu(
     rows: Vec<Vec<moon_core::config::telegram_menu::MenuEntry>>,
 ) -> moon_core::config::telegram_menu::BotMenu {
-    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem, MenuLevel};
+    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem};
     let listed: Vec<MenuItem> = rows.iter().flatten().map(|e| e.item).collect();
-    let rest: Vec<MenuEntry> = MenuLevel::Keyboard
-        .allowed()
+    let rest: Vec<MenuEntry> = MenuItem::ALL
         .iter()
         .filter(|item| !listed.contains(item))
         .map(|&item| MenuEntry::hidden(item))
         .collect();
     let mut keyboard = rows;
     keyboard.push(rest);
-    BotMenu {
-        keyboard,
-        report: BotMenu::default().report,
-    }
-    .normalized()
+    BotMenu { keyboard }.normalized()
 }
 
 /// The command list has a description for every command every chat may use, on both hosts, and

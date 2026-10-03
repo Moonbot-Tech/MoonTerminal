@@ -88,11 +88,11 @@ fn presets_count_back_from_today() {
     }
 }
 
-/// Every Settings screen and switch survives its callback, inside Telegram's 64 bytes; a level
-/// that does not allow an item, or a value out of range, is refused.
+/// Every Settings screen and switch survives its callback, inside Telegram's 64 bytes; a button
+/// of the retired Report-section level, or a value out of range, is refused.
 #[test]
 fn settings_actions_round_trip() {
-    use crate::config::telegram_menu::{MenuLevel, ReportBasis, ReportView};
+    use crate::config::telegram_menu::{MenuItem, ReportBasis, ReportView};
     let mut actions = vec![
         SettingsAction::Root,
         SettingsAction::Buttons,
@@ -113,11 +113,11 @@ fn settings_actions_round_trip() {
     ];
     actions.extend(ReportView::ALL.map(SettingsAction::SetView));
     actions.extend(ReportBasis::ALL.map(SettingsAction::SetBasis));
-    for level in [MenuLevel::Keyboard, MenuLevel::Report] {
-        actions.extend(level.allowed().iter().flat_map(|&item| {
-            [true, false].map(|show| SettingsAction::ShowButton(level, item, show))
-        }));
-    }
+    actions.extend(
+        MenuItem::ALL
+            .iter()
+            .flat_map(|&item| [true, false].map(|show| SettingsAction::ShowButton(item, show))),
+    );
     for action in actions {
         let data = MenuAction::Settings(action).callback();
         assert!(data.len() <= 64, "{data}");
@@ -130,6 +130,8 @@ fn settings_actions_round_trip() {
     assert_eq!(MenuAction::Settings(SettingsAction::Root).callback(), "m:s");
     for data in [
         "m:s:b:r:help:1",
+        "m:s:b:r:today:1",
+        "m:s:b:k:miniapp:1",
         "m:s:b:x:today:1",
         "m:s:b:k:today",
         "m:s:b:k:today:2",

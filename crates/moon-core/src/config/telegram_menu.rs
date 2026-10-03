@@ -26,7 +26,6 @@ pub enum MenuItem {
     Help,
     /// The station's status; a station owner's only.
     Status,
-    MiniApp,
     /// The Report section: an inline menu of periods under one message.
     Report,
     /// The bot's own settings, under one message; the owner's only.
@@ -35,7 +34,7 @@ pub enum MenuItem {
 
 impl MenuItem {
     /// Every item, in the order a picker lists them.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 10] = [
         Self::Report,
         Self::Today,
         Self::Yesterday,
@@ -45,7 +44,6 @@ impl MenuItem {
         Self::Custom,
         Self::Help,
         Self::Status,
-        Self::MiniApp,
         Self::Settings,
     ];
 
@@ -61,7 +59,6 @@ impl MenuItem {
             Self::Custom => "custom",
             Self::Help => "help",
             Self::Status => "status",
-            Self::MiniApp => "miniapp",
             Self::Report => "report",
             Self::Settings => "settings",
         }
@@ -79,31 +76,12 @@ impl Serialize for MenuItem {
     }
 }
 
-/// Which level of the menu a row list is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuLevel {
-    /// The reply keyboard under the chat.
-    Keyboard,
-    /// The Report section's inline menu.
-    Report,
-}
-
-impl MenuLevel {
-    /// The items this level may hold, in default picker order.
-    pub fn allowed(self) -> &'static [MenuItem] {
-        match self {
-            Self::Keyboard => &MenuItem::ALL,
-            Self::Report => &[
-                MenuItem::Today,
-                MenuItem::Yesterday,
-                MenuItem::Month,
-                MenuItem::LastMonth,
-                MenuItem::Daily,
-                MenuItem::Custom,
-            ],
-        }
-    }
-}
+/// The Report section's inline menu: a fixed layout, every period shown.
+pub const REPORT_SECTION: [&[MenuItem]; 3] = [
+    &[MenuItem::Today, MenuItem::Yesterday],
+    &[MenuItem::Month, MenuItem::LastMonth],
+    &[MenuItem::Daily, MenuItem::Custom],
+];
 
 /// One button in a row: the item and whether it is shown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
@@ -127,14 +105,14 @@ impl MenuEntry {
 /// Telegram's widest inline keyboard row; a longer saved row is split.
 pub const MAX_ROW: usize = 8;
 
-/// The bot's menu: the reply keyboard and the Report section, each as rows of buttons.
+/// The bot's menu: the reply keyboard as rows of buttons. The Report section is fixed
+/// ([`REPORT_SECTION`]).
 ///
-/// Every level always lists each of its allowed items exactly once, hidden ones included, so a
-/// settings editor shows the whole set and a renderer only filters ([`Self::visible`]).
+/// The keyboard always lists each item exactly once, hidden ones included, so a settings editor
+/// shows the whole set and a renderer only filters ([`Self::visible`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct BotMenu {
     pub keyboard: Vec<Vec<MenuEntry>>,
-    pub report: Vec<Vec<MenuEntry>>,
 }
 
 impl Default for BotMenu {
@@ -149,45 +127,19 @@ impl Default for BotMenu {
                 vec![E::shown(Today), E::shown(Yesterday), E::shown(Help)],
                 vec![E::shown(Month), E::shown(LastMonth)],
                 vec![E::shown(Status), E::shown(Settings)],
-                vec![
-                    E::hidden(Report),
-                    E::hidden(Daily),
-                    E::hidden(Custom),
-                    E::hidden(MiniApp),
-                ],
-            ],
-            report: vec![
-                vec![E::shown(Today), E::shown(Yesterday)],
-                vec![E::shown(Month), E::shown(LastMonth)],
-                vec![E::shown(Daily), E::shown(Custom)],
+                vec![E::hidden(Report), E::hidden(Daily), E::hidden(Custom)],
             ],
         }
     }
 }
 
 impl BotMenu {
-    /// The rows of `level`.
-    pub fn rows(&self, level: MenuLevel) -> &[Vec<MenuEntry>] {
-        match level {
-            MenuLevel::Keyboard => &self.keyboard,
-            MenuLevel::Report => &self.report,
-        }
-    }
-
-    /// The rows of `level`, for an editor.
-    pub fn rows_mut(&mut self, level: MenuLevel) -> &mut Vec<Vec<MenuEntry>> {
-        match level {
-            MenuLevel::Keyboard => &mut self.keyboard,
-            MenuLevel::Report => &mut self.report,
-        }
-    }
-
-    /// The shown items of `level` that `keep` admits, row by row; rows left empty are dropped.
+    /// The shown keyboard items that `keep` admits, row by row; rows left empty are dropped.
     ///
     /// Args:
     ///     keep: The caller's filter — what the chat's role and the host allow.
-    pub fn visible(&self, level: MenuLevel, keep: impl Fn(MenuItem) -> bool) -> Vec<Vec<MenuItem>> {
-        self.rows(level)
+    pub fn visible(&self, keep: impl Fn(MenuItem) -> bool) -> Vec<Vec<MenuItem>> {
+        self.keyboard
             .iter()
             .map(|row| {
                 row.iter()
@@ -199,10 +151,10 @@ impl BotMenu {
             .collect()
     }
 
-    /// The entries of `level` in order, each with whether it starts a row: the shape an editor
+    /// The keyboard entries in order, each with whether it starts a row: the shape an editor
     /// works on, where rows can never be left empty.
-    pub fn flat(&self, level: MenuLevel) -> Vec<(MenuEntry, bool)> {
-        self.rows(level)
+    pub fn flat(&self) -> Vec<(MenuEntry, bool)> {
+        self.keyboard
             .iter()
             .flat_map(|row| {
                 row.iter()
@@ -212,12 +164,12 @@ impl BotMenu {
             .collect()
     }
 
-    /// Replace `level`'s rows with `flat`, cut where an entry starts a row (the first always does)
-    /// and where a row is full ([`MAX_ROW`]).
+    /// Replace the keyboard rows with `flat`, cut where an entry starts a row (the first always
+    /// does) and where a row is full ([`MAX_ROW`]).
     ///
     /// Returns:
     ///     Whether the rows changed: joining an entry onto a full row does not.
-    fn set_flat(&mut self, level: MenuLevel, flat: Vec<(MenuEntry, bool)>) -> bool {
+    fn set_flat(&mut self, flat: Vec<(MenuEntry, bool)>) -> bool {
         let mut rows: Vec<Vec<MenuEntry>> = Vec::new();
         for (entry, starts) in flat {
             match rows.last_mut() {
@@ -225,18 +177,18 @@ impl BotMenu {
                 _ => rows.push(vec![entry]),
             }
         }
-        let changed = *self.rows(level) != rows;
-        *self.rows_mut(level) = rows;
+        let changed = self.keyboard != rows;
+        self.keyboard = rows;
         changed
     }
 
-    /// Move `item` one place earlier (`up`) or later on `level`: within its row, or across the
-    /// edge into the next row, which keeps its place.
+    /// Move `item` one place earlier (`up`) or later: within its row, or across the edge into the
+    /// next row, which keeps its place.
     ///
     /// Returns:
     ///     Whether anything moved; the first entry cannot go up nor the last one down.
-    pub fn move_item(&mut self, level: MenuLevel, item: MenuItem, up: bool) -> bool {
-        let mut flat = self.flat(level);
+    pub fn move_item(&mut self, item: MenuItem, up: bool) -> bool {
+        let mut flat = self.flat();
         let Some(at) = flat.iter().position(|(entry, _)| entry.item == item) else {
             return false;
         };
@@ -248,15 +200,15 @@ impl BotMenu {
         let (a, b) = (flat[at].0, flat[other].0);
         flat[at].0 = b;
         flat[other].0 = a;
-        self.set_flat(level, flat)
+        self.set_flat(flat)
     }
 
     /// Start a new row at `item` (`starts`), or join it to the row before.
     ///
     /// Returns:
     ///     Whether anything changed; the first entry always starts a row.
-    pub fn set_row_start(&mut self, level: MenuLevel, item: MenuItem, starts: bool) -> bool {
-        let mut flat = self.flat(level);
+    pub fn set_row_start(&mut self, item: MenuItem, starts: bool) -> bool {
+        let mut flat = self.flat();
         let Some(at) = flat.iter().position(|(entry, _)| entry.item == item) else {
             return false;
         };
@@ -264,16 +216,16 @@ impl BotMenu {
             return false;
         }
         flat[at].1 = starts;
-        self.set_flat(level, flat)
+        self.set_flat(flat)
     }
 
-    /// Show or hide `item` on `level`.
+    /// Show or hide `item`.
     ///
     /// Returns:
     ///     Whether anything changed.
-    pub fn set_shown(&mut self, level: MenuLevel, item: MenuItem, show: bool) -> bool {
+    pub fn set_shown(&mut self, item: MenuItem, show: bool) -> bool {
         let entry = self
-            .rows_mut(level)
+            .keyboard
             .iter_mut()
             .flatten()
             .find(|entry| entry.item == item);
@@ -286,22 +238,18 @@ impl BotMenu {
         }
     }
 
-    /// This menu made valid: on every level, items the level does not allow and repeats are
-    /// dropped, rows wider than [`MAX_ROW`] are split, empty rows are removed, and each allowed
-    /// item missing from the level — one a newer build added — is appended on a row at the end,
-    /// shown or hidden as the default layout has it.
+    /// This menu made valid: repeats are dropped, rows wider than [`MAX_ROW`] are split, empty
+    /// rows are removed, and each item missing from the keyboard — one a newer build added — is
+    /// appended on a row at the end, shown or hidden as the default layout has it.
     pub fn normalized(mut self) -> Self {
-        for level in [MenuLevel::Keyboard, MenuLevel::Report] {
-            let rows = std::mem::take(self.rows_mut(level));
-            *self.rows_mut(level) = normalize_level(rows, level);
-        }
+        self.keyboard = normalize_keyboard(std::mem::take(&mut self.keyboard));
         self
     }
 }
 
 /// See [`BotMenu::normalized`].
-fn normalize_level(rows: Vec<Vec<MenuEntry>>, level: MenuLevel) -> Vec<Vec<MenuEntry>> {
-    let allowed = level.allowed();
+fn normalize_keyboard(rows: Vec<Vec<MenuEntry>>) -> Vec<Vec<MenuEntry>> {
+    let allowed = &MenuItem::ALL;
     let mut seen = Vec::new();
     let mut out: Vec<Vec<MenuEntry>> = Vec::new();
     for row in rows {
@@ -323,7 +271,7 @@ fn normalize_level(rows: Vec<Vec<MenuEntry>>, level: MenuLevel) -> Vec<Vec<MenuE
         .map(|&item| MenuEntry {
             item,
             show: BotMenu::default()
-                .rows(level)
+                .keyboard
                 .iter()
                 .flatten()
                 .any(|entry| entry.item == item && entry.show),
@@ -347,21 +295,19 @@ fn shown_by_default() -> bool {
     true
 }
 
-/// How a saved menu reads before it is normalized.
+/// How a saved menu reads before it is normalized. A `report` level saved by an earlier build,
+/// when the Report section was configurable, is ignored: the section is fixed now.
 #[derive(Deserialize)]
 struct RawMenu {
     #[serde(default)]
     keyboard: Option<Vec<Vec<RawEntry>>>,
-    #[serde(default)]
-    report: Option<Vec<Vec<RawEntry>>>,
 }
 
 impl<'de> Deserialize<'de> for BotMenu {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let raw = RawMenu::deserialize(d)?;
-        let defaults = Self::default();
-        let level = |rows: Option<Vec<Vec<RawEntry>>>, fallback: Vec<Vec<MenuEntry>>| match rows {
-            None => fallback,
+        let keyboard = match raw.keyboard {
+            None => Self::default().keyboard,
             Some(rows) => rows
                 .into_iter()
                 .map(|row| {
@@ -376,11 +322,7 @@ impl<'de> Deserialize<'de> for BotMenu {
                 })
                 .collect(),
         };
-        Ok(Self {
-            keyboard: level(raw.keyboard, defaults.keyboard),
-            report: level(raw.report, defaults.report),
-        }
-        .normalized())
+        Ok(Self { keyboard }.normalized())
     }
 }
 

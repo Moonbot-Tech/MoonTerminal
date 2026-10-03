@@ -9,7 +9,7 @@
 use std::sync::mpsc::SyncSender;
 
 use chrono::NaiveDate;
-use moon_core::config::telegram_menu::{MenuItem, MenuLevel, ReportView};
+use moon_core::config::telegram_menu::{MenuItem, REPORT_SECTION, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
@@ -41,7 +41,7 @@ pub(crate) fn run(
     let today = today(host);
     match action {
         MenuAction::Report => {
-            let rows = report_rows(&telegram.bot.menu, view);
+            let rows = report_rows(view);
             let _ = reply.try_send(section(
                 t!("telegram.button_report").to_string(),
                 t!("telegram.menu.report_pick").to_string(),
@@ -107,21 +107,14 @@ fn section(
     }
 }
 
-/// The Report section's buttons, as the menu lays them out; a section with nothing shown keeps
-/// Today, so it never opens empty.
-fn report_rows(
-    menu: &moon_core::config::telegram_menu::BotMenu,
-    view: ReportView,
-) -> Vec<Vec<InlineKeyboardButton>> {
-    let mut rows = menu.visible(MenuLevel::Report, |_| true);
-    if rows.is_empty() {
-        rows = vec![vec![MenuItem::Today]];
-    }
+/// The Report section's buttons, in its fixed layout ([`REPORT_SECTION`]).
+fn report_rows(view: ReportView) -> Vec<Vec<InlineKeyboardButton>> {
     let locale = rust_i18n::locale();
-    rows.into_iter()
+    REPORT_SECTION
+        .iter()
         .map(|row| {
-            row.into_iter()
-                .filter_map(|item| {
+            row.iter()
+                .filter_map(|&item| {
                     let data = report_callback(item, view)?;
                     Some(InlineKeyboardButton::callback(
                         button_text(item, locale.as_ref()),

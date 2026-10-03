@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
 use moon_core::config::{Language, TelegramConfig};
-use moon_core::config::telegram_menu::{MenuItem, MenuLevel};
+use moon_core::config::telegram_menu::MenuItem;
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::runtime::Response;
@@ -67,9 +67,10 @@ pub(crate) fn navigation_keyboard(
     telegram: &TelegramConfig,
 ) -> ReplyMarkup {
     let locale = rust_i18n::locale();
-    let mut rows = telegram.bot.menu.visible(MenuLevel::Keyboard, |item| {
-        keyboard_admits(item, host, owner)
-    });
+    let mut rows = telegram
+        .bot
+        .menu
+        .visible(|item| keyboard_admits(item, host, owner));
     if rows.is_empty() {
         rows = vec![vec![MenuItem::Report]];
     }
@@ -127,7 +128,6 @@ fn item_icon(item: MenuItem) -> &'static str {
         MenuItem::Custom => "\u{1f50e}",
         MenuItem::Help => "\u{2139}\u{fe0f}",
         MenuItem::Status => "\u{1f4e1}",
-        MenuItem::MiniApp => "\u{1f4f1}",
         MenuItem::Report => "\u{1f4ca}",
         MenuItem::Settings => "\u{2699}\u{fe0f}",
     }
@@ -185,7 +185,12 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
     );
     // Keep old keyboard labels usable after the desktop locale changes.
     for locale in Language::ALL.map(Language::code) {
-        for (name, icon) in [("home", "\u{1f4ca}"), ("help", "\u{2753}")] {
+        // The keyboard's Mini App button is gone; one still installed opens the app.
+        for (name, icon) in [
+            ("home", "\u{1f4ca}"),
+            ("help", "\u{2753}"),
+            ("miniapp", "\u{1f4f1}"),
+        ] {
             let key = format!("telegram.button_{name}");
             labels.insert(
                 format!("button_{name}_legacy_emoji_{locale}"),
