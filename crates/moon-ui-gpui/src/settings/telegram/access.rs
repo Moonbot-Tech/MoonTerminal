@@ -113,7 +113,7 @@ impl SettingsView {
     }
 
     /// `side`'s chats as edited; `None` while the station's are not read yet.
-    fn chats<'a>(&'a self, side: ChatsOf, cx: &'a App) -> Option<&'a TelegramConfig> {
+    pub(super) fn chats<'a>(&'a self, side: ChatsOf, cx: &'a App) -> Option<&'a TelegramConfig> {
         match side {
             ChatsOf::Terminal => {
                 let b = self.backend.read(cx);
@@ -137,7 +137,7 @@ impl SettingsView {
     }
 
     /// Change `side`'s draft; `edit` says whether it changed anything.
-    fn chats_edit(
+    pub(super) fn chats_edit(
         &mut self,
         side: ChatsOf,
         cx: &mut Context<Self>,

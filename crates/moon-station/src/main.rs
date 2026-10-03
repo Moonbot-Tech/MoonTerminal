@@ -58,7 +58,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use moon_core::session::SessionManager;
-use moon_core::station_api::{Access, Answer, BotStatus, Reply, Request, Status};
+use moon_core::station_api::{Answer, BotStatus, Reply, Request, Status};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -364,11 +364,11 @@ fn answer(
         },
         Request::AccessGet => match bot {
             None => Err(NO_BOT.to_owned()),
-            Some(_) => Ok(Answer::Access(Access::of(&cfg.telegram))),
+            Some(bot) => Ok(Answer::Access(bot.access(cfg))),
         },
         Request::AccessSet { base, access } => match bot {
             None => Err(NO_BOT.to_owned()),
-            Some(bot) => bot.set_access(cfg, &base, access).map(Answer::Access),
+            Some(bot) => bot.set_access(cfg, &base, *access).map(Answer::Access),
         },
         // Answered on the API's thread (`pull::answer_directly`); never sent here.
         Request::TapeFetch { .. } | Request::TracesFetch { .. } => {

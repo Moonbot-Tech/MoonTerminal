@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::TelegramConfig;
 use crate::config::telegram_access::TelegramChatAccess;
+use crate::config::telegram_menu::BotSettings;
 use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
 use crate::telegram::TelegramStatus;
 use crate::telegram::runtime::mini_app::MiniAppStatus;
@@ -71,9 +72,16 @@ pub enum Request {
     AccessGet,
     /// Replace the paired chats with `access`, only while they are still `base` — as the client
     /// read them: a chat paired on the station after that read is not dropped by an edit made
-    /// before it.
+    /// before it. The bot's settings and zone ride along: an absent one keeps the station's, and
+    /// a `base` that carries the bot's settings is refused when they moved since (see
+    /// [`Access::base_holds`]).
     #[serde(rename = "access.set")]
-    AccessSet { base: Access, access: Access },
+    // Boxed: the bot's settings make an access the largest thing a request carries. The wire
+    // form is the same.
+    AccessSet {
+        base: Box<Access>,
+        access: Box<Access>,
+    },
     /// What the station's recording holds inside these stretches of these markets — the tape of
     /// closed trades the terminal lacks. Answered from the file alone, off the main loop.
     #[serde(rename = "tape.fetch")]
@@ -331,11 +339,13 @@ pub struct PairingCode {
     pub expires_in_s: u64,
 }
 
-/// Who may talk to the bot: the paired chats, the owner, the viewers' grants. Also the station's
-/// own `telegram.json`.
+/// Who may talk to the bot: the paired chats, the owner, the viewers' grants — and the bot's own
+/// settings and the zone its reports are cut in. Also the station's own `telegram.json`.
 ///
 /// Unknown fields are ignored, not refused: a station binary rolled back after a newer one wrote
-/// the file must still start its bot. Nothing secret is here — the token is a credential.
+/// the file must still start its bot. The bot's settings and the zone are optional both ways: a
+/// station or terminal that predates them leaves them out, which keeps the other side's — so
+/// [`PROTO_VERSION`] did not move for them. Nothing secret is here — the token is a credential.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Access {
     #[serde(default)]
@@ -344,23 +354,55 @@ pub struct Access {
     pub owner_chat_id: Option<i64>,
     #[serde(default)]
     pub chat_access: Vec<TelegramChatAccess>,
+    /// The bot's menu and report settings. A station always answers with them; absent from a
+    /// station that predates them, and in a change it means "keep the station's".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotSettings>,
+    /// The IANA zone the station's reports are cut in: the terminal's header clock, pushed when it
+    /// changes. Absent keeps the station's (and on disk, `station.toml`'s `[telegram] zone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
 }
 
 impl Access {
-    /// The access part of a Telegram configuration.
+    /// The chats and the bot's settings of a Telegram configuration; no zone.
     pub fn of(telegram: &TelegramConfig) -> Self {
         Self {
             authorized_chat_ids: telegram.authorized_chat_ids.clone(),
             owner_chat_id: telegram.owner_chat_id,
             chat_access: telegram.chat_access.clone(),
+            bot: Some(telegram.bot.clone()),
+            zone: None,
         }
     }
 
-    /// Put this access into `telegram`, leaving its token and switches as they are.
+    /// Put this access into `telegram`, leaving its token and switches as they are; the bot's
+    /// settings only when they are here.
     pub fn apply_to(&self, telegram: &mut TelegramConfig) {
         telegram.authorized_chat_ids = self.authorized_chat_ids.clone();
         telegram.owner_chat_id = self.owner_chat_id;
         telegram.chat_access = self.chat_access.clone();
+        if let Some(bot) = &self.bot {
+            telegram.bot = bot.clone();
+        }
+    }
+
+    /// Whether the chats are the same: who is paired, the owner, the grants.
+    pub fn same_chats(&self, other: &Self) -> bool {
+        self.authorized_chat_ids == other.authorized_chat_ids
+            && self.owner_chat_id == other.owner_chat_id
+            && self.chat_access == other.chat_access
+    }
+
+    /// Whether a change edited from `self` (as the client read it) still applies to `current`:
+    /// the same chats, and — when the client read the bot's settings — the same settings. The zone
+    /// is never compared: it is pushed on its own and an edit of the chats does not carry it.
+    pub fn base_holds(&self, current: &Self) -> bool {
+        self.same_chats(current)
+            && self
+                .bot
+                .as_ref()
+                .is_none_or(|bot| current.bot.as_ref() == Some(bot))
     }
 
     /// Upgrade a saved pairing that predates the owner: its first chat becomes the explicit owner.

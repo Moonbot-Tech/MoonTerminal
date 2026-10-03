@@ -52,11 +52,40 @@ pub fn set_access(target: &Target, base: &Access, access: &Access) -> anyhow::Re
     let conn = admin_conn(target)?;
     current_helper_status(&conn)?;
     let request = Request::AccessSet {
-        base: base.clone(),
-        access: access.clone(),
+        base: Box::new(base.clone()),
+        access: Box::new(access.clone()),
     };
     match call(&conn, &request)? {
         Answer::Access(saved) => Ok(saved),
         other => anyhow::bail!("the station answered a change of chats with {other:?}"),
+    }
+}
+
+/// Make `zone` the zone the station's reports are cut in, live: the chats as read now go back
+/// unchanged with it.
+///
+/// Returns:
+///     The station's access after the change; `Ok(None)` from a station that predates the bot's
+///     settings, which keeps the zone of its `station.toml` and is not changed.
+pub fn set_zone(target: &Target, zone: &str) -> anyhow::Result<Option<Access>> {
+    let conn = admin_conn(target)?;
+    current_helper_status(&conn)?;
+    let read = match call(&conn, &Request::AccessGet)? {
+        Answer::Access(access) => access,
+        other => anyhow::bail!("the station answered a read of chats with {other:?}"),
+    };
+    if read.bot.is_none() {
+        return Ok(None);
+    }
+    let request = Request::AccessSet {
+        access: Box::new(Access {
+            zone: Some(zone.to_owned()),
+            ..read.clone()
+        }),
+        base: Box::new(read),
+    };
+    match call(&conn, &request)? {
+        Answer::Access(saved) => Ok(Some(saved)),
+        other => anyhow::bail!("the station answered a change of zone with {other:?}"),
     }
 }

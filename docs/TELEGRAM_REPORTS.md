@@ -1,8 +1,8 @@
 # Telegram chat reports
 
 Pair your private chat in Settings -> Telegram, then send `/start`. A short welcome installs a
-persistent reply keyboard with period choices and Help. The separate report opens as
-an exchange summary with its inline keyboard already attached. Both messages remain editable only
+persistent reply keyboard with period choices and Help. The separate report opens in the bot's
+report view (by exchange unless changed) with its inline keyboard already attached. Both messages remain editable only
 where Telegram permits it: the welcome is not reused as a report.
 
 The bottom reply keyboard opens a global overview for the selected period. Buttons beneath a report
@@ -26,19 +26,35 @@ Historical cores without known membership appear under Unidentified, never a gue
 
 | Command | Result |
 | --- | --- |
-| `/report` or `/today` | Today by exchange |
+| `/report` or `/today` | Today |
 | `/hour` | Current calendar hour |
 | `/yesterday` | Previous calendar day |
 | `/month` | Current month to now |
 | `/lastmonth` | Previous calendar month |
 | `/daily` | Current month by day |
-| `/report 2026-09-01 2026-09-10` | Custom period by exchange |
+| `/report 2026-09-01 2026-09-10` | Custom period |
 | `/daily 2026-09-01 2026-09-10` | Custom period by day |
 
-Custom dates are inclusive, at most 366 days. Calendar boundaries follow the terminal clock's
+Period commands and buttons open in the bot's report view; `/daily` always splits by day, and a
+one-day period always opens by exchange. Custom dates are inclusive, at most 366 days. Calendar boundaries follow the terminal clock's
 selected time zone, including daylight-saving changes. Paging and changing the view retain the
-resolved UTC bounds; A new reply-keyboard request resolves the period again. Changing the terminal's time
-zone changes the report's display and daily grouping on the next request.
+resolved UTC bounds and the period basis the report was read on; a new reply-keyboard request
+resolves the period again. Changing the terminal's time zone changes the report's display and
+daily grouping on the next request; a station-hosted bot receives the new zone without a restart.
+
+## Bot menu
+
+Settings -> Telegram -> Bot menu lays out the reply keyboard and the Report section as rows of
+buttons: a tick shows a button, "new row" starts a row, the arrows change the order. The same box
+sets the view reports open in (by exchange, by core, by day) and whether periods count trades by
+close time (the default, as the terminal's Report) or by open time; a report read by open time
+says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot takes
+them with "Apply on the server", without a restart. Chats get a changed keyboard with the bot's
+next message; a button already on an older keyboard keeps working within the chat's role.
+
+The Report button opens a menu under one message, which turns into the report pressed. Custom
+period offers the last 7 days, the last 30 days, last week, and a calendar: the first press picks
+the first day, the second the last one, up to a year later.
 
 Settings -> Telegram -> Chats and core access assigns one owner and any number of read-only
 viewers. The first paired chat is the owner, including when upgrading an older flat pairing list;
@@ -71,7 +87,7 @@ Formatting uses Telegram's [Rich Messages](https://core.telegram.org/bots/api#ri
 introduced in Bot API 10.1. Use a current Telegram client. This feature requires no additional
 bot, public website, or trading permissions.
 
-Exchange buttons use brand-colored circles. Today omits the redundant daily view.
+Exchange buttons use brand-colored circles. A one-day report omits the redundant daily view.
 Main-table USDT amounts carry a `$` suffix; native-currency details keep their own ticker.
 
 Native details use two money columns, with each full core name above its figures.

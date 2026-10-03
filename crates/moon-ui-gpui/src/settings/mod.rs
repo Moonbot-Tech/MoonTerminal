@@ -706,6 +706,7 @@ fn settings_sig(b: &Backend) -> u64 {
     cfg.telegram.owner_chat_id.hash(&mut h);
     cfg.telegram.chat_access.hash(&mut h);
     cfg.telegram.mini_app_enabled.hash(&mut h);
+    cfg.telegram.bot.hash(&mut h);
 
     cfg.groups.len().hash(&mut h);
     for g in &cfg.groups {

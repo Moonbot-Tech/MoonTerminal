@@ -2048,6 +2048,8 @@ impl Backend {
             self.layout_dirty = true;
             if zone_changed {
                 self.display_time_revision.update(cx, |_, cx| cx.notify());
+                // A station's bot cuts its reports in this zone too.
+                self.station_zone_sync(cx);
             }
         }
     }

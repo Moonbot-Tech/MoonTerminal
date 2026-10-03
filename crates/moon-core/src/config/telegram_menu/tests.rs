@@ -137,3 +137,94 @@ fn ids_are_stable_and_distinct() {
     assert_eq!(LastMonth.id(), "lastmonth");
     assert_eq!(MiniApp.id(), "miniapp");
 }
+
+/// The items of a level, row by row.
+fn layout(menu: &BotMenu, level: MenuLevel) -> Vec<Vec<MenuItem>> {
+    menu.rows(level)
+        .iter()
+        .map(|row| row.iter().map(|e| e.item).collect())
+        .collect()
+}
+
+/// Moving swaps neighbours and crosses a row edge without moving the edge; the ends stay put.
+#[test]
+fn moving_swaps_neighbours_across_rows() {
+    let mut menu = BotMenu::default();
+    let level = MenuLevel::Report;
+    // [Today, Yesterday] [Month, LastMonth] [Daily, Custom]
+    assert!(menu.move_item(level, Month, true));
+    assert_eq!(
+        layout(&menu, level),
+        vec![
+            vec![Today, Month],
+            vec![Yesterday, LastMonth],
+            vec![Daily, Custom]
+        ]
+    );
+    assert!(!menu.move_item(level, Today, true));
+    assert!(!menu.move_item(level, Custom, false));
+    assert!(menu.move_item(level, Today, false));
+    assert_eq!(layout(&menu, level)[0], vec![Month, Today]);
+}
+
+/// A row starts and joins at an item; the first item always starts one, and no row is empty.
+#[test]
+fn row_starts_split_and_join() {
+    let mut menu = BotMenu::default();
+    let level = MenuLevel::Report;
+    assert!(menu.set_row_start(level, Yesterday, true));
+    assert_eq!(
+        layout(&menu, level),
+        vec![
+            vec![Today],
+            vec![Yesterday],
+            vec![Month, LastMonth],
+            vec![Daily, Custom]
+        ]
+    );
+    assert!(menu.set_row_start(level, Month, false));
+    assert!(menu.set_row_start(level, Daily, false));
+    assert_eq!(
+        layout(&menu, level),
+        vec![
+            vec![Today],
+            vec![Yesterday, Month, LastMonth, Daily, Custom]
+        ]
+    );
+    assert!(!menu.set_row_start(level, Today, false));
+    assert!(!menu.set_row_start(level, Month, false), "already joined");
+    assert!(menu.rows(level).iter().all(|row| !row.is_empty()));
+    assert_eq!(
+        menu.clone().normalized(),
+        menu,
+        "an edited menu is already valid"
+    );
+}
+
+/// Showing and hiding flips one entry and reports a real change only.
+#[test]
+fn showing_flips_one_entry() {
+    let mut menu = BotMenu::default();
+    assert!(menu.set_shown(MenuLevel::Keyboard, Report, true));
+    assert!(!menu.set_shown(MenuLevel::Keyboard, Report, true));
+    assert_eq!(
+        menu.visible(MenuLevel::Keyboard, |_| true).last(),
+        Some(&vec![Report])
+    );
+}
+
+/// Joining a button onto a full row changes nothing, and says so: the tick does not lie.
+#[test]
+fn joining_a_full_row_is_no_change() {
+    let mut menu = BotMenu::default();
+    let level = MenuLevel::Keyboard;
+    for item in MenuItem::ALL {
+        menu.set_row_start(level, item, false);
+    }
+    // Ten buttons: a full row of eight and two more that cannot join it.
+    assert_eq!(menu.rows(level).len(), 2);
+    let ninth = menu.rows(level)[1][0].item;
+    let before = menu.clone();
+    assert!(!menu.set_row_start(level, ninth, false));
+    assert_eq!(menu, before);
+}

@@ -20,7 +20,8 @@ pub(crate) enum BotPlan {
     /// Hand the terminal's bot over: its token and its paired chats.
     Transfer {
         token: Secret,
-        pairing: Access,
+        /// Boxed: the bot's settings make it the largest part of a plan.
+        pairing: Box<Access>,
         change: BotChange,
     },
 }
@@ -85,6 +86,8 @@ pub(crate) enum Job {
     /// Switch the station's Mini App on or off: `[telegram] mini_app`, then a restart — the
     /// station picks its profile at start.
     MiniApp { target: Target, on: bool },
+    /// Make the terminal's header-clock zone the one the station's reports are cut in, live.
+    Zone { target: Target, zone: String },
     /// Read the station's state.
     Status { target: Target },
     /// Read the tail of the station's journal.
@@ -369,6 +372,19 @@ fn run(
             Ok(Done::Ok {
                 transferred: false,
                 bot: Some(state),
+                bot_off: false,
+            })
+        }
+        Job::Zone { target, zone } => {
+            let saved = station::api::set_zone(&target, &zone)?;
+            say(Progress::Text(match saved {
+                Some(_) => rust_i18n::t!("telegram.server.zone_pushed", zone = zone).to_string(),
+                None => rust_i18n::t!("telegram.server.zone_unsupported").to_string(),
+            }));
+            // The push has landed: a read that fails after it does not make it a failure.
+            Ok(Done::Ok {
+                transferred: false,
+                bot: bot::bot_state(&target).ok(),
                 bot_off: false,
             })
         }

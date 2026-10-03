@@ -102,7 +102,7 @@ impl MenuLevel {
 }
 
 /// One button in a row: the item and whether it is shown.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct MenuEntry {
     pub item: MenuItem,
     pub show: bool,
@@ -127,7 +127,7 @@ pub const MAX_ROW: usize = 8;
 ///
 /// Every level always lists each of its allowed items exactly once, hidden ones included, so a
 /// settings editor shows the whole set and a renderer only filters ([`Self::visible`]).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct BotMenu {
     pub keyboard: Vec<Vec<MenuEntry>>,
     pub report: Vec<Vec<MenuEntry>>,
@@ -192,6 +192,93 @@ impl BotMenu {
             })
             .filter(|row| !row.is_empty())
             .collect()
+    }
+
+    /// The entries of `level` in order, each with whether it starts a row: the shape an editor
+    /// works on, where rows can never be left empty.
+    pub fn flat(&self, level: MenuLevel) -> Vec<(MenuEntry, bool)> {
+        self.rows(level)
+            .iter()
+            .flat_map(|row| {
+                row.iter()
+                    .enumerate()
+                    .map(|(index, entry)| (*entry, index == 0))
+            })
+            .collect()
+    }
+
+    /// Replace `level`'s rows with `flat`, cut where an entry starts a row (the first always does)
+    /// and where a row is full ([`MAX_ROW`]).
+    ///
+    /// Returns:
+    ///     Whether the rows changed: joining an entry onto a full row does not.
+    fn set_flat(&mut self, level: MenuLevel, flat: Vec<(MenuEntry, bool)>) -> bool {
+        let mut rows: Vec<Vec<MenuEntry>> = Vec::new();
+        for (entry, starts) in flat {
+            match rows.last_mut() {
+                Some(row) if !starts && row.len() < MAX_ROW => row.push(entry),
+                _ => rows.push(vec![entry]),
+            }
+        }
+        let changed = *self.rows(level) != rows;
+        *self.rows_mut(level) = rows;
+        changed
+    }
+
+    /// Move `item` one place earlier (`up`) or later on `level`: within its row, or across the
+    /// edge into the next row, which keeps its place.
+    ///
+    /// Returns:
+    ///     Whether anything moved; the first entry cannot go up nor the last one down.
+    pub fn move_item(&mut self, level: MenuLevel, item: MenuItem, up: bool) -> bool {
+        let mut flat = self.flat(level);
+        let Some(at) = flat.iter().position(|(entry, _)| entry.item == item) else {
+            return false;
+        };
+        let other = if up { at.checked_sub(1) } else { Some(at + 1) };
+        let Some(other) = other.filter(|&other| other < flat.len()) else {
+            return false;
+        };
+        // The entries swap; the row starts stay where they are.
+        let (a, b) = (flat[at].0, flat[other].0);
+        flat[at].0 = b;
+        flat[other].0 = a;
+        self.set_flat(level, flat)
+    }
+
+    /// Start a new row at `item` (`starts`), or join it to the row before.
+    ///
+    /// Returns:
+    ///     Whether anything changed; the first entry always starts a row.
+    pub fn set_row_start(&mut self, level: MenuLevel, item: MenuItem, starts: bool) -> bool {
+        let mut flat = self.flat(level);
+        let Some(at) = flat.iter().position(|(entry, _)| entry.item == item) else {
+            return false;
+        };
+        if at == 0 || flat[at].1 == starts {
+            return false;
+        }
+        flat[at].1 = starts;
+        self.set_flat(level, flat)
+    }
+
+    /// Show or hide `item` on `level`.
+    ///
+    /// Returns:
+    ///     Whether anything changed.
+    pub fn set_shown(&mut self, level: MenuLevel, item: MenuItem, show: bool) -> bool {
+        let entry = self
+            .rows_mut(level)
+            .iter_mut()
+            .flatten()
+            .find(|entry| entry.item == item);
+        match entry {
+            Some(entry) if entry.show != show => {
+                entry.show = show;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// This menu made valid: on every level, items the level does not allow and repeats are
@@ -366,7 +453,7 @@ id_serde!(ReportBasis);
 
 /// The bot's own settings: its menu and how its reports read. Every field defaults, so a
 /// configuration saved before they existed loads with the bot as it was.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct BotSettings {
     /// The view a report opens in.
     #[serde(default)]

@@ -122,6 +122,7 @@ fn a_retry_returns_the_current_bot_instead_of_a_superseded_snapshot() {
             authorized_chat_ids: vec![42],
             owner_chat_id: Some(42),
             chat_access: Vec::new(),
+            ..Access::default()
         },
     };
     let mut remembered = None;
@@ -135,6 +136,7 @@ fn a_retry_returns_the_current_bot_instead_of_a_superseded_snapshot() {
                         authorized_chat_ids: vec![73],
                         owner_chat_id: Some(73),
                         chat_access: Vec::new(),
+                        ..Access::default()
                     },
                 })
             })
@@ -221,6 +223,7 @@ fn the_pairing_file_is_what_the_station_reads() {
             name: "me".into(),
             core_uids: vec![1, 3],
         }],
+        ..Access::default()
     };
     let json: serde_json::Value = serde_json::to_value(&pairing).unwrap();
     assert_eq!(json["authorized_chat_ids"][0], 42);

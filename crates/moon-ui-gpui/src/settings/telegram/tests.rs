@@ -53,6 +53,7 @@ fn fixture(window: &mut Window, cx: &mut Context<EditorFixture>) -> EditorFixtur
             resend_pulse_armed: false,
         },
         server: super::server_bot::build(window, cx, None),
+        menu: super::bot_menu::BotMenuEd::new(cx),
     })
 }
 
