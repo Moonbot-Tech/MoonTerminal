@@ -122,6 +122,10 @@ pub(crate) fn report_delivery_failed(host: crate::HostKind) -> String {
 ///
 /// Args:
 ///     host: Which process runs the bot; a station swaps in its own wording ([`STATION_WORDED`]).
+///
+/// Returns:
+///     Page and shell labels in the current locale, plus reply-button aliases for every
+///     `Language::ALL` code so an earlier keyboard still works after a locale change.
 pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeMap<String, String> {
     let mut labels: std::collections::BTreeMap<String, String> = [
         ("menu_miniapp".to_string(), t!("telegram.open").to_string()),

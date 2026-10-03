@@ -1,7 +1,7 @@
 """Loads ``locales/<lang>/<area>.<lang>.yml`` into one flat table of key -> language -> string.
 
 The files are rust-i18n ``_version: 1`` documents: one language per folder, flat
-dotted keys, string values. The filename's last dot-segment is the locale, so
+dotted keys, string values. The file stem's last dot-segment is the locale, so
 the stem must end in that folder's code. The terminal itself reads them through
 the ``i18n!`` proc macro at build time, so this loader is a second reader of the
 same source of truth, never a copy of it.
@@ -22,7 +22,7 @@ VERSION_KEY = "_version"
 
 @dataclass(frozen=True)
 class Locales:
-    """Every translatable string in the repository, and which file each came from."""
+    """Translations by key and language, with English reference paths for citations."""
 
     strings: dict[str, dict[str, str]]
     origin: dict[str, str]
@@ -63,6 +63,19 @@ def load(locales_dir: Path) -> Locales:
     and the tour would then quote a string the application does not show.
     ``origin`` records ``en/<area>.en.yml`` for every key. English is the reference
     language, so the citation does not follow whichever folder was read first.
+
+    Args:
+        locales_dir: Root containing the per-language dictionary folders.
+
+    Returns:
+        Translations and English reference paths. A reference path is derived from
+        the first accepted area for a key; the English file's existence is not checked.
+
+    Raises:
+        LocaleError: The root or dictionary files are absent, or any file has a
+            mismatched locale suffix, invalid YAML, a non-mapping document,
+            a non-string key or value, or a duplicate key within a language.
+        OSError: A dictionary file cannot be read.
     """
     if not locales_dir.is_dir():
         raise LocaleError(f"no locales directory at {locales_dir}")

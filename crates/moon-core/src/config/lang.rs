@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Supported interface languages, persisted by code and displayed by native name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {
     Ru,

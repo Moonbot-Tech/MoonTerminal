@@ -43,8 +43,8 @@ pub fn read_src(rel: &str) -> String {
 
 /// Codes of `moon_core::config::Language::ALL`, in dropdown order.
 ///
-/// This integration test cannot import `moon-core`. `languages_match_language_all` reads
-/// `crates/moon-core/src/config/lang.rs` and checks this list still matches the codes of `ALL`.
+/// `languages_match_language_all` reads `crates/moon-core/src/config/lang.rs` as text and
+/// checks that this list and the codes of `ALL` contain the same set of languages.
 pub const SHIPPED: [&str; 4] = ["ru", "en", "es", "uk"];
 
 /// Repository `locales/` directory, next to the workspace crates.
@@ -102,7 +102,8 @@ fn read_locale_file(area: &str, lang: &str) -> String {
 ///     raw: Text after the `: ` separator, including the surrounding quotes.
 ///
 /// Returns:
-///     The scalar text a reader would show. Panics when `raw` is not single- or double-quoted.
+///     The decoded scalar. Panics when `raw` has no opening single or double quote.
+///     Decoding stops at the closing quote or end of input; closing quotes are not validated.
 pub fn unquote_locale_scalar(key: &str, raw: &str) -> String {
     let raw = raw.trim();
     if let Some(rest) = raw.strip_prefix('"') {
@@ -114,6 +115,10 @@ pub fn unquote_locale_scalar(key: &str, raw: &str) -> String {
     panic!("{key} locale value must be quoted");
 }
 
+/// Decode text after an opening double quote until an unescaped quote or end of input.
+///
+/// Recognizes escaped quotes, backslashes, and newlines; preserves unknown escapes and a
+/// trailing backslash. Text after a closing quote is ignored.
 fn unescape_double(rest: &str) -> String {
     let mut out = String::new();
     let mut chars = rest.chars();
@@ -138,6 +143,9 @@ fn unescape_double(rest: &str) -> String {
     out
 }
 
+/// Decode text after an opening single quote, turning doubled quotes into one quote.
+///
+/// A lone quote ends the value; text after it is ignored. Without one, consumes all input.
 fn unescape_single(rest: &str) -> String {
     let mut out = String::new();
     let mut chars = rest.chars().peekable();

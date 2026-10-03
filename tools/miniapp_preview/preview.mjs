@@ -67,8 +67,15 @@ function chromePath() {
     return found;
 }
 
-// The labels the terminal hands the page: every `telegram.*` key, prefix stripped, in one locale.
-// Each area is read from locales/<locale>/<area>.<locale>.yml, falling back per key to English.
+/**
+ * Load preview labels from English `telegram*` areas, stripping the `telegram.` key prefix.
+ * Read overrides from locales/<locale>/<area>.<locale>.yml, falling back per key to English
+ * when the locale file is missing or its value is not a string. Locale-only keys are ignored.
+ * @param {object} yaml YAML parser used to load each dictionary.
+ * @param {string} locale Requested language code, also returned as the `locale` label.
+ * @returns {object} Label map for the preview page.
+ * @throws {Error} If the English directory or a dictionary cannot be read or parsed.
+ */
 function labels(yaml, locale) {
     const out = { locale };
     const enDir = path.join(LOCALES, "en");

@@ -6,14 +6,15 @@
 //! not match its folder, a `locales/` folder has no `Language::ALL` variant, or an `ALL`
 //! variant has no folder.
 //!
-//! `SHIPPED` is hardcoded because this integration test cannot import `moon-core`. The last test
-//! reads `crates/moon-core/src/config/lang.rs` so the two lists cannot diverge quietly.
+//! `SHIPPED` is an explicit list checked against `crates/moon-core/src/config/lang.rs` as text
+//! by the last test, so the two lists cannot diverge quietly.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use super::support::{self, SHIPPED, fs, locales_root, unquote_locale_scalar};
 
+/// Origin file and sorted placeholder occurrences for one localization key.
 struct LocaleEntry {
     file: String,
     placeholders: Vec<String>,
@@ -138,6 +139,10 @@ fn load_language(lang: &str) -> &'static BTreeMap<String, LocaleEntry> {
         .unwrap_or_else(|| panic!("{lang} is not in SHIPPED"))
 }
 
+/// Collect area names from `lang`'s locale filenames, stripping the `.<lang>.yml` suffix.
+///
+/// A filename without that suffix is retained whole; `stem_suffix_matches_folder` rejects it.
+/// An unreadable language directory panics.
 fn area_stems(lang: &str) -> BTreeSet<String> {
     let suffix = format!(".{lang}.yml");
     support::locale_dir_files(lang)
@@ -179,7 +184,8 @@ fn every_language_has_exactly_en_keys() {
     }
 }
 
-/// Each key must interpolate the same `%{name}` set in every language.
+/// Each key present in both catalogues must interpolate the same `%{name}` multiset, including
+/// duplicate counts. A placeholder renamed or repeated in one translation must fail.
 #[test]
 fn placeholders_match_en() {
     let english = load_language("en");
@@ -254,8 +260,8 @@ fn stem_suffix_matches_folder() {
 /// `locales/` folders, the codes of `Language::ALL`, and [`SHIPPED`] are the same set.
 ///
 /// A folder with no `ALL` variant fails, and an `ALL` variant with no folder fails. The enum
-/// lives in `crates/moon-core/src/config/lang.rs`. This target cannot link that crate, so the
-/// check reads the `ALL` list and the `code()` arms as text.
+/// lives in `crates/moon-core/src/config/lang.rs`; this check reads the `ALL` list and the
+/// `code()` arms as text, matching the source-based approach of this contract suite.
 #[test]
 fn languages_match_language_all() {
     let root = locales_root();

@@ -485,7 +485,7 @@ def _entry(
     advisory_pointer: str = "",
 ) -> dict[str, object]:
     """Build one JSONL entry from resolved text objects."""
-    entry = {
+    entry: dict[str, object] = {
         "id": entry_id,
         "kind": kind,
         "title": dict(title.values),

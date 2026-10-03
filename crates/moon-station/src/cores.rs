@@ -41,7 +41,7 @@
 //! [telegram]
 //! mini_app = true
 //! zone = "Europe/Moscow"   # the reports' time zone; UTC when absent
-//! language = "ru"          # ru | en | es; en when absent
+//! language = "ru"          # ru | en | es | uk; en when absent
 //! ```
 //!
 //! A `key =` line is refused rather than ignored: a key in a plain file is exactly what this
@@ -279,7 +279,10 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
     Ok(station)
 }
 
-/// `[telegram]` with its token.
+/// Resolve `[telegram]` with its token, defaulting an absent zone to UTC and language to English.
+///
+/// Invalid zones or unsupported language prefixes return an error. Missing or unreadable token
+/// credentials are logged and leave the bot disabled without rejecting the configuration.
 fn telegram(section: TelegramSection, creds: Option<&Path>) -> anyhow::Result<Telegram> {
     let zone = match section.zone {
         Some(name) => name
