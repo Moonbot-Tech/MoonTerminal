@@ -206,7 +206,14 @@ fn the_station_calls_only_its_share_of_the_session() {
 }
 
 /// What the bot and the Mini App read from the sessions, anywhere in `moon-tg`.
-const TG_READ_CALLS: [&str; 4] = ["core_run_state", "core_venues", "sessions", "store"];
+/// `market_source` converts an open order's quote-currency PnL into dollars for the Mini App.
+const TG_READ_CALLS: [&str; 5] = [
+    "core_run_state",
+    "core_venues",
+    "market_source",
+    "sessions",
+    "store",
+];
 
 /// The Mini App's owner commands (STATION.md §1 item 9, §4.2: the Mini App as it is, what
 /// the key allows): the terminal's own session calls, from `mini_app/commands.rs` alone. Trading

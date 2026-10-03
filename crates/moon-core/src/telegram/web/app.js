@@ -175,7 +175,7 @@
         return "";
     }
 
-    // Group PnL is a client sum of order.pnl. Match signed_fixed's visible
+    // Group PnL is a client sum of order.pnl_usd. Match signed_fixed's visible
     // contract: half away from zero, two decimals, a sign only when non-zero.
     function signedFixed(value) {
         if (typeof value !== "number" || value !== value || value === Infinity || value === -Infinity) {
@@ -630,35 +630,45 @@
         return text == null ? null : text + "$";
     }
 
-    // Finite order.pnl figures of a set of orders: their sum and how many there were. An order
-    // with no position yet has no pnl (order_pnl returns nothing) and adds nothing; the chart
-    // position caption skips the same rows.
+    function finiteNumber(value) {
+        return typeof value === "number" && value === value && value !== Infinity && value !== -Infinity;
+    }
+
+    // Dollar PnL of a set of orders: the sum of the server's dollar figures (order.pnl_usd) of
+    // REAL orders, how many there were, and how many real orders with a PnL had no dollar value.
+    // order.pnl is in each market's own quote and is never added. Emulator orders stay out, as the
+    // desktop keeps them apart. An order with no position yet has no pnl and adds nothing; the
+    // chart position caption skips the same rows. A sum missing a real order is not shown.
     function knownPnl(orders) {
         var sum = 0;
         var known = 0;
+        var unvalued = 0;
         var i;
         for (i = 0; i < orders.length; i++) {
-            var pnl = orders[i] && orders[i].pnl;
-            if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) {
+            var order = orders[i];
+            if (!order || order.emulator || !finiteNumber(order.pnl)) continue;
+            if (!finiteNumber(order.pnl_usd)) {
+                unvalued += 1;
                 continue;
             }
             known += 1;
-            sum += pnl;
+            sum += order.pnl_usd;
         }
-        return { sum: sum, known: known };
+        return { sum: sum, known: known, unvalued: unvalued };
     }
 
-    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no
-    // valued order shows the count alone.
+    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no real
+    // order holding a position shows the count alone; one whose real orders cannot all be valued
+    // in dollars shows "No value" beside it.
     function orderGroupSummary(items) {
         var wrap = el("span", "group-meta");
         var n = items.length;
         wrap.appendChild(el("span", "num hint", trf("mini_orders_n_" + pluralForm(n), { n: n })));
         var pnl = knownPnl(items);
-        var text = pnl.known ? signedDollars(pnl.sum) : null;
-        if (text != null) {
+        // A sum missing a real order is not shown; "No value" says why instead of an empty slot.
+        if (pnl.known || pnl.unvalued) {
             var fig = el("span", "num");
-            applyMoney(fig, "num", text, pnl.sum);
+            applyMoney(fig, "num", pnl.unvalued ? null : signedDollars(pnl.sum), pnl.sum);
             wrap.appendChild(fig);
         }
         return wrap;
@@ -905,8 +915,9 @@
     function orderResult(order) {
         if (!order.pnl_text) return null;
         var node = el("span", "num order-pnl");
-        // Dollars like the core header and the summary above it.
-        applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
+        // The server's text carries the unit: dollars for a USD-stable quote, else the quote. The
+        // tone follows the sign of that rounded text, not the raw value.
+        applyMoney(node, "num order-pnl", order.pnl_text, order.pnl_sign);
         return node;
     }
 
@@ -965,7 +976,8 @@
         var row = el("div", "row order-row");
         var main = el("div", "order-main");
         var top = el("div", "order-top");
-        var coin = el("span", "name order-coin", order.coin || "");
+        // (E) marks an emulated order, as the desktop orders table does.
+        var coin = el("span", "name order-coin", (order.coin || "") + (order.emulator ? " (E)" : ""));
         coin.title = order.coin || "";
         top.appendChild(coin);
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
@@ -1187,15 +1199,14 @@
         return typeof n === "number" ? tr("mini_report_core_orders").replace("{n}", String(n)) : "";
     }
 
-    // Order count plus the client sum of every known PnL, same rounding as the group heads.
+    // Order count plus the dollar sum of real orders (knownPnl), same rounding as the group heads.
     function ordersSummary(orders) {
         var line = el("p", "summary spread");
         line.appendChild(el("span", "", tr("mini_orders_summary").replace("{n}", String(orders.length))));
         var pnl = knownPnl(orders);
-        var text = pnl.known ? signedDollars(pnl.sum) : null;
-        if (text != null) {
+        if (pnl.known || pnl.unvalued) {
             var fig = el("span", "");
-            applyMoney(fig, "num money-col", text, pnl.sum);
+            applyMoney(fig, "num money-col", pnl.unvalued ? null : signedDollars(pnl.sum), pnl.sum);
             line.appendChild(fig);
         }
         return line;

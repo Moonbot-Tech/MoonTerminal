@@ -448,8 +448,9 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
 /// collapsed exchange then shows only its name, or the online count without
 /// the total the page already received.
 ///
-/// An order group's PnL sums the finite figures and shows nothing when none
-/// exist. Mutation: set `known = false` and `break` on the first order
+/// An order group's PnL sums the dollar figures of real orders, shows nothing when
+/// none hold a position, and "No value" when a real order has no dollar figure.
+/// Mutation: set `known = false` and `break` on the first order
 /// without a figure. A core with open positions plus one unfilled order
 /// then loses those positions' PnL. Mutation: draw a dash for an unvalued
 /// core. The header then shows "—" where a PnL is expected.
@@ -479,7 +480,9 @@ fn mini_collapsed_groups_carry_their_summary() {
     assert!(
         orders.contains("knownPnl(items)")
             && orders.contains("mini_orders_n_")
-            && orders.contains("applyMoney(fig, \"num\", text, pnl.sum)")
+            && orders.contains(
+                "applyMoney(fig, \"num\", pnl.unvalued ? null : signedDollars(pnl.sum), pnl.sum)"
+            )
             && !orders.contains("\\u2014"),
         "an order group labels its count and shows PnL only when some order is valued"
     );
@@ -657,4 +660,28 @@ fn mini_settings_draft_is_not_wiped_while_busy() {
         !busy.contains("return false"),
         "settingsBusy must not stay a stub that always allows a reload"
     );
+}
+
+/// The open-PnL figures over a set of orders add dollars of real orders only.
+///
+/// Mutation: sum `order.pnl` again. That figure is in each market's own quote, so a BTC-quoted
+/// order's PnL is added to dollars and the sum is labelled "$"; emulator orders were added too.
+#[test]
+fn mini_open_pnl_sums_real_orders_in_dollars() {
+    let js = read_core_src("telegram/web/app.js");
+    let body = braced_body(&js, "function knownPnl(");
+    assert!(
+        body.contains(".pnl_usd"),
+        "the order sums must add the dollar value the server converted, not the quote-currency pnl"
+    );
+    assert!(
+        body.contains(".emulator"),
+        "emulator orders must stay out of the order sums, as the desktop keeps them apart"
+    );
+    for caller in ["function orderGroupSummary(", "function ordersSummary("] {
+        assert!(
+            braced_body(&js, caller).contains("pnl.unvalued"),
+            "{caller} must not print a dollar sum that is missing a real order"
+        );
+    }
 }

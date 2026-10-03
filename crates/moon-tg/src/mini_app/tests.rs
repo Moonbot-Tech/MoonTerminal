@@ -24,8 +24,8 @@ use moon_core::session::balances::BalanceFigures;
 use moon_core::telegram::web::dto::BalanceStateDto;
 
 use super::dto::{
-    balance_state_dto, distance_text, entry_volume_text, order_to_entry_pct, strategy_pending,
-    trade_strategy, trade_volume_text,
+    balance_state_dto, distance_text, entry_volume_text, order_quote, order_to_entry_pct, pnl_sign,
+    pnl_text, pnl_usd, strategy_pending, trade_strategy, trade_volume_text,
 };
 use super::reads::coin_rows;
 use super::{by_section, natural_cmp, scope_targets};
@@ -1399,4 +1399,53 @@ fn save_fault_text_follows_the_chat_locale() {
             "No se pudo guardar"
         );
     }
+}
+
+/// An order's PnL text names its unit: dollars only for a USD-stable quote, nothing when unknown.
+///
+/// Mutation: always append "$". A BTC-quoted order's 0.00012345 BTC then reads as "+0.00$".
+#[test]
+fn pnl_text_carries_the_quote_unit() {
+    assert_eq!(pnl_text(1.234, "USDT").as_deref(), Some("+1.23$"));
+    assert_eq!(pnl_text(-2.5, "").as_deref(), Some("-2.50"));
+    assert_eq!(
+        pnl_text(0.00012345, "BTC").as_deref(),
+        Some("+0.00012345 BTC")
+    );
+}
+
+/// The unit and the conversion share one quote: the catalog's, else the name's, else USDC.
+///
+/// Mutation: leave an empty catalog quote unknown. Every Hyperliquid perp (`BTC`, `xyz:BIRD`, no
+/// quote in the catalog) then prints a bare number and drops out of the dollar sums.
+#[test]
+fn order_quote_is_the_catalog_then_the_name_then_usdc() {
+    assert_eq!(order_quote("BTC", "ETHBTC"), "BTC");
+    assert_eq!(order_quote("", "BTCUSDT"), "USDT");
+    assert_eq!(order_quote("", "BTC"), "USDC");
+    assert_eq!(order_quote("", "xyz:BIRD"), "USDC");
+}
+
+/// Dollars: a stablecoin as is, a coin through its rate, nothing without a quote or a rate.
+///
+/// Mutation: return the quote-currency value when the rate is missing. A BTC PnL then joins the
+/// dollar sum as if one BTC were one dollar.
+#[test]
+fn pnl_usd_converts_through_the_same_quote() {
+    assert_eq!(pnl_usd(2.0, "USDT", |_| None), Some(2.0));
+    assert_eq!(
+        pnl_usd(0.001, "BTC", |q| (q == "BTC").then_some(60_000.0)),
+        Some(60.0)
+    );
+    assert_eq!(pnl_usd(0.001, "BTC", |_| None), None);
+    assert_eq!(pnl_usd(1.0, "", |_| Some(1.0)), None);
+    assert_eq!(pnl_usd(1.0, "BTC", |_| Some(f64::INFINITY)), None);
+}
+
+/// The tone follows the printed text: a loss that rounds to zero is neutral.
+#[test]
+fn pnl_sign_follows_the_rounded_text() {
+    assert_eq!(pnl_sign(-0.001, "USDT"), 0);
+    assert_eq!(pnl_sign(-0.01, "USDT"), -1);
+    assert_eq!(pnl_sign(0.00000002, "BTC"), 1);
 }
