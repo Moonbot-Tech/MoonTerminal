@@ -69,8 +69,18 @@ Anything else is an error. A one-key `locale` mapping can never be confused with
 language triple, so there is no convention to remember.
 
 **Markup is opt-in.** Content reaches the DOM through `innerHTML`, so every slot is
-HTML-escaped unless it says `html: true` — which today only the quick-start bodies
-do, because they carry `<code>` and a link on purpose.
+HTML-escaped unless it says `html: true`. Quick-start bodies and block text use
+this for `<code>`, `<a>` and `<b>`; the content loader validates that subset.
+
+## Structured quick-start steps
+
+`content/quickstart.yml` uses `tour.quickstart.v2`: each step has a `title`, a short
+`body` and optional `blocks`, rendered in order. Each block is a one-key mapping:
+`group`, `sub`, `p`, `note` and `warn` carry text slots; `path` and `status` carry
+lists of slots; `terms` carries a list of `{term, text}` pairs. A `code` block
+carries a language-neutral command, rendered with a copy button and also included
+in the static no-JavaScript fallback. The knowledge bundle flattens each step's
+body and blocks into one fact per step.
 
 ## Adding a language
 
