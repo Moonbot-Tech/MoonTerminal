@@ -9,7 +9,9 @@
 use std::time::Instant;
 
 use moon_core::config::telegram_access::TelegramReportAccess;
+use moon_core::feed::OrderRow;
 use moon_core::session::{CoreId, RunDispatch, RunSwitch};
+use moon_core::telegram::menu_action::OrderBan;
 use moon_core::telegram::web::dto::StrategyPendingDto;
 
 use crate::TgHost;
@@ -294,4 +296,95 @@ pub(crate) fn strategy_toggle(
         .mini_strategy_wanted
         .insert((core, id), (on, now, ack_before, rev_before));
     Ok(())
+}
+
+/// `core`'s open positions — entries filled and not yet closed — newest first.
+pub(crate) fn open_orders(host: &dyn TgHost, core: CoreId) -> Vec<OrderRow> {
+    let mut orders: Vec<OrderRow> = host
+        .session()
+        .store()
+        .core(core)
+        .map(|data| {
+            data.orders
+                .iter()
+                .filter(|order| order.filled && !order.job_is_done)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    orders.sort_by_key(|order| std::cmp::Reverse(order.uid));
+    orders
+}
+
+/// One of `core`'s open positions by its uid.
+pub(crate) fn open_order(host: &dyn TgHost, core: CoreId, uid: u64) -> Option<OrderRow> {
+    open_orders(host, core)
+        .into_iter()
+        .find(|order| order.uid == uid)
+}
+
+/// An open position of a connected core the owner sees, for a command on it.
+fn order_for_command(
+    host: &dyn TgHost,
+    chat: i64,
+    core: CoreId,
+    uid: u64,
+) -> Result<OrderRow, Refusal> {
+    owner(host, chat)?;
+    if !known(host, core) {
+        return Err(Refusal::NotFound);
+    }
+    let order = open_order(host, core, uid).ok_or(Refusal::NotFound)?;
+    if !host.session().core_run_state(core).online {
+        return Err(Refusal::Offline);
+    }
+    Ok(order)
+}
+
+/// Panic-sell one open position.
+pub(crate) fn order_panic(
+    host: &mut dyn TgHost,
+    chat: i64,
+    core: CoreId,
+    uid: u64,
+) -> Result<(), Refusal> {
+    order_for_command(host, chat, core, uid)?;
+    host.session()
+        .turn_order_panic_sell(core, uid, true)
+        .map_err(|_| Refusal::Unavailable)
+}
+
+/// Put an open position's coin on a blacklist: the core's own, its strategy's `CoinsBlackList`,
+/// or the core's temporary list for a span, keyed by the order's market.
+///
+/// Returns:
+///     Whether anything was sent; `false` when the coin already was listed. A manual order, or a
+///     strategy whose kind has no coin list, is `NotFound` for the strategy's list.
+pub(crate) fn order_ban(
+    host: &mut dyn TgHost,
+    chat: i64,
+    core: CoreId,
+    uid: u64,
+    ban: OrderBan,
+) -> Result<bool, Refusal> {
+    let order = order_for_command(host, chat, core, uid)?;
+    let sent = match ban {
+        OrderBan::Core => host
+            .session()
+            .write_core_blacklist(core, &order.coin, false),
+        OrderBan::Strategy => {
+            let listed =
+                order.strat_id != 0 && host.session().strategy_has_blacklist(core, order.strat_id);
+            if !listed {
+                return Err(Refusal::NotFound);
+            }
+            host.session()
+                .write_strategy_blacklist(core, order.strat_id, &order.coin, false)
+        }
+        OrderBan::Temp(span) => host
+            .session()
+            .set_temp_ban(core, order.market.clone(), Some(span.duration()))
+            .map(|()| true),
+    };
+    sent.map_err(|_| Refusal::Unavailable)
 }

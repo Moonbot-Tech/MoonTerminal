@@ -400,6 +400,10 @@ impl DetectRow {
 /// two thousand rows per core, on every core.
 pub const DETECT_MSG_KEEP: usize = 200;
 
+/// The strategy field holding its coin blacklist: a comma-separated token list, in the format of
+/// the core-wide blacklist ([`crate::symbol::coin_list`]).
+pub const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
+
 /// Longest strategy name retained on a detect, in characters.
 ///
 /// Same reasoning as [`DETECT_MSG_KEEP`] and a quarter of it: the wire type behind a strategy name

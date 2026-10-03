@@ -17,13 +17,11 @@ use moon_ui::{MoonContextMenuWindowExt as _, MoonMenuItem, MoonTone, MoonWindowE
 use rust_i18n::t;
 
 use moon_core::config::SPLIT_ORDER_PARTS;
+use moon_core::feed::FIELD_COINS_BLACK_LIST;
 use moon_core::session::CoreId;
+use moon_core::symbol::coin_list::contains as blacklist_contains;
 
 use crate::Backend;
-
-/// MoonProto strategy field containing the token blacklist. Its string value is a comma-separated
-/// token list, matching the core-wide blacklist format.
-const FIELD_COINS_BLACK_LIST: &str = "CoinsBlackList";
 
 /// Minimum fitted width preserving the former shared coin-menu footprint.
 const MENU_MIN_WIDTH: f32 = 220.0;
@@ -397,13 +395,7 @@ fn core_blacklist(b: &Backend, core: CoreId) -> (bool, String) {
 ///     coin: Token to insert or drop, compared case-insensitively.
 ///     lift: When true, drop `coin`; when false, append it and enable the list.
 fn write_core_blacklist(b: &Backend, core: CoreId, coin: &str, lift: bool) {
-    let (enabled, text) = core_blacklist(b, core);
-    let new = blacklist_edit(&text, coin, lift);
-    if lift && new == text {
-        return;
-    }
-    let flag = if lift { enabled } else { true };
-    if let Err(err) = b.session.set_blacklist(core, flag, new) {
+    if let Err(err) = b.session.write_core_blacklist(core, coin, lift) {
         let action = if lift { "lift" } else { "add" };
         let prep = if lift { "from" } else { "to" };
         log::warn!(
@@ -432,24 +424,7 @@ fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
 /// Returns whether the strategy-kind schema identified by `kind_ordinal` contains
 /// `CoinsBlackList`. Without it, the field edit would be silently ignored, so the entry is hidden.
 fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
-    let Some(cd) = b.session.store().core(core) else {
-        return false;
-    };
-    let Some(row) = cd.strategies.iter().find(|s| s.id == sid) else {
-        return false;
-    };
-    let Some(schema) = cd.schema.as_ref() else {
-        return false;
-    };
-    schema
-        .kinds
-        .iter()
-        .find(|k| k.ordinal == row.kind_ordinal)
-        .is_some_and(|k| {
-            k.sections
-                .iter()
-                .any(|s| s.fields.iter().any(|f| f.name == FIELD_COINS_BLACK_LIST))
-        })
+    b.session.strategy_has_blacklist(core, sid)
 }
 
 /// Writes one token onto or off the strategy's `CoinsBlackList` through the shared field editor.
@@ -465,14 +440,9 @@ fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
 ///     coin: Token to insert or drop, compared case-insensitively.
 ///     lift: When true, drop `coin`; when false, append it.
 fn write_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str, lift: bool) {
-    let cur = strategy_blacklist(b, core, sid);
-    let new = blacklist_edit(&cur, coin, lift);
-    if new == cur {
-        return;
-    }
-    let edits = vec![(sid, vec![(FIELD_COINS_BLACK_LIST.to_string(), new)])];
-    match b.session.edit_strategies(core, edits) {
-        Ok(()) => b.watch_strategy_edit(core, sid, coin.to_string()),
+    match b.session.write_strategy_blacklist(core, sid, coin, lift) {
+        Ok(true) => b.watch_strategy_edit(core, sid, coin.to_string()),
+        Ok(false) => {}
         Err(err) => {
             let action = if lift { "lift" } else { "add" };
             log::warn!(
@@ -480,80 +450,6 @@ fn write_strategy_blacklist(b: &mut Backend, core: CoreId, sid: u64, coin: &str,
                 if lift { "from" } else { "to" }
             );
         }
-    }
-}
-
-/// Checks a comma-separated list for a token, ignoring ASCII case and surrounding whitespace.
-///
-/// Deliberately a LITERAL comparison, not `symbol::coin_match_key` — and this is now MEASURED
-/// rather than assumed. MoonProto's `rebuild_market_blacklisted_cfg` compares each list entry
-/// against the market's own `market_currency` with `same_text_ascii`, an exact case-insensitive
-/// match with no folding. So the token to write and to compare is the core's spelling
-/// (`BTC_RP`, `1kBONKPERP`), which is what `MarketLabel::coin` carries and what every caller of
-/// this menu now supplies. Folding here would claim "already listed" about an entry the core
-/// does not associate with the market.
-///
-/// The Analytics coin axis DOES fold, and it writes too (`analytics::tuner::coins`), so the two
-/// paths still disagree for contract-qualified coins. That one is now the side known to be
-/// wrong; it is left alone here because changing what a working list writes belongs in its own
-/// change, not smuggled into this one.
-fn blacklist_contains(text: &str, coin: &str) -> bool {
-    text.split(',').any(|s| s.trim().eq_ignore_ascii_case(coin))
-}
-
-/// Appends a token to a comma-separated list with case-insensitive deduplication. An existing token
-/// leaves the list unchanged, while an empty list becomes the token alone.
-fn blacklist_add(text: &str, coin: &str) -> String {
-    if blacklist_contains(text, coin) {
-        return text.to_string();
-    }
-    let base = text.trim().trim_end_matches(',').trim_end();
-    if base.is_empty() {
-        coin.to_string()
-    } else {
-        format!("{base},{coin}")
-    }
-}
-
-/// Drops one token from a comma-separated list, keeping every other entry verbatim.
-///
-/// Matching is the same case-insensitive trim as [`blacklist_contains`]. Remaining tokens keep
-/// their original order, inner spacing, and any spelling this menu does not recognise. A token
-/// that is not present leaves the string unchanged, including its exact bytes.
-///
-/// Args:
-///     text: Current comma-separated blacklist.
-///     coin: Token to drop.
-///
-/// Returns:
-///     The list without `coin`, or `text` unchanged when `coin` was not listed.
-fn blacklist_remove(text: &str, coin: &str) -> String {
-    if !blacklist_contains(text, coin) {
-        return text.to_string();
-    }
-    text.split(',')
-        .filter(|s| !s.trim().eq_ignore_ascii_case(coin))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// Inserts or drops one token in a comma-separated blacklist.
-///
-/// This is the pure list edit both permanent-blacklist writers send: `lift` drops the token,
-/// otherwise it is appended with the same case-insensitive dedup as [`blacklist_add`].
-///
-/// Args:
-///     text: Current comma-separated blacklist.
-///     coin: Token to insert or drop.
-///     lift: When true, drop `coin`; when false, append it.
-///
-/// Returns:
-///     The rewritten list. Remaining entries keep their original order and spacing.
-fn blacklist_edit(text: &str, coin: &str, lift: bool) -> String {
-    if lift {
-        blacklist_remove(text, coin)
-    } else {
-        blacklist_add(text, coin)
     }
 }
 

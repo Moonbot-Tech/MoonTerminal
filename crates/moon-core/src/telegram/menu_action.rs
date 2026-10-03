@@ -76,6 +76,29 @@ pub enum ControlAction {
     },
     /// Reconnect one core.
     Reconnect(u64),
+    /// One core's open positions, a page of them.
+    Orders { core: u64, page: u16 },
+    /// One open position's card.
+    Order { core: u64, uid: u64 },
+    /// Panic-sell one order.
+    OrderPanic {
+        core: u64,
+        uid: u64,
+        confirmed: bool,
+    },
+    /// Put an order's coin on a blacklist.
+    OrderBan { core: u64, uid: u64, ban: OrderBan },
+}
+
+/// Which blacklist an order's coin goes on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OrderBan {
+    /// The core's own list.
+    Core,
+    /// The `CoinsBlackList` of the strategy that placed the order.
+    Strategy,
+    /// The core's temporary list, keyed by the order's market, for this span.
+    Temp(crate::config::TempBanSpan),
 }
 
 impl ControlAction {
@@ -112,6 +135,21 @@ impl ControlAction {
                 confirmed,
             } => format!(":p:{}:{}", target(t), flag(confirmed)),
             Self::Reconnect(id) => format!(":n:{id}"),
+            Self::Orders { core, page } => format!(":o:{core}:{page}"),
+            Self::Order { core, uid } => format!(":i:{core}:{uid}"),
+            Self::OrderPanic {
+                core,
+                uid,
+                confirmed,
+            } => format!(":q:{core}:{uid}:{}", flag(confirmed)),
+            Self::OrderBan { core, uid, ban } => {
+                let code = match ban {
+                    OrderBan::Core => "c".to_string(),
+                    OrderBan::Strategy => "s".to_string(),
+                    OrderBan::Temp(span) => format!("t{}", span.hours()),
+                };
+                format!(":b:{core}:{uid}:{code}")
+            }
         }
     }
 
@@ -150,6 +188,35 @@ impl ControlAction {
                 confirmed: flag(confirmed)?,
             },
             ["n", id] => Self::Reconnect(id.parse().ok()?),
+            ["o", core, page] => Self::Orders {
+                core: core.parse().ok()?,
+                page: page.parse().ok()?,
+            },
+            ["i", core, uid] => Self::Order {
+                core: core.parse().ok()?,
+                uid: uid.parse().ok()?,
+            },
+            ["q", core, uid, confirmed] => Self::OrderPanic {
+                core: core.parse().ok()?,
+                uid: uid.parse().ok()?,
+                confirmed: flag(confirmed)?,
+            },
+            ["b", core, uid, code] => Self::OrderBan {
+                core: core.parse().ok()?,
+                uid: uid.parse().ok()?,
+                ban: match *code {
+                    "c" => OrderBan::Core,
+                    "s" => OrderBan::Strategy,
+                    hours => {
+                        let hours: u64 = hours.strip_prefix('t')?.parse().ok()?;
+                        OrderBan::Temp(
+                            crate::config::TempBanSpan::ALL
+                                .into_iter()
+                                .find(|span| span.hours() == hours)?,
+                        )
+                    }
+                },
+            },
             _ => return None,
         })
     }

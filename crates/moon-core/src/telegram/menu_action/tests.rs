@@ -189,6 +189,29 @@ fn control_actions_round_trip() {
         core: u64::MAX,
         confirmed: true,
     });
+    actions.push(ControlAction::Orders {
+        core: u64::MAX,
+        page: u16::MAX,
+    });
+    actions.push(ControlAction::Order {
+        core: u64::MAX,
+        uid: u64::MAX,
+    });
+    actions.push(ControlAction::OrderPanic {
+        core: u64::MAX,
+        uid: u64::MAX,
+        confirmed: true,
+    });
+    let bans = [OrderBan::Core, OrderBan::Strategy]
+        .into_iter()
+        .chain(crate::config::TempBanSpan::ALL.map(OrderBan::Temp));
+    for ban in bans {
+        actions.push(ControlAction::OrderBan {
+            core: u64::MAX,
+            uid: u64::MAX,
+            ban,
+        });
+    }
     for action in actions {
         let data = MenuAction::Control(action).callback();
         assert!(data.len() <= 64, "{data}");
@@ -204,6 +227,8 @@ fn control_actions_round_trip() {
         "m:k:x:7:2",
         "m:k:c:-1",
         "m:k:zz",
+        "m:k:b:1:2:t5",
+        "m:k:b:1:2:x",
     ] {
         assert_eq!(MenuAction::parse_callback(bad), None, "{bad}");
     }

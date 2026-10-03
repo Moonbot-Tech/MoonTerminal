@@ -207,23 +207,28 @@ fn the_station_calls_only_its_share_of_the_session() {
 
 /// What the bot and the Mini App read from the sessions, anywhere in `moon-tg`.
 /// `market_source` converts an open order's quote-currency PnL into dollars for the Mini App.
-const TG_READ_CALLS: [&str; 5] = [
+const TG_READ_CALLS: [&str; 6] = [
     "core_run_state",
     "core_venues",
     "market_source",
     "sessions",
     "store",
+    "strategy_has_blacklist",
 ];
 
 /// The owner's commands (STATION.md §1 item 9, §4.2: what the key allows), from the Mini App and
 /// the chat's Control section alike: the terminal's own session calls, from the shared command
 /// module `control.rs` alone. Trading and AutoDetect go through `dispatch_run`, which keeps them
 /// away from a core that is not connected; the raw senders are crate-private.
-const TG_TRADE_CALLS: [&str; 4] = [
+const TG_TRADE_CALLS: [&str; 8] = [
     "apply_strategies",
     "cancel_all_orders",
     "cancel_order",
     "dispatch_run",
+    "set_temp_ban",
+    "turn_order_panic_sell",
+    "write_core_blacklist",
+    "write_strategy_blacklist",
 ];
 
 /// Breakage guarded: a command to a core reaching the station from anywhere in the bot but the

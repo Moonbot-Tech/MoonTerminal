@@ -1157,6 +1157,114 @@ impl SessionManager {
         self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
     }
 
+    /// Put one coin on the core's own blacklist, or with `lift` take it off.
+    ///
+    /// Adding switches the list on, so the entry affects trading: the command carries the flag and
+    /// the text together. Lifting drops only that token and leaves the switch as it is — turning
+    /// the whole feature off is a bigger statement than un-listing one coin. A lift that changes
+    /// nothing sends nothing.
+    ///
+    /// Args:
+    ///     core: Core whose list is rewritten, from the settings it last sent.
+    ///     coin: The core's spelling of the coin ([`crate::symbol::coin_list`]).
+    ///     lift: Take the coin off instead of putting it on.
+    ///
+    /// Returns:
+    ///     Whether a command was sent.
+    ///
+    /// Errors:
+    ///     The core's command channel refused it.
+    pub fn write_core_blacklist(&self, core: CoreId, coin: &str, lift: bool) -> Result<bool> {
+        let (enabled, text) = self
+            .store()
+            .core(core)
+            .and_then(|data| data.client_settings.as_ref())
+            .map(|cs| (cs.use_blacklist, cs.blacklist_text.clone()))
+            .unwrap_or((false, String::new()));
+        let new = crate::symbol::coin_list::edit(&text, coin, lift);
+        if lift && new == text {
+            return Ok(false);
+        }
+        let on = if lift { enabled } else { true };
+        self.set_blacklist(core, on, new)?;
+        Ok(true)
+    }
+
+    /// Put one coin on a strategy's `CoinsBlackList`, or with `lift` take it off, through the
+    /// shared field editor.
+    ///
+    /// The core omits a field equal to its schema default, so a strategy that sends no list has
+    /// an empty one and the first token starts it. An edit that changes nothing sends nothing.
+    ///
+    /// Args:
+    ///     core: Core that holds the strategy.
+    ///     strategy: Its id.
+    ///     coin: The core's spelling of the coin.
+    ///     lift: Take the coin off instead of putting it on.
+    ///
+    /// Returns:
+    ///     Whether an edit was sent.
+    ///
+    /// Errors:
+    ///     The core's command channel refused it.
+    pub fn write_strategy_blacklist(
+        &self,
+        core: CoreId,
+        strategy: u64,
+        coin: &str,
+        lift: bool,
+    ) -> Result<bool> {
+        let current = self
+            .store()
+            .core(core)
+            .and_then(|data| data.strategies.iter().find(|s| s.id == strategy))
+            .and_then(|s| {
+                s.fields
+                    .iter()
+                    .find(|(name, _)| name == crate::feed::FIELD_COINS_BLACK_LIST)
+                    .map(|(_, value)| value.clone())
+            })
+            .unwrap_or_default();
+        let new = crate::symbol::coin_list::edit(&current, coin, lift);
+        if new == current {
+            return Ok(false);
+        }
+        self.edit_strategies(
+            core,
+            vec![(
+                strategy,
+                vec![(crate::feed::FIELD_COINS_BLACK_LIST.to_string(), new)],
+            )],
+        )?;
+        Ok(true)
+    }
+
+    /// Whether a strategy's kind has a `CoinsBlackList` at all, by the core's schema: an edit of a
+    /// field its kind lacks is silently ignored by the core, so no surface offers one.
+    pub fn strategy_has_blacklist(&self, core: CoreId, strategy: u64) -> bool {
+        let Some(data) = self.store().core(core) else {
+            return false;
+        };
+        let Some(row) = data.strategies.iter().find(|s| s.id == strategy) else {
+            return false;
+        };
+        let Some(schema) = data.schema.as_ref() else {
+            return false;
+        };
+        schema
+            .kinds
+            .iter()
+            .find(|kind| kind.ordinal == row.kind_ordinal)
+            .is_some_and(|kind| {
+                kind.sections.iter().any(|section| {
+                    section
+                        .fields
+                        .iter()
+                        .any(|field| field.name == crate::feed::FIELD_COINS_BLACK_LIST)
+                })
+            })
+    }
+
     /// Ban ONE market temporarily, or lift the ban it is under.
     ///
     /// The two controls that offer this — the coin menu's rows and the chart's button — spelled the

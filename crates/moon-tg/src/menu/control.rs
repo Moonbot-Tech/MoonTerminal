@@ -9,10 +9,14 @@
 
 use std::sync::mpsc::SyncSender;
 
+use moon_core::config::TempBanSpan;
 use moon_core::session::{CoreId, RunSwitch};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
-use moon_core::telegram::menu_action::{ControlAction, ControlSwitch, ControlTarget, MenuAction};
+use moon_core::telegram::menu_action::{
+    ControlAction, ControlSwitch, ControlTarget, MenuAction, OrderBan,
+};
 use moon_core::telegram::runtime::Response;
+use moon_core::util::fmt;
 use rust_i18n::t;
 
 use crate::TgHost;
@@ -153,6 +157,44 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
             };
             core_card(host, core, Some(said))
         }
+        A::Orders { core, page } => orders(host, core, usize::from(page), None),
+        A::Order { core, uid } => order_card(host, core, uid, None),
+        A::OrderPanic {
+            core,
+            uid,
+            confirmed,
+        } => {
+            if !confirmed {
+                let coin = control::open_order(host, core, uid)
+                    .map(|order| order.coin)
+                    .unwrap_or_default();
+                let question = t!("telegram.control.confirm_order_panic", coin = coin);
+                return confirm(
+                    question.to_string(),
+                    action,
+                    ControlAction::Order { core, uid },
+                );
+            }
+            let said = match control::order_panic(host, chat, core, uid) {
+                Ok(()) => t!("telegram.control.order_panic_sent").to_string(),
+                Err(refusal) => refusal_text(refusal),
+            };
+            order_card(host, core, uid, Some(said))
+        }
+        A::OrderBan { core, uid, ban } => {
+            let said = match control::order_ban(host, chat, core, uid, ban) {
+                Ok(true) => match ban {
+                    OrderBan::Core => t!("telegram.control.banned_core").to_string(),
+                    OrderBan::Strategy => t!("telegram.control.banned_strategy").to_string(),
+                    OrderBan::Temp(span) => {
+                        t!("telegram.control.banned_temp", hours = span.hours()).to_string()
+                    }
+                },
+                Ok(false) => t!("telegram.control.already_banned").to_string(),
+                Err(refusal) => refusal_text(refusal),
+            };
+            order_card(host, core, uid, Some(said))
+        }
     }
 }
 
@@ -206,6 +248,11 @@ fn confirm(question: String, action: ControlAction, back: ControlAction) -> Rend
         },
         ControlAction::PanicAll { target, .. } => ControlAction::PanicAll {
             target,
+            confirmed: true,
+        },
+        ControlAction::OrderPanic { core, uid, .. } => ControlAction::OrderPanic {
+            core,
+            uid,
             confirmed: true,
         },
         other => other,
@@ -356,6 +403,10 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
             ),
         ],
         vec![button(
+            format!("\u{1f4cb} {} ({positions})", t!("telegram.control.orders")),
+            ControlAction::Orders { core, page: 0 },
+        )],
+        vec![button(
             format!("\u{1f504} {}", t!("telegram.control.reconnect")),
             ControlAction::Reconnect(core),
         )],
@@ -365,6 +416,151 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
         )],
     ];
     (name(host, core), lines, rows)
+}
+
+/// One core's open positions, `page` of them, newest first.
+fn orders(host: &dyn TgHost, core: CoreId, page: usize, said: Option<String>) -> Rendered {
+    let all = control::open_orders(host, core);
+    let pages = all.len().div_ceil(PAGE).max(1);
+    let page = page.min(pages - 1);
+    let mut lines: Vec<String> = said.into_iter().collect();
+    lines.push(
+        match all.is_empty() {
+            true => t!("telegram.control.no_orders"),
+            false => t!("telegram.control.pick_order"),
+        }
+        .to_string(),
+    );
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = all
+        .iter()
+        .skip(page * PAGE)
+        .take(PAGE)
+        .map(|order| {
+            vec![button(
+                order_caption(order),
+                ControlAction::Order {
+                    core,
+                    uid: order.uid,
+                },
+            )]
+        })
+        .collect();
+    if pages > 1 {
+        let to = |page: usize| ControlAction::Orders {
+            core,
+            page: u16::try_from(page).unwrap_or(u16::MAX),
+        };
+        let mut nav = Vec::new();
+        if page > 0 {
+            nav.push(button("\u{25c0}".into(), to(page - 1)));
+        }
+        nav.push(InlineKeyboardButton::callback(
+            format!("{}/{pages}", page + 1),
+            MenuAction::Noop.callback(),
+        ));
+        if page + 1 < pages {
+            nav.push(button("\u{25b6}".into(), to(page + 1)));
+        }
+        rows.push(nav);
+    }
+    rows.push(vec![button(
+        format!("\u{2b05}\u{fe0f} {}", name(host, core)),
+        ControlAction::Core(core),
+    )]);
+    (t!("telegram.control.orders").to_string(), lines, rows)
+}
+
+/// An open position as its list button shows it: coin, side, strategy, emulator mark.
+fn order_caption(order: &moon_core::feed::OrderRow) -> String {
+    let side = if order.is_short { "S" } else { "L" };
+    let strategy = if order.strat_name.is_empty() {
+        order.strat.as_str()
+    } else {
+        order.strat_name.as_str()
+    };
+    let emulator = if order.emulator { " (E)" } else { "" };
+    format!("{} {side} \u{00b7} {strategy}{emulator}", order.coin)
+}
+
+/// One open position's card: what it is and where it stands, and its commands. A position that
+/// closed meanwhile says so and leads back to the list.
+fn order_card(host: &dyn TgHost, core: CoreId, uid: u64, said: Option<String>) -> Rendered {
+    let mut lines: Vec<String> = said.into_iter().collect();
+    let back = vec![button(
+        format!("\u{2b05}\u{fe0f} {}", t!("telegram.control.orders")),
+        ControlAction::Orders { core, page: 0 },
+    )];
+    let Some(order) = control::open_order(host, core, uid) else {
+        lines.push(t!("telegram.control.order_gone").to_string());
+        return (t!("telegram.control.orders").to_string(), lines, vec![back]);
+    };
+    let strategy = if order.strat_name.is_empty() {
+        order.strat.clone()
+    } else {
+        order.strat_name.clone()
+    };
+    lines.push(format!(
+        "{} \u{00b7} {} \u{00b7} {}",
+        order.market_display,
+        if order.is_short { "Short" } else { "Long" },
+        strategy
+    ));
+    lines.push(
+        t!(
+            "telegram.control.order_prices",
+            buy = fmt::compact(order.buy_price, 8),
+            sell = fmt::compact(order.sell_price, 8),
+            size = fmt::compact(order.size, 8)
+        )
+        .to_string(),
+    );
+    if order.emulator {
+        lines.push(t!("telegram.notify_emulator").to_string());
+    }
+    if host.is_panic_armed(core, &order.market) {
+        lines.push(t!("telegram.control.panic_armed").to_string());
+    }
+    let ban = |ban: OrderBan| ControlAction::OrderBan { core, uid, ban };
+    let mut ban_row = vec![button(
+        format!("\u{26d4} {}", t!("telegram.control.ban_core")),
+        ban(OrderBan::Core),
+    )];
+    if order.strat_id != 0 && host.session().strategy_has_blacklist(core, order.strat_id) {
+        ban_row.push(button(
+            format!("\u{26d4} {}", t!("telegram.control.ban_strategy")),
+            ban(OrderBan::Strategy),
+        ));
+    }
+    let temp_row = TempBanSpan::ALL
+        .into_iter()
+        .map(|span| {
+            button(
+                format!(
+                    "\u{23f3} {}",
+                    t!("telegram.control.hours", hours = span.hours())
+                ),
+                ban(OrderBan::Temp(span)),
+            )
+        })
+        .collect();
+    let rows = vec![
+        vec![button(
+            format!("\u{1f9ef} {}", t!("telegram.control.order_panic")),
+            ControlAction::OrderPanic {
+                core,
+                uid,
+                confirmed: false,
+            },
+        )],
+        ban_row,
+        temp_row,
+        back,
+    ];
+    (
+        format!("{} \u{00b7} {}", order.coin, name(host, core)),
+        lines,
+        rows,
+    )
 }
 
 /// The all-cores card: how many are there, connected and trading, and the commands for all.
