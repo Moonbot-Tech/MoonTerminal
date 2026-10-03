@@ -187,6 +187,34 @@ pub struct NotifySettings {
     /// document stays as it was.
     #[serde(skip_serializing_if = "AutoReports::is_off")]
     pub reports: AutoReports,
+    /// What the chat hears of the cores' own Telegram reports. Off by default; not written while
+    /// off, so the Mini App's document stays as it was.
+    #[serde(skip_serializing_if = "EventRule::is_off")]
+    pub events: EventRule,
+}
+
+/// The cores' own Telegram reports a chat relays: what a strategy marks for Telegram
+/// (`ReportToTelegram` on its detects, `ReportTradesToTelegram` on its trades), sent as the core
+/// would send it. No filters of the chat's own; emulator trades included.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct EventRule {
+    /// A trade was opened.
+    pub opened: bool,
+    /// A detect fired.
+    pub detects: bool,
+}
+
+impl EventRule {
+    /// Whether either is on.
+    pub fn any(&self) -> bool {
+        self.opened || self.detects
+    }
+
+    /// Whether both are off.
+    pub fn is_off(&self) -> bool {
+        !self.any()
+    }
 }
 
 impl NotifySettings {

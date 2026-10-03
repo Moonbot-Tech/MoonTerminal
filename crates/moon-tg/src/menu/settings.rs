@@ -163,6 +163,14 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
             notify(host, &|n| n.reports.set(kind, on))?;
             Screen::Notify
         }
+        A::Opened(on) => {
+            notify(host, &|n| n.events.opened = on)?;
+            Screen::Notify
+        }
+        A::Detects(on) => {
+            notify(host, &|n| n.events.detects = on)?;
+            Screen::Notify
+        }
         A::DailyHours => Screen::DailyHours,
         A::StationStatus => return Ok(Screen::Status),
         A::DailyHour(hour) => {
@@ -436,8 +444,23 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
                 false => on_off(false),
             }
         ),
+        format!(
+            "{}: {} / {}",
+            t!("telegram.notify_editor.events").trim_end_matches(':'),
+            format_args!(
+                "{} {}",
+                tick(notify.events.opened),
+                t!("telegram.notify_editor.opened")
+            ),
+            format_args!(
+                "{} {}",
+                tick(notify.events.detects),
+                t!("telegram.notify_editor.detects")
+            ),
+        ),
         t!("telegram.settings.notify_hint").to_string(),
         t!("telegram.auto.hint").to_string(),
+        t!("telegram.notify_editor.events_hint").to_string(),
     ];
     let mut rows = vec![
         vec![button(
@@ -497,6 +520,24 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
             })
             .collect(),
     );
+    rows.push(vec![
+        button(
+            format!(
+                "{} {}",
+                tick(notify.events.opened),
+                t!("telegram.notify_editor.opened")
+            ),
+            SettingsAction::Opened(!notify.events.opened),
+        ),
+        button(
+            format!(
+                "{} {}",
+                tick(notify.events.detects),
+                t!("telegram.notify_editor.detects")
+            ),
+            SettingsAction::Detects(!notify.events.detects),
+        ),
+    ]);
     rows.push(back(SettingsAction::Root));
     (
         format!("\u{1f514} {}", t!("telegram.settings.notify")),

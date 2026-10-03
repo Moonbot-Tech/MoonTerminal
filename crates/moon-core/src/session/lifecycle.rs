@@ -5,8 +5,8 @@ use std::collections::{HashMap, HashSet};
 use crate::config::{AppConfig, ServerConfig};
 use crate::db::ReportTx;
 use crate::feed::{
-    self, ConnStatus, CoreTimeOffsetStatus, EngineActionResult, ExchangeId, FeedHandle, FeedMsg,
-    FeedWakeTx,
+    self, ConnStatus, CoreTgEvent, CoreTimeOffsetStatus, EngineActionResult, ExchangeId,
+    FeedHandle, FeedMsg, FeedWakeTx,
 };
 use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
 use crate::session::core_time_offset::OffsetSource;
@@ -22,7 +22,62 @@ mod identity_stale_tests;
 #[cfg(test)]
 mod order_tests;
 #[cfg(test)]
+mod tg_event_tests;
+#[cfg(test)]
 mod trade_sound_tests;
+
+/// Oldest entry, in milliseconds, still announced to Telegram as one happening now.
+const TG_OPEN_FRESH_MS: i64 = 120_000;
+
+/// Whether an entry at `open_ms` is one happening now, not an open trade resent after a
+/// reconnect. A stamp the axis could not lift (`<= 0`) is not. The window is two-sided: until
+/// the core's clock offset is measured its stamps are its own wall clock, and a clock running
+/// ahead must not make every resent trade look like a new one.
+pub(super) fn tg_open_is_fresh(open_ms: i64, now_ms: i64) -> bool {
+    open_ms > 0 && now_ms.saturating_sub(open_ms).abs() <= TG_OPEN_FRESH_MS
+}
+
+/// Keep a core's Telegram events for the bot, each stamped in true UTC: an entry by its own
+/// stamp, a detect by its arrival. An entry further than [`TG_OPEN_FRESH_MS`] from now is
+/// dropped — the open-row check after a reconnect resends every open trade, and those are no
+/// entries now — and one already filed for this core is not filed again (a reconnect, or a new
+/// report schema, announces its open rows anew).
+///
+/// Args:
+///     data: The core's store.
+///     axis: Its true-UTC report axis.
+///     core: The core that produced them.
+///     events: Its events of one drain tick.
+fn file_tg_events(
+    data: &mut super::store::CoreData,
+    axis: &crate::db::ReportAxis,
+    core: CoreId,
+    events: Vec<CoreTgEvent>,
+) {
+    let now_ms = crate::util::now_unix_ms_i64();
+    for event in events {
+        let at_utc_ms = match &event {
+            CoreTgEvent::Opened {
+                buy, rec_id, coin, ..
+            } => {
+                let open_ms = axis.stamp_to_utc_ms(*buy, core);
+                if !tg_open_is_fresh(open_ms, now_ms) {
+                    log::debug!(
+                        "telegram: entry of {coin} on core {core} not announced: {} ms from now",
+                        now_ms.saturating_sub(open_ms)
+                    );
+                    continue;
+                }
+                if !data.tg_opened_once(*rec_id) {
+                    continue;
+                }
+                open_ms
+            }
+            CoreTgEvent::Detect { .. } => now_ms,
+        };
+        data.push_tg_event(at_utc_ms, event);
+    }
+}
 
 /// Position of `id` in the configured order; ids missing from `order` rank last.
 pub(super) fn rank_of(order: &[CoreId], id: CoreId) -> usize {
@@ -465,6 +520,13 @@ impl SessionManager {
                             let before = core.folders_rev;
                             core.apply(FeedMsg::Folders(folders));
                             stats.ui_state |= core.folders_rev != before;
+                        }
+                    }
+                    FeedMsg::TelegramEvents(events) => {
+                        // Not `ui_state`: only the bot reads them.
+                        let axis = self.true_utc_axis(sess.id);
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            file_tg_events(core, &axis, sess.id, events);
                         }
                     }
                     FeedMsg::TradeOpened {

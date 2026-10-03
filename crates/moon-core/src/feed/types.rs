@@ -289,6 +289,35 @@ pub struct OrderRow {
     pub sell_trace: Option<OrderTrace>,
 }
 
+/// Something a core's strategy asked to report to Telegram, for the bot to relay: what the core
+/// would send to its own Telegram, which does not come over the wire.
+///
+/// Only flagged events are produced — a regular detect of a strategy with `ReportToTelegram`, the
+/// entry of a trade whose strategy has `ReportTradesToTelegram` — so the stream stays small even
+/// on a core whose detects storm.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CoreTgEvent {
+    /// A regular detect.
+    Detect {
+        market: String,
+        /// The detect's own line, bounded like [`DetectRow::msg`], addresses redacted.
+        msg: String,
+        /// The strategy's name, bounded like [`DetectRow::strat_name`].
+        strat_name: String,
+        is_short: bool,
+    },
+    /// A trade's entry: the report row that first carried its coin and entry stamp.
+    Opened {
+        rec_id: i64,
+        coin: String,
+        strat_name: String,
+        /// The core's emulator traded it, not the exchange.
+        emulator: bool,
+        /// The entry stamp as the core wrote it, core-local.
+        buy: crate::db::ReportStamp,
+    },
+}
+
 /// One core detect for the toolbar and history, decoupled from moonproto.
 #[derive(Debug, Clone)]
 pub struct DetectRow {
@@ -1375,6 +1404,9 @@ pub enum FeedMsg {
     OrderLines(Vec<OrderRow>),
     /// Batch of new detects accumulated during one event-drain tick.
     Detects(Vec<DetectRow>),
+    /// What this core's strategies asked to report to Telegram during one event-drain tick, for
+    /// the bot to relay. Produced whatever the feed's `detects` flag says, on a station too.
+    TelegramEvents(Vec<CoreTgEvent>),
     /// Batch of new core server-log lines accumulated during one event-drain tick.
     ServerLog(Vec<CoreLogLine>),
     /// Core strategy snapshot sent when its signature changes.

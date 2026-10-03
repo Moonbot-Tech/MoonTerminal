@@ -121,9 +121,13 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
     };
     purge_revoked_rows(host, &store);
     if !anything_on(&store) {
+        // The core events' cursors go with the last switch: one turned on later starts at what
+        // happens from then on.
+        host.state_mut().events_cursor.clear();
         return;
     }
     step_down(host, &store, now_utc);
+    crate::notify::events::run(host, &store, now_utc);
     maybe_spawn(host, &store, now_utc);
     crate::notify::reports::run(host, &store, now_utc);
 }
@@ -250,7 +254,7 @@ fn service_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
 ///
 /// Returns:
 ///     The guard. A poisoned lock still yields the inner store.
-pub(super) fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
+pub(crate) fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
     store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -267,7 +271,8 @@ fn anything_on(store: &Mutex<NotifyStore>) -> bool {
     lock_store(store).file.chats.values().any(chat_enabled)
 }
 
-/// `true` when this chat asked for trades, down/back, a daily summary or an automatic report.
+/// `true` when this chat asked for trades, down/back, a daily summary, an automatic report or
+/// the cores' own events.
 ///
 /// Args:
 ///     chat: One stored chat.
@@ -279,6 +284,7 @@ fn chat_enabled(chat: &ChatNotify) -> bool {
         || chat.settings.down.on
         || chat.settings.daily.on
         || chat.settings.reports.any()
+        || chat.settings.events.any()
 }
 
 /// Step every authorized chat whose down rule is on.
@@ -1119,7 +1125,7 @@ fn grant_matches(host: &dyn TgHost, shot: &ChatShot) -> bool {
 ///
 /// Returns:
 ///     Core ids. A test override replaces both arms.
-fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<u64> {
+pub(crate) fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<u64> {
     if let Some(ids) = visible_override(host) {
         return ids;
     }

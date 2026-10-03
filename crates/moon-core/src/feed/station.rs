@@ -9,8 +9,8 @@
 //! traces and the tape around trades. What it turns off:
 //!
 //! - the client's periodic market refresh and its full-size history rings (`Compact`);
-//! - every domain event but reports, archive answers and the core's log (the log is sampled for
-//!   the clock offset alone, see [`keeps_reports`]);
+//! - every domain event but reports, archive answers, the core's log (sampled for the clock
+//!   offset alone) and detects (judged for the bot alone), see [`keeps_reports`];
 //! - the requests a terminal sends on Ready and on a reconnect — license, settings, hedge mode,
 //!   balances, chart alerts, Telegram — and the recurring API-key poll;
 //! - the Assets publications and the 5-minute kline recorder.
@@ -96,10 +96,13 @@ pub fn enabled() -> bool {
 /// `ServerLog` stays for one reader only: the clock-offset estimator samples it in a pass that
 /// ignores `feed.log`, and nothing else reads it with the station's flags. Without it the offset
 /// has no source at all — `Replica` and `Skew` are never produced (§9, question 27).
+///
+/// `Detect` stays for the bot alone: with `feed.detects` off no detect reaches the store, and
+/// only one whose strategy has `ReportToTelegram` leaves the feed, as a Telegram event.
 pub fn keeps_reports(event: &Event) -> bool {
     matches!(
         event,
-        Event::Report(_) | Event::MarketHistory(_) | Event::ServerLog(_)
+        Event::Report(_) | Event::MarketHistory(_) | Event::ServerLog(_) | Event::Detect(_)
     )
 }
 

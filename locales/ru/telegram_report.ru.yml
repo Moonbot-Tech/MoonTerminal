@@ -111,6 +111,10 @@ telegram.notify_unvalued: "Нет оценки"
 
 telegram.notify_unchecked: "Пороги не проверены: оценки в $ нет"
 
+telegram.notify_opened: "Сделка открыта"
+telegram.notify_emulator: "эмулятор"
+telegram.notify_events_more: "…и ещё %{n}"
+
 telegram.notify_down: "нет связи с"
 
 telegram.notify_back: "связь восстановлена"

@@ -109,6 +109,10 @@ fn settings_actions_round_trip() {
         SettingsAction::DailyHours,
         SettingsAction::DailyHour(0),
         SettingsAction::DailyHour(23),
+        SettingsAction::Opened(true),
+        SettingsAction::Opened(false),
+        SettingsAction::Detects(true),
+        SettingsAction::Detects(false),
         SettingsAction::StationStatus,
     ];
     actions.extend(

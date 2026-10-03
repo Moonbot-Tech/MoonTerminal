@@ -42,6 +42,11 @@ pub struct TelegramState {
     pub(crate) last_report_revision: Option<crate::ReportRevision>,
     /// When the last notification read was spawned. `None` allows the first run.
     pub(crate) last_notify_run: Option<Instant>,
+    /// Each core's newest Telegram event already relayed or passed over
+    /// (`notify::events`); a core missing here starts at its newest.
+    pub(crate) events_cursor: HashMap<CoreId, u64>,
+    /// When the last batch of core events went. `None` allows the first.
+    pub(crate) events_flush: Option<Instant>,
     /// At most one automatic-report read is in flight.
     pub(crate) auto_busy: bool,
     /// When the last automatic-report read was spawned. `None` allows the first run.
@@ -162,6 +167,8 @@ impl TelegramState {
             notify_busy: false,
             last_report_revision: None,
             last_notify_run: None,
+            events_cursor: HashMap::new(),
+            events_flush: None,
             auto_busy: false,
             last_auto_run: None,
             injected_auto: None,

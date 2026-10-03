@@ -579,8 +579,8 @@ pub(super) fn mini_notify_save(
     }
 }
 
-/// The page knows neither automatic reports nor the dollar follow-up of trade cards: what it
-/// submits keeps the chat's stored ones.
+/// The page knows neither automatic reports, the dollar follow-up of trade cards, nor the cores'
+/// own events: what it submits keeps the chat's stored ones.
 pub(super) fn keep_stored_bot_fields(file: &NotifyFile, chat: i64, settings: &mut NotifySettings) {
     let stored = file
         .chats
@@ -590,6 +590,7 @@ pub(super) fn keep_stored_bot_fields(file: &NotifyFile, chat: i64, settings: &mu
         .unwrap_or_default();
     settings.reports = stored.reports;
     settings.trades.usd_followup = stored.trades.usd_followup;
+    settings.events = stored.events;
 }
 
 /// Machine kind stored in [`NotifyDto::fault`].

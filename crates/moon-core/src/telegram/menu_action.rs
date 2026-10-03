@@ -64,6 +64,10 @@ pub enum SettingsAction {
     DailyHour(u8),
     /// An automatic report on or off.
     Auto(AutoReport, bool),
+    /// The cores' own "trade opened" reports on or off.
+    Opened(bool),
+    /// The cores' own detect reports on or off.
+    Detects(bool),
     /// The station's status, opened from the section: it leads back to it.
     StationStatus,
 }
@@ -90,6 +94,8 @@ impl SettingsAction {
             Self::DailyHours => ":n:h".into(),
             Self::DailyHour(hour) => format!(":n:h:{hour}"),
             Self::Auto(kind, on) => format!(":n:a:{}:{}", auto_code(kind), flag(on)),
+            Self::Opened(on) => format!(":n:e:o:{}", flag(on)),
+            Self::Detects(on) => format!(":n:e:d:{}", flag(on)),
             Self::StationStatus => ":st".into(),
         }
     }
@@ -127,6 +133,8 @@ impl SettingsAction {
                     .find(|k| auto_code(*k) == *kind)?,
                 flag(on)?,
             ),
+            ["n", "e", "o", on] => Self::Opened(flag(on)?),
+            ["n", "e", "d", on] => Self::Detects(flag(on)?),
             ["n", "h"] => Self::DailyHours,
             ["n", "h", hour] => {
                 let hour: u8 = hour.parse().ok()?;

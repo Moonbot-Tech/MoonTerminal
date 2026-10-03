@@ -715,6 +715,33 @@ impl SettingsView {
                 ),
             )
             .child(
+                div()
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(t!("telegram.notify_editor.events").to_string()),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 16.0))
+                    .child(switch(
+                        "opened",
+                        t!("telegram.notify_editor.opened").to_string(),
+                        draft.events.opened,
+                        |s, v| s.events.opened = v,
+                    ))
+                    .child(switch(
+                        "detects",
+                        t!("telegram.notify_editor.detects").to_string(),
+                        draft.events.detects,
+                        |s, v| s.events.detects = v,
+                    )),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.notify_editor.events_hint").to_string()),
+            )
+            .child(
                 h_flex()
                     .flex_wrap()
                     .gap(design::ui_px(cx, 16.0))

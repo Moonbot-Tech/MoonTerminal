@@ -74,9 +74,11 @@ fn the_notify_screens_switch_and_pick() {
     let _locale = crate::test_locale::force("en");
     let notify = NotifySettings::default();
     let (_, lines, rows) = super::notify_screen(&notify, chrono_tz::UTC);
-    assert_eq!(lines.len(), 6);
+    assert_eq!(lines.len(), 8);
     let all = actions(&rows);
     for wanted in [
+        SettingsAction::Opened(true),
+        SettingsAction::Detects(true),
         SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Hourly, true),
         SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Today, true),
         SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Month, true),

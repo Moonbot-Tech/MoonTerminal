@@ -111,6 +111,10 @@ telegram.notify_unvalued: "Sin valoración"
 
 telegram.notify_unchecked: "Umbrales sin comprobar: sin valor en dólares"
 
+telegram.notify_opened: "Operación abierta"
+telegram.notify_emulator: "emulador"
+telegram.notify_events_more: "…y %{n} más"
+
 telegram.notify_down: "sin conexión desde"
 
 telegram.notify_back: "conexión restablecida"

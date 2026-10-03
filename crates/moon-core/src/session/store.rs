@@ -12,10 +12,10 @@ use crate::applog::LogLine;
 use crate::feed::{
     AssetsSnapshot, ChartAlertUpdate, ChartTextRows, ClientSettings, ConnStatus, CoreConfig,
     CoreConfigEditEvent, CoreConfigEditPhase, CoreConfigEditResult, CoreConfigEditRow,
-    CoreConfigState, CoreTelegramState, DetectRow, EngineActionResult, FeedMsg, LicenseState,
-    NewsSnapshot, OrderRow, ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP, StrategyEditNote,
-    StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow, StrategySchemaModel,
-    TempBlacklistRow, TransferAssetsSnapshot,
+    CoreConfigState, CoreTelegramState, CoreTgEvent, DetectRow, EngineActionResult, FeedMsg,
+    LicenseState, NewsSnapshot, OrderRow, ProfitState, RuntimeState, STRATEGY_EDIT_NOTE_CAP,
+    StrategyEditNote, StrategyEditOutcome, StrategyEditPhase, StrategyEditRow, StrategyRow,
+    StrategySchemaModel, TempBlacklistRow, TransferAssetsSnapshot,
 };
 use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
@@ -23,6 +23,23 @@ use crate::util::{now_unix_ms, now_unix_ms_i64};
 
 /// Maximum number of recent detects retained in memory for each core.
 const MAX_DETECTS: usize = 2000;
+
+/// Telegram events retained per core for the bot, which drains them every few seconds.
+const MAX_TG_EVENTS: usize = 256;
+
+/// Entries remembered per core against announcing one trade twice.
+const MAX_TG_OPENED: usize = 512;
+
+/// One [`CoreTgEvent`] as the bot reads it: stamped and numbered on arrival.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TgEventRow {
+    /// Per-core number, rising; the bot keeps its own cursor on it.
+    pub seq: u64,
+    /// When it happened, true UTC milliseconds: the entry stamp of an opened trade, the arrival of
+    /// a detect.
+    pub at_utc_ms: i64,
+    pub event: CoreTgEvent,
+}
 
 /// Maximum number of recent server-log lines retained per core for live viewing and search.
 /// Older history remains in `logs/<date>_<core>.log` files.
@@ -124,6 +141,14 @@ pub struct CoreData {
     /// compares — for the common case of a market that never had one. One entry per market that
     /// HAS fired, which is a fraction of the ring and never larger than it.
     pub latest_detect: HashMap<String, DetectRow>,
+    /// What this core's strategies asked to report to Telegram, oldest first, trimmed to
+    /// [`MAX_TG_EVENTS`]; see [`CoreData::push_tg_event`].
+    pub tg_events: VecDeque<TgEventRow>,
+    /// `seq` of the newest row ever pushed into [`Self::tg_events`].
+    pub tg_events_seq: u64,
+    /// Report rows whose entry was already filed as a Telegram event, newest last, trimmed to
+    /// [`MAX_TG_OPENED`]; see [`CoreData::tg_opened_once`].
+    pub tg_opened: VecDeque<i64>,
     /// Latest core strategy snapshot for the Strategies window.
     pub strategies: Vec<StrategyRow>,
     /// Open (pending or timed-out) strategy edits, FULL REPLACE on every `FeedMsg::StrategyEdits`.
@@ -508,6 +533,37 @@ fn ban_deadline_ms(at_ms: i64, row: &TempBlacklistRow) -> i64 {
 }
 
 impl CoreData {
+    /// Keep one Telegram event for the bot, numbered after the last; the oldest goes past
+    /// [`MAX_TG_EVENTS`].
+    ///
+    /// Args:
+    ///     at_utc_ms: When it happened, true UTC milliseconds.
+    ///     event: The event.
+    pub fn push_tg_event(&mut self, at_utc_ms: i64, event: CoreTgEvent) {
+        self.tg_events_seq = self.tg_events_seq.wrapping_add(1);
+        self.tg_events.push_back(TgEventRow {
+            seq: self.tg_events_seq,
+            at_utc_ms,
+            event,
+        });
+        while self.tg_events.len() > MAX_TG_EVENTS {
+            self.tg_events.pop_front();
+        }
+    }
+
+    /// Remember `rec_id`'s entry as filed; `false` when it already was, so the trade is not
+    /// announced twice.
+    pub fn tg_opened_once(&mut self, rec_id: i64) -> bool {
+        if self.tg_opened.contains(&rec_id) {
+            return false;
+        }
+        self.tg_opened.push_back(rec_id);
+        while self.tg_opened.len() > MAX_TG_OPENED {
+            self.tg_opened.pop_front();
+        }
+        true
+    }
+
     /// Create an empty per-core store in the connecting state.
     pub fn new() -> Self {
         Self {
@@ -517,6 +573,9 @@ impl CoreData {
             clock_skew: CoreClockSkew::default(),
             detects: VecDeque::new(),
             latest_detect: HashMap::new(),
+            tg_events: VecDeque::new(),
+            tg_events_seq: 0,
+            tg_opened: VecDeque::new(),
             strategies: Vec::new(),
             strategy_edits: Vec::new(),
             strategy_edit_rev: 0,
@@ -1443,7 +1502,9 @@ impl CoreData {
             | FeedMsg::ChartArchiveAnswered { .. }
             | FeedMsg::TradeSounds(_)
             | FeedMsg::TradeOpened { .. }
-            | FeedMsg::TradeClosed { .. } => {}
+            | FeedMsg::TradeClosed { .. }
+            // Stamped by the session, which owns the time axis (`push_tg_event`).
+            | FeedMsg::TelegramEvents(_) => {}
         }
     }
 

@@ -111,6 +111,10 @@ telegram.notify_unvalued: "Unvalued"
 
 telegram.notify_unchecked: "Thresholds not checked: no dollar value"
 
+telegram.notify_opened: "Trade opened"
+telegram.notify_emulator: "emulator"
+telegram.notify_events_more: "…and %{n} more"
+
 telegram.notify_down: "lost connection since"
 
 telegram.notify_back: "connection restored"

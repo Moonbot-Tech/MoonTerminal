@@ -894,6 +894,37 @@ pub(super) fn strat_kind_name(ordinal: u8) -> &'static str {
     }
 }
 
+/// The Telegram event of a regular detect whose strategy has `ReportToTelegram`, else `None`:
+/// watcher rows, chart-only detects and alert firings are not what the core reports, and a
+/// detect that arrives before its strategy snapshot cannot be judged.
+///
+/// Args:
+///     snap: The client's state, for the strategy's flag and name.
+///     d: The detect.
+pub(super) fn tg_detect(
+    snap: Option<&moonproto::MoonStateSnapshot>,
+    d: &moonproto::DetectEvent,
+) -> Option<crate::feed::CoreTgEvent> {
+    if !d.is_regular_detect() {
+        return None;
+    }
+    let snap = snap?;
+    if !strat_field_bool(snap, d.strategy_id, "ReportToTelegram") {
+        return None;
+    }
+    Some(crate::feed::CoreTgEvent::Detect {
+        market: d.market_name.clone(),
+        // The same redaction and bound as the detects feed's own copy: the line can name the
+        // machine the core runs on.
+        msg: crate::applog::redact::addresses(&d.msg)
+            .chars()
+            .take(crate::feed::DETECT_MSG_KEEP)
+            .collect(),
+        strat_name: detect_strat_name(snap.strats().snapshot(d.strategy_id)),
+        is_short: d.is_short,
+    })
+}
+
 /// Reads a Boolean order-strategy field, falling back to the schema default. The strategy
 /// serializer (mirrored by Delphi and moonproto) does NOT transmit fields equal to the schema
 /// default, so a missing field means `= default`, not `false`. No strategy snapshot means false.

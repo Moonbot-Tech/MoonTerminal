@@ -36,7 +36,7 @@ pub use crate::feed::{
 };
 pub use run_dispatch::{RunDispatch, RunSwitch, RunTarget};
 pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
-pub use store::{BalanceState, CoreId, CoreStore};
+pub use store::{BalanceState, CoreId, CoreStore, TgEventRow};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;

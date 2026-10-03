@@ -44,11 +44,11 @@ use self::trace_backfill::TracePacer;
 use super::assets::{build_assets, build_transfer_assets};
 use super::strategies::{
     alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
-    strat_db_dump, strat_display_name, strat_kind_name,
+    strat_db_dump, strat_display_name, strat_field_bool, strat_kind_name, tg_detect,
 };
 use super::{
     ChartTextRows, ConnStatus, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
-    CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    CoreTgEvent, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
     SharedMoonClient, StrategyEditPhase, StrategyEditResolution, StrategyEditResult,
     StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
@@ -734,6 +734,9 @@ pub(super) fn run(
     // Per-feed memory of open report rows, so a partial closing upsert can be completed into
     // a print capture — see `capture::CaptureTracker`.
     let mut capture: Option<capture::CaptureTracker> = None;
+    // Field indices of a report row's `StrategyID` and `Emulator`, for the Telegram event of a
+    // trade's entry — see `tg_opened`.
+    let mut tg_fields: Option<(u16, Option<u16>)> = None;
     // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
     // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
     // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
@@ -2149,11 +2152,17 @@ pub(super) fn run(
         // Alert fires (`DETECT_KIND_ALERT`) arrive as Event::Detect. Also enter this path when
         // feed.alerts is enabled so alerts work without the general detect stream.
         let want_detects = server.feed.detects || server.feed.alerts;
-        if want_detects || (server.feed.reports && reports.is_some()) || want_log {
+        // A detect may be one its strategy reports to Telegram whatever this feed's flags say —
+        // on a station, where `detects` is off, too.
+        let has_detect = events.iter().any(|ev| matches!(ev, Event::Detect(_)));
+        if want_detects || has_detect || (server.feed.reports && reports.is_some()) || want_log {
             let mut detects: Vec<DetectRow> = Vec::new();
             let mut logs: Vec<CoreLogLine> = Vec::new();
+            let mut tg_events: Vec<CoreTgEvent> = Vec::new();
             // Snapshot for fields of the strategy that produced the detect (SoundAlert/KeepAlert/sound).
-            let detect_snap = want_detects.then(|| client.snapshot()).flatten();
+            let detect_snap = (want_detects || has_detect)
+                .then(|| client.snapshot())
+                .flatten();
             // Strategy schema for fallback to default_value: the server omits fields equal to the
             // schema default, including sound/SoundAlert.
             let detect_schema = detect_snap
@@ -2180,6 +2189,7 @@ pub(super) fn run(
                     Event::Detect(d)
                         if server.feed.detects || (server.feed.alerts && d.is_alert_fire()) =>
                     {
+                        tg_events.extend(tg_detect(detect_snap.as_deref(), d));
                         let strat = detect_snap
                             .as_ref()
                             .and_then(|s| s.strats().snapshot(d.strategy_id));
@@ -2227,6 +2237,10 @@ pub(super) fn run(
                                 .collect(),
                             strat_name,
                         });
+                    }
+                    // Not wanted for the detects feed, but still one its strategy may report.
+                    Event::Detect(d) => {
+                        tg_events.extend(tg_detect(detect_snap.as_deref(), d));
                     }
                     // The core committed a checkbox delta. Published as its own message because the
                     // strategy SNAPSHOT cannot carry this fact: the protocol library applies a
@@ -2290,6 +2304,7 @@ pub(super) fn run(
                         match rev {
                             ReportEvent::Schema(schema) => {
                                 trace_fields = trace_field_indices(schema);
+                                tg_fields = tg_field_indices(schema);
                                 capture = capture::CaptureFields::from_schema(schema)
                                     .map(capture::CaptureTracker::new);
                             }
@@ -2305,6 +2320,14 @@ pub(super) fn run(
                                 }
                                 match capture.as_mut().and_then(|tracker| tracker.on_row(row)) {
                                     Some(capture::RowEdge::Opened { rec_id, coin, buy }) => {
+                                        tg_events.extend(tg_opened(
+                                            client.snapshot().as_deref(),
+                                            row,
+                                            tg_fields,
+                                            rec_id,
+                                            &coin,
+                                            buy,
+                                        ));
                                         let _ = tx.send(FeedMsg::TradeOpened {
                                             rec_id,
                                             coin,
@@ -2543,6 +2566,9 @@ pub(super) fn run(
                 ));
             }
             if !detects.is_empty() && tx.send(FeedMsg::Detects(detects)).is_err() {
+                break;
+            }
+            if !tg_events.is_empty() && tx.send(FeedMsg::TelegramEvents(tg_events)).is_err() {
                 break;
             }
         }
@@ -2932,6 +2958,71 @@ pub(super) fn run(
 
     let _ = client.disconnect();
     Ok(())
+}
+
+/// Field indices of a report row's `StrategyID` and, when the schema has it, `Emulator`.
+///
+/// Matched without case, as the capture tracker matches its own: the replica files the columns
+/// lowercased while the wire spells them in mixed case.
+fn tg_field_indices(schema: &moonproto::ReportSchema) -> Option<(u16, Option<u16>)> {
+    let integer = |name: &str| {
+        schema
+            .fields()
+            .iter()
+            .find(|f| {
+                f.name.eq_ignore_ascii_case(name) && f.kind == moonproto::ReportFieldKind::Integer
+            })
+            .map(|f| f.index)
+    };
+    Some((integer("StrategyID")?, integer("Emulator")))
+}
+
+/// The Telegram event of a trade's entry whose strategy has `ReportTradesToTelegram`, else
+/// `None` — a manual trade (no strategy), a row without the fields, or no strategy snapshot yet.
+///
+/// Args:
+///     snap: The client's state, for the strategy's flag and name.
+///     row: The upsert that opened the trade; the opening one carries the whole row.
+///     fields: [`tg_field_indices`] of the current schema.
+///     rec_id: The trade's report row.
+///     coin: Its coin token.
+///     buy: Its entry stamp, core-local.
+fn tg_opened(
+    snap: Option<&MoonStateSnapshot>,
+    row: &moonproto::ReportRow,
+    fields: Option<(u16, Option<u16>)>,
+    rec_id: i64,
+    coin: &str,
+    buy: crate::db::ReportStamp,
+) -> Option<CoreTgEvent> {
+    let (strategy_ix, emulator_ix) = fields?;
+    let strat_id = match row.value(strategy_ix) {
+        Some(moonproto::ReportValue::Integer(id)) if *id > 0 => *id as u64,
+        Some(moonproto::ReportValue::Integer(_)) => return None,
+        _ => {
+            // The opening upsert normally carries the whole row; one without its strategy is not
+            // announced, and this is the only trace of it.
+            log::debug!("telegram: entry of {coin} (row {rec_id}) carries no StrategyID");
+            return None;
+        }
+    };
+    let snap = snap?;
+    if !strat_field_bool(snap, strat_id, "ReportTradesToTelegram") {
+        return None;
+    }
+    let emulator = emulator_ix
+        .and_then(|ix| match row.value(ix) {
+            Some(moonproto::ReportValue::Integer(v)) => Some(*v != 0),
+            _ => None,
+        })
+        .unwrap_or(false);
+    Some(CoreTgEvent::Opened {
+        rec_id,
+        coin: coin.to_string(),
+        strat_name: detect_strat_name(snap.strats().snapshot(strat_id)),
+        emulator,
+        buy,
+    })
 }
 
 /// Field indices of `ReportUID` and `CloseDate` in one schema revision, or `None` when the core

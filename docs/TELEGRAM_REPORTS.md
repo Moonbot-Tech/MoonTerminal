@@ -156,6 +156,14 @@ rich):
 - A daily summary at a chosen time in the display time zone, the same zone chat reports use.
   If the bot is down at that time, it sends the summary once later on that same local day, and
   not for an earlier day.
+- What the cores themselves would send to their own Telegram, which does not come over the
+  wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
+  its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
+  terminal's Settings and the bot's Settings -> Notifications; emulator trades are included, and
+  the chat adds no filters of its own. What arrived is merged into one message at most every
+  10 seconds, so a burst of detects is one list; a long list is cut and counted. Only what happens
+  while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
+  a chat whose queue Telegram has not drained for five minutes.
 
 Automatic reports are the rich report a menu button opens, sent by the bot on its own. They are
 switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->

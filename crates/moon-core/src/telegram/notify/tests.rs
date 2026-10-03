@@ -179,6 +179,10 @@ fn sample_file() -> NotifyFile {
                 today: false,
                 month: true,
             },
+            events: EventRule {
+                opened: true,
+                detects: false,
+            },
         },
         ledger: NotifyLedger {
             trades_enabled_utc: Some(1_700_000_000),
@@ -259,7 +263,8 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
                     },
                     "down": {"on": true, "after_minutes": 12},
                     "daily": {"on": false, "hour": 9, "minute": 30},
-                    "reports": {"hourly": true, "month": true}
+                    "reports": {"hourly": true, "month": true},
+                    "events": {"opened": true}
                 },
                 "ledger": {
                     "trades_enabled_utc": 1700000000,
