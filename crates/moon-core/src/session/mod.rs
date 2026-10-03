@@ -19,6 +19,7 @@ pub mod core_time_offset;
 pub mod core_update;
 pub mod order_lines;
 pub mod panic_override;
+pub mod run_dispatch;
 pub mod run_state;
 pub mod store;
 
@@ -33,6 +34,7 @@ pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
     CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL, ReportSyncProgress,
 };
+pub use run_dispatch::{RunDispatch, RunSwitch, RunTarget};
 pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
 pub use store::{BalanceState, CoreId, CoreStore};
 

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use moon_core::session::CoreId;
+use moon_core::session::{CoreId, RunSwitch};
 use moon_core::telegram::web::MiniAppApiError;
 use moon_core::telegram::web::dto::{
     CommandErrorDto, CommandResultDto, CoreSwitchDto, ScopeResultDto, StrategyPendingDto,
@@ -85,7 +85,7 @@ pub(super) fn mini_panic_sell(
     Ok(command_hit(Some(host.is_panic_armed(core, &market))))
 }
 
-/// Flip one core's trading or auto-detect switch through the desktop's session call.
+/// Flip one core's trading or auto-detect switch through the desktop's gated session call.
 ///
 /// Args:
 ///     chat_id: Paired chat that sent the command.
@@ -94,8 +94,9 @@ pub(super) fn mini_panic_sell(
 ///     on: State the page asked for.
 ///
 /// Returns:
-///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
-///     send is `Unavailable`. `Err` is only the owner gate.
+///     `Ok` with `NotFound` for a core that is not configured and `Offline` for one that is not
+///     connected; nothing is sent for either. A core already in the asked state is a hit without
+///     a send. A refused send is `Unavailable`. `Err` is only the owner gate.
 pub(super) fn mini_core_switch(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -107,17 +108,17 @@ pub(super) fn mini_core_switch(
     if !mini_core_known(host, core) {
         return Ok(command_miss(CommandErrorDto::NotFound));
     }
-    let sent = match switch {
-        CoreSwitchDto::Trading => host.session_mut().set_trading(core, on),
-        CoreSwitchDto::AutoDetect => host.session_mut().set_auto_detect(core, on),
-    };
-    match sent {
-        Ok(()) => Ok(command_hit(None)),
-        Err(_) => Ok(command_miss(CommandErrorDto::Unavailable)),
+    let outcome = host.session().dispatch_run(&[core], run_switch(switch), on);
+    if outcome.offline > 0 {
+        return Ok(command_miss(CommandErrorDto::Offline));
     }
+    if outcome.refused() > 0 {
+        return Ok(command_miss(CommandErrorDto::Unavailable));
+    }
+    Ok(command_hit(None))
 }
 
-/// Flip one switch on several cores with one scope call.
+/// Flip one switch on several cores with one gated scope call.
 ///
 /// Args:
 ///     chat_id: Paired chat that sent the command.
@@ -126,8 +127,9 @@ pub(super) fn mini_core_switch(
 ///     on: State the page asked for.
 ///
 /// Returns:
-///     `Ok` with `sent` of `requested` known cores accepted; `ok` only when all were.
-///     No known core is `NotFound` and sends nothing. `Err` is only the owner gate.
+///     `Ok` with how many known cores were sent, already in the asked state, or skipped as not
+///     connected; `ok` only when none was skipped or refused. No known core is `NotFound` and
+///     sends nothing. `Err` is only the owner gate.
 pub(super) fn mini_cores_switch(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -143,22 +145,38 @@ pub(super) fn mini_cores_switch(
             ok: false,
             sent: 0,
             requested: 0,
+            already: 0,
+            offline: 0,
             error: Some(CommandErrorDto::NotFound),
         });
     }
-    let accepted = match switch {
-        CoreSwitchDto::Trading => host.session_mut().set_trading_many(&targets, on),
-        CoreSwitchDto::AutoDetect => host.session_mut().set_auto_detect_many(&targets, on),
+    let outcome = host
+        .session()
+        .dispatch_run(&targets, run_switch(switch), on);
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let error = if outcome.refused() > 0 {
+        Some(CommandErrorDto::Unavailable)
+    } else if outcome.offline > 0 {
+        Some(CommandErrorDto::Offline)
+    } else {
+        None
     };
-    let sent = u32::try_from(accepted.len()).unwrap_or(u32::MAX);
-    let requested = u32::try_from(targets.len()).unwrap_or(u32::MAX);
-    let ok = sent == requested;
     Ok(ScopeResultDto {
-        ok,
-        sent,
-        requested,
-        error: (!ok).then_some(CommandErrorDto::Unavailable),
+        ok: error.is_none(),
+        sent: count(outcome.sent.len()),
+        requested: count(targets.len()),
+        already: count(outcome.already),
+        offline: count(outcome.offline),
+        error,
     })
+}
+
+/// The session's run switch for the page's switch name.
+fn run_switch(switch: CoreSwitchDto) -> RunSwitch {
+    match switch {
+        CoreSwitchDto::Trading => RunSwitch::Trading,
+        CoreSwitchDto::AutoDetect => RunSwitch::AutoDetect,
+    }
 }
 
 /// Cancel every open order of one core through the desktop's session call.
@@ -168,8 +186,9 @@ pub(super) fn mini_cores_switch(
 ///     core: Core id.
 ///
 /// Returns:
-///     `Ok` with `NotFound` for a core that is not configured, and nothing is sent. A refused
-///     send is `Unavailable`. `Err` is only the owner gate.
+///     `Ok` with `NotFound` for a core that is not configured and `Offline` for one that is not
+///     connected; nothing is sent for either. A refused send is `Unavailable`. `Err` is only the
+///     owner gate.
 pub(super) fn mini_cancel_all(
     host: &mut dyn TgHost,
     chat_id: i64,
@@ -178,6 +197,10 @@ pub(super) fn mini_cancel_all(
     mini_owner(host, chat_id)?;
     if !mini_core_known(host, core) {
         return Ok(command_miss(CommandErrorDto::NotFound));
+    }
+    // The session refuses an unconnected core too; checking first names the reason for the page.
+    if !host.session().core_run_state(core).online {
+        return Ok(command_miss(CommandErrorDto::Offline));
     }
     match host.session_mut().cancel_all_orders(core) {
         Ok(()) => Ok(command_hit(None)),

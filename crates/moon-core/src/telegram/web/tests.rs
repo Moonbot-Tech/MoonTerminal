@@ -174,6 +174,8 @@ fn accept(event: MiniAppApiRequest) {
                 ok: true,
                 sent: n,
                 requested: n,
+                already: 0,
+                offline: 0,
                 error: None,
             }));
         }

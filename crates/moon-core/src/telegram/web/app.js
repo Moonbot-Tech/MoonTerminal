@@ -1543,7 +1543,8 @@
         var line = el("div", "detail-actions");
         var cancel = button("cmd action-btn cmd-danger", tr("mini_cancel_all"), function () {
             if (commandBusy) return;
-            runCommand(null, "/api/core/cancel_all", { core: core.id });
+            // The desktop asks a second click for the same action; the page asks one confirm.
+            runCommand(tr("mini_cancel_all_confirm"), "/api/core/cancel_all", { core: core.id });
         });
         cancel.disabled = commandBusy;
         line.appendChild(cancel);
@@ -3150,8 +3151,14 @@
             return;
         }
         var data = res.data || {};
-        var partial = typeof data.sent === "number" && typeof data.requested === "number"
-            && data.sent !== data.requested;
+        // A scope result: cores already in the asked state count as done; cores that are not
+        // connected were skipped, never queued.
+        var done = typeof data.sent === "number" ? data.sent + (data.already || 0) : null;
+        var offline = data.offline || 0;
+        // Partial when part of the scope was done, or part of it (not all) was offline: the
+        // offline count is shown even when the rest was refused.
+        var partial = done != null && typeof data.requested === "number"
+            && done !== data.requested && (done > 0 || (offline > 0 && offline < data.requested));
         // A reconnect only starts one; the next cores poll shows whether it came back.
         if (data.ok === true && path === "/api/core/reconnect") {
             showCmdLine("");
@@ -3166,12 +3173,16 @@
         }
         haptic("error");
         if (partial) {
-            showCmdLine(trf("mini_cmd_partial", { sent: data.sent, n: data.requested }));
+            showCmdLine(offline
+                ? trf("mini_cmd_partial_offline", { sent: done, n: data.requested, offline: offline })
+                : trf("mini_cmd_partial", { sent: done, n: data.requested }));
             reloadAfterCommand(true);
             return;
         }
         var failed = tr("mini_cmd_failed");
-        if (data.error === "not_found") {
+        if (data.error === "offline") {
+            failed = tr("mini_cmd_offline");
+        } else if (data.error === "not_found") {
             failed = path.indexOf("/api/core") === 0 ? tr("mini_cmd_core_not_found") : tr("mini_cmd_not_found");
         }
         showCmdLine(failed);

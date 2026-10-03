@@ -318,12 +318,19 @@ pub struct CommandResultDto {
     pub error: Option<CommandErrorDto>,
 }
 
-/// Result of a Mini App command over several cores: `sent` of `requested` were accepted.
+/// Result of a Mini App command over several cores.
+///
+/// Of `requested` known cores, `sent` accepted the command now, `already` were in the asked state
+/// and needed nothing, and `offline` were skipped because they are not connected (a command queued
+/// for them would fire whenever they come back). `ok` only when every core ended up sent or
+/// already there.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ScopeResultDto {
     pub ok: bool,
     pub sent: u32,
     pub requested: u32,
+    pub already: u32,
+    pub offline: u32,
     pub error: Option<CommandErrorDto>,
 }
 
@@ -335,6 +342,8 @@ pub enum CommandErrorDto {
     Unavailable,
     Rejected,
     Forbidden,
+    /// The core is not connected, so nothing was sent.
+    Offline,
 }
 
 /// One core the chat may include in a notification rule.

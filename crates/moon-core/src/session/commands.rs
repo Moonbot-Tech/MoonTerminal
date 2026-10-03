@@ -84,7 +84,7 @@ impl SessionManager {
     ///
     /// Returns:
     ///     Whether the command reached the core's channel.
-    pub fn set_trading(&self, core: CoreId, on: bool) -> Result<()> {
+    pub(crate) fn set_trading(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(
             core,
             CoreCmd::StrategiesAction {
@@ -110,9 +110,12 @@ impl SessionManager {
     ///     cores: Cores to command.
     ///     on: Whether to start (`true`) or stop (`false`) trading.
     ///
+    /// Crate-private: every caller outside `session` goes through [`Self::dispatch_run`], which
+    /// keeps a command away from a core that is not connected.
+    ///
     /// Returns:
     ///     The cores whose command channel accepted the intent, in the order given.
-    pub fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+    pub(crate) fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
         self.send_many(cores, &format!("set trading {on}"), |core| {
             self.set_trading(core, on)
         })
@@ -1106,7 +1109,7 @@ impl SessionManager {
     ///
     /// Returns:
     ///     Whether the command reached the core's channel.
-    pub fn set_auto_detect(&self, core: CoreId, on: bool) -> Result<()> {
+    pub(crate) fn set_auto_detect(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetAutoDetect(on), "set auto detect")
     }
 
@@ -1120,9 +1123,11 @@ impl SessionManager {
     ///     cores: Cores to command.
     ///     on: Whether detection should be active.
     ///
+    /// Crate-private, like [`Self::set_trading_many`]: callers use [`Self::dispatch_run`].
+    ///
     /// Returns:
     ///     The cores whose command channel accepted the intent, in the order given.
-    pub fn set_auto_detect_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+    pub(crate) fn set_auto_detect_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
         self.send_many(cores, &format!("set auto detect {on}"), |core| {
             self.set_auto_detect(core, on)
         })
@@ -1134,7 +1139,16 @@ impl SessionManager {
     }
 
     /// Cancel every order for the core. This is a live exchange action.
+    ///
+    /// Refused for a core that is not connected, for the reason the run switches are gated
+    /// (`run_dispatch`): the command channel outlives a disconnect, so a queued cancel would fire
+    /// whenever the core comes back and wipe the orders it holds by then.
     pub fn cancel_all_orders(&self, core: CoreId) -> Result<()> {
+        if !self.core_run_state(core).online {
+            return Err(anyhow!(
+                "core {core} is not connected: cancel all orders not sent"
+            ));
+        }
         self.send_core_cmd(core, CoreCmd::CancelAllOrders, "cancel all orders")
     }
 
