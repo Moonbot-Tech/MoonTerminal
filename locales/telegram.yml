@@ -351,10 +351,6 @@ telegram.mini_settings_no_cores:
   ru: "Ядра не найдены"
   en: "No cores found"
   es: "No se encontraron núcleos"
-telegram.mini_settings_off_note:
-  ru: "Уведомления приходят сообщениями бота в этот чат"
-  en: "Notifications arrive as bot messages in this chat"
-  es: "Los avisos llegan como mensajes del bot en este chat"
 telegram.mini_period_today:
   ru: "Сегодня"
   en: "Today"

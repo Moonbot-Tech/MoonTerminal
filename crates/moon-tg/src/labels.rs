@@ -227,7 +227,6 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_settings_zone",
     "mini_settings_save",
     "mini_settings_saved",
-    "mini_settings_off_note",
     "mini_settings_notifications",
     "mini_settings_chat_note",
     "mini_settings_summary_trades",
