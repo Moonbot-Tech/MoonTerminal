@@ -1,0 +1,232 @@
+{
+  "settings": {
+    "trades": {
+      "on": true,
+      "cores": {
+        "kind": "only",
+        "ids": [
+          1,
+          2
+        ]
+      },
+      "min_volume_usd": null,
+      "profit_at_least_usd": null,
+      "loss_at_least_usd": null
+    },
+    "down": {
+      "on": false,
+      "after_minutes": 5
+    },
+    "daily": {
+      "on": false,
+      "hour": 21,
+      "minute": 0
+    }
+  },
+  "cores": [
+    {
+      "id": 1,
+      "name": "Synthetic 01 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 2,
+      "name": "Synthetic 02 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 3,
+      "name": "Synthetic 03 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 4,
+      "name": "Synthetic 04 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 5,
+      "name": "Synthetic 05 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 6,
+      "name": "Synthetic 06 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 7,
+      "name": "Synthetic 07 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 8,
+      "name": "Synthetic 08 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 9,
+      "name": "Synthetic 09 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 10,
+      "name": "Synthetic 10 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 11,
+      "name": "Synthetic 11 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 12,
+      "name": "Synthetic 12 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 13,
+      "name": "Synthetic 13 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 14,
+      "name": "Synthetic 14 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 15,
+      "name": "Synthetic 15 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 16,
+      "name": "Synthetic 16 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 17,
+      "name": "Synthetic 17 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 18,
+      "name": "Synthetic 18 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 19,
+      "name": "Synthetic 19 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 20,
+      "name": "Synthetic 20 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 21,
+      "name": "Synthetic 21 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 22,
+      "name": "Synthetic 22 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 23,
+      "name": "Synthetic 23 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 24,
+      "name": "Synthetic 24 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 25,
+      "name": "Synthetic 25 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 26,
+      "name": "Synthetic 26 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 27,
+      "name": "Synthetic 27 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 28,
+      "name": "Synthetic 28 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 29,
+      "name": "Synthetic 29 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 30,
+      "name": "Synthetic 30 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 31,
+      "name": "Synthetic 31 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 32,
+      "name": "Synthetic 32 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 33,
+      "name": "Synthetic 33 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 34,
+      "name": "Synthetic 34 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 35,
+      "name": "Synthetic 35 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 36,
+      "name": "Synthetic 36 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 37,
+      "name": "Synthetic 37 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    },
+    {
+      "id": 38,
+      "name": "Synthetic 38 - a deliberately long strategy core name for compact selection",
+      "exchange": "OKX"
+    },
+    {
+      "id": 39,
+      "name": "Synthetic 39 - a deliberately long strategy core name for compact selection",
+      "exchange": "Binance"
+    },
+    {
+      "id": 40,
+      "name": "Synthetic 40 - a deliberately long strategy core name for compact selection",
+      "exchange": "Bybit"
+    }
+  ],
+  "zone": "UTC",
+  "revision": 0,
+  "error": null,
+  "fault": null
+}

@@ -1933,6 +1933,41 @@
     var settingsSavedTimer = null;
     var settingsCores = [];
     var settingsZone = "";
+    // Category and search are popup-local navigation, like the other tabs' detail views.
+    var settingsCategoryId = null;
+    var settingsCoreSearch = "";
+    var settingsCoreScroll = 0;
+    var SETTINGS_CATEGORIES = [
+        { id: "notifications", titleKey: "mini_settings_notifications", summary: settingsNotifySummary, render: settingsNotifications }
+    ];
+
+    /** Summarize enabled notification kinds from the retained draft. */
+    function settingsNotifySummary() {
+        var active = [];
+        if (settingsForm.tradesOn) active.push(tr("mini_settings_summary_trades"));
+        if (settingsForm.downOn) active.push(tr("mini_settings_summary_cores"));
+        if (settingsForm.dailyOn) active.push(tr("mini_settings_summary_daily"));
+        return active.length ? active.join(" · ") : tr("mini_settings_summary_off");
+    }
+
+    /** Open a registry category or return to the list without discarding unsaved edits. */
+    function settingsNavigate(id) {
+        settingsCategoryId = id;
+        hapticSelection();
+        settingsRender();
+        restoreScroll(0);
+        var focus = sections.settings.querySelector(id ? "[data-settings-back]" : "[data-settings-category]");
+        if (focus) focus.focus({ preventScroll: true });
+    }
+
+    /** Append the existing notification form under its category title. */
+    function settingsNotifications(host) {
+        host.appendChild(settingsNote());
+        host.appendChild(settingsTradesCard());
+        host.appendChild(settingsDownCard());
+        host.appendChild(settingsDailyCard());
+        host.appendChild(settingsSaveBlock());
+    }
 
     /** Return whether the current form differs from its last adopted settings baseline. */
     function settingsIsDirty() {
@@ -2160,17 +2195,42 @@
         return false;
     }
 
-    /** Rebuild the Settings cards from the retained draft, restoring the page scroll. */
+    /** Render the category registry or its selected page while retaining the Settings draft. */
     function settingsRender() {
         var host = sections.settings;
         if (!host || !settingsForm) return;
         var y = window.pageYOffset || 0;
         clear(host);
-        host.appendChild(settingsNote());
-        host.appendChild(settingsTradesCard());
-        host.appendChild(settingsDownCard());
-        host.appendChild(settingsDailyCard());
-        host.appendChild(settingsSaveBlock());
+        var category = null;
+        SETTINGS_CATEGORIES.forEach(function (entry) {
+            if (entry.id === settingsCategoryId) category = entry;
+        });
+        if (category) {
+            var back = button("settings-back", tr("mini_back"), function () { settingsNavigate(null); });
+            back.setAttribute("data-settings-back", "");
+            host.appendChild(back);
+            host.appendChild(el("h2", "settings-title", tr(category.titleKey)));
+            category.render(host);
+        } else {
+            settingsCategoryId = null;
+            host.appendChild(el("h2", "settings-title", tr("mini_tab_settings")));
+            var list = el("div", "card settings-categories");
+            SETTINGS_CATEGORIES.forEach(function (entry) {
+                var row = button("settings-category", "", function () { settingsNavigate(entry.id); });
+                row.setAttribute("data-settings-category", entry.id);
+                var text = el("span", "settings-category-text");
+                text.appendChild(el("span", "settings-category-title", tr(entry.titleKey)));
+                text.appendChild(el("span", "settings-category-summary", entry.summary()));
+                row.appendChild(text);
+                var arrow = el("span", "chev", "›");
+                arrow.setAttribute("aria-hidden", "true");
+                row.appendChild(arrow);
+                list.appendChild(row);
+            });
+            host.appendChild(list);
+        }
+        var coreList = host.querySelector(".settings-core-list");
+        if (coreList) coreList.scrollTop = settingsCoreScroll;
         restoreScroll(y);
     }
 
@@ -2278,9 +2338,9 @@
         }
     }
 
-    /** Return the localized note explaining the notification defaults. */
+    /** Return the localized explanation of where this chat receives notifications. */
     function settingsNote() {
-        var note = el("p", "settings-note", tr("mini_settings_off_note"));
+        var note = el("p", "settings-note", tr("mini_settings_chat_note"));
         note.setAttribute("data-settings-note", "");
         return note;
     }
@@ -2304,18 +2364,66 @@
         return el("div", "settings-options" + (on ? "" : " is-off"));
     }
 
-    /** Return a labelled chip for `core` that reflects and toggles its draft selection. */
-    function settingsCoreChip(core, disabled) {
+    /** Return a compact core row whose name truncates while its check remains visible. */
+    function settingsCoreRow(core, disabled) {
         var id = core.id;
         var selected = settingsForm.scopeKind === "only" && settingsForm.scopeIds.indexOf(id) >= 0;
-        var chip = button("chip" + (selected ? " on" : ""), (core.name || "") + " · " + (core.exchange || ""), function () {
+        var chip = button("settings-core-row" + (selected ? " on" : ""), "", function () {
             if (chip.disabled || settingsSaving) return;
+            var list = chip.parentNode;
+            settingsCoreScroll = list.scrollTop;
             settingsToggleCore(id);
+            var replacement = sections.settings.querySelector('[data-settings-core="' + id + '"]');
+            if (replacement) replacement.focus({ preventScroll: true });
         });
+        var check = el("span", "settings-core-check", selected ? "✓" : "");
+        check.setAttribute("aria-hidden", "true");
+        chip.appendChild(check);
+        chip.appendChild(el("span", "settings-core-name", core.name || ""));
+        chip.title = (core.name || "") + " · " + (core.exchange || "");
+        chip.setAttribute("aria-label", chip.title);
         chip.setAttribute("data-settings-core", String(id));
         chip.setAttribute("aria-pressed", selected ? "true" : "false");
         chip.disabled = !!disabled;
         return chip;
+    }
+
+    /** Populate a bounded core list, filtering names and exchanges without changing selection. */
+    function settingsCoreRows(list, disabled) {
+        clear(list);
+        var query = settingsCoreSearch.trim().toLocaleLowerCase();
+        settingsCores.forEach(function (core) {
+            if (((core.name || "") + " " + (core.exchange || "")).toLocaleLowerCase().indexOf(query) >= 0) {
+                list.appendChild(settingsCoreRow(core, disabled));
+            }
+        });
+        if (!list.firstChild) list.appendChild(el("p", "settings-caption", tr("mini_settings_no_cores")));
+        list.scrollTop = settingsCoreScroll;
+    }
+
+    /** Return search, the retained selection count, and a dense scrollable multi-select list. */
+    function settingsCorePicker(disabled) {
+        var picker = el("div", "settings-core-picker");
+        var search = el("input", "settings-input settings-core-search");
+        search.type = "search";
+        search.placeholder = tr("mini_settings_search_cores");
+        search.setAttribute("aria-label", search.placeholder);
+        search.setAttribute("data-settings-search", "");
+        search.value = settingsCoreSearch;
+        search.disabled = disabled;
+        picker.appendChild(search);
+        picker.appendChild(el("p", "settings-caption", trf("mini_settings_selected", {
+            n: settingsForm.scopeIds.length, m: settingsCores.length
+        })));
+        var list = el("div", "settings-core-list");
+        search.addEventListener("input", function () {
+            settingsCoreSearch = search.value;
+            settingsCoreScroll = 0;
+            settingsCoreRows(list, disabled);
+        });
+        settingsCoreRows(list, disabled);
+        picker.appendChild(list);
+        return picker;
     }
 
     /** Toggle `id` in the explicit scope; removing its last id restores the All scope. */
@@ -2373,7 +2481,7 @@
         var allOn = settingsForm.scopeKind !== "only";
         var all = button("chip" + (allOn ? " on" : ""), tr("mini_settings_all_cores"), function () {
             if (all.disabled || settingsSaving) return;
-            settingsForm.scopeKind = "all";
+            settingsForm.scopeKind = allOn ? "only" : "all";
             settingsForm.scopeIds = [];
             settingsToggleDone();
         });
@@ -2381,9 +2489,8 @@
         all.setAttribute("aria-pressed", allOn ? "true" : "false");
         all.disabled = locked;
         chips.appendChild(all);
-        var i;
-        for (i = 0; i < settingsCores.length; i++) chips.appendChild(settingsCoreChip(settingsCores[i], locked));
         options.appendChild(chips);
+        if (!allOn) options.appendChild(settingsCorePicker(locked));
         options.appendChild(settingsThresholdRow("mini_settings_min_volume", "volume-switch", "min-volume", "volumeOn", "volumeText", settingsForm.tradesOn));
         options.appendChild(settingsThresholdRow("mini_settings_profit_at_least", "profit-switch", "profit", "profitOn", "profitText", settingsForm.tradesOn));
         options.appendChild(settingsThresholdRow("mini_settings_loss_at_least", "loss-switch", "loss", "lossOn", "lossText", settingsForm.tradesOn));
@@ -2727,6 +2834,7 @@
             paintDealsPressed();
         }
         paintUpdated();
+        syncBackButton();
         loadTab(name, loadToken, !!hasData[name]);
         if (name === "cores") ensureCoresToday();
     }
@@ -2922,6 +3030,7 @@
         }
     }
 
+    /** Return from the active sheet, detail, or Settings category before collapsing groups. */
     function onBack() {
         if (sheetOpen) {
             closeSheet();
@@ -2929,6 +3038,10 @@
         }
         if (coreDetailId != null) {
             closeCoreDetail();
+            return;
+        }
+        if (current === "settings" && settingsCategoryId != null) {
+            settingsNavigate(null);
             return;
         }
         collapseOpenGroups();
@@ -2943,10 +3056,12 @@
         return typeof webapp.isVersionAtLeast !== "function" || webapp.isVersionAtLeast("6.1");
     }
 
+    /** Show Telegram's BackButton whenever the visible page has a local back destination. */
     function syncBackButton() {
         var button = webapp && webapp.BackButton;
         if (!button) return;
-        var needed = sheetOpen || coreDetailId != null || anyGroupOpen();
+        var needed = sheetOpen || coreDetailId != null || anyGroupOpen()
+            || (current === "settings" && settingsCategoryId != null);
         if (typeof button.isVisible === "boolean" && button.isVisible === needed) return;
         if (needed && typeof button.show === "function") button.show();
         else if (!needed && typeof button.hide === "function") button.hide();

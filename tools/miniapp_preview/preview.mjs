@@ -109,7 +109,13 @@ async function openPage(browser, html, viewport, theme, api, log) {
                 ready: noop,
                 expand: noop,
                 onEvent: noop,
-                BackButton: { show: noop, hide: noop, onClick: noop, offClick: noop },
+                BackButton: {
+                    isVisible: false,
+                    show() { this.isVisible = true; },
+                    hide() { this.isVisible = false; },
+                    onClick(callback) { window.previewBack = callback; },
+                    offClick: noop,
+                },
                 showConfirm: (_text, done) => done(true),
             },
         };
@@ -175,6 +181,12 @@ function defaultApi() {
 const settle = (page) => page.waitForTimeout(350);
 const nav = async (page, tab) => {
     await page.click(`#app-nav button[data-tab="${tab}"]`);
+    await settle(page);
+};
+/** Enter the notification category so legacy form checks still test the same controls. */
+const openNotifications = async (page) => {
+    await nav(page, "settings");
+    await page.click('[data-settings-category="notifications"]');
     await settle(page);
 };
 const openFirstGroup = async (page, tab) => {
@@ -302,7 +314,7 @@ async function assertSettingsDefault(page) {
         };
     });
     const time = state.time && (state.time.value === "21:00" || state.time.value === "21:00:00");
-    if (state.cards !== 3 || !state.note || !state.hint || state.chips !== 4
+    if (state.cards !== 3 || !state.note || !state.hint || state.chips !== 1
         || state.trades !== "false" || state.down !== "false" || state.daily !== "false"
         || state.all !== "true"
         || !state.minutes || state.minutes.value !== "5" || !state.minutes.disabled
@@ -351,6 +363,59 @@ async function assertSettingsTradesOn(page) {
 
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
 const SCREENS = [
+    { name: "settings-root", run: async (p) => {
+        await nav(p, "settings");
+        if (await p.locator("[data-settings-category]").count() !== 1
+            || await p.locator("[data-settings-card]").count() !== 0) {
+            throw new Error("Settings must open its single category list without notification cards");
+        }
+        await p.click('[data-settings-category="notifications"]');
+        await p.reload();
+        await p.waitForSelector("#app-nav:not([hidden])");
+        await nav(p, "settings");
+        if (await p.locator("[data-settings-category]").count() !== 1) throw new Error("refresh must reset category navigation");
+        await assertSettingsFit(p);
+    } },
+    { name: "settings-many-cores", api: {
+        "/api/notify": () => ({ body: fixture("notify_many") }),
+    }, run: async (p) => {
+        await openNotifications(p);
+        if (await p.locator("[data-settings-core]").count() !== 40) {
+            throw new Error("many-core picker must contain 40 synthetic cores");
+        }
+        await p.fill("[data-settings-search]", "Synthetic 40");
+        if (await p.locator("[data-settings-core]").count() !== 1) throw new Error("search must filter core names");
+        await p.click('[data-settings-core="40"]');
+        await p.fill("[data-settings-search]", "not-a-core");
+        if (await p.locator("[data-settings-core]").count() !== 0) throw new Error("unmatched search must be empty");
+        await p.fill("[data-settings-search]", "");
+        if (await p.getAttribute('[data-settings-core="40"]', "aria-pressed") !== "true") {
+            throw new Error("search must retain offscreen selection");
+        }
+        await p.locator('[data-settings-core="39"]').scrollIntoViewIfNeeded();
+        await p.click('[data-settings-core="39"]');
+        if (!(await p.evaluate(() => document.querySelector(".settings-core-list").scrollTop > 0))) {
+            throw new Error("core selection must retain the list's scroll position");
+        }
+        await p.click("[data-settings-back]");
+        if (await p.locator("[data-settings-card]").count() !== 0) throw new Error("back must return to registry");
+        await p.click('[data-settings-category="notifications"]');
+        if (await p.getAttribute('[data-settings-core="40"]', "aria-pressed") !== "true") {
+            throw new Error("category back must retain the unsaved core draft");
+        }
+        await p.evaluate(() => window.previewBack());
+        if (await p.locator("[data-settings-category]").count() !== 1) throw new Error("Telegram back must return to list");
+        await p.click('[data-settings-category="notifications"]');
+        await p.locator("[data-settings-search]").scrollIntoViewIfNeeded();
+        await assertSettingsFit(p);
+        const bounded = await p.evaluate(() => {
+            const list = document.querySelector(".settings-core-list");
+            const name = document.querySelector(".settings-core-name");
+            return list.clientHeight <= 224 && list.scrollHeight > list.clientHeight
+                && getComputedStyle(name).textOverflow === "ellipsis";
+        });
+        if (!bounded) throw new Error("core list must be bounded with ellipsized names");
+    } },
     { name: "report-today", run: async () => {} },
     { name: "report-month", run: async (p) => { await p.click('[data-period="month"]'); await settle(p); } },
     { name: "report-month-scrolled", run: async (p) => {
@@ -413,19 +478,19 @@ const SCREENS = [
         await assertCoinQtyClips(p);
     } },
     { name: "settings-default", run: async (p) => {
-        await nav(p, "settings");
+        await openNotifications(p);
         await p.waitForSelector('[data-settings-card="trades"]');
         await assertSettingsDefault(p);
     } },
     { name: "settings-trades-on", api: { "/api/notify": () => ({ body: notifyTradesOn() }) }, run: async (p) => {
-        await nav(p, "settings");
+        await openNotifications(p);
         await p.waitForSelector('[data-settings-card="trades"]');
         await assertSettingsTradesOn(p);
     } },
     { name: "settings-save-error", api: {
         "/api/notify/save": () => ({ body: Object.assign({}, fixture("notify"), { error: SETTINGS_SAVE_ERROR }) }),
     }, run: async (p) => {
-        await nav(p, "settings");
+        await openNotifications(p);
         await p.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
         await p.click('[data-settings-card="trades"] [data-settings="card-on"]');
         await settle(p);
@@ -443,7 +508,7 @@ const SCREENS = [
         await assertSettingsFit(p);
     } },
     { name: "settings-draft-survives", run: async (p) => {
-        await nav(p, "settings");
+        await openNotifications(p);
         await p.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
         await p.click('[data-settings-card="trades"] [data-settings="card-on"]');
         await settle(p);
@@ -577,7 +642,7 @@ async function interactions(browser, html, texts) {
     expect(cancels.length === 1 && cancels[0].raw === cancelWanted,
         `order cancel sent ${JSON.stringify(cancels.map((c) => c.raw))}, expected [${cancelWanted}]`);
 
-    await nav(page, "settings");
+    await openNotifications(page);
     await page.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
     await page.click('[data-settings-card="trades"] [data-settings="card-on"]');
     await settle(page);
@@ -610,6 +675,23 @@ async function interactions(browser, html, texts) {
     try { secondSave = JSON.parse(secondSaves[1] ? secondSaves[1].raw : ""); } catch { secondSave = {}; }
     expect(secondSaves.length === 2 && secondSave.revision === 1,
         `second settings save revision ${secondSave.revision}, bodies ${JSON.stringify(secondSaves.map((s) => s.raw))}`);
+    // Losing the search-independent scope or turning an empty explicit scope into All must fail.
+    await page.click('[data-settings="scope-all"]');
+    expect(await page.locator("[data-settings-save]").isDisabled(), "an empty explicit core scope must not save as All");
+    await page.fill("[data-settings-search]", "Beta");
+    await page.click('[data-settings-core="2"]');
+    await page.click("[data-settings-back]");
+    expect((await page.locator(".settings-category-summary").innerText()) === texts.mini_settings_summary_trades,
+        "category summary must reflect enabled trades in the retained draft");
+    await page.click('[data-settings-category="notifications"]');
+    await page.click("[data-settings-save]");
+    await page.waitForFunction((wanted) => document.querySelector("[data-settings-status]").textContent === wanted,
+        texts.mini_settings_saved);
+    const scopeSaves = log.sent.filter((s) => s.path === "/api/notify/save");
+    const scopeSave = JSON.parse(scopeSaves[2].raw);
+    expect(scopeSave.revision === 2 && scopeSave.settings.trades.cores.kind === "only"
+        && JSON.stringify(scopeSave.settings.trades.cores.ids) === "[2]",
+        "filtered selection must save the selected core ID with the existing revision contract");
     await context.close();
     // The refused toggle's own 400 is logged by the browser; that one is expected.
     for (const error of log.errors.filter((e) => !/status of 400/.test(e))) failures.push(`page error: ${error}`);
@@ -633,7 +715,7 @@ async function main() {
         const { shots, errors } = await shoot(browser, html, opts, texts);
         console.log(`[OK] ${shots.length} screenshots -> ${opts.out}`);
         const failures = errors.map((e) => `page error: ${e}`);
-        if (!opts.only) failures.push(...(await interactions(browser, html, texts)));
+        if (!opts.only || opts.only.startsWith("settings-")) failures.push(...(await interactions(browser, html, texts)));
         for (const failure of failures) console.error(`[FAIL] ${failure}`);
         if (failures.length) process.exitCode = 1;
         else console.log("[OK] interaction checks passed");

@@ -1689,7 +1689,107 @@ button.pill:disabled {
     font-size: var(--fs-meta);
 }
 
-/* Settings: one note, then three cards. A long card title wraps beside its pill. */
+/* Settings categories reuse the page palette and the notification form's cards. */
+.settings-title {
+    margin: 12px 16px 8px;
+    font-size: var(--fs-title);
+}
+
+.settings-back {
+    margin: 8px 16px 0;
+    padding: 10px 0;
+    color: var(--link);
+    background: transparent;
+    border: 0;
+}
+
+.settings-category {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 16px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+}
+
+.settings-category-text {
+    display: grid;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-category-title {
+    font-size: var(--fs-body);
+    font-weight: 600;
+}
+
+.settings-category-summary {
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.settings-core-picker {
+    padding: 0 16px 12px;
+    display: grid;
+    gap: 8px;
+}
+
+.settings-core-list {
+    max-height: 224px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.settings-core-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 0;
+    border: 0;
+    border-bottom: 1px solid var(--row-line);
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+}
+
+.settings-core-check {
+    flex: 0 0 18px;
+    color: var(--pill-on);
+}
+
+.settings-core-name {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.settings-core-row.on {
+    background: var(--pill-on-fill);
+}
+
+.settings-category:hover,
+.settings-core-row:not(:disabled):hover {
+    background: var(--pill-on-fill);
+}
+
+.settings-back:focus-visible,
+.settings-category:focus-visible,
+.settings-core-row:focus-visible,
+.settings-core-search:focus-visible {
+    outline: 2px solid var(--pill-on);
+    outline-offset: -2px;
+}
+
 .settings-note {
     margin: 4px 16px 8px;
     color: var(--hint);
