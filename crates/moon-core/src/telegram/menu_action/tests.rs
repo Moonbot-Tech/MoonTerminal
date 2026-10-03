@@ -157,3 +157,54 @@ fn settings_actions_round_trip() {
         assert_eq!(MenuAction::parse_callback(data), None, "{data}");
     }
 }
+
+/// Every Control action must come back from its callback as itself, within Telegram's 64 bytes —
+/// a core id is a full `u64` — and a malformed one must not decode into some other command.
+#[test]
+fn control_actions_round_trip() {
+    let targets = [ControlTarget::Core(u64::MAX), ControlTarget::All];
+    let mut actions = vec![
+        ControlAction::Cores(0),
+        ControlAction::Cores(u16::MAX),
+        ControlAction::Core(u64::MAX),
+        ControlAction::All,
+        ControlAction::Reconnect(42),
+    ];
+    for target in targets {
+        for confirmed in [false, true] {
+            actions.push(ControlAction::PanicAll { target, confirmed });
+            for switch in [ControlSwitch::Trading, ControlSwitch::AutoDetect] {
+                for on in [false, true] {
+                    actions.push(ControlAction::Run {
+                        target,
+                        switch,
+                        on,
+                        confirmed,
+                    });
+                }
+            }
+        }
+    }
+    actions.push(ControlAction::CancelAll {
+        core: u64::MAX,
+        confirmed: true,
+    });
+    for action in actions {
+        let data = MenuAction::Control(action).callback();
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(
+            MenuAction::parse_callback(&data),
+            Some(MenuAction::Control(action)),
+            "{data}"
+        );
+    }
+    for bad in [
+        "m:k:r:a:t:1",
+        "m:k:r:x:t:1:0",
+        "m:k:x:7:2",
+        "m:k:c:-1",
+        "m:k:zz",
+    ] {
+        assert_eq!(MenuAction::parse_callback(bad), None, "{bad}");
+    }
+}

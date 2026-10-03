@@ -215,10 +215,10 @@ const TG_READ_CALLS: [&str; 5] = [
     "store",
 ];
 
-/// The Mini App's owner commands (STATION.md §1 item 9, §4.2: the Mini App as it is, what
-/// the key allows): the terminal's own session calls, from `mini_app/commands.rs` alone. Trading
-/// and AutoDetect go through `dispatch_run`, which keeps them away from a core that is not
-/// connected; the raw senders are crate-private.
+/// The owner's commands (STATION.md §1 item 9, §4.2: what the key allows), from the Mini App and
+/// the chat's Control section alike: the terminal's own session calls, from the shared command
+/// module `control.rs` alone. Trading and AutoDetect go through `dispatch_run`, which keeps them
+/// away from a core that is not connected; the raw senders are crate-private.
 const TG_TRADE_CALLS: [&str; 4] = [
     "apply_strategies",
     "cancel_all_orders",
@@ -227,11 +227,11 @@ const TG_TRADE_CALLS: [&str; 4] = [
 ];
 
 /// Breakage guarded: a command to a core reaching the station from anywhere in the bot but the
-/// Mini App's owner commands — a chat report that trades, a read that switches a core off — or a
+/// shared owner commands — a chat report that trades, a read that switches a core off — or a
 /// call the station's mode was never measured with.
 #[test]
-fn the_bot_trades_only_from_the_mini_app_commands() {
-    let commands = workspace().join("crates/moon-tg/src/mini_app/commands.rs");
+fn the_bot_trades_only_from_the_owner_commands() {
+    let commands = workspace().join("crates/moon-tg/src/control.rs");
     let reads: BTreeSet<String> = TG_READ_CALLS.iter().map(|s| s.to_string()).collect();
     let trades: BTreeSet<String> = TG_TRADE_CALLS.iter().map(|s| s.to_string()).collect();
     let mut traded = BTreeSet::new();
@@ -246,13 +246,13 @@ fn the_bot_trades_only_from_the_mini_app_commands() {
             }
             assert!(
                 trades.contains(call),
-                "{} calls `{call}` on the session: not a read the bot makes nor a Mini App \
+                "{} calls `{call}` on the session: not a read the bot makes nor an owner \
                  command — a deliberate change of the station's mode",
                 path.display()
             );
             assert!(
                 path == commands,
-                "{} calls `{call}`: owner commands live in mini_app/commands.rs alone",
+                "{} calls `{call}`: owner commands live in control.rs alone",
                 path.display()
             );
             traded.insert(call.clone());
@@ -260,7 +260,7 @@ fn the_bot_trades_only_from_the_mini_app_commands() {
     }
     assert_eq!(
         traded, trades,
-        "the scanner lost sight of the Mini App's commands"
+        "the scanner lost sight of the owner commands"
     );
 }
 

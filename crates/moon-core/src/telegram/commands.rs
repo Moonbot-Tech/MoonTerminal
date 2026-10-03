@@ -4,7 +4,7 @@
 //! Command suffixes are accepted only for the configured bot username from `getMe`.
 
 use super::api::{Message, Update};
-use super::menu_action::{MenuAction, SettingsAction};
+use super::menu_action::{ControlAction, MenuAction, SettingsAction};
 use super::report::{Period, ReportRequest};
 use crate::config::telegram_menu::MenuItem;
 
@@ -180,6 +180,10 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
             args,
             ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
         ),
+        "control" => require_no_args(
+            args,
+            ParsedCommand::Menu(MenuAction::Control(ControlAction::Cores(0))),
+        ),
         "pair" => parse_pair(args),
         _ => ParsedCommand::Unknown,
     }
@@ -248,6 +252,7 @@ pub fn button_command(item: MenuItem) -> ParsedCommand {
         MenuItem::Status => ParsedCommand::StationStatus,
         MenuItem::Report => ParsedCommand::Menu(MenuAction::Report),
         MenuItem::Settings => ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
+        MenuItem::Control => ParsedCommand::Menu(MenuAction::Control(ControlAction::Cores(0))),
     }
 }
 

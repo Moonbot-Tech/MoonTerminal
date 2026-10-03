@@ -27,6 +27,132 @@ pub enum MenuAction {
     Noop,
     /// A screen or a switch of the owner's Settings section.
     Settings(SettingsAction),
+    /// A screen or a command of the owner's Control section.
+    Control(ControlAction),
+}
+
+/// Which cores a Control command addresses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlTarget {
+    /// One core, by its id.
+    Core(u64),
+    /// Every core the owner sees.
+    All,
+}
+
+/// A core's run switch, as a Control button names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlSwitch {
+    /// Automatic trading: the strategy engine.
+    Trading,
+    /// Automatic detection.
+    AutoDetect,
+}
+
+/// What a button of the bot's Control section asks for. A command that can lose money or stop
+/// trading carries `confirmed`: the first press shows a confirmation, whose button sends the same
+/// action confirmed. A command names the state it sets, as a Settings switch does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlAction {
+    /// The cores, one page of them, with "all cores".
+    Cores(u16),
+    /// One core's card.
+    Core(u64),
+    /// The all-cores card.
+    All,
+    /// A run switch on one core or all of them.
+    Run {
+        target: ControlTarget,
+        switch: ControlSwitch,
+        on: bool,
+        confirmed: bool,
+    },
+    /// Cancel every open order of one core.
+    CancelAll { core: u64, confirmed: bool },
+    /// Panic-sell every market with an open position, on one core or all of them.
+    PanicAll {
+        target: ControlTarget,
+        confirmed: bool,
+    },
+    /// Reconnect one core.
+    Reconnect(u64),
+}
+
+impl ControlAction {
+    /// The data after `m:k`.
+    fn encode(self) -> String {
+        let flag = |on: bool| if on { "1" } else { "0" };
+        let target = |target: ControlTarget| match target {
+            ControlTarget::Core(id) => id.to_string(),
+            ControlTarget::All => "a".into(),
+        };
+        let switch = |switch: ControlSwitch| match switch {
+            ControlSwitch::Trading => "t",
+            ControlSwitch::AutoDetect => "d",
+        };
+        match self {
+            Self::Cores(page) => format!(":l:{page}"),
+            Self::Core(id) => format!(":c:{id}"),
+            Self::All => ":a".into(),
+            Self::Run {
+                target: t,
+                switch: s,
+                on,
+                confirmed,
+            } => format!(
+                ":r:{}:{}:{}:{}",
+                target(t),
+                switch(s),
+                flag(on),
+                flag(confirmed)
+            ),
+            Self::CancelAll { core, confirmed } => format!(":x:{core}:{}", flag(confirmed)),
+            Self::PanicAll {
+                target: t,
+                confirmed,
+            } => format!(":p:{}:{}", target(t), flag(confirmed)),
+            Self::Reconnect(id) => format!(":n:{id}"),
+        }
+    }
+
+    /// Decode the parts after `m:k`; anything malformed is `None`.
+    fn decode(parts: &[&str]) -> Option<Self> {
+        let flag = |code: &str| match code {
+            "1" => Some(true),
+            "0" => Some(false),
+            _ => None,
+        };
+        let target = |code: &str| match code {
+            "a" => Some(ControlTarget::All),
+            id => id.parse().ok().map(ControlTarget::Core),
+        };
+        let switch = |code: &str| match code {
+            "t" => Some(ControlSwitch::Trading),
+            "d" => Some(ControlSwitch::AutoDetect),
+            _ => None,
+        };
+        Some(match parts {
+            ["l", page] => Self::Cores(page.parse().ok()?),
+            ["c", id] => Self::Core(id.parse().ok()?),
+            ["a"] => Self::All,
+            ["r", t, s, on, confirmed] => Self::Run {
+                target: target(t)?,
+                switch: switch(s)?,
+                on: flag(on)?,
+                confirmed: flag(confirmed)?,
+            },
+            ["x", core, confirmed] => Self::CancelAll {
+                core: core.parse().ok()?,
+                confirmed: flag(confirmed)?,
+            },
+            ["p", t, confirmed] => Self::PanicAll {
+                target: target(t)?,
+                confirmed: flag(confirmed)?,
+            },
+            ["n", id] => Self::Reconnect(id.parse().ok()?),
+            _ => return None,
+        })
+    }
 }
 
 /// What a button of the bot's Settings section asks for: a screen, or one switch that saves at
@@ -177,6 +303,7 @@ impl MenuAction {
             Self::Preset(Preset::LastWeek) => "m:p:w".into(),
             Self::Noop => "m:-".into(),
             Self::Settings(action) => format!("m:s{}", action.encode()),
+            Self::Control(action) => format!("m:k{}", action.encode()),
         }
     }
 
@@ -189,6 +316,7 @@ impl MenuAction {
         let parts: Vec<&str> = rest.split(':').collect();
         match parts.as_slice() {
             ["s", rest @ ..] => SettingsAction::decode(rest).map(Self::Settings),
+            ["k", rest @ ..] => ControlAction::decode(rest).map(Self::Control),
             ["r"] => Some(Self::Report),
             ["-"] => Some(Self::Noop),
             ["p", "7"] => Some(Self::Preset(Preset::Days7)),

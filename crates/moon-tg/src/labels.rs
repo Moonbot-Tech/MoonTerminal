@@ -102,11 +102,11 @@ pub fn station_owner_navigation(telegram: &TelegramConfig) -> ReplyMarkup {
 }
 
 /// Whether a chat's reply keyboard may carry `item`: Status only for a station's owner,
-/// Settings only for the owner.
+/// Settings and Control only for the owner.
 pub(crate) fn keyboard_admits(item: MenuItem, host: crate::HostKind, owner: bool) -> bool {
     match item {
         MenuItem::Status => host == crate::HostKind::Station && owner,
-        MenuItem::Settings => owner,
+        MenuItem::Settings | MenuItem::Control => owner,
         _ => true,
     }
 }
@@ -130,6 +130,7 @@ fn item_icon(item: MenuItem) -> &'static str {
         MenuItem::Status => "\u{1f4e1}",
         MenuItem::Report => "\u{1f4ca}",
         MenuItem::Settings => "\u{2699}\u{fe0f}",
+        MenuItem::Control => "\u{1f39b}\u{fe0f}",
     }
 }
 

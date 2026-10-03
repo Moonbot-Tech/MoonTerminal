@@ -30,7 +30,7 @@ fn station_non_owner_keyboard_matches_the_terminal() {
 }
 
 /// The reply keyboard keeps its rows: short period labels with Help, then the two month labels;
-/// the owner's has Settings below them.
+/// the owner's has Settings and Control below them.
 #[test]
 fn the_keyboard_keeps_its_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
@@ -43,7 +43,7 @@ fn the_keyboard_keeps_its_rows() {
     };
     assert_eq!(
         markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![3, 2, 1]
+        vec![3, 2, 2]
     );
     let command =
         |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);
@@ -63,6 +63,10 @@ fn the_keyboard_keeps_its_rows() {
     assert!(matches!(
         command(1, 1),
         ParsedCommand::Report(request) if request.period == Period::LastMonth
+    ));
+    assert!(matches!(
+        command(2, 1),
+        ParsedCommand::Menu(moon_core::telegram::menu_action::MenuAction::Control(_))
     ));
 }
 
@@ -105,7 +109,7 @@ fn only_the_station_keyboard_has_its_status() {
     };
     assert_eq!(
         markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![3, 2, 2]
+        vec![3, 2, 3]
     );
     let command =
         |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);

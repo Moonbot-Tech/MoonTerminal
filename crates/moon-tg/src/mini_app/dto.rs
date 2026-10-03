@@ -303,7 +303,7 @@ pub(super) fn trade_strategy(
 ///
 /// Returns:
 ///     `Pending`, `TimedOut`, or `None` when the entry should be dropped.
-pub(super) fn strategy_pending(
+pub(crate) fn strategy_pending(
     entry: (bool, Instant, u64, u64),
     ack_now: u64,
     rev_now: u64,

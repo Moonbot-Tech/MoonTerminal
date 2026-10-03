@@ -21,7 +21,8 @@ name = "viewer"
 core_uids = [3]
 "#;
 
-/// A configuration saved before the menu existed loads with the bot as it was.
+/// A configuration saved before the menu existed loads with the bot as it was, plus what came
+/// later shown by default: the owner's Control beside Settings.
 #[test]
 fn an_old_servers_file_loads_with_the_old_menu() {
     let file: ServersFile = toml::from_str(OLD_SERVERS_TOML).unwrap();
@@ -36,7 +37,7 @@ fn an_old_servers_file_loads_with_the_old_menu() {
         vec![
             vec![Today, Yesterday, Help],
             vec![Month, LastMonth],
-            vec![Status, Settings],
+            vec![Status, Settings, Control],
         ]
     );
 }
@@ -71,7 +72,7 @@ fn unknown_ids_degrade_instead_of_failing() {
         "period_basis": "open",
         "future_field": 1,
         "menu": {
-            "keyboard": [[{"item": "control"}, {"item": "today"}], [{"item": "help", "show": false}]]
+            "keyboard": [[{"item": "future_item"}, {"item": "today"}], [{"item": "help", "show": false}]]
         }
     }"#;
     let bot: BotSettings = serde_json::from_str(json).unwrap();
@@ -132,10 +133,10 @@ fn normalizing_repairs_the_keyboard() {
     assert_eq!(
         menu.keyboard.len(),
         2,
-        "empty row dropped, ten split as 8 + 2"
+        "empty row dropped, eleven split as 8 + 3"
     );
     assert_eq!(menu.keyboard[0].len(), MAX_ROW);
-    assert_eq!(menu.keyboard[1].len(), 2);
+    assert_eq!(menu.keyboard[1].len(), 3);
     assert!(
         menu.keyboard.iter().flatten().all(|e| e.show),
         "the repeated hidden Today is dropped, the first shown one stays"
@@ -153,7 +154,8 @@ fn ids_are_stable_and_distinct() {
     for item in MenuItem::ALL {
         assert_eq!(MenuItem::from_id(item.id()), Some(item));
     }
-    assert_eq!(MenuItem::from_id("control"), None);
+    assert_eq!(MenuItem::from_id("future_item"), None);
+    assert_eq!(Control.id(), "control");
     assert_eq!(MenuItem::from_id("miniapp"), None);
     assert_eq!(LastMonth.id(), "lastmonth");
 }

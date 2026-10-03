@@ -22,6 +22,7 @@ use crate::html::escape;
 use crate::labels::{button_text, navigation_keyboard};
 
 mod calendar;
+mod control;
 mod settings;
 
 /// Answer a section button or one of its screens.
@@ -81,6 +82,7 @@ pub(crate) fn run(
         // A cell that does nothing: no answer, the screen stays as it is.
         MenuAction::Noop => {}
         MenuAction::Settings(action) => settings::run(host, chat, action, &reply),
+        MenuAction::Control(action) => control::run(host, chat, action, &reply),
     }
 }
 

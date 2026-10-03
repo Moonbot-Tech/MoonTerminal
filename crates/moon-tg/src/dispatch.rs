@@ -207,6 +207,7 @@ fn run_command(
         ParsedCommand::StationStatus
             | ParsedCommand::StationUpdate
             | ParsedCommand::Menu(MenuAction::Settings(_))
+            | ParsedCommand::Menu(MenuAction::Control(_))
     ) && !owner
     {
         answer(&reply, t!("telegram.refusal").to_string());

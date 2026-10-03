@@ -30,11 +30,13 @@ pub enum MenuItem {
     Report,
     /// The bot's own settings, under one message; the owner's only.
     Settings,
+    /// Commands to the cores — run switches, orders, strategies, blacklists; the owner's only.
+    Control,
 }
 
 impl MenuItem {
     /// Every item, in the order a picker lists them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Report,
         Self::Today,
         Self::Yesterday,
@@ -45,6 +47,7 @@ impl MenuItem {
         Self::Help,
         Self::Status,
         Self::Settings,
+        Self::Control,
     ];
 
     /// Stable id: the saved value and the suffix of the item's locale keys
@@ -61,6 +64,7 @@ impl MenuItem {
             Self::Status => "status",
             Self::Report => "report",
             Self::Settings => "settings",
+            Self::Control => "control",
         }
     }
 
@@ -126,7 +130,7 @@ impl Default for BotMenu {
             keyboard: vec![
                 vec![E::shown(Today), E::shown(Yesterday), E::shown(Help)],
                 vec![E::shown(Month), E::shown(LastMonth)],
-                vec![E::shown(Status), E::shown(Settings)],
+                vec![E::shown(Status), E::shown(Settings), E::shown(Control)],
                 vec![E::hidden(Report), E::hidden(Daily), E::hidden(Custom)],
             ],
         }
