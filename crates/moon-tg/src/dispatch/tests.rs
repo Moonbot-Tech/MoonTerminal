@@ -62,6 +62,10 @@ impl crate::TgHost for StationHost {
     fn report_zone(&self) -> chrono_tz::Tz {
         chrono_tz::UTC
     }
+    /// Point the fixture at a process-local path. The empty token never creates it.
+    fn notifications_path(&self) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("moon-tg-notify-{}.json", std::process::id()))
+    }
     /// Pair in memory without granting ownership.
     fn save_paired_chat(&mut self, chat: i64) -> bool {
         self.config.telegram.pair_chat(chat);

@@ -1062,3 +1062,85 @@ fn a_window_ending_now_learns_whether_rows_lie_past_its_end() {
     assert_eq!(read(200, true), Some(false));
     assert_eq!(read(160, false), None, "a fixed window does not ask");
 }
+
+/// Notification reads page past the Mini App cap and keep both rows that share a close time.
+#[test]
+fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT,
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER
+        )",
+    )
+    .unwrap();
+    let mut insert = conn
+        .prepare(
+            "INSERT INTO orders_rep
+             (core_uid, core_name, newrecid, coin, buydate, closedate, channelname, emulator)
+             VALUES (1, 'CoreA', ?1, 'BTC', ?2, ?3, '', 0)",
+        )
+        .unwrap();
+    for close in 1000_i64..=1059 {
+        insert
+            .execute(rusqlite::params![close, close - 10, close])
+            .unwrap();
+    }
+    insert
+        .execute(rusqlite::params![500_i64, 490_i64, 500_i64])
+        .unwrap();
+    insert
+        .execute(rusqlite::params![7001_i64, 1990_i64, 2000_i64])
+        .unwrap();
+    insert
+        .execute(rusqlite::params![7002_i64, 1990_i64, 2000_i64])
+        .unwrap();
+    insert
+        .execute(rusqlite::params![90000_i64, 89990_i64, 90000_i64])
+        .unwrap();
+    drop(insert);
+
+    let names = moon_core::db::CoreNames::default();
+    let since = super::read_closed_since_on(&conn, chrono_tz::UTC, &names, 1000).unwrap();
+    let since_ids: std::collections::BTreeSet<i64> =
+        since.iter().map(|trade| trade.rec_id).collect();
+    let mut expected_since = std::collections::BTreeSet::new();
+    for rec in 1000_i64..=1059 {
+        expected_since.insert(rec);
+    }
+    expected_since.insert(7001);
+    expected_since.insert(7002);
+    expected_since.insert(90000);
+    assert_eq!(since_ids, expected_since);
+    assert_eq!(
+        since.len(),
+        expected_since.len(),
+        "paging must not repeat a row"
+    );
+    assert!(since.len() > super::MINI_TRADES_LIMIT);
+    assert!(since.len() > super::NOTIFY_READ_PAGE);
+    assert_eq!(
+        since
+            .iter()
+            .find(|trade| trade.rec_id == 1000)
+            .unwrap()
+            .open_utc,
+        990,
+        "a missing core offset leaves the stored buy time unchanged"
+    );
+
+    let day = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let next = chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
+    let first = super::read_day_on(&conn, chrono_tz::UTC, &names, day).unwrap();
+    let second = super::read_day_on(&conn, chrono_tz::UTC, &names, next).unwrap();
+    let first_ids: std::collections::BTreeSet<i64> =
+        first.iter().map(|trade| trade.rec_id).collect();
+    let second_ids: std::collections::BTreeSet<i64> =
+        second.iter().map(|trade| trade.rec_id).collect();
+    let mut expected_day = expected_since.clone();
+    expected_day.remove(&90000);
+    expected_day.insert(500);
+    assert_eq!(first_ids, expected_day);
+    assert_eq!(first.len(), expected_day.len());
+    assert_eq!(second_ids, std::collections::BTreeSet::from([90000]));
+}

@@ -1,20 +1,33 @@
 //! Unit regressions for Mini App targeting, ordering and safe entry-notional display.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::PathBuf;
 
+use moon_core::telegram::notify::{
+    ChatNotify, CoreScope, NotifyFile, NotifyLedger, NotifySettings,
+};
+use moon_core::telegram::runtime::NotifyStore;
 use moon_core::venue::CoreVenue;
+
+use super::settings::{SaveFault, SaveResult, prepare_settings, save_fault_text, store_settings};
 
 use std::time::{Duration, Instant};
 
 use moon_core::telegram::web::dto::StrategyPendingDto;
 
-use moon_core::feed::OrderRow;
+use moon_core::feed::{
+    AssetRow, AssetsSnapshot, OrderRow, TransferAssetRow, TransferAssetsSnapshot,
+};
+use moon_core::session::BalanceState;
+use moon_core::session::balances::BalanceFigures;
+use moon_core::telegram::web::dto::BalanceStateDto;
 
 use super::dto::{
-    distance_text, entry_volume_text, order_to_entry_pct, strategy_pending, trade_strategy,
-    trade_volume_text,
+    balance_state_dto, distance_text, entry_volume_text, order_to_entry_pct, strategy_pending,
+    trade_strategy, trade_volume_text,
 };
+use super::reads::coin_rows;
 use super::{by_section, natural_cmp, scope_targets};
 
 /// `mini_app/mod.rs:scope_targets` keeps only visible cores, in visible order, once each.
@@ -306,4 +319,1084 @@ fn trade_strategy_names_signed_ids_and_separates_manual_from_unknown() {
     );
     assert_eq!(trade_strategy(Some(0), "Demo Alpha", names), (None, true));
     assert_eq!(trade_strategy(None, "", names), (None, false));
+}
+
+/// One synthetic asset row. Unused position fields stay at zero.
+fn asset_row(
+    coin: &str,
+    qty_full: f64,
+    value_usdt: f64,
+    min_lot_usd: f64,
+    is_quote_asset: bool,
+) -> AssetRow {
+    AssetRow {
+        market: format!("{coin}USDT"),
+        coin: coin.to_string(),
+        quote: "USDT".to_string(),
+        listed: 1,
+        qty: qty_full,
+        qty_full,
+        price: 1.0,
+        value_usdt,
+        min_lot_usd,
+        is_quote_asset,
+        mark_price: 0.0,
+        pos_size: 0.0,
+        pos_price: 0.0,
+        liq_price: 0.0,
+        leverage: 0,
+        pnl_usdt: 0.0,
+        pnl_live: false,
+    }
+}
+
+fn reading(state: BalanceState, free: f64, total: f64) -> BalanceFigures {
+    BalanceFigures { state, free, total }
+}
+
+/// `reads::coin_rows` prices a stale core's coins and withholds value when the reading is not usable.
+///
+/// Mutation: treat Stale as unusable, or attach a number while the core is Awaiting or Unpriced.
+/// A stale finite figure is still a number the account total counts, and its state stays stale.
+/// An awaiting or unpriced reading is not usable, so its coins contribute no value and the core
+/// adds nothing to a total. Oracle: hardcoded `unpriced` and `12.50$`, plus [`BalanceFigures::usable`]
+/// on the same inputs.
+#[test]
+fn coin_rows_prices_a_stale_core_and_withholds_an_unusable_one() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![asset_row("AAA", 1.5, 12.5, 1.0, false)],
+        ..AssetsSnapshot::default()
+    };
+    let stale = reading(BalanceState::Stale, 10.0, 20.0);
+    assert!(stale.usable());
+    let rows = coin_rows(&assets, &TransferAssetsSnapshot::default(), "", stale);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].value, Some(12.5));
+    assert_eq!(rows[0].value_text, "12.50$");
+    assert_ne!(
+        balance_state_dto(BalanceState::Stale),
+        BalanceStateDto::Live
+    );
+
+    for state in [BalanceState::Unpriced, BalanceState::Awaiting] {
+        let held = reading(state, 10.0, 20.0);
+        assert!(!held.usable(), "{state:?} must not enter a total");
+        let rows = coin_rows(&assets, &TransferAssetsSnapshot::default(), "", held);
+        assert_eq!(rows[0].value, None);
+        assert_eq!(rows[0].value_text, "unpriced");
+    }
+
+    let broken = reading(BalanceState::Stale, f64::NAN, 20.0);
+    assert!(!broken.usable());
+    assert_eq!(
+        coin_rows(&assets, &TransferAssetsSnapshot::default(), "", broken)[0].value,
+        None
+    );
+}
+
+/// `reads::coin_rows` drops a row only when its USDT value is strictly below the min lot.
+///
+/// Mutation: drop the equal case, keep dust, hide quote-currency market rows, or treat a zero
+/// value as dust. A holding exactly at the lot stays; a smaller priced one does not. A
+/// quote-currency market row above the lot stays, because this list is the core's coins. A
+/// zero value means the rate is unknown, so the row stays unpriced even when the lot is
+/// positive. Oracle: input coins KEEP, DUST, USDT, ZERO; DUST is the only one absent.
+#[test]
+fn coin_rows_drops_dust_below_the_min_lot() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![
+            asset_row("KEEP", 2.0, 2.0, 2.0, false),
+            asset_row("DUST", 0.1, 0.5, 1.0, false),
+            asset_row("USDT", 9.0, 9.0, 1.0, true),
+            asset_row("ZERO", 3.0, 0.0, 5.0, false),
+        ],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    let coins: Vec<&str> = rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(coins, vec!["USDT", "KEEP", "ZERO"]);
+    assert_eq!(rows[0].value, Some(9.0));
+    assert_eq!(rows[0].value_text, "9.00$");
+    assert_eq!(rows[1].value, Some(2.0));
+    assert_eq!(rows[2].value, None);
+    assert_eq!(rows[2].value_text, "unpriced");
+}
+
+/// `reads::coin_rows` carries a usable core's coin values, largest first, unpriced last.
+///
+/// Mutation: sort ascending, drop a positive value, or price a zero. Equal priced values keep
+/// input order. Oracle: 40, then 12.5, then the two 7s in input order, then the zero row.
+/// Quantity text for 1.5 is `1.5` and for 35483 is `35483.0`.
+#[test]
+fn coin_rows_sorts_priced_coins_ahead_of_unpriced() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![
+            asset_row("SMALL", 1.5, 12.5, 0.0, false),
+            asset_row("NONE", 1.0, 0.0, 0.0, false),
+            asset_row("BIG", 35483.0, 40.0, 1.0, false),
+            asset_row("TIEA", 7.0, 7.0, 0.0, false),
+            asset_row("TIEB", 7.0, 7.0, 0.0, false),
+        ],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 100.0, 200.0),
+    );
+    let coins: Vec<&str> = rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(coins, vec!["BIG", "SMALL", "TIEA", "TIEB", "NONE"]);
+    assert_eq!(rows[0].value, Some(40.0));
+    assert_eq!(rows[0].value_text, "40.00$");
+    assert_eq!(rows[0].qty_text, "35483.0");
+    assert_eq!(rows[1].value, Some(12.5));
+    assert_eq!(rows[1].value_text, "12.50$");
+    assert_eq!(rows[1].qty_text, "1.5");
+    assert_eq!(rows[4].value, None);
+    assert_eq!(rows[4].value_text, "unpriced");
+}
+
+fn transfer_row(currency: &str, amount: f64, total: f64, value_usdt: f64) -> TransferAssetRow {
+    TransferAssetRow {
+        currency: currency.to_string(),
+        amount,
+        total,
+        value_usdt,
+    }
+}
+
+/// `reads::coin_rows` collapses duplicate coin-margined wallets of one coin into a single row.
+///
+/// Mutation: emit every market row, or add the duplicate values together. A COIN-M core lists
+/// the same wallet once per contract, so the coin list would repeat the coin or triple its
+/// value. Oracle: rows `BTC` and `btc`, each quantity 1 and value 10, become one `BTC` row
+/// whose quantity text is `1.0` and whose value is 10, not `2.0` and 20.
+#[test]
+fn coin_rows_collapses_duplicate_coin_wallets() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![
+            asset_row("BTC", 1.0, 10.0, 1.0, false),
+            asset_row("btc", 1.0, 10.0, 1.0, false),
+        ],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].coin, "BTC");
+    assert_eq!(rows[0].qty_text, "1.0");
+    assert_eq!(rows[0].value, Some(10.0));
+    assert_eq!(rows[0].value_text, "10.00$");
+}
+
+/// `reads::coin_rows` shows the larger of the full and free quantities.
+///
+/// Mutation: format `qty_full` only. A wallet whose full field is missing would show no
+/// quantity while 5 coins are free. Oracle: `qty_full` 0 and `qty` 5 render `5.0`. That text
+/// is what [`moon_core::util::fmt::qty`] produces for 5, because it keeps one fractional digit.
+#[test]
+fn coin_rows_uses_free_quantity_when_full_is_missing() {
+    let _locale = crate::test_locale::force("en");
+    let mut row = asset_row("SOL", 0.0, 8.0, 1.0, false);
+    row.qty = 5.0;
+    row.qty_full = 0.0;
+    let assets = AssetsSnapshot {
+        rows: vec![row],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].qty_text, "5.0");
+    assert_eq!(rows[0].value, Some(8.0));
+    assert_eq!(rows[0].value_text, "8.00$");
+}
+
+/// `reads::coin_rows` adds a spot holding that exists only on the transfer wallet.
+///
+/// Mutation: ignore `transfer_assets.spot`, add the second wallet of the same coin, keep the
+/// account-quote wallet, or add spot wallets on a futures core. A spot coin that the exchange
+/// reports only as a transfer balance would be missing, a duplicated wallet would double, the
+/// quote balance would show as a purchased coin, and a futures margin wallet would show too.
+/// Oracle: DOGE is only on the spot wallet (total 4, free 1, value 6) and renders `4.0` and
+/// `6.00$`; the second DOGE wallet is ignored; USDT matching the quote is absent; ADA already
+/// on a market row stays one row; the same DOGE is absent when `futures_account` is set. A
+/// priced dust market row stays hidden when that coin is also on a spot transfer wallet.
+#[test]
+fn coin_rows_adds_a_spot_transfer_holding_once() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![asset_row("ADA", 1.0, 4.0, 1.0, false)],
+        base_currency: "USDT".to_string(),
+        ..AssetsSnapshot::default()
+    };
+    let wallets = TransferAssetsSnapshot {
+        spot: vec![
+            transfer_row("DOGE", 1.0, 4.0, 6.0),
+            transfer_row("DOGE", 9.0, 9.0, 20.0),
+            transfer_row("USDT", 50.0, 50.0, 50.0),
+            transfer_row("ADA", 3.0, 3.0, 12.0),
+        ],
+        ..TransferAssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &wallets,
+        "USDC",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    let coins: Vec<&str> = rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(coins, vec!["DOGE", "ADA"]);
+    assert_eq!(rows[0].qty_text, "4.0");
+    assert_eq!(rows[0].value, Some(6.0));
+    assert_eq!(rows[0].value_text, "6.00$");
+    assert_eq!(rows[1].value, Some(4.0));
+
+    let mut futures = assets.clone();
+    futures.futures_account = true;
+    let futures_rows = coin_rows(
+        &futures,
+        &wallets,
+        "USDC",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    let futures_coins: Vec<&str> = futures_rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(futures_coins, vec!["ADA"]);
+
+    let dust_market = AssetsSnapshot {
+        rows: vec![asset_row("DOGE", 0.1, 0.2, 1.0, false)],
+        base_currency: "USDT".to_string(),
+        ..AssetsSnapshot::default()
+    };
+    let rescued = coin_rows(
+        &dust_market,
+        &wallets,
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    let rescued_coins: Vec<&str> = rescued.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(rescued_coins, vec!["ADA"]);
+    assert_eq!(rescued[0].qty_text, "3.0");
+    assert_eq!(rescued[0].value, Some(12.0));
+}
+
+/// `reads::coin_rows` keeps an unpriced coin whose lot is positive.
+///
+/// Mutation: drop every row with `value_usdt < min_lot_usd`, including a zero. A coin with no
+/// rate would disappear instead of showing the unpriced word. Oracle: quantity 3, value 0,
+/// lot 5 stays one row with no number and the text `unpriced`.
+#[test]
+fn coin_rows_keeps_an_unpriced_coin_when_the_lot_is_positive() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![asset_row("ZERO", 3.0, 0.0, 5.0, false)],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].coin, "ZERO");
+    assert_eq!(rows[0].value, None);
+    assert_eq!(rows[0].value_text, "unpriced");
+    assert_eq!(rows[0].qty_text, "3.0");
+}
+
+/// `reads::coin_rows` keeps a priced dust market coin hidden when that coin is also on spot.
+///
+/// Mutation: record the seen set after dust is dropped. The transfer loop would add the
+/// dust coin back and show a holding the market list already rejected. Oracle: DOGE at
+/// value 0.2 under lot 1, plus a DOGE spot wallet of value 6, produces no DOGE row. ADA,
+/// present only on the spot wallet (quantity 3, value 12), is the only row.
+#[test]
+fn coin_rows_hides_priced_dust_also_held_on_spot() {
+    let _locale = crate::test_locale::force("en");
+    let assets = AssetsSnapshot {
+        rows: vec![asset_row("DOGE", 0.1, 0.2, 1.0, false)],
+        base_currency: "USDT".to_string(),
+        ..AssetsSnapshot::default()
+    };
+    let wallets = TransferAssetsSnapshot {
+        spot: vec![
+            transfer_row("DOGE", 1.0, 4.0, 6.0),
+            transfer_row("ADA", 3.0, 3.0, 12.0),
+            transfer_row("USDT", 50.0, 50.0, 50.0),
+        ],
+        ..TransferAssetsSnapshot::default()
+    };
+    let rows = coin_rows(&assets, &wallets, "", reading(BalanceState::Live, 1.0, 1.0));
+    let coins: Vec<&str> = rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(coins, vec!["ADA"]);
+    assert_eq!(rows[0].qty_text, "3.0");
+    assert_eq!(rows[0].value, Some(12.0));
+    assert_eq!(rows[0].value_text, "12.00$");
+}
+
+/// `reads::coin_rows` treats a non-finite USDT value as unpriced.
+///
+/// Mutation: accept infinity because `value > 0` is true, or let infinity beat a finite
+/// value of the same quantity. The row would show an impossible figure, and input order
+/// would decide which wallet wins. Oracle: one infinity row stays, with no number and the
+/// text `unpriced`. Two `MIX` rows of quantity 2, values infinity and 15, become value 15
+/// and `15.00$` in both orders. A NaN value stays unpriced the same way.
+#[test]
+fn coin_rows_treats_a_non_finite_value_as_unpriced() {
+    let _locale = crate::test_locale::force("en");
+    let infinite = AssetsSnapshot {
+        rows: vec![asset_row("INF", 1.0, f64::INFINITY, 1.0, false)],
+        ..AssetsSnapshot::default()
+    };
+    let rows = coin_rows(
+        &infinite,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].coin, "INF");
+    assert_eq!(rows[0].value, None);
+    assert_eq!(rows[0].value_text, "unpriced");
+
+    let nan_value = AssetsSnapshot {
+        rows: vec![asset_row("NAN", 1.0, f64::NAN, 1.0, false)],
+        ..AssetsSnapshot::default()
+    };
+    let nan_rows = coin_rows(
+        &nan_value,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(nan_rows.len(), 1);
+    assert_eq!(nan_rows[0].value, None);
+    assert_eq!(nan_rows[0].value_text, "unpriced");
+
+    for (first, second) in [(f64::INFINITY, 15.0), (15.0, f64::INFINITY)] {
+        let mixed = AssetsSnapshot {
+            rows: vec![
+                asset_row("MIX", 2.0, first, 1.0, false),
+                asset_row("MIX", 2.0, second, 1.0, false),
+            ],
+            ..AssetsSnapshot::default()
+        };
+        let rows = coin_rows(
+            &mixed,
+            &TransferAssetsSnapshot::default(),
+            "",
+            reading(BalanceState::Live, 1.0, 1.0),
+        );
+        assert_eq!(rows.len(), 1, "order {first} then {second}");
+        assert_eq!(rows[0].coin, "MIX");
+        assert_eq!(rows[0].value, Some(15.0));
+        assert_eq!(rows[0].value_text, "15.00$");
+    }
+}
+
+/// `reads::coin_rows` turns a non-finite quantity into zero before it compares.
+///
+/// Mutation: pass NaN into `max` or `>`. Which row wins then depends on input order, and
+/// a NaN full quantity would hide a real free quantity. Oracle: one row with `qty_full`
+/// NaN and `qty` 5 renders `5.0` and value `8.00$`. Two SOL rows, one with both
+/// quantities NaN and value 100 and one with quantity 2 and value 5, render `2.0` and
+/// `5.00$` in both orders. A spot wallet whose total is NaN and whose amount is 3 renders
+/// `3.0`.
+#[test]
+fn coin_rows_treats_a_non_finite_quantity_as_zero() {
+    let _locale = crate::test_locale::force("en");
+    let mut partial = asset_row("SOL", 0.0, 8.0, 1.0, false);
+    partial.qty = 5.0;
+    partial.qty_full = f64::NAN;
+    let one = coin_rows(
+        &AssetsSnapshot {
+            rows: vec![partial],
+            ..AssetsSnapshot::default()
+        },
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(one.len(), 1);
+    assert_eq!(one[0].qty_text, "5.0");
+    assert_eq!(one[0].value, Some(8.0));
+    assert_eq!(one[0].value_text, "8.00$");
+
+    let mut blank = asset_row("SOL", 0.0, 100.0, 1.0, false);
+    blank.qty = f64::NAN;
+    blank.qty_full = f64::NAN;
+    let finite = asset_row("SOL", 2.0, 5.0, 1.0, false);
+    for (label, rows_in) in [
+        ("nan then finite", vec![blank.clone(), finite.clone()]),
+        ("finite then nan", vec![finite, blank]),
+    ] {
+        let rows = coin_rows(
+            &AssetsSnapshot {
+                rows: rows_in,
+                ..AssetsSnapshot::default()
+            },
+            &TransferAssetsSnapshot::default(),
+            "",
+            reading(BalanceState::Live, 1.0, 1.0),
+        );
+        assert_eq!(rows.len(), 1, "{label}");
+        assert_eq!(rows[0].coin, "SOL");
+        assert_eq!(rows[0].qty_text, "2.0", "{label}");
+        assert_eq!(rows[0].value, Some(5.0), "{label}");
+        assert_eq!(rows[0].value_text, "5.00$", "{label}");
+    }
+
+    let wallets = TransferAssetsSnapshot {
+        spot: vec![transfer_row("XRP", 3.0, f64::NAN, 9.0)],
+        ..TransferAssetsSnapshot::default()
+    };
+    let transferred = coin_rows(
+        &AssetsSnapshot::default(),
+        &wallets,
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    assert_eq!(transferred.len(), 1);
+    assert_eq!(transferred[0].coin, "XRP");
+    assert_eq!(transferred[0].qty_text, "3.0");
+    assert_eq!(transferred[0].value, Some(9.0));
+    assert_eq!(transferred[0].value_text, "9.00$");
+}
+
+/// `reads::coin_rows` skips a market row that holds no coins.
+///
+/// Mutation: keep a futures market whose quantity is zero because it has a position, or
+/// record that coin as seen so its spot wallet is dropped. A position is not a held coin,
+/// and a transfer of the same coin is. Oracle: POS with qty 0, qty_full 0, value 0 and
+/// pos_size 3 is absent beside KEEP. The same POS on a spot wallet of quantity 2 and
+/// value 7 appears, and KEEP stays.
+#[test]
+fn coin_rows_skips_a_position_only_market_row() {
+    let _locale = crate::test_locale::force("en");
+    let mut position = asset_row("POS", 0.0, 0.0, 1.0, false);
+    position.pos_size = 3.0;
+    let assets = AssetsSnapshot {
+        rows: vec![position, asset_row("KEEP", 2.0, 4.0, 1.0, false)],
+        ..AssetsSnapshot::default()
+    };
+    let held = coin_rows(
+        &assets,
+        &TransferAssetsSnapshot::default(),
+        "",
+        reading(BalanceState::Live, 1.0, 1.0),
+    );
+    let held_coins: Vec<&str> = held.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(held_coins, vec!["KEEP"]);
+
+    let wallets = TransferAssetsSnapshot {
+        spot: vec![transfer_row("POS", 2.0, 2.0, 7.0)],
+        ..TransferAssetsSnapshot::default()
+    };
+    let rows = coin_rows(&assets, &wallets, "", reading(BalanceState::Live, 1.0, 1.0));
+    let coins: Vec<&str> = rows.iter().map(|row| row.coin.as_str()).collect();
+    assert_eq!(coins, vec!["POS", "KEEP"]);
+    assert_eq!(rows[0].qty_text, "2.0");
+    assert_eq!(rows[0].value, Some(7.0));
+    assert_eq!(rows[0].value_text, "7.00$");
+    assert_eq!(rows[1].coin, "KEEP");
+    assert_eq!(rows[1].value, Some(4.0));
+}
+
+/// Isolated temp root for a notifications file. Removed on drop, including on panic.
+struct NotifyTemp(PathBuf);
+
+impl NotifyTemp {
+    fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "moon-tg-mini-notify-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("temp root");
+        Self(root)
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for NotifyTemp {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn empty_store(path: PathBuf) -> NotifyStore {
+    NotifyStore {
+        path,
+        file: NotifyFile::default(),
+        allowed: None,
+    }
+}
+
+/// Save with the revision currently stored for `chat`, in UTC.
+///
+/// An absent chat is revision 0. Tests that must send a different revision call
+/// [`store_settings`] themselves.
+fn save_known(
+    store: &mut NotifyStore,
+    chat: i64,
+    settings: NotifySettings,
+    visible: &[u64],
+    now_utc: i64,
+) -> SaveResult {
+    let revision = store
+        .file
+        .chats
+        .get(&chat)
+        .map(|row| row.revision)
+        .unwrap_or(0);
+    store_settings(
+        store,
+        chat,
+        settings,
+        visible,
+        now_utc,
+        chrono_tz::UTC,
+        revision,
+    )
+}
+
+/// `settings::prepare_settings` keeps visible `Only` ids in the submitted order, duplicates included.
+///
+/// Mutation: sort the ids, drop duplicates, or intersect `All` with the visible list. A viewer
+/// then loses a core they named twice, or an "all cores" rule becomes empty when the grant is
+/// empty and the save is refused. Oracle: `[9, 1, 9, 2]` against visible `[1, 9]` is `[9, 1, 9]`,
+/// and `All` against an empty grant stays `All`.
+#[test]
+fn prepare_settings_keeps_visible_only_ids_and_leaves_all() {
+    let mut only = NotifySettings::default();
+    only.trades.cores = CoreScope::Only(vec![9, 1, 9, 2]);
+    let prepared = prepare_settings(only, &[1, 9]).expect("visible ids stay");
+    assert_eq!(prepared.trades.cores, CoreScope::Only(vec![9, 1, 9]));
+
+    let mut all = NotifySettings::default();
+    all.trades.on = true;
+    let prepared = prepare_settings(all, &[]).expect("All is not intersected");
+    assert_eq!(prepared.trades.cores, CoreScope::All);
+    assert!(prepared.trades.on);
+
+    let mut empty = NotifySettings::default();
+    empty.trades.cores = CoreScope::Only(vec![]);
+    assert_eq!(
+        prepare_settings(empty, &[1]),
+        Err(SaveFault::Cores),
+        "an empty Only list is a core fault even when the chat can see a core"
+    );
+
+    let mut invalid = NotifySettings::default();
+    invalid.daily.hour = 24;
+    assert_eq!(prepare_settings(invalid, &[]), Err(SaveFault::Invalid));
+}
+
+/// A viewer `Only` list stores the cores that chat can see, duplicates included, and leaves `All`.
+///
+/// Mutation: store the forbidden id, or drop the second copy of the allowed id. The file then
+/// names a core the chat cannot see, or a repeated id disappears. Oracle: `[99, 1, 1, 2]` against
+/// visible `[1]` is `[1, 1]` on disk. `All` with an empty visible list is stored unchanged.
+#[test]
+fn store_settings_keeps_visible_cores_and_does_not_filter_all() {
+    let root = NotifyTemp::new("visible");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+
+    let mut only = NotifySettings::default();
+    only.trades.on = true;
+    only.trades.cores = CoreScope::Only(vec![99, 1, 1, 2]);
+    assert_eq!(
+        save_known(&mut store, 4, only, &[1], 1_700_000_000),
+        SaveResult::Saved
+    );
+    let row = &store.file.chats[&4];
+    assert_eq!(row.settings.trades.cores, CoreScope::Only(vec![1, 1]));
+    assert!(row.settings.trades.on);
+    assert_eq!(row.ledger.trades_enabled_utc, Some(1_700_000_000));
+    assert!(row.ledger.seen.is_empty());
+    assert_eq!(row.revision, 1);
+    assert_eq!(NotifyFile::load(&path).expect("reload"), store.file);
+
+    let mut all = NotifySettings::default();
+    all.trades.on = true;
+    assert_eq!(
+        save_known(&mut store, 5, all, &[], 1_700_000_100),
+        SaveResult::Saved
+    );
+    let row = &store.file.chats[&5];
+    assert_eq!(row.settings.trades.cores, CoreScope::All);
+    assert!(row.settings.trades.on);
+    assert_eq!(row.ledger.trades_enabled_utc, Some(1_700_000_100));
+    assert_eq!(NotifyFile::load(&path).expect("reload all"), store.file);
+}
+
+/// `Only` of cores the chat cannot see is refused, and the file is not opened for write.
+///
+/// Mutation: call `update` before the intersection check. The destination here is a directory, so
+/// that call would return [`SaveResult::Failed`] and could rewrite nothing only by accident.
+/// Oracle: [`SaveResult::Refused`] with [`SaveFault::Cores`] or [`SaveFault::Invalid`], the seed
+/// bytes unchanged, and chat 8 still absent.
+#[test]
+fn store_settings_refuses_before_it_writes() {
+    let root = NotifyTemp::new("refuse");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+    store
+        .update(|file| {
+            file.chats.insert(
+                7,
+                ChatNotify {
+                    revision: 1,
+                    ..ChatNotify::default()
+                },
+            );
+        })
+        .expect("seed");
+    let seeded = store.file.clone();
+    let bytes = std::fs::read(&path).expect("seed bytes");
+    let dir = root.path("not-a-file");
+    std::fs::create_dir_all(&dir).expect("directory");
+    store.path = dir;
+
+    let mut forbidden = NotifySettings::default();
+    forbidden.trades.cores = CoreScope::Only(vec![99]);
+    assert_eq!(
+        save_known(&mut store, 8, forbidden, &[1], 50),
+        SaveResult::Refused(SaveFault::Cores)
+    );
+    let mut empty = NotifySettings::default();
+    empty.trades.cores = CoreScope::Only(vec![]);
+    assert_eq!(
+        save_known(&mut store, 8, empty, &[1], 50),
+        SaveResult::Refused(SaveFault::Cores)
+    );
+    let mut invalid = NotifySettings::default();
+    invalid.daily.hour = 24;
+    assert_eq!(
+        save_known(&mut store, 8, invalid, &[1], 50),
+        SaveResult::Refused(SaveFault::Invalid)
+    );
+
+    assert_eq!(store.file, seeded);
+    assert!(!store.file.chats.contains_key(&8));
+    assert_eq!(std::fs::read(&path).expect("bytes after refuse"), bytes);
+}
+
+/// Enabling trades records the timestamp and clears `seen`. Saving again while they stay on
+/// keeps both. Disabling clears the timestamp and leaves `seen`.
+///
+/// Mutation: refresh the timestamp on every save, or clear `seen` when trades turn off. A restart
+/// then treats an unchanged rule as newly enabled, or forgets closes it already announced.
+/// Oracle: the seeded timestamp 10 and seen row `(1, 2, 30)` survive a re-save at 99; off clears
+/// only the timestamp; on at 200 replaces the timestamp and empties `seen`.
+#[test]
+fn store_settings_trades_ledger_follows_the_on_edge() {
+    let root = NotifyTemp::new("trades");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+    let mut on = NotifySettings::default();
+    on.trades.on = true;
+    let mut seen = BTreeMap::new();
+    seen.insert(1_u64, BTreeMap::from([(2_i64, 30_i64)]));
+    store
+        .update(|file| {
+            file.chats.insert(
+                5,
+                ChatNotify {
+                    settings: on,
+                    ledger: NotifyLedger {
+                        trades_enabled_utc: Some(10),
+                        seen,
+                        down_announced: BTreeSet::from([7]),
+                        ..NotifyLedger::default()
+                    },
+                    revision: 2,
+                },
+            );
+        })
+        .expect("seed");
+
+    let mut still = NotifySettings::default();
+    still.trades.on = true;
+    assert_eq!(save_known(&mut store, 5, still, &[], 99), SaveResult::Saved);
+    let row = &store.file.chats[&5];
+    assert_eq!(row.ledger.trades_enabled_utc, Some(10));
+    assert_eq!(
+        row.ledger.seen.get(&1).and_then(|rows| rows.get(&2)),
+        Some(&30)
+    );
+    assert!(row.ledger.down_announced.contains(&7));
+    assert_eq!(row.revision, 3);
+
+    let off = NotifySettings::default();
+    assert_eq!(save_known(&mut store, 5, off, &[], 100), SaveResult::Saved);
+    let row = &store.file.chats[&5];
+    assert_eq!(row.ledger.trades_enabled_utc, None);
+    assert_eq!(
+        row.ledger.seen.get(&1).and_then(|rows| rows.get(&2)),
+        Some(&30)
+    );
+    assert!(row.ledger.down_announced.contains(&7));
+    assert!(!row.settings.trades.on);
+    assert_eq!(row.revision, 4);
+
+    let mut again = NotifySettings::default();
+    again.trades.on = true;
+    assert_eq!(
+        save_known(&mut store, 5, again, &[], 200),
+        SaveResult::Saved
+    );
+    let row = &store.file.chats[&5];
+    assert_eq!(row.ledger.trades_enabled_utc, Some(200));
+    assert!(row.ledger.seen.is_empty());
+    assert!(row.ledger.down_announced.contains(&7));
+    assert_eq!(row.revision, 5);
+    assert_eq!(NotifyFile::load(&path).expect("reload"), store.file);
+}
+
+/// `down_announced` is cleared only when down goes from on to off.
+///
+/// Mutation: clear the set on every save, or when down turns on. A core that is still down is
+/// announced again, or a core marked down while the rule was off is forgotten when the rule
+/// turns on. Oracle: the set `{4, 9}` survives a save that leaves down on, becomes empty when
+/// down turns off, and a mark added while down is off survives the turn back on.
+#[test]
+fn store_settings_clears_down_announced_only_when_down_turns_off() {
+    let root = NotifyTemp::new("down");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path);
+    let mut down_on = NotifySettings::default();
+    down_on.down.on = true;
+    store
+        .update(|file| {
+            file.chats.insert(
+                6,
+                ChatNotify {
+                    settings: down_on.clone(),
+                    ledger: NotifyLedger {
+                        down_announced: BTreeSet::from([4, 9]),
+                        ..NotifyLedger::default()
+                    },
+                    revision: 3,
+                },
+            );
+        })
+        .expect("seed");
+
+    assert_eq!(
+        save_known(&mut store, 6, down_on, &[], 1),
+        SaveResult::Saved
+    );
+    assert_eq!(
+        store.file.chats[&6].ledger.down_announced,
+        BTreeSet::from([4, 9])
+    );
+    assert_eq!(store.file.chats[&6].revision, 4);
+
+    let off = NotifySettings::default();
+    assert_eq!(save_known(&mut store, 6, off, &[], 2), SaveResult::Saved);
+    assert!(store.file.chats[&6].ledger.down_announced.is_empty());
+    assert!(!store.file.chats[&6].settings.down.on);
+    assert_eq!(store.file.chats[&6].revision, 5);
+
+    store
+        .file
+        .chats
+        .get_mut(&6)
+        .expect("chat")
+        .ledger
+        .down_announced
+        .insert(4);
+    let mut back = NotifySettings::default();
+    back.down.on = true;
+    assert_eq!(save_known(&mut store, 6, back, &[], 3), SaveResult::Saved);
+    assert_eq!(
+        store.file.chats[&6].ledger.down_announced,
+        BTreeSet::from([4])
+    );
+    assert!(store.file.chats[&6].settings.down.on);
+}
+
+/// A failed atomic save keeps the previous settings in memory and on disk.
+///
+/// Mutation: assign the edited file before `save` returns. A rename onto a directory then
+/// publishes settings the disk does not hold. Oracle: the seeded trades-on document, loaded
+/// back from the original path, equals memory, and chat 8 was not inserted.
+#[test]
+fn store_settings_failed_save_keeps_the_previous_document() {
+    let root = NotifyTemp::new("fail");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+    let mut seeded_settings = NotifySettings::default();
+    seeded_settings.trades.on = true;
+    assert_eq!(
+        save_known(&mut store, 7, seeded_settings, &[], 15),
+        SaveResult::Saved
+    );
+    let seeded = store.file.clone();
+    let dir = root.path("not-a-file");
+    std::fs::create_dir_all(&dir).expect("directory");
+    store.path = dir;
+
+    let mut next = NotifySettings::default();
+    next.trades.on = false;
+    next.daily.hour = 9;
+    let failed = save_known(&mut store, 7, next, &[], 90);
+    assert!(
+        matches!(failed, SaveResult::Failed(ref text) if !text.is_empty()),
+        "renaming onto a directory must fail the save, got {failed:?}"
+    );
+    assert_eq!(store.file, seeded);
+    assert_eq!(store.file.chats[&7].ledger.trades_enabled_utc, Some(15));
+    assert!(store.file.chats[&7].settings.trades.on);
+    assert_eq!(NotifyFile::load(&path).expect("seed file"), seeded);
+    assert!(!seeded.chats.contains_key(&8));
+}
+
+/// Enabling daily after today's clock, or moving that clock to a time that has already passed,
+/// records today so the summary is not sent again. A clock that has not passed leaves the ledger.
+///
+/// Mutation: stamp `daily_last` on every save, or skip the off-to-on edge. Turning the summary
+/// on at 22:00 for a 21:00 rule then sends today's summary immediately, or moving 21:00 to 18:00
+/// after 18:00 does the same. Oracle: 2024-06-15 20:00 UTC is before 21:00 and after 18:00;
+/// 22:00 UTC is after 21:00. Those instants are built here and are not read from `due`.
+#[test]
+fn store_settings_marks_today_when_daily_becomes_due() {
+    use chrono::{NaiveDate, TimeZone};
+
+    let day = NaiveDate::from_ymd_opt(2024, 6, 15).expect("civil day");
+    let at = |hour: u32, minute: u32| {
+        chrono_tz::UTC
+            .from_local_datetime(&day.and_hms_opt(hour, minute, 0).expect("civil time"))
+            .single()
+            .expect("utc instant")
+            .timestamp()
+    };
+    let at_20 = at(20, 0);
+    let at_21 = at(21, 0);
+    let at_22 = at(22, 0);
+    assert!(
+        at_20 < at_21 && at_21 <= at_22,
+        "20:00 is before the 21:00 rule and 22:00 is not"
+    );
+
+    let root = NotifyTemp::new("daily");
+    let mut store = empty_store(root.path("notifications.json"));
+    let mut rule = NotifySettings::default();
+    rule.daily.on = true;
+    rule.daily.hour = 21;
+
+    assert_eq!(
+        store_settings(&mut store, 1, rule.clone(), &[], at_22, chrono_tz::UTC, 0),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&1].ledger.daily_last, Some(day));
+    assert_eq!(store.file.chats[&1].revision, 1);
+
+    assert_eq!(
+        store_settings(&mut store, 2, rule.clone(), &[], at_20, chrono_tz::UTC, 0),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&2].ledger.daily_last, None);
+    assert_eq!(store.file.chats[&2].revision, 1);
+
+    assert_eq!(
+        store_settings(&mut store, 2, rule.clone(), &[], at_22, chrono_tz::UTC, 1),
+        SaveResult::Saved
+    );
+    assert_eq!(
+        store.file.chats[&2].ledger.daily_last, None,
+        "an ordinary re-save after the clock has passed must not stamp today"
+    );
+    assert_eq!(store.file.chats[&2].revision, 2);
+
+    let mut earlier = rule.clone();
+    earlier.daily.hour = 18;
+    assert_eq!(
+        store_settings(&mut store, 2, earlier, &[], at_20, chrono_tz::UTC, 2),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&2].ledger.daily_last, Some(day));
+    assert_eq!(store.file.chats[&2].revision, 3);
+
+    let mut later = rule;
+    later.daily.hour = 23;
+    assert_eq!(
+        store_settings(&mut store, 2, later, &[], at_22, chrono_tz::UTC, 3),
+        SaveResult::Saved
+    );
+    assert_eq!(
+        store.file.chats[&2].ledger.daily_last,
+        Some(day),
+        "moving the clock to a time that has not passed must not clear today"
+    );
+    assert_eq!(store.file.chats[&2].settings.daily.hour, 23);
+}
+
+/// A revision the page did not load is refused before validation and before the file is written.
+/// The matching revision is stored and comes back as one greater.
+///
+/// Mutation: compare the revision after `prepare_settings`, or skip the compare. A stale invalid
+/// draft then says "check the values" and keeps the old form, or the second window's rules
+/// replace the first. Oracle: chat 9 stays revision 2 with trades off while the path is a
+/// directory; a following save at revision 2 turns trades on and stores revision 3. An absent
+/// chat accepts 0 and refuses any other revision.
+#[test]
+fn store_settings_refuses_a_stale_revision_and_stores_a_match() {
+    let root = NotifyTemp::new("revision");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+    let mut seeded_settings = NotifySettings::default();
+    seeded_settings.trades.on = false;
+    store
+        .update(|file| {
+            file.chats.insert(
+                9,
+                ChatNotify {
+                    settings: seeded_settings,
+                    revision: 2,
+                    ..ChatNotify::default()
+                },
+            );
+        })
+        .expect("seed");
+    let seeded = store.file.clone();
+    let bytes = std::fs::read(&path).expect("seed bytes");
+    let dir = root.path("not-a-file");
+    std::fs::create_dir_all(&dir).expect("directory");
+    store.path = dir;
+
+    let mut stale_invalid = NotifySettings::default();
+    stale_invalid.daily.hour = 24;
+    stale_invalid.trades.on = true;
+    assert_eq!(
+        store_settings(&mut store, 9, stale_invalid, &[1], 50, chrono_tz::UTC, 1,),
+        SaveResult::Refused(SaveFault::Stale)
+    );
+    assert_eq!(
+        store_settings(
+            &mut store,
+            11,
+            NotifySettings::default(),
+            &[],
+            50,
+            chrono_tz::UTC,
+            4,
+        ),
+        SaveResult::Refused(SaveFault::Stale)
+    );
+    assert_eq!(store.file, seeded);
+    assert!(!store.file.chats.contains_key(&11));
+    assert_eq!(std::fs::read(&path).expect("bytes after stale"), bytes);
+
+    store.path = path;
+    let mut matched = NotifySettings::default();
+    matched.trades.on = true;
+    assert_eq!(
+        store_settings(&mut store, 9, matched, &[], 80, chrono_tz::UTC, 2),
+        SaveResult::Saved
+    );
+    assert!(store.file.chats[&9].settings.trades.on);
+    assert_eq!(store.file.chats[&9].revision, 3);
+    assert_eq!(store.file.chats[&9].ledger.trades_enabled_utc, Some(80));
+
+    assert_eq!(
+        store_settings(
+            &mut store,
+            10,
+            NotifySettings::default(),
+            &[],
+            81,
+            chrono_tz::UTC,
+            0,
+        ),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&10].revision, 1);
+    assert!(!store.file.chats.contains_key(&11));
+}
+
+/// Refusal text is the locale sentence, not the key. The guards are not nested: the locale lock
+/// is not reentrant.
+///
+/// Mutation: return the key, or the English sentence in every locale. The page then shows
+/// `telegram.mini_settings_err_cores` or English to a Russian chat. Oracle: the strings in
+/// `locales/telegram.yml`, including the stale-revision sentence.
+#[test]
+fn save_fault_text_follows_the_chat_locale() {
+    {
+        let _locale = crate::test_locale::force("en");
+        assert_eq!(
+            save_fault_text(SaveFault::Cores),
+            "Pick at least one core you can see"
+        );
+        assert_eq!(save_fault_text(SaveFault::Invalid), "Check the values");
+        assert_eq!(
+            save_fault_text(SaveFault::Stale),
+            "Settings changed elsewhere — showing the latest"
+        );
+        assert_eq!(
+            rust_i18n::t!("telegram.mini_settings_err_save").to_string(),
+            "Could not save"
+        );
+    }
+    {
+        let _locale = crate::test_locale::force("ru");
+        assert_eq!(
+            save_fault_text(SaveFault::Cores),
+            "Выберите хотя бы одно доступное ядро"
+        );
+        assert_eq!(save_fault_text(SaveFault::Invalid), "Проверьте значения");
+        assert_eq!(
+            save_fault_text(SaveFault::Stale),
+            "Настройки изменены в другом окне — показаны актуальные"
+        );
+        assert_eq!(
+            rust_i18n::t!("telegram.mini_settings_err_save").to_string(),
+            "Не удалось сохранить"
+        );
+    }
+    {
+        let _locale = crate::test_locale::force("es");
+        assert_eq!(
+            save_fault_text(SaveFault::Cores),
+            "Elige al menos un núcleo que puedas ver"
+        );
+        assert_eq!(save_fault_text(SaveFault::Invalid), "Revisa los valores");
+        assert_eq!(
+            save_fault_text(SaveFault::Stale),
+            "Los ajustes cambiaron en otro lugar — se muestran los más recientes"
+        );
+        assert_eq!(
+            rust_i18n::t!("telegram.mini_settings_err_save").to_string(),
+            "No se pudo guardar"
+        );
+    }
 }

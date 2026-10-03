@@ -2,7 +2,7 @@
 
 use super::{
     InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup,
-    SendMessageReq,
+    text_message_request,
 };
 use serde_json::json;
 
@@ -88,11 +88,7 @@ fn send_message_serializes_persistent_text_keyboard_without_enum_wrapper() {
         resize_keyboard: true,
         is_persistent: true,
     });
-    let request = SendMessageReq {
-        chat_id: 7,
-        text: "Welcome",
-        reply_markup: Some(&markup),
-    };
+    let request = text_message_request(7, "Welcome", Some(&markup));
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         json!({
@@ -113,11 +109,7 @@ fn inline_launcher_keeps_web_app_wire_shape() {
     let markup = ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(vec![vec![
         InlineKeyboardButton::web_app("Open", "https://example.invalid"),
     ]]));
-    let request = SendMessageReq {
-        chat_id: 7,
-        text: "Ready",
-        reply_markup: Some(&markup),
-    };
+    let request = text_message_request(7, "Ready", Some(&markup));
     assert_eq!(
         serde_json::to_value(request).unwrap(),
         json!({
@@ -210,5 +202,63 @@ fn only_chat_refusals_count_as_an_unreachable_chat() {
         ApiError::Conflict,
     ] {
         assert!(!super::is_unreachable_chat(&bot), "{bot}");
+    }
+}
+
+/// A notification must travel as HTML with previews off. A plain sendMessage that gained either
+/// field would change every existing command reply.
+#[test]
+fn send_html_sets_parse_mode_and_disables_previews() {
+    let html = super::send_html_request(7, "<b>filled</b>");
+    let body = serde_json::to_value(&html).unwrap();
+    assert_eq!(body["parse_mode"], "HTML");
+    assert_eq!(body["link_preview_options"], json!({"is_disabled": true}));
+    assert_eq!(body["text"], "<b>filled</b>");
+    assert_eq!(body["chat_id"], 7);
+
+    let plain = text_message_request(7, "filled", None);
+    let plain_body = serde_json::to_value(&plain).unwrap();
+    assert!(plain_body.get("parse_mode").is_none(), "{plain_body}");
+    assert!(
+        plain_body.get("link_preview_options").is_none(),
+        "{plain_body}"
+    );
+    assert_eq!(plain_body, json!({"chat_id": 7, "text": "filled"}));
+}
+
+/// Bad markup, an over-long body and empty text must leave the queue. A 429, a 5xx and a timeout
+/// must stay, or one bad minute would drop a notification.
+#[test]
+fn only_permanent_payload_descriptions_are_dropped() {
+    use super::ApiError;
+    let telegram = |description: &str, retry_after_secs| ApiError::Telegram {
+        description: description.into(),
+        retry_after_secs,
+    };
+    for permanent in [
+        "Bad Request: can't parse entities",
+        "Bad Request: can't parse entities: Unsupported start tag \"x\" at byte offset 1",
+        "Bad Request: message is too long",
+        "Bad Request: text must be non-empty",
+        "Bad Request: message text is empty",
+    ] {
+        assert!(
+            super::is_permanent_payload_error(&telegram(permanent, None)),
+            "{permanent}"
+        );
+    }
+    for retryable in [
+        telegram("Too Many Requests: retry after 5", Some(5)),
+        telegram("Internal Server Error", None),
+        telegram("Bad Gateway", None),
+        telegram("Bad Request: message is too long", Some(3)),
+        ApiError::Timeout,
+        ApiError::Transport,
+        ApiError::Conflict,
+    ] {
+        assert!(
+            !super::is_permanent_payload_error(&retryable),
+            "{retryable}"
+        );
     }
 }

@@ -86,3 +86,28 @@ Only IDs and original Telegram timestamps are stored in the per-bot chat-history
 Atomic persistence completes before deleting a replaced answer; a failed save retains the old message.
 The history cache never grants authorization and contains no token or report content.
 Messages sent before this persistence feature cannot be recovered from Telegram history.
+
+## Notifications
+
+The Mini App «Настройки» tab is where a paired chat turns on messages the bot sends on its own.
+Every switch is off until that chat saves it. Each chat has its own settings. A viewer is limited
+to the cores that chat can see. The owner can hear about every core the host keeps.
+
+Three kinds of message can be sent. They are ordinary bot messages, not rich reports:
+
+- Closed trades, with optional filters: which cores, a minimum volume in USD, a profit of at
+  least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
+  that closes after the switch is turned on is eligible, and the dedup window is 72 hours.
+  A close older than that window is not announced.
+- Core down and back. After a core stays disconnected for the chosen number of minutes, the
+  chat receives one down message. When that core connects again, the chat receives one back
+  message. A core that leaves the configured set is forgotten: it does not stay announced as
+  down, and no back message is sent for it. If it returns and is lost again, the delay starts
+  over.
+- A daily summary at a chosen time in the display time zone, the same zone chat reports use.
+  If the bot is down at that time, it sends the summary once later on that same local day, and
+  not for an earlier day.
+
+Accepted messages wait in a durable outbox and are delivered after a restart if Telegram had not
+accepted them yet. A network timeout can leave the outcome ambiguous, so a rare duplicate is
+possible. The sender paces a private chat at one message per second, and a group or channel (a negative chat id) at one message per three seconds.

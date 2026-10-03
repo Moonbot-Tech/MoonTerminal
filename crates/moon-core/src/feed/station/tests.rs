@@ -14,7 +14,7 @@ fn account_and_order_events_do_not_reach_the_light_station() {
 }
 
 /// The Mini App's station keeps what its tabs read: without orders the open-orders tab and Panic
-/// Sell's state stay empty, without balances the balances tab.
+/// Sell's state stay empty, without balances the Cores tab.
 #[test]
 fn the_mini_app_station_keeps_the_account() {
     let balance = Event::Balance(BalanceEvent::IncrementalApplied {

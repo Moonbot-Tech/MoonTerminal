@@ -44,6 +44,8 @@ use crate::release::{self, ReleaseWatch};
 
 /// The station's own Telegram state file, in the data root.
 const PAIRING_FILE: &str = "telegram.json";
+/// Notification settings and outbox, beside [`PAIRING_FILE`].
+const NOTIFY_FILE: &str = "telegram_notify.json";
 /// How often a lasting `Conflict` is warned about again.
 const CONFLICT_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
 
@@ -120,7 +122,11 @@ impl StationTg {
         );
         let (finished_tx, finished_rx) = mpsc::channel();
         Ok(Self {
-            state: TelegramState::new(bot, moon_tg::HostKind::Station),
+            state: TelegramState::new_with_notifications(
+                bot,
+                HostKind::Station,
+                Some(data_root.join(NOTIFY_FILE)),
+            ),
             zone: telegram.zone,
             generations,
             pairing_path,
@@ -390,6 +396,11 @@ impl TgHost for StationHost<'_> {
 
     fn report_zone(&self) -> Tz {
         self.tg.zone
+    }
+
+    /// Return the station's notification file beside its pairing state without creating it.
+    fn notifications_path(&self) -> PathBuf {
+        self.tg.data_root.join(NOTIFY_FILE)
     }
 
     fn report_revision(&self) -> Option<ReportRevision> {

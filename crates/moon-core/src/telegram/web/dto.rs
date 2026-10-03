@@ -95,13 +95,28 @@ pub struct CoreStatusDto {
     pub mem_mb: Option<u32>,
     /// Free physical memory on the core host, in MB; `None` when not reported.
     pub free_mem_mb: Option<u32>,
+    /// This core's free and total. Always present. A core the store has not seen is awaiting,
+    /// with empty figure text.
+    pub balance: CoreBalanceFigureDto,
+    /// Coin holdings after priced-dust filtering; unpriced holdings are retained.
+    pub coins: Vec<CoinBalanceDto>,
 }
 
-/// Core status list. `can_control` is true only for the owner.
+/// Core status list for one chat, including the balance total those cores share.
+///
+/// `can_control` is true only for the owner. `total` is `None` and `total_text` is empty when
+/// `counted == 0` (unavailable, never a fake zero). `excluded` counts awaiting and unpriced
+/// cores. `stale` counts cores inside `counted` whose figure is stale.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct CoresDto {
     pub cores: Vec<CoreStatusDto>,
     pub can_control: bool,
+    pub total: Option<f64>,
+    pub total_text: String,
+    pub counted: u32,
+    pub stale: u32,
+    pub excluded: u32,
+    pub per_exchange: Vec<ExchangeBalanceDto>,
 }
 
 /// Core switch a Mini App command flips. Serialized as snake_case.
@@ -122,17 +137,29 @@ pub enum BalanceStateDto {
     Unpriced,
 }
 
-/// One core's balance, including optional preformatted text.
+/// One core's free and total on the Cores response.
+///
+/// `free` and `total` are `Some` only when the reading is usable (live or stale, and finite).
+/// The texts are empty when it is not, so a missing figure is not serialized as zero.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct CoreBalanceDto {
-    pub id: u64,
-    pub name: String,
-    pub exchange: String,
+pub struct CoreBalanceFigureDto {
     pub state: BalanceStateDto,
     pub free: Option<f64>,
     pub total: Option<f64>,
-    pub free_text: Option<String>,
-    pub total_text: Option<String>,
+    pub free_text: String,
+    pub total_text: String,
+}
+
+/// One held coin on a core.
+///
+/// `value` is `Some` only when that core's balance reading is usable and the coin's USDT value
+/// is positive. Otherwise `value_text` is the localized unpriced word. The reader omits dust.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CoinBalanceDto {
+    pub coin: String,
+    pub qty_text: String,
+    pub value: Option<f64>,
+    pub value_text: String,
 }
 
 /// Sum across the cores of one exchange.
@@ -147,22 +174,6 @@ pub struct ExchangeBalanceDto {
     pub counted: u32,
     pub stale: u32,
     pub excluded: u32,
-}
-
-/// Balance page: grand total, per core, per exchange, and how many cores sit behind that total.
-///
-/// `total` and `total_text` are `None` when `counted == 0` (unavailable, never a fake zero).
-/// `excluded` counts awaiting and unpriced cores. `stale` counts cores inside `counted` whose
-/// figure is stale.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
-pub struct BalancesDto {
-    pub total: Option<f64>,
-    pub total_text: Option<String>,
-    pub per_core: Vec<CoreBalanceDto>,
-    pub per_exchange: Vec<ExchangeBalanceDto>,
-    pub excluded: u32,
-    pub counted: u32,
-    pub stale: u32,
 }
 
 /// One open order. Quote-money volume and prices are preformatted text.
@@ -191,7 +202,7 @@ pub struct OrderDto {
     pub coin: String,
     pub market: String,
     pub side: String,
-    /// Entry notional in the market quote; absent when the entry inputs are unavailable.
+    /// Entry notional in the market quote; absent for unusable inputs or an unknown quote.
     pub volume_text: Option<String>,
     pub entry_text: Option<String>,
     pub mark_text: Option<String>,
@@ -324,6 +335,40 @@ pub enum CommandErrorDto {
     Unavailable,
     Rejected,
     Forbidden,
+}
+
+/// One core the chat may include in a notification rule.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct NotifyCoreDto {
+    /// Saved core id, serialized as a JSON number like the Cores list's ids.
+    pub id: u64,
+    /// Display name.
+    pub name: String,
+    /// Exchange section caption.
+    pub exchange: String,
+}
+
+/// Notification settings for the signed chat, plus the cores that chat may name.
+///
+/// `error` and `fault` are always present. `null` means the read or the save succeeded.
+/// `revision` is the stored counter the next save must send back.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct NotifyDto {
+    /// Stored rules. A missing chat is the all-off default.
+    pub settings: crate::telegram::notify::NotifySettings,
+    /// Cores this chat is allowed to see, in Mini App order.
+    pub cores: Vec<NotifyCoreDto>,
+    /// IANA zone reports use. Daily time is shown in this zone.
+    pub zone: String,
+    /// Stored chat revision. `0` when this chat has no row yet.
+    pub revision: u64,
+    /// Localized save problem, or `null` when nothing went wrong.
+    pub error: Option<String>,
+    /// Machine kind of a save problem, or `null` when the read or the save succeeded.
+    ///
+    /// `stale`, `cores`, `invalid`, and `save` are the only values. The page branches on
+    /// `stale` and still shows `error`.
+    pub fault: Option<String>,
 }
 
 /// 64-bit identifiers as decimal strings on the Mini App wire.

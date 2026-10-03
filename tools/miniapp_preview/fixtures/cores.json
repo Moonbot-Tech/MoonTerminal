@@ -14,7 +14,40 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 383,
-      "free_mem_mb": 1811
+      "free_mem_mb": 1811,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": [
+        {
+          "coin": "ETH",
+          "qty_text": "4.0",
+          "value": 40,
+          "value_text": "40.00$"
+        },
+        {
+          "coin": "BTC",
+          "qty_text": "1.5",
+          "value": 12.5,
+          "value_text": "12.50$"
+        },
+        {
+          "coin": "SOL",
+          "qty_text": "3.0",
+          "value": null,
+          "value_text": ""
+        },
+        {
+          "coin": "TEST",
+          "qty_text": "123456789.12345678",
+          "value": 1,
+          "value_text": "1.00$"
+        }
+      ]
     },
     {
       "id": 1002,
@@ -30,7 +63,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 386,
-      "free_mem_mb": 1822
+      "free_mem_mb": 1822,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1003,
@@ -46,7 +87,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 389,
-      "free_mem_mb": 1833
+      "free_mem_mb": 1833,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1004,
@@ -62,7 +111,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 392,
-      "free_mem_mb": 1844
+      "free_mem_mb": 1844,
+      "balance": {
+        "state": "stale",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1005,
@@ -78,7 +135,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 395,
-      "free_mem_mb": 1855
+      "free_mem_mb": 1855,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1006,
@@ -94,7 +159,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 398,
-      "free_mem_mb": 1866
+      "free_mem_mb": 1866,
+      "balance": {
+        "state": "awaiting",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1007,
@@ -110,7 +183,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 401,
-      "free_mem_mb": 1877
+      "free_mem_mb": 1877,
+      "balance": {
+        "state": "live",
+        "free": 4000,
+        "total": 8000,
+        "free_text": "4 000.00$",
+        "total_text": "8 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1008,
@@ -126,7 +207,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 404,
-      "free_mem_mb": 1888
+      "free_mem_mb": 1888,
+      "balance": {
+        "state": "unpriced",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1009,
@@ -142,7 +231,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 407,
-      "free_mem_mb": 1899
+      "free_mem_mb": 1899,
+      "balance": {
+        "state": "live",
+        "free": 5000,
+        "total": 10000,
+        "free_text": "5 000.00$",
+        "total_text": "10 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1010,
@@ -158,7 +255,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 410,
-      "free_mem_mb": 1910
+      "free_mem_mb": 1910,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1011,
@@ -174,7 +279,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 413,
-      "free_mem_mb": 1921
+      "free_mem_mb": 1921,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1012,
@@ -190,7 +303,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 416,
-      "free_mem_mb": 1932
+      "free_mem_mb": 1932,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1013,
@@ -206,7 +327,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 419,
-      "free_mem_mb": 1943
+      "free_mem_mb": 1943,
+      "balance": {
+        "state": "live",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1014,
@@ -222,7 +351,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 422,
-      "free_mem_mb": 1954
+      "free_mem_mb": 1954,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1015,
@@ -238,7 +375,15 @@
       "auto_detect": false,
       "version": "7.1.11",
       "mem_mb": 425,
-      "free_mem_mb": 1965
+      "free_mem_mb": 1965,
+      "balance": {
+        "state": "live",
+        "free": 3500,
+        "total": 7000,
+        "free_text": "3 500.00$",
+        "total_text": "7 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1016,
@@ -254,7 +399,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 428,
-      "free_mem_mb": 1976
+      "free_mem_mb": 1976,
+      "balance": {
+        "state": "live",
+        "free": 4000,
+        "total": 8000,
+        "free_text": "4 000.00$",
+        "total_text": "8 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1017,
@@ -270,7 +423,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "stale",
+        "free": 4500,
+        "total": 9000,
+        "free_text": "4 500.00$",
+        "total_text": "9 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1018,
@@ -286,7 +447,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 434,
-      "free_mem_mb": 1998
+      "free_mem_mb": 1998,
+      "balance": {
+        "state": "live",
+        "free": 5000,
+        "total": 10000,
+        "free_text": "5 000.00$",
+        "total_text": "10 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1019,
@@ -302,7 +471,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 437,
-      "free_mem_mb": 2009
+      "free_mem_mb": 2009,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1020,
@@ -318,7 +495,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 440,
-      "free_mem_mb": 2020
+      "free_mem_mb": 2020,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1021,
@@ -334,7 +519,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 443,
-      "free_mem_mb": 2031
+      "free_mem_mb": 2031,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1022,
@@ -350,7 +543,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 446,
-      "free_mem_mb": 2042
+      "free_mem_mb": 2042,
+      "balance": {
+        "state": "live",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1023,
@@ -366,7 +567,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1024,
@@ -382,7 +591,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 452,
-      "free_mem_mb": 2064
+      "free_mem_mb": 2064,
+      "balance": {
+        "state": "live",
+        "free": 3500,
+        "total": 7000,
+        "free_text": "3 500.00$",
+        "total_text": "7 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1025,
@@ -398,7 +615,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 455,
-      "free_mem_mb": 2075
+      "free_mem_mb": 2075,
+      "balance": {
+        "state": "awaiting",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1026,
@@ -414,7 +639,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 458,
-      "free_mem_mb": 2086
+      "free_mem_mb": 2086,
+      "balance": {
+        "state": "live",
+        "free": 4500,
+        "total": 9000,
+        "free_text": "4 500.00$",
+        "total_text": "9 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1027,
@@ -430,7 +663,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 461,
-      "free_mem_mb": 2097
+      "free_mem_mb": 2097,
+      "balance": {
+        "state": "live",
+        "free": 5000,
+        "total": 10000,
+        "free_text": "5 000.00$",
+        "total_text": "10 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1028,
@@ -446,7 +687,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 464,
-      "free_mem_mb": 2108
+      "free_mem_mb": 2108,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1029,
@@ -462,7 +711,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 467,
-      "free_mem_mb": 2119
+      "free_mem_mb": 2119,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1030,
@@ -478,7 +735,15 @@
       "auto_detect": false,
       "version": "7.1.11",
       "mem_mb": 470,
-      "free_mem_mb": 2130
+      "free_mem_mb": 2130,
+      "balance": {
+        "state": "stale",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1031,
@@ -494,7 +759,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "unpriced",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1032,
@@ -510,7 +783,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 476,
-      "free_mem_mb": 2152
+      "free_mem_mb": 2152,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1033,
@@ -526,7 +807,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 479,
-      "free_mem_mb": 2163
+      "free_mem_mb": 2163,
+      "balance": {
+        "state": "live",
+        "free": 3500,
+        "total": 7000,
+        "free_text": "3 500.00$",
+        "total_text": "7 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1034,
@@ -542,7 +831,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "live",
+        "free": 4000,
+        "total": 8000,
+        "free_text": "4 000.00$",
+        "total_text": "8 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1035,
@@ -558,7 +855,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 485,
-      "free_mem_mb": 2185
+      "free_mem_mb": 2185,
+      "balance": {
+        "state": "live",
+        "free": 4500,
+        "total": 9000,
+        "free_text": "4 500.00$",
+        "total_text": "9 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1036,
@@ -574,7 +879,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 488,
-      "free_mem_mb": 2196
+      "free_mem_mb": 2196,
+      "balance": {
+        "state": "live",
+        "free": 5000,
+        "total": 10000,
+        "free_text": "5 000.00$",
+        "total_text": "10 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1037,
@@ -590,7 +903,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 491,
-      "free_mem_mb": 2207
+      "free_mem_mb": 2207,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1038,
@@ -606,7 +927,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 494,
-      "free_mem_mb": 2218
+      "free_mem_mb": 2218,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1039,
@@ -622,7 +951,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 497,
-      "free_mem_mb": 2229
+      "free_mem_mb": 2229,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1040,
@@ -638,7 +975,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 500,
-      "free_mem_mb": 2240
+      "free_mem_mb": 2240,
+      "balance": {
+        "state": "live",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1041,
@@ -654,7 +999,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 503,
-      "free_mem_mb": 2251
+      "free_mem_mb": 2251,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1042,
@@ -670,7 +1023,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 506,
-      "free_mem_mb": 2262
+      "free_mem_mb": 2262,
+      "balance": {
+        "state": "live",
+        "free": 3500,
+        "total": 7000,
+        "free_text": "3 500.00$",
+        "total_text": "7 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1043,
@@ -686,7 +1047,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 509,
-      "free_mem_mb": 2273
+      "free_mem_mb": 2273,
+      "balance": {
+        "state": "stale",
+        "free": 4000,
+        "total": 8000,
+        "free_text": "4 000.00$",
+        "total_text": "8 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1044,
@@ -702,7 +1071,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 512,
-      "free_mem_mb": 2284
+      "free_mem_mb": 2284,
+      "balance": {
+        "state": "awaiting",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1045,
@@ -718,7 +1095,15 @@
       "auto_detect": false,
       "version": "7.1.11",
       "mem_mb": 515,
-      "free_mem_mb": 2295
+      "free_mem_mb": 2295,
+      "balance": {
+        "state": "live",
+        "free": 5000,
+        "total": 10000,
+        "free_text": "5 000.00$",
+        "total_text": "10 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1046,
@@ -734,7 +1119,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1047,
@@ -750,7 +1143,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 521,
-      "free_mem_mb": 2317
+      "free_mem_mb": 2317,
+      "balance": {
+        "state": "live",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1048,
@@ -766,7 +1167,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 524,
-      "free_mem_mb": 2328
+      "free_mem_mb": 2328,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1049,
@@ -782,7 +1191,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 527,
-      "free_mem_mb": 2339
+      "free_mem_mb": 2339,
+      "balance": {
+        "state": "live",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1050,
@@ -798,7 +1215,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 530,
-      "free_mem_mb": 2350
+      "free_mem_mb": 2350,
+      "balance": {
+        "state": "live",
+        "free": 3000,
+        "total": 6000,
+        "free_text": "3 000.00$",
+        "total_text": "6 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1051,
@@ -814,7 +1239,15 @@
       "auto_detect": null,
       "version": null,
       "mem_mb": null,
-      "free_mem_mb": null
+      "free_mem_mb": null,
+      "balance": {
+        "state": "live",
+        "free": 3500,
+        "total": 7000,
+        "free_text": "3 500.00$",
+        "total_text": "7 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1052,
@@ -830,7 +1263,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 536,
-      "free_mem_mb": 2372
+      "free_mem_mb": 2372,
+      "balance": {
+        "state": "live",
+        "free": 4000,
+        "total": 8000,
+        "free_text": "4 000.00$",
+        "total_text": "8 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1053,
@@ -846,7 +1287,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 539,
-      "free_mem_mb": 2383
+      "free_mem_mb": 2383,
+      "balance": {
+        "state": "live",
+        "free": 4500,
+        "total": 9000,
+        "free_text": "4 500.00$",
+        "total_text": "9 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1054,
@@ -862,7 +1311,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 542,
-      "free_mem_mb": 2394
+      "free_mem_mb": 2394,
+      "balance": {
+        "state": "unpriced",
+        "free": null,
+        "total": null,
+        "free_text": "",
+        "total_text": ""
+      },
+      "coins": []
     },
     {
       "id": 1055,
@@ -878,7 +1335,15 @@
       "auto_detect": true,
       "version": "7.1.11",
       "mem_mb": 545,
-      "free_mem_mb": 2405
+      "free_mem_mb": 2405,
+      "balance": {
+        "state": "live",
+        "free": 1000,
+        "total": 2000,
+        "free_text": "1 000.00$",
+        "total_text": "2 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1056,
@@ -894,7 +1359,15 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 548,
-      "free_mem_mb": 2416
+      "free_mem_mb": 2416,
+      "balance": {
+        "state": "stale",
+        "free": 1500,
+        "total": 3000,
+        "free_text": "1 500.00$",
+        "total_text": "3 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1057,
@@ -910,7 +1383,15 @@
       "auto_detect": false,
       "version": "7.1.12",
       "mem_mb": 551,
-      "free_mem_mb": 2427
+      "free_mem_mb": 2427,
+      "balance": {
+        "state": "live",
+        "free": 2000,
+        "total": 4000,
+        "free_text": "2 000.00$",
+        "total_text": "4 000.00$"
+      },
+      "coins": []
     },
     {
       "id": 1058,
@@ -926,8 +1407,39 @@
       "auto_detect": true,
       "version": "7.1.12",
       "mem_mb": 554,
-      "free_mem_mb": 2438
+      "free_mem_mb": 2438,
+      "balance": {
+        "state": "live",
+        "free": 2500,
+        "total": 5000,
+        "free_text": "2 500.00$",
+        "total_text": "5 000.00$"
+      },
+      "coins": []
     }
   ],
-  "can_control": true
+  "can_control": true,
+  "total": 290000,
+  "total_text": "290 000.00$",
+  "counted": 47,
+  "stale": 5,
+  "excluded": 6,
+  "per_exchange": [
+    {
+      "exchange": "Binance Futures",
+      "total": 201000,
+      "total_text": "201 000.00$",
+      "counted": 33,
+      "stale": 3,
+      "excluded": 4
+    },
+    {
+      "exchange": "Hyperliquid Spot",
+      "total": 89000,
+      "total_text": "89 000.00$",
+      "counted": 14,
+      "stale": 2,
+      "excluded": 2
+    }
+  ]
 }

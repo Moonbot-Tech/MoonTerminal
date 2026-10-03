@@ -6,10 +6,11 @@
 //!
 //! Every `/api/*` route, read or write, re-verifies initData HMAC, the paired chat, and
 //! `auth_date` within `INIT_DATA_MAX_AGE_SECS` (3600 s) before anything reaches the consumer.
-//! Routes: `POST /api/session`, `POST /api/report`, `POST /api/cores`, `POST /api/balances`,
+//! Routes: `POST /api/session`, `POST /api/report`, `POST /api/cores`,
 //! `POST /api/orders`, `POST /api/order/cancel`, `POST /api/panic`, `POST /api/core/switch`,
 //! `POST /api/cores/switch`, `POST /api/core/cancel_all`, `POST /api/trades`,
-//! `POST /api/strategies`, `POST /api/strategy/toggle`, and `POST /api/core/reconnect`.
+//! `POST /api/strategies`, `POST /api/strategy/toggle`, `POST /api/core/reconnect`,
+//! `POST /api/notify`, and `POST /api/notify/save`.
 
 use std::io::{self, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -33,7 +34,7 @@ use crate::util::time::now_unix_secs;
 pub mod dto;
 
 use dto::{
-    BalancesDto, CommandResultDto, CoreSwitchDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto,
+    CommandResultDto, CoreSwitchDto, CoresDto, OrdersDto, ReportDto, ReportPeriodDto,
     ScopeResultDto, StrategiesDto, TradesDto,
 };
 
@@ -114,15 +115,6 @@ pub enum MiniAppApiRequest {
         chat_id: i64,
         /// One-shot typed reply for the HTTP handler.
         reply: SyncSender<Result<CoresDto, MiniAppApiError>>,
-    },
-    /// Balances for every visible core.
-    Balances {
-        /// Signed identity that passed pairing.
-        identity: SignedInitData,
-        /// Paired chat id.
-        chat_id: i64,
-        /// One-shot typed reply for the HTTP handler.
-        reply: SyncSender<Result<BalancesDto, MiniAppApiError>>,
     },
     /// Open orders for every visible core.
     Orders {
@@ -246,6 +238,28 @@ pub enum MiniAppApiRequest {
         core: u64,
         /// One-shot typed reply for the HTTP handler.
         reply: SyncSender<Result<CommandResultDto, MiniAppApiError>>,
+    },
+    /// Read this chat's notification settings and the cores it may name.
+    Notify {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<dto::NotifyDto, MiniAppApiError>>,
+    },
+    /// Replace this chat's notification settings.
+    NotifySave {
+        /// Signed identity that passed pairing.
+        identity: SignedInitData,
+        /// Paired chat id.
+        chat_id: i64,
+        /// Rules the page asked to store. The consumer validates them.
+        settings: crate::telegram::notify::NotifySettings,
+        /// Revision the page loaded. The consumer refuses a mismatch.
+        revision: u64,
+        /// One-shot typed reply for the HTTP handler.
+        reply: SyncSender<Result<dto::NotifyDto, MiniAppApiError>>,
     },
 }
 
@@ -478,6 +492,18 @@ struct CoreReconnectBody {
     core: u64,
 }
 
+/// Body of `POST /api/notify/save`. Unknown fields are rejected.
+///
+/// `settings` itself accepts unknown fields so an older file shape still loads. A missing
+/// `settings` or `revision` fails here, before an event is built.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotifySaveBody {
+    settings: crate::telegram::notify::NotifySettings,
+    /// Revision the page loaded with these settings.
+    revision: u64,
+}
+
 /// Longest `market` accepted by `POST /api/panic`, in bytes.
 const MAX_MARKET_BYTES: usize = 64;
 
@@ -547,15 +573,6 @@ impl App {
             (&Method::POST, "/api/cores") => {
                 self.handle_api(request, |identity, chat_id, _body, reply| {
                     Ok(MiniAppApiRequest::Cores {
-                        identity,
-                        chat_id,
-                        reply,
-                    })
-                })
-            }
-            (&Method::POST, "/api/balances") => {
-                self.handle_api(request, |identity, chat_id, _body, reply| {
-                    Ok(MiniAppApiRequest::Balances {
                         identity,
                         chat_id,
                         reply,
@@ -688,12 +705,33 @@ impl App {
                     })
                 })
             }
+            (&Method::POST, "/api/notify") => {
+                self.handle_api(request, |identity, chat_id, _body, reply| {
+                    Ok(MiniAppApiRequest::Notify {
+                        identity,
+                        chat_id,
+                        reply,
+                    })
+                })
+            }
+            (&Method::POST, "/api/notify/save") => {
+                self.handle_api(request, |identity, chat_id, body, reply| {
+                    let parsed = serde_json::from_value::<NotifySaveBody>(body)
+                        .map_err(|_| status_response(StatusCode::BAD_REQUEST, "json"))?;
+                    Ok(MiniAppApiRequest::NotifySave {
+                        identity,
+                        chat_id,
+                        settings: parsed.settings,
+                        revision: parsed.revision,
+                        reply,
+                    })
+                })
+            }
             (&Method::GET, "/api/session")
             | (
                 &Method::GET,
                 "/api/report"
                 | "/api/cores"
-                | "/api/balances"
                 | "/api/orders"
                 | "/api/order/cancel"
                 | "/api/panic"
@@ -703,7 +741,9 @@ impl App {
                 | "/api/trades"
                 | "/api/strategies"
                 | "/api/strategy/toggle"
-                | "/api/core/reconnect",
+                | "/api/core/reconnect"
+                | "/api/notify"
+                | "/api/notify/save",
             )
             | (&Method::HEAD, "/")
             | (&Method::OPTIONS, _) => status_response(StatusCode::METHOD_NOT_ALLOWED, "method"),

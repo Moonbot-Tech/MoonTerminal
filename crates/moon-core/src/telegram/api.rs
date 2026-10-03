@@ -256,6 +256,12 @@ struct GetUpdatesReq<'a> {
     allowed_updates: &'a [&'a str],
 }
 
+/// `link_preview_options` object. Notifications disable previews so a URL in the card is not expanded.
+#[derive(Clone, Copy, Debug, Serialize)]
+struct LinkPreviewOptions {
+    is_disabled: bool,
+}
+
 /// Serialized `sendMessage` request body.
 #[derive(Serialize)]
 struct SendMessageReq<'a> {
@@ -263,6 +269,37 @@ struct SendMessageReq<'a> {
     text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_markup: Option<&'a ReplyMarkup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link_preview_options: Option<LinkPreviewOptions>,
+}
+
+/// Plain `sendMessage` body. `parse_mode` and link previews stay absent, so existing callers
+/// keep the same wire body.
+fn text_message_request<'a>(
+    chat_id: i64,
+    text: &'a str,
+    reply_markup: Option<&'a ReplyMarkup>,
+) -> SendMessageReq<'a> {
+    SendMessageReq {
+        chat_id,
+        text,
+        reply_markup,
+        parse_mode: None,
+        link_preview_options: None,
+    }
+}
+
+/// HTML `sendMessage` body with link previews disabled.
+fn send_html_request<'a>(chat_id: i64, html: &'a str) -> SendMessageReq<'a> {
+    SendMessageReq {
+        chat_id,
+        text: html,
+        reply_markup: None,
+        parse_mode: Some("HTML"),
+        link_preview_options: Some(LinkPreviewOptions { is_disabled: true }),
+    }
 }
 
 impl RetryState {
@@ -417,12 +454,27 @@ impl BotApi {
         text: &str,
         reply_markup: Option<&ReplyMarkup>,
     ) -> Result<Message, ApiError> {
-        let req = SendMessageReq {
-            chat_id,
-            text,
-            reply_markup,
-        };
-        self.post("sendMessage", &req, false)
+        self.post(
+            "sendMessage",
+            &text_message_request(chat_id, text, reply_markup),
+            false,
+        )
+    }
+
+    /// Send one notification as Telegram HTML, with link previews disabled.
+    ///
+    /// Args:
+    ///     chat_id: Destination chat.
+    ///     html: Telegram HTML subset. The caller bounds the text to 4096 UTF-16 units.
+    ///
+    /// Returns:
+    ///     The echoed message on success.
+    ///
+    /// Errors:
+    ///     The same classified failures as [`BotApi::send_message`]. `post` already waits out
+    ///     `retry_after` before returning a retryable error.
+    pub fn send_html(&mut self, chat_id: i64, html: &str) -> Result<Message, ApiError> {
+        self.post("sendMessage", &send_html_request(chat_id, html), false)
     }
 
     /// Send editable reports with their inline keyboard in the initial request.
@@ -722,6 +774,36 @@ pub fn is_unavailable_delete(method: &str, error: &ApiError) -> bool {
         && matches!(error, ApiError::Telegram { description, retry_after_secs: None }
             if description == "Bad Request: message to delete not found"
                 || description == "Bad Request: message can't be deleted")
+}
+
+/// A 400 whose description will not change on retry: bad HTML, an over-long body, or empty text.
+///
+/// Rate limits, 5xx and timeouts are not payload errors. Telegram appends a byte offset after
+/// "can't parse entities", so the prefix is enough. Empty text matches both "text must be
+/// non-empty" and the Bot API string "message text is empty".
+pub fn is_permanent_payload_error(error: &ApiError) -> bool {
+    matches!(error, ApiError::Telegram { description, retry_after_secs: None }
+        if description.starts_with("Bad Request: can't parse entities")
+            || description.contains("message is too long")
+            || description.contains("text must be non-empty")
+            || description.contains("message text is empty"))
+}
+
+/// A Bad Request 400 with no `retry_after`. Sending the same body again will not succeed.
+///
+/// Timeouts, transport errors, 5xx, and 429 stay retryable. Forbidden stays on
+/// [`is_unreachable_chat`]. [`is_permanent_payload_error`] stays the narrow HTML, length, and
+/// empty-text check. The sender drops on this wider predicate.
+///
+/// Args:
+///     error: Failure from one Bot API call.
+///
+/// Returns:
+///     `true` when `error` is a Telegram error whose description starts with `Bad Request:`
+///     and `retry_after_secs` is `None`.
+pub fn is_permanent_bad_request(error: &ApiError) -> bool {
+    matches!(error, ApiError::Telegram { description, retry_after_secs: None }
+        if description.starts_with("Bad Request:"))
 }
 
 /// Telegram refused a call because this one chat is out of the bot's reach — its user is gone,

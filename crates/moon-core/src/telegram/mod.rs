@@ -12,6 +12,7 @@ pub mod auth;
 pub mod cloudflared;
 pub mod commands;
 pub mod init_data;
+pub mod notify;
 pub mod reply;
 pub mod report;
 pub mod runtime;

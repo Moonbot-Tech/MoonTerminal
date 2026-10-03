@@ -1,4 +1,5 @@
-//! Mini App routes: report, core status, balances, open orders, and owner money commands.
+//! Mini App routes: report, core status, open orders, owner money commands, and notification
+//! settings.
 //!
 //! The session check stays in `dispatch.rs` so its authorization text stays byte-identical.
 //! Every route here goes through [`mini_access`]. Only the report and trades reads leave the owner
@@ -19,6 +20,7 @@ pub(crate) mod cache;
 mod commands;
 mod dto;
 mod reads;
+mod settings;
 
 /// Answer one Mini App request. The live session check is handled by the caller.
 pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
@@ -31,9 +33,6 @@ pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
         } => reads::mini_report(host, chat_id, period, reply),
         MiniAppApiRequest::Cores { chat_id, reply, .. } => {
             let _ = reply.try_send(reads::mini_cores(host, chat_id));
-        }
-        MiniAppApiRequest::Balances { chat_id, reply, .. } => {
-            let _ = reply.try_send(reads::mini_balances(host, chat_id));
         }
         MiniAppApiRequest::Orders { chat_id, reply, .. } => {
             let _ = reply.try_send(reads::mini_orders(host, chat_id));
@@ -113,6 +112,20 @@ pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
         }
         MiniAppApiRequest::Session { reply, .. } => {
             let _ = reply.try_send(Err(MiniAppApiError::Rejected));
+        }
+        MiniAppApiRequest::Notify { chat_id, reply, .. } => {
+            let _ = reply.try_send(settings::mini_notify(host, chat_id));
+        }
+        MiniAppApiRequest::NotifySave {
+            chat_id,
+            settings,
+            revision,
+            reply,
+            ..
+        } => {
+            let _ = reply.try_send(settings::mini_notify_save(
+                host, chat_id, settings, revision,
+            ));
         }
     }
 }

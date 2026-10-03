@@ -26,7 +26,7 @@ fn empty_token_guard_dominates_telegram_service_construction() {
 
     let config = TelegramConfig::default();
     assert!(
-        TelegramService::start(&config).is_none(),
+        TelegramService::start(&config, None).is_none(),
         "an empty credential must be the hard off switch rather than an inactive service handle"
     );
 }
