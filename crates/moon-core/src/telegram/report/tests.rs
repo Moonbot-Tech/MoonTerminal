@@ -5,15 +5,18 @@ use chrono::{TimeZone, Utc};
 /// Scoped custom-date navigation stays within Telegram's 64-byte callback limit.
 #[test]
 fn scoped_custom_callback_preserves_exchange_and_dates() {
-    let mut request = ReportRequest::dates("2026-01-01", "2026-12-31").unwrap();
+    // A callback names its view; a request still following the bot's is resolved first.
+    let mut request = ReportRequest::dates("2026-01-01", "2026-12-31")
+        .unwrap()
+        .in_view(crate::config::telegram_menu::ReportView::Cores);
     request.window = request.bounds(0, chrono_tz::UTC);
-    request.by_exchange = false;
     request.scope = super::ReportScope::Venue(crate::feed::ExchangeId {
         code: 255,
         dex: u32::MAX,
     });
     request.page = 10000;
     request.exchanges_open = true;
+    request.basis = Some(crate::config::telegram_menu::ReportBasis::Open);
     let encoded = request.callback();
     assert!(encoded.len() <= 64, "{encoded}");
     assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
@@ -130,4 +133,49 @@ fn callback_parser_rejects_invalid_and_unbounded_inputs() {
             .callback(),
         "r:d:2026-09-01,2026-09-10:2"
     );
+}
+
+/// A page carries the basis it was read on through its buttons; a callback without one (a menu
+/// button) leaves it to the bot.
+#[test]
+fn the_basis_survives_the_callback() {
+    use crate::config::telegram_menu::{ReportBasis, ReportView};
+    for basis in [None, Some(ReportBasis::Close), Some(ReportBasis::Open)] {
+        for open in [false, true] {
+            let mut request = ReportRequest::preset(Period::Month).in_view(ReportView::Cores);
+            request.scope = super::ReportScope::Unidentified;
+            request.exchanges_open = open;
+            request.basis = basis;
+            assert_eq!(
+                ReportRequest::parse_callback(&request.callback()),
+                Some(request.clone()),
+                "{}",
+                request.callback()
+            );
+        }
+    }
+}
+
+/// The days view splits only a period that covers several days; one day opens by exchanges.
+#[test]
+fn the_days_view_needs_more_than_one_day() {
+    use crate::config::telegram_menu::ReportView;
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+    for period in [
+        Period::Hour,
+        Period::Today,
+        Period::Yesterday,
+        Period::Dates(day, day),
+    ] {
+        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Days);
+        assert!(request.by_exchange && !request.daily, "{period:?}");
+    }
+    for period in [
+        Period::Month,
+        Period::LastMonth,
+        Period::Dates(day, day.succ_opt().unwrap()),
+    ] {
+        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Days);
+        assert!(request.daily && !request.by_exchange, "{period:?}");
+    }
 }

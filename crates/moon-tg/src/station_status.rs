@@ -79,7 +79,13 @@ const FILE_NAME_CHARS: usize = 48;
 /// The chat's answer to "Status": the station's status as a rich message, a line on the latest
 /// release, and — only while a newer release carries the station's binary — the "Update" button
 /// under it. The dispatcher admits only the owner before the host produces this response.
-pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response {
+///
+/// `navigation` is the owner's persistent keyboard ([`crate::station_owner_navigation`]).
+pub fn station_status_reply(
+    status: &Status,
+    release: &ReleaseCheck,
+    navigation: ReplyMarkup,
+) -> Response {
     let facts = StatusFacts::of(status);
     let release_line = match release {
         ReleaseCheck::Newer(version) => {
@@ -98,7 +104,6 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
         )]],
         _ => Vec::new(),
     };
-    let navigation = crate::labels::navigation_keyboard(crate::HostKind::Station, true);
     let html = facts.html(release_line.as_deref());
     if !crate::report::rich_message_fits(&html) {
         // Not expected with a bounded file list; plain text still answers the press.

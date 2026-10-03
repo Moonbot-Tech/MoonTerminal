@@ -178,9 +178,11 @@ fn the_chat_status_is_escaped_and_bounded() {
     let mut status = status(Some(host(files)));
     status.station_version = "0.1.0 <dev>".into();
     status.last_update = Some("2026-09-30T14:02Z update=failed: <boom> & more".into());
-    let Response::Rich { html, keyboard, .. } =
-        station_status_reply(&status, &ReleaseCheck::Current)
-    else {
+    let Response::Rich { html, keyboard, .. } = station_status_reply(
+        &status,
+        &ReleaseCheck::Current,
+        crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+    ) else {
         panic!("the status is a rich message");
     };
     assert!(crate::report::rich_message_fits(&html));
@@ -206,14 +208,18 @@ fn the_update_button_comes_only_with_a_newer_release() {
         html,
         keyboard,
         navigation,
-    } = station_status_reply(&status(None), &ReleaseCheck::Newer("v0.52.0".into()))
+    } = station_status_reply(
+        &status(None),
+        &ReleaseCheck::Newer("v0.52.0".into()),
+        crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+    )
     else {
         panic!("the status is a rich message");
     };
     assert!(html.ends_with("<p>A new version of the station is out: v0.52.0.</p>"));
     assert_eq!(
         navigation.1,
-        crate::labels::navigation_keyboard(crate::HostKind::Station, true)
+        crate::station_owner_navigation(&moon_core::config::TelegramConfig::default())
     );
     let mut updated = status(None);
     updated.last_update = Some("2026-09-30T14:02Z health=ok".into());
@@ -243,8 +249,11 @@ fn the_update_button_comes_only_with_a_newer_release() {
             "updated from the terminal only.</p>",
         ),
     ] {
-        let Response::Rich { html, keyboard, .. } = station_status_reply(&status(None), &check)
-        else {
+        let Response::Rich { html, keyboard, .. } = station_status_reply(
+            &status(None),
+            &check,
+            crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+        ) else {
             panic!("the status is a rich message");
         };
         assert!(html.ends_with(tail), "{html}");

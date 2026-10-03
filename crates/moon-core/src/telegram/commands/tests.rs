@@ -142,3 +142,77 @@ fn reply_labels_accept_all_locales_without_loose_command_matching() {
         assert_eq!(parse_reply_button(text, &labels), ParsedCommand::Unknown);
     }
 }
+
+/// Section callbacks parse as menu actions under the same private-sender identity; a report
+/// callback stays a report.
+#[test]
+fn menu_callbacks_are_their_own_namespace() {
+    let mut update: crate::telegram::api::Update = serde_json::from_value(serde_json::json!({
+        "update_id":1,"callback_query":{"id":"fixture","from":{"id":7},
+        "message":{"message_id":10,"chat":{"id":7,"type":"private"}},"data":"m:r"}
+    }))
+    .unwrap();
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::Menu(crate::telegram::menu_action::MenuAction::Report)
+    );
+    update.callback_query.as_mut().unwrap().data = Some("m:nope".into());
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::Unknown
+    );
+    update.callback_query.as_mut().unwrap().data = Some("m:r".into());
+    update.callback_query.as_mut().unwrap().from.id = 8;
+    assert!(super::parse_update(&update, None).is_none());
+}
+
+/// A period command leaves the view to the bot; `/daily` names its own.
+#[test]
+fn period_commands_follow_the_bot_view_and_daily_names_its_own() {
+    for text in [
+        "/today",
+        "/yesterday",
+        "/month",
+        "/lastmonth",
+        "/hour",
+        "/report 2026-09-01 2026-09-10",
+    ] {
+        let ParsedCommand::Report(request) = parse_text(text, None) else {
+            panic!("{text}")
+        };
+        assert!(request.follow_view, "{text}");
+    }
+    for text in ["/daily", "/daily 2026-09-01 2026-09-10"] {
+        let ParsedCommand::Report(request) = parse_text(text, None) else {
+            panic!("{text}")
+        };
+        assert!(request.daily && !request.follow_view, "{text}");
+    }
+}
+
+/// Every menu item's button resolves by its id in any locale; the old Overview button still opens
+/// today's report.
+#[test]
+fn buttons_resolve_by_item_id() {
+    use crate::config::telegram_menu::MenuItem;
+    let mut labels = BTreeMap::new();
+    for item in MenuItem::ALL {
+        labels.insert(
+            format!("button_{}_emoji_es", item.id()),
+            format!("* {}", item.id()),
+        );
+    }
+    labels.insert("button_home_legacy_emoji_en".into(), "📊 Overview".into());
+    for item in MenuItem::ALL {
+        assert_eq!(
+            parse_reply_button(&format!("* {}", item.id()), &labels),
+            super::button_command(item),
+            "{}",
+            item.id()
+        );
+    }
+    assert_eq!(
+        parse_reply_button("📊 Overview", &labels),
+        ParsedCommand::Start
+    );
+}

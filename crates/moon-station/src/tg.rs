@@ -179,10 +179,15 @@ impl StationTg {
         }
         let asks = std::mem::take(&mut self.status_asks);
         let status = status(self.status(config));
+        let navigation = moon_tg::station_owner_navigation(&config.telegram);
         let release = self.release.clone();
         let answer = move |asks: Vec<SyncSender<Response>>, check: moon_tg::ReleaseCheck| {
             for ask in asks {
-                let _ = ask.try_send(moon_tg::station_status_reply(&status, &check));
+                let _ = ask.try_send(moon_tg::station_status_reply(
+                    &status,
+                    &check,
+                    navigation.clone(),
+                ));
             }
         };
         // Handed over through a slot, so a thread that cannot be started leaves the answer here:

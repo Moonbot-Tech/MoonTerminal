@@ -10,7 +10,7 @@ use moon_core::telegram::{
 fn station_non_owner_keyboard_matches_the_terminal() {
     let rows = |host, owner| {
         let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-            super::navigation_keyboard(host, owner)
+            super::navigation_keyboard(host, owner, &moon_core::config::TelegramConfig::default())
         else {
             panic!("expected persistent keyboard")
         };
@@ -30,9 +30,11 @@ fn station_non_owner_keyboard_matches_the_terminal() {
 #[test]
 fn persistent_keyboard_fits_in_two_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
-    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Terminal, true)
-    else {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
+        crate::HostKind::Terminal,
+        true,
+        &moon_core::config::TelegramConfig::default(),
+    ) else {
         panic!("expected persistent keyboard")
     };
     assert_eq!(markup.keyboard.len(), 2);
@@ -63,9 +65,11 @@ fn persistent_keyboard_fits_in_two_rows() {
 #[test]
 fn persistent_navigation_buttons_have_recognized_commands() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
-    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Terminal, true)
-    else {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
+        crate::HostKind::Terminal,
+        true,
+        &moon_core::config::TelegramConfig::default(),
+    ) else {
         panic!("expected persistent keyboard")
     };
     assert!(markup.is_persistent);
@@ -81,18 +85,22 @@ fn persistent_navigation_buttons_have_recognized_commands() {
     }
 }
 
-/// A station owner's keyboard is three rows of two — days, months, then Status with Help — and
-/// only a station's labels parse its Status: a terminal's bot has no station to report on.
+/// A station owner's default keyboard is the terminal's with Status on a row of its own, and only
+/// a station's labels parse its Status: a terminal's bot has no station to report on.
 #[test]
 fn only_the_station_keyboard_has_its_status() {
     let labels = super::telegram_labels(crate::HostKind::Station);
-    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
-        super::navigation_keyboard(crate::HostKind::Station, true)
-    else {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
+        crate::HostKind::Station,
+        true,
+        &moon_core::config::TelegramConfig::default(),
+    ) else {
         panic!("expected persistent keyboard")
     };
-    assert_eq!(markup.keyboard.len(), 3);
-    assert!(markup.keyboard.iter().all(|row| row.len() == 2));
+    assert_eq!(
+        markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![3, 2, 1]
+    );
     let command =
         |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);
     assert!(matches!(
@@ -103,6 +111,7 @@ fn only_the_station_keyboard_has_its_status() {
         command(0, 1),
         ParsedCommand::Report(request) if request.period == Period::Yesterday
     ));
+    assert!(matches!(command(0, 2), ParsedCommand::Help));
     assert!(matches!(
         command(1, 0),
         ParsedCommand::Report(request) if request.period == Period::Month
@@ -112,7 +121,6 @@ fn only_the_station_keyboard_has_its_status() {
         ParsedCommand::Report(request) if request.period == Period::LastMonth
     ));
     assert_eq!(command(2, 0), ParsedCommand::StationStatus);
-    assert!(matches!(command(2, 1), ParsedCommand::Help));
     let status = &markup.keyboard[2][0].text;
     for row in &markup.keyboard {
         for button in row {
@@ -154,4 +162,115 @@ fn station_labels_replace_the_terminal_wording() {
         super::report_delivery_failed(crate::HostKind::Station),
         station["report_delivery_failed"]
     );
+}
+
+/// The keyboard as `telegram` configures it, as button texts row by row.
+fn keyboard_texts(
+    host: crate::HostKind,
+    owner: bool,
+    telegram: &moon_core::config::TelegramConfig,
+) -> Vec<Vec<String>> {
+    let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
+        super::navigation_keyboard(host, owner, telegram)
+    else {
+        panic!("expected persistent keyboard")
+    };
+    markup
+        .keyboard
+        .into_iter()
+        .map(|row| row.into_iter().map(|b| b.text).collect())
+        .collect()
+}
+
+/// A configured menu lays the keyboard out as its rows say, hides what it hides, and keeps
+/// Status for a station's owner only; every shown button resolves to its own item.
+#[test]
+fn the_keyboard_follows_the_configured_menu() {
+    let _locale = crate::test_locale::force("ru");
+    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem::*};
+    let mut telegram = moon_core::config::TelegramConfig::default();
+    telegram.bot.menu = BotMenu {
+        keyboard: vec![
+            vec![MenuEntry::shown(Report), MenuEntry::shown(Status)],
+            vec![
+                MenuEntry::shown(Custom),
+                MenuEntry::hidden(Today),
+                MenuEntry::shown(MiniApp),
+                MenuEntry::shown(Daily),
+            ],
+        ],
+        report: Vec::new(),
+    }
+    .normalized();
+    let locale = rust_i18n::locale();
+    let text = |item| super::button_text(item, locale.as_ref());
+    assert_eq!(
+        keyboard_texts(crate::HostKind::Station, true, &telegram),
+        vec![
+            vec![text(Report), text(Status)],
+            vec![text(Custom), text(MiniApp), text(Daily)],
+        ]
+    );
+    for (host, owner) in [
+        (crate::HostKind::Station, false),
+        (crate::HostKind::Terminal, true),
+    ] {
+        assert_eq!(
+            keyboard_texts(host, owner, &telegram),
+            vec![
+                vec![text(Report)],
+                vec![text(Custom), text(MiniApp), text(Daily)]
+            ]
+        );
+    }
+    let labels = super::telegram_labels(crate::HostKind::Station);
+    for item in [Report, Status, Custom, MiniApp, Daily] {
+        assert_eq!(
+            parse_reply_button(&text(item), &labels),
+            moon_core::telegram::commands::button_command(item),
+            "{}",
+            item.id()
+        );
+    }
+}
+
+/// A menu with nothing left to show for a chat keeps the Report section as a way in.
+#[test]
+fn an_empty_keyboard_keeps_the_report_section() {
+    let _locale = crate::test_locale::force("ru");
+    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem};
+    let mut telegram = moon_core::config::TelegramConfig::default();
+    telegram.bot.menu = BotMenu {
+        keyboard: vec![vec![MenuEntry::shown(MenuItem::Status)]],
+        report: Vec::new(),
+    }
+    .normalized();
+    let locale = rust_i18n::locale();
+    assert_eq!(
+        keyboard_texts(crate::HostKind::Terminal, true, &telegram),
+        vec![vec![super::button_text(MenuItem::Report, locale.as_ref())]]
+    );
+}
+
+/// No two items share a button text in any language, so a press always resolves to one item.
+#[test]
+fn button_texts_are_distinct_in_every_locale() {
+    use moon_core::config::telegram_menu::MenuItem;
+    for locale in ["ru", "en", "es"] {
+        let mut texts: Vec<String> = MenuItem::ALL
+            .into_iter()
+            .map(|item| super::button_text(item, locale))
+            .collect();
+        texts.sort();
+        texts.dedup();
+        assert_eq!(texts.len(), MenuItem::ALL.len(), "{locale}");
+        for item in MenuItem::ALL {
+            let key = format!("telegram.button_{}", item.id());
+            assert_ne!(
+                rust_i18n::t!(&key, locale = locale),
+                key,
+                "{key} is missing in {locale}"
+            );
+        }
+    }
 }

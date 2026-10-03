@@ -3,7 +3,7 @@ use chrono::{Days, NaiveDate};
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
 use moon_core::{
-    config::telegram_access::TelegramReportAccess,
+    config::{telegram_access::TelegramReportAccess, telegram_menu::ReportBasis},
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
     telegram::{
         report::{ReportRequest, ReportScope},
@@ -19,6 +19,7 @@ use crate::notify::trades::ClosedTrade;
 
 use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
+use moon_core::telegram::api::ReplyMarkup;
 
 mod paging;
 mod render;
@@ -37,9 +38,14 @@ struct Page {
     pages: usize,
     drilldowns: Vec<(String, ReportScope)>,
     scope_label: Option<String>,
+    /// Which timestamp the period was read on.
+    basis: ReportBasis,
 }
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
+///
+/// A request whose view the chat did not pick opens in the bot's `report_view`; a request that does
+/// not carry its basis yet is read on the bot's `period_basis`.
 pub(crate) fn telegram_report(
     host: &mut dyn TgHost,
     chat: i64,
@@ -51,33 +57,27 @@ pub(crate) fn telegram_report(
         return;
     };
     let owner = access == TelegramReportAccess::Owner;
+    let bot = &host.config().telegram.bot;
+    let request = request.resolve_view(bot.report_view);
+    // A page's own buttons carry the basis it was read on; a fresh request takes the bot's.
+    let basis = request.basis.unwrap_or(bot.period_basis);
+    let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
     if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         report_notice(
             &reply,
             t!("telegram.access_no_cores").to_string(),
-            host.kind(),
-            owner,
+            navigation,
         );
         return;
     }
     if host.state().report_pending {
-        report_notice(
-            &reply,
-            t!("telegram.report_busy").to_string(),
-            host.kind(),
-            owner,
-        );
+        report_notice(&reply, t!("telegram.report_busy").to_string(), navigation);
         return;
     }
     let zone = host.report_zone();
     let now = moon_core::util::time::now_unix_secs() as i64;
     let Some((from, to)) = request.bounds(now, zone) else {
-        report_notice(
-            &reply,
-            crate::labels::report_help(host.kind()),
-            host.kind(),
-            owner,
-        );
+        report_notice(&reply, crate::labels::report_help(host.kind()), navigation);
         return;
     };
     let order = CoreOrder::new(host.config());
@@ -86,33 +86,42 @@ pub(crate) fn telegram_report(
     let read_access = access.clone();
     host.state_mut().report_pending = true;
     host.spawn(Box::new(move || {
-        let result = read_page(request, from, to, zone, order, names, venues, read_access);
+        let result = read_page(
+            request,
+            from,
+            to,
+            zone,
+            basis,
+            order,
+            names,
+            venues,
+            read_access,
+        );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().report_pending = false;
             if host.config().telegram.report_access(chat).as_ref() != Some(&access) {
                 answer(&reply, t!("telegram.refusal").to_string());
                 return;
             }
+            // The navigation as it is now: the menu may have changed during the read.
+            let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
             match result {
                 Ok(page) => {
-                    let _ = reply.try_send(render(&page, host.kind(), owner));
+                    let _ = reply.try_send(render(&page, host.kind(), navigation));
                 }
-                Err(_) => report_notice(
-                    &reply,
-                    t!("telegram.report_failed").to_string(),
-                    host.kind(),
-                    owner,
-                ),
+                Err(_) => {
+                    report_notice(&reply, t!("telegram.report_failed").to_string(), navigation)
+                }
             }
         })
     }));
 }
 
 /// A report notice exposes navigation limited to the admission grant, including on /start.
-fn report_notice(reply: &SyncSender<Response>, text: String, host: crate::HostKind, owner: bool) {
+fn report_notice(reply: &SyncSender<Response>, text: String, navigation: ReplyMarkup) {
     let _ = reply.try_send(Response::Text {
         text,
-        keyboard: Some(navigation_keyboard(host, owner)),
+        keyboard: Some(navigation),
     });
 }
 
@@ -123,25 +132,28 @@ fn read_page(
     from: i64,
     to: i64,
     zone: Tz,
+    basis: ReportBasis,
     order: CoreOrder,
     names: db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
 ) -> db::ReadResult<Page> {
     let conn = db::open_reader()?;
-    read_page_on(&conn, request, from, to, zone, &names, |cores| {
+    read_page_on(&conn, request, from, to, zone, basis, &names, |cores| {
         order.sort_by(cores, |(id, _)| *id);
         (venues, access)
     })
 }
 
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
+#[allow(clippy::too_many_arguments)]
 fn read_page_on(
     conn: &rusqlite::Connection,
     mut request: ReportRequest,
     from: i64,
     to: i64,
     zone: Tz,
+    basis: ReportBasis,
     names: &db::CoreNames,
     order: impl FnOnce(
         &mut [(u64, String)],
@@ -151,6 +163,7 @@ fn read_page_on(
     ),
 ) -> db::ReadResult<Page> {
     request.window = Some((from, to));
+    request.basis = Some(basis);
     let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
     relabel(&mut cores, names);
@@ -182,6 +195,7 @@ fn read_page_on(
         date_to: Some(to),
         emulator: Some(false),
         rows: RowScope::Closed,
+        period_basis: basis.period_basis(),
         axis: db::ReportAxis::load(&snap, zone)?,
         ..Default::default()
     };
@@ -263,6 +277,7 @@ fn read_page_on(
             pages: if partial { 10_000 } else { 1 },
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
+            basis,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -284,6 +299,7 @@ fn read_page_on(
         pages,
         drilldowns,
         scope_label,
+        basis,
     })
 }
 

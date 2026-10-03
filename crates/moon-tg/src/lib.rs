@@ -15,6 +15,7 @@ mod dispatch;
 mod host;
 mod html;
 mod labels;
+mod menu;
 mod mini_app;
 pub(crate) mod notify;
 mod report;
@@ -29,7 +30,7 @@ mod test_locale;
 
 pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
-pub use labels::status_text;
+pub use labels::{station_owner_navigation, status_text};
 pub use state::TelegramState;
 pub use station_status::{
     ReleaseCheck, ReleaseFailure, Section, StatusFacts, UpdateRefusal, station_status_reply,

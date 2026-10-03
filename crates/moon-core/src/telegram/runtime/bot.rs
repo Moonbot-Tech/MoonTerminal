@@ -5,6 +5,7 @@ use crate::telegram::{
     TelegramStatus,
     api::{BotApi, ReplyMarkup},
     commands::{ParsedCommand, parse_reply_button, parse_update},
+    menu_action::MenuAction,
     reply::segment_pages,
 };
 use std::sync::{
@@ -137,9 +138,12 @@ pub(super) fn run(
                 .is_some_and(|chat| chat.id == chat_id && chat.kind == "private");
             let (reply, rx) = mpsc::sync_channel(1);
             let is_start = matches!(inbound.command, ParsedCommand::Start);
+            // A preset from the custom-period screen answers with its report.
             let is_report = matches!(
                 inbound.command,
-                ParsedCommand::Report(_) | ParsedCommand::Start
+                ParsedCommand::Report(_)
+                    | ParsedCommand::Start
+                    | ParsedCommand::Menu(MenuAction::Preset(_))
             );
             // The station's status looks for a newer release before it answers.
             let slow = is_report || inbound.command == ParsedCommand::StationStatus;

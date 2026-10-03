@@ -1,0 +1,18 @@
+# Telegram bot menu: configurable reply-keyboard items and the inline section screens.
+# Button keys are `telegram.button_{item id}` — the ids are stable, never rename them.
+_version: 1
+
+telegram.button_report: "Report"
+telegram.button_custom: "Custom period"
+telegram.button_miniapp: "Mini App"
+telegram.menu.report_pick: "Choose a period."
+telegram.menu.custom_pick_from: "Pick a ready period or the first day in the calendar."
+telegram.menu.custom_pick_to: "From %{from}. Pick the last day — up to a year later."
+telegram.menu.preset_7: "7 days"
+telegram.menu.preset_30: "30 days"
+telegram.menu.preset_week: "Last week"
+telegram.menu.back: "Back"
+# Seven space-separated short names, Monday first.
+telegram.menu.weekdays: "Mo Tu We Th Fr Sa Su"
+# Twelve space-separated month names, January first.
+telegram.menu.months: "January February March April May June July August September October November December"

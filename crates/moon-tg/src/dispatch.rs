@@ -166,9 +166,11 @@ fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
     }
     .to_string();
     let keyboard = saved.then(|| {
+        let telegram = &host.config().telegram;
         navigation_keyboard(
             host.kind(),
-            host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+            telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+            telegram,
         )
     });
     let _ = reply.try_send(Response::PairSaved {
@@ -208,16 +210,20 @@ fn run_command(
         return;
     }
     match command {
-        ParsedCommand::Start => report::telegram_report(
-            host,
-            chat_id,
-            ReportRequest::new(Period::Today, false),
-            reply,
-        ),
+        ParsedCommand::Start => {
+            report::telegram_report(host, chat_id, ReportRequest::preset(Period::Today), reply)
+        }
         ParsedCommand::Report(request) => report::telegram_report(host, chat_id, request, reply),
+        ParsedCommand::Menu(action) => crate::menu::run(host, chat_id, action, owner, reply),
         ParsedCommand::Help => {
             let zone = host.report_zone();
-            let _ = reply.try_send(report::help(&zone.to_string(), host.kind(), owner));
+            let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
+            let _ = reply.try_send(report::help(
+                &zone.to_string(),
+                host.kind(),
+                owner,
+                navigation,
+            ));
         }
         ParsedCommand::MiniApp => {
             let mini_app_enabled = host.config().telegram.mini_app_enabled;
@@ -247,9 +253,13 @@ fn run_command(
                 }
                 .to_string()
             };
-            let keyboard = keyboard
-                .map(ReplyMarkup::Inline)
-                .or_else(|| Some(navigation_keyboard(host.kind(), owner)));
+            let keyboard = keyboard.map(ReplyMarkup::Inline).or_else(|| {
+                Some(navigation_keyboard(
+                    host.kind(),
+                    owner,
+                    &host.config().telegram,
+                ))
+            });
             let _ = reply.try_send(Response::Text { text, keyboard });
         }
         ParsedCommand::StationStatus => {
@@ -266,12 +276,13 @@ fn run_command(
                     reason = reason.text()
                 ),
             };
+            let telegram = &host.config().telegram;
             let _ = reply.try_send(Response::Text {
                 text: text.to_string(),
                 keyboard: Some(navigation_keyboard(
                     host.kind(),
-                    host.config().telegram.report_access(chat_id)
-                        == Some(TelegramReportAccess::Owner),
+                    telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+                    telegram,
                 )),
             });
         }
@@ -281,6 +292,7 @@ fn run_command(
 
 /// Explain an unsupported request with navigation limited to the chat's current role.
 fn cannot_run(host: &dyn TgHost, chat_id: i64, reply: &SyncSender<Response>) {
+    let telegram = &host.config().telegram;
     let _ = reply.try_send(Response::Text {
         text: format!(
             "{}\n\n{}",
@@ -289,7 +301,8 @@ fn cannot_run(host: &dyn TgHost, chat_id: i64, reply: &SyncSender<Response>) {
         ),
         keyboard: Some(navigation_keyboard(
             host.kind(),
-            host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+            telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner),
+            telegram,
         )),
     });
 }

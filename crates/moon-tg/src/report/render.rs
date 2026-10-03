@@ -1,10 +1,11 @@
 //! The report's rich HTML, its inline keyboard, and Help.
 
 use moon_core::{
+    config::telegram_menu::ReportBasis,
     db::QuoteBreakdown,
     telegram::{
         api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup},
-        report::{Period, ReportRequest, ReportScope},
+        report::{ReportRequest, ReportScope},
         runtime::Response,
     },
     util::{display_time, fmt},
@@ -13,7 +14,6 @@ use rust_i18n::t;
 
 use super::Page;
 use crate::HostKind;
-use crate::labels::navigation_keyboard;
 
 /// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
 const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
@@ -68,8 +68,8 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
-/// `host` words delivery failures; `owner` limits the persistent station navigation.
-pub(super) fn render(page: &Page, host: HostKind, owner: bool) -> Response {
+/// `host` words delivery failures; `navigation` is the chat's persistent keyboard.
+pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Response {
     let html = report_html(page);
     if !rich_message_fits(&html) {
         return Response::Text {
@@ -82,7 +82,7 @@ pub(super) fn render(page: &Page, host: HostKind, owner: bool) -> Response {
         keyboard: keyboard(page),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host, owner),
+            navigation,
         ),
     }
 }
@@ -112,6 +112,13 @@ pub(super) fn report_html(page: &Page) -> String {
             stamp(page.to)
         )
     };
+    // The terminal's Report wording: the period counts trades by when they opened.
+    if page.basis == ReportBasis::Open {
+        html.push_str(&format!(
+            "<p><i>{}</i></p>",
+            escape(&t!("report.period_basis.open"))
+        ));
+    }
     if page.total.orders == 0 {
         html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
     }
@@ -213,8 +220,9 @@ pub(super) fn report_html(page: &Page) -> String {
 /// Help is disposable rich content; a separate permanent message owns persistent navigation.
 ///
 /// `host` picks the lines that say what the bot depends on: a terminal must keep running, a
-/// station reports around the clock. `owner` controls station command help and navigation.
-pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
+/// station reports around the clock. `owner` controls station command help; `navigation` is the
+/// chat's persistent keyboard.
+pub(crate) fn help(zone: &str, host: HostKind, owner: bool, navigation: ReplyMarkup) -> Response {
     let (limits, mini) = match host {
         HostKind::Terminal => ("telegram.help_limits", "telegram.help_mini"),
         HostKind::Station => ("telegram.help_limits_station", "telegram.help_mini_station"),
@@ -269,7 +277,7 @@ pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
         keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host, owner),
+            navigation,
         ),
     }
 }
@@ -379,7 +387,8 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             true,
         ),
     ] {
-        if (daily && request.period == Period::Today)
+        // A single day has nothing to split by days (`ReportRequest::in_view` agrees).
+        if (daily && !request.period.spans_days())
             || (request.by_exchange == exchanges && request.daily == daily)
             // The collapsed top row already carries All cores; do not repeat it below.
             || (!request.exchanges_open && !exchanges && !daily)

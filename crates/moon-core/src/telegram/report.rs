@@ -1,4 +1,5 @@
 //! Bounded report navigation and civil-time periods shared by chat commands and callbacks.
+use crate::config::telegram_menu::ReportBasis;
 use crate::util::display_time::{self, LocalBoundary};
 use chrono::{Datelike, Days, NaiveDate, Timelike};
 use chrono_tz::Tz;
@@ -12,6 +13,40 @@ pub enum ReportScope {
     Venue(crate::feed::ExchangeId),
 }
 
+/// The widest custom period, in days from its first to its last: one year and a day less.
+pub const MAX_SPAN_DAYS: i64 = 366;
+
+/// A ready custom period, counted back from the chat's today in the report zone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preset {
+    /// The last 7 days, today included.
+    Days7,
+    /// The last 30 days, today included.
+    Days30,
+    /// The calendar week before this one, Monday to Sunday.
+    LastWeek,
+}
+
+impl Preset {
+    /// Every preset, in button order.
+    pub const ALL: [Self; 3] = [Self::Days7, Self::Days30, Self::LastWeek];
+
+    /// The first and the last day of this preset when today is `today`.
+    pub fn dates(self, today: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+        match self {
+            Self::Days7 => Some((today.checked_sub_days(Days::new(6))?, today)),
+            Self::Days30 => Some((today.checked_sub_days(Days::new(29))?, today)),
+            Self::LastWeek => {
+                let monday = today.checked_sub_days(Days::new(u64::from(
+                    today.weekday().num_days_from_monday(),
+                )))?;
+                let from = monday.checked_sub_days(Days::new(7))?;
+                Some((from, monday.checked_sub_days(Days::new(1))?))
+            }
+        }
+    }
+}
+
 /// A requested period; explicit dates include both calendar days.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Period {
@@ -21,6 +56,17 @@ pub enum Period {
     Month,
     LastMonth,
     Dates(NaiveDate, NaiveDate),
+}
+
+impl Period {
+    /// Whether the period can cover more than one calendar day, so a split by days says something.
+    pub fn spans_days(&self) -> bool {
+        match self {
+            Self::Hour | Self::Today | Self::Yesterday => false,
+            Self::Month | Self::LastMonth => true,
+            Self::Dates(from, to) => from != to,
+        }
+    }
 }
 
 /// One read-only report view, independent of a chat's previous navigation.
@@ -35,6 +81,12 @@ pub struct ReportRequest {
     pub window: Option<(i64, i64)>,
     /// Inline exchange list is expanded; a missing or unknown flag stays collapsed.
     pub exchanges_open: bool,
+    /// The chat did not pick a view (a period button or command): the bot's own default view
+    /// applies ([`Self::resolve_view`]). Never encoded in a callback — a callback names its view.
+    pub follow_view: bool,
+    /// The timestamp the period applies to, once a report has been read on it: its paging and view
+    /// buttons keep it, so an old message never mixes bases. `None` reads on the bot's basis now.
+    pub basis: Option<ReportBasis>,
 }
 
 impl ReportRequest {
@@ -48,6 +100,39 @@ impl ReportRequest {
             page: 0,
             window: None,
             exchanges_open: false,
+            follow_view: false,
+            basis: None,
+        }
+    }
+
+    /// The first page of a preset whose view the chat did not pick: a period button or command.
+    pub fn preset(period: Period) -> Self {
+        Self {
+            follow_view: true,
+            ..Self::new(period, false)
+        }
+    }
+
+    /// This request in `view`. A single day has nothing to split by days: it opens by exchanges, as
+    /// the report's own buttons never offer days for today.
+    pub fn in_view(mut self, view: crate::config::telegram_menu::ReportView) -> Self {
+        use crate::config::telegram_menu::ReportView;
+        let view = match view {
+            ReportView::Days if !self.period.spans_days() => ReportView::Exchanges,
+            other => other,
+        };
+        self.daily = view == ReportView::Days;
+        self.by_exchange = view == ReportView::Exchanges;
+        self.follow_view = false;
+        self
+    }
+
+    /// This request in `view` when the chat did not pick one; otherwise unchanged.
+    pub fn resolve_view(self, view: crate::config::telegram_menu::ReportView) -> Self {
+        if self.follow_view {
+            self.in_view(view)
+        } else {
+            self
         }
     }
 
@@ -74,7 +159,12 @@ impl ReportRequest {
             ReportScope::Venue(id) => format!("{:x}.{:x}", id.code, id.dex),
         };
         let open = if self.exchanges_open { "k" } else { "" };
-        let mut encoded = format!("r:{view}{scope}{open}:{period}:{}", self.page);
+        let basis = match self.basis {
+            None => "",
+            Some(ReportBasis::Close) => "z",
+            Some(ReportBasis::Open) => "o",
+        };
+        let mut encoded = format!("r:{view}{scope}{open}{basis}:{period}:{}", self.page);
         if let Some((from, to)) = self.window {
             encoded.push_str(&format!(":x{from:x},{to:x}"));
         }
@@ -95,6 +185,12 @@ impl ReportRequest {
             "d" => true,
             "c" | "e" => false,
             _ => return None,
+        };
+        // A trailing `o`/`z` is the basis the report was read on (none: the bot's basis now).
+        let (rest, basis) = match (rest.strip_suffix('o'), rest.strip_suffix('z')) {
+            (Some(stripped), _) => (stripped, Some(ReportBasis::Open)),
+            (_, Some(stripped)) => (stripped, Some(ReportBasis::Close)),
+            _ => (rest, None),
         };
         // A trailing `k` is the expanded exchange list; any other suffix stays collapsed.
         let (scope_src, exchanges_open) = match rest.strip_suffix('k') {
@@ -151,6 +247,8 @@ impl ReportRequest {
             page,
             window,
             exchanges_open,
+            follow_view: false,
+            basis,
         })
     }
 
@@ -158,10 +256,15 @@ impl ReportRequest {
     pub fn dates(a: &str, b: &str) -> Option<Self> {
         let from = NaiveDate::parse_from_str(a, "%Y-%m-%d").ok()?;
         let to = NaiveDate::parse_from_str(b, "%Y-%m-%d").ok()?;
-        if from.year() < 1970 || !(0..366).contains(&(to - from).num_days()) {
+        Self::span(from, to)
+    }
+
+    /// A custom period whose view the chat did not pick, within the same limits as [`Self::dates`].
+    pub fn span(from: NaiveDate, to: NaiveDate) -> Option<Self> {
+        if from.year() < 1970 || !(0..MAX_SPAN_DAYS).contains(&(to - from).num_days()) {
             return None;
         }
-        Some(Self::new(Period::Dates(from, to), false))
+        Some(Self::preset(Period::Dates(from, to)))
     }
 
     /// Resolve inclusive UTC bounds through the terminal's DST-aware calendar helpers.

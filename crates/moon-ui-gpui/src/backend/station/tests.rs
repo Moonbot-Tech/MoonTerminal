@@ -44,6 +44,7 @@ fn telegram_handover_erases_bot_identity_and_preserves_mini_app_choice() {
             core_uids: vec![9],
         }],
         mini_app_enabled: true,
+        ..TelegramConfig::default()
     };
     super::forget_bot(&mut config);
     assert!(config.token.is_empty());
