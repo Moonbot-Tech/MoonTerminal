@@ -398,6 +398,7 @@ impl TgHost for StationHost<'_> {
         self.tg.zone
     }
 
+    /// Return the station's notification file beside its pairing state without creating it.
     fn notifications_path(&self) -> PathBuf {
         self.tg.data_root.join(NOTIFY_FILE)
     }

@@ -46,6 +46,7 @@ impl TgHost for GuiTgHost<'_, '_> {
         moon_core::util::display_time::zone_or_utc(self.backend.header_clock_zone())
     }
 
+    /// Return the terminal's notification file path without creating it.
     fn notifications_path(&self) -> std::path::PathBuf {
         moon_core::config::paths::telegram_notifications()
     }

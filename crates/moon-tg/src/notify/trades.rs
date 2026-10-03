@@ -20,9 +20,9 @@ pub(crate) struct ClosedTrade {
     pub core_name: String,
     /// Strategy name stored on the row.
     pub strategy: String,
-    /// Entry notional in USD, absent when the row has no usable volume.
+    /// Entry notional in USDT for the USD-named rule threshold; absent when unusable.
     pub volume_usd: Option<f64>,
-    /// Realised profit in USD, absent when the row is unvalued.
+    /// Report-valued profit in USDT for the USD-named rule thresholds; absent when unvalued.
     pub profit_usd: Option<f64>,
     /// Profit percent already scaled by 100, absent when unvalued.
     pub profit_pct: Option<f64>,

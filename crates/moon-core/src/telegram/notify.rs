@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 /// Which cores a trade notification applies to.
 ///
-/// `All` is every core the chat is allowed to see. The intersection with that
-/// grant happens at send time. `Only` is an explicit list and must be non-empty.
+/// `All` is every core the chat is allowed to see. Decisions use that grant,
+/// and the sender rechecks each queued row's disclosure before sending.
+/// `Only` is an explicit list and must be non-empty.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "ids", rename_all = "snake_case")]
 pub enum CoreScope {
@@ -58,6 +59,7 @@ pub struct DownRule {
 }
 
 impl Default for DownRule {
+    /// Keep outage notices off and use a five-minute delay when settings are absent.
     fn default() -> Self {
         Self {
             on: false,
@@ -80,7 +82,7 @@ const fn default_daily_minute() -> u8 {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default)]
 pub struct DailyRule {
-    /// Send the summary on the chat's local calendar day.
+    /// Queue the summary for the calendar day in the host's report zone.
     pub on: bool,
     /// Hour in `0..24`.
     #[serde(default = "default_daily_hour")]
@@ -91,6 +93,7 @@ pub struct DailyRule {
 }
 
 impl Default for DailyRule {
+    /// Keep summaries off and use 21:00 in the host's report zone when settings are absent.
     fn default() -> Self {
         Self {
             on: false,
@@ -178,6 +181,7 @@ pub enum NotifyError {
 }
 
 impl std::fmt::Display for NotifyError {
+    /// Write the rejected rule and value as a diagnostic, propagating formatter errors.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             NotifyError::Threshold { field, value } => write!(
@@ -248,6 +252,7 @@ pub struct Pending {
 mod cores_opt {
     use serde::{Deserialize, Deserializer};
 
+    /// Read an explicit core array as `Some`; reject null and non-array values.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u64>>, D::Error>
     where
         D: Deserializer<'de>,
@@ -263,6 +268,7 @@ mod naive_date_opt {
 
     const FORMAT: &str = "%Y-%m-%d";
 
+    /// Serialize a present date as `YYYY-MM-DD`, or an absent date as null.
     pub fn serialize<S>(value: &Option<NaiveDate>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -273,6 +279,7 @@ mod naive_date_opt {
         }
     }
 
+    /// Read null or a `YYYY-MM-DD` string, returning a serde error for invalid dates.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDate>, D::Error>
     where
         D: Deserializer<'de>,
@@ -293,13 +300,13 @@ mod naive_date_opt {
 pub struct NotifyLedger {
     /// Unix seconds when the trade rule was switched on. Absent until a caller records it.
     pub trades_enabled_utc: Option<i64>,
-    /// Announced closes: core id, then record id, then close time in Unix seconds.
+    /// Considered closes, including filter-suppressed rows: core, record id, then UTC seconds.
     ///
     /// JSON object keys are decimal strings. A tuple key is not used because it is not a JSON object key.
     pub seen: BTreeMap<u64, BTreeMap<i64, i64>>,
-    /// Cores that already received a down notice and have not been announced back.
+    /// Cores whose down notice was queued and whose back notice has not been queued.
     pub down_announced: BTreeSet<u64>,
-    /// Local calendar date of the last daily summary.
+    /// Host-local date last queued or suppressed when daily settings were enabled or moved.
     #[serde(default, with = "naive_date_opt")]
     pub daily_last: Option<NaiveDate>,
 }
@@ -323,7 +330,7 @@ impl NotifyLedger {
 pub struct ChatNotify {
     /// What this chat asked to be told.
     pub settings: NotifySettings,
-    /// What has already been announced.
+    /// Decisions already recorded, independently of Telegram delivery acknowledgements.
     pub ledger: NotifyLedger,
     /// Caller-owned counter stored with the chat. This module does not increment it.
     pub revision: u64,

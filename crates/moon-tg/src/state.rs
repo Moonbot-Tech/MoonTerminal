@@ -34,7 +34,7 @@ pub struct TelegramState {
     pub(crate) mini_trades_pending: bool,
     /// At most one closed-trade and daily notification read is in flight.
     pub(crate) notify_busy: bool,
-    /// Report revision captured when the last notification read finished saving.
+    /// Report revision captured at spawn and retained after that notification read saved.
     ///
     /// `None` is a host that cannot name a revision, the value after a service restart, and the
     /// value after a read that did not save. A later tick spawns again only when this differs

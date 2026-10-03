@@ -74,8 +74,8 @@ pub fn reset_pairing(host: &mut dyn TgHost) {
 
 /// Drain bounded transport work on the owner loop (the terminal's 100 ms tick).
 ///
-/// Notification decisions also run when the service is absent, so a host with a store and no
-/// live poller still enqueues.
+/// The notification tick also runs without a service. Production then has no store and returns;
+/// a test store override can still exercise enqueue decisions without a live poller.
 pub fn tick(host: &mut dyn TgHost) {
     if host
         .state()

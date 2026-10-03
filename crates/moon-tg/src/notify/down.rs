@@ -71,7 +71,7 @@ impl DownTracker {
     ///
     /// Args:
     ///     rule: Down/back rule. `after_minutes` is the debounce.
-    ///     ledger: Persisted set of cores whose down notice was sent.
+    ///     ledger: Cores whose down decision was recorded; the caller saves it with the outbox.
     ///     links: Core id and link state observed now. A core absent from this
     ///         slice loses its timer and its `down_announced` entry. No back
     ///         notice is sent for it.
@@ -110,7 +110,7 @@ impl DownTracker {
     /// new timer instead of continuing the outage it left with.
     ///
     /// Args:
-    ///     ledger: Persisted set of cores whose down notice was sent.
+    ///     ledger: Cores whose down decision was recorded; no delivery ack is read here.
     ///     links: Cores observed now. Any other core id is forgotten.
     fn forget_absent(&mut self, ledger: &mut NotifyLedger, links: &[(u64, Link)]) {
         let present: BTreeSet<u64> = links.iter().map(|(core, _)| *core).collect();

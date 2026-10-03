@@ -1149,7 +1149,7 @@ fn messages_for(
 ///
 /// `decide` runs even when the trade rule is off, which clears `seen`.
 /// A matching day sets `daily_last` even when the day has no visible row.
-/// A stale day leaves the ledger and sends nothing.
+/// A stale day leaves `daily_last` unchanged and omits the summary; trade cards still apply.
 ///
 /// Args:
 ///     entry: Chat settings and ledger, edited in place.

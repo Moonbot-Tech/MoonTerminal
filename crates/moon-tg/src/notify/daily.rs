@@ -35,12 +35,12 @@ pub(crate) struct DaySummary {
 ///     now_utc: Current UTC Unix seconds.
 ///     zone: The host report zone (`TgHost::report_zone`).
 ///     rule: Daily summary rule.
-///     last: Local date of the last summary, if one was sent.
+///     last: Host-local date last queued, or suppressed after its clock passed at a settings edit.
 ///
 /// Returns:
 ///     Today's local date when the rule is on, the local clock has passed, and
 ///     `last` is not already today. `None` before the clock, when the rule is
-///     off, when today was already sent, or when `now_utc` is outside chrono's
+///     off, when today was already recorded, or when `now_utc` is outside chrono's
 ///     range. An hour or minute chrono cannot represent is also `None`.
 pub(crate) fn due(
     now_utc: i64,

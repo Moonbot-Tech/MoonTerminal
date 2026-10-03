@@ -661,9 +661,11 @@ const NOTIFY_READ_PAGE: usize = 32;
 /// Largest page before an equal-timestamp stampede steps the window back one second.
 const NOTIFY_READ_PAGE_CAP: usize = 1_048_576;
 
-/// Every closed trade with `close_utc >= from_utc`, paged until the replica is exhausted.
+/// Read closed trades with `close_utc >= from_utc`, paging each replica core separately.
 ///
-/// There is no UI cap. A window that crosses a core clock-offset change can admit or drop a
+/// There is no UI row limit. At [`NOTIFY_READ_PAGE_CAP`], a saturated equal-timestamp page
+/// steps back one second and can omit additional rows at that timestamp.
+/// A window that crosses a core clock-offset change can admit or drop a
 /// trade within one offset of the edge, because the SQL bound uses each core's offset at now.
 ///
 /// Args:
@@ -962,7 +964,8 @@ fn map_closed_row(
     })
 }
 
-/// Entry notional in USD. Any non-finite or non-positive input or product is `None`.
+/// Entry notional in USDT using the Report-gated rate; any missing, non-finite, or non-positive
+/// input or product is `None`. The notification rule's USD-named thresholds use this amount.
 fn entry_volume_usd(bought: Option<f64>, price: Option<f64>, rate: Option<f64>) -> Option<f64> {
     let bought = bought.filter(|value| value.is_finite() && *value > 0.0)?;
     let price = price.filter(|value| value.is_finite() && *value > 0.0)?;

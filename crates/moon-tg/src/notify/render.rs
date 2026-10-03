@@ -1,8 +1,8 @@
 //! Telegram HTML for one notification: a closed-trade card, a down or back
 //! line, and the daily summary.
 //!
-//! Names are cut to 64 chars before [`crate::html::escape`], so the outbox's
-//! 4096-unit cut never has to split a tag inside one of these messages.
+//! Names are cut to 64 chars before [`crate::html::escape`]. The outbox refuses
+//! oversized bodies rather than cutting HTML inside a tag or entity.
 
 use chrono::NaiveDate;
 use chrono_tz::Tz;

@@ -26,7 +26,7 @@ const CHAT_GAP_GROUP: Duration = Duration::from_secs(3);
 const CHAT_BACKOFF_START: Duration = Duration::from_secs(5);
 /// Longest extra wait after repeated retryable failures for one chat.
 const CHAT_BACKOFF_CAP: Duration = Duration::from_secs(600);
-/// Sends that may start inside one rolling second, across every chat.
+/// Successful sends recorded inside one rolling second, across every chat.
 const GLOBAL_PER_SECOND: usize = 25;
 /// Width of the global send window.
 const GLOBAL_WINDOW: Duration = Duration::from_secs(1);
@@ -43,7 +43,7 @@ const WAIT_SLICE: Duration = Duration::from_millis(500);
 pub struct NotifyStore {
     /// On-disk document. Missing until the first successful save.
     pub path: PathBuf,
-    /// Settings, ledger and outbox. Outbox order is send order.
+    /// Settings, ledger and outbox. Rows retain FIFO order within each chat.
     pub file: NotifyFile,
     /// Who may receive a queued row. `None` until the owner thread publishes.
     ///
@@ -57,7 +57,7 @@ impl NotifyStore {
     /// Load `path`. A missing file is an empty document and is not created.
     ///
     /// Args:
-    ///     path: Notifications file. Its parent must exist before the first save.
+    ///     path: Notifications file. The atomic writer creates its parent on the first save.
     ///
     /// Returns:
     ///     A store whose outbox is the file order.
@@ -274,8 +274,9 @@ pub fn cores_kept(cores: &Option<Vec<u64>>, visible: &BTreeSet<u64>, keep_unknow
 
 /// Drop outbox rows `keep` rejects, and save only when at least one would go.
 ///
-/// The decision walks the outbox in place and does not clone the document.
-/// `keep` may run again inside the save, so it must not depend on earlier calls.
+/// The initial scan borrows the current outbox. When a row would go, [`NotifyStore::update`]
+/// filters a clone and saves it before replacing the document. `keep` runs again on that
+/// clone, so it must not depend on earlier calls.
 ///
 /// Args:
 ///     store: Notifications file.

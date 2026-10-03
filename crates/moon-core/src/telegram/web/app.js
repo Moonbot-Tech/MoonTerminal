@@ -49,7 +49,7 @@
     var cmdTimer = null;
     var period = "today";
     var current = null;
-    // Every money figure starts masked; one eye toggle on the Cores total reveals them
+    // Cores balance and profit figures start masked; one eye toggle reveals them
     // together. Kept for the popup's life like a toggled group, never persisted.
     var balanceRevealed = false;
     var BALANCE_MASK = "******";
@@ -414,6 +414,7 @@
         return settingsSaving || settingsIsDirty();
     }
 
+    /** Schedule the next read for `name` and `token`; Settings relies on explicit reloads. */
     function schedulePoll(name, token) {
         clearPoll();
         // A timer would replace a future Settings draft. settingsBusy is the second guard.
@@ -427,6 +428,7 @@
         }, name === "report" || name === "trades" ? REPORT_POLL_MS : POLL_MS);
     }
 
+    /** Return the read endpoint for `name`, including notification settings. */
     function pathFor(name) {
         if (name === "report") return "/api/report";
         if (name === "cores") return "/api/cores";
@@ -611,6 +613,7 @@
         return wrap;
     }
 
+    /** Return the Cores response's exchange total for `name`, or null when absent. */
     function exchangeBalance(name) {
         var data = payloads.cores || {};
         var rows = Array.isArray(data.per_exchange) ? data.per_exchange : [];
@@ -743,6 +746,7 @@
         return any ? box : null;
     }
 
+    /** Build a navigable `core` row with its balance and a separate coin-list toggle. */
     function coreRow(core) {
         var row = el("div", "row core-row");
         row.setAttribute("role", "button");
@@ -812,6 +816,7 @@
         return row;
     }
 
+    /** Return the non-empty names in `coins` as the coin-toggle's accessible label. */
     function coinNames(coins) {
         var names = [];
         var i;
@@ -821,6 +826,7 @@
         return names.join(", ");
     }
 
+    /** Return `core`'s row and its coin list when this popup has that list expanded. */
     function coreBlock(core) {
         var coins = Array.isArray(core.coins) ? core.coins : [];
         if (!coinsOpen[core.id] || !coins.length) return coreRow(core);
@@ -830,6 +836,7 @@
         return block;
     }
 
+    /** Build the `coins` list using the core's `figure` to mark stale holdings. */
     function coinList(coins, figure) {
         var list = el("div", "coin-list");
         var i;
@@ -837,6 +844,7 @@
         return list;
     }
 
+    /** Render `row`'s quantity and masked value, preserving unpriced and stale states. */
     function coinLine(row, figure) {
         var unpriced = !row || row.value == null;
         var classes = "coin-row";
@@ -1275,6 +1283,7 @@
         return card;
     }
 
+    /** Repaint the core list or open detail, retaining scroll and requesting today's profit. */
     function paintCores() {
         var host = sections.cores;
         var y = window.pageYOffset || 0;
@@ -1333,6 +1342,7 @@
         restoreScroll(y);
     }
 
+    /** Return the Cores total from `data`, trust badges, and any cached profit line. */
     function coresHero(data) {
         var hero = el("div", "card hero");
         var head = el("div", "hero-head");
@@ -1383,6 +1393,7 @@
         return hero;
     }
 
+    /** Invalidate old profit callbacks and clear the line before an explicit Cores refresh. */
     function resetCoresToday() {
         coresTodayGen += 1;
         coresTodayFlight = false;
@@ -1391,6 +1402,7 @@
         coresToday = { phase: "idle", line: null, at: 0 };
     }
 
+    /** Return `res`'s formatted report total, or null on failure or any unknown order. */
     function todayLine(res) {
         if (!res.ok || !res.data || !res.data.total) return null;
         var total = res.data.total;
@@ -1399,14 +1411,15 @@
         return { text: total.text, usdt: total.usdt };
     }
 
-    // One report read for today's profit. A cancel leaves no line. A completed read is kept
-    // until it is older than REPORT_POLL_MS. The Cores poll and selecting the Cores tab both
-    // call this. Do not start another read from the cancel callback: selectTab cancels before
-    // it changes the current tab, and a replacement read would outlive the switch.
+    /** Return whether a completed profit fetch is younger than REPORT_POLL_MS. */
     function coresTodayFresh() {
         return coresToday.phase === "ready" && Date.now() - coresToday.at < REPORT_POLL_MS;
     }
 
+    // One report read for today's profit. A cancel leaves no line. A completed read is kept
+    // until it is older than REPORT_POLL_MS. The Cores poll and selecting the Cores tab both
+    // call this. Do not start another read from the cancel callback: selectTab cancels before
+    // it changes the current tab, and a replacement read would outlive the switch.
     function ensureCoresToday() {
         if (coresTodayFlight || coresTodayFresh()) return;
         coresTodayFlight = true;
@@ -1921,17 +1934,20 @@
     var settingsCores = [];
     var settingsZone = "";
 
+    /** Return whether the current form differs from its last adopted settings baseline. */
     function settingsIsDirty() {
         if (!settingsForm || !settingsBaseSnap) return false;
         return settingsSnap(settingsForm) !== settingsBaseSnap;
     }
 
+    /** Return a numerically sorted copy of `ids`, leaving the draft array untouched. */
     function settingsSortedIds(ids) {
         var copy = ids.slice();
         copy.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
         return copy;
     }
 
+    /** Parse unsigned decimal `text`, accepting a comma separator; return null on invalid input. */
     function settingsFinite(text) {
         var raw = String(text == null ? "" : text).trim().replace(/,/g, ".");
         if (!/^\d+(\.\d+)?$/.test(raw)) return null;
@@ -1940,16 +1956,19 @@
         return n;
     }
 
+    /** Return whether `text` denotes a finite non-negative threshold. */
     function settingsAmountOk(text) {
         var n = settingsFinite(text);
         return n != null && n >= 0;
     }
 
+    /** Normalize valid threshold `text` for draft comparison, retaining invalid text trimmed. */
     function settingsAmountCanon(text) {
         if (!settingsAmountOk(text)) return String(text == null ? "" : text).trim();
         return String(settingsFinite(text));
     }
 
+    /** Return whether `text` is an integer delay from 1 through 1440 minutes. */
     function settingsMinutesOk(text) {
         var raw = String(text == null ? "" : text).trim();
         if (!/^\d+$/.test(raw)) return false;
@@ -1957,12 +1976,13 @@
         return n >= 1 && n <= 1440;
     }
 
+    /** Normalize valid delay `text` for draft comparison, retaining invalid text trimmed. */
     function settingsMinutesCanon(text) {
         if (!settingsMinutesOk(text)) return String(text == null ? "" : text).trim();
         return String(Number(String(text).trim()));
     }
 
-    // HH:MM, or HH:MM:00 from a time input. Anything else is rejected before save.
+    // Parse HH:MM or HH:MM:00 into hour and minute; return null for any other clock text.
     function settingsParseTime(text) {
         var raw = String(text == null ? "" : text).trim();
         var parts = raw.split(":");
@@ -1975,12 +1995,14 @@
         return { hour: hour, minute: minute };
     }
 
+    /** Normalize valid time `text` to HH:MM, retaining invalid text trimmed. */
     function settingsTimeCanon(text) {
         var parsed = settingsParseTime(text);
         if (!parsed) return String(text == null ? "" : text).trim();
         return twoDigits(parsed.hour) + ":" + twoDigits(parsed.minute);
     }
 
+    /** Serialize `form`'s normalized rules for comparison, ignoring disabled threshold text. */
     function settingsSnap(form) {
         var ids = form.scopeKind === "only" ? settingsSortedIds(form.scopeIds) : [];
         return JSON.stringify({
@@ -1997,6 +2019,7 @@
         });
     }
 
+    /** Validate `form`'s enabled thresholds, scope, delay, and clock before allowing Save. */
     function settingsFormValid(form) {
         if (!form) return false;
         if (form.volumeOn && !settingsAmountOk(form.volumeText)) return false;
@@ -2008,6 +2031,7 @@
         return true;
     }
 
+    /** Return the wire rules for a valid `form`; disabled thresholds become null. */
     function settingsPayload(form) {
         var time = settingsParseTime(form.timeText);
         var cores = form.scopeKind === "only"
@@ -2033,14 +2057,14 @@
         };
     }
 
-    // A revision past 2^53 is not an exact JS integer, so it cannot round-trip.
+    // Return a non-negative safe-integer revision, or 0 when it cannot round-trip exactly.
     function settingsRevisionOf(data) {
         var value = data && data.revision;
         if (typeof value !== "number" || value !== value || value < 0 || value > 9007199254740991 || Math.floor(value) !== value) return 0;
         return value;
     }
 
-    // Take the server settings as the draft and the baseline. Display cores and zone too.
+    // Adopt server settings, cores, zone and revision as the draft baseline; false leaves it unchanged.
     function settingsAdopt(data) {
         var settings = data && data.settings;
         var trades = settings && settings.trades;
@@ -2086,6 +2110,7 @@
         return true;
     }
 
+    /** Cancel the saved-status timer and clear completed feedback when the draft changes. */
     function settingsTouch() {
         if (settingsSavedTimer) {
             clearTimeout(settingsSavedTimer);
@@ -2097,6 +2122,7 @@
         }
     }
 
+    /** Hide saved feedback after two seconds unless a later edit changed its phase. */
     function settingsArmSaved() {
         if (settingsSavedTimer) clearTimeout(settingsSavedTimer);
         settingsSavedTimer = setTimeout(function () {
@@ -2107,6 +2133,7 @@
         }, 2000);
     }
 
+    /** Return whether `id` occurs in the latest server-provided visible core list. */
     function settingsKnownCore(id) {
         var i;
         for (i = 0; i < settingsCores.length; i++) {
@@ -2115,6 +2142,7 @@
         return false;
     }
 
+    /** Return whether any selected `ids` occur in the visible core list. */
     function settingsHasVisible(ids) {
         var i;
         for (i = 0; i < ids.length; i++) {
@@ -2123,6 +2151,7 @@
         return false;
     }
 
+    /** Return whether `ids` retain any selection absent from the visible core list. */
     function settingsHasUnknown(ids) {
         var i;
         for (i = 0; i < ids.length; i++) {
@@ -2131,6 +2160,7 @@
         return false;
     }
 
+    /** Rebuild the Settings cards from the retained draft, restoring the page scroll. */
     function settingsRender() {
         var host = sections.settings;
         if (!host || !settingsForm) return;
@@ -2144,12 +2174,14 @@
         restoreScroll(y);
     }
 
+    /** Clear old feedback, give selection feedback, and repaint after a draft toggle. */
     function settingsToggleDone() {
         settingsTouch();
         hapticSelection();
         settingsRender();
     }
 
+    /** Return a labelled `on`/off toggle that calls `onClick` only while editing is allowed. */
     function settingsSwitch(on, label, disabled, attr, onClick) {
         var pill = button("pill " + (on ? "on" : "off"), on ? "ON" : "OFF", function () {
             if (pill.disabled || settingsSaving) return;
@@ -2162,6 +2194,7 @@
         return pill;
     }
 
+    /** Return a labelled text input; edits call `assign` and update validation without rebuilding it. */
     function settingsTextInput(attr, value, disabled, invalid, label, mode, assign) {
         var input = document.createElement("input");
         input.type = "text";
@@ -2173,6 +2206,7 @@
         input.setAttribute("aria-label", label);
         input.setAttribute("aria-invalid", invalid ? "true" : "false");
         input.setAttribute("data-settings", attr);
+        /** Copy this input's value into the draft unless a save is in flight. */
         function apply() {
             if (settingsSaving || !settingsForm) return;
             assign(input.value);
@@ -2184,6 +2218,7 @@
         return input;
     }
 
+    /** Return a minute-resolution time input initialized from `value` and bound to the draft. */
     function settingsTimeInput(value, disabled, invalid) {
         var input = document.createElement("input");
         input.type = "time";
@@ -2194,6 +2229,7 @@
         input.setAttribute("aria-label", tr("mini_settings_time"));
         input.setAttribute("aria-invalid", invalid ? "true" : "false");
         input.setAttribute("data-settings", "time");
+        /** Copy this input's clock into the draft unless a save is in flight. */
         function apply() {
             if (settingsSaving || !settingsForm) return;
             settingsForm.timeText = input.value;
@@ -2205,6 +2241,7 @@
         return input;
     }
 
+    /** Update `node`'s visual and accessible invalid state, ignoring an absent node. */
     function settingsMarkField(node, invalid) {
         if (!node) return;
         if (invalid) node.classList.add("invalid");
@@ -2212,6 +2249,7 @@
         node.setAttribute("aria-invalid", invalid ? "true" : "false");
     }
 
+    /** Refresh field errors, Save availability, and feedback while retaining input focus. */
     function settingsSyncChrome() {
         var host = sections.settings;
         if (!host || !settingsForm) return;
@@ -2240,12 +2278,14 @@
         }
     }
 
+    /** Return the localized note explaining the notification defaults. */
     function settingsNote() {
         var note = el("p", "settings-note", tr("mini_settings_off_note"));
         note.setAttribute("data-settings-note", "");
         return note;
     }
 
+    /** Return a card for `kind` whose localized header toggles draft field `onField`. */
     function settingsCard(kind, titleKey, onField) {
         var card = el("div", "card settings-card");
         card.setAttribute("data-settings-card", kind);
@@ -2259,10 +2299,12 @@
         return card;
     }
 
+    /** Return an options container with the inactive visual state when `on` is false. */
     function settingsOptions(on) {
         return el("div", "settings-options" + (on ? "" : " is-off"));
     }
 
+    /** Return a labelled chip for `core` that reflects and toggles its draft selection. */
     function settingsCoreChip(core, disabled) {
         var id = core.id;
         var selected = settingsForm.scopeKind === "only" && settingsForm.scopeIds.indexOf(id) >= 0;
@@ -2276,6 +2318,7 @@
         return chip;
     }
 
+    /** Toggle `id` in the explicit scope; removing its last id restores the All scope. */
     function settingsToggleCore(id) {
         if (settingsSaving || !settingsForm) return;
         var form = settingsForm;
@@ -2298,6 +2341,7 @@
         settingsToggleDone();
     }
 
+    /** Return a labelled threshold toggle and input bound to `onField` and `textField`. */
     function settingsThresholdRow(labelKey, switchAttr, inputAttr, onField, textField, cardOn) {
         var on = !!settingsForm[onField];
         var text = settingsForm[textField];
@@ -2320,6 +2364,7 @@
         return row;
     }
 
+    /** Return the trade card with core selection, optional thresholds, and the no-filter hint. */
     function settingsTradesCard() {
         var card = settingsCard("trades", "mini_settings_trades", "tradesOn");
         var options = settingsOptions(settingsForm.tradesOn);
@@ -2351,6 +2396,7 @@
         return card;
     }
 
+    /** Return the outage card with its retained delay and save-time validation state. */
     function settingsDownCard() {
         var card = settingsCard("down", "mini_settings_down", "downOn");
         var options = settingsOptions(settingsForm.downOn);
@@ -2371,6 +2417,7 @@
         return card;
     }
 
+    /** Return the daily card with a minute-resolution clock and the host's report zone. */
     function settingsDailyCard() {
         var card = settingsCard("daily", "mini_settings_daily", "dailyOn");
         var options = settingsOptions(settingsForm.dailyOn);
@@ -2384,6 +2431,7 @@
         return card;
     }
 
+    /** Return the decorative SVG used while a settings save is in flight. */
     function settingsSpinner() {
         var icon = svgEl("svg");
         icon.setAttribute("viewBox", "0 0 24 24");
@@ -2401,6 +2449,7 @@
         return icon;
     }
 
+    /** Return Save and its status line, reflecting draft validity, dirtiness, and save progress. */
     function settingsSaveBlock() {
         var wrap = el("div", "settings-save-wrap");
         var btn = button("action-btn settings-save", tr("mini_settings_save"), settingsSave);
@@ -2427,6 +2476,7 @@
         return wrap;
     }
 
+    /** Submit a valid changed draft with its revision, retaining the request across tab switches. */
     function settingsSave() {
         if (settingsSaving || !settingsForm) return;
         if (!settingsFormValid(settingsForm) || !settingsIsDirty()) return;
@@ -2492,6 +2542,7 @@
         }
     }
 
+    /** Adopt loaded settings only for a clean idle form, then render the retained draft. */
     function paintSettings() {
         var host = sections.settings;
         if (!host) return;
@@ -2584,6 +2635,7 @@
         refreshButton.disabled = !!on;
     }
 
+    /** Refresh the active tab, protecting Settings edits and invalidating the Cores profit cache. */
     function refreshCurrent() {
         if (!current || inFlight[current]) return;
         if (current === "settings" && settingsBusy()) return;
@@ -2593,6 +2645,7 @@
         reloadPane(current, !!hasData[current]);
     }
 
+    /** Read `name` for the current `token`, preserving good background data and Settings edits. */
     function loadTab(name, token, silent) {
         if (name !== current || token !== loadToken) return;
         if (name === "settings" && settingsBusy()) return;
@@ -2646,6 +2699,7 @@
         loadTab(name, loadToken, silent);
     }
 
+    /** Show `name`, cancel disposable reads, and request its data plus Cores profit when needed. */
     function selectTab(name) {
         if (!sections[name] || name === current) return;
         if (current) hapticSelection();
@@ -2677,6 +2731,7 @@
         if (name === "cores") ensureCoresToday();
     }
 
+    /** Resume visible-tab reads and age updates while preserving a dirty or saving Settings form. */
     function onVisible() {
         if (!sessionOk || !current) return;
         if (document.visibilityState !== "visible") {
@@ -2837,6 +2892,7 @@
         if (kind === "success" || kind === "error") feedback.notificationOccurred(kind);
     }
 
+    /** Return whether a Cores, Orders, or Strategies exchange/core group is expanded. */
     function anyGroupOpen() {
         var panes = ["cores", "orders", "strategies"];
         var p;
@@ -2850,6 +2906,7 @@
         return false;
     }
 
+    /** Collapse open Cores, Orders, and Strategies groups and retain that popup-local choice. */
     function collapseOpenGroups() {
         var panes = ["cores", "orders", "strategies"];
         var p;

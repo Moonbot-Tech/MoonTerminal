@@ -98,7 +98,7 @@ pub struct CoreStatusDto {
     /// This core's free and total. Always present. A core the store has not seen is awaiting,
     /// with empty figure text.
     pub balance: CoreBalanceFigureDto,
-    /// Held coins above the min lot. Empty when the core has no such rows.
+    /// Coin holdings after priced-dust filtering; unpriced holdings are retained.
     pub coins: Vec<CoinBalanceDto>,
 }
 
@@ -202,7 +202,7 @@ pub struct OrderDto {
     pub coin: String,
     pub market: String,
     pub side: String,
-    /// Entry notional in the market quote; absent when the entry inputs are unavailable.
+    /// Entry notional in the market quote; absent for unusable inputs or an unknown quote.
     pub volume_text: Option<String>,
     pub entry_text: Option<String>,
     pub mark_text: Option<String>,
@@ -340,7 +340,7 @@ pub enum CommandErrorDto {
 /// One core the chat may include in a notification rule.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct NotifyCoreDto {
-    /// Core id. Small enough to stay a JSON number.
+    /// Saved core id, serialized as a JSON number like the Cores list's ids.
     pub id: u64,
     /// Display name.
     pub name: String,
