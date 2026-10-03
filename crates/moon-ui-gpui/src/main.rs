@@ -81,7 +81,7 @@ use moon_core::config::{AppConfig, WindowLayout};
 use moon_core::metrics::{MetricsSampler, MetricsSnapshot};
 use moon_core::session::{CoreId, SessionManager};
 
-// Localization: load the root `locales/*.yml` files relative to this crate's manifest.
+// Localization: load `locales/<lang>/*.yml` relative to this crate's manifest.
 // `t!("key")` reads a string from that set; `rust_i18n::set_locale` selects the global locale
 // shared with MoonUI. Fall back to English when the selected locale has no matching key.
 rust_i18n::i18n!("../../locales", fallback = "en");

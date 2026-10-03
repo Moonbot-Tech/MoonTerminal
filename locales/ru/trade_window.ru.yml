@@ -1,0 +1,145 @@
+_version: 1
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open: "Открыть окно сделки"
+
+trade_window.blocked.unresolved: "Окно сделки недоступно — ядро не подключено"
+
+trade_window.retry: "Повторить"
+
+trade_window.other_trades: "Другие сделки"
+
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip: "Вид окна сделки"
+
+trade_window.settings.title: "Вид окна сделки"
+
+trade_window.settings.frame_trades: "Сделки"
+
+trade_window.settings.fit: "Вписать сделку в окно"
+
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels: "Надписи сделки на чарте"
+
+trade_window.settings.hide_rail: "Скрыть правую панель"
+
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone: "Зона MoonShot"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks: "Подгружать тики"
+
+trade_window.source.candles_ticks_disabled: "свечи %{min} мин — тики выключены в настройках окна"
+
+trade_window.state.loading: "Загружаю рынок вокруг сделки…"
+
+trade_window.state.failed: "Не удалось получить данные с биржи. Можно повторить."
+
+trade_window.state.rate_limited: "Биржа ограничила запросы. Повтор через %{secs} с."
+
+trade_window.state.unknown_symbol: "Биржа не знает такого рынка."
+
+trade_window.source.ticks: "тики с биржи"
+
+trade_window.source.core_ticks: "тики с ядра"
+
+trade_window.source.loading_more: "загрузка продолжается"
+
+trade_window.source.context_unavailable: "свечной контекст недоступен"
+
+trade_window.source.awaiting_core: "свечи %{min} мин, проверяем архив ядра"
+
+trade_window.source.core_ticks_bucketed: "тики с ядра, шаг %{secs} с"
+
+trade_window.source.ticks_bucketed: "тики с биржи, шаг %{secs} с"
+
+# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
+# словаре не хранится.
+trade_window.source.ticks_edges: "края закрыты свечами %{min} мин"
+
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends: "тики у входа и выхода, между ними свечи %{min} мин"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending: "свечи %{min} мин, тики ещё грузятся"
+
+trade_window.source.candles_no_route: "свечи %{min} мин — у %{brand} нет тиков"
+
+trade_window.source.candles_retention: "свечи %{min} мин — биржа хранит тики только %{hours} ч"
+
+trade_window.source.candles_no_trades: "свечи %{min} мин — сделок за это время не было"
+
+trade_window.source.candles_failed: "свечи %{min} мин — тики не загрузились"
+
+trade_window.source.candles_rate_limited: "свечи %{min} мин — биржа ограничила запросы, тики не запрошены; переоткройте окно через %{secs} с"
+
+trade_window.empty.no_data: "За это время по рынку нет данных."
+
+trade_window.empty.no_endpoint: "У %{brand} нет публичного источника истории, который умеет терминал."
+
+trade_window.empty.unknown_venue: "Биржа ядра неизвестна этой версии терминала."
+
+trade_window.empty.core_offline: "Ядро сделки не подключено — биржу и рынок не определить."
+
+trade_window.empty.bad_window: "У сделки некорректное время открытия или закрытия."
+
+trade_window.figure.side: "Направление"
+
+trade_window.figure.entry: "Вход"
+
+trade_window.figure.exit: "Выход"
+
+trade_window.figure.quantity: "Объём"
+
+trade_window.figure.profit: "Прибыль"
+
+trade_window.figure.profit_pct: "Прибыль, %"
+
+trade_window.figure.opened: "Открыта"
+
+trade_window.figure.closed: "Закрыта"
+
+trade_window.figure.held: "В позиции"
+
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy: "Стратегия"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted: "в удалённых"
+trade_window.strategy.deleted: "удалена"
+trade_window.strategy.core_offline: "ядро не подключено"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version: "версия %{stamp}"
+trade_window.strategy.version_current: "версия: действует"
+trade_window.strategy.version_unknown: "версия неизвестна"
+trade_window.strategy.version_tip: "Версия стратегии, действовавшая на момент входа — по данным терминала: дата отмечает, когда терминал увидел настройки, а не когда ядро их применило. Клик открывает эту версию в панели «Версии»."
+trade_window.strategy.version_unknown_tip: "Сделка старше первой сохранённой версии: терминал ещё не наблюдал это ядро"
+
+trade_window.figure.unknown: "нет данных"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long: "LONG"
+
+trade_window.side.short: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders: "Ордера"
+trade_window.traces.pending: "ищу трассы: архив, затем ядро…"
+trade_window.traces.drawn: "%{own} свои, %{inherited} унаследованных"
+trade_window.traces.drawn_own: "%{own} линий на графике"
+trade_window.traces.none: "трасс в архиве нет — выход по отчёту, вход стрелкой"
+trade_window.traces.not_askable: "ключ строки не получен — сделка реплицирована до обновления ядра"
+trade_window.traces.failed: "ядро не ответило — старое ядро или обрыв"
+trade_window.traces.retry_tip: "Запросить трассы ордеров у ядра ещё раз"
+trade_window.traces.neighbours: "+%{n} соседних"

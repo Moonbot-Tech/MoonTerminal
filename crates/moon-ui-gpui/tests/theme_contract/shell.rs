@@ -620,15 +620,6 @@ fn assets_wallet_grouping_owns_one_layout_key_and_one_writer() {
     let table = read_src("panels/assets/table.rs");
     let view = read_src("panels/assets/mod.rs");
     let layout = read_src("../../moon-core/src/config/layout.rs");
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("locales")
-            .join("assets.yml"),
-    )
-    .expect("read Assets locales");
-
     for key in [
         "assets.settings.title",
         "assets.settings.display",
@@ -638,10 +629,7 @@ fn assets_wallet_grouping_owns_one_layout_key_and_one_writer() {
             settings.contains(key),
             "the settings popup does not consume {key}"
         );
-        assert!(
-            locales.contains(&format!("{key}:")),
-            "locales do not define {key}"
-        );
+        assert_locale_key_in_every_language("assets", key);
     }
 
     let declaration = "pub assets_group_by_venue: Option<bool>";

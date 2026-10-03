@@ -6,6 +6,7 @@
 use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
+use moon_core::config::Language;
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::runtime::Response;
@@ -121,6 +122,10 @@ pub(crate) fn report_delivery_failed(host: crate::HostKind) -> String {
 ///
 /// Args:
 ///     host: Which process runs the bot; a station swaps in its own wording ([`STATION_WORDED`]).
+///
+/// Returns:
+///     Page and shell labels in the current locale, plus reply-button aliases for every
+///     `Language::ALL` code so an earlier keyboard still works after a locale change.
 pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeMap<String, String> {
     let mut labels: std::collections::BTreeMap<String, String> = [
         ("menu_miniapp".to_string(), t!("telegram.open").to_string()),
@@ -146,7 +151,7 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
         t!("telegram.report_delivery_failed").to_string(),
     );
     // Keep old keyboard labels usable after the desktop locale changes.
-    for locale in ["ru", "en", "es"] {
+    for locale in Language::ALL.map(Language::code) {
         for (name, icon) in [("home", "\u{1f4ca}"), ("help", "\u{2753}")] {
             let key = format!("telegram.button_{name}");
             labels.insert(
@@ -192,7 +197,7 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
         }
         // Only a station's bot knows its status button: a terminal's never parses it.
         let (name, icon) = STATION_STATUS_BUTTON;
-        for locale in ["ru", "en", "es"] {
+        for locale in Language::ALL.map(Language::code) {
             let text = t!("telegram.button_status", locale = locale).to_string();
             labels.insert(
                 format!("button_{name}_emoji_{locale}"),

@@ -1,0 +1,28 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "пунктир"
+lines.start_cross: "крест в начале"
+lines.end_cross: "крест в конце"
+lines.knots: "узлы"
+lines.thickness: "толщина"
+lines.cross_size: "размер креста"
+lines.cross_thickness: "толщина креста"
+lines.knot_size: "размер узла"
+lines.pending_group: "Выставлен (не исполнен):"
+lines.pending_alpha: "прозрачность"
+lines.path_title: "История переносов (путь / змейка)"
+lines.path_line_color: "цветом своей линии"
+lines.path_alpha: "прозрачность"
+lines.path_hint: "Ступеньки переносов цены ордера — и присланные ядром, и собранные терминалом. Отрезок переноса стопа рисуется всегда."
+lines.global: "Общее"
+lines.active_alpha: "Прозрачность активных"
+lines.closed_visibility: "Видимость отменённых/закрытых"
+lines.pending_dashed: "Отлож. ордер: пунктир входа"
+lines.max_closed: "Макс. закрытых ордеров на графике"
+lines.hint: "Линии Stop/Trailing/Liq появляются только после исполнения входа."
+lines.theme_hint: "Редактируется набор линий активной темы: Light — светлый, Dark и Graphite — общий тёмный; тема меняется на вкладке «Общие». «Сохранить» записывает оба набора в cfg/orders.toml рядом с программой — файлом можно делиться."

@@ -118,7 +118,7 @@ update-all:
 update-forks: update-all
 
 # --- the user tour (docs/tour/index.html) ------------------------------------
-# The page is GENERATED from locales/*.yml plus a committed snapshot of MoonUI's
+# The page is GENERATED from locales/*/*.yml plus a committed snapshot of MoonUI's
 # theme, and the generated file is committed. Needs PyYAML:
 #   pip install -r tools/requirements.txt
 

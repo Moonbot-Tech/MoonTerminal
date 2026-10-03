@@ -31,7 +31,7 @@ maps:
       en: Switches the group's workspace. In AUTO mode the terminal keeps the active core's coin on the
         chart for you.
     src:
-      code: locales/workspace.yml
+      code: locales/en/workspace.en.yml
   - id: core
     n: 3
     title:
@@ -82,7 +82,7 @@ maps:
       en: Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots
         sit on the F1…F6 keys.
     src:
-      code: locales/shell.yml — toolbar.size_hint
+      code: locales/en/shell.en.yml — toolbar.size_hint
   - id: lev
     n: 8
     title:
@@ -93,7 +93,7 @@ maps:
       en: Leverage for the active core's market. A change is sent to the exchange as its own command and
         shows up in the log as "Leverage … ×N".
     src:
-      code: locales/shell.yml — toolbar.lev_title
+      code: locales/en/shell.en.yml — toolbar.lev_title
   - id: risk
     n: 9
     title:
@@ -104,7 +104,7 @@ maps:
       en: The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside
         it.
     src:
-      code: locales/shell.yml — toolbar.sl_title
+      code: locales/en/shell.en.yml — toolbar.sl_title
   - id: exit
     n: 10
     title:
@@ -116,7 +116,7 @@ maps:
       en: Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to
         edit · Ctrl+wheel to change.
     src:
-      code: locales/shell.yml — toolbar.tp_title, toolbar.sell_hint
+      code: locales/en/shell.en.yml — toolbar.tp_title, toolbar.sell_hint
   - id: live
     n: 11
     title:
@@ -147,7 +147,7 @@ maps:
       en: The group's open charts. Escape closes the active Main chart, Shift+Escape closes every Main chart
         in every group.
     src:
-      code: locales/hotkeys.yml — встроенные
+      code: locales/en/hotkeys.en.yml — встроенные
   - id: chart
     n: 14
     title:
@@ -161,7 +161,7 @@ maps:
         or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an
         entry order line cancels it; hold and sweep to cancel every entry the pointer crosses.
     src:
-      code: locales/hotkeys.yml — встроенные
+      code: locales/en/hotkeys.en.yml — встроенные
   - id: book
     n: 15
     title:
@@ -172,7 +172,7 @@ maps:
       en: 'Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click
         moves an open long, Ctrl+click moves the exit lines.'
     src:
-      code: locales/hotkeys.yml — жесты стакана
+      code: locales/en/hotkeys.en.yml — жесты стакана
   - id: detects
     n: 16
     title:
@@ -184,7 +184,7 @@ maps:
       en: 'Cards for fired detections per core-and-coin pair. The gear configures the look: size, fields,
         mini-chart, coloured server strip.'
     src:
-      code: locales/dock.yml — detects.cfg.*
+      code: locales/en/dock.en.yml — detects.cfg.*
   - id: dtabs
     n: 17
     title:
@@ -196,7 +196,7 @@ maps:
       en: Click to select · double-click or drag to pop out into a window. Right-click a tab to turn on
         unread counters.
     src:
-      code: locales/dock.yml — dock.tab.hint_docked
+      code: locales/en/dock.en.yml — dock.tab.hint_docked
   - id: table
     n: 18
     title:
@@ -284,7 +284,7 @@ maps:
       en: Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots
         sit on the F1…F6 keys.
     src:
-      code: locales/shell.yml — toolbar.size_hint
+      code: locales/en/shell.en.yml — toolbar.size_hint
   - id: lev
     n: 7
     title:
@@ -295,7 +295,7 @@ maps:
       en: Leverage for the active core's market. A change is sent to the exchange as its own command and
         shows up in the log as "Leverage … ×N".
     src:
-      code: locales/shell.yml — toolbar.lev_title
+      code: locales/en/shell.en.yml — toolbar.lev_title
   - id: risk
     n: 8
     title:
@@ -306,7 +306,7 @@ maps:
       en: The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside
         it.
     src:
-      code: locales/shell.yml — toolbar.sl_title
+      code: locales/en/shell.en.yml — toolbar.sl_title
   - id: exit
     n: 9
     title:
@@ -318,7 +318,7 @@ maps:
       en: Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to
         edit · Ctrl+wheel to change.
     src:
-      code: locales/shell.yml — toolbar.tp_title, toolbar.sell_hint
+      code: locales/en/shell.en.yml — toolbar.tp_title, toolbar.sell_hint
   - id: live
     n: 10
     title:
@@ -412,7 +412,7 @@ maps:
       en: 'Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click
         moves an open long, Ctrl+click moves the exit lines.'
     src:
-      code: locales/hotkeys.yml — жесты стакана
+      code: locales/en/hotkeys.en.yml — жесты стакана
   - id: orders
     n: 18
     title:

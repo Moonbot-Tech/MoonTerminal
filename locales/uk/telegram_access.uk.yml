@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Чати"
+telegram.access_chat: "Чат %{id}"
+telegram.access_owner_summary: "Власник: усі ядра, повний доступ"
+telegram.access_viewer_summary: "Спостерігач: ядер: %{count}, лише перегляд"
+telegram.access_waiting: "Спостерігач: ядер не призначено, доступу до даних немає"
+telegram.access_no_cores: "Для цього чату ще не призначено ядер. Попросіть власника вибрати їх у MoonTerminal: Налаштування → Telegram."
+telegram.access_edit: "Налаштувати"
+telegram.access_collapse: "Згорнути"
+telegram.access_name: "Назва чату в терміналі"
+telegram.access_name_placeholder: "Наприклад, Олексій — клієнт"
+telegram.access_transfer_hint: "Цей чат отримає повний доступ до всіх ядер. Попередній власник стане спостерігачем без призначених ядер. Зміна набере чинності після збереження."
+telegram.access_transfer_confirm: "Підтвердити зміну власника"
+telegram.access_make_owner: "Призначити власником"
+telegram.access_remove: "Відв'язати чат"
+telegram.access_cores: "Доступні ядра: лише перегляд"
+telegram.access_search: "Знайти ядро за номером або назвою"
+telegram.access_select_current: "Вибрати всі поточні ядра"
+telegram.access_clear: "Зняти вибір"
+telegram.access_archived: "Ядро видалено з підключень (доступ до історії)"
+telegram.access_no_matches: "Ядер не знайдено. Додайте і збережіть підключення або змініть пошук."
+telegram.access_history_loading: "Завантаження ядер з історії…"
+telegram.access_history_failed: "Не вдалося прочитати історію. Підключені ядра і збережені призначення доступні."
+telegram.access_retry: "Повторити"
+
+telegram.chats_hint: "Додайте чат за кодом; перший — власник, інші бачать вибрані ядра після Зберегти."

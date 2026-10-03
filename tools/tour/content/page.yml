@@ -1,5 +1,5 @@
 # Page chrome: headings, leads, and the micro-labels inside the window replica.
-# A slot spelled `{locale: some.key}` is pulled from locales/*.yml — that is the
+# A slot spelled `{locale: some.key}` is pulled from locales/*/*.yml — that is the
 # application's own string, in every language, and it is never retyped here.
 # Edited by hand; rendered into docs/tour/index.html by `make tour`.
 
@@ -84,9 +84,9 @@ strings:
     en: MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux.
   ft.built:
     ru: 'Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI;
-      подписи и пояснения — из проверенной модели тура и выбранных locales/*.yml. Это схема, а не запись живой сессии.'
+      подписи и пояснения — из проверенной модели тура и выбранных locales/*/*.yml. Это схема, а не запись живой сессии.'
     en: 'This page is assembled from repository data: palette and metrics come from a committed MoonUI theme
-      snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture.'
+      snapshot; labels and explanations come from the validated tour model and selected locales/*/*.yml. It is a schematic, not a live-session capture.'
   # The header's workspace-mode control names the mode it is currently in, so the two schematics
   # need two keys rather than one: a single `ui.ws` would print the AUTO row's label on the MANUAL
   # schematic too.

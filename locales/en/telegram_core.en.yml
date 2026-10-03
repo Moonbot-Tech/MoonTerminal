@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Telegram on the core"
+
+telegram_core.intro: "Control the built-in Telegram reader on the selected core. State belongs to the core, not this terminal."
+
+telegram_core.core_pick: "Core"
+
+telegram_core.core_pick_none: "Select a core"
+
+telegram_core.details: "Core settings"
+
+telegram_core.enable: "Enable reader"
+
+telegram_core.enable_tip: "Turning this off stops only this core's reader and does not log the Telegram account out."
+
+telegram_core.unsupported: "Remote login is not available on this service."
+
+telegram_core.unsupported_ver: "Remote login is not available on this service (version %{v})."
+
+telegram_core.stale: "Snapshot is stale — actions stay disabled until a fresh state arrives."
+
+telegram_core.sent_waiting: "Sent, waiting for the core…"
+
+telegram_core.service_online: "Service online"
+
+telegram_core.service_offline: "Service offline"
+
+telegram_core.client_state: "State"
+
+telegram_core.setup_error: "Setup error"
+
+telegram_core.client_error: "Client error"
+
+telegram_core.disconnected: "Core is not connected."
+
+telegram_core.no_snapshot: "No state snapshot."
+
+telegram_core.proxy_section: "Proxy"
+
+telegram_core.proxy_kind_none: "No proxy"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Host"
+
+telegram_core.proxy_port: "Port"
+
+telegram_core.proxy_user: "User"
+
+telegram_core.proxy_password: "Password"
+
+telegram_core.proxy_secret: "Secret"
+
+telegram_core.proxy_save: "Save proxy"
+
+telegram_core.proxy_secret_hint: "The core never returns a saved password or secret, so type it again. Leaving it empty clears it, rather than keeping the old value."
+
+telegram_core.proxy_actual: "Active proxy"
+
+telegram_core.proxy_actual_unknown: "not known yet"
+
+telegram_core.proxy_error: "Proxy error"
+
+telegram_core.proxy_password_set: "password is set"
+
+telegram_core.phone: "Phone"
+
+telegram_core.phone_hint: "International format, for example +15551234567."
+
+telegram_core.phone_send: "Send number"
+
+telegram_core.login_qr: "Log in by QR instead"
+
+telegram_core.login_phone: "Use a phone number instead"
+
+telegram_core.cancel_to_phone: "Cancel login and return to phone entry"
+
+telegram_core.code: "Code"
+
+telegram_core.code_send: "Send code"
+
+telegram_core.password: "2FA password"
+
+telegram_core.password_send: "Send password"
+
+telegram_core.password_hint_label: "Hint"
+
+telegram_core.recovery_email: "Recovery email"
+
+telegram_core.email: "Email"
+
+telegram_core.email_send: "Send email"
+
+telegram_core.email_code: "Email code"
+
+telegram_core.email_code_send: "Send email code"
+
+telegram_core.email_pattern: "The message will arrive at %{pattern}"
+
+telegram_core.code_length: "Code length: %{n}"
+
+telegram_core.first_name: "First name"
+
+telegram_core.last_name: "Last name"
+
+telegram_core.terms_accept: "I accept the terms"
+
+telegram_core.register: "Register"
+
+telegram_core.min_age: "Minimum age: %{n}"
+
+telegram_core.logged_in: "Account %{phone}"
+
+telegram_core.logged_in_unknown: "Account is ready"
+
+telegram_core.logout: "Log out"
+
+telegram_core.logout_title: "Log out of Telegram on the core"
+
+telegram_core.logout_q: "This logs out and resets the shared Telegram account data on that core's machine. Every MoonBot process on that machine is affected, not just this core."
+
+telegram_core.premium: "An external Telegram step is required. Cancel login to return to the phone number."
+
+telegram_core.support_email: "Support email"
+
+telegram_core.support_subject: "Subject"
+
+telegram_core.cancel_login: "Cancel login"
+
+telegram_core.transitional: "The core is working, wait…"
+
+telegram_core.step_unknown: "Unknown login step. Refresh the state; do not guess which input to send."
+
+telegram_core.refresh: "Refresh"
+
+telegram_core.service_error: "Error %{code}: %{message}"
+
+telegram_core.connection: "Telegram network"
+
+telegram_core.conn.unknown: "unknown"
+
+telegram_core.conn.waiting_for_network: "waiting for network"
+
+telegram_core.conn.connecting_to_proxy: "connecting to proxy"
+
+telegram_core.conn.connecting: "connecting"
+
+telegram_core.conn.updating: "updating"
+
+telegram_core.conn.ready: "ready"
+
+telegram_core.qr_failed: "Could not build the QR. Refresh the state."
+
+telegram_core.qr_wait: "Waiting for the QR link…"
+
+telegram_core.resend: "Resend code"
+
+telegram_core.resend_in: "Resend in %{wait}"
+
+telegram_core.no_answer: "The core did not answer. Refresh the state and try again."
+
+telegram_core.next_code: "Next method"
+
+telegram_core.code_kind.telegram: "Code in the Telegram app."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "SMS word, starts with “%{first_letter}”, first word “%{first_word}”."
+
+telegram_core.code_kind.sms_phrase: "SMS phrase: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Phone call."
+
+telegram_core.code_kind.flash_call: "Flash call, prefix %{prefix}."
+
+telegram_core.code_kind.missed_call: "Missed call, prefix %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "This delivery method is not supported."
+
+telegram_core.code_kind.other: "%{kind}"

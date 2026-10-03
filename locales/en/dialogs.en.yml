@@ -1,0 +1,26 @@
+# Create, rename, and delete dialogs plus shared buttons.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Shared buttons ---
+dialogs.cancel: "Cancel"
+dialogs.done: "Done"
+dialogs.yes: "Yes"
+dialogs.no: "No"
+dialogs.create: "Create"
+dialogs.rename: "Rename"
+
+# --- Strategy dialog titles ---
+dialogs.new_strategy: "New strategy"
+dialogs.new_folder: "New folder"
+dialogs.rename_folder: "Rename folder"
+dialogs.delete_q: "Delete?"
+dialogs.operation: "Operation"
+
+# --- Dialog fields and hints ---
+dialogs.name_ph: "name"
+dialogs.name_required: "Enter a strategy name"
+dialogs.folder_prefix: "folder: %{path}"
+dialogs.into_prefix: "into: %{path}"
+dialogs.delete_confirm: "Delete %{what}? This cannot be undone."
+dialogs.close: "Close"

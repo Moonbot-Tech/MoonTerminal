@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Horizontal Ray"
+hotkeys.draw_horizontal_ray: "Horizontal Ray"
+hotkeys.draw_horizontal_ray_hint: "One click sets the origin and price of a rightward ray. Press again to disarm the tool."

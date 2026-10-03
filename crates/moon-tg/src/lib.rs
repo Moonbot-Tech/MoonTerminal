@@ -6,8 +6,8 @@
 //! and the service's lifecycle. Two hosts run it, the desktop terminal and the station, each
 //! through [`TgHost`]; nothing here knows which.
 //!
-//! Translations are the terminal's own `locales/` folder, read by this crate's `i18n!`: the same
-//! files, one locale per process (`rust_i18n` keeps a single current locale for every crate).
+//! Translations are the terminal's own `locales/<lang>/*.yml` files, read by this crate's `i18n!`:
+//! the same files, one locale per process (`rust_i18n` keeps a single current locale for every crate).
 
 rust_i18n::i18n!("../../locales", fallback = "en");
 

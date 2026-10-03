@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "Queued"
+core_update.phase.held: "Held — lane busy"
+core_update.phase.sent: "Command sent"
+core_update.phase.waiting: "Updating"
+core_update.phase.verifying: "Verifying build"
+core_update.phase.succeeded: "Updated"
+core_update.phase.installed: "Installed"
+core_update.phase.unchanged: "Version unchanged"
+core_update.phase.failed.not_sent: "Command failed to send"
+core_update.phase.failed.never_dropped: "Core never dropped for the update"
+core_update.phase.failed.not_ready: "Never came back online in time to be sent the update"
+core_update.phase.failed.timeout: "Did not come back after the update — timed out"
+core_update.phase.failed.gone: "Core's endpoint became unknown"
+core_update.phase.failed.abandoned: "Abandoned when the application quit"
+core_update.phase.failed.rejected: "Core refused the requested build name"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Build not verified — reconnect unavailable"
+core_update.phase.unverified.timeout: "Build not verified — the core did not come back in time"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "updating"
+core_update.summary.queued: "queued"
+core_update.summary.failed: "failed"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Time"
+core_update.col.core: "Core"
+core_update.col.server: "Server"
+core_update.col.from_to: "From → to"
+core_update.col.target: "Target"
+core_update.col.outcome: "Outcome"
+core_update.col.duration: "Duration"
+core_update.list_empty: "No update history"
+core_update.target.release: "Release"
+core_update.target.named: "Beta %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Update this core"
+core_update.server.action: "Update %{n} core(s) on this server"
+core_update.retry: "Retry the update"
+core_update.skipped_offline: "%{n} offline"
+core_update.skipped_already: "%{n} already updating"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Update all"
+core_update.fleet.behind: "Update behind"
+core_update.fleet.behind_none: "Nothing here reports an older build than the newest one visible, and the terminal can't see Moonbot releases."
+core_update.fleet.selected: "Update selected (%{n})"
+core_update.fleet.named: "To a build…"
+core_update.confirm.title: "Update cores"
+core_update.confirm.q: "Update %{cores} cores across %{servers} servers? Updates run in parallel across servers — no more than one core at a time per server."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Update to release"
+core_update.menu.named: "Update to a named version…"
+core_update.menu.named_prompt: "Build name for %{core}:"
+core_update.menu.release_n: "Update %{n} core(s) to release"
+core_update.menu.named_n: "Update %{n} core(s) to a named version…"
+core_update.menu.named_prompt_n: "Build name for %{n} core(s):"
+core_update.confirm.named_prompt: "Build name:"
+core_update.menu.named_ph: "MoonBot-F8 or %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "You can type just the build name, or paste the whole install command — either works."
+core_update.menu.unavailable: "Unavailable — core not ready or already updating"

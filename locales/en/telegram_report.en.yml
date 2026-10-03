@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "This hour"
+
+telegram.help_daily: "Daily results this month"
+
+telegram.help_intro: "Choose a period in the bottom menu. Tap again for a fresh report. Select an exchange to open its cores."
+
+telegram.help_commands: "Commands and custom dates"
+
+telegram.help_limits: "Dates are inclusive, up to 366 days. Time zone: %{zone}. Keep the terminal running."
+
+telegram.help_limits_station: "Dates are inclusive, up to 366 days. Time zone: %{zone}. Reports update around the clock."
+
+telegram.help_custom: "Custom period / by day"
+
+telegram.help_mini: "Chat reports do not require Mini App. Use /miniapp to open it when enabled in terminal settings."
+
+telegram.help_mini_station: "Chat reports do not require Mini App. Use /miniapp to open it when enabled on the station."
+
+telegram.help_status_station: "The station's status; an update button when a new version is out"
+telegram.report_total: "Total"
+
+telegram.report_calculation_extra: "Total covers the entire selected group and period, including other pages. Average order uses trades with suitable data; exclusions are listed in report details."
+
+telegram.button_home: "Overview"
+
+telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap again for a fresh report. Buttons beneath the report open cores or days."
+
+telegram.report_all_cores: "All cores"
+
+telegram.report_by_days: "By day"
+
+telegram.report_days_scope: "Group by day"
+
+telegram.report_cores_scope: "Group cores"
+
+telegram.report_back: "All exchanges"
+
+telegram.report_calculation: "Calculation details"
+
+telegram.report_exchanges: "Exchanges"
+
+telegram.report_exchanges_menu: "Exchanges"
+
+telegram.report_exchanges_back: "Back"
+
+telegram.report_exchange: "Exchange"
+
+telegram.report_scope_unavailable: "Exchange unavailable"
+
+telegram.report_average_coverage: "%{counted} counted; %{excluded} excluded"
+
+telegram.report_delivery_failed: "Could not display the report. Please retry; if this persists, check the terminal connection and update Telegram."
+telegram.report_delivery_failed_station: "Could not display the report. Please retry; if this persists, update Telegram."
+
+telegram.button_today: "Today"
+
+telegram.button_yesterday: "Yesterday"
+
+telegram.button_month: "This month"
+
+telegram.button_lastmonth: "Last month"
+
+telegram.button_daily: "Daily"
+
+telegram.report_days: "Days"
+
+telegram.report_cores: "Cores"
+
+telegram.report_profit: "Profit / loss"
+
+telegram.report_trades: "Trades"
+
+telegram.report_date: "Date"
+
+telegram.report_bot: "Bot"
+
+telegram.report_details: "Currencies and average order"
+
+telegram.report_average: "Average order"
+
+telegram.report_page: "Page"
+
+telegram.report_prev: "Previous"
+
+telegram.report_next: "Next"
+
+telegram.report_unvalued: "Unavailable"
+
+telegram.report_empty: "No closed real trades in this period."
+
+telegram.report_scope: "Selected group in terminal history · closed real trades · rates at trade time. Local history; offline bots do not update."
+telegram.report_scope_station: "Selected group in the station's history · closed real trades · rates at trade time. The station copies the cores' history around the clock; offline bots do not update."
+
+telegram.report_missing_rates: "If any trades lack valuation, the complete USDT total is unavailable. Details retain known currency subtotals; unknown currencies are excluded."
+
+telegram.report_busy: "The previous report is still being calculated. Please try again shortly."
+
+telegram.report_failed: "Could not read trade history. Please retry; a read error does not mean zero profit."
+
+telegram.report_help: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\nDates are inclusive, up to 366 days; time zone follows the terminal clock. Keep the terminal running."
+
+telegram.report_help_station: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\n/status — the station's status\nDates are inclusive, up to 366 days; time zone follows the station settings. Reports update around the clock."
+
+telegram.notify_profit: "Profit"
+
+telegram.notify_manual: "Manual"
+
+telegram.notify_unvalued: "Unvalued"
+
+telegram.notify_down: "lost connection since"
+
+telegram.notify_back: "connection restored"
+
+telegram.notify_daily_title: "Daily summary"
+
+telegram.notify_trades: "Trades"
+
+telegram.notify_unvalued_trades: "Unvalued"
+
+telegram.notify_best: "Best"
+
+telegram.notify_worst: "Worst"

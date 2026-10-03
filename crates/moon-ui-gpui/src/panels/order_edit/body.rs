@@ -102,7 +102,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
 
     // Show the pending entry condition as read-only protocol data when present.
     // MIXED NODE: `orders.edit.cond` combines the localized condition sentence with the price
-    // figure in one text node (locales/orders.yml:175-178) — stays mono.
+    // figure in one text node (`orders.edit.cond`) — stays mono.
     let cond = r.pending_cond.map(|c| {
         div()
             .w_full()
@@ -136,7 +136,7 @@ pub(super) fn dialog_body(state: &Entity<OrderEditState>, cx: &mut App) -> AnyEl
                 )
                 .child(
                     // MIXED NODE: `orders.edit.current` combines the localized "Current:" label
-                    // with the price figure in one text node (locales/orders.yml:187-190) — stays
+                    // with the price figure in one text node (`orders.edit.current`) — stays
                     // mono.
                     div()
                         .font_family(design::mono())

@@ -67,14 +67,15 @@ pub struct NewsSnapshot {
 impl NewsItem {
     /// The body in `lang`, falling back to the English original while a translation is missing.
     ///
-    /// Every surface that shows a news body goes through this: the News panel (choosing by its
-    /// Translate toggle) and the chart's hover card (choosing by the UI locale). The fallback rule
-    /// belongs to the item, not to each caller.
+    /// Ukrainian has no news translation on the wire, so it uses the English body. Every surface
+    /// that shows a news body goes through this: the News panel (choosing by its Translate toggle)
+    /// and the chart's hover card (choosing by the UI locale). The fallback rule belongs to the
+    /// item, not to each caller.
     pub fn body(&self, lang: crate::config::Language) -> &str {
         let text = match lang {
             crate::config::Language::Ru => self.ru.as_str(),
             crate::config::Language::Es => self.es.as_str(),
-            crate::config::Language::En => self.en.as_str(),
+            crate::config::Language::En | crate::config::Language::Uk => self.en.as_str(),
         };
         if text.is_empty() { &self.en } else { text }
     }

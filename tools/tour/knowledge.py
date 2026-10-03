@@ -185,7 +185,7 @@ def index_markdown(content: Content) -> str:
         "MoonTerminal knowledge base",
         "A machine-readable map of the currently documented MoonTerminal interface.",
         content.codes,
-        ["tools/tour/content/*.yml", "locales/*.yml"],
+        ["tools/tour/content/*.yml", "locales/*/*.yml"],
         ["authored-tour", "locale-literal", "advisory-code-pointer"],
         ("topic", 5),
     )
@@ -253,7 +253,7 @@ def interface_markdown(content: Content) -> str:
         "MoonTerminal main interface",
         "The currently documented clickable zones of the Classic and AutoTrading window maps.",
         content.codes,
-        ["tools/tour/content/zones.yml", "tools/tour/content/modes.yml", "locales/*.yml"],
+        ["tools/tour/content/zones.yml", "tools/tour/content/modes.yml", "locales/*/*.yml"],
         ["authored-tour", "locale-literal", "advisory-code-pointer"],
         ("zone", len(content.zones)),
     )
@@ -289,7 +289,7 @@ def panels_markdown(content: Content) -> str:
         "MoonTerminal dock panels",
         "Panels currently represented in the generated tour data.",
         content.codes,
-        ["tools/tour/content/panels.yml", "tools/tour/content/page.yml", "locales/*.yml"],
+        ["tools/tour/content/panels.yml", "tools/tour/content/page.yml", "locales/*/*.yml"],
         ["authored-tour", "locale-literal"],
         ("panel", len(content.panels)),
     )
@@ -485,7 +485,7 @@ def _entry(
     advisory_pointer: str = "",
 ) -> dict[str, object]:
     """Build one JSONL entry from resolved text objects."""
-    entry = {
+    entry: dict[str, object] = {
         "id": entry_id,
         "kind": kind,
         "title": dict(title.values),

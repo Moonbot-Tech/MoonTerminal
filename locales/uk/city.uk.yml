@@ -1,0 +1,59 @@
+# City names for the header clock's time-zone picker, keyed by the three-letter code the header
+# shows. The CODES are not translated (see README); the names are proper nouns that genuinely
+# differ across the three languages.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+city.UTC: "Всесвітній час"
+
+# --- Americas ---
+city.HNL: "Гонолулу"
+city.ANC: "Анкоридж"
+city.LAX: "Лос-Анджелес"
+city.DEN: "Денвер"
+city.MEX: "Мехіко"
+city.CHI: "Чикаго"
+city.BOG: "Богота"
+city.NYC: "Нью-Йорк"
+city.TOR: "Торонто"
+city.SCL: "Сантьяго"
+city.BUE: "Буенос-Айрес"
+city.SAO: "Сан-Паулу"
+
+# --- Europe and Africa ---
+city.LIS: "Лісабон"
+city.DUB: "Дублін"
+city.LON: "Лондон"
+city.AMS: "Амстердам"
+city.BER: "Берлін"
+city.MAD: "Мадрид"
+city.PAR: "Париж"
+city.ROM: "Рим"
+city.ZRH: "Цюрих"
+city.ATH: "Афіни"
+city.HEL: "Гельсінкі"
+city.KIE: "Київ"
+city.WAW: "Варшава"
+city.CAI: "Каїр"
+city.JNB: "Йоганнесбург"
+city.IST: "Стамбул"
+city.MOW: "Москва"
+city.RUH: "Ер-Ріяд"
+
+# --- Asia and Oceania ---
+city.DXB: "Дубай"
+city.KHI: "Карачі"
+city.BOM: "Мумбаї"
+city.ALA: "Алмати"
+city.BKK: "Бангкок"
+city.JKT: "Джакарта"
+city.PER: "Перт"
+city.SIN: "Сінгапур"
+city.HKG: "Гонконг"
+city.SHA: "Шанхай"
+city.TPE: "Тайбей"
+city.SEL: "Сеул"
+city.TYO: "Токіо"
+city.BNE: "Брисбен"
+city.SYD: "Сідней"
+city.AKL: "Окленд"

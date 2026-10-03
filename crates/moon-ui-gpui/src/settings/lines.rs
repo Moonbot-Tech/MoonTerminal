@@ -1,6 +1,6 @@
 //! Order-line style editor: one collapsible section per line type, plus Path and Global.
 //! Trading line names remain English while attributes and shared labels are localized through
-//! `locales/lines.yml`. Changes update the live-preview draft and are saved to `orders.toml`.
+//! `locales/<lang>/lines.<lang>.yml`. Changes update the live-preview draft and are saved to `orders.toml`.
 //! [`Lines`] stores editor controls; `SettingsView.open_lines` stores expansion state.
 
 use gpui::*;
@@ -431,7 +431,7 @@ impl SettingsView {
     }
 
     /// Build the Lines tab with one section per English trading line name, then Path and Global.
-    /// Attribute labels come from `locales/lines.yml`.
+    /// Attribute labels come from `locales/<lang>/lines.<lang>.yml`.
     ///
     /// Args:
     ///     cx: Settings context used for the active palette and scaled controls.

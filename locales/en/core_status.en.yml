@@ -1,0 +1,373 @@
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Top bar and footer ---
+core_status.all_cores: "All cores"
+core_status.cores_n: "Cores: %{n}"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint: "Sorted within each exchange"
+core_status.cores: "Cores"
+core_status.empty: "No core data"
+core_status.mode.by_ip: "By IP"
+core_status.mode.flat: "Flat"
+core_status.mode.problems: "Problems"
+core_status.mode.warnings: "Alerts"
+core_status.mode.updates: "Updates"
+core_status.warn_empty: "No recorded alerts"
+# Warnings-list columns.
+core_status.col.time: "Time"
+core_status.col.dur: "Duration"
+core_status.col.type: "Type"
+core_status.col.peak: "Peak"
+core_status.footer: "Servers: %{servers}  Cores: %{cores}  Online: %{online}"
+
+# --- Server tree ---
+core_status.server_n: "Server %{n}"
+core_status.rename: "Rename server"
+core_status.show_ip: "Show IP"
+core_status.hide_ip: "Hide IP"
+core_status.ip_unknown: "The terminal has no address for this server yet"
+core_status.cpu_load: "%{value} (%{n})"
+core_status.mem_free: "%{pct}% (%{gb} GB)"
+core_status.unknown_server: "Unknown IP: %{core}"
+core_status.online: "Online"
+core_status.degraded: "Degraded"
+core_status.offline: "Offline"
+core_status.ready_count: "%{ready}/%{total} cores"
+core_status.hide_server: "Hide server processes"
+core_status.show_server: "Show server processes"
+core_status.system_cpu: "System CPU %{value}"
+core_status.process_cpu: "CPU %{value}"
+core_status.process_memory: "RAM %{value}"
+core_status.process_memory_total: "Process RAM %{value}"
+
+# --- Table columns ---
+core_status.col.server: "Server"
+core_status.col.core: "Core"
+core_status.col.status: "Status"
+core_status.col.cpu_proc: "CPU proc"
+core_status.col.cpu_sys: "CPU sys"
+core_status.col.mem_used: "Mem used"
+core_status.col.free_phys: "Free phys"
+core_status.col.cpus: "Logical CPUs"
+core_status.col.ping: "Core ping"
+core_status.col.ping_exch: "Exch. ping"
+core_status.col.updated: "Updated"
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
+# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version: "MoonBot"
+# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind: "Outdated MoonBot build: %{have}. The newest across your cores is %{newest}"
+# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
+# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
+# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
+# has none to be behind with), which is why this string must not tell the user to expand anything:
+# expanding a Uniform group reveals N cores all reporting the number they can already see.
+core_status.version_behind_group: "Every core on this server runs %{have}; a newer build exists: %{newest}"
+core_status.col.api_key: "API (d)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual: "Key with no expiry date"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus: "Logical CPUs on the machine"
+core_status.col_tip.tz_off: "Core clock offset from UTC"
+core_status.col_tip.api_key: "Days until the exchange API key expires"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota: "API limit"
+
+# --- By IP column header (the fixed caption row above the server tree) ---
+# CPU column: percentage plus the machine's logical-core count in parentheses.
+core_status.hdr.cpu: "CPU (cores)"
+# Memory column: free share and the reconstructed total RAM.
+core_status.hdr.mem: "Mem. free"
+# IP column heading (the abbreviation is identical across locales).
+core_status.hdr.ip: "IP"
+# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
+# panel advertises them, and the Shift variant is the only reset a detached window offers.
+core_status.col_resize: "Drag to resize. Double-click resets this column, Shift+double-click resets all"
+# API-key column heading in the By-IP tree; carries the unit its cells omit.
+core_status.hdr.api_key: "API (d)"
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests: "req."
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota: "API limit"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu: "CPU"
+core_status.chart_mem: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
+core_status.chart_ping: "Ping"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch: "Exchange"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn: "Link"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing: "ongoing"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect: "At detection:"
+core_status.warn_server: "Server"
+core_status.chart_5m: "5 min"
+core_status.chart_1h: "1 h"
+
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title: "Alerts: what to catch"
+core_status.warn_cfg.cpu: "Server CPU"
+core_status.warn_cfg.mem: "Memory growth"
+core_status.warn_cfg.conn: "Core dropout"
+core_status.warn_cfg.ping: "Core ping spike"
+core_status.warn_cfg.exch: "Exchange ping spike"
+core_status.warn_cfg.api: "API key expiring"
+core_status.warn_cfg.api_quota: "API quota running out"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on: "On"
+core_status.warn_cfg.col.chart: "Chart"
+core_status.warn_cfg.col.sound: "Sound"
+# Threshold captions.
+core_status.warn_cfg.p.threshold: "Level"
+core_status.warn_cfg.p.hold: "Hold"
+core_status.warn_cfg.p.growth: "Rise"
+core_status.warn_cfg.p.window: "Window"
+core_status.warn_cfg.p.yellow: "Yellow"
+core_status.warn_cfg.p.red: "Red"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days: "Within"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests: "Min requests"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none: "None"
+core_status.warn_cfg.u.sec: "s"
+core_status.warn_cfg.u.day: "days"
+
+# --- Units and relative time ---
+core_status.mb: "MB"
+core_status.ms: "ms"
+core_status.ago_s: "%{n}s"
+core_status.ago_m: "%{n}m"
+core_status.ago_h: "%{n}h"
+core_status.ago_d: "%{n}d"
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
+core_status.api_days: "%{n} d"
+core_status.api_expired: "expired"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup: "Startup"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs: "%{t} s"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took: "in %{t}"
+core_status.startup.rate: "%{v}/s"
+core_status.startup.b: "B"
+core_status.startup.kb: "KB"
+core_status.startup.mb: "MB"
+# Startup phases.
+core_status.startup.state.connecting: "Connecting"
+core_status.startup.state.initializing: "Initializing"
+core_status.startup.state.ready: "Ready"
+core_status.startup.state.reconnecting: "Reconnecting"
+core_status.startup.state.failed: "Failed"
+core_status.startup.state.disconnected: "Disconnected"
+core_status.startup.state.unknown: "Unknown"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check: "Base check"
+core_status.startup.step.auth_check: "Auth check"
+core_status.startup.step.markets_list: "Markets list"
+core_status.startup.step.markets_update: "Prices and indexes"
+core_status.startup.step.strategy_schema: "Strategy schema"
+core_status.startup.step.post_init_flush: "Initial refreshes"
+core_status.startup.step.snapshot: "First snapshot"
+core_status.startup.step.events: "Startup events"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase: "Phase"
+core_status.startup.f.step: "Step"
+core_status.startup.f.elapsed: "Elapsed"
+core_status.startup.f.received: "Received"
+core_status.startup.f.blocks: "Blocks"
+core_status.startup.f.dupes: "duplicates"
+core_status.startup.f.transfers: "Transfers"
+core_status.startup.f.idle: "Idle"
+core_status.startup.f.retries: "Retries (step · total)"
+core_status.startup.f.reconnects: "Reconnects"
+core_status.startup.f.local_port: "Local UDP port"
+core_status.startup.f.previous_port: "Previous UDP port"
+core_status.startup.f.port_changes: "Local port changes"
+core_status.startup.packets: "sent %{sent} · recv %{recv}"
+core_status.startup.f.rtt: "RTT"
+core_status.startup.f.mtu: "MTU"
+core_status.startup.f.delivery: "Delivery"
+
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off: "UTC offset"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown: "—"
+core_status.tz_off.f.offset: "Offset"
+core_status.tz_off.f.samples: "Samples"
+core_status.tz_off.f.observed: "Observed"
+core_status.tz_off.f.source: "Source"
+# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+core_status.tz_off.f.unmeasured: "Not measured yet"
+core_status.tz_off.source.log: "Core log"
+core_status.tz_off.source.replica: "Replica data"
+core_status.tz_off.source.skew: "Skew correction"
+core_status.tz_off.source.none: "—"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
+core_status.fault.short.local_port: "local port"
+core_status.fault.short.no_response: "no answer"
+core_status.fault.short.unparsed: "UDP received"
+core_status.fault.short.access: "key / access"
+core_status.fault.short.unidentified: "core did not identify"
+core_status.fault.short.syncing: "syncing"
+core_status.fault.short.stalled: "stalled at a step"
+core_status.fault.short.aborted: "stopped"
+core_status.fault.short.unknown: "undetermined"
+core_status.fault.short.key_empty: "no key pasted"
+core_status.fault.short.key_unparsable: "not a MoonBot key"
+core_status.fault.reason.local_port: "The terminal could not bind its own UDP port (%{n} attempts)"
+core_status.fault.reason.silent: "Not one byte arrived from the core in %{t} s"
+core_status.fault.reason.unparsed: "UDP packets received: %{n}; the terminal did not accept a handshake within %{t} s"
+core_status.fault.reason.partial: "%{bytes} arrived from the core, but the connection never completed within %{t} s"
+core_status.fault.reason.access_refused: "The core did not accept the key"
+core_status.fault.reason.access_timeout: "The core answered, but the account access check never completed"
+core_status.fault.reason.access_failed: "The account access check failed: %{msg}"
+core_status.fault.reason.unidentified_timeout: "The core did not answer the compatibility check"
+core_status.fault.reason.unidentified_failed: "The compatibility check failed: %{msg}"
+core_status.fault.reason.syncing: "Step %{step} (%{done}/%{total}), %{t} s, no snapshot yet"
+core_status.fault.reason.stalled: "Initialization stopped at step %{step} (%{done}/%{total}), %{t} s"
+core_status.fault.reason.aborted: "The terminal stopped the attempt itself"
+core_status.fault.reason.unknown: "The cause could not be determined"
+core_status.fault.reason.key_empty: "The Key field is empty — there is nothing to connect with"
+core_status.fault.reason.key_unparsable: "What is in the Key field is not a MoonBot key — the terminal could not read it"
+core_status.fault.next.local_port: "Something on THIS machine holds the port: a VPN or a local firewall"
+core_status.fault.next.no_response: "Open the core UDP port both in the hoster panel and in the firewall of the machine itself. A VM restored from a snapshot does not carry its rule group over, and Windows marks a new adapter Public while a Private-only rule stays silent"
+core_status.fault.next.unparsed: "Packets reached the terminal: this is not a closed port. Send the log and these counters to support"
+core_status.fault.next.try_mode: "Other cores on this terminal connected fine on mode %{mode} — try switching this one to %{mode}"
+core_status.fault.next.access: "Paste the key exported from THIS bot, and check that Kernel (VPS) mode is on at the core. It stays inactive while the exchange account is not under the MoonBonus referral"
+core_status.fault.next.unidentified: "The core replies but does not pass the compatibility check. Check, in order: whether Kernel (VPS) mode is on, whether the core is overloaded, and update MoonBot on its host"
+core_status.fault.next.syncing: "Wait. If the figure stops moving, hover the startup column: it shows the channel loss"
+core_status.fault.next.stalled: "The attempt repeats by itself. If the same step keeps failing, hover the startup column and send the log"
+core_status.fault.next.aborted: "Nothing to do"
+core_status.fault.next.unknown: "Send this line and the log to support"
+core_status.fault.next.key: "The key is made in MoonBot, not on the website. In MoonBot: the green dot at the bottom left (the Info window) → the Moon Kernel row → Settings → the Moon Proto window, Settings tab → Key: → Copy Key (no key yet — New Key). Paste the whole of it into the Key field with the Paste button and press Save — the core connects by itself"
+core_status.fault.core.legacy_named: "The core reports MoonBot %{server} and no protocol version: it predates this terminal"
+core_status.fault.core.legacy_silent: "The core reports no protocol version: it predates this terminal"
+core_status.fault.retrying: "reconnecting"
+core_status.fault.f.reason: "Reason"
+core_status.fault.f.next: "What to do"
+core_status.fault.f.stage: "Stage"
+core_status.fault.f.core: "Core"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category: "Category"
+core_status.col.problem_kind: "Kind"
+core_status.col.problem_title: "Problem"
+# Shown only when EVERY core in scope delivered a list and all of them were empty.
+core_status.problems_empty: "The cores report no problems"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown: "Not reported: %{n} — an older core, or the list has not arrived yet"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated: "Showing the first %{n}"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores: "No cores in scope"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed: "Nothing reported"
+core_status.problem_cat.machine: "Machine"
+core_status.problem_cat.exchange: "Exchange"
+core_status.problem_cat.network: "Network"
+core_status.problem_cat.other: "Other"
+
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+#
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
+core_status.problems_test: "Test the channel"
+# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
+core_status.problems_clear: "Reset"
+core_status.problems_test_tip: "Publishes a test fact through the core's own detector — about two seconds. It proves the whole path: detector, wire, projection, panel."
+core_status.problems_refresh: "Refresh"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip: "Re-reads whatever the connected cores (%{cores}) have sent so far. Click a row to re-read only that core. A fresh list cannot be requested: the protocol has no such command — a core sends one itself, on connection and whenever its detectors change it. Worth pressing after a core restart, when the old rows are no longer about it."
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one: "Resets the selected core's diagnostics — irreversibly, and for every terminal. Click its row again to go back to the whole scope"
+core_status.problems_refresh_tip_one: "Re-reads whatever the selected core has sent so far. A fresh list cannot be requested: the protocol has no such command. Click its row again to go back to the whole scope"
+core_status.problems_clear_tip: "Resets the diagnostics. Connected cores: %{cores}. Irreversible, and for every terminal. Click a row to reset only that core"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
+core_status.problems_pick_core: "The test goes to one core: click that core's finding in the table — or narrow the panel's scope to a single core"
+core_status.problems_picked_offline: "The selected core is offline — the command would wait for it to come back"
+core_status.problems_no_online: "No core in the panel's scope is connected"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
+core_status.problems_core_offline: "The core is offline — the test would wait for its reconnect and publish its fact at some unannounced later moment"
+core_status.problems_test_title: "Send a test diagnostic?"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q: "Core %{core} will publish a test fact through its own detector — about two seconds. The row stays on the core, and the ONLY way to remove it is the reset, which also destroys that core's real findings."
+core_status.problems_test_sent: "Test sent to %{core} — the row appears in a couple of seconds"
+core_status.problems_clear_sent: "Reset sent to %{core} — the rows go when the core sends its next list"
+core_status.problems_clear_sent_many: "Reset sent to %{cores} cores — the rows go when those cores send their next lists"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed: "Cores re-read: %{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none: "Reached none of the %{cores} cores — offline, or their command channel is closed"
+core_status.problems_fleet_partial: "Reached %{sent} of %{cores} cores — the rest are offline or their channel is closed"
+core_status.problems_not_sent: "Not sent: the core's command channel is closed"
+core_status.problems_not_sent_offline: "Not sent: the core is offline"
+core_status.problems_clear_title: "Reset the core's diagnostics?"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q: "Core %{core} will drop every confirmed problem and pending hypothesis — for all terminals, with no way back. It fixes no cause: if one remains, the core will confirm the problem again."
+core_status.problems_clear_title_many: "Reset the diagnostics of several cores?"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many: "Each of these %{cores} cores drops every confirmed problem and pending hypothesis — for all terminals, with no way back. It fixes no cause: those that remain will be confirmed again."

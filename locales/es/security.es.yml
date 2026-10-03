@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Seguridad"
+security.password: "Contraseña"
+security.confirm: "Repetir"
+security.mismatch: "Las contraseñas no coinciden"
+
+# --- Launch gate ---
+security.launch: "Contraseña al iniciar"
+security.launch_hint: "Un pestillo local que se pide en cada inicio. Cualquier longitud. NO cifra las claves de los núcleos: quien acceda a los archivos las lee igual."
+
+# --- servers.enc encryption password ---
+security.file: "Contraseña de cifrado de servers.enc"
+security.file_hint: "Se pide solo donde el archivo no se abre con la clave de la máquina: en una máquina nueva o tras perder el llavero del sistema. Una vez introducida correctamente se recuerda para esta máquina."
+security.file_warning: "Esta contraseña no se puede recuperar. Perderla junto con la clave de la máquina significa perder los núcleos."
+security.rule: "Al menos %{min} caracteres y dos clases de caracteres distintas."
+security.bits: "≈%{bits} bits"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Débil"
+security.level.fair: "Regular"
+security.level.good: "Buena"
+security.level.strong: "Fuerte"
+security.issue.none: "Aceptada"
+security.issue.short: "Demasiado corta: mínimo %{min} caracteres"
+security.issue.common: "Contiene una palabra conocida: se adivina de una vez"
+security.issue.repeats: "Demasiada repetición del mismo carácter"
+security.issue.sequence: "Las secuencias de caracteres consecutivos se adivinan al instante"
+security.issue.one_class: "Solo una clase de caracteres: añada un dígito, una mayúscula o un símbolo"
+security.issue.low_entropy: "Demasiado predecible: hágala más larga y variada"
+
+# --- Machine key slots ---
+security.machines: "Máquinas con acceso: %{used} de %{max}"
+security.machines_unknown: "Máquinas con acceso: — de %{max}"
+security.forget_machines: "Olvidar las demás"
+security.machines_forgotten: "Acceso revocado para las demás máquinas"
+
+# --- Apply results ---
+security.applied: "Contraseñas guardadas"
+security.pending_write: "Contraseñas aceptadas; guardando…"
+security.err.not_saved: "La contraseña se aceptó pero la configuración no se guardó; corrija el error y guarde de nuevo"
+security.err.empty: "Introduzca una contraseña"
+security.err.mismatch: "Las contraseñas no coinciden"
+security.err.not_editable: "La configuración no se abrió en esta ejecución: no hay dónde guardar la contraseña"
+security.err.backend: "El almacén de claves no está disponible: no se guardó nada"
+security.not_editable: "servers.enc no se abrió en esta ejecución: las contraseñas no están disponibles"
+security.err.weak: "La contraseña de cifrado es demasiado débil"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Acceso"
+login.title: "Acceso"
+login.placeholder: "Contraseña"
+login.enter: "Entrar"
+login.exit: "Salir"
+login.start_over: "Empezar de cero"
+login.file_subtitle: "servers.enc no se abre con la clave de esta máquina. Introduzca la contraseña de cifrado; después la máquina recordará el acceso."
+login.launch_subtitle: "Introduzca la contraseña de inicio."
+login.locked_subtitle: "servers.enc está cifrado con la clave de otra máquina y no tiene contraseña de cifrado. No hay con qué abrirlo."
+login.throttled: "La entrada se ralentiza tras varios fallos"
+login.err.empty: "Introduzca una contraseña"
+login.err.backend: "No se pudo comprobar la contraseña; consulte el registro"
+login.err.wrong: "Contraseña incorrecta"

@@ -21,7 +21,7 @@ class ContentError(TourError):
 
 
 class LocaleError(TourError):
-    """``locales/*.yml`` could not be loaded, or a referenced key is absent."""
+    """``locales/<lang>/*.yml`` could not be loaded, or a referenced key is absent."""
 
 
 class ThemeError(TourError):
@@ -71,7 +71,7 @@ class Problems:
         """Record an unknown identifier, suggesting the nearest known one.
 
         A typo in a locale key is the most common authoring mistake here, and
-        without a suggestion the author is left grepping 1600 keys by hand.
+        without a suggestion the author is left grepping the shipped locale catalogue by hand.
         """
         near = get_close_matches(key, known, n=3, cutoff=0.7)
         hint = f"nearest: {', '.join(near)}" if near else f"no near match among {universe}"

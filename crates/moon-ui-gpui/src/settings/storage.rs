@@ -325,7 +325,7 @@ impl SettingsView {
                     ),
             )
             // MIXED NODE: `storage.total_size` combines the localized "Total:" label with the
-            // figure in one text node (locales/storage.yml:22-25) — cannot style half of it, so
+            // figure in one text node (`storage.total_size`) — cannot style half of it, so
             // it stays mono.
             .child(
                 hint(t!("storage.total_size", size = moon_tg::size_text(total)).to_string())
@@ -338,7 +338,7 @@ impl SettingsView {
             // ── Reports ─────────────────────────────────────────────────────
             .child(section(&t!("storage.reports_title"), p, cx))
             // MIXED NODE: `size_line` and `storage.reports_rows` each combine a localized label
-            // with a figure in one text node (locales/storage.yml:22-25, 43-46) — stays mono.
+            // with a figure in one text node (`storage.total_size`, `storage.reports_rows`) — stays mono.
             .child(
                 hint(format!(
                     "{} · {}",

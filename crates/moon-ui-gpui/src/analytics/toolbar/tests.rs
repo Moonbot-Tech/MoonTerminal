@@ -45,7 +45,7 @@ fn presets_row_fits_only_when_available_width_reaches_the_row_width() {
     );
 }
 
-/// `locales/analytics.yml:analytics.period.last_month` must remain below the font-scaled toolbar
+/// `analytics.period.last_month` in `locales/<lang>/analytics.<lang>.yml` must remain below the font-scaled toolbar
 /// ceiling; widening it would elide the Russian Analytics period label with an ellipsis.
 #[gpui::test]
 fn every_preset_label_fits_its_fitted_cell_without_truncation(cx: &mut gpui::TestAppContext) {

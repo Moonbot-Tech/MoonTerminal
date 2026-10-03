@@ -555,7 +555,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
 
   <footer>
     <p data-i18n="ft.p">MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.</p>
-    <p class="built" data-i18n="ft.built">Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*.yml.</p>
+    <p class="built" data-i18n="ft.built">Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*/*.yml.</p>
   </footer>
 </main>
 
@@ -571,7 +571,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
 
 /* ------------------------------------------------------------------
    СЛОВАРЬ.
-   Строки с пометкой [locale] взяты из locales/*.yml дословно —
+   Строки с пометкой [locale] взяты из locales/*/*.yml дословно —
    это те же тексты, что показывает приложение.
    ------------------------------------------------------------------ */
 {{data_page}}

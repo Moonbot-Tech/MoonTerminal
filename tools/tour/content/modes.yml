@@ -1,7 +1,7 @@
 # First-class window-map modes. AUTO is the default schematic; MANUAL is the basic
 # hand-driven workspace alongside it. The `id`s stay `auto`/`classic` — they are the
 # persisted WorkspaceMode codes, not the names the user reads.
-# Labels and leads are authored here; tips reuse locales/workspace.yml so they
+# Labels and leads are authored here; tips reuse locales/<lang>/workspace.<lang>.yml so they
 # cannot drift from the in-app workspace-mode control.
 # Edited by hand; rendered into docs/tour/index.html by `make tour`.
 

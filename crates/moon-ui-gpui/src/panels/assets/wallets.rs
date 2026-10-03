@@ -357,7 +357,7 @@ impl AssetsView {
                         .child(
                             // MIXED NODE: `assets.transfer_title` combines the coin ticker and
                             // the from/to wallet names with the sentence in one text node
-                            // (locales/assets.yml:253-256) — stays mono.
+                            // (`assets.transfer_title`) — stays mono.
                             div()
                                 .font_family(design::mono())
                                 .font_weight(FontWeight::SEMIBOLD)
@@ -366,7 +366,7 @@ impl AssetsView {
                         )
                         .child(
                             // MIXED NODE: `assets.free` combines the label with the figure in one
-                            // text node (locales/assets.yml:257-260) — stays mono.
+                            // text node (`assets.free`) — stays mono.
                             div()
                                 .font_family(design::mono())
                                 .text_size(design::t_body(cx))

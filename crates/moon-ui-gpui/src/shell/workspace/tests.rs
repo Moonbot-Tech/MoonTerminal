@@ -468,7 +468,7 @@ fn icon_summary_stays_bounded_for_two_hundred_cores() {
 /// still compose the EXACT sentence `workspace.summary` renders, joined by the code-side " · "
 /// separator, in every shipped locale — or a translator editing one segment silently desyncs the
 /// rail from its own tooltip (which still reads the frozen `workspace.summary` string) in that one
-/// locale only, invisible to anyone reading the source. `locales/workspace.yml`, the NEW keys
+/// locale only, invisible to anyone reading the source. `locales/<lang>/workspace.<lang>.yml`, the NEW keys
 /// against the deliberately UNCHANGED `workspace.summary` (plan-B.md Step 3).
 ///
 /// The oracle (`workspace.summary`) is independent of the code under test: it is the pre-existing,

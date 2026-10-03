@@ -1290,23 +1290,8 @@ fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
         "the crowd statistics view must be reconciled before the empty/non-empty branch, or a          chart opening never reaches it and the view goes on drawing under the chart"
     );
 
-    let locale = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("locales")
-            .join("shell.yml"),
-    )
-    .expect("shell locale must be readable");
-    for (key, next) in [
-        ("chart.coin.cores:", "chart.empty.hint:"),
-        ("chart.empty.hint:", "# --- Stack orientation"),
-    ] {
-        let entry = chain_between(&locale, key, next, "localized chart text");
-        assert!(
-            entry.contains("ru:") && entry.contains("en:") && entry.contains("es:"),
-            "{key} must carry ru, en, and es translations"
-        );
+    for key in ["chart.coin.cores", "chart.empty.hint"] {
+        assert_locale_key_in_every_language("shell", key);
     }
 }
 
@@ -1792,7 +1777,7 @@ fn chart_strip_button_geometry_matches_the_caption_reservation() {
     }
 }
 
-/// Issue #647's six tooltip keys must ship all three languages, or that locale shows the raw key.
+/// Issue #647's six tooltip keys must ship in every language, or that locale shows the raw key.
 #[test]
 fn chart_strip_tooltip_keys_ship_in_three_languages() {
     for key in [
@@ -1803,7 +1788,7 @@ fn chart_strip_tooltip_keys_ship_in_three_languages() {
         "chart.strip.broom_tip",
         "chart.strip.broom_on_tip",
     ] {
-        assert_locale_key_in_three_languages("shell.yml", key);
+        assert_locale_key_in_every_language("shell", key);
     }
 }
 

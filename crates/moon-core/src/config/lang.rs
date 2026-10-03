@@ -1,4 +1,4 @@
-//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es");
+//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es"/"uk");
 //! applied through `rust_i18n::set_locale(lang.code())`.
 //!
 //! The default is the system locale (sys-locale), falling back to English when the
@@ -6,16 +6,18 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// Supported interface languages, persisted by code and displayed by native name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {
     Ru,
     En,
     Es,
+    Uk,
 }
 
 impl Language {
     /// All supported languages (order = order in the settings dropdown).
-    pub const ALL: [Language; 3] = [Language::Ru, Language::En, Language::Es];
+    pub const ALL: [Language; 4] = [Language::Ru, Language::En, Language::Es, Language::Uk];
 
     /// Locale code for rust_i18n / settings.toml.
     pub fn code(self) -> &'static str {
@@ -23,6 +25,7 @@ impl Language {
             Language::Ru => "ru",
             Language::En => "en",
             Language::Es => "es",
+            Language::Uk => "uk",
         }
     }
 
@@ -32,10 +35,11 @@ impl Language {
             Language::Ru => "Русский",
             Language::En => "English",
             Language::Es => "Español",
+            Language::Uk => "Українська",
         }
     }
 
-    /// Parses a code ("ru", "en-US", "es_ES", …), considering only the language prefix.
+    /// Parses a code ("ru", "en-US", "es_ES", "uk-UA", …), considering only the language prefix.
     pub fn from_code(s: &str) -> Option<Language> {
         let prefix: String = s
             .chars()
@@ -46,6 +50,7 @@ impl Language {
             "ru" => Some(Language::Ru),
             "en" => Some(Language::En),
             "es" => Some(Language::Es),
+            "uk" => Some(Language::Uk),
             _ => None,
         }
     }

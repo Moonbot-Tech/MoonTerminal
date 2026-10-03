@@ -623,51 +623,24 @@ fn the_composed_set_is_reported_beside_the_holdout() {
         "when comparison cannot run, the summary must still name the all-fields path that did"
     );
 
-    // B8. `locales/*.yml` is compiled by the `i18n!` proc macro, so a key missing in one language
-    // surfaces at runtime as the raw key rather than as a build error.
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/analytics.yml"),
-    )
-    .expect("failed to read locales/analytics.yml")
-    .replace("\r\n", "\n");
-    for (key, next) in [
-        (
-            "analytics.tuner.compose_rejected",
-            "analytics.tuner.compose_rejected_detail:",
-        ),
-        (
-            "analytics.tuner.compose_rejected_detail",
-            "analytics.tuner.train_off:",
-        ),
+    // B8. The per-language dictionaries are compiled by the `i18n!` proc macro, so a key missing
+    // in one language surfaces at runtime as the raw key rather than as a build error.
+    for key in [
+        "analytics.tuner.compose_rejected",
+        "analytics.tuner.compose_rejected_detail",
     ] {
-        let block = chain_between(
-            &locales,
-            &format!("{key}:\n"),
-            next,
-            "declined-set locale block",
-        );
-        let members = block
-            .lines()
-            .filter(|line| line.starts_with("  "))
-            .collect::<Vec<_>>();
-        assert_eq!(members.len(), 3, "{key} must define exactly ru, en, and es");
-        for locale in ["ru", "en", "es"] {
-            assert!(
-                members
-                    .iter()
-                    .any(|line| line.starts_with(&format!("  {locale}: \""))),
-                "{key} must carry {locale}, or that language shows the raw key instead"
-            );
-        }
-        if key.ends_with("_detail") {
-            for placeholder in ["%{fields}", "%{inner}", "%{gate}"] {
-                assert_eq!(
-                    block.matches(placeholder).count(),
-                    3,
-                    "every language of the declined-set line must interpolate {placeholder}: the \
-                     two signed lifts ARE the explanation, and naming the set without them says \
-                     nothing"
-                );
+        for lang in SHIPPED {
+            let value = locale_value("analytics", lang, key);
+            if key.ends_with("_detail") {
+                for placeholder in ["%{fields}", "%{inner}", "%{gate}"] {
+                    assert_eq!(
+                        value.matches(placeholder).count(),
+                        1,
+                        "{lang} of the declined-set line must interpolate {placeholder} once: the \
+                         two signed lifts ARE the explanation, and naming the set without them \
+                         says nothing"
+                    );
+                }
             }
         }
     }

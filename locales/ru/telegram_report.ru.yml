@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "Этот час"
+
+telegram.help_daily: "По дням за этот месяц"
+
+telegram.help_intro: "Выберите период в нижнем меню. Повторное нажатие обновляет отчёт. Нажмите биржу, чтобы открыть её ядра."
+
+telegram.help_commands: "Команды и свой период"
+
+telegram.help_limits: "Даты включительно, максимум 366 дней. Часовой пояс: %{zone}. Терминал должен быть запущен."
+
+telegram.help_limits_station: "Даты включительно, максимум 366 дней. Часовой пояс: %{zone}. Отчёты обновляются круглосуточно."
+
+telegram.help_custom: "Свой период / по дням"
+
+telegram.help_mini: "Для отчётов в чате Mini App не нужен. Команда /miniapp открывает приложение, если оно включено в настройках терминала."
+
+telegram.help_mini_station: "Для отчётов в чате Mini App не нужен. Команда /miniapp открывает приложение, если оно включено на станции."
+
+telegram.help_status_station: "Статус станции; кнопка обновления, когда вышла новая версия"
+telegram.report_total: "Итого"
+
+telegram.report_calculation_extra: "Итого охватывает всю выбранную группу и период, включая другие страницы. Средний ордер считается по сделкам с подходящими данными; исключения указаны в деталях отчёта."
+
+telegram.button_home: "Сводка"
+
+telegram.report_navigation_hint: "Период выбирайте в нижнем меню. Повторное нажатие запросит свежий отчёт. Под отчётом — переходы к ядрам и дням."
+
+telegram.report_all_cores: "Все ядра"
+
+telegram.report_by_days: "По дням"
+
+telegram.report_days_scope: "Дни группы"
+
+telegram.report_cores_scope: "Ядра группы"
+
+telegram.report_back: "Все биржи"
+
+telegram.report_calculation: "Как считается"
+
+telegram.report_exchanges: "Биржи"
+
+telegram.report_exchanges_menu: "Биржи"
+
+telegram.report_exchanges_back: "Назад"
+
+telegram.report_exchange: "Биржа"
+
+telegram.report_scope_unavailable: "Биржа недоступна"
+
+telegram.report_average_coverage: "учтено %{counted}; исключено %{excluded}"
+
+telegram.report_delivery_failed: "Не удалось показать отчёт. Повторите запрос; если ошибка повторяется, проверьте подключение терминала и обновите Telegram."
+telegram.report_delivery_failed_station: "Не удалось показать отчёт. Повторите запрос; если ошибка повторяется, обновите Telegram."
+
+telegram.button_today: "Сегодня"
+
+telegram.button_yesterday: "Вчера"
+
+telegram.button_month: "Этот месяц"
+
+telegram.button_lastmonth: "Прошлый месяц"
+
+telegram.button_daily: "По дням"
+
+telegram.report_days: "Дни"
+
+telegram.report_cores: "Ядра"
+
+telegram.report_profit: "Результат"
+
+telegram.report_trades: "Сделки"
+
+telegram.report_date: "Дата"
+
+telegram.report_bot: "Бот"
+
+telegram.report_details: "Валюта и средний ордер"
+
+telegram.report_average: "Средний ордер"
+
+telegram.report_page: "Страница"
+
+telegram.report_prev: "Назад"
+
+telegram.report_next: "Далее"
+
+telegram.report_unvalued: "Нет оценки"
+
+telegram.report_empty: "За этот период закрытых реальных сделок нет."
+
+telegram.report_scope: "Выбранная группа в истории терминала · реальные закрытые сделки · курс на момент сделки. Данные локальной истории; выключенные боты не обновляются."
+telegram.report_scope_station: "Выбранная группа в истории станции · реальные закрытые сделки · курс на момент сделки. Станция копирует историю ядер круглосуточно; отключённые боты не обновляются."
+
+telegram.report_missing_rates: "Если не все сделки оценены, итог в USDT недоступен. Детали сохраняют суммы по известным валютам; неизвестные валюты в них не включены."
+
+telegram.report_busy: "Предыдущий отчёт ещё рассчитывается. Повторите запрос немного позже."
+
+telegram.report_failed: "Не удалось прочитать историю сделок. Повторите запрос; ошибка чтения не означает нулевой результат."
+
+telegram.report_help: "Выберите период кнопками. В отчёте доступны вид по ботам/дням — для свежих данных повторно нажмите период в нижнем меню.\n\n/hour — этот час\n/today — сегодня\n/daily — по дням за этот месяц\n/report 2026-09-01 2026-09-10 — свой период\n/daily 2026-09-01 2026-09-10 — свой период по дням\nДаты включительно, максимум 366 дней; часовой пояс — из часов терминала. Терминал должен быть запущен."
+
+telegram.report_help_station: "Выберите период кнопками. В отчёте доступны вид по ботам/дням — для свежих данных повторно нажмите период в нижнем меню.\n\n/hour — этот час\n/today — сегодня\n/daily — по дням за этот месяц\n/report 2026-09-01 2026-09-10 — свой период\n/daily 2026-09-01 2026-09-10 — свой период по дням\n/status — статус станции\nДаты включительно, максимум 366 дней; часовой пояс — из настроек станции. Отчёты обновляются круглосуточно."
+
+telegram.notify_profit: "Прибыль"
+
+telegram.notify_manual: "Вручную"
+
+telegram.notify_unvalued: "Нет оценки"
+
+telegram.notify_down: "нет связи с"
+
+telegram.notify_back: "связь восстановлена"
+
+telegram.notify_daily_title: "Итог дня"
+
+telegram.notify_trades: "Сделки"
+
+telegram.notify_unvalued_trades: "Без оценки"
+
+telegram.notify_best: "Лучшая"
+
+telegram.notify_worst: "Худшая"

@@ -169,6 +169,13 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
 ///
 /// This is parsing only: the runtime still checks private-chat identity and authorization.
 /// Slash commands never become button clicks, even if a supplied label resembles a command.
+///
+/// Args:
+///     text: Incoming text, trimmed before matching.
+///     labels: Reply-button aliases keyed by button name, style, and `Language::ALL` code.
+///
+/// Returns:
+///     The command for an exact supplied alias, or [`ParsedCommand::Unknown`] on a miss.
 pub fn parse_reply_button(
     text: &str,
     labels: &std::collections::BTreeMap<String, String>,
@@ -177,7 +184,7 @@ pub fn parse_reply_button(
     if text.is_empty() || text.starts_with('/') {
         return ParsedCommand::Unknown;
     }
-    for locale in ["ru", "en", "es"] {
+    for locale in crate::config::Language::ALL.map(crate::config::Language::code) {
         for (name, command) in [
             ("miniapp", ParsedCommand::MiniApp),
             ("help", ParsedCommand::Help),

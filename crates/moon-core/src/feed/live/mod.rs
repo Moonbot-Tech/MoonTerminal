@@ -1061,7 +1061,7 @@ pub(super) fn run(
                 } => {
                     // THIS machine could not bind its own UDP socket. The sentence that used to be
                     // built here named a VPN and a firewall in Russian, inside a crate that cannot
-                    // localize; the same advice now lives in `locales/core_status.yml` behind the
+                    // localize; the same advice now lives in `locales/<lang>/core_status.<lang>.yml` behind the
                     // typed kind, and only an English token stays on the status.
                     let _ = tx.send(FeedMsg::ConnFault(convert::bind_fault(
                         consecutive_failures,

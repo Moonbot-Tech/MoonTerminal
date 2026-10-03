@@ -990,15 +990,14 @@ pub(super) fn header_for(col: &str) -> String {
     }
 }
 
-/// Report columns carrying a `report.col.<name>` translation in `locales/report.yml`'s
-/// `# --- Column headers ---` block.
+/// Report columns carrying a `report.col.<name>` translation in `locales/<lang>/report.<lang>.yml`.
 ///
 /// `t!` does not fall back to a default on a missing key — it returns the literal
 /// `"report.col.<name>"` string — and the runtime schema genuinely carries columns outside this
 /// set (`DISPLAY_COLUMNS`' six deliberately-untranslated technical names, `lev`, `fname`, every
 /// `*delta`/`*ratio` metric column, and any dynamically added core field), so [`header_label`]
 /// must test membership here rather than trying `t!` on every column and hoping for the best.
-/// **Kept in sync with `locales/report.yml` by hand — one decision in two places.**
+/// **Kept in sync with `locales/<lang>/report.<lang>.yml` by hand — one decision in two places.**
 fn is_keyed_report_header(col: &str) -> bool {
     matches!(
         col,
@@ -1042,7 +1041,7 @@ fn is_keyed_report_header(col: &str) -> bool {
             | "dvol"
             // `takeprofitlag` is deliberately absent: it is the one tuner column with no
             // `tuner/fields.rs` FieldSpec to mirror, so it keeps its raw DB name rather than an
-            // invented label. Keep this in step with `locales/report.yml`.
+            // invented label. Keep this in step with the `report.col.*` keys.
             | "last_update_at"
     )
 }

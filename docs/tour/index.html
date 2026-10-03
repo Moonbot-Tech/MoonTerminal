@@ -1015,7 +1015,7 @@ footer .built{font-family:var(--mono);font-size:12px;margin-top:10px;color:var(-
 
   <footer>
     <p data-i18n="ft.p">MoonTerminal — десктопный торговый терминал для ядра Moonbot. Windows · macOS · Linux.</p>
-    <p class="built" data-i18n="ft.built">Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*.yml.</p>
+    <p class="built" data-i18n="ft.built">Страница собрана из данных репозитория: палитра и метрики — themes/moon-terminal.toml, все подписи и пояснения — locales/*/*.yml.</p>
   </footer>
 </main>
 
@@ -1031,7 +1031,7 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ESC[c]);
 
 /* ------------------------------------------------------------------
    СЛОВАРЬ.
-   Строки с пометкой [locale] взяты из locales/*.yml дословно —
+   Строки с пометкой [locale] взяты из locales/*/*.yml дословно —
    это те же тексты, что показывает приложение.
    ------------------------------------------------------------------ */
 const T = {
@@ -1128,8 +1128,8 @@ const T = {
     "en": "MoonTerminal — desktop trading terminal for the Moonbot core. Windows · macOS · Linux."
   },
   "ft.built": {
-    "ru": "Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI; подписи и пояснения — из проверенной модели тура и выбранных locales/*.yml. Это схема, а не запись живой сессии.",
-    "en": "This page is assembled from repository data: palette and metrics come from a committed MoonUI theme snapshot; labels and explanations come from the validated tour model and selected locales/*.yml. It is a schematic, not a live-session capture."
+    "ru": "Страница собрана из данных репозитория: палитра и метрики — из зафиксированного снимка темы MoonUI; подписи и пояснения — из проверенной модели тура и выбранных locales/*/*.yml. Это схема, а не запись живой сессии.",
+    "en": "This page is assembled from repository data: palette and metrics come from a committed MoonUI theme snapshot; labels and explanations come from the validated tour model and selected locales/*/*.yml. It is a schematic, not a live-session capture."
   },
   "ui.ws.auto": {
     "ru": "AUTO режим",
@@ -1367,7 +1367,7 @@ const MODES = {
           "Workspace mode",
           "Switches the group's workspace. In AUTO mode the terminal keeps the active core's coin on the chart for you."
         ],
-        "src": "locales/workspace.yml"
+        "src": "locales/en/workspace.en.yml"
       },
       "core": {
         "n": 3,
@@ -1403,7 +1403,7 @@ const MODES = {
           "Rate ticker",
           "Price and 1h / 24h deltas. Click opens the chart, double-click picks coin and core"
         ],
-        "src": "locales/shell.yml — header.ticker_tip"
+        "src": "locales/en/shell.en.yml — header.ticker_tip"
       },
       "clock": {
         "n": 6,
@@ -1415,7 +1415,7 @@ const MODES = {
           "Clock",
           "Clock in the selected time zone. Click to change it; daylight-saving changes are automatic"
         ],
-        "src": "locales/shell.yml — header.clock_tip"
+        "src": "locales/en/shell.en.yml — header.clock_tip"
       },
       "size": {
         "n": 7,
@@ -1427,7 +1427,7 @@ const MODES = {
           "Order size F1–F6",
           "Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots sit on the F1…F6 keys."
         ],
-        "src": "locales/shell.yml — toolbar.size_hint"
+        "src": "locales/en/shell.en.yml — toolbar.size_hint"
       },
       "lev": {
         "n": 8,
@@ -1439,7 +1439,7 @@ const MODES = {
           "Leverage",
           "Leverage for the active core's market. A change is sent to the exchange as its own command and shows up in the log as \"Leverage … ×N\"."
         ],
-        "src": "locales/shell.yml — toolbar.lev_title"
+        "src": "locales/en/shell.en.yml — toolbar.lev_title"
       },
       "risk": {
         "n": 9,
@@ -1451,7 +1451,7 @@ const MODES = {
           "Risk: stop loss",
           "The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside it."
         ],
-        "src": "locales/shell.yml — toolbar.sl_title"
+        "src": "locales/en/shell.en.yml — toolbar.sl_title"
       },
       "exit": {
         "n": 10,
@@ -1463,7 +1463,7 @@ const MODES = {
           "Exit: TP and fixed sells",
           "Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to edit · Ctrl+wheel to change."
         ],
-        "src": "locales/shell.yml — toolbar.tp_title, toolbar.sell_hint"
+        "src": "locales/en/shell.en.yml — toolbar.tp_title, toolbar.sell_hint"
       },
       "live": {
         "n": 11,
@@ -1475,7 +1475,7 @@ const MODES = {
           "Live / Pause",
           "Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."
         ],
-        "src": "locales/shell.yml — toolbar.live_tip"
+        "src": "locales/en/shell.en.yml — toolbar.live_tip"
       },
       "launch": {
         "n": 12,
@@ -1499,7 +1499,7 @@ const MODES = {
           "Chart tabs",
           "The group's open charts. Escape closes the active Main chart, Shift+Escape closes every Main chart in every group."
         ],
-        "src": "locales/hotkeys.yml — встроенные"
+        "src": "locales/en/hotkeys.en.yml — встроенные"
       },
       "chart": {
         "n": 14,
@@ -1511,7 +1511,7 @@ const MODES = {
           "Chart area",
           "Candles, order lines and closed trades drawn by a dedicated GPU pass. Wheel zooms by time, Shift or Alt + wheel pans left/right. Ctrl+Shift+wheel super zooms down to 3 seconds. Tab or Delete over an entry order line cancels it; hold and sweep to cancel every entry the pointer crosses."
         ],
-        "src": "locales/hotkeys.yml — встроенные"
+        "src": "locales/en/hotkeys.en.yml — встроенные"
       },
       "book": {
         "n": 15,
@@ -1523,7 +1523,7 @@ const MODES = {
           "Order book",
           "Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click moves an open long, Ctrl+click moves the exit lines."
         ],
-        "src": "locales/hotkeys.yml — жесты стакана"
+        "src": "locales/en/hotkeys.en.yml — жесты стакана"
       },
       "detects": {
         "n": 16,
@@ -1535,7 +1535,7 @@ const MODES = {
           "Detect ribbon",
           "Cards for fired detections per core-and-coin pair. The gear configures the look: size, fields, mini-chart, coloured server strip."
         ],
-        "src": "locales/dock.yml — detects.cfg.*"
+        "src": "locales/en/dock.en.yml — detects.cfg.*"
       },
       "dtabs": {
         "n": 17,
@@ -1547,7 +1547,7 @@ const MODES = {
           "Dock tabs",
           "Click to select · double-click or drag to pop out into a window. Right-click a tab to turn on unread counters."
         ],
-        "src": "locales/dock.yml — dock.tab.hint_docked"
+        "src": "locales/en/dock.en.yml — dock.tab.hint_docked"
       },
       "table": {
         "n": 18,
@@ -1632,7 +1632,7 @@ const MODES = {
           "Workspace mode",
           "Auto-trading workspace; layout is shared across servers and window detachment is disabled"
         ],
-        "src": "locales/workspace.yml — workspace.mode.auto_tip"
+        "src": "locales/en/workspace.en.yml — workspace.mode.auto_tip"
       },
       "core": {
         "n": 3,
@@ -1656,7 +1656,7 @@ const MODES = {
           "Rate ticker",
           "Price and 1h / 24h deltas. Click opens the chart, double-click picks coin and core"
         ],
-        "src": "locales/shell.yml — header.ticker_tip"
+        "src": "locales/en/shell.en.yml — header.ticker_tip"
       },
       "clock": {
         "n": 5,
@@ -1668,7 +1668,7 @@ const MODES = {
           "Clock",
           "Clock in the selected time zone. Click to change it; daylight-saving changes are automatic"
         ],
-        "src": "locales/shell.yml — header.clock_tip"
+        "src": "locales/en/shell.en.yml — header.clock_tip"
       },
       "size": {
         "n": 6,
@@ -1680,7 +1680,7 @@ const MODES = {
           "Order size F1–F6",
           "Order size F1–F6 · click to select · double-click to edit · Ctrl+wheel to change. The same slots sit on the F1…F6 keys."
         ],
-        "src": "locales/shell.yml — toolbar.size_hint"
+        "src": "locales/en/shell.en.yml — toolbar.size_hint"
       },
       "lev": {
         "n": 7,
@@ -1692,7 +1692,7 @@ const MODES = {
           "Leverage",
           "Leverage for the active core's market. A change is sent to the exchange as its own command and shows up in the log as \"Leverage … ×N\"."
         ],
-        "src": "locales/shell.yml — toolbar.lev_title"
+        "src": "locales/en/shell.en.yml — toolbar.lev_title"
       },
       "risk": {
         "n": 8,
@@ -1704,7 +1704,7 @@ const MODES = {
           "Risk: stop loss",
           "The panic-on-price-drop switch and the stop-loss value. The value is edited in the popup beside it."
         ],
-        "src": "locales/shell.yml — toolbar.sl_title"
+        "src": "locales/en/shell.en.yml — toolbar.sl_title"
       },
       "exit": {
         "n": 9,
@@ -1716,7 +1716,7 @@ const MODES = {
           "Exit: TP and fixed sells",
           "Take profit plus the S1–S6 fixed-sell strip. Fixed sell S · click to engage · double-click to edit · Ctrl+wheel to change."
         ],
-        "src": "locales/shell.yml — toolbar.tp_title, toolbar.sell_hint"
+        "src": "locales/en/shell.en.yml — toolbar.tp_title, toolbar.sell_hint"
       },
       "live": {
         "n": 10,
@@ -1728,7 +1728,7 @@ const MODES = {
           "Live / Pause",
           "Live: the chart follows the market. Pause: frozen, you can scroll (LMB drag, wheel)."
         ],
-        "src": "locales/shell.yml — toolbar.live_tip"
+        "src": "locales/en/shell.en.yml — toolbar.live_tip"
       },
       "launch": {
         "n": 11,
@@ -1764,7 +1764,7 @@ const MODES = {
           "Full summary",
           "All available cores in group Main"
         ],
-        "src": "locales/workspace.yml — workspace.overview_tip"
+        "src": "locales/en/workspace.en.yml — workspace.overview_tip"
       },
       "cores": {
         "n": 14,
@@ -1812,7 +1812,7 @@ const MODES = {
           "Order book",
           "Market depth right of the chart. Mouse gestures live here too: double-click places a long, Shift+click moves an open long, Ctrl+click moves the exit lines."
         ],
-        "src": "locales/hotkeys.yml — жесты стакана"
+        "src": "locales/en/hotkeys.en.yml — жесты стакана"
       },
       "orders": {
         "n": 18,
@@ -2691,7 +2691,7 @@ function render(){
     }
   ],
   [
-    "3",
+    "4",
     {
       "ru": "языка интерфейса",
       "en": "interface languages"

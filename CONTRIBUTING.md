@@ -65,8 +65,8 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   that block.
 - **Issues, issue comments, commits and PR text are in English** as well — the tracker is the
   public record every contributor reads.
-- **UI strings go through `t!("key")`**, with the keys in `locales/*.yml`. No literals in panels.
-- A key is added in **all three languages at once** — ru/en/es. [`locales/README.md`](locales/README.md)
+- **UI strings go through `t!("key")`**, with the keys in `locales/<lang>/<area>.<lang>.yml`. No literals in panels.
+- A key is added in **all four languages at once** — ru/en/es/uk. [`locales/README.md`](locales/README.md)
   is binding, not background: it holds the deliberately-untranslated list and the rule that glyphs
   never live in dictionary values.
 - Every new or changed function, struct and module gets a docstring — public and private alike.
@@ -223,7 +223,7 @@ make build | run | release | check | fmt
 LF, UTF-8, 4-space indent, trailing newline (`.gitattributes` + `.editorconfig`).
 A CRLF write shows up as a whole-file diff.
 
-`docs/tour/index.html` is **generated**, not written: it is built from `locales/*.yml`
+`docs/tour/index.html` is **generated**, not written: it is built from `locales/*/*.yml`
 and `tools/tour/content/*.yml` by `make tour`, and a CI job fails the PR when the
 committed page does not match its sources. Edit the content files, then re-run and
 commit the result. See [`tools/tour/README.md`](tools/tour/README.md).

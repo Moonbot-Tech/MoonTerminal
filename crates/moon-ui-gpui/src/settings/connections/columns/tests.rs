@@ -258,18 +258,23 @@ fn data_trigger_fits_every_count_at_each_zoom() {
 fn total_trigger_fits_every_localized_option_at_each_zoom() {
     use moon_core::config::UiThemeMode;
 
-    let dictionary = include_str!("../../../../../../locales/connections.yml");
-    let mut in_total_mode = false;
+    let dictionaries = [
+        include_str!("../../../../../../locales/ru/connections.ru.yml"),
+        include_str!("../../../../../../locales/en/connections.en.yml"),
+        include_str!("../../../../../../locales/es/connections.es.yml"),
+        include_str!("../../../../../../locales/uk/connections.uk.yml"),
+    ];
     let mut labels = Vec::new();
-    for line in dictionary.lines() {
-        if !line.starts_with(' ') {
-            in_total_mode = line.starts_with("conn.total.");
-        } else if in_total_mode {
-            let (_, value) = line.split_once(':').expect("locale value");
+    for dictionary in dictionaries {
+        for line in dictionary.lines() {
+            let Some(rest) = line.strip_prefix("conn.total.") else {
+                continue;
+            };
+            let (_, value) = rest.split_once(':').expect("locale value");
             labels.push(value.trim().trim_matches('"'));
         }
     }
-    assert_eq!(labels.len(), 9, "three modes in each shipped locale");
+    assert_eq!(labels.len(), 12, "three modes in each shipped locale");
     for zoom in [0.75, 1.0, 1.5] {
         let tokens =
             crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom).dark;

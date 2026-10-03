@@ -230,56 +230,83 @@ fn english_wording_preserves_warning_and_refusal_evidence() {
 /// Check every import-preview dictionary entry, including less common chart/action captions.
 #[test]
 fn every_preview_key_has_all_locales_and_matching_parameters() {
-    let yaml = include_str!("../../../../../../locales/import.yml");
-    let mut key = "";
-    let mut translations: Vec<(&str, String)> = Vec::new();
-    for line in yaml.lines().chain(["end:"]) {
-        if !line.starts_with(' ') && line.ends_with(':') {
-            if key.starts_with("import.preview.") {
-                assert_eq!(
-                    translations.len(),
-                    3,
-                    "every key requires three translations"
-                );
-                assert_eq!(
-                    translations
-                        .iter()
-                        .map(|(locale, _)| *locale)
-                        .collect::<Vec<_>>(),
-                    ["ru", "en", "es"]
-                );
-                let mut expected = None;
-                for (locale, text) in &translations {
-                    if *locale != "ru" {
-                        assert!(
-                            !text.chars().any(|c| ('\u{0400}'..='\u{04ff}').contains(&c)),
-                            "translated preview key contains Cyrillic"
-                        );
-                    }
-                    let _locale = crate::test_locale::force(locale);
-                    assert_eq!(rust_i18n::t!(key).as_ref(), text);
-                    let mut params: Vec<_> = text
-                        .split("%{")
-                        .skip(1)
-                        .map(|part| part.split('}').next().unwrap())
-                        .collect();
-                    params.sort();
-                    if let Some(ref expected) = expected {
-                        assert_eq!(&params, expected);
-                    } else {
-                        expected = Some(params);
-                    }
-                }
+    use std::collections::BTreeMap;
+
+    let files = [
+        (
+            "ru",
+            include_str!("../../../../../../locales/ru/import.ru.yml"),
+        ),
+        (
+            "en",
+            include_str!("../../../../../../locales/en/import.en.yml"),
+        ),
+        (
+            "es",
+            include_str!("../../../../../../locales/es/import.es.yml"),
+        ),
+        (
+            "uk",
+            include_str!("../../../../../../locales/uk/import.uk.yml"),
+        ),
+    ];
+    let mut by_lang: BTreeMap<&str, BTreeMap<&str, String>> = BTreeMap::new();
+    for (lang, yaml) in files {
+        let mut entries = BTreeMap::new();
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
             }
-            key = line.trim_end_matches(':');
-            translations.clear();
-        } else if key.starts_with("import.preview.")
-            && let Some((locale, value)) = line.trim().split_once(": ")
-        {
-            let value: String = serde_json::from_str(value).unwrap();
-            translations.push((locale, value));
+            let Some((key, raw)) = line.split_once(": ") else {
+                continue;
+            };
+            if !key.starts_with("import.preview.") {
+                continue;
+            }
+            let value: String = serde_json::from_str(raw.trim())
+                .unwrap_or_else(|err| panic!("{lang} {key} is not a JSON string: {err}"));
+            assert!(entries.insert(key, value).is_none(), "{lang} repeats {key}");
+        }
+        by_lang.insert(lang, entries);
+    }
+    let english = &by_lang["en"];
+    assert!(!english.is_empty(), "import preview catalogue is empty");
+    for (key, en_text) in english {
+        let mut expected = params_of(en_text);
+        expected.sort();
+        for (lang, entries) in &by_lang {
+            let text = entries
+                .get(key)
+                .unwrap_or_else(|| panic!("{lang} is missing {key}"));
+            if *lang != "ru" && *lang != "uk" {
+                assert!(
+                    !text.chars().any(|c| ('\u{0400}'..='\u{04ff}').contains(&c)),
+                    "{lang} preview key {key} contains Cyrillic"
+                );
+            }
+            let _locale = crate::test_locale::force(lang);
+            assert_eq!(rust_i18n::t!(*key).as_ref(), text);
+            let mut params = params_of(text);
+            params.sort();
+            assert_eq!(params, expected, "{lang} {key} placeholders differ");
         }
     }
+    for (lang, entries) in &by_lang {
+        for key in entries.keys() {
+            assert!(
+                english.contains_key(key),
+                "{lang} has extra preview key {key}"
+            );
+        }
+    }
+}
+
+fn params_of(text: &str) -> Vec<&str> {
+    text.split("%{")
+        .skip(1)
+        .map(|part| part.split('}').next().unwrap())
+        .collect()
 }
 
 /// A missing locale or an untranslated mode value would hide the imported x10 mode.

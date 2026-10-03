@@ -272,7 +272,7 @@ jobs:
   tour:
     name: Tour and knowledge site
     runs-on: ubuntu-latest
-    # The complete site is GENERATED from locales/*.yml, tools/tour/content/*.yml and a
+    # The complete site is GENERATED from locales/*/*.yml, tools/tour/content/*.yml and a
     # committed snapshot of MoonUI's theme. This gate proves a clean clone can build the exact
     # artifact that Pages will deploy; no committed Markdown copy needs manual regeneration.
     #

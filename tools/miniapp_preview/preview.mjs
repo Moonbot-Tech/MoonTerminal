@@ -1,7 +1,7 @@
 // Headless preview of the Telegram Mini App: renders every screen from fixture payloads and
 // checks entry-volume rendering and the owner commands the page sends. No core, no bot, no network.
 //
-//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es] [--only <screen>]
+//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]
 //
 // Exits non-zero when an interaction check fails or the page throws.
 
@@ -28,7 +28,7 @@ function args() {
         else if (key === "--locale") out.locale = value;
         else if (key === "--only") out.only = value;
         else if (key === "--help" || key === "-h") {
-            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es] [--only <screen>]");
+            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]");
             process.exit(0);
         } else throw new Error(`unknown argument ${key}`);
         i++;
@@ -67,15 +67,31 @@ function chromePath() {
     return found;
 }
 
-// The labels the terminal hands the page: every `telegram.*` key, prefix stripped, in one locale.
+/**
+ * Load preview labels from English `telegram*` areas, stripping the `telegram.` key prefix.
+ * Read overrides from locales/<locale>/<area>.<locale>.yml, falling back per key to English
+ * when the locale file is missing or its value is not a string. Locale-only keys are ignored.
+ * @param {object} yaml YAML parser used to load each dictionary.
+ * @param {string} locale Requested language code, also returned as the `locale` label.
+ * @returns {object} Label map for the preview page.
+ * @throws {Error} If the English directory or a dictionary cannot be read or parsed.
+ */
 function labels(yaml, locale) {
     const out = { locale };
-    for (const file of fs.readdirSync(LOCALES).filter((f) => /^telegram.*\.yml$/.test(f)).sort()) {
-        const doc = yaml.load(fs.readFileSync(path.join(LOCALES, file), "utf8")) || {};
-        for (const [key, value] of Object.entries(doc)) {
-            if (!key.startsWith("telegram.") || !value || typeof value !== "object") continue;
-            const text = value[locale] ?? value.en;
-            if (typeof text === "string") out[key.slice("telegram.".length)] = text;
+    const enDir = path.join(LOCALES, "en");
+    const files = fs.readdirSync(enDir).filter((f) => /^telegram.*\.en\.yml$/.test(f)).sort();
+    for (const file of files) {
+        const area = file.slice(0, -".en.yml".length);
+        const enDoc = yaml.load(fs.readFileSync(path.join(enDir, file), "utf8")) || {};
+        const localeFile = path.join(LOCALES, locale, `${area}.${locale}.yml`);
+        const localeDoc = locale === "en" || !fs.existsSync(localeFile)
+            ? {}
+            : (yaml.load(fs.readFileSync(localeFile, "utf8")) || {});
+        for (const [key, fallback] of Object.entries(enDoc)) {
+            if (!key.startsWith("telegram.") || typeof fallback !== "string") continue;
+            const local = localeDoc[key];
+            const text = typeof local === "string" ? local : fallback;
+            out[key.slice("telegram.".length)] = text;
         }
     }
     return out;

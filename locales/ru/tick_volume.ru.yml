@@ -1,0 +1,33 @@
+# Cursor volume readout: per-trade prints near the cursor, plus the hovered candle's own bucket
+# turnover. The two are labelled separately on purpose — a bucket total is not a trade.
+_version: 1
+
+tick_volume.nearby: "Тики рядом с курсором"
+tick_volume.side_values: "%{side} (%{count}): %{value} %{unit}"
+
+tick_volume.nearby_unit: "Тики рядом (%{unit})"
+tick_volume.side_count: "%{side} (%{count})"
+tick_volume.minimum: "Мин: %{value}"
+tick_volume.maximum: "Макс: %{value}"
+
+# The hovered candle's whole-bucket turnover. `%{tf}` is the bucket width as the chart's own
+# timeframe controls spell it (`1m`, `4h`, `1d`) and stays untranslated, like every other market
+# token. The `_untimed` pair covers a bucket whose width cannot be named.
+tick_volume.candle_values: "Свеча %{tf}: %{value} %{unit}"
+tick_volume.candle_values_untimed: "Свеча: %{value} %{unit}"
+tick_volume.candle_head: "Свеча %{tf}"
+tick_volume.candle_head_untimed: "Свеча"
+
+# Stacked with no tick heading above to carry the unit: the candle's own heading carries it, so a
+# narrow pane can still show the amount on its own line instead of losing the block.
+tick_volume.candle_head_unit: "Свеча %{tf} (%{unit})"
+tick_volume.candle_head_unit_untimed: "Свеча (%{unit})"
+
+# The hovered sides-half sample (`candle_volume_sides`): bought and sold over the band's rolling
+# interval ending at the pointer, spelled `Bv`/`Sv` like the chart captions. `%{tf}` stays
+# untranslated as above.
+tick_volume.sides_values: "За %{tf}: Bv %{buy} · Sv %{sell} %{unit}"
+tick_volume.sides_head: "Объём за %{tf}"
+tick_volume.sides_head_unit: "Объём за %{tf} (%{unit})"
+tick_volume.sides_buy: "Bv: %{value}"
+tick_volume.sides_sell: "Sv: %{value}"

@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "En cola"
+core_update.phase.held: "En espera — línea ocupada"
+core_update.phase.sent: "Comando enviado"
+core_update.phase.waiting: "Actualizando"
+core_update.phase.verifying: "Verificando la versión"
+core_update.phase.succeeded: "Actualizado"
+core_update.phase.installed: "Instalado"
+core_update.phase.unchanged: "Versión sin cambios"
+core_update.phase.failed.not_sent: "No se pudo enviar el comando"
+core_update.phase.failed.never_dropped: "El núcleo no se desconectó para la actualización"
+core_update.phase.failed.not_ready: "No volvió a estar disponible a tiempo para enviarle la actualización"
+core_update.phase.failed.timeout: "No volvió tras la actualización — tiempo agotado"
+core_update.phase.failed.gone: "La dirección del núcleo dejó de ser conocida"
+core_update.phase.failed.abandoned: "Abandonado al cerrar la aplicación"
+core_update.phase.failed.rejected: "El núcleo rechazó el nombre de la build solicitada"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Versión no verificada — reconexión no disponible"
+core_update.phase.unverified.timeout: "Versión no verificada — el núcleo no volvió a tiempo"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "actualizando"
+core_update.summary.queued: "en cola"
+core_update.summary.failed: "con error"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Hora"
+core_update.col.core: "Núcleo"
+core_update.col.server: "Servidor"
+core_update.col.from_to: "De → a"
+core_update.col.target: "Objetivo"
+core_update.col.outcome: "Resultado"
+core_update.col.duration: "Duración"
+core_update.list_empty: "Sin historial de actualizaciones"
+core_update.target.release: "Lanzamiento"
+core_update.target.named: "Beta %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Actualizar este núcleo"
+core_update.server.action: "Actualizar %{n} núcleo(s) de este servidor"
+core_update.retry: "Reintentar la actualización"
+core_update.skipped_offline: "%{n} sin conexión"
+core_update.skipped_already: "%{n} ya en actualización"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Actualizar todo"
+core_update.fleet.behind: "Actualizar atrasados"
+core_update.fleet.behind_none: "Nada aquí reporta una versión más antigua que la más nueva visible, y la terminal no puede ver los lanzamientos de Moonbot."
+core_update.fleet.selected: "Actualizar seleccionados (%{n})"
+core_update.fleet.named: "A una build…"
+core_update.confirm.title: "Actualizar núcleos"
+core_update.confirm.q: "¿Actualizar %{cores} núcleos en %{servers} servidores? Las actualizaciones se ejecutan en paralelo entre servidores — no más de un núcleo a la vez por servidor."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Actualizar a la versión de lanzamiento"
+core_update.menu.named: "Actualizar a una versión con nombre…"
+core_update.menu.named_prompt: "Nombre de la build para %{core}:"
+core_update.menu.release_n: "Actualizar %{n} núcleo(s) a la versión de lanzamiento"
+core_update.menu.named_n: "Actualizar %{n} núcleo(s) a una versión con nombre…"
+core_update.menu.named_prompt_n: "Nombre de la build para %{n} núcleo(s):"
+core_update.confirm.named_prompt: "Nombre de la build:"
+core_update.menu.named_ph: "MoonBot-F8 o %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "Puedes escribir solo el nombre de la build, o pegar el comando de instalación completo — ambos funcionan."
+core_update.menu.unavailable: "No disponible — núcleo no listo o ya actualizándose"

@@ -122,16 +122,19 @@ fn navigation_commands_keep_address_and_argument_guards() {
     }
 }
 
-/// Exact old-locale labels remain usable; partial text and command-shaped labels stay inert.
+/// Exact old-locale labels remain usable, including Ukrainian; partial text and
+/// command-shaped labels stay inert. A loop that still skipped `uk` would leave
+/// a Ukrainian reply button unmatched.
 #[test]
 fn reply_labels_accept_all_locales_without_loose_command_matching() {
     let labels = BTreeMap::from([
         ("button_miniapp_ru".into(), "Открыть Mini App".into()),
         ("button_miniapp_en".into(), "Open Mini App".into()),
+        ("button_miniapp_uk".into(), "Open Mini App UK".into()),
         ("button_help_es".into(), "Ayuda".into()),
         ("button_help_ru".into(), "/help@other".into()),
     ]);
-    for text in ["Открыть Mini App", "Open Mini App"] {
+    for text in ["Открыть Mini App", "Open Mini App", "Open Mini App UK"] {
         assert_eq!(parse_reply_button(text, &labels), ParsedCommand::MiniApp);
     }
     assert_eq!(parse_reply_button("Ayuda", &labels), ParsedCommand::Help);

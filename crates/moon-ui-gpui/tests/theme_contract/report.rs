@@ -4,7 +4,7 @@
 //! (`analytics.rs` still owns the ones spanning both panels). Everything below is specific to
 //! Report's own restyle: the export/clipboard header contract stays on raw DB names, `cell_weight`
 //! never grows a third resolved font, the side badge stays one shared helper, and every runtime
-//! column gets a localized header in all three shipped locales.
+//! column gets a localized header in every shipped locale.
 
 use super::support::*;
 
@@ -107,10 +107,10 @@ fn the_side_badge_is_the_one_shared_helper_in_both_panels() {
 /// entry, which is WRONG -- `header_label`'s own docstring says the runtime schema genuinely
 /// carries columns outside the keyed set (six deliberately-untranslated technical names, `lev`,
 /// `fname`, every `*delta`/`*ratio` metric). The real invariant is that `is_keyed_report_header`'s
-/// `matches!` list and `locales/report.yml` are "kept in sync by hand -- one decision in two
-/// places" (`columns.rs`'s own docstring): every column NAMED THERE needs its `report.col.<name>`
-/// locale entry, in all three shipped locales, or `header_label`'s miss path leaks the raw locale
-/// key text for a column someone added to one list and forgot in the other.
+/// `matches!` list and `locales/<lang>/report.<lang>.yml` are "kept in sync by hand -- one
+/// decision in two places" (`columns.rs`'s own docstring): every column NAMED THERE needs its
+/// `report.col.<name>` locale entry, in every shipped locale, or `header_label`'s miss path leaks
+/// the raw locale key text for a column someone added to one list and forgot in the other.
 #[test]
 fn every_keyed_report_header_has_a_localized_entry_in_all_three_locales() {
     let columns_src = read_src("panels/report/columns.rs");
@@ -121,38 +121,8 @@ fn every_keyed_report_header_has_a_localized_entry_in_all_three_locales() {
         "expected a substantial keyed-column list; got {names:?} -- did the function shape change?"
     );
 
-    let locales = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/report.yml"),
-    )
-    .expect("read Report locales")
-    .replace("\r\n", "\n");
-
     for column in names {
-        let key = format!("report.col.{column}:\n");
-        let block = locale_block(&locales, &key);
-        for locale in ["ru", "en", "es"] {
-            assert!(
-                block
-                    .lines()
-                    .any(|line| line.starts_with(&format!("  {locale}: "))),
-                "report.col.{column} must define {locale}"
-            );
-        }
+        let key = format!("report.col.{column}");
+        assert_locale_key_in_every_language("report", &key);
     }
-}
-
-/// Slice the indented lines directly under a `key:\n` locale anchor -- the same shape
-/// `chain_between` isolates in `analytics.rs`, but bounded by indentation instead of a known next
-/// key, since the column list this test walks is data-driven rather than a fixed sequence.
-fn locale_block<'a>(locales: &'a str, key: &str) -> &'a str {
-    let after = locales
-        .split_once(key)
-        .unwrap_or_else(|| panic!("missing locale block for {key}"))
-        .1;
-    let end: usize = after
-        .lines()
-        .take_while(|line| line.starts_with("  "))
-        .map(|line| line.len() + 1)
-        .sum();
-    &after[..end.min(after.len())]
 }

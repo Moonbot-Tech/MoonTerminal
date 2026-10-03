@@ -1,0 +1,72 @@
+# Strings shared by multiple panels: loading placeholders, report-database errors, and generic
+# labels such as an unidentified exchange.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+common.loading: "Завантаження…"
+common.empty_period: "У цьому періоді немає закритих угод."
+common.db_read_failed: "Не вдалося прочитати базу звітів."
+common.db_read_failed_corrupt: "Файл бази пошкоджено — повтор не допоможе. Див. вкладку Журнал."
+common.db_read_failed_other: "Це помилка читання, а не відсутність угод. Подробиці — на вкладці Журнал."
+common.db_read_failed_exhausted: "Забагато читань звітів відкрито одночасно. Зазвичай це минає, коли інші читання завершуються. Якщо ні — файл може тримати інший процес."
+common.db_read_failed_retry: "База звітів зараз зайнята. Повторіть — період перерахується. Якщо це повторюється, файл може тримати інший процес — хмарна синхронізація %{data_dir}, антивірус, друга копія термінала або зовнішня програма для БД."
+common.db_read_failed_detail: "Файл: %{path}  Операція: %{operation}  Код: %{code}"
+common.db_read_failed_file: "Файл"
+common.db_read_failed_operation: "Операція"
+common.db_read_failed_code: "Код"
+common.db_read_failed_copy: "Копіювати"
+common.db_read_failed_short: "Помилка читання БД"
+common.db_not_ready: "База звітів ще не синхронізована."
+common.incomparable_quote: "У вибраних угодах різні або невідомі quote-валюти. Виберіть одну валюту або перемкніться на Profit %."
+common.period_out_of_range: "Запитаний період виходить за межі читаного діапазону."
+common.period_out_of_range_title: "Період поза читаним діапазоном."
+common.period_out_of_range_hint: "Це не порожній період, а відхилений — перевірте збережений період або дані ядра."
+common.exchange_unknown: "Біржу не визначено"
+common.exchange_spot: "Spot"
+common.exchange_futures: "Futures"
+# Binance COIN-M delivery contracts, which the core itself calls "Binance Quarterly".
+common.exchange_quarterly: "Quarterly"
+# The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
+# strings live here rather than in any one panel's file for the same reason the Analytics
+# placeholders do: six panels share the control, so no single namespace owns it.
+#
+# Saved core groups: a named set of cores the user applies instead of re-picking them. A group row
+# ticks when the current selection IS that group, and its trailing count is what a CLICK produces —
+# the members the panel showing it can actually select. In the MENU that count is formatted by the
+# consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
+# `group_cores_n` below serves the two modals, which have no trigger beside them.
+# Short "all" word for the shared core selector once a narrow row shrinks it to its icon: the noun
+# is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
+# agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
+common.core_pick.all_short: "Усі"
+common.core_pick.groups_heading: "Групи ядер"
+common.core_pick.group_cores_n: "ядер: %{n}"
+# Members whose core is no longer configured. They are kept on purpose — a core can come back — so
+# this is a warning, not an error.
+common.core_pick.group_dead_n: "немає %{n}"
+common.core_pick.save_as_group: "Зберегти вибір як групу…"
+common.core_pick.manage_groups: "Керування групами…"
+common.core_pick.save_title: "Нова група ядер"
+common.core_pick.manage_title: "Групи ядер"
+# Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
+# created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
+# strategy in all three languages.
+common.core_pick.group_name_required: "Введіть назву групи"
+common.core_pick.group_name_ph: "Назва групи"
+# Two-step delete rather than a confirmation dialog: MoonUI paints one dialog at a time, so a
+# confirm modal opened from the management modal would replace the list being edited. The second
+# click reuses the shared `dialogs.delete_q`.
+common.core_pick.group_delete: "Видалити"
+
+# A control edited for several things at once (strategies, cores) whose values disagree.
+common.mixed_values: "різні значення"
+
+# Second part of every strategy-name search tooltip (Strategies tree, Analytics, Report): the one
+# shared query syntax with examples.
+common.strategy_query_syntax: "Кома = АБО, пробіл = І, !слово = виключити. Регістр не важливий.\nEMA, Hook — назви з EMA або Hook\ndrops 1m — назви з drops і 1m\nshort !test — назви з short, без test"
+
+# The button that writes a staged change and keeps its surface open.
+common.apply: "Застосувати"
+common.size_kb: "%{value} КБ"
+common.size_mb: "%{value} МБ"
+common.size_gb: "%{value} ГБ"

@@ -1807,39 +1807,13 @@ fn calendar_cost_and_funding_tiles_keep_localized_tooltips() {
         "the identified KPI root must delegate hover copy to the standard MoonUI tooltip adapter"
     );
 
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/analytics.yml"),
-    )
-    .expect("failed to read locales/analytics.yml")
-    .replace("\r\n", "\n");
-    for (key, next) in [
-        ("analytics.cal.kpi_funding", "analytics.cal.funding_short:"),
-        ("analytics.cal.funding_short", "analytics.cal.kpi_fee_tip:"),
-        (
-            "analytics.cal.kpi_fee_tip",
-            "analytics.cal.kpi_funding_tip:",
-        ),
-        ("analytics.cal.kpi_funding_tip", "analytics.cal.fee_short:"),
+    for key in [
+        "analytics.cal.kpi_funding",
+        "analytics.cal.funding_short",
+        "analytics.cal.kpi_fee_tip",
+        "analytics.cal.kpi_funding_tip",
     ] {
-        let block = chain_between(
-            &locales,
-            &format!("{key}:\n"),
-            next,
-            "Calendar KPI locale block",
-        );
-        let members = block
-            .lines()
-            .filter(|line| line.starts_with("  "))
-            .collect::<Vec<_>>();
-        assert_eq!(members.len(), 3, "{key} must define exactly ru, en, and es");
-        for locale in ["ru", "en", "es"] {
-            assert!(
-                members
-                    .iter()
-                    .any(|line| line.starts_with(&format!("  {locale}: "))),
-                "{key} must define {locale}"
-            );
-        }
+        assert_locale_key_in_every_language("analytics", key);
     }
 }
 
@@ -2086,53 +2060,22 @@ fn the_report_totals_row_degrades_by_priority_not_by_wrapping() {
         "volume must originate in footer_facts and render one palette-token separator"
     );
 
-    let locales = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/report.yml"),
-    )
-    .expect("read Report locales")
-    .replace("\r\n", "\n");
-    for (key, next) in [
-        ("report.traded_volume", "report.traded_volume_tip:"),
-        ("report.traded_volume_tip", "report.traded_volume_current:"),
-        (
-            "report.traded_volume_current",
-            "report.traded_volume_current_tip:",
-        ),
-        (
-            "report.traded_volume_current_tip",
-            "report.traded_volume_partial:",
-        ),
-        (
-            "report.traded_volume_partial",
-            "report.traded_volume_partial_tip:",
-        ),
-        (
-            "report.traded_volume_partial_tip",
-            "report.traded_volume_unknown_quote:",
-        ),
-        (
-            "report.traded_volume_unknown_quote",
-            "report.unknown_quote_orders:",
-        ),
+    for key in [
+        "report.traded_volume",
+        "report.traded_volume_tip",
+        "report.traded_volume_current",
+        "report.traded_volume_current_tip",
+        "report.traded_volume_partial",
+        "report.traded_volume_partial_tip",
+        "report.traded_volume_unknown_quote",
     ] {
-        let block = chain_between(
-            &locales,
-            &format!("{key}:\n"),
-            next,
-            "Report traded-volume locale block",
-        );
-        for locale in ["ru", "en", "es"] {
+        for lang in SHIPPED {
+            let value = locale_value("report", lang, key);
             assert!(
-                block
-                    .lines()
-                    .any(|line| line.starts_with(&format!("  {locale}: "))),
-                "{key} must define {locale}"
+                !value.contains('|'),
+                "the visual separator belongs to render code, not {key} ({lang}) locale text"
             );
         }
-        assert!(
-            !block.contains('|'),
-            "the visual separator belongs to render code, not {key} locale text"
-        );
     }
     // (`.overflow_x_scroll()` is already banned across this file by
     // `report_table_uses_scrollable_preserved_widths`; repeating it here would pin nothing new.)
@@ -2326,27 +2269,30 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
 
     // The hint must state both caveats in every language. Asserted on the TEXT, because a key that
     // resolves to one bland word would satisfy the reference check above and tell the user nothing.
-    let locales =
-        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/general.yml"))
-            .expect("failed to read locales/general.yml")
-            .replace("\r\n", "\n");
-    let hint = chain_between(
-        &locales,
-        "general.valuation_mode_hint:",
-        "\ngeneral.",
-        "the valuation-mode hint",
-    );
-    assert_eq!(
-        hint.matches("Binance/Bybit").count(),
-        3,
-        "every language must name where the current rate comes from"
-    );
-    for tuner_word in ["тюнер", "tuning", "ajuste"] {
+    // The Ukrainian sentence names the tuner as "підбір порогів"; it does not contain "тюнер".
+    let mut named_source = 0;
+    for (lang, tuner_word) in [
+        ("ru", "тюнер"),
+        ("en", "tuning"),
+        ("es", "ajuste"),
+        ("uk", "підбір порогів"),
+    ] {
+        let hint = locale_value("general", lang, "general.valuation_mode_hint");
+        let hits = hint.matches("Binance/Bybit").count();
+        assert_eq!(
+            hits, 1,
+            "{lang} must name where the current rate comes from exactly once"
+        );
+        named_source += hits;
         assert!(
             hint.contains(tuner_word),
-            "every language must state that the tuner is re-valued too: missing {tuner_word}"
+            "{lang} must state that the tuner is re-valued too: missing {tuner_word}"
         );
     }
+    assert_eq!(
+        named_source, 4,
+        "every shipped language must name where the current rate comes from"
+    );
 
     // The two reading windows must REQUERY on that wake, not merely repaint: the numbers change
     // even though no row did, and neither window is the writer.
