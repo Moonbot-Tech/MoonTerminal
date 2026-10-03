@@ -17,7 +17,13 @@ const WEB = path.join(ROOT, "crates", "moon-core", "src", "telegram", "web");
 const LOCALES = path.join(ROOT, "locales");
 const FIXTURES = path.join(HERE, "fixtures");
 
-// Command-line options: output folder, label locale, one screen by name.
+/**
+ * Read output folder, label locale, and optional screen name from the process arguments.
+ * Locale codes are passed through to the label loader without validation.
+ * Help prints usage and exits successfully.
+ * @returns {object} Options defaulting to the tool's out folder, Russian labels, and all screens.
+ * @throws {Error} If an argument is unrecognized or output path resolution fails.
+ */
 function args() {
     const out = { out: path.join(HERE, "out"), locale: "ru", only: null };
     const argv = process.argv.slice(2);

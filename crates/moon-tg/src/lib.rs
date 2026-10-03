@@ -37,18 +37,22 @@ pub use station_status::{
 };
 pub use units::size_text;
 
-/// Build this crate's dictionary once, on a dedicated 8 MiB thread.
+/// Initialize this crate's dictionary once on a joined thread with an 8 MiB stack.
 ///
-/// `i18n!` materialises every key in the first lookup's frame. That frame fits an 8 MiB
-/// stack, the size the binaries link with (`/STACK` on MSVC, the default main stack on Linux).
-/// This function runs the build on such a thread and joins it, so the caller's stack does not
-/// hold the frame. A later call returns immediately.
+/// The seven-locale dictionary outgrows a default spawned thread's stack, so the initializing
+/// lookup runs on this larger stack rather than the caller's. Concurrent calls wait for
+/// initialization; after it succeeds, later calls reuse the completed `Once`.
 ///
-/// Hosts call this at startup. [`t`] calls it before every lookup, so a `t!` reached deep in a
-/// request looks up a dictionary that already exists.
+/// Hosts call this at startup, and the crate-local [`t`] macro calls it before every lookup.
+/// A successful return means the dictionary is ready, including when the first wrapped lookup
+/// is reached deep inside a request.
 ///
-/// The lookup inside this function is `rust_i18n::t!`. [`t`] calls this function, so the inner
-/// lookup stays on `rust_i18n::t!` and does not re-enter it.
+/// The initializing lookup uses `rust_i18n::t!` directly to avoid recursively entering [`t`].
+///
+/// # Panics
+///
+/// Panics if the thread cannot be spawned, its lookup panics, or an earlier initialization
+/// attempt poisoned the `Once`.
 pub fn warm_locales() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
@@ -65,9 +69,9 @@ pub fn warm_locales() {
 
 /// Look up a key in this crate's dictionary.
 ///
-/// Calls [`warm_locales`] before the lookup, so the dictionary build runs on the dedicated
-/// thread. Arguments match [`rust_i18n::t`]: a key, an optional `locale`, and `name = value`
-/// replacements.
+/// Calls [`warm_locales`] before forwarding all arguments unchanged to `rust_i18n::t!`, so
+/// a lookup on a small caller stack uses an initialized dictionary. Available only inside
+/// this crate; initialization panics are described by [`warm_locales`].
 macro_rules! t {
     ($($all:tt)*) => {{
         $crate::warm_locales();

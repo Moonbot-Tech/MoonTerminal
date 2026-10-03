@@ -16,11 +16,17 @@
 
 use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
-/// Build this crate's dictionary on a stack that can hold the first lookup.
+/// Initialize the including crate's dictionary once on a joined 8 MiB thread.
 ///
-/// `i18n!` materialises every key in that one frame. It fits the 8 MiB the binaries link with
-/// (`/STACK` on MSVC, the default main stack on Linux) and does not fit a Windows test thread's
-/// 2 MiB.
+/// The seven-locale dictionary exceeds a default 2 MiB test thread's stack. This helper is
+/// compiled into both the terminal and Telegram test binaries, each with its own dictionary
+/// and `Once`. Concurrent calls wait for initialization; a successful return means the
+/// dictionary is ready before [`force`] changes the process-wide locale.
+///
+/// # Panics
+///
+/// Panics if the thread cannot be spawned, its lookup panics, or an earlier initialization
+/// attempt poisoned the `Once`.
 pub(crate) fn warm() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {

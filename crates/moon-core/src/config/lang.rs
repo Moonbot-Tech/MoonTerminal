@@ -56,7 +56,10 @@ impl Language {
         }
     }
 
-    /// Parses a code ("ru", "en-US", "es_ES", "uk-UA", "pt-BR", …), considering only the language prefix.
+    /// Parse the leading ASCII language prefix, ignoring case and any region suffix.
+    ///
+    /// Codes such as `en-US`, `es_ES`, and `pt-BR` select the same language as `en`, `es`,
+    /// and `pt`. Returns `None` when the prefix is empty or unsupported.
     pub fn from_code(s: &str) -> Option<Language> {
         let prefix: String = s
             .chars()
