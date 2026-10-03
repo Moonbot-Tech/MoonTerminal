@@ -12,9 +12,10 @@
 //!   of it not recorded twice. The file keeps everything while the disk has room; short of the
 //!   reserve, the oldest tape goes — and only the tape (`storage.rs`).
 //!
-//! With `[telegram]` in `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with
-//! the Mini App on, the account the Mini App shows: orders, balances, strategies, the cores'
-//! health, and the USDT valuation of its reports (`feed::station::Profile::Account`).
+//! It values every report in USDT (`db::valuation`), whatever its profile. With `[telegram]` in
+//! `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with the Mini App on, the
+//! account the Mini App shows: orders, balances, strategies and the cores' health
+//! (`feed::station::Profile::Account`).
 //!
 //! It never elects a market provider — the terminal does that from its open charts — so no core
 //! is asked to keep every market's trades; only the pairs of trades in progress are selected.
@@ -135,12 +136,9 @@ fn main() -> anyhow::Result<()> {
     };
     let reports = moon_core::db::spawn_writer(permit)
         .ok_or_else(|| anyhow::anyhow!("report writer did not start"))?;
-    // The USDT valuation of reports whose quote is not USDT, for the Mini App's report. The light
-    // station stages no outbox for it, so it runs none.
-    let valuation = profile
-        .runs_account()
-        .then(|| moon_core::db::valuation::spawn_worker(reports.tx.clone()))
-        .flatten();
+    // The USDT valuation of reports whose quote is not USDT, on either profile: the bot's trade
+    // cards, reports and daily summary read it as much as the Mini App does.
+    let valuation = moon_core::db::valuation::spawn_worker(reports.tx.clone());
     let epoch = moon_core::util::now_unix_ms_i64() as f64;
     let mut session =
         moon_core::session::SessionManager::start(&cfg, epoch, Some(&reports.tx), None);
