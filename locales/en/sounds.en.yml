@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "no file"
+sounds.missing_title: "Sound not found"
+sounds.missing_name: "Sound \"%{name}\" was not found — %{fallback} plays instead. Put %{name}.wav into %{folder}."
+sounds.missing_ordinal: "Sound #%{n} does not exist — %{fallback} plays instead. Put a file named %{n}_name.wav into %{folder}, or pick the sound again in the core's settings."
+sounds.folder_title: "Your own sounds"
+sounds.folder_help: "Drop .wav files into this folder — they appear in every sound list (strategies, trade sounds, warnings, alerts). The core's settings store a sound by NUMBER: 1–%{last} are built in; a file claims its own number by name: %{first}_MySound.wav → sound \"MySound\" #%{first}. A file without a number cannot be picked in the core's settings; a file named like a built-in sound (ding1.wav) replaces it."
+sounds.open_folder: "Open folder"
+sounds.rescan: "Rescan"
+sounds.scan_summary: "From the folder: %{folder} (numbered: %{numbered}), rejected: %{rejected}"
+sounds.numbered_title: "Your numbers"
+sounds.scan_pending: "Reading the folder…"
+sounds.rejected_title: "Rejected files"
+sounds.reject_not_pcm: "not a PCM WAV"
+sounds.reject_too_large: "larger than %{mb} MB"
+sounds.reject_over_total: "over the %{mb} MB total"
+sounds.reject_io: "unreadable: %{detail}"
+sounds.reject_number_reserved: "numbers below %{first} belong to the built-in sounds"
+sounds.reject_number_taken: "this number is already held by \"%{by}\""
+sounds.reject_name_taken: "a sound with this name already exists — a numbered file needs a different name"

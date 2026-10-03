@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "Ця година"
+
+telegram.help_daily: "По днях за цей місяць"
+
+telegram.help_intro: "Оберіть період у нижньому меню. Повторне натискання дає свіжий звіт. Оберіть біржу, щоб відкрити її ядра."
+
+telegram.help_commands: "Команди і власні дати"
+
+telegram.help_limits: "Дати включно, до 366 днів. Часовий пояс: %{zone}. Термінал має бути запущений."
+
+telegram.help_limits_station: "Дати включно, до 366 днів. Часовий пояс: %{zone}. Звіти оновлюються цілодобово."
+
+telegram.help_custom: "Власний період / по днях"
+
+telegram.help_mini: "Для звітів у чаті Mini App не потрібен. Команда /miniapp відкриває його, якщо його увімкнено в налаштуваннях термінала."
+
+telegram.help_mini_station: "Для звітів у чаті Mini App не потрібен. Команда /miniapp відкриває його, якщо його увімкнено на станції."
+
+telegram.help_status_station: "Статус станції; кнопка оновлення, коли вийшла нова версія"
+telegram.report_total: "Разом"
+
+telegram.report_calculation_extra: "Разом охоплює всю вибрану групу і період, включно з іншими сторінками. Середній ордер рахується за угодами з придатними даними; винятки перелічено в деталях звіту."
+
+telegram.button_home: "Огляд"
+
+telegram.report_navigation_hint: "Період обирайте в нижньому меню. Повторне натискання запитує свіжий звіт. Під звітом — переходи до ядер і днів."
+
+telegram.report_all_cores: "Усі ядра"
+
+telegram.report_by_days: "По днях"
+
+telegram.report_days_scope: "Група по днях"
+
+telegram.report_cores_scope: "Ядра групи"
+
+telegram.report_back: "Усі біржі"
+
+telegram.report_calculation: "Як рахується"
+
+telegram.report_exchanges: "Біржі"
+
+telegram.report_exchanges_menu: "Біржі"
+
+telegram.report_exchanges_back: "Назад"
+
+telegram.report_exchange: "Біржа"
+
+telegram.report_scope_unavailable: "Біржа недоступна"
+
+telegram.report_average_coverage: "враховано %{counted}; виключено %{excluded}"
+
+telegram.report_delivery_failed: "Не вдалося показати звіт. Повторіть запит; якщо помилка лишається, перевірте підключення термінала й оновіть Telegram."
+telegram.report_delivery_failed_station: "Не вдалося показати звіт. Повторіть запит; якщо помилка лишається, оновіть Telegram."
+
+telegram.button_today: "Сьогодні"
+
+telegram.button_yesterday: "Учора"
+
+telegram.button_month: "Цей місяць"
+
+telegram.button_lastmonth: "Минулий місяць"
+
+telegram.button_daily: "По днях"
+
+telegram.report_days: "Дні"
+
+telegram.report_cores: "Ядра"
+
+telegram.report_profit: "Прибуток / збиток"
+
+telegram.report_trades: "Угоди"
+
+telegram.report_date: "Дата"
+
+telegram.report_bot: "Бот"
+
+telegram.report_details: "Валюти і середній ордер"
+
+telegram.report_average: "Середній ордер"
+
+telegram.report_page: "Сторінка"
+
+telegram.report_prev: "Назад"
+
+telegram.report_next: "Далі"
+
+telegram.report_unvalued: "Недоступно"
+
+telegram.report_empty: "За цей період закритих реальних угод немає."
+
+telegram.report_scope: "Вибрана група в історії термінала · закриті реальні угоди · курс на момент угоди. Локальна історія; вимкнені боти не оновлюються."
+telegram.report_scope_station: "Вибрана група в історії станції · закриті реальні угоди · курс на момент угоди. Станція копіює історію ядер цілодобово; вимкнені боти не оновлюються."
+
+telegram.report_missing_rates: "Якщо не всі угоди оцінено, повний підсумок у USDT недоступний. Деталі зберігають суми за відомими валютами; невідомі валюти до них не входять."
+
+telegram.report_busy: "Попередній звіт ще рахується. Спробуйте трохи згодом."
+
+telegram.report_failed: "Не вдалося прочитати історію угод. Повторіть запит; помилка читання не означає нульовий прибуток."
+
+telegram.report_help: "Оберіть період нижче. У звітах є вигляд за ботами і днями. Натисніть період ще раз, щоб отримати свіжі дані.\n\n/hour — ця година\n/today — сьогодні\n/daily — по днях за цей місяць\n/report 2026-09-01 2026-09-10 — власний період\n/daily 2026-09-01 2026-09-10 — власні результати по днях\nДати включно, до 366 днів; часовий пояс — з годинника термінала. Термінал має бути запущений."
+
+telegram.report_help_station: "Оберіть період нижче. У звітах є вигляд за ботами і днями. Натисніть період ще раз, щоб отримати свіжі дані.\n\n/hour — ця година\n/today — сьогодні\n/daily — по днях за цей місяць\n/report 2026-09-01 2026-09-10 — власний період\n/daily 2026-09-01 2026-09-10 — власні результати по днях\n/status — статус станції\nДати включно, до 366 днів; часовий пояс — з налаштувань станції. Звіти оновлюються цілодобово."
+
+telegram.notify_profit: "Прибуток"
+
+telegram.notify_manual: "Вручну"
+
+telegram.notify_unvalued: "Без оцінки"
+
+telegram.notify_down: "немає зв'язку з"
+
+telegram.notify_back: "зв'язок відновлено"
+
+telegram.notify_daily_title: "Підсумок дня"
+
+telegram.notify_trades: "Угоди"
+
+telegram.notify_unvalued_trades: "Без оцінки"
+
+telegram.notify_best: "Найкраща"
+
+telegram.notify_worst: "Найгірша"

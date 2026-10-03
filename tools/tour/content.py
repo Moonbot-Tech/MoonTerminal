@@ -8,7 +8,7 @@ A *text slot* is one of exactly two shapes, and anything else is an error:
     empty heading and nothing tells you.
 
 ``{locale: some.key}``
-    Pulled from ``locales/*.yml``: the application's own string, in every
+    Pulled from the shipped locale catalogue: the application's own string, in every
     language it ships. Never retyped, so it cannot drift from what the terminal
     actually shows.
 
@@ -213,7 +213,7 @@ class _Resolver:
 
         if key not in self.locales:
             self.problems.add_unknown_key(
-                where, key, self.locales.keys, "1600 keys in locales/*.yml"
+                where, key, self.locales.keys, "the shipped locale catalogue"
             )
             return Text(values={code: "" for code in self.codes})
 

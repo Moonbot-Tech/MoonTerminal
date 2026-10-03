@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Гучність звуків угод"
+trade_sounds.tab: "Звуки угод"
+trade_sounds.help: "Оберіть звуки відкриття та закриття для кожної біржі. Зміни зберігаються автоматично."
+trade_sounds.exchange: "Біржа"
+trade_sounds.quiet_note: "Тихий режим увімкнено — звуки вимкнено."
+trade_sounds.open: "Відкриття позиції"
+trade_sounds.close: "Закриття позиції"
+trade_sounds.off: "Без звуку"
+trade_sounds.preview: "Прослухати"

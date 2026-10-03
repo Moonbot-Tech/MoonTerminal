@@ -81,7 +81,7 @@ chrono-tz = "0.10"
 # consult the OS again unless the saved clock fields are still absent.
 iana-time-zone = "0.1"
 env_logger = "0.11"
-# UI localization: dictionaries in the root `locales/*.yml` (see locales/README.md).
+# UI localization: dictionaries in `locales/<lang>/*.yml` (see locales/README.md).
 # Compatible Cargo resolution with MoonUI shares the global locale backend.
 rust-i18n = "4.1"
 # The Report panel queries the local SQLite database through moon-core. The version and

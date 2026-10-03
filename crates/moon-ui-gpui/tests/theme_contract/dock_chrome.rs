@@ -131,20 +131,19 @@ fn action_control_h_value_agrees_with_glyph_btn_w() {
     );
 }
 
-/// The two new locale keys Goal C lands must each carry all three languages.
+/// The two new locale keys Goal C lands must each carry every shipped language.
 ///
 /// Mutation: land `workspace.scope.pinned_hint` or `assets.refresh_hint` with `ru` only.
-/// Consequence: `locales/*.yml` is compiled by the `i18n!` proc macro, so a key missing in one
-/// language surfaces at runtime as the raw key rather than as a build error — the raw key would
-/// render for `en`/`es` users.
+/// Consequence: the per-language dictionaries are compiled by the `i18n!` proc macro, so a key
+/// missing in one language surfaces at runtime as the raw key rather than as a build error.
 #[test]
 fn goal_c_locale_keys_carry_all_three_languages() {
     let cases = [
-        ("workspace.yml", "workspace.scope.pinned_hint"),
-        ("assets.yml", "assets.refresh_hint"),
+        ("workspace", "workspace.scope.pinned_hint"),
+        ("assets", "assets.refresh_hint"),
     ];
-    for (file, key) in cases {
-        assert_locale_key_in_three_languages(file, key);
+    for (area, key) in cases {
+        assert_locale_key_in_every_language(area, key);
     }
 }
 
@@ -373,13 +372,13 @@ fn dock_header_controls_and_reset_labels_keep_localized_tooltips() {
         "dock.ctl.close",
         "dock.ctl.overflow",
     ] {
-        assert_locale_key_in_three_languages("dock.yml", key);
+        assert_locale_key_in_every_language("dock", key);
     }
     for key in [
         "iface.dock_reset",
         "iface.dock_reset_btn",
         "iface.dock_reset_tip",
     ] {
-        assert_locale_key_in_three_languages("interface.yml", key);
+        assert_locale_key_in_every_language("interface", key);
     }
 }

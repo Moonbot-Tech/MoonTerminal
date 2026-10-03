@@ -1,0 +1,106 @@
+# Connections tab in Settings: cores, groups, statuses, columns, and tooltips.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Table columns use short labels; translations should remain short as well.
+_version: 1
+
+conn.servers_heading: "Ядра (сервери)"
+conn.market_src: "Джерело ринкових даних"
+conn.market_src_tip: "Звідки беруться хрестики і стакан. Дедуп: одне ядро-провайдер на біржу тягне ринок за всіх (економно, коли ядер багато). По ядрах: кожен графік читає ринок зі свого ядра (без дедупа)."
+conn.market_dedup: "Спільні дані — одне ядро на біржу"
+conn.market_percore: "Окремо — кожному графіку своє ядро"
+conn.core_sort: "Порядок ядер"
+conn.core_sort_tip: "Порядок ядер в УСІХ списках застосунку: шапка, Ордери, Активи, Звіт, Аналітика, Скринер, Стратегії, Журнал. Відключені ядра лишаються на своїх місцях — їхній стан видно по точці статусу."
+conn.core_sort.name: "За іменем — за абеткою"
+conn.core_sort.added: "За додаванням — спершу старі"
+conn.core_sort.added_newest: "За додаванням — спершу нові"
+conn.groups_heading: "Групи"
+conn.no_groups: "додай ядро вище і впиши йому “Групу” — з'явиться гілка групи"
+conn.show_group: "Показати вікно групи"
+# The + glyph is prepended in code; the locale entry contains only text.
+conn.add_core: "Додати ядро (до “default”)"
+conn.add_core_short: "ядро"
+conn.groups_panel_heading: "Ядра за групами і біржами"
+conn.groups_panel_tip: "Група = окреме головне вікно. Усередині групи ядра зібрано автоматично за біржею, про яку повідомляє підключення. Стовпець “Графіки” зводить детекти з кількох ядер групи в один графік."
+conn.pending_cores: "Нові ядра — налаштуйте перед збереженням"
+# Shared by BOTH the group header and the pending/exchange subsection headings, where a count of
+# 1..4 is ordinary -- so the abbreviated form stays: Russian has no single plural form that is
+# right at 1, 2 and 56, and this file has no plural-selection convention to reach for.
+conn.member_count: "ядер: %{n}"
+conn.icon_btn: "Іконка"
+conn.bulk_mode_btn: "Режим"
+conn.bulk_mode_tip: "Поставити режим транспорту MoonProto всім ядрам групи одразу, а не рядок за рядком. Застосовується після Зберегти: кожне змінене ядро перепідключиться саме."
+conn.icon_for: "Іконка для “%{name}”"
+conn.pick: "вибір"
+conn.delete: "Видал"
+conn.reconnect: "Перепідключити"
+conn.filter_note: "фільтр на клієнті"
+
+# Connection-status dot at the end of a server row.
+conn.status.ready: "Підключено"
+conn.status.connecting: "Підключення…"
+conn.status.stage: "Підключення: %{stage}"
+conn.status.failed: "Помилка: %{err}"
+conn.status.disconnected: "Відключено"
+conn.status.inactive: "Не підключається (прапорець “Дія” знято)"
+conn.status.none: "Немає даних (збережи налаштування, щоб підключитися)"
+
+# Server-table column headings.
+conn.col.act: "Дія"
+conn.col.name: "Ім'я"
+conn.col.key: "Ключ"
+conn.col.endpoint: "Адреса:порт"
+conn.tip.endpoint: "Адреса і порт ядра з вставленого ключа, до підключення"
+conn.endpoint_duplicate: "Цю адресу і порт уже використовує ядро %{name}"
+conn.col.proto: "Прото"
+conn.col.preset: "Пресет"
+conn.col.total: "Разом"
+conn.col.group: "Група"
+conn.col.bundle: "Графіки"
+conn.col.color: "Колір"
+conn.col.data: "Дані"
+conn.col.orders: "Орд"
+conn.col.detects: "Дет"
+conn.col.reports: "Звіт"
+conn.col.balance: "Бал"
+conn.col.strat: "Стр"
+conn.col.log: "Лог"
+conn.col.alerts: "Алр"
+conn.col.arb: "Арб"
+
+# Group-table column headings.
+conn.gcol.ico: "Ico"
+
+# Tooltips.
+conn.tip.act: "Підключатися до ядра"
+conn.tip.name: "Ім'я ядра (довільне, для показу в терміналі)"
+conn.tip.key: "Ключ створюється в MoonBot, не на сайті, і копіюється ПІСЛЯ налаштування ядра — він несе адресу, порт і режим із собою, тож тут їх не вводять. Порядок: 1) на сервері з MoonBot відкрити UDP-порт ядра для вхідних; 2) у MoonBot: зелений кружок ліворуч унизу (вікно Info) → Moon Kernel → Settings → вікно Moon Proto, вкладка Settings: увімкнути Kernel (VPS), задати Port, вибрати версію V0/V1/V2 (за замовчуванням V0), натиснути Apply; 3) там само Key: → Copy Key (ключа ще немає — New Key); 4) вставити сюди кнопкою Вставити і натиснути Зберегти. Око показує або ховає його."
+conn.key_ph: "Copy Key у MoonBot"
+conn.key_unreadable: "Це не ключ MoonBot — термінал не може його прочитати. Скопіюйте ключ у MoonBot кнопкою Copy Key (вікно Moon Proto → Settings → Key:) і вставте його сюди цілком кнопкою Вставити"
+# Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
+# `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
+conn.bundle_ph: "ім'я зв'язки"
+conn.paste_key: "Вставити"
+conn.paste_key_tip: "Вставити ключ із буфера обміну"
+conn.tip.color: "Колір ядра: ним підсвічуються його угоди і мітки на графіку."
+conn.tip.flags: "Прийом даних від ядра. Сіра = приймаємо все; кольорова = частину категорій вимкнено. Клік — налаштувати."
+conn.tip.proto: "Режим транспорту MoonProto - та сама трійка V0/V1/V2, що й у налаштуваннях ядра Moon Proto; обидві сторони мають стояти на ОДНОМУ. Береться з ключа ОДИН раз, доки режим ще не задано; далі він ваш, і новий ключ його вже не перебиває - тож ключ не треба випускати наново лише щоб змінити режим. Прочерк означає, що ключ нічого не назвав (старіший експорт), і з'єднання йде як V0. Застосовується після Зберегти: ядро перепідключиться саме. Тож Copy Key натискайте вже ПІСЛЯ того, як на ядрі виставлено Port і версію перемикачами V0/V1/V2 (MoonBot за замовчуванням створює ключі V0): ключ несе їх із собою."
+conn.tip.preset: "У якому режимі робочого простору ядро видно в кожному списку: в обох, лише в MANUAL чи лише в AUTO. Лише показ — приховане ядро все одно підключається і записує."
+conn.tip.total: "Як це ядро входить у підсумок унизу Активів. Авто: ядра на одному біржовому рахунку рахуються один раз. Не враховувати: ядро не входить у підсумок. Окремо: ядро завжди рахується саме, без злиття."
+conn.preset.both: "Обидва"
+# The same two mode NAMES the header dropdown lists (`workspace.mode.*`): this column picks which
+# of them shows the core, so a name that drifted apart here would read as a third mode.
+conn.preset.classic: "MANUAL"
+conn.preset.auto: "AUTO"
+conn.total.auto: "Авто (за рахунком)"
+conn.total.exclude: "Не враховувати"
+conn.total.separate: "Окремо"
+conn.tip.group: "Група = ОКРЕМЕ головне вікно. Усі ядра з однаковим ім'ям групи живуть в одному вікні; нове ім'я групи → нове головне вікно."
+conn.tip.bundle: "Ім'я зв'язки графіків: детекти AddToChart з КІЛЬКОХ ядер однієї групи з однаковим ім'ям зводяться в ОДИН графік (одна вкладка, ім'я — у її заголовку). Порожньо = за глобальним налаштуванням (вкладка на ядро / усі в одній)."
+conn.tip.orders: "Відкриті ордери"
+conn.tip.detects: "Детекти"
+conn.tip.reports: "Звіти про закриті ордери → SQLite"
+conn.tip.balance: "Баланси / рахунок"
+conn.tip.strat: "Стратегії"
+conn.tip.log: "Серверний журнал"
+conn.tip.alerts: "Chart-алерти / текст"
+conn.tip.arb: "Арбітраж"

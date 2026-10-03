@@ -27,7 +27,7 @@ const MANIFEST_VERSION: u32 = 2;
 const HELPER_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const HELPER_COMMIT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Cap on the best-effort helper-failure diagnostic: the surfaced string is a tooltip
-/// (`chrome/terminal_chrome.rs`, `locales/update.yml`'s `update.failed`), so keep it bounded.
+/// (`chrome/terminal_chrome.rs`, `update.failed` in the update area file), so keep it bounded.
 const MAX_HELPER_REASON_BYTES: usize = 512;
 const STARTED_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTHY_TIMEOUT: Duration = Duration::from_secs(90);

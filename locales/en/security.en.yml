@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Security"
+security.password: "Password"
+security.confirm: "Repeat"
+security.mismatch: "Passwords do not match"
+
+# --- Launch gate ---
+security.launch: "Password on launch"
+security.launch_hint: "A local latch asked for at every start. Any length. It does NOT encrypt the core keys — anyone with file access still reads them."
+
+# --- servers.enc encryption password ---
+security.file: "servers.enc encryption password"
+security.file_hint: "Asked only where the file cannot be opened with the machine key: on a new machine, or after the OS keyring is lost. Once entered correctly it is remembered for this machine and not asked again."
+security.file_warning: "This password cannot be recovered. Losing it together with the machine key loses the cores."
+security.rule: "At least %{min} characters and two different character classes."
+security.bits: "≈%{bits} bits"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Weak"
+security.level.fair: "Fair"
+security.level.good: "Good"
+security.level.strong: "Strong"
+security.issue.none: "Accepted"
+security.issue.short: "Too short: at least %{min} characters"
+security.issue.common: "Contains a well-known word — guessed as one chunk"
+security.issue.repeats: "Too much of it is one repeated character"
+security.issue.sequence: "Runs of consecutive characters are guessed instantly"
+security.issue.one_class: "Only one character class — add a digit, a capital, or a symbol"
+security.issue.low_entropy: "Too predictable — make it longer and more varied"
+
+# --- Machine key slots ---
+security.machines: "Machines with access: %{used} of %{max}"
+security.machines_unknown: "Machines with access: — of %{max}"
+security.forget_machines: "Forget the others"
+security.machines_forgotten: "Access revoked for the other machines"
+
+# --- Apply results ---
+security.applied: "Passwords saved"
+security.pending_write: "Passwords accepted; saving…"
+security.err.not_saved: "The password was accepted but the config was not saved; fix the error above and save again"
+security.err.empty: "Enter a password"
+security.err.mismatch: "Passwords do not match"
+security.err.not_editable: "The config was not opened this run, so there is nowhere to store a password"
+security.err.backend: "The key store is unavailable, so nothing was stored"
+security.not_editable: "servers.enc was not opened this run, so passwords are unavailable"
+security.err.weak: "The encryption password is too weak"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Login"
+login.title: "Login"
+login.placeholder: "Password"
+login.enter: "Enter"
+login.exit: "Exit"
+login.start_over: "Start over"
+login.file_subtitle: "servers.enc cannot be opened with this machine's key. Enter the encryption password; the machine will remember the access afterwards."
+login.launch_subtitle: "Enter the launch password."
+login.locked_subtitle: "servers.enc is encrypted with another machine's key and carries no encryption password. There is nothing to open it with."
+login.throttled: "Entry slows down after repeated failures"
+login.err.empty: "Enter a password"
+login.err.backend: "The password could not be checked; see the log"
+login.err.wrong: "Wrong password"

@@ -1,0 +1,12 @@
+# Header update button: Windows self-update, macOS installer image download.
+_version: 1
+
+update.available: "Update to %{version}"
+update.tooltip: "Download, install, and restart MoonTerminal"
+update.tooltip_image: "Download the MoonTerminal installer to Downloads and open it"
+update.opened: "Installer opened"
+update.opened_tooltip: "Installer opened — drag MoonTerminal into Applications. Click to open it again"
+update.installing: "Installing update..."
+update.retry: "Retry update"
+update.failed: "Update failed: %{error}"
+update.recovered: "The update did not start. The previous version was restored and reopened."

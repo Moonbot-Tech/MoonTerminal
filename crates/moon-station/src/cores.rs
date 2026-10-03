@@ -289,7 +289,7 @@ fn telegram(section: TelegramSection, creds: Option<&Path>) -> anyhow::Result<Te
     };
     let language = match section.language {
         Some(code) => Language::from_code(&code)
-            .ok_or_else(|| anyhow::anyhow!("language {code:?}: ru, en or es"))?,
+            .ok_or_else(|| anyhow::anyhow!("language {code:?}: ru, en, es or uk"))?,
         None => Language::En,
     };
     let token = credential(creds, TOKEN_CREDENTIAL)

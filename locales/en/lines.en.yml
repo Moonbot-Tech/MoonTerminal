@@ -1,0 +1,28 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "dashed"
+lines.start_cross: "start cross"
+lines.end_cross: "end cross"
+lines.knots: "knots"
+lines.thickness: "thickness"
+lines.cross_size: "cross size"
+lines.cross_thickness: "cross thickness"
+lines.knot_size: "knot size"
+lines.pending_group: "Placed (unfilled):"
+lines.pending_alpha: "alpha"
+lines.path_title: "Repricing trail (path)"
+lines.path_line_color: "in the line's own colour"
+lines.path_alpha: "alpha"
+lines.path_hint: "The steps an order's price was moved through — sent by the core or reconstructed here. A stop's own move segment is always drawn."
+lines.global: "Global"
+lines.active_alpha: "Active alpha"
+lines.closed_visibility: "Cancelled/closed visibility"
+lines.pending_dashed: "Pending order: dashed entry"
+lines.max_closed: "Max closed orders drawn"
+lines.hint: "Stop/Trailing/Liq lines appear only after the entry is filled."
+lines.theme_hint: "Editing the active theme's line set: Light uses the light set, Dark and Graphite share the dark set; change theme on the General tab. Save writes both sets to cfg/orders.toml next to the app — you can share the file."

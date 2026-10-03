@@ -1348,7 +1348,7 @@ fn store_settings_refuses_a_stale_revision_and_stores_a_match() {
 ///
 /// Mutation: return the key, or the English sentence in every locale. The page then shows
 /// `telegram.mini_settings_err_cores` or English to a Russian chat. Oracle: the strings in
-/// `locales/telegram.yml`, including the stale-revision sentence.
+/// `locales/<lang>/telegram.<lang>.yml`, including the stale-revision sentence.
 #[test]
 fn save_fault_text_follows_the_chat_locale() {
     {

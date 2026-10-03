@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Безпека"
+security.password: "Пароль"
+security.confirm: "Ще раз"
+security.mismatch: "Паролі не збігаються"
+
+# --- Launch gate ---
+security.launch: "Пароль під час запуску"
+security.launch_hint: "Локальна засувка: запитується під час кожного запуску. Довжина будь-яка. Ключі ядер вона НЕ шифрує — хто має доступ до файлів, прочитає їх і без неї."
+
+# --- servers.enc encryption password ---
+security.file: "Пароль шифрування servers.enc"
+security.file_hint: "Запитується лише там, де файл не відкривається ключем машини: на новій машині або після втрати сховища ключів ОС. Введений правильно, він запам'ятовується для цієї машини і більше не запитується."
+security.file_warning: "Цей пароль не відновити. Втративши його разом із ключем машини, ви втратите ядра."
+security.rule: "Щонайменше %{min} символів і два різні класи символів."
+security.bits: "≈%{bits} біт"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Слабкий"
+security.level.fair: "Середній"
+security.level.good: "Добрий"
+security.level.strong: "Надійний"
+security.issue.none: "Прийнято"
+security.issue.short: "Закороткий: потрібно щонайменше %{min} символів"
+security.issue.common: "Містить загальновідоме слово — підбирається одним шматком"
+security.issue.repeats: "Надто багато повторень одного символу"
+security.issue.sequence: "Послідовності символів підбираються миттєво"
+security.issue.one_class: "Лише один клас символів — додайте цифру, велику літеру або знак"
+security.issue.low_entropy: "Надто передбачуваний — зробіть довшим і різноманітнішим"
+
+# --- Machine key slots ---
+security.machines: "Машин із доступом: %{used} з %{max}"
+security.machines_unknown: "Машин із доступом: — з %{max}"
+security.forget_machines: "Забути інші"
+security.machines_forgotten: "Доступ інших машин відкликано"
+
+# --- Apply results ---
+security.applied: "Паролі збережено"
+security.pending_write: "Паролі прийнято; збереження…"
+security.err.not_saved: "Пароль прийнято, але конфіг не збережено; виправте помилку вище і збережіть знову"
+security.err.empty: "Введіть пароль"
+security.err.mismatch: "Паролі не збігаються"
+security.err.not_editable: "Конфіг не відкрито в цьому запуску, тож пароль зберегти нікуди"
+security.err.backend: "Сховище ключів недоступне, тож нічого не збережено"
+security.not_editable: "servers.enc не відкрито в цьому запуску, тож паролі недоступні"
+security.err.weak: "Пароль шифрування заслабкий"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Вхід"
+login.title: "Вхід"
+login.placeholder: "Пароль"
+login.enter: "Увійти"
+login.exit: "Вихід"
+login.start_over: "Почати спочатку"
+login.file_subtitle: "servers.enc не відкривається ключем цієї машини. Введіть пароль шифрування — після цього машина запам'ятає доступ."
+login.launch_subtitle: "Введіть пароль запуску."
+login.locked_subtitle: "servers.enc зашифровано ключем іншої машини, а пароль шифрування на ньому не задавали. Відкрити файл нічим."
+login.throttled: "Після кількох помилок введення сповільнюється"
+login.err.empty: "Введіть пароль"
+login.err.backend: "Не вдалося перевірити пароль — подробиці в журналі"
+login.err.wrong: "Неправильний пароль"

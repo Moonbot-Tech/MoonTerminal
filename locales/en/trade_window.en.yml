@@ -1,0 +1,145 @@
+_version: 1
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open: "Open trade window"
+
+trade_window.blocked.unresolved: "Trade window unavailable - the core is not connected"
+
+trade_window.retry: "Retry"
+
+trade_window.other_trades: "Show other trades"
+
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip: "Trade window view"
+
+trade_window.settings.title: "Trade window view"
+
+trade_window.settings.frame_trades: "Trades"
+
+trade_window.settings.fit: "Fit the trade to the window"
+
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels: "Trade captions on the chart"
+
+trade_window.settings.hide_rail: "Hide the side panel"
+
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone: "MoonShot zone"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks: "Load ticks"
+
+trade_window.source.candles_ticks_disabled: "%{min}-minute candles - ticks are off in the window settings"
+
+trade_window.state.loading: "Loading the market around this trade…"
+
+trade_window.state.failed: "Could not fetch data from the exchange. You can retry."
+
+trade_window.state.rate_limited: "The exchange is rate-limiting requests. Retry in %{secs} s."
+
+trade_window.state.unknown_symbol: "The exchange does not know this market."
+
+trade_window.source.ticks: "exchange ticks"
+
+trade_window.source.core_ticks: "core ticks"
+
+trade_window.source.loading_more: "loading more"
+
+trade_window.source.context_unavailable: "candle context unavailable"
+
+trade_window.source.awaiting_core: "%{min}-minute candles, checking core archive"
+
+trade_window.source.core_ticks_bucketed: "core ticks, %{secs} s step"
+
+trade_window.source.ticks_bucketed: "exchange ticks, %{secs} s step"
+
+# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
+# словаре не хранится.
+trade_window.source.ticks_edges: "edges filled by %{min}-minute candles"
+
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends: "ticks around the entry and the exit, %{min}-minute candles between"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending: "%{min}-minute candles, still fetching ticks"
+
+trade_window.source.candles_no_route: "%{min}-minute candles - %{brand} has no public ticks"
+
+trade_window.source.candles_retention: "%{min}-minute candles - the exchange keeps ticks for only %{hours} h"
+
+trade_window.source.candles_no_trades: "%{min}-minute candles - the exchange had no trades here"
+
+trade_window.source.candles_failed: "%{min}-minute candles - could not load ticks"
+
+trade_window.source.candles_rate_limited: "%{min}-minute candles - the exchange is rate-limiting, ticks were not asked for; reopen the window in %{secs} s"
+
+trade_window.empty.no_data: "The market has no data for this period."
+
+trade_window.empty.no_endpoint: "%{brand} has no public history source this build can use."
+
+trade_window.empty.unknown_venue: "This build does not recognise the core's exchange."
+
+trade_window.empty.core_offline: "The trade's core is not connected, so its exchange and market cannot be identified."
+
+trade_window.empty.bad_window: "The trade's open or close time is not usable."
+
+trade_window.figure.side: "Side"
+
+trade_window.figure.entry: "Entry"
+
+trade_window.figure.exit: "Exit"
+
+trade_window.figure.quantity: "Quantity"
+
+trade_window.figure.profit: "Profit"
+
+trade_window.figure.profit_pct: "Profit, %"
+
+trade_window.figure.opened: "Opened"
+
+trade_window.figure.closed: "Closed"
+
+trade_window.figure.held: "Held"
+
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy: "Strategy"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted: "in deleted"
+trade_window.strategy.deleted: "deleted"
+trade_window.strategy.core_offline: "core not connected"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version: "version %{stamp}"
+trade_window.strategy.version_current: "version: in effect"
+trade_window.strategy.version_unknown: "version unknown"
+trade_window.strategy.version_tip: "The strategy version in effect at entry — by the terminal's record: the stamp is when the terminal saw the settings, not when the core applied them. Click opens that version in the Versions pane."
+trade_window.strategy.version_unknown_tip: "The trade predates the first saved version: the terminal was not observing this core yet"
+
+trade_window.figure.unknown: "unknown"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long: "LONG"
+
+trade_window.side.short: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders: "Orders"
+trade_window.traces.pending: "looking up traces: the archive, then the core…"
+trade_window.traces.drawn: "%{own} own, %{inherited} inherited"
+trade_window.traces.drawn_own: "%{own} lines on the chart"
+trade_window.traces.none: "no traces in the archive — exit from the report, entry as an arrow"
+trade_window.traces.not_askable: "row key not received — the trade was replicated before the core update"
+trade_window.traces.failed: "the core did not answer — an old core or a dropped link"
+trade_window.traces.retry_tip: "Ask the core for the order traces again"
+trade_window.traces.neighbours: "+%{n} neighbouring"

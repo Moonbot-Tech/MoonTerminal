@@ -1,0 +1,28 @@
+# General tab of the Settings window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+general.language: "Interface language"
+general.language_hint: "Applies after saving."
+general.valuation_mode: "Rate used for USDT conversion"
+general.valuation_mode.historical: "At trade time"
+general.valuation_mode.current: "Current rate"
+general.valuation_mode_hint: "Report and Analytics convert to USDT at the rate of the minute the trade closed. Change this only deliberately: “Current rate” takes the latest known rate from Binance/Bybit spot rather than the exchange the trade was made on, refreshes it every few minutes, and never stores it. It also changes tuning: thresholds are then fitted against re-valued history. Applies after saving."
+general.charts_split_by_core: "Separate chart tab per core"
+general.charts_split_by_core_hint: "AddToChart default: on — a tab per core, off — all cores of a group in one. The core's “Bundle” column (Connections) overrides this: cores sharing a bundle name merge into one tab."
+general.separate_control_zones: "Chart pan in the order-book zone"
+general.separate_control_zones_hint: "On — a left drag that misses every order line pans the chart from inside the order-book zone; a click that does not move still places, moves or cancels as today. Off — the book zone is orders only: no pan and no zoom there. Order gestures are always confined to the book zone, on every tab including Add and detached windows; a click on the plot never places, moves or cancels an order. The wheel over the book still belongs to the stack / book. With the book hidden the order zone is a strip along the right edge with a marker line, as long as the tab keeps “Order zone with the book hidden” on; turn it off together with the book and the tab becomes chart edge to edge — no order gesture at all, and a double click anywhere opens the coin on Main. A chart broomed down to its order book in comparison mode is not split at all: the book covers every part of it, and no chart gesture — pan, the open-on-Main double click, leaving fullscreen — is left on it."
+general.main_idle_close: "Auto-close Main charts when idle"
+general.main_idle_close_secs: "Close after"
+general.main_idle_close_hint: "Idle = the Main window is not focused OR focused but the mouse is not moving. Each chart closes after N seconds of its own inactivity (the most recently opened closes last); a fullscreen chart closes too and exits fullscreen. Order-book subscriptions are dropped immediately."
+general.seconds: "sec"
+general.charts_scroll: "Show charts with scrolling"
+general.charts_scroll_hint: "On — each chart has a fixed height with vertical scrolling. Off (as before) — charts share the window height (scaled vertically)."
+general.chart_height: "Chart height, px"
+general.compress_fill: "Compress to fit (no scrolling)"
+general.compress_fill_hint: "No scrollbar appears: charts keep the set height until they reach the window bottom, then compress (as without scrolling)."
+general.log_to_file: "Write log to files"
+general.log_to_file_hint: "App and core logs are written to logs/<date>_<source>.log (one file per source per day)."
+general.log_retention: "Keep log"
+general.log_retention_hint: "Files older than this are deleted on startup and once a day. 0 — keep everything."
+general.days: "days"

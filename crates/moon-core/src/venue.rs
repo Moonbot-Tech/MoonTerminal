@@ -302,7 +302,7 @@ impl MarketKind {
     /// captions are edited in one place rather than compiled in.
     ///
     /// Returns:
-    ///     Key into `locales/common.yml`.
+    ///     Key into `locales/<lang>/common.<lang>.yml`.
     pub const fn label_key(self) -> &'static str {
         match self {
             Self::Spot => "common.exchange_spot",

@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Горизонтальный луч"
+hotkeys.draw_horizontal_ray: "Горизонтальный луч"
+hotkeys.draw_horizontal_ray_hint: "Один клик задаёт начало и цену луча, направленного вправо. Повторное нажатие выключает инструмент."

@@ -24,7 +24,7 @@ pub(crate) struct City {
 }
 
 impl City {
-    /// Resolve the picker label through `locales/city.yml`, while the header keeps the stable code.
+    /// Resolve the picker label through `locales/<lang>/city.<lang>.yml`, while the header keeps the stable code.
     pub fn name(&self) -> String {
         rust_i18n::t!(format!("city.{}", self.code)).to_string()
     }

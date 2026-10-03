@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Telegram на ядрі"
+
+telegram_core.intro: "Керування вбудованим Telegram-рідером вибраного ядра. Стан належить ядру, не цьому терміналу."
+
+telegram_core.core_pick: "Ядро"
+
+telegram_core.core_pick_none: "Виберіть ядро"
+
+telegram_core.details: "Параметри ядра"
+
+telegram_core.enable: "Увімкнути рідер"
+
+telegram_core.enable_tip: "Вимкнення зупиняє лише рідер цього ядра і не виходить з облікового запису Telegram."
+
+telegram_core.unsupported: "Віддалений вхід на цій службі недоступний."
+
+telegram_core.unsupported_ver: "Віддалений вхід на цій службі недоступний (версія %{v})."
+
+telegram_core.stale: "Знімок застарів — дії лишаються вимкненими, доки не надійде свіжий стан."
+
+telegram_core.sent_waiting: "Надіслано, чекаємо на ядро…"
+
+telegram_core.service_online: "Служба онлайн"
+
+telegram_core.service_offline: "Служба офлайн"
+
+telegram_core.client_state: "Стан"
+
+telegram_core.setup_error: "Помилка встановлення"
+
+telegram_core.client_error: "Помилка клієнта"
+
+telegram_core.disconnected: "Ядро не підключено."
+
+telegram_core.no_snapshot: "Немає знімка стану."
+
+telegram_core.proxy_section: "Проксі"
+
+telegram_core.proxy_kind_none: "Без проксі"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Хост"
+
+telegram_core.proxy_port: "Порт"
+
+telegram_core.proxy_user: "Користувач"
+
+telegram_core.proxy_password: "Пароль"
+
+telegram_core.proxy_secret: "Секрет"
+
+telegram_core.proxy_save: "Зберегти проксі"
+
+telegram_core.proxy_secret_hint: "Ядро ніколи не повертає збережений пароль або секрет, тож введіть його знову. Порожнє значення стирає його, а не лишає старе."
+
+telegram_core.proxy_actual: "Активний проксі"
+
+telegram_core.proxy_actual_unknown: "ще не відомо"
+
+telegram_core.proxy_error: "Помилка проксі"
+
+telegram_core.proxy_password_set: "пароль задано"
+
+telegram_core.phone: "Телефон"
+
+telegram_core.phone_hint: "Міжнародний формат, наприклад +15551234567."
+
+telegram_core.phone_send: "Надіслати номер"
+
+telegram_core.login_qr: "Увійти через QR"
+
+telegram_core.login_phone: "Увійти за номером телефону"
+
+telegram_core.cancel_to_phone: "Скасувати вхід і повернутися до номера"
+
+telegram_core.code: "Код"
+
+telegram_core.code_send: "Надіслати код"
+
+telegram_core.password: "Пароль 2FA"
+
+telegram_core.password_send: "Надіслати пароль"
+
+telegram_core.password_hint_label: "Підказка"
+
+telegram_core.recovery_email: "Пошта відновлення"
+
+telegram_core.email: "Пошта"
+
+telegram_core.email_send: "Надіслати пошту"
+
+telegram_core.email_code: "Код із пошти"
+
+telegram_core.email_code_send: "Надіслати код із пошти"
+
+telegram_core.email_pattern: "Лист надійде на %{pattern}"
+
+telegram_core.code_length: "Довжина коду: %{n}"
+
+telegram_core.first_name: "Ім'я"
+
+telegram_core.last_name: "Прізвище"
+
+telegram_core.terms_accept: "Приймаю умови"
+
+telegram_core.register: "Зареєструватися"
+
+telegram_core.min_age: "Мінімальний вік: %{n}"
+
+telegram_core.logged_in: "Обліковий запис %{phone}"
+
+telegram_core.logged_in_unknown: "Обліковий запис готовий"
+
+telegram_core.logout: "Вийти"
+
+telegram_core.logout_title: "Вийти з Telegram на ядрі"
+
+telegram_core.logout_q: "Це вийде з облікового запису і скине спільні дані Telegram на машині цього ядра. Зачепить усі процеси MoonBot на тій машині, не лише це ядро."
+
+telegram_core.premium: "Потрібен зовнішній крок Telegram. Скасуйте вхід, щоб повернутися до номера телефону."
+
+telegram_core.support_email: "Пошта підтримки"
+
+telegram_core.support_subject: "Тема"
+
+telegram_core.cancel_login: "Скасувати вхід"
+
+telegram_core.transitional: "Ядро працює, зачекайте…"
+
+telegram_core.step_unknown: "Невідомий крок входу. Оновіть стан; не вгадуйте, які дані надсилати."
+
+telegram_core.refresh: "Оновити"
+
+telegram_core.service_error: "Помилка %{code}: %{message}"
+
+telegram_core.connection: "Мережа Telegram"
+
+telegram_core.conn.unknown: "невідомо"
+
+telegram_core.conn.waiting_for_network: "очікування мережі"
+
+telegram_core.conn.connecting_to_proxy: "підключення до проксі"
+
+telegram_core.conn.connecting: "підключення"
+
+telegram_core.conn.updating: "оновлення"
+
+telegram_core.conn.ready: "готова"
+
+telegram_core.qr_failed: "Не вдалося побудувати QR. Оновіть стан."
+
+telegram_core.qr_wait: "Чекаємо на посилання для QR…"
+
+telegram_core.resend: "Надіслати код ще раз"
+
+telegram_core.resend_in: "Повтор через %{wait}"
+
+telegram_core.no_answer: "Ядро не відповіло. Оновіть стан і спробуйте знову."
+
+telegram_core.next_code: "Наступний спосіб"
+
+telegram_core.code_kind.telegram: "Код у застосунку Telegram."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "SMS-слово, починається з “%{first_letter}”, перше слово “%{first_word}”."
+
+telegram_core.code_kind.sms_phrase: "SMS-фраза: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Дзвінок."
+
+telegram_core.code_kind.flash_call: "Flash-дзвінок, префікс %{prefix}."
+
+telegram_core.code_kind.missed_call: "Пропущений дзвінок, префікс %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "Цей спосіб доставки не підтримується."
+
+telegram_core.code_kind.other: "%{kind}"

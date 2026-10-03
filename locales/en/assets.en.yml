@@ -1,0 +1,124 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+assets.window_title: "MoonTerminal — Assets"
+assets.show_all: "show all"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "Hide assets worth less than N $ (0 — show all; mouse wheel changes)"
+assets.cores_free_total: "Cores · free/total"
+assets.cores_count: "Cores (%{n})"
+assets.no_cores: "no cores"
+assets.empty: "no assets"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "no open positions"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "Table rows after the dust filter; Σ is their combined value"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "%{n} rows have no valid value — Σ excludes them"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "Equity across the in-scope cores — not the table sum"
+assets.balances_total: "Total"
+assets.balances_free: "free"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "offline"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "no rate"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "awaiting: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "no rate: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "offline: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "same account: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "excluded: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores} share the account of %{core}: counted once"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "(Hyperliquid: the terminal cannot see the account mode, unified or standard; if the wallets are separate, set the core to \"Separate\" in Settings → Connections → In total)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "Excluded by core setting: %{cores}"
+assets.section_positions: "Positions"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "All cores"
+assets.cores_n: "Cores: %{n}"
+
+# --- Asset table columns ---
+assets.col.core: "Core"
+assets.col.coin: "Asset"
+assets.col.qty: "Qty"
+assets.col.price: "Price"
+assets.col.value: "Value $"
+assets.col.pos: "Pos."
+assets.col.pos_price: "Pos. price"
+assets.col.profit: "Profit"
+assets.col.kind: "Market"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "Buttons"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "Fields"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "Spot balances have no unrealized PnL"
+assets.actions.unavailable_qty: "No sellable %{coin} quantity"
+assets.actions.unavailable_market_identity: "No market identity for %{coin}"
+assets.actions.unavailable_market_catalog: "Market %{market} is absent from the core catalog"
+
+# --- Position action buttons ---
+assets.open_global_hint: "Open Assets in a separate window (all cores)"
+assets.market_sell: "Market sell"
+assets.market_sell_confirm: "Market sell"
+assets.market_sell_no_price: "Sale cancelled: the market has no current price, and the order needs one."
+assets.market_sell_q: "Really market-sell %{coin}?"
+assets.market_sell_scope_changed: "Sale cancelled: the core is no longer in the current Assets scope."
+assets.order: "Order"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "Re-place the sell: cancel own %{coin} orders and place a limit close for the whole position (Moonbot's Order)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "Place a limit sell of %{coin}: the order window with price and size (Moonbot's Order on spot)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "Sell %{coin}"
+assets.order_dialog.side: "Order"
+assets.order_dialog.size: "Size, %{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "Sell price"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "Current: %{p}"
+assets.order_dialog.bad_size: "The size must be a positive number"
+assets.order_dialog.bad_price: "The price must be a positive number"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "Order command for %{coin} sent to the core — check Orders and the core log for the result"
+assets.order_failed: "Limit close of the %{coin} position was not sent: the core is unreachable"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "Spot"
+assets.wallet.kind.futures: "Futures"
+assets.wallet.kind.quarterly: "Quarterly"
+assets.wallet.filtered_empty: "All %{n} assets are hidden by the %{thr}$ value filter"
+assets.wallets_hint: "Wallets · drag a coin between containers"
+assets.refresh_hint: "Refresh core balances"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "Wallets settings"
+assets.settings.display: "Display"
+assets.settings.group_by_venue: "Group cores by exchange"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "Drag to resize the column. Double-click resets it"
+assets.transfer_title: "Transfer %{coin}: %{from} -> %{to}"
+assets.free: "free: %{n}"
+assets.transfer_btn: "Transfer"

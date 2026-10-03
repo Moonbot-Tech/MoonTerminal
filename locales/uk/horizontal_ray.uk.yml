@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Горизонтальний промінь"
+hotkeys.draw_horizontal_ray: "Горизонтальний промінь"
+hotkeys.draw_horizontal_ray_hint: "Один клік задає початок і ціну променя, спрямованого праворуч. Повторне натискання вимикає інструмент."

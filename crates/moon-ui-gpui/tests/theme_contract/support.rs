@@ -41,44 +41,182 @@ pub fn read_src(rel: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
-/// Assert that one localization key defines exactly the three shipped language values.
+/// Codes of `moon_core::config::Language::ALL`, in dropdown order.
+///
+/// This integration test cannot import `moon-core`. `languages_match_language_all` reads
+/// `crates/moon-core/src/config/lang.rs` and checks this list still matches the codes of `ALL`.
+pub const SHIPPED: [&str; 4] = ["ru", "en", "es", "uk"];
+
+/// Repository `locales/` directory, next to the workspace crates.
+pub fn locales_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("locales")
+}
+
+/// Path of one per-language area file: `locales/<lang>/<area>.<lang>.yml`.
+pub fn locale_path(area: &str, lang: &str) -> PathBuf {
+    locales_root().join(lang).join(format!("{area}.{lang}.yml"))
+}
+
+/// Last path component as UTF-8.
 ///
 /// Args:
-///     file: Locale file name below the repository `locales` directory.
+///     path: File whose name is needed for a panic or a stem.
+///
+/// Returns:
+///     The file name, or `"?"` when it is missing or not Unicode.
+pub fn file_name(path: &Path) -> &str {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("?")
+}
+
+/// Read one locale file and normalize CRLF to LF.
+///
+/// Args:
+///     path: Area file under `locales/`.
+///
+/// Returns:
+///     File text with `\r\n` replaced by `\n`. Panics when the file cannot be read.
+pub fn read_locale_path(path: &Path) -> String {
+    fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()))
+        .replace("\r\n", "\n")
+}
+
+/// Read one area file with line endings normalized to LF.
+fn read_locale_file(area: &str, lang: &str) -> String {
+    read_locale_path(&locale_path(area, lang))
+}
+
+/// Unquote one flat locale scalar.
+///
+/// Double-quoted values unescape `\"`, `\\`, and `\n`. A quote closes the value only when an
+/// even number of backslashes precedes it, so a value ending in `\"` keeps that quote.
+/// Single-quoted values turn `''` into `'`.
+///
+/// Args:
+///     key: Localization key, named in the panic when the scalar is not quoted.
+///     raw: Text after the `: ` separator, including the surrounding quotes.
+///
+/// Returns:
+///     The scalar text a reader would show. Panics when `raw` is not single- or double-quoted.
+pub fn unquote_locale_scalar(key: &str, raw: &str) -> String {
+    let raw = raw.trim();
+    if let Some(rest) = raw.strip_prefix('"') {
+        return unescape_double(rest);
+    }
+    if let Some(rest) = raw.strip_prefix('\'') {
+        return unescape_single(rest);
+    }
+    panic!("{key} locale value must be quoted");
+}
+
+fn unescape_double(rest: &str) -> String {
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('n') => out.push('\n'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else if ch == '"' {
+            break;
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn unescape_single(rest: &str) -> String {
+    let mut out = String::new();
+    let mut chars = rest.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\'' {
+            if chars.peek() == Some(&'\'') {
+                chars.next();
+                out.push('\'');
+            } else {
+                break;
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Value of one flat key in `locales/<lang>/<area>.<lang>.yml`.
+///
+/// A line matches only when it starts with `{key}: `, so `report.traded_volume` does not
+/// consume `report.traded_volume_tip`. Comment and blank lines are skipped.
+///
+/// Args:
+///     area: Area stem, without a language suffix (`shell`, not `shell.yml`).
+///     lang: Shipped language code.
+///     key: Fully-qualified localization key.
+///
+/// Returns:
+///     The unquoted scalar. Panics when the file or the key is missing.
+pub fn locale_value(area: &str, lang: &str, key: &str) -> String {
+    let text = read_locale_file(area, lang);
+    let prefix = format!("{key}: ");
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(raw) = line.strip_prefix(&prefix) {
+            return unquote_locale_scalar(key, raw);
+        }
+    }
+    panic!("locales/{lang}/{area}.{lang}.yml does not define {key}");
+}
+
+/// Every `*.yml` file in `locales/<lang>/`, sorted by path.
+///
+/// Args:
+///     lang: Shipped language code. The directory must exist.
+///
+/// Returns:
+///     File paths. An unreadable directory panics.
+pub fn locale_dir_files(lang: &str) -> Vec<PathBuf> {
+    let dir = locales_root().join(lang);
+    let entries =
+        fs::read_dir(&dir).unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()));
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.unwrap_or_else(|err| panic!("failed to read dir entry: {err}"));
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("yml") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    files
+}
+
+/// Assert that one localization key is defined in every shipped language.
+///
+/// Args:
+///     area: Area stem, without a language suffix (`shell`, not `shell.yml`).
 ///     key: Fully-qualified localization key to inspect.
 ///
 /// Returns:
-///     Nothing; a missing or partial locale entry panics with its file and key.
-pub fn assert_locale_key_in_three_languages(file: &str, key: &str) {
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("locales")
-            .join(file),
-    )
-    .unwrap_or_else(|err| panic!("failed to read locales/{file}: {err}"))
-    .replace("\r\n", "\n");
-    let after = locales
-        .split_once(&format!("{key}:\n"))
-        .unwrap_or_else(|| panic!("locales/{file} does not define {key}"))
-        .1;
-    let members: Vec<&str> = after
-        .lines()
-        .take_while(|line| line.starts_with("  "))
-        .collect();
-    assert_eq!(
-        members.len(),
-        3,
-        "{key} in locales/{file} must define exactly ru, en, and es"
-    );
-    for locale in ["ru", "en", "es"] {
-        assert!(
-            members
-                .iter()
-                .any(|line| line.starts_with(&format!("  {locale}: "))),
-            "{key} in locales/{file} must carry {locale}, or that language shows the raw key instead"
-        );
+///     Nothing. A missing file or key panics with its language, area, and key.
+pub fn assert_locale_key_in_every_language(area: &str, key: &str) {
+    for lang in SHIPPED {
+        let _value = locale_value(area, lang, key);
     }
 }
 

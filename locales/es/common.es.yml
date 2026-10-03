@@ -1,0 +1,72 @@
+# Strings shared by multiple panels: loading placeholders, report-database errors, and generic
+# labels such as an unidentified exchange.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+common.loading: "Cargando…"
+common.empty_period: "No hay operaciones cerradas en este período."
+common.db_read_failed: "No se pudo leer la base de datos de informes."
+common.db_read_failed_corrupt: "El archivo de la base está dañado: reintentar no ayudará. Consulte la pestaña Registro."
+common.db_read_failed_other: "Es un error de lectura, no una ausencia de operaciones. Consulte la pestaña Registro."
+common.db_read_failed_exhausted: "Hay demasiadas lecturas de informes abiertas a la vez. Suele resolverse cuando terminan las demás lecturas. Si persiste, otro proceso puede estar reteniendo el archivo."
+common.db_read_failed_retry: "La base de datos de informes está ocupada. Reinténtelo — el período se recalculará. Si se repite, otro proceso puede estar reteniendo el archivo: sincronización en la nube de %{data_dir}, antivirus, una segunda copia del terminal o una herramienta externa de BD."
+common.db_read_failed_detail: "Archivo: %{path}  Operación: %{operation}  Código: %{code}"
+common.db_read_failed_file: "Archivo"
+common.db_read_failed_operation: "Operación"
+common.db_read_failed_code: "Código"
+common.db_read_failed_copy: "Copiar"
+common.db_read_failed_short: "Error de lectura de BD"
+common.db_not_ready: "La base de datos de informes aún no está sincronizada."
+common.incomparable_quote: "Las operaciones seleccionadas tienen monedas de cotización mixtas o desconocidas. Seleccione una moneda o cambie a Profit %."
+common.period_out_of_range: "El período solicitado está fuera del rango legible."
+common.period_out_of_range_title: "Período fuera del rango legible."
+common.period_out_of_range_hint: "Es un período rechazado, no vacío: compruebe el período guardado o los datos del núcleo."
+common.exchange_unknown: "Bolsa sin identificar"
+common.exchange_spot: "Spot"
+common.exchange_futures: "Futures"
+# Binance COIN-M delivery contracts, which the core itself calls "Binance Quarterly".
+common.exchange_quarterly: "Quarterly"
+# The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
+# strings live here rather than in any one panel's file for the same reason the Analytics
+# placeholders do: six panels share the control, so no single namespace owns it.
+#
+# Saved core groups: a named set of cores the user applies instead of re-picking them. A group row
+# ticks when the current selection IS that group, and its trailing count is what a CLICK produces —
+# the members the panel showing it can actually select. In the MENU that count is formatted by the
+# consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
+# `group_cores_n` below serves the two modals, which have no trigger beside them.
+# Short "all" word for the shared core selector once a narrow row shrinks it to its icon: the noun
+# is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
+# agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
+common.core_pick.all_short: "Todos"
+common.core_pick.groups_heading: "Grupos de núcleos"
+common.core_pick.group_cores_n: "%{n} núcleos"
+# Members whose core is no longer configured. They are kept on purpose — a core can come back — so
+# this is a warning, not an error.
+common.core_pick.group_dead_n: "faltan %{n}"
+common.core_pick.save_as_group: "Guardar la selección como grupo…"
+common.core_pick.manage_groups: "Gestionar grupos…"
+common.core_pick.save_title: "Nuevo grupo de núcleos"
+common.core_pick.manage_title: "Grupos de núcleos"
+# Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
+# created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
+# strategy in all three languages.
+common.core_pick.group_name_required: "Introduzca un nombre de grupo"
+common.core_pick.group_name_ph: "Nombre del grupo"
+# Two-step delete rather than a confirmation dialog: MoonUI paints one dialog at a time, so a
+# confirm modal opened from the management modal would replace the list being edited. The second
+# click reuses the shared `dialogs.delete_q`.
+common.core_pick.group_delete: "Eliminar"
+
+# A control edited for several things at once (strategies, cores) whose values disagree.
+common.mixed_values: "valores distintos"
+
+# Second part of every strategy-name search tooltip (Strategies tree, Analytics, Report): the one
+# shared query syntax with examples.
+common.strategy_query_syntax: "Coma = o, espacio = y, !palabra = excluir. Sin distinguir mayúsculas.\nEMA, Hook — nombres con EMA o Hook\ndrops 1m — nombres con drops y 1m\nshort !test — nombres con short, sin test"
+
+# The button that writes a staged change and keeps its surface open.
+common.apply: "Aplicar"
+common.size_kb: "%{value} KB"
+common.size_mb: "%{value} MB"
+common.size_gb: "%{value} GB"

@@ -1,0 +1,124 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+assets.window_title: "MoonTerminal — Activos"
+assets.show_all: "mostrar todo"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "Ocultar activos por debajo de N $ (0 — mostrar todo; la rueda del ratón lo cambia)"
+assets.cores_free_total: "Núcleos · libre/total"
+assets.cores_count: "Núcleos (%{n})"
+assets.no_cores: "sin núcleos"
+assets.empty: "sin activos"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "sin posiciones abiertas"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "Filas de la tabla tras el filtro de polvo; Σ es su valor combinado"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "%{n} filas sin valor válido — Σ las excluye"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "Fondos de los núcleos en alcance — no es la suma de la tabla"
+assets.balances_total: "Total"
+assets.balances_free: "libre"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "sin conexión"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "sin cotización"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "esperando: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "sin cotización: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "sin conexión: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "misma cuenta: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "excluidos: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores} comparten la cuenta de %{core}: contada una vez"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "(Hyperliquid: el terminal no ve el modo de cuenta, unificado o estándar; si las billeteras están separadas, ponga el núcleo en «Por separado» en Ajustes → Conexiones → En total)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "Excluidos por ajuste del núcleo: %{cores}"
+assets.section_positions: "Posiciones"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "Todos los núcleos"
+assets.cores_n: "Núcleos: %{n}"
+
+# --- Asset table columns ---
+assets.col.core: "Núcleo"
+assets.col.coin: "Activo"
+assets.col.qty: "Cant."
+assets.col.price: "Precio"
+assets.col.value: "Valor $"
+assets.col.pos: "Pos."
+assets.col.pos_price: "Precio pos."
+assets.col.profit: "Beneficio"
+assets.col.kind: "Mercado"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "Botones"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "Campos"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "Los saldos Spot no tienen PnL no realizado"
+assets.actions.unavailable_qty: "No hay cantidad vendible de %{coin}"
+assets.actions.unavailable_market_identity: "No hay identidad de mercado para %{coin}"
+assets.actions.unavailable_market_catalog: "El mercado %{market} no está en el catálogo del núcleo"
+
+# --- Position action buttons ---
+assets.open_global_hint: "Abrir Activos en ventana aparte (todos los núcleos)"
+assets.market_sell: "Venta mercado"
+assets.market_sell_confirm: "Venta a mercado"
+assets.market_sell_no_price: "Venta cancelada: el mercado no tiene precio actual y la orden lo necesita."
+assets.market_sell_q: "¿Vender %{coin} a mercado?"
+assets.market_sell_scope_changed: "Venta cancelada: el núcleo ya no está en el ámbito actual de Activos."
+assets.order: "Orden"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "Reponer la venta: cancelar las órdenes propias de %{coin} y poner un límite de cierre de toda la posición (Order de Moonbot)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "Poner una venta límite de %{coin}: la ventana de orden con precio y tamaño (Order de Moonbot en spot)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "Vender %{coin}"
+assets.order_dialog.side: "Orden"
+assets.order_dialog.size: "Tamaño, %{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "Precio de venta"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "Actual: %{p}"
+assets.order_dialog.bad_size: "El tamaño debe ser un número positivo"
+assets.order_dialog.bad_price: "El precio debe ser un número positivo"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "Comando Order de %{coin} enviado al núcleo: el resultado se ve en Órdenes y en el log del núcleo"
+assets.order_failed: "Cierre límite de la posición %{coin} no enviado: el núcleo no está disponible"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "Spot"
+assets.wallet.kind.futures: "Futuros"
+assets.wallet.kind.quarterly: "Trimestrales"
+assets.wallet.filtered_empty: "Los %{n} activos están ocultos por el filtro de valor de %{thr}$"
+assets.wallets_hint: "Carteras · arrastra una moneda entre contenedores"
+assets.refresh_hint: "Actualizar saldos del núcleo"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "Ajustes de carteras"
+assets.settings.display: "Visualización"
+assets.settings.group_by_venue: "Agrupar núcleos por exchange"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "Arrastre para cambiar el ancho. Doble clic lo restablece"
+assets.transfer_title: "Transferir %{coin}: %{from} -> %{to}"
+assets.free: "libre: %{n}"
+assets.transfer_btn: "Transferir"

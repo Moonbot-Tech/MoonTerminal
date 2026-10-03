@@ -177,7 +177,7 @@ pub fn parse_reply_button(
     if text.is_empty() || text.starts_with('/') {
         return ParsedCommand::Unknown;
     }
-    for locale in ["ru", "en", "es"] {
+    for locale in crate::config::Language::ALL.map(crate::config::Language::code) {
         for (name, command) in [
             ("miniapp", ParsedCommand::MiniApp),
             ("help", ParsedCommand::Help),

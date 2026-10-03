@@ -14,6 +14,8 @@
 
 mod support;
 
+mod locales;
+
 mod analytics;
 mod chart;
 mod core_pick;

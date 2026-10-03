@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "sin archivo"
+sounds.missing_title: "Sonido no encontrado"
+sounds.missing_name: "No se encontró el sonido «%{name}»: suena %{fallback}. Copie %{name}.wav a la carpeta %{folder}."
+sounds.missing_ordinal: "El sonido n.º %{n} no existe: suena %{fallback}. Copie a la carpeta %{folder} un archivo llamado %{n}_nombre.wav o vuelva a elegir el sonido en la configuración del núcleo."
+sounds.folder_title: "Sonidos propios"
+sounds.folder_help: "Copie archivos .wav a esta carpeta: aparecerán en todas las listas de sonidos (estrategias, sonidos de operaciones, alarmas, alertas). La configuración del núcleo guarda el sonido por NÚMERO: 1–%{last} son integrados; un archivo reclama su número por el nombre: %{first}_MySound.wav → sonido «MySound» n.º %{first}. Un archivo sin número no se puede elegir en la configuración del núcleo; un archivo con el nombre de un sonido integrado (ding1.wav) lo sustituye."
+sounds.open_folder: "Abrir carpeta"
+sounds.rescan: "Actualizar"
+sounds.scan_summary: "De la carpeta: %{folder} (con número: %{numbered}), rechazados: %{rejected}"
+sounds.numbered_title: "Sus números"
+sounds.scan_pending: "Leyendo la carpeta…"
+sounds.rejected_title: "Archivos rechazados"
+sounds.reject_not_pcm: "no es WAV PCM"
+sounds.reject_too_large: "mayor de %{mb} MB"
+sounds.reject_over_total: "supera el límite total de %{mb} MB"
+sounds.reject_io: "no se puede leer: %{detail}"
+sounds.reject_number_reserved: "los números anteriores a %{first} pertenecen a los sonidos integrados"
+sounds.reject_number_taken: "este número ya lo tiene «%{by}»"
+sounds.reject_name_taken: "ya existe un sonido con este nombre: un archivo con número necesita otro nombre"

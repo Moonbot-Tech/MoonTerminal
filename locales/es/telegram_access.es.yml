@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Chats"
+telegram.access_chat: "Chat %{id}"
+telegram.access_owner_summary: "Propietario: todos los núcleos, acceso completo"
+telegram.access_viewer_summary: "Observador: %{count} núcleos, solo lectura"
+telegram.access_waiting: "Observador: sin núcleos asignados ni acceso a datos"
+telegram.access_no_cores: "Aún no se han asignado núcleos a este chat. Pide al propietario que los seleccione en MoonTerminal: Ajustes → Telegram."
+telegram.access_edit: "Configurar"
+telegram.access_collapse: "Contraer"
+telegram.access_name: "Nombre del chat en el terminal"
+telegram.access_name_placeholder: "Por ejemplo, Alex — cliente"
+telegram.access_transfer_hint: "Este chat tendrá acceso completo a todos los núcleos. El propietario anterior pasará a ser observador sin núcleos asignados. El cambio se aplicará al guardar."
+telegram.access_transfer_confirm: "Confirmar cambio de propietario"
+telegram.access_make_owner: "Hacer propietario"
+telegram.access_remove: "Desvincular chat"
+telegram.access_cores: "Núcleos disponibles: solo lectura"
+telegram.access_search: "Buscar núcleo por número o nombre"
+telegram.access_select_current: "Seleccionar todos los núcleos actuales"
+telegram.access_clear: "Quitar selección"
+telegram.access_archived: "Núcleo eliminado de conexiones (acceso al historial)"
+telegram.access_no_matches: "No se encontraron núcleos. Añade y guarda conexiones o cambia la búsqueda."
+telegram.access_history_loading: "Cargando núcleos del historial…"
+telegram.access_history_failed: "No se pudo leer el historial. Los núcleos configurados y las asignaciones guardadas están disponibles."
+telegram.access_retry: "Reintentar"
+
+telegram.chats_hint: "Añade chats por código; el primero es propietario, los demás ven núcleos asignados al Guardar."

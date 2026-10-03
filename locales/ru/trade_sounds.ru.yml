@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Громкость звуков сделок"
+trade_sounds.tab: "Звуки сделок"
+trade_sounds.help: "Выберите звуки открытия и закрытия для каждой биржи. Изменения сохраняются автоматически."
+trade_sounds.exchange: "Биржа"
+trade_sounds.quiet_note: "Тихий режим включён — звуки отключены."
+trade_sounds.open: "Открытие позиции"
+trade_sounds.close: "Закрытие позиции"
+trade_sounds.off: "Без звука"
+trade_sounds.preview: "Прослушать"

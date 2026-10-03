@@ -1,0 +1,7 @@
+# Error messages for settings validation and GPU failures.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+err.dup_name: "Дублікат імені сервера: «%{name}»"
+err.dup_key: "Дублікат ключа на сервері «%{name}» (таке ядро вже є)"
+err.no_gpu: "немає відповідного адаптера GPU"

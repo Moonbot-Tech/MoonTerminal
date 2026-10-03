@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "Esta hora"
+
+telegram.help_daily: "Resultados diarios de este mes"
+
+telegram.help_intro: "Elige un período en el menú inferior. Pulsa de nuevo para actualizar. Selecciona un exchange para ver sus núcleos."
+
+telegram.help_commands: "Comandos y fechas propias"
+
+telegram.help_limits: "Fechas inclusive, máximo 366 días. Zona horaria: %{zone}. Mantén el terminal abierto."
+
+telegram.help_limits_station: "Fechas inclusive, máximo 366 días. Zona horaria: %{zone}. Los informes se actualizan las 24 horas."
+
+telegram.help_custom: "Período propio / por día"
+
+telegram.help_mini: "Los informes del chat no necesitan Mini App. /miniapp lo abre si está habilitado en los ajustes del terminal."
+
+telegram.help_mini_station: "Los informes del chat no necesitan Mini App. /miniapp lo abre si está habilitado en la estación."
+
+telegram.help_status_station: "Estado de la estación; un botón de actualización cuando hay una versión nueva"
+telegram.report_total: "Total"
+
+telegram.report_calculation_extra: "El total incluye todo el grupo y período, también otras páginas. La orden media usa operaciones con datos adecuados; las exclusiones figuran en los detalles."
+
+telegram.button_home: "Resumen"
+
+telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa de nuevo para obtener un informe actualizado. Los botones del informe abren núcleos o días."
+
+telegram.report_all_cores: "Todos los núcleos"
+
+telegram.report_by_days: "Por día"
+
+telegram.report_days_scope: "Días del grupo"
+
+telegram.report_cores_scope: "Núcleos del grupo"
+
+telegram.report_back: "Todos los exchanges"
+
+telegram.report_calculation: "Cómo se calcula"
+
+telegram.report_exchanges: "Exchanges"
+
+telegram.report_exchanges_menu: "Exchanges"
+
+telegram.report_exchanges_back: "Atrás"
+
+telegram.report_exchange: "Exchange"
+
+telegram.report_scope_unavailable: "Exchange no disponible"
+
+telegram.report_average_coverage: "%{counted} incluidas; %{excluded} excluidas"
+
+telegram.report_delivery_failed: "No se pudo mostrar el informe. Reinténtalo; si persiste, comprueba la conexión del terminal y actualiza Telegram."
+telegram.report_delivery_failed_station: "No se pudo mostrar el informe. Reinténtalo; si persiste, actualiza Telegram."
+
+telegram.button_today: "Hoy"
+
+telegram.button_yesterday: "Ayer"
+
+telegram.button_month: "Este mes"
+
+telegram.button_lastmonth: "Mes pasado"
+
+telegram.button_daily: "Por día"
+
+telegram.report_days: "Días"
+
+telegram.report_cores: "Núcleos"
+
+telegram.report_profit: "Resultado"
+
+telegram.report_trades: "Operaciones"
+
+telegram.report_date: "Fecha"
+
+telegram.report_bot: "Bot"
+
+telegram.report_details: "Divisas y orden media"
+
+telegram.report_average: "Orden media"
+
+telegram.report_page: "Página"
+
+telegram.report_prev: "Anterior"
+
+telegram.report_next: "Siguiente"
+
+telegram.report_unvalued: "Sin valoración"
+
+telegram.report_empty: "No hay operaciones reales cerradas en este período."
+
+telegram.report_scope: "Grupo seleccionado del historial · operaciones reales cerradas · tipos al operar. Historial local; los bots desconectados no se actualizan."
+telegram.report_scope_station: "Grupo seleccionado del historial de la estación · operaciones reales cerradas · tipos al operar. La estación copia el historial de los núcleos las 24 horas; los bots desconectados no se actualizan."
+
+telegram.report_missing_rates: "Si faltan valoraciones, el total completo en USDT no está disponible. Los detalles conservan los subtotales por divisa conocida; las desconocidas se excluyen."
+
+telegram.report_busy: "El informe anterior aún se está calculando. Inténtalo de nuevo en breve."
+
+telegram.report_failed: "No se pudo leer el historial. Reinténtalo; un error de lectura no significa resultado cero."
+
+telegram.report_help: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\nFechas inclusive, máximo 366 días; zona del reloj del terminal. El terminal debe estar abierto."
+
+telegram.report_help_station: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\n/status — estado de la estación\nFechas inclusive, máximo 366 días; zona de los ajustes de la estación. Los informes se actualizan las 24 horas."
+
+telegram.notify_profit: "Beneficio"
+
+telegram.notify_manual: "Manual"
+
+telegram.notify_unvalued: "Sin valoración"
+
+telegram.notify_down: "sin conexión desde"
+
+telegram.notify_back: "conexión restablecida"
+
+telegram.notify_daily_title: "Resumen del día"
+
+telegram.notify_trades: "Operaciones"
+
+telegram.notify_unvalued_trades: "Sin valoración"
+
+telegram.notify_best: "Mejor"
+
+telegram.notify_worst: "Peor"

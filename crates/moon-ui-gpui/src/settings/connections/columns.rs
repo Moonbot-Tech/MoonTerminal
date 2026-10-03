@@ -66,7 +66,8 @@ const DATA_TRIGGER_BASIS: f32 = 5.0 * 0.6 * 16.0 + 14.0 + 2.0;
 /// unlike a fixed character count, reading all translations keeps future label edits fitted.
 /// The control tier supplies the font size and the trigger applies its own font scale.
 fn total_trigger_basis() -> f32 {
-    let longest = ["ru", "en", "es"]
+    let longest = moon_core::config::Language::ALL
+        .map(moon_core::config::Language::code)
         .into_iter()
         .flat_map(|locale| {
             [

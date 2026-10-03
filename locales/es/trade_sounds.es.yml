@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Volumen de los sonidos de operaciones"
+trade_sounds.tab: "Sonidos"
+trade_sounds.help: "Elige los sonidos de apertura y cierre de cada mercado. Los cambios se guardan automáticamente."
+trade_sounds.exchange: "Mercado"
+trade_sounds.quiet_note: "El modo silencioso está activado: los sonidos están desactivados."
+trade_sounds.open: "Posición abierta"
+trade_sounds.close: "Posición cerrada"
+trade_sounds.off: "Sin sonido"
+trade_sounds.preview: "Escuchar"

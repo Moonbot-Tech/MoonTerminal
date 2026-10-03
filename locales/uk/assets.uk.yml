@@ -1,0 +1,124 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+assets.window_title: "MoonTerminal — Активи"
+assets.show_all: "показати все"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "Ховати активи дешевші за N $ (0 — показати все; коліщатко миші змінює)"
+assets.cores_free_total: "Ядра · вільні/разом"
+assets.cores_count: "Ядра (%{n})"
+assets.no_cores: "немає ядер"
+assets.empty: "немає активів"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "немає відкритих позицій"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "Рядки таблиці після фільтра пилу; Σ — їхня сумарна вартість"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "У %{n} рядків немає коректної вартості — Σ їх не враховує"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "Кошти по ядрах охоплення — це не сума таблиці"
+assets.balances_total: "Разом"
+assets.balances_free: "вільні"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "немає зв'язку"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "немає курсу"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "чекаємо: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "немає курсу: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "немає зв'язку: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "одним рахунком: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "не в підсумку: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores} мають той самий рахунок, що й %{core}: враховано один раз"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "(Hyperliquid: термінал не бачить режим рахунку, єдиний чи стандартний; якщо гаманці роздільні, поставте ядру \"Окремо\" у Налаштування → Підключення → У підсумку)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "Не в підсумку за налаштуванням ядра: %{cores}"
+assets.section_positions: "Позиції"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "Усі ядра"
+assets.cores_n: "Ядер: %{n}"
+
+# --- Asset table columns ---
+assets.col.core: "Ядро"
+assets.col.coin: "Актив"
+assets.col.qty: "К-сть"
+assets.col.price: "Ціна"
+assets.col.value: "Варт.$"
+assets.col.pos: "Поз."
+assets.col.pos_price: "Поз. ціна"
+assets.col.profit: "Прибуток"
+assets.col.kind: "Ринок"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "Кнопки"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "Поля"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "Спотові баланси не мають нереалізованого PnL"
+assets.actions.unavailable_qty: "Немає доступної для продажу кількості %{coin}"
+assets.actions.unavailable_market_identity: "Немає ідентифікатора ринку для %{coin}"
+assets.actions.unavailable_market_catalog: "Ринку %{market} немає в каталозі ядра"
+
+# --- Position action buttons ---
+assets.open_global_hint: "Відкрити Активи в окремому вікні (усі ядра)"
+assets.market_sell: "Market sell"
+assets.market_sell_confirm: "Ринковий продаж"
+assets.market_sell_no_price: "Продаж скасовано: у ринку немає поточної ціни, а ордеру вона потрібна."
+assets.market_sell_q: "Точно продати %{coin} ринковим ордером?"
+assets.market_sell_scope_changed: "Продаж скасовано: ядро більше не входить у поточну область Активів."
+assets.order: "Order"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "Переставити продаж: скасувати свої ордери по %{coin} і виставити лімітне закриття всієї позиції (Order у Moonbot)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "Виставити лімітний продаж %{coin}: вікно ордера з ціною та розміром (Order у Moonbot на споті)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "Продати %{coin}"
+assets.order_dialog.side: "Ордер"
+assets.order_dialog.size: "Розмір, %{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "Ціна продажу"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "Поточна: %{p}"
+assets.order_dialog.bad_size: "Розмір має бути додатним числом"
+assets.order_dialog.bad_price: "Ціна має бути додатним числом"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "Команду Order для %{coin} надіслано ядру — результат дивіться в Ордерах і журналі ядра"
+assets.order_failed: "Лімітне закриття позиції %{coin} не надіслано: ядро недоступне"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "Спот"
+assets.wallet.kind.futures: "Ф'ючерси"
+assets.wallet.kind.quarterly: "Квартальні"
+assets.wallet.filtered_empty: "Усі %{n} активів сховані фільтром вартості %{thr}$"
+assets.wallets_hint: "Гаманці · перетягніть монету між контейнерами"
+assets.refresh_hint: "Оновити баланси ядра"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "Налаштування гаманців"
+assets.settings.display: "Відображення"
+assets.settings.group_by_venue: "Групувати ядра за біржами"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "Потягніть, щоб змінити ширину колонки. Подвійний клік скидає її"
+assets.transfer_title: "Перенесення %{coin}: %{from} -> %{to}"
+assets.free: "вільно: %{n}"
+assets.transfer_btn: "Перенести"

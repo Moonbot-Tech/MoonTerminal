@@ -44,7 +44,7 @@ So: **a locale, palette, or zone-copy change is a re-run; a new visual widget is
 
 ## Where the data comes from
 
-- **`locales/*.yml`** — the same files the terminal compiles in through `rust_i18n`.
+- **`locales/<lang>/*.yml`** — the same files the terminal compiles in through `rust_i18n`.
   A content slot spelled `{locale: toolbar.live_tip}` pulls the application's own
   string, in every language it ships. That text is never retyped here, so it cannot
   drift from what a user actually sees in the terminal.
@@ -114,7 +114,7 @@ re-derived from scratch next time.
 | `__main__.py` | CLI, exit codes, the Python and PyYAML guards |
 | `paths.py` | every path read or written, anchored on this file rather than the CWD |
 | `errors.py` | the failure types, and the collector that reports them all at once |
-| `locales.py` | `locales/*.yml` into one flat table; refuses a key defined twice |
+| `locales.py` | `locales/<lang>/*.yml` into one flat table; refuses a key defined twice in one language |
 | `theme.py` | the palette and metrics; snapshot-first resolution |
 | `content.py` | the slot rules and every validation |
 | `map.py` | MANUAL and AUTO window replicas from the content model |

@@ -6,7 +6,7 @@ Every test here can genuinely fail; each was confirmed by mutating the thing it
 guards and watching it redden.
 
 The one that earns its keep most is *locale fidelity*: it compares the rendered
-page against ``locales/*.yml`` rather than against another copy of the same
+page against ``locales/<lang>/*.yml`` rather than against another copy of the same
 data, so it is the only assertion here whose two sides have independent origins.
 *Theme fidelity* is weaker on purpose and says so in its own docstring.
 """
@@ -36,7 +36,7 @@ from tour import render as render_mod
 from tour.__main__ import main as tour_main
 from tour.content import Language, step_digest, step_texts
 from tour.content import load as load_content
-from tour.errors import ContentError, Problems, TourError
+from tour.errors import ContentError, LocaleError, Problems, TourError
 from tour.locales import load as load_locales
 from tour.theme import load as load_theme
 from tour.theme import resolve as resolve_theme
@@ -73,6 +73,25 @@ def build() -> tuple[str, object, object]:
     content.problems.raise_if_any("content is not usable")
     template = paths.TEMPLATE.read_text(encoding="utf-8")
     return render_mod.render(template, content, themes).page, content, locales
+
+
+class LocaleLoad(unittest.TestCase):
+    def test_load_reads_per_language_folders(self):
+        locales = load_locales(paths.LOCALES_DIR)
+        self.assertEqual(locales.file_of("shell.settings_btn"), "en/shell.en.yml")
+        self.assertEqual(locales.languages_of("shell.settings_btn"), {"ru", "en", "es", "uk"})
+        self.assertEqual(locales.get("shell.settings_btn", "en"), "Settings")
+
+    def test_load_rejects_stem_folder_mismatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "en"
+            folder.mkdir()
+            (folder / "dock.yml").write_text(
+                '_version: 1\ndock.x: "X"\n', encoding="utf-8"
+            )
+            with self.assertRaises(LocaleError) as caught:
+                load_locales(Path(tmp))
+            self.assertIn("dock.yml", str(caught.exception))
 
 
 class Determinism(unittest.TestCase):

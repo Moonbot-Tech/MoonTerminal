@@ -1,0 +1,28 @@
+# General tab of the Settings window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+general.language: "Idioma de la interfaz"
+general.language_hint: "Se aplica al guardar."
+general.valuation_mode: "Tasa para la conversión a USDT"
+general.valuation_mode.historical: "Al cerrar la operación"
+general.valuation_mode.current: "Tasa actual"
+general.valuation_mode_hint: "El Informe y Analítica convierten a USDT con la tasa del minuto en que se cerró la operación. Cámbielo solo deliberadamente: «Tasa actual» toma la última tasa conocida del spot de Binance/Bybit y no del exchange donde se operó, la actualiza cada pocos minutos y nunca la guarda. También cambia el ajuste: los umbrales se calculan sobre un histórico revalorizado. Se aplica al guardar."
+general.charts_split_by_core: "Pestaña de gráfico separada por núcleo"
+general.charts_split_by_core_hint: "AddToChart por defecto: act — una pestaña por núcleo, des — todos los núcleos del grupo en una. La columna «Conjunto» del núcleo (Conexiones) lo anula: los núcleos con el mismo nombre de conjunto se unen en una pestaña."
+general.separate_control_zones: "Panear el gráfico en la zona del libro"
+general.separate_control_zones_hint: "Act — un arrastre izquierdo que no cae en una línea de orden panea el gráfico desde la zona del libro; un clic sin movimiento sigue colocando, moviendo o cancelando como hoy. Des — la zona del libro es solo de órdenes: sin paneo ni zoom. Los gestos de órdenes quedan SIEMPRE en la zona del libro, en cualquier pestaña, incluidas Add y las ventanas separadas; un clic en el gráfico nunca coloca, mueve ni cancela una orden. La rueda sobre el libro sigue perteneciendo a la pila / libro. Con el libro oculto la zona de órdenes es una franja en el borde derecho con una línea marcadora, mientras la pestaña mantenga «Zona de órdenes con el libro oculto»; desactívela junto con el libro y la pestaña pasa a ser gráfico de borde a borde: ningún gesto de órdenes, y un doble clic en cualquier punto abre la moneda en Main. Un gráfico reducido con la escoba de comparación a su libro no se divide en absoluto: el libro ocupa toda su superficie y no queda en él ningún gesto de gráfico: paneo, doble clic para abrir en Main o salir de pantalla completa."
+general.main_idle_close: "Cierre automático de gráficos Main al estar inactivo"
+general.main_idle_close_secs: "Cerrar tras"
+general.main_idle_close_hint: "Inactivo = la ventana Main no está enfocada O está enfocada pero el ratón no se mueve. Cada gráfico se cierra tras N segundos de su propia inactividad (el más reciente, el último); el de pantalla completa también se cierra y sale del modo. Las suscripciones al libro de órdenes se cancelan de inmediato."
+general.seconds: "seg"
+general.charts_scroll: "Mostrar gráficos con desplazamiento"
+general.charts_scroll_hint: "Act — cada gráfico tiene altura fija con desplazamiento vertical. Des (como antes) — los gráficos reparten la altura de la ventana (escalado vertical)."
+general.chart_height: "Altura del gráfico, px"
+general.compress_fill: "Comprimir para ajustar (sin desplazamiento)"
+general.compress_fill_hint: "No aparece desplazamiento: los gráficos mantienen la altura fijada hasta llegar al fondo de la ventana y luego se comprimen (como sin desplazamiento)."
+general.log_to_file: "Escribir registro en archivos"
+general.log_to_file_hint: "Los registros de app y núcleos se escriben en logs/<fecha>_<fuente>.log (un archivo por fuente al día)."
+general.log_retention: "Conservar registro"
+general.log_retention_hint: "Los archivos más antiguos se eliminan al iniciar y una vez al día. 0 — conservar todo."
+general.days: "días"

@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Telegram на ядре"
+
+telegram_core.intro: "Управление встроенным Telegram-ридером выбранного ядра. Состояние принадлежит ядру, не этому терминалу."
+
+telegram_core.core_pick: "Ядро"
+
+telegram_core.core_pick_none: "Выберите ядро"
+
+telegram_core.details: "Параметры ядра"
+
+telegram_core.enable: "Включить ридер"
+
+telegram_core.enable_tip: "Выключение останавливает только ридер этого ядра и не выходит из аккаунта Telegram."
+
+telegram_core.unsupported: "Удалённый вход на этой службе недоступен."
+
+telegram_core.unsupported_ver: "Удалённый вход на этой службе недоступен (версия %{v})."
+
+telegram_core.stale: "Снимок устарел — до свежего состояния ядра действия заблокированы."
+
+telegram_core.sent_waiting: "Отправлено, ждём ответ ядра…"
+
+telegram_core.service_online: "Служба онлайн"
+
+telegram_core.service_offline: "Служба офлайн"
+
+telegram_core.client_state: "Состояние"
+
+telegram_core.setup_error: "Ошибка установки"
+
+telegram_core.client_error: "Ошибка клиента"
+
+telegram_core.disconnected: "Ядро не подключено."
+
+telegram_core.no_snapshot: "Нет снимка состояния."
+
+telegram_core.proxy_section: "Прокси"
+
+telegram_core.proxy_kind_none: "Без прокси"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Хост"
+
+telegram_core.proxy_port: "Порт"
+
+telegram_core.proxy_user: "Пользователь"
+
+telegram_core.proxy_password: "Пароль"
+
+telegram_core.proxy_secret: "Секрет"
+
+telegram_core.proxy_save: "Сохранить прокси"
+
+telegram_core.proxy_secret_hint: "Ядро не возвращает сохранённый пароль или секрет — его нужно ввести снова. Пустое значение стирает его, а не оставляет прежнее."
+
+telegram_core.proxy_actual: "Фактический прокси"
+
+telegram_core.proxy_actual_unknown: "ещё не известно"
+
+telegram_core.proxy_error: "Ошибка прокси"
+
+telegram_core.proxy_password_set: "пароль задан"
+
+telegram_core.phone: "Телефон"
+
+telegram_core.phone_hint: "Международный формат, например +79001234567."
+
+telegram_core.phone_send: "Отправить номер"
+
+telegram_core.login_qr: "Войти по QR"
+
+telegram_core.login_phone: "Войти по номеру телефона"
+
+telegram_core.cancel_to_phone: "Отменить вход и вернуться к номеру телефона"
+
+telegram_core.code: "Код"
+
+telegram_core.code_send: "Отправить код"
+
+telegram_core.password: "Пароль 2FA"
+
+telegram_core.password_send: "Отправить пароль"
+
+telegram_core.password_hint_label: "Подсказка"
+
+telegram_core.recovery_email: "Почта восстановления"
+
+telegram_core.email: "Почта"
+
+telegram_core.email_send: "Отправить почту"
+
+telegram_core.email_code: "Код с почты"
+
+telegram_core.email_code_send: "Отправить код с почты"
+
+telegram_core.email_pattern: "Письмо придёт на %{pattern}"
+
+telegram_core.code_length: "Длина кода: %{n}"
+
+telegram_core.first_name: "Имя"
+
+telegram_core.last_name: "Фамилия"
+
+telegram_core.terms_accept: "Принимаю условия"
+
+telegram_core.register: "Зарегистрироваться"
+
+telegram_core.min_age: "Минимальный возраст: %{n}"
+
+telegram_core.logged_in: "Аккаунт %{phone}"
+
+telegram_core.logged_in_unknown: "Аккаунт готов"
+
+telegram_core.logout: "Выйти"
+
+telegram_core.logout_title: "Выход из Telegram на ядре"
+
+telegram_core.logout_q: "Это выйдет из аккаунта и сбросит общие данные Telegram на машине этого ядра. Затронуты все процессы MoonBot на той машине, не только это ядро."
+
+telegram_core.premium: "Нужен внешний шаг Telegram. Отмените вход, чтобы вернуться к номеру телефона."
+
+telegram_core.support_email: "Почта поддержки"
+
+telegram_core.support_subject: "Тема"
+
+telegram_core.cancel_login: "Отменить вход"
+
+telegram_core.transitional: "Ядро работает, подождите…"
+
+telegram_core.step_unknown: "Неизвестный шаг входа. Обновите состояние, не отправляйте данные наугад."
+
+telegram_core.refresh: "Обновить"
+
+telegram_core.service_error: "Ошибка %{code}: %{message}"
+
+telegram_core.connection: "Сеть Telegram"
+
+telegram_core.conn.unknown: "неизвестно"
+
+telegram_core.conn.waiting_for_network: "нет сети"
+
+telegram_core.conn.connecting_to_proxy: "подключение к прокси"
+
+telegram_core.conn.connecting: "подключение"
+
+telegram_core.conn.updating: "обновление"
+
+telegram_core.conn.ready: "готова"
+
+telegram_core.qr_failed: "Не удалось построить QR. Обновите состояние."
+
+telegram_core.qr_wait: "Ждём ссылку для QR…"
+
+telegram_core.resend: "Отправить код ещё раз"
+
+telegram_core.resend_in: "Повтор через %{wait}"
+
+telegram_core.no_answer: "Ядро не ответило. Обновите состояние и повторите действие."
+
+telegram_core.next_code: "Следующий способ"
+
+telegram_core.code_kind.telegram: "Код в приложении Telegram."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "SMS-слово, начинается с «%{first_letter}», первое слово «%{first_word}»."
+
+telegram_core.code_kind.sms_phrase: "SMS-фраза: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Звонок."
+
+telegram_core.code_kind.flash_call: "Flash-звонок, префикс %{prefix}."
+
+telegram_core.code_kind.missed_call: "Пропущенный звонок, префикс %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "Этот способ доставки не поддерживается."
+
+telegram_core.code_kind.other: "%{kind}"

@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Telegram en el núcleo"
+
+telegram_core.intro: "Controla el lector de Telegram integrado del núcleo seleccionado. El estado pertenece al núcleo, no a este terminal."
+
+telegram_core.core_pick: "Núcleo"
+
+telegram_core.core_pick_none: "Selecciona un núcleo"
+
+telegram_core.details: "Ajustes del núcleo"
+
+telegram_core.enable: "Activar lector"
+
+telegram_core.enable_tip: "Desactivar esto detiene solo el lector de este núcleo y no cierra la sesión de Telegram."
+
+telegram_core.unsupported: "El inicio de sesión remoto no está disponible en este servicio."
+
+telegram_core.unsupported_ver: "El inicio de sesión remoto no está disponible en este servicio (versión %{v})."
+
+telegram_core.stale: "La instantánea está desactualizada: las acciones siguen bloqueadas hasta que llegue un estado reciente."
+
+telegram_core.sent_waiting: "Enviado, esperando al núcleo…"
+
+telegram_core.service_online: "Servicio en línea"
+
+telegram_core.service_offline: "Servicio desconectado"
+
+telegram_core.client_state: "Estado"
+
+telegram_core.setup_error: "Error de instalación"
+
+telegram_core.client_error: "Error del cliente"
+
+telegram_core.disconnected: "El núcleo no está conectado."
+
+telegram_core.no_snapshot: "No hay instantánea de estado."
+
+telegram_core.proxy_section: "Proxy"
+
+telegram_core.proxy_kind_none: "Sin proxy"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Host"
+
+telegram_core.proxy_port: "Puerto"
+
+telegram_core.proxy_user: "Usuario"
+
+telegram_core.proxy_password: "Contraseña"
+
+telegram_core.proxy_secret: "Secreto"
+
+telegram_core.proxy_save: "Guardar proxy"
+
+telegram_core.proxy_secret_hint: "El núcleo nunca devuelve la contraseña o el secreto guardados: hay que introducirlos de nuevo. Dejarlo vacío los borra, no conserva el valor anterior."
+
+telegram_core.proxy_actual: "Proxy activo"
+
+telegram_core.proxy_actual_unknown: "aún desconocido"
+
+telegram_core.proxy_error: "Error de proxy"
+
+telegram_core.proxy_password_set: "contraseña definida"
+
+telegram_core.phone: "Teléfono"
+
+telegram_core.phone_hint: "Formato internacional, por ejemplo +34600111222."
+
+telegram_core.phone_send: "Enviar número"
+
+telegram_core.login_qr: "Entrar con QR"
+
+telegram_core.login_phone: "Usar un número de teléfono"
+
+telegram_core.cancel_to_phone: "Cancelar el inicio de sesión y volver al número"
+
+telegram_core.code: "Código"
+
+telegram_core.code_send: "Enviar código"
+
+telegram_core.password: "Contraseña 2FA"
+
+telegram_core.password_send: "Enviar contraseña"
+
+telegram_core.password_hint_label: "Pista"
+
+telegram_core.recovery_email: "Correo de recuperación"
+
+telegram_core.email: "Correo"
+
+telegram_core.email_send: "Enviar correo"
+
+telegram_core.email_code: "Código del correo"
+
+telegram_core.email_code_send: "Enviar código del correo"
+
+telegram_core.email_pattern: "El mensaje llegará a %{pattern}"
+
+telegram_core.code_length: "Longitud del código: %{n}"
+
+telegram_core.first_name: "Nombre"
+
+telegram_core.last_name: "Apellido"
+
+telegram_core.terms_accept: "Acepto las condiciones"
+
+telegram_core.register: "Registrarse"
+
+telegram_core.min_age: "Edad mínima: %{n}"
+
+telegram_core.logged_in: "Cuenta %{phone}"
+
+telegram_core.logged_in_unknown: "La cuenta está lista"
+
+telegram_core.logout: "Cerrar sesión"
+
+telegram_core.logout_title: "Cerrar sesión de Telegram en el núcleo"
+
+telegram_core.logout_q: "Esto cierra la sesión y restablece los datos compartidos de Telegram en la máquina de ese núcleo. Afecta a todos los procesos MoonBot de esa máquina, no solo a este núcleo."
+
+telegram_core.premium: "Hace falta un paso externo de Telegram. Cancela el inicio de sesión para volver al número."
+
+telegram_core.support_email: "Correo de soporte"
+
+telegram_core.support_subject: "Asunto"
+
+telegram_core.cancel_login: "Cancelar inicio de sesión"
+
+telegram_core.transitional: "El núcleo está trabajando, espera…"
+
+telegram_core.step_unknown: "Paso de inicio de sesión desconocido. Actualiza el estado; no envíes datos a ciegas."
+
+telegram_core.refresh: "Actualizar"
+
+telegram_core.service_error: "Error %{code}: %{message}"
+
+telegram_core.connection: "Red de Telegram"
+
+telegram_core.conn.unknown: "desconocido"
+
+telegram_core.conn.waiting_for_network: "sin red"
+
+telegram_core.conn.connecting_to_proxy: "conectando al proxy"
+
+telegram_core.conn.connecting: "conectando"
+
+telegram_core.conn.updating: "actualizando"
+
+telegram_core.conn.ready: "lista"
+
+telegram_core.qr_failed: "No se pudo generar el QR. Actualiza el estado."
+
+telegram_core.qr_wait: "Esperando el enlace del QR…"
+
+telegram_core.resend: "Reenviar código"
+
+telegram_core.resend_in: "Reenviar en %{wait}"
+
+telegram_core.no_answer: "El núcleo no respondió. Actualiza el estado e inténtalo de nuevo."
+
+telegram_core.next_code: "Siguiente método"
+
+telegram_core.code_kind.telegram: "Código en la aplicación Telegram."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "Palabra por SMS, empieza por «%{first_letter}», primera palabra «%{first_word}»."
+
+telegram_core.code_kind.sms_phrase: "Frase por SMS: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Llamada."
+
+telegram_core.code_kind.flash_call: "Llamada flash, prefijo %{prefix}."
+
+telegram_core.code_kind.missed_call: "Llamada perdida, prefijo %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "Este método de entrega no es compatible."
+
+telegram_core.code_kind.other: "%{kind}"

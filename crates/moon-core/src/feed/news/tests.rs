@@ -121,3 +121,16 @@ fn reduce_keeps_first_seen_order_and_skips_invalid_frames() {
         vec!["first", "second"]
     );
 }
+
+/// Ukrainian has no news translation. Returning Russian, Spanish, or a blank
+/// body would show the wrong language on the card and on the clipboard.
+#[test]
+fn uk_body_falls_back_to_english() {
+    let item = NewsItem {
+        en: "BTC up".to_string(),
+        ru: "BTC rastet".to_string(),
+        es: "BTC sube".to_string(),
+        ..NewsItem::default()
+    };
+    assert_eq!(item.body(crate::config::Language::Uk), "BTC up");
+}

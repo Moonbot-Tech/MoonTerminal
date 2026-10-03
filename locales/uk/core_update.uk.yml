@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "У черзі"
+core_update.phase.held: "Очікує — лінія зайнята"
+core_update.phase.sent: "Команду надіслано"
+core_update.phase.waiting: "Оновлюється"
+core_update.phase.verifying: "Перевіряємо збірку"
+core_update.phase.succeeded: "Оновлено"
+core_update.phase.installed: "Встановлено"
+core_update.phase.unchanged: "Версія не змінилася"
+core_update.phase.failed.not_sent: "Не вдалося надіслати команду"
+core_update.phase.failed.never_dropped: "Ядро не відключилося для оновлення"
+core_update.phase.failed.not_ready: "Не вдалося дочекатися готовності ядра, щоб надіслати оновлення"
+core_update.phase.failed.timeout: "Не повернулося після оновлення — час вийшов"
+core_update.phase.failed.gone: "Адреса ядра стала невідомою"
+core_update.phase.failed.abandoned: "Перервано виходом із застосунку"
+core_update.phase.failed.rejected: "Ядро відхилило запитану назву збірки"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Збірку не вдалося перевірити — перепідключення недоступне"
+core_update.phase.unverified.timeout: "Збірку не вдалося перевірити — ядро не повернулося вчасно"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "оновлюється"
+core_update.summary.queued: "у черзі"
+core_update.summary.failed: "з помилкою"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Час"
+core_update.col.core: "Ядро"
+core_update.col.server: "Сервер"
+core_update.col.from_to: "З → на"
+core_update.col.target: "Ціль"
+core_update.col.outcome: "Підсумок"
+core_update.col.duration: "Тривалість"
+core_update.list_empty: "Немає записів про оновлення"
+core_update.target.release: "Реліз"
+core_update.target.named: "Бета %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Оновити це ядро"
+core_update.server.action: "Оновити ядер: %{n} на цьому сервері"
+core_update.retry: "Повторити оновлення"
+core_update.skipped_offline: "%{n} не в мережі"
+core_update.skipped_already: "%{n} уже оновлюється"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Оновити всі"
+core_update.fleet.behind: "Оновити відсталі"
+core_update.fleet.behind_none: "Жодне ядро не відстає від найновішої версії, видимої тут, а релізи Moonbot терміналу не видно."
+core_update.fleet.selected: "Оновити вибрані (%{n})"
+core_update.fleet.named: "До збірки…"
+core_update.confirm.title: "Оновлення ядер"
+core_update.confirm.q: "Оновити %{cores} ядер на %{servers} серверах? Оновлення йдуть паралельно між серверами — не більше одного ядра за раз на кожному."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Оновити до релізу"
+core_update.menu.named: "Оновити до іменованої версії…"
+core_update.menu.named_prompt: "Назва збірки для %{core}:"
+core_update.menu.release_n: "Оновити %{n} ядер до релізу"
+core_update.menu.named_n: "Оновити %{n} ядер до іменованої версії…"
+core_update.menu.named_prompt_n: "Назва збірки для %{n} ядер:"
+core_update.confirm.named_prompt: "Назва збірки:"
+core_update.menu.named_ph: "MoonBot-F8 або %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "Можна ввести лише назву збірки або вставити всю команду встановлення — підійде і те, і те."
+core_update.menu.unavailable: "Недоступно — ядро не готове або вже оновлюється"

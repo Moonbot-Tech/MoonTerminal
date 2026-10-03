@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Trade sound volume"
+trade_sounds.tab: "Trade sounds"
+trade_sounds.help: "Choose entry and exit sounds for each exchange. Changes are saved automatically."
+trade_sounds.exchange: "Exchange"
+trade_sounds.quiet_note: "Quiet mode is on — sounds are muted."
+trade_sounds.open: "Position opened"
+trade_sounds.close: "Position closed"
+trade_sounds.off: "Silent"
+trade_sounds.preview: "Preview"

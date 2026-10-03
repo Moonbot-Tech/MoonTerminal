@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Чаты"
+telegram.access_chat: "Чат %{id}"
+telegram.access_owner_summary: "Владелец: все ядра, полный доступ"
+telegram.access_viewer_summary: "Наблюдатель: ядер %{count}, только просмотр"
+telegram.access_waiting: "Наблюдатель: ядра не назначены, доступа к данным нет"
+telegram.access_no_cores: "Для этого чата ещё не назначены ядра. Попросите владельца выбрать их в MoonTerminal: Настройки → Telegram."
+telegram.access_edit: "Настроить"
+telegram.access_collapse: "Свернуть"
+telegram.access_name: "Название чата в терминале"
+telegram.access_name_placeholder: "Например, Иван — клиент"
+telegram.access_transfer_hint: "Этот чат получит полный доступ ко всем ядрам. Прежний владелец станет наблюдателем без назначенных ядер. Изменение вступит в силу после сохранения."
+telegram.access_transfer_confirm: "Подтвердить смену владельца"
+telegram.access_make_owner: "Назначить владельцем"
+telegram.access_remove: "Отвязать чат"
+telegram.access_cores: "Доступные ядра: только просмотр"
+telegram.access_search: "Найти ядро по номеру или названию"
+telegram.access_select_current: "Выбрать все текущие ядра"
+telegram.access_clear: "Снять выбор"
+telegram.access_archived: "Ядро удалено из подключений (доступ к истории)"
+telegram.access_no_matches: "Ядра не найдены. Добавьте и сохраните подключения или измените поиск."
+telegram.access_history_loading: "Загружаем ядра из истории…"
+telegram.access_history_failed: "Не удалось прочитать историю. Подключённые ядра и сохранённые назначения доступны."
+telegram.access_retry: "Повторить"
+
+telegram.chats_hint: "Добавьте чат по коду; первый — владелец, остальные видят выбранные ядра после «Сохранить»."

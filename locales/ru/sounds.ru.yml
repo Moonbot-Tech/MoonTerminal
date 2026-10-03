@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "нет файла"
+sounds.missing_title: "Звук не найден"
+sounds.missing_name: "Звук «%{name}» не найден — играет %{fallback}. Положите %{name}.wav в папку %{folder}."
+sounds.missing_ordinal: "Звука №%{n} нет — играет %{fallback}. Положите в папку %{folder} файл с именем %{n}_имя.wav или выберите звук заново в настройках ядра."
+sounds.folder_title: "Свои звуки"
+sounds.folder_help: "Положите файлы .wav в эту папку — они появятся во всех списках звуков (стратегии, звуки сделок, тревоги, алерты). Настройки ядра хранят звук НОМЕРОМ: 1–%{last} — встроенные, свой номер задаётся именем файла: %{first}_MySound.wav → звук «MySound» №%{first}. Файл без номера в настройках ядра не выбирается; файл с именем встроенного звука (ding1.wav) подменяет его."
+sounds.open_folder: "Открыть папку"
+sounds.rescan: "Обновить"
+sounds.scan_summary: "Из папки: %{folder} (с номером: %{numbered}), отклонено: %{rejected}"
+sounds.numbered_title: "Свои номера"
+sounds.scan_pending: "Папка ещё читается…"
+sounds.rejected_title: "Отклонённые файлы"
+sounds.reject_not_pcm: "не PCM WAV"
+sounds.reject_too_large: "больше %{mb} МБ"
+sounds.reject_over_total: "превышен общий лимит %{mb} МБ"
+sounds.reject_io: "не читается: %{detail}"
+sounds.reject_number_reserved: "номера до %{first} заняты встроенными звуками"
+sounds.reject_number_taken: "этот номер уже у файла «%{by}»"
+sounds.reject_name_taken: "звук с таким именем уже есть — файл с номером должен называться иначе"

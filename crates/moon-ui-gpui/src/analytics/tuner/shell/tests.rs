@@ -250,7 +250,7 @@ fn a_stopped_run_warns_either_way_and_only_the_caption_changes() {
     assert_eq!(empty_tail.last().map(String::as_str), Some(note.as_str()));
 }
 
-/// `locales/analytics.yml:analytics.tuner.sugg_axis_moved` must be a real string in ru, en, and es.
+/// `analytics.tuner.sugg_axis_moved` in `locales/<lang>/analytics.<lang>.yml` must be a real string in ru, en, and es.
 ///
 /// Breakage: deleting one language. `rust_i18n` echoes the missing key, so the status band would
 /// show `analytics.tuner.sugg_axis_moved` instead of the axis-shift caption.

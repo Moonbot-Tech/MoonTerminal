@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Chats"
+telegram.access_chat: "Chat %{id}"
+telegram.access_owner_summary: "Owner: all cores, full access"
+telegram.access_viewer_summary: "Viewer: %{count} cores, read only"
+telegram.access_waiting: "Viewer: no cores assigned, no data access"
+telegram.access_no_cores: "No cores have been assigned to this chat yet. Ask the owner to select them in MoonTerminal: Settings → Telegram."
+telegram.access_edit: "Configure"
+telegram.access_collapse: "Collapse"
+telegram.access_name: "Chat name in the terminal"
+telegram.access_name_placeholder: "For example, Alex — client"
+telegram.access_transfer_hint: "This chat will get full access to all cores. The previous owner will become a viewer with no assigned cores. The change takes effect after saving."
+telegram.access_transfer_confirm: "Confirm owner change"
+telegram.access_make_owner: "Make owner"
+telegram.access_remove: "Unpair chat"
+telegram.access_cores: "Available cores: read only"
+telegram.access_search: "Find a core by number or name"
+telegram.access_select_current: "Select all current cores"
+telegram.access_clear: "Clear selection"
+telegram.access_archived: "Core removed from connections (history access)"
+telegram.access_no_matches: "No cores found. Add and save connections, or change your search."
+telegram.access_history_loading: "Loading cores from history…"
+telegram.access_history_failed: "Could not read history. Configured cores and saved assignments are available."
+telegram.access_retry: "Retry"
+
+telegram.chats_hint: "Add chats by code; the first is the owner, others see assigned cores after Save."

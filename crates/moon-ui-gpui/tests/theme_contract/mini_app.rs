@@ -3,13 +3,13 @@
 //!
 //! These read the Telegram crate (`moon-tg`) as text, beside the page they serve. Each
 //! oracle is the other side of a seam: the page's literal keys against the label
-//! table and `locales/telegram.yml`, and the control-flow text a dropped guard
+//! table and `locales/<lang>/telegram.<lang>.yml`, and the control-flow text a dropped guard
 //! would delete. A string the test itself invented and then found is not an oracle.
 
 use std::collections::BTreeSet;
 
 use super::support::{
-    assert_locale_key_in_three_languages, braced_body, read_core_src, read_tg_src,
+    assert_locale_key_in_every_language, braced_body, read_core_src, read_tg_src,
 };
 
 /// Quoted `mini_*` keys in `app.js` that are whole label names.
@@ -269,12 +269,12 @@ fn mini_panic_goes_through_toggle_panic_sell() {
 }
 
 /// Every whole `mini_*` literal in `web/app.js` must be a key `telegram_labels`
-/// puts on the page, and that key must have ru, en, and es in `locales/telegram.yml`.
+/// puts on the page, and that key must exist in every shipped `locales/<lang>/telegram.<lang>.yml`.
 ///
 /// Shell copy is inserted by name beside `MINI_LABEL_KEYS`; every other literal
 /// has to be in the array. Mutation: delete `"mini_cancel"` from
 /// `MINI_LABEL_KEYS`. The cancel button then renders as an empty string while
-/// the Russian, English, and Spanish strings still exist in the locale file.
+/// the translated strings still exist in the locale files.
 #[test]
 fn mini_page_literals_are_wired_and_translated() {
     let page = page_label_keys(&read_core_src("telegram/web/app.js"));
@@ -297,7 +297,7 @@ fn mini_page_literals_are_wired_and_translated() {
         "app.js literals missing from MINI_LABEL_KEYS and telegram_labels inserts: {missing:?}"
     );
     for key in &page {
-        assert_locale_key_in_three_languages("telegram.yml", &format!("telegram.{key}"));
+        assert_locale_key_in_every_language("telegram", &format!("telegram.{key}"));
     }
 }
 

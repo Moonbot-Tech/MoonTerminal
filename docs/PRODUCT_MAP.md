@@ -8,7 +8,7 @@ feature — a row in the map, a new user word — a row in the dictionary.
 
 ## How to find a feature by name
 
-1. `locales/*.yml` — all UI labels (`grep -rni "слово" locales/`). Each key carries `ru`, `en` and `es` values, so an English reader can grep either side.
+1. `locales/<lang>/*.yml` — all UI labels (`grep -rni "слово" locales/`). The same key is written in `ru`, `en`, `es`, and `uk`, so an English reader can grep any folder.
    Found a string — the key is next to it, and the code is grepped by that key. Files by area:
    shell, interface, settings, hotkeys, orders, report, analytics,
    strategies, screener, news, connections, core_status, core_run,

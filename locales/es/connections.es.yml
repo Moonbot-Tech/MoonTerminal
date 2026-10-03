@@ -1,0 +1,106 @@
+# Connections tab in Settings: cores, groups, statuses, columns, and tooltips.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Table columns use short labels; translations should remain short as well.
+_version: 1
+
+conn.servers_heading: "Núcleos (servidores)"
+conn.market_src: "Fuente de datos de mercado"
+conn.market_src_tip: "De dónde vienen los cruces y el libro de órdenes. Dedup: un núcleo proveedor por bolsa sirve el mercado a todos (económico con muchos núcleos). Por núcleo: cada gráfico lee el mercado de su propio núcleo (sin dedup)."
+conn.market_dedup: "Datos compartidos — un núcleo por bolsa"
+conn.market_percore: "Separado — cada gráfico su propio núcleo"
+conn.core_sort: "Orden de núcleos"
+conn.core_sort_tip: "El orden en que aparecen los núcleos en TODAS las listas de la aplicación: encabezado, Órdenes, Activos, Informe, Analítica, Escáner, Estrategias, Registro. Los núcleos desconectados mantienen su lugar — su estado se ve en el punto de estado."
+conn.core_sort.name: "Por nombre — alfabético"
+conn.core_sort.added: "Por inserción — más antiguos primero"
+conn.core_sort.added_newest: "Por inserción — más recientes primero"
+conn.groups_heading: "Grupos"
+conn.no_groups: "añade un núcleo arriba y asígnale un «Grupo» — aparecerá una rama de grupo"
+conn.show_group: "Mostrar ventana del grupo"
+# The + glyph is prepended in code; the locale entry contains only text.
+conn.add_core: "Añadir núcleo (a «default»)"
+conn.add_core_short: "núcleo"
+conn.groups_panel_heading: "Núcleos por grupo y bolsa"
+conn.groups_panel_tip: "Un grupo = una ventana principal aparte. Dentro de cada grupo, los núcleos se agrupan automáticamente por la bolsa indicada por su conexión. La columna «Gráficos» une las detecciones de varios núcleos del grupo en un solo gráfico."
+conn.pending_cores: "Núcleos nuevos — configúralos antes de guardar"
+# Shared by BOTH the group header and the pending/exchange subsection headings, where a count of
+# 1..4 is ordinary -- so the abbreviated form stays: Russian has no single plural form that is
+# right at 1, 2 and 56, and this file has no plural-selection convention to reach for.
+conn.member_count: "%{n} núcleos"
+conn.icon_btn: "Icono"
+conn.bulk_mode_btn: "Modo"
+conn.bulk_mode_tip: "Establece el modo de transporte MoonProto para todos los nucleos del grupo a la vez, en lugar de fila por fila. Se aplica al guardar: cada nucleo cambiado se reconecta solo."
+conn.icon_for: "Icono de «%{name}»"
+conn.pick: "elegir"
+conn.delete: "Elim"
+conn.reconnect: "Reconectar"
+conn.filter_note: "filtro en el cliente"
+
+# Connection-status dot at the end of a server row.
+conn.status.ready: "Conectado"
+conn.status.connecting: "Conectando…"
+conn.status.stage: "Conectando: %{stage}"
+conn.status.failed: "Error: %{err}"
+conn.status.disconnected: "Desconectado"
+conn.status.inactive: "Sin conexión (la casilla «Act» está desactivada)"
+conn.status.none: "Sin datos (guarda los ajustes para conectar)"
+
+# Server-table column headings.
+conn.col.act: "Act"
+conn.col.name: "Nombre"
+conn.col.key: "Clave"
+conn.col.endpoint: "Dirección:puerto"
+conn.tip.endpoint: "Dirección y puerto del núcleo de la clave pegada, antes de conectar"
+conn.endpoint_duplicate: "El núcleo %{name} ya usa esta dirección y puerto"
+conn.col.proto: "Proto"
+conn.col.preset: "Preset"
+conn.col.total: "En total"
+conn.col.group: "Grupo"
+conn.col.bundle: "Gráficos"
+conn.col.color: "Color"
+conn.col.data: "Datos"
+conn.col.orders: "Órd"
+conn.col.detects: "Det"
+conn.col.reports: "Inf"
+conn.col.balance: "Sal"
+conn.col.strat: "Est"
+conn.col.log: "Reg"
+conn.col.alerts: "Ale"
+conn.col.arb: "Arb"
+
+# Group-table column headings.
+conn.gcol.ico: "Ico"
+
+# Tooltips.
+conn.tip.act: "Conectarse al núcleo"
+conn.tip.name: "Nombre del núcleo (arbitrario, para mostrar en el terminal)"
+conn.tip.key: "La clave se crea en MoonBot, no en el sitio web, y se copia DESPUÉS de configurar el núcleo: lleva consigo host, puerto y modo, así que aquí no se introduce ninguno. Orden: 1) en el servidor de MoonBot, abre el puerto UDP del núcleo para tráfico entrante; 2) en MoonBot: el punto verde abajo a la izquierda (ventana Info) → Moon Kernel → Settings → ventana Moon Proto, pestaña Settings: activa Kernel (VPS), fija el Port, elige V0/V1/V2 (V0 por defecto), pulsa Apply; 3) ahí mismo Key: → Copy Key (sin clave: New Key); 4) pégala aquí con el botón Pegar y pulsa Guardar. El ojo la muestra/oculta."
+conn.key_ph: "Copy Key en MoonBot"
+conn.key_unreadable: "Esto no es una clave MoonBot: el terminal no puede leerla. Copia la clave en MoonBot con Copy Key (ventana Moon Proto → Settings → Key:) y pégala entera aquí con el botón Pegar"
+# Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
+# `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
+conn.bundle_ph: "nombre del conjunto"
+conn.paste_key: "Pegar"
+conn.paste_key_tip: "Pegar la clave desde el portapapeles"
+conn.tip.color: "Color del núcleo: tiñe sus operaciones y marcas del gráfico."
+conn.tip.flags: "Datos recibidos del núcleo. Gris = todo activado; en color = algunas categorías desactivadas. Clic para configurar."
+conn.tip.proto: "Modo de transporte MoonProto: el mismo trío V0/V1/V2 que en los ajustes Moon Proto del núcleo; ambos lados deben estar en el MISMO. Se toma de la clave UNA vez, mientras no haya modo definido; después es tuyo y una clave nueva ya no lo sobrescribe, así que no hace falta reemitir ninguna clave para cambiar de modo. Un guion significa que la clave no indicó nada (exportación antigua) y la conexión usa V0. Se aplica al guardar: el núcleo se reconecta solo. Por eso pulsa Copy Key solo DESPUÉS de fijar el Port y la versión en el núcleo con los botones V0/V1/V2 (MoonBot crea claves V0 por defecto): la clave los lleva consigo."
+conn.tip.preset: "En qué modo de espacio de trabajo se muestra este núcleo en las listas: ambos, solo MANUAL o solo AUTO. Solo visualización — un núcleo oculto sigue conectándose y registrando."
+conn.tip.total: "Cómo cuenta este núcleo en el total al pie de Activos. Auto: los núcleos de la misma cuenta de la bolsa cuentan una vez. Excluir: el núcleo queda fuera del total. Por separado: el núcleo siempre cuenta por sí solo, sin fusionarse."
+conn.preset.both: "Ambos"
+# The same two mode NAMES the header dropdown lists (`workspace.mode.*`): this column picks which
+# of them shows the core, so a name that drifted apart here would read as a third mode.
+conn.preset.classic: "MANUAL"
+conn.preset.auto: "AUTO"
+conn.total.auto: "Auto (por cuenta)"
+conn.total.exclude: "Excluir"
+conn.total.separate: "Por separado"
+conn.tip.group: "Grupo = una ventana principal SEPARADA. Todos los núcleos con el mismo nombre de grupo viven en una ventana; un nombre de grupo nuevo → una ventana principal nueva."
+conn.tip.bundle: "Nombre del conjunto de gráfico: las detecciones AddToChart de VARIOS núcleos de un grupo con el mismo nombre se unen en UN gráfico (una pestaña, el nombre en su título). Vacío = según el ajuste global (una pestaña por núcleo / todas en una)."
+conn.tip.orders: "Órdenes abiertas"
+conn.tip.detects: "Detecciones"
+conn.tip.reports: "Informes de órdenes cerradas → SQLite"
+conn.tip.balance: "Saldos / cuenta"
+conn.tip.strat: "Estrategias"
+conn.tip.log: "Registro del servidor"
+conn.tip.alerts: "Alertas de gráfico / texto"
+conn.tip.arb: "Arbitraje"

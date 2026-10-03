@@ -31,36 +31,16 @@ fn login_theme_reuses_the_application_theme_mapping_for_all_three_modes() {
     assert!(!install.contains("UiThemeMode::Light => moon_ui::MoonThemeConfig::moon_light()"));
 }
 
-/// Catches omitting a locale line in `locales/interface.yml` for the theme selector.
+/// Catches omitting a locale line in `locales/<lang>/interface.<lang>.yml` for the theme selector.
 /// A missing language renders a raw locale key on the General settings tab.
 #[test]
 fn graphite_selector_keys_define_each_shipped_language() {
-    let locale = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../locales/interface.yml"),
-    )
-    .expect("Interface locales must be readable")
-    .replace("\r\n", "\n");
     for key in [
         "iface.theme_mode",
         "iface.graphite_theme",
         "iface.light_experimental_theme",
         "iface.dark_experimental_theme",
     ] {
-        let members: Vec<&str> = locale
-            .split_once(&format!("{key}:\n"))
-            .unwrap_or_else(|| panic!("interface locale must define {key}"))
-            .1
-            .lines()
-            .take_while(|line| line.starts_with("  "))
-            .collect();
-        assert_eq!(members.len(), 3, "{key} must define exactly ru, en, and es");
-        for language in ["ru", "en", "es"] {
-            assert!(
-                members
-                    .iter()
-                    .any(|line| line.starts_with(&format!("  {language}: "))),
-                "{key} must define {language}, or the raw key reaches Settings"
-            );
-        }
+        assert_locale_key_in_every_language("interface", key);
     }
 }

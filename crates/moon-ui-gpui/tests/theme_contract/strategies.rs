@@ -1,7 +1,7 @@
 //! Strategies-window contracts for folder paths, copy/reveal behavior, refresh routing, MoonTree
 //! ownership, and per-frame tree construction.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use super::support::*;
 
@@ -763,15 +763,6 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let selection = read_src("strategies/selection.rs");
     let dialogs = read_src("strategies/tree/dialogs.rs");
     let dnd = read_src("strategies/tree/dnd.rs");
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("locales")
-            .join("strategies.yml"),
-    )
-    .expect("read Strategies locales");
-
     for id in ["group-by-venue", "active-only"] {
         assert!(
             settings.contains(&format!("id: \"{id}\"")),
@@ -789,10 +780,7 @@ fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
         "strat.settings.text_step",
     ] {
         assert!(settings.contains(key), "settings UI does not consume {key}");
-        assert!(
-            locales.contains(&format!("{key}:")),
-            "locales do not define {key}"
-        );
+        assert_locale_key_in_every_language("strategies", key);
     }
     let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut production_sources = Vec::new();
@@ -1401,9 +1389,9 @@ fn version_restore_clears_stale_drafts_only_for_its_own_strategy() {
     );
 }
 
-/// `params.rs::field_keys` and `Strategies.yml`: dropping a lookup arm or one locale value
-/// would either fall back to a raw identifier or show a `strat.label.*` key to traders instead of
-/// a human label.
+/// `params.rs::field_keys` and each `locales/<lang>/strategies.<lang>.yml`: dropping a lookup arm
+/// or one locale value would either fall back to a raw identifier or show a `strat.label.*` key
+/// to traders instead of a human label.
 #[test]
 fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
     let params = read_src("strategies/params.rs");
@@ -1422,42 +1410,26 @@ fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
         "the contract labels exactly 414 schema fields; an absent arm silently falls back to raw text"
     );
 
-    let locales = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("locales")
-            .join("strategies.yml"),
-    )
-    .expect("read Strategies locales");
-    let mut dictionary: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut current: Option<String> = None;
-    for line in locales.lines() {
-        let trimmed = line.trim();
-        if !line.starts_with(' ') && trimmed.starts_with("strat.label.") && trimmed.ends_with(':') {
-            let key = trimmed.trim_end_matches(':').to_string();
-            dictionary.entry(key.clone()).or_default();
-            current = Some(key);
-        } else if let Some(key) = &current
-            && let Some((locale, _)) = trimmed.split_once(':')
-            && matches!(locale, "ru" | "en" | "es")
-        {
-            dictionary
-                .get_mut(key)
-                .expect("current label key was inserted")
-                .insert(locale.to_string());
+    for lang in SHIPPED {
+        let text = fs::read_to_string(locale_path("strategies", lang))
+            .unwrap_or_else(|err| panic!("read Strategies locales ({lang}): {err}"))
+            .replace("\r\n", "\n");
+        let mut keys = BTreeSet::new();
+        for line in text.lines() {
+            let Some(rest) = line.strip_prefix("strat.label.") else {
+                continue;
+            };
+            let Some((name, _)) = rest.split_once(':') else {
+                continue;
+            };
+            if name.contains(' ') {
+                continue;
+            }
+            keys.insert(format!("strat.label.{name}"));
         }
-    }
-    let dictionary_keys: BTreeSet<String> = dictionary.keys().cloned().collect();
-    assert_eq!(
-        returned, dictionary_keys,
-        "the lookup and locale dictionary must expose precisely the same label keys"
-    );
-    for (key, locales) in dictionary {
         assert_eq!(
-            locales,
-            BTreeSet::from(["en".to_string(), "es".to_string(), "ru".to_string()]),
-            "{key} must have ru, en, and es values so rust-i18n cannot render a locale key"
+            returned, keys,
+            "{lang} strategies labels must match field_keys so rust-i18n cannot render a raw key"
         );
     }
 }
