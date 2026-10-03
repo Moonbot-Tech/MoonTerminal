@@ -66,8 +66,9 @@ pub(super) fn prepare_settings(
 
 /// Replace `chat` and apply the ledger edges for a trades, down, or daily switch.
 ///
-/// Enabling trades records `now_utc` and clears `seen`. Disabling trades clears
-/// `trades_enabled_utc` and leaves `seen`. The down set is cleared only on the true-to-false
+/// Enabling trades records `now_utc` and clears `seen` and `held`. Disabling trades clears
+/// `trades_enabled_utc` and `held` and leaves `seen`. Cards waiting for their dollar value are
+/// forgotten whenever trades or the follow-up end up off. The down set is cleared only on the true-to-false
 /// edge. A chat that was not stored starts from the all-off default, so enabling it records
 /// the timestamp. Saving again while trades stay on does not move that timestamp.
 ///
@@ -101,8 +102,14 @@ pub(super) fn commit_settings(
     if !was_trades && settings.trades.on {
         ledger.trades_enabled_utc = Some(now_utc);
         ledger.seen.clear();
+        ledger.held.clear();
     } else if was_trades && !settings.trades.on {
         ledger.trades_enabled_utc = None;
+        ledger.held.clear();
+    }
+    // Nothing waits to be filled in with dollars once the chat stops asking for it.
+    if !(settings.trades.on && settings.trades.usd_followup) {
+        ledger.cards.clear();
     }
     if was_down && !settings.down.on {
         ledger.down_announced.clear();
@@ -528,7 +535,7 @@ pub(super) fn mini_notify_save(
         .store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    keep_stored_reports(&guard.file, chat_id, &mut settings);
+    keep_stored_bot_fields(&guard.file, chat_id, &mut settings);
     let outcome = store_settings(
         &mut guard, chat_id, settings, &visible, now, view.zone, revision,
     );
@@ -572,13 +579,17 @@ pub(super) fn mini_notify_save(
     }
 }
 
-/// The page does not know automatic reports: what it submits keeps the chat's stored ones.
-pub(super) fn keep_stored_reports(file: &NotifyFile, chat: i64, settings: &mut NotifySettings) {
-    settings.reports = file
+/// The page knows neither automatic reports nor the dollar follow-up of trade cards: what it
+/// submits keeps the chat's stored ones.
+pub(super) fn keep_stored_bot_fields(file: &NotifyFile, chat: i64, settings: &mut NotifySettings) {
+    let stored = file
         .chats
         .get(&chat)
-        .map(|row| row.settings.reports)
+        .map(|row| &row.settings)
+        .cloned()
         .unwrap_or_default();
+    settings.reports = stored.reports;
+    settings.trades.usd_followup = stored.trades.usd_followup;
 }
 
 /// Machine kind stored in [`NotifyDto::fault`].

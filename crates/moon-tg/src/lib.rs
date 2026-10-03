@@ -32,6 +32,10 @@ pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::{station_owner_navigation, status_text};
 pub use mini_app::{check_notify_rows, notify_rows, save_notify_rows};
+
+/// How long a closed trade waits for its dollar value when a chat's threshold needs one, in
+/// minutes; the terminal's notification editor says so.
+pub const TRADE_HOLD_MINUTES: i64 = notify::trades::HOLD_SECS / 60;
 pub use state::TelegramState;
 pub use station_status::{
     ReleaseCheck, ReleaseFailure, Section, StatusFacts, UpdateRefusal, station_status_reply,

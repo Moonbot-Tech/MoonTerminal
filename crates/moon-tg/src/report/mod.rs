@@ -919,7 +919,7 @@ fn page_closed_core(
     let mut trades = Vec::new();
     while !cursor.exhausted(from_utc) {
         let filter = closed_filter(axis, names, core, from_utc, cursor.window_to);
-        let table = db::query_mini_trades(snap, &filter, cursor.limit)?;
+        let table = db::query_notify_trades(snap, &filter, cursor.limit)?;
         let cols = ClosedCols::from_table(&table);
         let mut boundary: Option<i64> = None;
         let mut added = 0usize;
@@ -981,6 +981,9 @@ struct ClosedCols {
     rate: Option<usize>,
     profit: Option<usize>,
     pct: Option<usize>,
+    profit_native: Option<usize>,
+    volume_native: Option<usize>,
+    quote: Option<usize>,
 }
 
 impl ClosedCols {
@@ -999,6 +1002,9 @@ impl ClosedCols {
             rate: index(db::MINI_ENTRY_VOLUME_RATE_COLUMN),
             profit: index(db::VALUATION_PROFIT_COLUMN),
             pct: index(db::PROFIT_PERCENT_COLUMN),
+            profit_native: index(db::NOTIFY_PROFIT_NATIVE_COLUMN),
+            volume_native: index(db::NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN),
+            quote: index(db::NOTIFY_QUOTE_COLUMN),
         }
     }
 }
@@ -1043,6 +1049,12 @@ fn map_closed_row(
         ),
         profit_usd: finite_number(cell(cols.profit).and_then(value_f64)),
         profit_pct: finite_number(cell(cols.pct).and_then(value_f64)),
+        quote: cell(cols.quote)
+            .and_then(value_i64)
+            .and_then(db::QuoteCurrency::from_report_ordinal),
+        profit_native: finite_number(cell(cols.profit_native).and_then(value_f64)),
+        volume_native: finite_number(cell(cols.volume_native).and_then(value_f64))
+            .filter(|volume| *volume > 0.0),
         open_utc: buy_utc.unwrap_or(close_utc),
     })
 }

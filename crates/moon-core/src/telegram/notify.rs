@@ -40,6 +40,12 @@ pub struct TradeRule {
     pub profit_at_least_usd: Option<f64>,
     /// Send when the loss is at least this many USD (a positive magnitude). `None` applies no loss floor.
     pub loss_at_least_usd: Option<f64>,
+    /// A card sent in a currency other than a USD stablecoin before its dollar value was known gets
+    /// that value written into it once the valuation has it. Off by default. The Mini App does not know this
+    /// switch, so it is not written while off and the Mini App's document stays as it was; its
+    /// save keeps the stored value.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub usd_followup: bool,
 }
 
 /// Minutes the core must stay disconnected before a down notice. Default delay is 5.
@@ -335,6 +341,36 @@ pub struct Pending {
         deserialize_with = "lenient_auto::deserialize"
     )]
     pub auto: Option<AutoRow>,
+    /// The closed trade this card announces, when the chat waits for its dollar value
+    /// ([`TradeRule::usd_followup`]): once Telegram accepts the card, its message id goes into
+    /// the chat's [`NotifyLedger::cards`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<CardKey>,
+    /// A message already in the chat that this row's HTML replaces (`editMessageText`) instead
+    /// of a new message. A build that predates the field sends the row as a new message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit: Option<i64>,
+}
+
+/// One closed trade: its core and report record id.
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize,
+)]
+pub struct CardKey {
+    pub core: u64,
+    pub rec_id: i64,
+}
+
+/// A card waiting for its trade's dollar value ([`TradeRule::usd_followup`]).
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct CardWait {
+    /// UTC seconds the card was queued; a card waits a day at most.
+    pub queued_utc: i64,
+    /// The message Telegram accepted for the card. `None` until it is sent.
+    pub message: Option<i64>,
+    /// The card said its thresholds could not be checked; the corrected card keeps saying so.
+    pub unchecked: bool,
 }
 
 /// [`Pending::auto`] read through a JSON value, so an unknown kind drops the field, not the file.
@@ -414,6 +450,14 @@ pub struct NotifyLedger {
     pub daily_last: Option<NaiveDate>,
     /// Each automatic report's last slot and the message it left in the chat.
     pub reports: AutoLedger,
+    /// Closes a threshold could not judge yet because their dollar value is unknown: core, record
+    /// id, then the UTC seconds the trade was first held. Not in [`Self::seen`] until decided.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub held: BTreeMap<u64, BTreeMap<i64, i64>>,
+    /// Cards sent before their trade's dollar value was known, waiting to have it written in:
+    /// core, record id, then the card. Empty unless [`TradeRule::usd_followup`] is on.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub cards: BTreeMap<u64, BTreeMap<i64, CardWait>>,
 }
 
 /// One automatic report's state in a chat.
@@ -466,6 +510,24 @@ impl NotifyLedger {
             rows.retain(|_rec_id, close_utc| *close_utc >= older_than_utc);
             !rows.is_empty()
         });
+    }
+
+    /// Stop waiting for cards queued before `older_than_utc`, then drop cores with none left.
+    pub fn prune_cards(&mut self, older_than_utc: i64) {
+        self.cards.retain(|_core, rows| {
+            rows.retain(|_rec_id, card| card.queued_utc >= older_than_utc);
+            !rows.is_empty()
+        });
+    }
+
+    /// Forget `key` as a card waiting for its dollar value.
+    pub fn drop_card(&mut self, key: CardKey) {
+        if let Some(rows) = self.cards.get_mut(&key.core) {
+            rows.remove(&key.rec_id);
+            if rows.is_empty() {
+                self.cards.remove(&key.core);
+            }
+        }
     }
 }
 

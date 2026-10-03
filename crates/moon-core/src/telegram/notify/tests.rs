@@ -163,6 +163,7 @@ fn sample_file() -> NotifyFile {
                 min_volume_usd: Some(100.0),
                 profit_at_least_usd: Some(1.5),
                 loss_at_least_usd: None,
+                usd_followup: true,
             },
             down: DownRule {
                 on: true,
@@ -191,6 +192,7 @@ fn sample_file() -> NotifyFile {
                 },
                 ..AutoLedger::default()
             },
+            ..NotifyLedger::default()
         },
         revision: 3,
     };
@@ -205,6 +207,7 @@ fn sample_file() -> NotifyFile {
             created_utc: 1_700_000_200,
             cores: None,
             auto: None,
+            ..Pending::default()
         }],
         next_id: 2,
     }
@@ -251,7 +254,8 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
                         "on": true,
                         "cores": {"kind": "only", "ids": [7]},
                         "min_volume_usd": 100.0,
-                        "profit_at_least_usd": 1.5
+                        "profit_at_least_usd": 1.5,
+                        "usd_followup": true
                     },
                     "down": {"on": true, "after_minutes": 12},
                     "daily": {"on": false, "hour": 9, "minute": 30},
@@ -302,6 +306,7 @@ fn missing_cores_field_is_none_and_an_array_is_some() {
         created_utc: 3,
         cores: Some(Vec::new()),
         auto: None,
+        ..Pending::default()
     });
     file.next_id = 2;
     file.save(&path).expect("save empty disclosure");

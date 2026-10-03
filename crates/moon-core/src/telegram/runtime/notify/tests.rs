@@ -75,7 +75,7 @@ fn ack_removes_the_row_and_persists() {
     store.enqueue(7, "one".into(), None, 10).expect("enqueue");
     let id = NotifyFile::load(&path).expect("reload").outbox[0].id;
 
-    store.ack(id, 7, None).expect("ack");
+    store.ack(id, 7, None, None).expect("ack");
 
     let loaded = NotifyFile::load(&path).expect("reload after ack");
     assert!(loaded.outbox.is_empty(), "acked id {id} still on disk");
@@ -394,7 +394,7 @@ fn hold_revokes_an_unknown_viewer_row_and_readies_an_empty_disclosure() {
     let quiet_id = only_id(&quiet);
     publish(&quiet, viewers);
     match super::hold(&quiet, quiet_id, 7) {
-        super::Held::Ready(html, None) => assert_eq!(html, "body"),
+        super::Held::Ready(row) if row.auto.is_none() => assert_eq!(row.html, "body"),
         _ => panic!("an empty disclosure must be ready for a viewer"),
     }
 }
@@ -408,7 +408,7 @@ fn hold_readies_an_owner_row() {
     allowed.insert(7, None);
     publish(&store, allowed);
     match super::hold(&store, id, 7) {
-        super::Held::Ready(html, None) => assert_eq!(html, "body"),
+        super::Held::Ready(row) if row.auto.is_none() => assert_eq!(row.html, "body"),
         _ => panic!("an owner row must be ready"),
     }
 }
@@ -472,32 +472,34 @@ fn acking_an_auto_report_records_it_and_returns_the_replaced_one() {
         .expect("enqueue");
     let id = store.file.outbox[0].id;
     assert_eq!(
-        store.ack(id, 7, Some((AutoReport::Today, 100))).unwrap(),
+        store
+            .ack(id, 7, Some((AutoReport::Today, 100)), None)
+            .unwrap(),
         None
     );
     assert_eq!(
         store
-            .ack(id + 50, 7, Some((AutoReport::Today, 101)))
+            .ack(id + 50, 7, Some((AutoReport::Today, 101)), None)
             .unwrap(),
         Some(100)
     );
     // The same message again is not its own predecessor.
     assert_eq!(
         store
-            .ack(id + 51, 7, Some((AutoReport::Today, 101)))
+            .ack(id + 51, 7, Some((AutoReport::Today, 101)), None)
             .unwrap(),
         None
     );
     // Hourly reports stay in the chat: nothing recorded, nothing to delete.
     assert_eq!(
         store
-            .ack(id + 52, 7, Some((AutoReport::Hourly, 200)))
+            .ack(id + 52, 7, Some((AutoReport::Hourly, 200)), None)
             .unwrap(),
         None
     );
     assert_eq!(
         store
-            .ack(id + 53, 7, Some((AutoReport::Hourly, 201)))
+            .ack(id + 53, 7, Some((AutoReport::Hourly, 201)), None)
             .unwrap(),
         None
     );
@@ -506,15 +508,72 @@ fn acking_an_auto_report_records_it_and_returns_the_replaced_one() {
     assert_eq!(loaded.chats[&7].ledger.reports.today.message, Some(101));
     assert_eq!(loaded.chats[&7].ledger.reports.hourly.message, None);
     assert_eq!(
-        store.ack(id + 54, 9, Some((AutoReport::Month, 5))).unwrap(),
+        store
+            .ack(id + 54, 9, Some((AutoReport::Month, 5)), None)
+            .unwrap(),
         None
     );
     // A report switched off while its message was in flight is not recorded.
     assert_eq!(
         store
-            .ack(id + 55, 7, Some((AutoReport::Month, 300)))
+            .ack(id + 55, 7, Some((AutoReport::Month, 300)), None)
             .unwrap(),
         None
     );
     assert_eq!(store.file.chats[&7].ledger.reports.month.message, None);
+}
+
+/// Acking a trade card the chat waits to fill in records its message against the trade in the
+/// same save; a card the chat stopped waiting for is not recorded, and an edit row carries its
+/// target message.
+#[test]
+fn acking_a_waiting_card_records_its_message() {
+    use crate::telegram::notify::{CardKey, CardWait};
+    let root = TempRoot::new("ack-card");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).expect("open");
+    let key = CardKey {
+        core: 3,
+        rec_id: 44,
+    };
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            chat.ledger
+                .cards
+                .entry(3)
+                .or_default()
+                .insert(44, CardWait::default());
+            file.chats.insert(7, chat);
+            assert!(super::push_trade_card(
+                file,
+                7,
+                "card".into(),
+                Some(vec![3]),
+                Some(key),
+                10
+            ));
+            assert!(super::push_edit(
+                file,
+                7,
+                900,
+                "filled".into(),
+                Some(vec![3]),
+                11
+            ));
+        })
+        .expect("seed");
+    assert_eq!(store.file.outbox[0].card, Some(key));
+    assert_eq!(store.file.outbox[1].edit, Some(900));
+    let id = store.file.outbox[0].id;
+    store.ack(id, 7, None, Some((key, 555))).expect("ack");
+    let loaded = NotifyFile::load(&path).expect("reload");
+    assert_eq!(loaded.outbox.len(), 1);
+    assert_eq!(loaded.chats[&7].ledger.cards[&3][&44].message, Some(555));
+    let gone = CardKey {
+        core: 3,
+        rec_id: 45,
+    };
+    store.ack(id + 9, 7, None, Some((gone, 556))).expect("ack");
+    assert!(!store.file.chats[&7].ledger.cards[&3].contains_key(&45));
 }

@@ -72,6 +72,8 @@ telegram.notify_editor.save_chats_first: "Save the chats first — notifications
 telegram.notify_editor.apply_chats_first: "Apply the chats on the server first — notifications are edited for an applied chat."
 telegram.notify_editor.stale: "This chat's notifications were changed elsewhere — saving will be refused."
 telegram.notify_editor.reload: "Read again"
+telegram.notify_editor.usd_followup: "Add the dollar amount once the trade is valued"
+telegram.notify_editor.trades_hint: "A card comes at once, in the trade's currency. Thresholds are in $: a stablecoin counts 1:1, a trade in another currency waits up to %{minutes} min for its valuation."
 telegram.auto.title: "Automatic reports"
 telegram.auto.hourly: "Hourly report"
 telegram.auto.today: "Today's report"

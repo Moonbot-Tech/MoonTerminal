@@ -16,6 +16,7 @@ fn trade(core: u64, rec_id: i64, close_utc: i64) -> ClosedTrade {
         profit_usd: Some(1.0),
         profit_pct: Some(0.5),
         open_utc: close_utc.saturating_sub(60),
+        ..ClosedTrade::default()
     }
 }
 
@@ -33,8 +34,8 @@ fn on_rule() -> TradeRule {
     }
 }
 
-fn ids(trades: &[ClosedTrade]) -> Vec<i64> {
-    trades.iter().map(|trade| trade.rec_id).collect()
+fn ids(announced: &[Announced]) -> Vec<i64> {
+    announced.iter().map(|card| card.trade.rec_id).collect()
 }
 
 /// Ignoring `trades_enabled_utc`, or using a window shorter than 72 hours, would
@@ -150,34 +151,169 @@ fn filter_boundaries_send_the_exact_figure() {
     assert_eq!(judged(&rule, &row, now), (false, true));
 }
 
-/// Sending a row with no volume when a minimum is set would announce a trade
-/// the user asked to keep quiet. The row stays marked so it is not retried.
+/// A BTC-quoted close with its own amounts and no valuation yet.
+fn btc_trade(rec_id: i64, close_utc: i64) -> ClosedTrade {
+    let mut row = trade(1, rec_id, close_utc);
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    row.profit_native = Some(0.0001);
+    row.volume_native = Some(0.01);
+    row
+}
+
+/// A volume or profit the row cannot evidence in any currency will never be valued, so a set
+/// threshold fails it at once, as before; holding it would only send it unchecked later.
 #[test]
-fn missing_volume_is_not_sent_when_a_minimum_is_set() {
+fn an_unprovable_figure_fails_at_once() {
     let now = 1_700_000_000;
     let mut rule = on_rule();
     rule.min_volume_usd = Some(50.0);
-    let mut row = trade(1, 1, now - 10);
+    let mut row = btc_trade(1, now - 10);
     row.volume_usd = None;
+    row.volume_native = None;
+    assert_eq!(judged(&rule, &row, now), (false, true));
+    rule = on_rule();
+    rule.profit_at_least_usd = Some(1.0);
+    row.rec_id = 2;
+    row.profit_usd = None;
+    row.profit_native = None;
     assert_eq!(judged(&rule, &row, now), (false, true));
 }
 
-/// Announcing an unvalued profit while a threshold is set would card a row the
-/// user cannot judge. With both thresholds off, that same row is a normal card.
+/// A held close the read no longer offers — its core left the chat — is let go, or its expired
+/// hold would keep forcing reads for three days.
 #[test]
-fn unvalued_profit_sends_only_when_both_thresholds_are_off() {
+fn a_held_close_the_read_no_longer_offers_is_released() {
     let now = 1_700_000_000;
-    let mut row = trade(1, 1, now - 10);
+    let mut rule = on_rule();
+    rule.profit_at_least_usd = Some(1.0);
+    let mut row = btc_trade(1, now - 10);
     row.profit_usd = None;
+    let mut ledger = enabled(now - 1_000);
+    assert!(decide(&rule, &mut ledger, &[1], std::slice::from_ref(&row), now).is_empty());
+    assert!(!ledger.held.is_empty());
+    assert!(
+        decide(
+            &rule,
+            &mut ledger,
+            &[2],
+            std::slice::from_ref(&row),
+            now + 1
+        )
+        .is_empty()
+    );
+    assert!(ledger.held.is_empty());
+    assert!(ledger.seen.is_empty(), "a released close is not marked");
+}
+
+/// Judging a row without a dollar volume against a minimum, or dropping it, would either send a
+/// trade the user asked to keep quiet or lose one that only waits for its valuation. It is held
+/// unmarked, and once the hold runs out it goes, marked unchecked.
+#[test]
+fn missing_volume_is_held_then_sent_unchecked() {
+    let now = 1_700_000_000;
+    let mut rule = on_rule();
+    rule.min_volume_usd = Some(50.0);
+    let mut row = btc_trade(1, now - 10);
+    row.volume_usd = None;
+    let mut ledger = enabled(now - 1_000);
+    let rows = std::slice::from_ref(&row);
+    assert!(decide(&rule, &mut ledger, &[1], rows, now).is_empty());
+    assert!(ledger.seen.is_empty());
+    assert_eq!(hold_until(&ledger), Some(now + HOLD_SECS));
+    assert!(decide(&rule, &mut ledger, &[1], rows, now + HOLD_SECS - 1).is_empty());
+    let got = decide(&rule, &mut ledger, &[1], rows, now + HOLD_SECS);
+    assert_eq!(ids(&got), vec![1]);
+    assert!(got[0].unchecked);
+    assert!(ledger.held.is_empty());
+    assert!(
+        ledger
+            .seen
+            .get(&1)
+            .is_some_and(|rows| rows.contains_key(&1))
+    );
+}
+
+/// A held row that gets its valuation must be judged by it at once, not sent unchecked at the
+/// end of the hold.
+#[test]
+fn a_held_row_is_judged_once_its_valuation_lands() {
+    let now = 1_700_000_000;
     let mut rule = on_rule();
     rule.profit_at_least_usd = Some(5.0);
-    assert_eq!(judged(&rule, &row, now), (false, true));
-    rule = on_rule();
+    let mut row = btc_trade(1, now - 10);
+    row.profit_usd = None;
+    let mut ledger = enabled(now - 1_000);
+    assert!(decide(&rule, &mut ledger, &[1], std::slice::from_ref(&row), now).is_empty());
+    row.profit_usd = Some(4.0);
+    assert!(
+        decide(
+            &rule,
+            &mut ledger,
+            &[1],
+            std::slice::from_ref(&row),
+            now + 5
+        )
+        .is_empty()
+    );
+    assert!(ledger.held.is_empty(), "a judged row is no longer held");
+    assert!(
+        ledger
+            .seen
+            .get(&1)
+            .is_some_and(|rows| rows.contains_key(&1))
+    );
+}
+
+/// With both thresholds off, a row without a dollar profit is a normal card at once. With one
+/// set, it waits.
+#[test]
+fn unvalued_profit_waits_only_when_a_threshold_is_set() {
+    let now = 1_700_000_000;
+    let mut row = btc_trade(1, now - 10);
+    row.profit_usd = None;
+    let mut rule = on_rule();
     rule.loss_at_least_usd = Some(5.0);
-    row.rec_id = 2;
-    assert_eq!(judged(&rule, &row, now), (false, true));
+    assert_eq!(judged(&rule, &row, now), (false, false));
     row.rec_id = 3;
     assert_eq!(judged(&on_rule(), &row, now), (true, true));
+}
+
+/// A USD stablecoin's own amount stands for dollars, so a USDC trade is judged the moment it
+/// lands; a BTC trade is not, since its amount is not dollars.
+#[test]
+fn a_stablecoin_amount_counts_one_to_one() {
+    let now = 1_700_000_000;
+    let mut rule = on_rule();
+    rule.profit_at_least_usd = Some(3.0);
+    rule.min_volume_usd = Some(100.0);
+    let mut row = trade(1, 1, now - 10);
+    row.profit_usd = None;
+    row.volume_usd = None;
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(8);
+    row.profit_native = Some(3.3);
+    row.volume_native = Some(150.0);
+    assert_eq!(judged(&rule, &row, now), (true, true));
+    row.rec_id = 2;
+    row.profit_native = Some(2.0);
+    assert_eq!(judged(&rule, &row, now), (false, true));
+    row.rec_id = 3;
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    row.profit_native = Some(0.5);
+    assert_eq!(judged(&rule, &row, now), (false, false));
+}
+
+/// One threshold already failing decides the row: waiting for the other's dollars would only
+/// delay a card that will never be sent.
+#[test]
+fn a_known_failure_is_not_held() {
+    let now = 1_700_000_000;
+    let mut rule = on_rule();
+    rule.min_volume_usd = Some(500.0);
+    rule.profit_at_least_usd = Some(1.0);
+    let mut row = trade(1, 1, now - 10);
+    row.volume_usd = Some(100.0);
+    row.profit_usd = None;
+    assert_eq!(judged(&rule, &row, now), (false, true));
 }
 
 /// An explicit core list is intersected with the chat's grant. A core outside

@@ -109,6 +109,8 @@ telegram.notify_manual: "Вручну"
 
 telegram.notify_unvalued: "Без оцінки"
 
+telegram.notify_unchecked: "Пороги не перевірено: оцінки в $ немає"
+
 telegram.notify_down: "немає зв'язку з"
 
 telegram.notify_back: "зв'язок відновлено"

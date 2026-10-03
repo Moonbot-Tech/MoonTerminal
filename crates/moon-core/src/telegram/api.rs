@@ -515,6 +515,35 @@ impl BotApi {
         self.post("sendMessage", &send_html_request(chat_id, html), false)
     }
 
+    /// Replace the text of a message [`BotApi::send_html`] sent, keeping its form.
+    ///
+    /// Args:
+    ///     chat_id: Chat the message is in.
+    ///     message: The message to edit.
+    ///     html: The new Telegram HTML, bounded like [`BotApi::send_html`]'s.
+    ///
+    /// Returns:
+    ///     The edited message on success.
+    ///
+    /// Errors:
+    ///     The same classified failures as [`BotApi::send_html`]. An edit that changes nothing is
+    ///     a `Telegram` error `post` keeps out of the service health.
+    pub fn edit_html(
+        &mut self,
+        chat_id: i64,
+        message: i64,
+        html: &str,
+    ) -> Result<Message, ApiError> {
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message,
+            "text": html,
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": true},
+        });
+        self.post("editMessageText", &body, false)
+    }
+
     /// Send editable reports with their inline keyboard in the initial request.
     pub fn rich_message(
         &mut self,

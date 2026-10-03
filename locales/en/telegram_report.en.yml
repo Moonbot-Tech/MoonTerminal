@@ -109,6 +109,8 @@ telegram.notify_manual: "Manual"
 
 telegram.notify_unvalued: "Unvalued"
 
+telegram.notify_unchecked: "Thresholds not checked: no dollar value"
+
 telegram.notify_down: "lost connection since"
 
 telegram.notify_back: "connection restored"

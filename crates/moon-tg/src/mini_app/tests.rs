@@ -11,7 +11,8 @@ use moon_core::telegram::runtime::NotifyStore;
 use moon_core::venue::CoreVenue;
 
 use super::settings::{
-    SaveFault, SaveResult, keep_stored_reports, prepare_settings, save_fault_text, store_settings,
+    SaveFault, SaveResult, keep_stored_bot_fields, prepare_settings, save_fault_text,
+    store_settings,
 };
 
 use std::time::{Duration, Instant};
@@ -1542,11 +1543,11 @@ fn a_mini_app_save_keeps_the_stored_auto_reports() {
     file.chats.insert(5, stored);
     let mut from_page = NotifySettings::default();
     from_page.daily.on = true;
-    keep_stored_reports(&file, 5, &mut from_page);
+    keep_stored_bot_fields(&file, 5, &mut from_page);
     assert!(from_page.daily.on);
     assert!(from_page.reports.on(AutoReport::Today));
     let mut fresh = NotifySettings::default();
     fresh.reports.set(AutoReport::Hourly, true);
-    keep_stored_reports(&file, 6, &mut fresh);
+    keep_stored_bot_fields(&file, 6, &mut fresh);
     assert!(!fresh.reports.any(), "a chat with no row has none");
 }

@@ -140,7 +140,14 @@ rich):
 - Closed trades, with optional filters: which cores, a minimum volume in USD, a profit of at
   least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
   that closes after the switch is turned on is eligible, and the dedup window is 72 hours.
-  A close older than that window is not announced.
+  A close older than that window is not announced. The card leaves within about five seconds of
+  the trade reaching the report replica and shows the trade in its own currency (`+0.00012 BTC`,
+  `+3.3 USDC`); outside a USD stablecoin the dollar value follows it once the USDT valuation has
+  it. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
+  A trade in another currency that a filter needs to judge waits up to five minutes for its
+  valuation; after that it is sent with a line saying its thresholds were not checked. With the
+  dollar follow-up on (terminal Settings only), a card sent before its valuation gets the dollar
+  value written into it once it arrives, within a day.
 - Core down and back. After a core stays disconnected for the chosen number of minutes, the
   chat receives one down message. When that core connects again, the chat receives one back
   message. A core that leaves the configured set is forgotten: it does not stay announced as

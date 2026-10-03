@@ -1407,3 +1407,41 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     .unwrap();
     assert!(none.is_none());
 }
+
+/// A card prints the trade's own money the moment its row lands, so the read must hand back the
+/// settled profit, the entry notional and their currency without any valuation; a row the
+/// Report's volume gates cannot prove (no close reason) keeps its profit and loses its volume.
+#[test]
+fn closed_trades_carry_their_own_money() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, fname TEXT,
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER, boughtq REAL, buyprice REAL,
+            sellprice REAL, sellreason TEXT
+        );
+        INSERT INTO orders_rep VALUES
+            (1, 'CoreA', 1, 'ACE', 'ACEUSDC', 990, 1000, '', 0, 3.3, 150.0, 8, 10.0, 15.0, 15.33,
+             'TakeProfit'),
+            (1, 'CoreA', 2, 'ETH', 'ETHBTC', 990, 1001, '', 0, 0.00012, 0.01, 0, 0.5, 0.02, 0.0202,
+             'TakeProfit'),
+            (1, 'CoreA', 3, 'ACE', 'ACEUSDC', 990, 1002, '', 0, -1.0, 150.0, 8, 10.0, 15.0, 14.9,
+             NULL);",
+    )
+    .unwrap();
+    let names = moon_core::db::CoreNames::default();
+    let rows = super::read_closed_since_on(&conn, chrono_tz::UTC, &names, 0).unwrap();
+    assert_eq!(rows.len(), 3);
+    let usdc = &rows[0];
+    assert_eq!(usdc.quote.map(|q| q.ticker()), Some("USDC"));
+    assert_eq!(usdc.profit_native, Some(3.3));
+    assert_eq!(usdc.volume_native, Some(150.0));
+    let btc = &rows[1];
+    assert_eq!(btc.quote.map(|q| q.ticker()), Some("BTC"));
+    assert_eq!(btc.profit_native, Some(0.00012));
+    assert!((btc.volume_native.unwrap() - 0.01).abs() < 1e-12);
+    let unproven = &rows[2];
+    assert_eq!(unproven.profit_native, Some(-1.0));
+    assert_eq!(unproven.volume_native, None);
+}

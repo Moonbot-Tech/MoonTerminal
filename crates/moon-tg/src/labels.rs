@@ -6,8 +6,8 @@
 use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
-use moon_core::config::{Language, TelegramConfig};
 use moon_core::config::telegram_menu::MenuItem;
+use moon_core::config::{Language, TelegramConfig};
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::runtime::Response;

@@ -44,6 +44,7 @@ fn closed_trade(rec_id: i64, close_utc: i64, coin: &str, profit_usd: Option<f64>
         profit_usd,
         profit_pct: None,
         open_utc: close_utc - 10,
+        ..ClosedTrade::default()
     }
 }
 
@@ -369,6 +370,7 @@ fn queued(id: u64, cores: Option<Vec<u64>>) -> Pending {
         created_utc: 1,
         cores,
         auto: None,
+        ..Pending::default()
     }
 }
 
@@ -518,4 +520,71 @@ fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
         ledger.seen.get(&9).and_then(|rows| rows.get(&3)).copied(),
         Some(50)
     );
+}
+
+/// A BTC card sent before its valuation waits for it when the chat asks for the dollars: the
+/// sender records its message, and the read that finds the trade valued queues an edit of that
+/// message and stops waiting. A USDT card never waits — its amount already is dollars.
+#[test]
+fn a_waiting_card_gets_its_dollars_written_in() {
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("followup");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    host.edit(|file| {
+        enable_trades(file);
+        file.chats
+            .get_mut(&CHAT)
+            .unwrap()
+            .settings
+            .trades
+            .usd_followup = true;
+    });
+    host.state.visible_override = Some(vec![7]);
+    let mut btc = closed_trade(11, 1_500, "ETHBTC", None);
+    btc.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    btc.profit_native = Some(0.00012);
+    let mut usdt = closed_trade(12, 1_501, "ACEUSDT", Some(1.0));
+    usdt.quote = moon_core::db::QuoteCurrency::from_report_ordinal(1);
+    usdt.profit_native = Some(1.0);
+    host.state.injected_reads = Some(InjectedReads {
+        trades: vec![btc.clone(), usdt],
+        days: BTreeMap::new(),
+    });
+    host.tick(2_000);
+    let rows = host.outbox();
+    assert_eq!(rows.len(), 2);
+    let key = moon_core::telegram::notify::CardKey {
+        core: 7,
+        rec_id: 11,
+    };
+    assert_eq!(rows[0].card, Some(key));
+    assert!(rows[0].html.contains("+0.00012 BTC"), "{}", rows[0].html);
+    assert!(!rows[0].html.contains('\u{2248}'));
+    assert_eq!(rows[1].card, None, "a USDT card has nothing to wait for");
+    // The sender's ack: the rows leave the outbox and the card's message is recorded.
+    host.edit(|file| {
+        file.outbox.clear();
+        let wait = file
+            .chats
+            .get_mut(&CHAT)
+            .unwrap()
+            .ledger
+            .cards
+            .get_mut(&7)
+            .unwrap();
+        wait.get_mut(&11).unwrap().message = Some(555);
+    });
+    btc.profit_usd = Some(7.5);
+    host.state.injected_reads = Some(InjectedReads {
+        trades: vec![btc],
+        days: BTreeMap::new(),
+    });
+    host.state.last_notify_run = None;
+    host.tick(2_100);
+    let rows = host.outbox();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].edit, Some(555));
+    assert!(rows[0].html.contains("\u{2248} +7.50$"), "{}", rows[0].html);
+    assert!(host.file().chats[&CHAT].ledger.cards.is_empty());
 }

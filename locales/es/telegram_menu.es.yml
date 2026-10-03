@@ -72,6 +72,8 @@ telegram.notify_editor.save_chats_first: "Guarde primero los chats: las notifica
 telegram.notify_editor.apply_chats_first: "Aplique primero los chats en el servidor: las notificaciones se editan en un chat aplicado."
 telegram.notify_editor.stale: "Las notificaciones de este chat se cambiaron en otro lugar: guardar será rechazado."
 telegram.notify_editor.reload: "Volver a leer"
+telegram.notify_editor.usd_followup: "Añadir el importe en dólares cuando la operación se valore"
+telegram.notify_editor.trades_hint: "La tarjeta llega al instante, en la moneda de la operación. Los umbrales están en $: una stablecoin cuenta 1:1; una operación en otra moneda espera su valoración hasta %{minutes} min."
 telegram.auto.title: "Informes automáticos"
 telegram.auto.hourly: "Informe por hora"
 telegram.auto.today: "Informe de hoy"

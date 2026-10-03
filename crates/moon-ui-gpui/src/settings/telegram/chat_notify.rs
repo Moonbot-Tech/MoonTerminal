@@ -620,6 +620,21 @@ impl SettingsView {
                         t!("telegram.mini_settings_loss_at_least").to_string(),
                     )),
             )
+            .child(switch(
+                "usd-followup",
+                t!("telegram.notify_editor.usd_followup").to_string(),
+                draft.trades.usd_followup,
+                |s, v| s.trades.usd_followup = v,
+            ))
+            .child(
+                div().text_color(muted).child(
+                    t!(
+                        "telegram.notify_editor.trades_hint",
+                        minutes = moon_tg::TRADE_HOLD_MINUTES
+                    )
+                    .to_string(),
+                ),
+            )
             .child(
                 h_flex()
                     .flex_wrap()

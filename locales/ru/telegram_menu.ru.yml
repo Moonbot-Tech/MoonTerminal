@@ -72,6 +72,8 @@ telegram.notify_editor.save_chats_first: "Сначала сохраните ча
 telegram.notify_editor.apply_chats_first: "Сначала примените чаты на сервере — уведомления правятся у применённого чата."
 telegram.notify_editor.stale: "Уведомления этого чата изменили в другом месте — сохранение будет отклонено."
 telegram.notify_editor.reload: "Перечитать"
+telegram.notify_editor.usd_followup: "Дописать сумму в $, когда сделка оценится"
+telegram.notify_editor.trades_hint: "Карточка приходит сразу, в валюте сделки. Пороги — в $: стейблкоин считается 1:1, сделка в другой валюте ждёт оценку до %{minutes} мин."
 telegram.auto.title: "Автоотчёты"
 telegram.auto.hourly: "Часовой отчёт"
 telegram.auto.today: "Отчёт за сегодня"

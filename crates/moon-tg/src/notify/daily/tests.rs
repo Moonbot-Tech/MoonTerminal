@@ -39,6 +39,7 @@ fn row(rec_id: i64, profit: Option<f64>) -> ClosedTrade {
         profit_usd: profit,
         profit_pct: None,
         open_utc: 0,
+        ..ClosedTrade::default()
     }
 }
 

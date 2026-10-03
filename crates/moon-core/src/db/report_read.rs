@@ -89,6 +89,16 @@ pub const VALUATION_RATE_COLUMN: &str = "valuation_rate";
 /// Mini App-only rate for an entry notional proven safe by the Report volume gates.
 pub const MINI_ENTRY_VOLUME_RATE_COLUMN: &str = "mini_entry_volume_rate";
 
+/// Bot-only: a closed trade's settled profit in its own currency ([`query_notify_trades`]).
+pub const NOTIFY_PROFIT_NATIVE_COLUMN: &str = "notify_profit_native";
+
+/// Bot-only: a closed trade's entry notional in its own currency, where the Report volume gates
+/// prove it ([`query_notify_trades`]).
+pub const NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN: &str = "notify_entry_volume_native";
+
+/// Bot-only: the effective quote ordinal both native columns are in ([`query_notify_trades`]).
+pub const NOTIFY_QUOTE_COLUMN: &str = "notify_quote";
+
 /// Synthetic report column naming where that rate came from.
 pub const VALUATION_SOURCE_COLUMN: &str = "valuation_rate_source";
 
@@ -633,6 +643,8 @@ fn source_select(
                     "CASE WHEN {} THEN ({}) END AS \"{c}\"",
                     volume.reconstructed, volume.rate
                 )
+            } else if let Some(sql) = notify_column_expression(src, c) {
+                format!("{sql} AS \"{c}\"")
             } else if let Some(entry) = synthetic(c) {
                 let sql = synthetic_expression(entry, src, valuation)
                     .unwrap_or_else(|| "NULL".to_string());
@@ -2525,13 +2537,101 @@ pub fn query_mini_trades(
     f: &ReportFilter,
     limit: usize,
 ) -> ReadResult<ReportTable> {
+    query_closed_with(conn, f, limit, &[MINI_ENTRY_VOLUME_RATE_COLUMN])
+}
+
+/// [`query_mini_trades`] plus each trade's own money: its settled profit, its entry notional and
+/// the currency both are in, read without any USDT valuation.
+///
+/// What the bot's trade cards print, so a card never has to wait for the valuation, and what the
+/// rule thresholds fall back to on a USD stablecoin quote. The native columns go through the same
+/// quote expressions as the Report's per-currency totals, so a COIN-M row reads in BTC, not in the
+/// USDT its label claims.
+///
+/// Args:
+///     conn: Report connection or snapshot.
+///     f: Row filter; its scope is forced to closed rows.
+///     limit: Maximum merged rows.
+///
+/// Returns:
+///     [`query_mini_trades`]'s columns plus [`NOTIFY_PROFIT_NATIVE_COLUMN`],
+///     [`NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN`] and [`NOTIFY_QUOTE_COLUMN`].
+///
+/// Errors:
+///     The same `ReadFail` contract as [`query_reports`].
+pub fn query_notify_trades(
+    conn: &Connection,
+    f: &ReportFilter,
+    limit: usize,
+) -> ReadResult<ReportTable> {
+    query_closed_with(
+        conn,
+        f,
+        limit,
+        &[
+            MINI_ENTRY_VOLUME_RATE_COLUMN,
+            NOTIFY_PROFIT_NATIVE_COLUMN,
+            NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN,
+            NOTIFY_QUOTE_COLUMN,
+        ],
+    )
+}
+
+/// Closed rows, newest close first, with the display columns plus `extra`.
+fn query_closed_with(
+    conn: &Connection,
+    f: &ReportFilter,
+    limit: usize,
+    extra: &[&str],
+) -> ReadResult<ReportTable> {
     let mut cols = display_columns(conn)?;
-    cols.push(MINI_ENTRY_VOLUME_RATE_COLUMN.to_string());
+    cols.extend(extra.iter().map(|col| (*col).to_string()));
     let closed = ReportFilter {
         rows: RowScope::Closed,
         ..f.clone()
     };
     query_reports_with_columns(conn, &closed, "closedate", true, limit, cols)
+}
+
+/// SQL for one of the bot's native-money columns against `src`, or `None` when `col` is not one.
+///
+/// Args:
+///     src: Physical source whose schema decides availability.
+///     col: Requested column.
+///
+/// Returns:
+///     The expression; `NULL` when the source lacks an input.
+fn notify_column_expression(src: &ReadSource, col: &str) -> Option<String> {
+    let sql = match col {
+        NOTIFY_PROFIT_NATIVE_COLUMN => {
+            if src.cols.contains("profitbtc") {
+                format!(
+                    "CASE WHEN typeof(r.\"profitbtc\") IN ('integer','real') THEN {} END",
+                    super::quote::settled_amount_expr("r", &src.cols, "profitbtc")
+                )
+            } else {
+                "NULL".to_string()
+            }
+        }
+        // SQLite resolves every column of a CASE at prepare time, unreachable arms included.
+        NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN
+            if !(src.cols.contains("boughtq") && src.cols.contains("buyprice")) =>
+        {
+            "NULL".to_string()
+        }
+        NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN => {
+            // The same proof the Report's traded volume needs: an ordinary closed trade whose
+            // prices are in the currency of its money, so quantity × price is a notional in it.
+            let volume = traded_volume_sql(src, None);
+            format!(
+                "CASE WHEN {} THEN ABS(r.\"boughtq\" * r.\"buyprice\") END",
+                volume.reconstructed
+            )
+        }
+        NOTIFY_QUOTE_COLUMN => super::quote::effective_ordinal_expr("r", &src.cols),
+        _ => return None,
+    };
+    Some(sql)
 }
 
 /// Execute the shared row reader with a caller-specific column projection.
