@@ -61,13 +61,13 @@ a station's is switched in the terminal's Settings), set this chat's notificatio
 cards, core down/back with a delay, the daily summary and its hour, the automatic reports — and,
 on a station, open its
 status. Each switch saves at once; button order and rows stay in the terminal's Settings, trade
-thresholds and cores in the Mini App's Settings tab. A change made in the chat reaches an open
-terminal Settings window only where that window had not been edited.
+thresholds and cores in the terminal's Settings and the Mini App's Settings tab. A change made in
+the chat reaches an open terminal Settings window only where that window had not been edited.
 
-Each chat's notifications can also be set in Settings -> Telegram -> Chats: open a chat for
-its trade cards (cores, minimum volume, profit and loss thresholds), core down/back notices with
-their delay, the daily summary with its time, and the automatic reports. "Save notifications"
-saves that chat alone,
+Each chat's notifications can also be set in Settings -> Telegram, in the right column of the
+"Bot menu and notifications" box: pick a chat, then its trade cards (cores, minimum volume, profit
+and loss thresholds, the dollar follow-up), core down/back notices with their delay, the daily
+summary with its time, and the automatic reports. "Save notifications" saves that chat alone,
 at once for a terminal-hosted bot and on the server for a station-hosted one; a change made
 meanwhile from the Mini App or the chat is refused rather than overwritten.
 
@@ -159,7 +159,7 @@ rich):
 
 Automatic reports are the rich report a menu button opens, sent by the bot on its own. They are
 switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->
-Chats (the Mini App does not show them, and its save leaves them as they are):
+Bot menu and notifications (the Mini App does not show them, and its save leaves them as they are):
 
 - Hourly, at the top of every hour in the display time zone, for the hour that just ended. Every
   hourly report stays in the chat.

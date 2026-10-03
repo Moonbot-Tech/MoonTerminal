@@ -1,5 +1,7 @@
-//! The bot's menu box: the reply keyboard as a tree of buttons, the view a report opens in, and
-//! the time its period is counted by (`TelegramConfig::bot`). The Report section is fixed.
+//! The bot's box, in two columns that wrap under each other in a narrow window. On the left the
+//! menu: the reply keyboard as a tree of buttons, the view a report opens in, and the time its
+//! period is counted by (`TelegramConfig::bot`); the Report section is fixed. On the right one
+//! chat's notifications and automatic reports (`chat_notify.rs`), the chat picked above them.
 //!
 //! It edits whichever bot this terminal has: its own (the Settings draft, saved by Save) or the
 //! station's (the station's draft, sent by "Apply on the server" with the chats). Rows are never
@@ -20,7 +22,7 @@ use moon_core::config::telegram_menu::{
 };
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonGroupBox,
-    MoonPalette, MoonTree, MoonTreeItem, MoonTreeState, h_flex, rgba_from,
+    MoonPalette, MoonTree, MoonTreeItem, MoonTreeState, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -49,6 +51,9 @@ const ROOT: &str = "kb";
 
 /// Unscaled height of one tree row.
 const ROW_H: f32 = 30.0;
+
+/// Unscaled narrowest width of one column; below two of them the columns stack.
+const COLUMN_MIN_W: f32 = 320.0;
 
 /// The button order and the language its labels are in: all the tree's items depend on.
 fn shape_sig(menu: &BotMenu) -> u64 {
@@ -158,12 +163,53 @@ impl SettingsView {
         self.chats_edit(side, cx, |telegram| edit(&mut telegram.bot));
     }
 
-    /// The bot's menu box for `side`, or a note when the station predates it.
+    /// The bot's box for `side`: the menu on the left, a chat's notifications on the right.
     pub(in crate::settings) fn bot_menu_box(
         &self,
         side: ChatsOf,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let id = |what: &str| -> SharedString {
+            match side {
+                ChatsOf::Terminal => format!("tgm-{what}").into(),
+                ChatsOf::Station => format!("tgms-{what}").into(),
+            }
+        };
+        let column = |what: &str, key: &str, body: AnyElement| {
+            div().flex_1().min_w(design::ui_px(cx, COLUMN_MIN_W)).child(
+                MoonGroupBox::new(id(what))
+                    .title(t!(key).to_string())
+                    .padding(12.0)
+                    .gap(10.0)
+                    .child(body),
+            )
+        };
+        MoonGroupBox::new(id("box"))
+            .title(t!("telegram.menu_editor.title").to_string())
+            .padding(14.0)
+            .gap(10.0)
+            .child(
+                h_flex()
+                    .w_full()
+                    .flex_wrap()
+                    .items_start()
+                    .gap(design::ui_px(cx, 16.0))
+                    .child(column(
+                        "keys",
+                        "telegram.settings.buttons",
+                        self.bot_menu_keys(side, cx),
+                    ))
+                    .child(column(
+                        "notify",
+                        "telegram.notify_editor.title",
+                        self.chat_notify_column(side, cx),
+                    )),
+            )
+            .into_any_element()
+    }
+
+    /// The menu column for `side`, or a note when the station predates the menu.
+    fn bot_menu_keys(&self, side: ChatsOf, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         let id = |what: &str| -> SharedString {
@@ -172,10 +218,7 @@ impl SettingsView {
                 ChatsOf::Station => format!("tgms-{what}").into(),
             }
         };
-        let section = MoonGroupBox::new(id("box"))
-            .title(t!("telegram.menu_editor.title").to_string())
-            .padding(14.0)
-            .gap(10.0);
+        let section = v_flex().w_full().min_w_0().gap(design::ui_px(cx, 10.0));
         let station_knows = self
             .telegram
             .server

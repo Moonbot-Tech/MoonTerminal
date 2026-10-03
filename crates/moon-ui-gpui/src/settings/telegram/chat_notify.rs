@@ -1,6 +1,7 @@
-//! The notifications of the chat opened in the Chats box — what the Mini App's Settings tab edits:
-//! closed-trade cards (cores, volume and result thresholds), core down/back notices, the daily
-//! summary — and the automatic reports, which only the bot's chat and this box edit.
+//! The notifications of one chat, picked in the Notifications column of the bot box beside the
+//! menu tree — what the Mini App's Settings tab edits: closed-trade cards (cores, volume and result
+//! thresholds), core down/back notices, the daily summary — and what only the bot's chat and this
+//! column edit: the cards' dollar follow-up and the automatic reports.
 //!
 //! The terminal's bot saves them at once into its notifications file; the station's sends them in
 //! a change of their own, carrying only this chat's row — not the zone, not a draft of the chats.
@@ -21,7 +22,8 @@ use moon_core::config::telegram_menu::ReportBasis;
 use moon_core::station_api::{Access, ChatNotifyRow};
 use moon_core::telegram::notify::{AutoReport, CoreScope, NotifySettings};
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonInput, MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
+    MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -31,7 +33,7 @@ use super::server_bot::known_server;
 use crate::backend::station::job::Job;
 use crate::design;
 
-/// Why the opened chat has no notifications to edit.
+/// Why the picked chat has no notifications to edit.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Unavailable {
     /// The terminal's bot is not running: its notifications file is not open.
@@ -42,13 +44,16 @@ enum Unavailable {
     StationSilent,
 }
 
-/// The opened chat's notifications as edited: switches and cores here, numbers in the fields.
+/// The picked chat's notifications as edited: switches and cores here, numbers in the fields.
 pub(in crate::settings) struct NotifyEd {
+    /// The chat picked in the column. `None`, or a chat no longer in the draft, falls back to the
+    /// owner's chat, then to the first one ([`SettingsView::notify_chat`]).
+    chat: Option<i64>,
     /// The chat and the stored row the editor was filled from.
     loaded: Option<(i64, ChatNotifyRow)>,
     /// What the fields were filled with, to tell the user's edits from the stored row.
     loaded_fields: [String; 5],
-    /// Why there is nothing to edit for the opened chat, from the last read.
+    /// Why there is nothing to edit for the picked chat, from the last read.
     unavailable: Option<Unavailable>,
     /// The stored row moved on while the editor held unsaved edits.
     stale: bool,
@@ -65,10 +70,11 @@ pub(in crate::settings) struct NotifyEd {
 }
 
 impl NotifyEd {
-    /// An empty editor; [`SettingsView::chat_notify_sync`] fills it for the opened chat.
+    /// An empty editor; [`SettingsView::chat_notify_sync`] fills it for the picked chat.
     pub(in crate::settings) fn new<T: 'static>(window: &mut Window, cx: &mut Context<T>) -> Self {
         let mut input = || cx.new(|cx| MoonInputState::new(window, cx));
         Self {
+            chat: None,
             loaded: None,
             loaded_fields: Default::default(),
             unavailable: None,
@@ -180,6 +186,18 @@ impl SettingsView {
         &mut self.chat_ed_mut(side).notify
     }
 
+    /// The chat `side`'s Notifications column edits: the one picked while it is still in the
+    /// draft, else the owner's, else the first; `None` without chats.
+    fn notify_chat(&self, side: ChatsOf, cx: &App) -> Option<i64> {
+        let telegram = self.chats(side, cx)?;
+        let chats = &telegram.authorized_chat_ids;
+        self.notify_ed(side)
+            .chat
+            .filter(|chat| chats.contains(chat))
+            .or_else(|| telegram.owner().filter(|chat| chats.contains(chat)))
+            .or_else(|| chats.first().copied())
+    }
+
     /// `chat`'s stored notifications on `side`: the terminal bot's file, against its saved chats;
     /// or the station's as last read.
     fn notify_row(&self, side: ChatsOf, chat: i64, cx: &App) -> Result<ChatNotifyRow, Unavailable> {
@@ -213,7 +231,7 @@ impl SettingsView {
         }
     }
 
-    /// Read each side's opened chat's stored row and fill its editor when the chat or the row
+    /// Read each side's picked chat's stored row and fill its editor when the chat or the row
     /// changed — unless the user holds unsaved edits, which stay and are marked stale. Also ends
     /// a save sent to the station once its answer is in. Runs at the window's render root, where
     /// the fields' window is.
@@ -228,7 +246,7 @@ impl SettingsView {
             self.notify_station_answer(row.as_ref(), cx);
         }
         for side in [ChatsOf::Terminal, ChatsOf::Station] {
-            let Some(chat) = self.chat_ed(side).active_chat else {
+            let Some(chat) = self.notify_chat(side, cx) else {
                 let ed = self.notify_ed_mut(side);
                 ed.loaded = None;
                 ed.stale = false;
@@ -427,13 +445,83 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// The opened chat's notifications on `side`.
-    pub(in crate::settings) fn chat_notify_box(
+    /// `side`'s Notifications column: the chat picker, then that chat's notifications.
+    pub(in crate::settings) fn chat_notify_column(
         &self,
         side: ChatsOf,
-        chat: i64,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let muted = rgba_from(p.text_muted, 1.0);
+        let column = v_flex().w_full().min_w_0().gap(design::ui_px(cx, 10.0));
+        let Some(telegram) = self.chats(side, cx) else {
+            return column.into_any_element();
+        };
+        let Some(chat) = self.notify_chat(side, cx) else {
+            return column
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.notify_editor.no_chats").to_string()),
+                )
+                .into_any_element();
+        };
+        let id = |what: &str| -> SharedString {
+            match side {
+                ChatsOf::Terminal => format!("tgn-{what}").into(),
+                ChatsOf::Station => format!("tgns-{what}").into(),
+            }
+        };
+        let items = {
+            let weak = cx.entity().downgrade();
+            crate::panels::radio_items(
+                telegram.authorized_chat_ids.iter().map(|&each| {
+                    (
+                        each,
+                        SharedString::from(format!("{}-{each}", id("chat"))),
+                        SharedString::from(super::access::chat_title(telegram, each)),
+                    )
+                }),
+                chat,
+                crate::panels::RadioMark::Check,
+                move |app, picked| {
+                    let _ = weak.update(app, |this, cx| {
+                        this.notify_ed_mut(side).chat = Some(picked);
+                        cx.notify();
+                    });
+                },
+            )
+        };
+        column
+            .child(
+                h_flex()
+                    .gap(design::ui_px(cx, 8.0))
+                    .items_center()
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child(t!("telegram.notify_editor.chat").to_string()),
+                    )
+                    .child(
+                        // The editor holds the chat a station save was sent for until its answer
+                        // is in; another chat filled meanwhile would be refilled over by it.
+                        MoonDropdown::new(id("chat-pick"))
+                            .disabled(self.notify_ed(side).sending.is_some())
+                            .label(super::access::chat_title(telegram, chat))
+                            .trigger_caret(true)
+                            .trigger_variant(MoonButtonVariant::Neutral)
+                            .trigger_size(MoonButtonSize::density(cx))
+                            .trigger_width_scaled(200.0)
+                            .menu_width_scaled(240.0)
+                            .items(items),
+                    ),
+            )
+            .child(self.chat_notify_box(side, chat, cx))
+            .into_any_element()
+    }
+
+    /// The picked chat's notifications on `side`.
+    fn chat_notify_box(&self, side: ChatsOf, chat: i64, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         let id = |what: &str| -> SharedString {
@@ -442,16 +530,7 @@ impl SettingsView {
                 ChatsOf::Station => format!("tgns-{what}-{chat}").into(),
             }
         };
-        let block = v_flex()
-            .gap(design::ui_px(cx, 8.0))
-            .pt(design::ui_px(cx, 6.0))
-            .border_t_1()
-            .border_color(rgba_from(p.border, 1.0))
-            .child(
-                div()
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(t!("telegram.notify_editor.title").to_string()),
-            );
+        let block = v_flex().gap(design::ui_px(cx, 8.0));
         let ed = self.notify_ed(side);
         let sending = ed.sending.is_some_and(|(c, _)| c == chat);
         if sending {

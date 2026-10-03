@@ -42,7 +42,8 @@ pub(in crate::settings) struct ChatEd {
     pub(super) pending_owner: Option<i64>,
     name: Entity<MoonInputState>,
     search: Entity<MoonInputState>,
-    /// The opened chat's notifications.
+    /// The notifications of the chat picked in the bot box's Notifications column; independent of
+    /// the chat opened here.
     pub(super) notify: super::chat_notify::NotifyEd,
 }
 
@@ -98,6 +99,18 @@ impl ChatEd {
         self.active_chat = None;
         self.pending_owner = None;
     }
+}
+
+/// A chat's caption: its name in the terminal, or `Chat <id>` without one.
+pub(super) fn chat_title(telegram: &TelegramConfig, chat: i64) -> String {
+    telegram
+        .chat_access
+        .iter()
+        .find(|a| a.chat_id == chat)
+        .map(|a| a.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| t!("telegram.access_chat", id = chat).to_string())
 }
 
 impl SettingsView {
@@ -251,12 +264,7 @@ impl SettingsView {
         let mut section = section;
         for &chat in &telegram.authorized_chat_ids {
             let owner = telegram.owner() == Some(chat);
-            let profile = telegram.chat_access.iter().find(|a| a.chat_id == chat);
-            let title = profile
-                .map(|a| a.name.trim())
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| t!("telegram.access_chat", id = chat).to_string());
+            let title = chat_title(telegram, chat);
             let summary = if owner {
                 t!("telegram.access_owner_summary").to_string()
             } else {
@@ -394,7 +402,6 @@ impl SettingsView {
                                 ),
                         );
                 }
-                card = card.child(self.chat_notify_box(side, chat, cx));
             }
             section = section.child(card);
         }
