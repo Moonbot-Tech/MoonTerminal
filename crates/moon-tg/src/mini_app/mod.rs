@@ -22,6 +22,8 @@ mod dto;
 mod reads;
 mod settings;
 
+pub(crate) use settings::{chat_notify, save_chat_notify};
+
 /// Answer one Mini App request. The live session check is handled by the caller.
 pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
     match request {

@@ -7,6 +7,7 @@
 use chrono::{Datelike, NaiveDate};
 
 use super::report::Preset;
+use crate::config::telegram_menu::{MenuItem, MenuLevel, ReportBasis, ReportView};
 
 /// What an inline menu button asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,117 @@ pub enum MenuAction {
     Preset(Preset),
     /// A calendar cell that does nothing: a weekday caption, a blank, a day out of reach.
     Noop,
+    /// A screen or a switch of the owner's Settings section.
+    Settings(SettingsAction),
+}
+
+/// What a button of the bot's Settings section asks for: a screen, or one switch that saves at
+/// once and shows its screen again. A switch names the state it sets, not "the other one": a
+/// press on an old message, or a second tap, then cannot undo what the user meant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsAction {
+    /// The section itself.
+    Root,
+    /// Which buttons the keyboard and the Report section show.
+    Buttons,
+    /// Show (`true`) or hide one button.
+    ShowButton(MenuLevel, MenuItem, bool),
+    /// The view reports open in.
+    View,
+    SetView(ReportView),
+    /// The time a period counts trades by.
+    Basis,
+    SetBasis(ReportBasis),
+    /// Switch the Mini App on or off.
+    MiniApp(bool),
+    /// This chat's notifications.
+    Notify,
+    /// Closed-trade cards on or off.
+    Trades(bool),
+    /// Core down/back notices on or off.
+    Down(bool),
+    /// How long a core must stay down before the notice, in minutes.
+    DownAfter(u16),
+    /// The daily summary on or off.
+    Daily(bool),
+    /// The hour picker of the daily summary.
+    DailyHours,
+    /// The hour the daily summary is sent at.
+    DailyHour(u8),
+}
+
+impl SettingsAction {
+    /// The data after `m:s`, empty for the section itself.
+    fn encode(self) -> String {
+        let level = |level: MenuLevel| match level {
+            MenuLevel::Keyboard => "k",
+            MenuLevel::Report => "r",
+        };
+        let flag = |on: bool| if on { "1" } else { "0" };
+        match self {
+            Self::Root => String::new(),
+            Self::Buttons => ":b".into(),
+            Self::ShowButton(lv, item, show) => {
+                format!(":b:{}:{}:{}", level(lv), item.id(), flag(show))
+            }
+            Self::View => ":v".into(),
+            Self::SetView(view) => format!(":v:{}", view.id()),
+            Self::Basis => ":p".into(),
+            Self::SetBasis(basis) => format!(":p:{}", basis.id()),
+            Self::MiniApp(on) => format!(":m:{}", flag(on)),
+            Self::Notify => ":n".into(),
+            Self::Trades(on) => format!(":n:t:{}", flag(on)),
+            Self::Down(on) => format!(":n:o:{}", flag(on)),
+            Self::DownAfter(minutes) => format!(":n:d:{minutes}"),
+            Self::Daily(on) => format!(":n:y:{}", flag(on)),
+            Self::DailyHours => ":n:h".into(),
+            Self::DailyHour(hour) => format!(":n:h:{hour}"),
+        }
+    }
+
+    /// Decode the parts after `m:s`; anything malformed is `None`.
+    fn decode(parts: &[&str]) -> Option<Self> {
+        let level = |code: &str| match code {
+            "k" => Some(MenuLevel::Keyboard),
+            "r" => Some(MenuLevel::Report),
+            _ => None,
+        };
+        let flag = |code: &str| match code {
+            "1" => Some(true),
+            "0" => Some(false),
+            _ => None,
+        };
+        Some(match parts {
+            [] => Self::Root,
+            ["b"] => Self::Buttons,
+            ["b", lv, id, show] => {
+                let level = level(lv)?;
+                let item = MenuItem::from_id(id).filter(|item| level.allowed().contains(item))?;
+                Self::ShowButton(level, item, flag(show)?)
+            }
+            ["v"] => Self::View,
+            ["v", id] => Self::SetView(ReportView::ALL.into_iter().find(|v| v.id() == *id)?),
+            ["p"] => Self::Basis,
+            ["p", id] => Self::SetBasis(ReportBasis::ALL.into_iter().find(|b| b.id() == *id)?),
+            ["m", on] => Self::MiniApp(flag(on)?),
+            ["n"] => Self::Notify,
+            ["n", "t", on] => Self::Trades(flag(on)?),
+            ["n", "o", on] => Self::Down(flag(on)?),
+            ["n", "d", minutes] => {
+                let minutes: u16 = minutes.parse().ok()?;
+                (1..=1440)
+                    .contains(&minutes)
+                    .then_some(Self::DownAfter(minutes))?
+            }
+            ["n", "y", on] => Self::Daily(flag(on)?),
+            ["n", "h"] => Self::DailyHours,
+            ["n", "h", hour] => {
+                let hour: u8 = hour.parse().ok()?;
+                (hour < 24).then_some(Self::DailyHour(hour))?
+            }
+            _ => return None,
+        })
+    }
 }
 
 /// Prefix of every callback in this namespace.
@@ -47,6 +159,7 @@ impl MenuAction {
             Self::Preset(Preset::Days30) => "m:p:30".into(),
             Self::Preset(Preset::LastWeek) => "m:p:w".into(),
             Self::Noop => "m:-".into(),
+            Self::Settings(action) => format!("m:s{}", action.encode()),
         }
     }
 
@@ -58,6 +171,7 @@ impl MenuAction {
         let rest = value.strip_prefix(PREFIX)?;
         let parts: Vec<&str> = rest.split(':').collect();
         match parts.as_slice() {
+            ["s", rest @ ..] => SettingsAction::decode(rest).map(Self::Settings),
             ["r"] => Some(Self::Report),
             ["-"] => Some(Self::Noop),
             ["p", "7"] => Some(Self::Preset(Preset::Days7)),

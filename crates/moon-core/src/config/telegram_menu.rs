@@ -29,11 +29,13 @@ pub enum MenuItem {
     MiniApp,
     /// The Report section: an inline menu of periods under one message.
     Report,
+    /// The bot's own settings, under one message; the owner's only.
+    Settings,
 }
 
 impl MenuItem {
     /// Every item, in the order a picker lists them.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Report,
         Self::Today,
         Self::Yesterday,
@@ -44,6 +46,7 @@ impl MenuItem {
         Self::Help,
         Self::Status,
         Self::MiniApp,
+        Self::Settings,
     ];
 
     /// Stable id: the saved value and the suffix of the item's locale keys
@@ -60,6 +63,7 @@ impl MenuItem {
             Self::Status => "status",
             Self::MiniApp => "miniapp",
             Self::Report => "report",
+            Self::Settings => "settings",
         }
     }
 
@@ -134,8 +138,9 @@ pub struct BotMenu {
 }
 
 impl Default for BotMenu {
-    /// The layout the bot had before the menu became configurable: periods and Help, and the
-    /// station's Status on a row of its own; everything new hidden.
+    /// The layout the bot had before the menu became configurable — periods and Help — with the
+    /// station's Status and the owner's Settings on a row of their own; everything else that came
+    /// with the configurable menu hidden.
     fn default() -> Self {
         use MenuEntry as E;
         use MenuItem::*;
@@ -143,7 +148,7 @@ impl Default for BotMenu {
             keyboard: vec![
                 vec![E::shown(Today), E::shown(Yesterday), E::shown(Help)],
                 vec![E::shown(Month), E::shown(LastMonth)],
-                vec![E::shown(Status)],
+                vec![E::shown(Status), E::shown(Settings)],
                 vec![
                     E::hidden(Report),
                     E::hidden(Daily),
@@ -283,7 +288,8 @@ impl BotMenu {
 
     /// This menu made valid: on every level, items the level does not allow and repeats are
     /// dropped, rows wider than [`MAX_ROW`] are split, empty rows are removed, and each allowed
-    /// item missing from the level is appended, hidden, on a row of its own kind at the end.
+    /// item missing from the level — one a newer build added — is appended on a row at the end,
+    /// shown or hidden as the default layout has it.
     pub fn normalized(mut self) -> Self {
         for level in [MenuLevel::Keyboard, MenuLevel::Report] {
             let rows = std::mem::take(self.rows_mut(level));
@@ -314,7 +320,14 @@ fn normalize_level(rows: Vec<Vec<MenuEntry>>, level: MenuLevel) -> Vec<Vec<MenuE
     let missing: Vec<MenuEntry> = allowed
         .iter()
         .filter(|item| !seen.contains(item))
-        .map(|&item| MenuEntry::hidden(item))
+        .map(|&item| MenuEntry {
+            item,
+            show: BotMenu::default()
+                .rows(level)
+                .iter()
+                .flatten()
+                .any(|entry| entry.item == item && entry.show),
+        })
         .collect();
     out.extend(missing.chunks(MAX_ROW).map(<[MenuEntry]>::to_vec));
     out

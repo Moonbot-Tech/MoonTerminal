@@ -251,6 +251,12 @@ pub(crate) fn help(zone: &str, host: HostKind, owner: bool, navigation: ReplyMar
             escape(&t!("telegram.help_status_station"))
         ));
     }
+    if owner {
+        html.push_str(&format!(
+            "<p><code>/settings</code> &#183; {}</p>",
+            escape(&t!("telegram.settings.help"))
+        ));
+    }
     html.push_str(&format!("<p><b>{}</b></p><pre>/report 2026-09-01 2026-09-10</pre><pre>/daily 2026-09-01 2026-09-10</pre><p>{}</p></details>",
         escape(&t!("telegram.help_custom")), escape(&t!(limits, zone = zone))));
     html.push_str(&format!(

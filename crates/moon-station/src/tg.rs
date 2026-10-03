@@ -463,6 +463,14 @@ impl TgHost for StationHost<'_> {
         self.save_pairing(|telegram| telegram.clear_pairing())
     }
 
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
+        let saved = self.save_pairing(|telegram| telegram.bot = bot);
+        if saved {
+            log::info!("telegram: the bot's settings changed from the chat");
+        }
+        saved
+    }
+
     fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
         let local = self
             .tg

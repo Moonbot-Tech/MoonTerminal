@@ -7,6 +7,7 @@ use moon_core::config::TelegramConfig;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::commands::ParsedCommand;
+use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 use moon_core::telegram::runtime::{Response, Work};
@@ -203,7 +204,9 @@ fn run_command(
     let owner = host.config().telegram.report_access(chat_id) == Some(TelegramReportAccess::Owner);
     if matches!(
         command,
-        ParsedCommand::StationStatus | ParsedCommand::StationUpdate
+        ParsedCommand::StationStatus
+            | ParsedCommand::StationUpdate
+            | ParsedCommand::Menu(MenuAction::Settings(_))
     ) && !owner
     {
         answer(&reply, t!("telegram.refusal").to_string());

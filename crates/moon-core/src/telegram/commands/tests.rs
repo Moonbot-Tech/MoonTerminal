@@ -216,3 +216,28 @@ fn buttons_resolve_by_item_id() {
         ParsedCommand::Start
     );
 }
+
+/// The Settings section's status button reaches the station's status, under the same private
+/// identity as every callback; `/settings` opens the section.
+#[test]
+fn the_settings_entry_points_parse() {
+    use crate::telegram::menu_action::{MenuAction, SettingsAction};
+    let update: crate::telegram::api::Update = serde_json::from_value(serde_json::json!({
+        "update_id":1,"callback_query":{"id":"c","from":{"id":7},
+        "message":{"message_id":10,"chat":{"id":7,"type":"private"}},
+        "data": super::STATION_STATUS_CALLBACK}
+    }))
+    .unwrap();
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::StationStatus
+    );
+    assert_eq!(
+        parse_text("/settings", None),
+        ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root))
+    );
+    assert_eq!(
+        parse_text("/settings now", None),
+        ParsedCommand::InvalidArgument
+    );
+}

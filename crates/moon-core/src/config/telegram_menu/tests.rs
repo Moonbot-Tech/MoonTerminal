@@ -40,7 +40,7 @@ fn an_old_servers_file_loads_with_the_old_menu() {
         vec![
             vec![Today, Yesterday, Help],
             vec![Month, LastMonth],
-            vec![Status],
+            vec![Status, Settings],
         ]
     );
 }
@@ -106,10 +106,10 @@ fn normalizing_repairs_a_level() {
     assert_eq!(
         menu.keyboard.len(),
         2,
-        "empty row dropped, ten split as 8 + 2"
+        "empty row dropped, eleven split as 8 + 3"
     );
     assert_eq!(menu.keyboard[0].len(), MAX_ROW);
-    assert_eq!(menu.keyboard[1].len(), 2);
+    assert_eq!(menu.keyboard[1].len(), 3);
     assert!(
         menu.keyboard.iter().flatten().all(|e| e.show),
         "the repeated hidden Today is dropped, the first shown one stays"
@@ -117,7 +117,8 @@ fn normalizing_repairs_a_level() {
     assert_eq!(menu.report[0], vec![MenuEntry::shown(Month)]);
     let rest: Vec<MenuItem> = menu.report[1..].iter().flatten().map(|e| e.item).collect();
     assert_eq!(rest, vec![Today, Yesterday, LastMonth, Daily, Custom]);
-    assert!(menu.report[1..].iter().flatten().all(|e| !e.show));
+    // A missing item takes its default visibility: the Report section shows all by default.
+    assert!(menu.report[1..].iter().flatten().all(|e| e.show));
     for level in [MenuLevel::Keyboard, MenuLevel::Report] {
         let mut items: Vec<MenuItem> = menu.rows(level).iter().flatten().map(|e| e.item).collect();
         items.sort_by_key(|item| item.id());
@@ -227,4 +228,27 @@ fn joining_a_full_row_is_no_change() {
     let before = menu.clone();
     assert!(!menu.set_row_start(level, ninth, false));
     assert_eq!(menu, before);
+}
+
+/// A saved menu from before an item existed gets it as the default layout has it: Settings
+/// shown, an item hidden by default hidden.
+#[test]
+fn a_new_item_takes_its_default_visibility() {
+    let menu = BotMenu {
+        keyboard: vec![vec![MenuEntry::shown(Today)]],
+        report: Vec::new(),
+    }
+    .normalized();
+    let entry = |item| {
+        *menu
+            .rows(MenuLevel::Keyboard)
+            .iter()
+            .flatten()
+            .find(|e| e.item == item)
+            .unwrap()
+    };
+    assert!(entry(Settings).show);
+    assert!(entry(Status).show);
+    assert!(!entry(Report).show);
+    assert!(!entry(MiniApp).show);
 }

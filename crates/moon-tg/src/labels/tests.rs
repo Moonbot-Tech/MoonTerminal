@@ -5,7 +5,8 @@ use moon_core::telegram::{
     report::Period,
 };
 
-/// A station bot answering a non-owner keeps the terminal's two-row layout, without Status.
+/// A station bot answering a non-owner keeps the terminal's two-row layout, without Status or
+/// Settings — the same as a terminal's viewer.
 #[test]
 fn station_non_owner_keyboard_matches_the_terminal() {
     let _locale = crate::test_locale::force("ru");
@@ -23,13 +24,15 @@ fn station_non_owner_keyboard_matches_the_terminal() {
     };
     assert_eq!(
         rows(crate::HostKind::Station, false),
-        rows(crate::HostKind::Terminal, true)
+        rows(crate::HostKind::Terminal, false)
     );
+    assert_eq!(rows(crate::HostKind::Station, false).len(), 2);
 }
 
-/// The reply keyboard is two rows: short period labels with Help, then the two month labels.
+/// The reply keyboard keeps its rows: short period labels with Help, then the two month labels;
+/// the owner's has Settings below them.
 #[test]
-fn persistent_keyboard_fits_in_two_rows() {
+fn persistent_keyboard_keeps_its_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
         crate::HostKind::Terminal,
@@ -38,9 +41,10 @@ fn persistent_keyboard_fits_in_two_rows() {
     ) else {
         panic!("expected persistent keyboard")
     };
-    assert_eq!(markup.keyboard.len(), 2);
-    assert_eq!(markup.keyboard[0].len(), 3);
-    assert_eq!(markup.keyboard[1].len(), 2);
+    assert_eq!(
+        markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
+        vec![3, 2, 1]
+    );
     let command =
         |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);
     assert!(matches!(
@@ -100,7 +104,7 @@ fn only_the_station_keyboard_has_its_status() {
     };
     assert_eq!(
         markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
-        vec![3, 2, 1]
+        vec![3, 2, 2]
     );
     let command =
         |row: usize, col: usize| parse_reply_button(&markup.keyboard[row][col].text, &labels);
@@ -188,21 +192,18 @@ fn keyboard_texts(
 #[test]
 fn the_keyboard_follows_the_configured_menu() {
     let _locale = crate::test_locale::force("ru");
-    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem::*};
+    use moon_core::config::telegram_menu::{MenuEntry, MenuItem::*};
     let mut telegram = moon_core::config::TelegramConfig::default();
-    telegram.bot.menu = BotMenu {
-        keyboard: vec![
-            vec![MenuEntry::shown(Report), MenuEntry::shown(Status)],
-            vec![
-                MenuEntry::shown(Custom),
-                MenuEntry::hidden(Today),
-                MenuEntry::shown(MiniApp),
-                MenuEntry::shown(Daily),
-            ],
+    telegram.bot.menu = full_menu(vec![
+        vec![MenuEntry::shown(Report), MenuEntry::shown(Status)],
+        vec![
+            MenuEntry::shown(Custom),
+            MenuEntry::hidden(Today),
+            MenuEntry::shown(MiniApp),
+            MenuEntry::shown(Daily),
         ],
-        report: Vec::new(),
-    }
-    .normalized();
+        vec![MenuEntry::shown(Settings)],
+    ]);
     let locale = rust_i18n::locale();
     let text = |item| super::button_text(item, locale.as_ref());
     assert_eq!(
@@ -210,14 +211,20 @@ fn the_keyboard_follows_the_configured_menu() {
         vec![
             vec![text(Report), text(Status)],
             vec![text(Custom), text(MiniApp), text(Daily)],
+            vec![text(Settings)],
         ]
     );
-    for (host, owner) in [
-        (crate::HostKind::Station, false),
-        (crate::HostKind::Terminal, true),
-    ] {
+    assert_eq!(
+        keyboard_texts(crate::HostKind::Terminal, true, &telegram),
+        vec![
+            vec![text(Report)],
+            vec![text(Custom), text(MiniApp), text(Daily)],
+            vec![text(Settings)],
+        ]
+    );
+    for host in [crate::HostKind::Station, crate::HostKind::Terminal] {
         assert_eq!(
-            keyboard_texts(host, owner, &telegram),
+            keyboard_texts(host, false, &telegram),
             vec![
                 vec![text(Report)],
                 vec![text(Custom), text(MiniApp), text(Daily)]
@@ -225,7 +232,7 @@ fn the_keyboard_follows_the_configured_menu() {
         );
     }
     let labels = super::telegram_labels(crate::HostKind::Station);
-    for item in [Report, Status, Custom, MiniApp, Daily] {
+    for item in [Report, Status, Custom, MiniApp, Daily, Settings] {
         assert_eq!(
             parse_reply_button(&text(item), &labels),
             moon_core::telegram::commands::button_command(item),
@@ -239,16 +246,13 @@ fn the_keyboard_follows_the_configured_menu() {
 #[test]
 fn an_empty_keyboard_keeps_the_report_section() {
     let _locale = crate::test_locale::force("ru");
-    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem};
+    use moon_core::config::telegram_menu::{MenuEntry, MenuItem};
     let mut telegram = moon_core::config::TelegramConfig::default();
-    telegram.bot.menu = BotMenu {
-        keyboard: vec![vec![MenuEntry::shown(MenuItem::Status)]],
-        report: Vec::new(),
-    }
-    .normalized();
+    telegram.bot.menu = full_menu(vec![vec![MenuEntry::shown(MenuItem::Status)]]);
     let locale = rust_i18n::locale();
+    // A viewer: Status and Settings are not theirs.
     assert_eq!(
-        keyboard_texts(crate::HostKind::Terminal, true, &telegram),
+        keyboard_texts(crate::HostKind::Terminal, false, &telegram),
         vec![vec![super::button_text(MenuItem::Report, locale.as_ref())]]
     );
 }
@@ -274,4 +278,25 @@ fn button_texts_are_distinct_in_every_locale() {
             );
         }
     }
+}
+
+/// A keyboard of `rows` with every other item listed hidden, as a saved menu always lists them.
+fn full_menu(
+    rows: Vec<Vec<moon_core::config::telegram_menu::MenuEntry>>,
+) -> moon_core::config::telegram_menu::BotMenu {
+    use moon_core::config::telegram_menu::{BotMenu, MenuEntry, MenuItem, MenuLevel};
+    let listed: Vec<MenuItem> = rows.iter().flatten().map(|e| e.item).collect();
+    let rest: Vec<MenuEntry> = MenuLevel::Keyboard
+        .allowed()
+        .iter()
+        .filter(|item| !listed.contains(item))
+        .map(|&item| MenuEntry::hidden(item))
+        .collect();
+    let mut keyboard = rows;
+    keyboard.push(rest);
+    BotMenu {
+        keyboard,
+        report: BotMenu::default().report,
+    }
+    .normalized()
 }

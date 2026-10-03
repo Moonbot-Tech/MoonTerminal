@@ -76,6 +76,11 @@ impl crate::TgHost for StationHost {
         self.config.telegram.clear_pairing();
         true
     }
+    /// Adopt the chat's change in memory.
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
+        self.config.telegram.bot = bot;
+        true
+    }
     /// Reject money-command reads outside the fixture scope.
     fn is_panic_armed(&self, _: u64, _: &str) -> bool {
         panic!("no money commands")
@@ -220,4 +225,57 @@ fn mini_app_session_guard_rechecks_both_live_authorization_conditions() {
         http.contains("Ok(Err(_)) => status_response(StatusCode::FORBIDDEN, \"rejected\")"),
         "a host rejection must become a 403 response rather than the old timeout class"
     );
+}
+
+/// The Settings section is the owner's: a viewer is refused, the owner's switch is saved and its
+/// screen comes back.
+#[test]
+fn the_settings_section_is_the_owners() {
+    use moon_core::config::telegram_menu::{MenuItem, MenuLevel, ReportView};
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    let _locale = crate::test_locale::force("en");
+    let mut host = StationHost::new();
+    let settings = |action| super::ParsedCommand::Menu(MenuAction::Settings(action));
+    let refused = host.command(20, settings(SettingsAction::SetView(ReportView::Days)));
+    assert!(matches!(refused, super::Response::Text { .. }));
+    assert_eq!(host.config.telegram.bot.report_view, ReportView::Exchanges);
+    let shown = host.command(10, settings(SettingsAction::SetView(ReportView::Days)));
+    assert!(matches!(shown, super::Response::Rich { .. }));
+    assert_eq!(host.config.telegram.bot.report_view, ReportView::Days);
+    let shown = |host: &StationHost, item| {
+        host.config
+            .telegram
+            .bot
+            .menu
+            .rows(MenuLevel::Keyboard)
+            .iter()
+            .flatten()
+            .any(|e| e.item == item && e.show)
+    };
+    assert!(!shown(&host, MenuItem::Report));
+    let show_report = settings(SettingsAction::ShowButton(
+        MenuLevel::Keyboard,
+        MenuItem::Report,
+        true,
+    ));
+    host.command(10, show_report.clone());
+    assert!(shown(&host, MenuItem::Report));
+    // A second press of the same (now stale) button does not undo it.
+    host.command(10, show_report);
+    assert!(shown(&host, MenuItem::Report));
+    // Settings itself stays on: the chat would lose its way back here.
+    host.command(
+        10,
+        settings(SettingsAction::ShowButton(
+            MenuLevel::Keyboard,
+            MenuItem::Settings,
+            false,
+        )),
+    );
+    assert!(shown(&host, MenuItem::Settings));
+    // The station's Mini App is switched by its administrator, not from the chat.
+    assert!(matches!(
+        host.command(10, settings(SettingsAction::MiniApp(true))),
+        super::Response::Text { .. }
+    ));
 }

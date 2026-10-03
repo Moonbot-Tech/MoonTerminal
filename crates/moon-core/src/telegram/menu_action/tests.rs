@@ -87,3 +87,59 @@ fn presets_count_back_from_today() {
         assert!(ReportRequest::span(from, to).is_some());
     }
 }
+
+/// Every Settings screen and switch survives its callback, inside Telegram's 64 bytes; a level
+/// that does not allow an item, or a value out of range, is refused.
+#[test]
+fn settings_actions_round_trip() {
+    use crate::config::telegram_menu::{MenuLevel, ReportBasis, ReportView};
+    let mut actions = vec![
+        SettingsAction::Root,
+        SettingsAction::Buttons,
+        SettingsAction::View,
+        SettingsAction::Basis,
+        SettingsAction::MiniApp(true),
+        SettingsAction::MiniApp(false),
+        SettingsAction::Notify,
+        SettingsAction::Trades(true),
+        SettingsAction::Down(false),
+        SettingsAction::DownAfter(1),
+        SettingsAction::DownAfter(1440),
+        SettingsAction::Daily(true),
+        SettingsAction::DailyHours,
+        SettingsAction::DailyHour(0),
+        SettingsAction::DailyHour(23),
+    ];
+    actions.extend(ReportView::ALL.map(SettingsAction::SetView));
+    actions.extend(ReportBasis::ALL.map(SettingsAction::SetBasis));
+    for level in [MenuLevel::Keyboard, MenuLevel::Report] {
+        actions.extend(level.allowed().iter().flat_map(|&item| {
+            [true, false].map(|show| SettingsAction::ShowButton(level, item, show))
+        }));
+    }
+    for action in actions {
+        let data = MenuAction::Settings(action).callback();
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(
+            MenuAction::parse_callback(&data),
+            Some(MenuAction::Settings(action)),
+            "{data}"
+        );
+    }
+    assert_eq!(MenuAction::Settings(SettingsAction::Root).callback(), "m:s");
+    for data in [
+        "m:s:b:r:help:1",
+        "m:s:b:x:today:1",
+        "m:s:b:k:today",
+        "m:s:b:k:today:2",
+        "m:s:m",
+        "m:s:n:t",
+        "m:s:v:weekly",
+        "m:s:n:d:0",
+        "m:s:n:d:1441",
+        "m:s:n:h:24",
+        "m:s:zzz",
+    ] {
+        assert_eq!(MenuAction::parse_callback(data), None, "{data}");
+    }
+}

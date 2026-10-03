@@ -52,6 +52,14 @@ says so under its period. A terminal-hosted bot saves these with Save; a station
 them with "Apply on the server", without a restart. Chats get a changed keyboard with the bot's
 next message; a button already on an older keyboard keeps working within the chat's role.
 
+The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
+buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
+a station's is switched in the terminal's Settings), set this chat's notifications — trade
+cards, core down/back with a delay, the daily summary and its hour — and, on a station, open its
+status. Each switch saves at once; button order and rows stay in the terminal's Settings, trade
+thresholds and cores in the Mini App's Settings tab. A change made in the chat reaches an open
+terminal Settings window only where that window had not been edited.
+
 The Report button opens a menu under one message, which turns into the report pressed. Custom
 period offers the last 7 days, the last 30 days, last week, and a calendar: the first press picks
 the first day, the second the last one, up to a year later.
@@ -71,8 +79,8 @@ Changing saved permissions cancels pending deliveries through the previous servi
 already delivered Telegram messages are not recalled. Existing Telegram functionality remains
 reporting: assigning the owner role does not add trading or core-control commands in the chat.
 On a station-hosted bot, the owner also has a Status reply button and `/status`. Its status answer
-offers Update when a newer release contains the station binary. Status and Update are refused for
-viewers; a terminal-hosted bot cannot run either station action.
+offers Update when a newer release contains the station binary. Status, Update and Settings are
+refused for viewers; a terminal-hosted bot cannot run either station action.
 
 Reports
 include closed real trades and exclude emulator and deleted trades. Offline bots' local history

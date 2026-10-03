@@ -4,7 +4,7 @@
 //! Command suffixes are accepted only for the configured bot username from `getMe`.
 
 use super::api::{Message, Update};
-use super::menu_action::MenuAction;
+use super::menu_action::{MenuAction, SettingsAction};
 use super::report::{Period, ReportRequest};
 use crate::config::telegram_menu::MenuItem;
 
@@ -39,6 +39,9 @@ pub enum ParsedCommand {
 /// callbacks' `r:` namespace.
 pub const STATION_UPDATE_CALLBACK: &str = "station:update";
 
+/// Callback data of the station's status button in the bot's Settings section.
+pub const STATION_STATUS_CALLBACK: &str = "station:status";
+
 /// Chat-scoped parse result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inbound {
@@ -66,6 +69,7 @@ pub fn parse_update(update: &Update, bot_username: Option<&str>) -> Option<Inbou
             chat_id: message.chat.id,
             command: match data {
                 Some(STATION_UPDATE_CALLBACK) => ParsedCommand::StationUpdate,
+                Some(STATION_STATUS_CALLBACK) => ParsedCommand::StationStatus,
                 _ => data
                     .and_then(|data| {
                         ReportRequest::parse_callback(data)
@@ -169,6 +173,10 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
         "help" => require_no_args(args, ParsedCommand::Help),
         "miniapp" => require_no_args(args, ParsedCommand::MiniApp),
         "status" => require_no_args(args, ParsedCommand::StationStatus),
+        "settings" => require_no_args(
+            args,
+            ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
+        ),
         "pair" => parse_pair(args),
         _ => ParsedCommand::Unknown,
     }
@@ -235,6 +243,7 @@ pub fn button_command(item: MenuItem) -> ParsedCommand {
         MenuItem::Status => ParsedCommand::StationStatus,
         MenuItem::MiniApp => ParsedCommand::MiniApp,
         MenuItem::Report => ParsedCommand::Menu(MenuAction::Report),
+        MenuItem::Settings => ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
     }
 }
 

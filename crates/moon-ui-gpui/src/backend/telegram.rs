@@ -77,6 +77,53 @@ impl TgHost for GuiTgHost<'_, '_> {
         true
     }
 
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
+        let backend = &mut *self.backend;
+        let before = backend.config.telegram.bot.clone();
+        let mut candidate = backend.config.clone();
+        candidate.telegram.bot = bot.clone();
+        if candidate.save_telegram().is_err() {
+            return false;
+        }
+        backend.config = candidate;
+        // An open Settings draft follows each part it still holds as saved: a part it edited is
+        // the user's, and their Save decides it.
+        if let Some(preview) = backend.preview.as_mut() {
+            let draft = &mut preview.telegram.bot;
+            if draft.report_view == before.report_view {
+                draft.report_view = bot.report_view;
+            }
+            if draft.period_basis == before.period_basis {
+                draft.period_basis = bot.period_basis;
+            }
+            if draft.menu == before.menu {
+                draft.menu = bot.menu;
+            }
+        }
+        self.cx.notify();
+        true
+    }
+
+    fn save_mini_app(&mut self, on: bool) -> Option<bool> {
+        let backend = &mut *self.backend;
+        let before = backend.config.telegram.clone();
+        let mut candidate = backend.config.clone();
+        candidate.telegram.mini_app_enabled = on;
+        if candidate.save_telegram().is_err() {
+            return Some(false);
+        }
+        backend.config = candidate;
+        if let Some(preview) = backend.preview.as_mut()
+            && preview.telegram.mini_app_enabled == before.mini_app_enabled
+        {
+            preview.telegram.mini_app_enabled = on;
+        }
+        // As a Settings Save applies it: the Mini App follows the saved switch.
+        backend.reconcile_telegram(&before);
+        self.cx.notify();
+        Some(true)
+    }
+
     fn save_cleared_pairing(&mut self) -> bool {
         let backend = &mut *self.backend;
         let mut candidate = backend.config.clone();

@@ -266,6 +266,11 @@ impl TgHost for TickHost {
         panic!("notify tick test must not clear pairing")
     }
 
+    /// The bot's settings are not edited from a notify tick.
+    fn save_bot_settings(&mut self, _: moon_core::config::telegram_menu::BotSettings) -> bool {
+        panic!("notify tick test must not save bot settings")
+    }
+
     /// Money commands are outside this fixture.
     fn is_panic_armed(&self, _core: u64, _market: &str) -> bool {
         panic!("notify tick test must not read panic state")

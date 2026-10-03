@@ -170,6 +170,85 @@ pub(super) fn store_settings(
     }
 }
 
+/// This chat's notification settings as stored, for the bot's own Settings section.
+///
+/// Returns:
+///     The stored settings (the all-off default for a chat with none); `None` when the bot has
+///     no notifications store.
+pub(crate) fn chat_notify(host: &dyn TgHost, chat_id: i64) -> Option<NotifySettings> {
+    let store = host
+        .state()
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)?;
+    let guard = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Some(
+        guard
+            .file
+            .chats
+            .get(&chat_id)
+            .map(|row| row.settings.clone())
+            .unwrap_or_default(),
+    )
+}
+
+/// Change this chat's notification settings from the bot's own Settings section, through the
+/// same checks and ledger edges as the Mini App's save ([`store_settings`]), against the
+/// revision stored right now. The section is the owner's, so every core is visible.
+///
+/// Returns:
+///     The settings as stored after the attempt, or why nothing was saved — in words for the
+///     chat.
+pub(crate) fn save_chat_notify(
+    host: &dyn TgHost,
+    chat_id: i64,
+    edit: impl FnOnce(&mut NotifySettings),
+) -> Result<NotifySettings, String> {
+    let store = host
+        .state()
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)
+        .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
+    let mut visible: Vec<u64> = super::visible_cores(
+        host,
+        &moon_core::config::telegram_access::TelegramReportAccess::Owner,
+    )
+    .into_iter()
+    .map(|(id, _, _)| id)
+    .collect();
+    let now = i64::try_from(now_unix_secs()).unwrap_or(i64::MAX);
+    let zone = host.report_zone();
+    let mut guard = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (mut settings, revision) = match guard.file.chats.get(&chat_id) {
+        Some(row) => (row.settings.clone(), row.revision),
+        None => (NotifySettings::default(), 0),
+    };
+    // A switch here never names cores: the stored choice stays whole, a core of it that is not
+    // connected now included (the owner's grant is every core).
+    if let CoreScope::Only(ids) = &settings.trades.cores {
+        visible.extend(ids.iter().copied());
+    }
+    edit(&mut settings);
+    match store_settings(&mut guard, chat_id, settings, &visible, now, zone, revision) {
+        SaveResult::Saved => Ok(guard
+            .file
+            .chats
+            .get(&chat_id)
+            .map(|row| row.settings.clone())
+            .unwrap_or_default()),
+        SaveResult::Refused(fault) => Err(save_fault_text(fault)),
+        SaveResult::Failed(error) => {
+            log::warn!("telegram notification settings not saved for chat {chat_id}: {error}");
+            Err(t!("telegram.mini_settings_err_save").to_string())
+        }
+    }
+}
+
 /// Localized text for a refusal. The HTTP body carries this string, not the key.
 ///
 /// Args:
