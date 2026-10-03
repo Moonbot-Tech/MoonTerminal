@@ -60,7 +60,7 @@ analytics.heat.year: "Рік"
 analytics.heat.month: "Місяць"
 analytics.heat.total: "Разом"
 analytics.heat.trades_short: "%{n} уг"
-analytics.heat.cores_n: "%{n} ядер"
+analytics.heat.cores_n: "ядер: %{n}"
 analytics.heat.trades_full: "%{n} угод"
 # Profit calendar: title, month navigation, KPIs, and bottom bar.
 analytics.cal.title: "Календар прибутку"

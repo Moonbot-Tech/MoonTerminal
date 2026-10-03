@@ -279,10 +279,53 @@ fn languages_match_language_all() {
     );
 }
 
+/// A rustfmt wrap of `Language::ALL` must still resolve every shipped code.
+///
+/// Once the array exceeds the width, rustfmt puts `= [` on the declaration line
+/// and each `Language::X` on its own line. A reader that keeps only the
+/// `pub const ALL` line then sees an empty list, so this contract fails on a
+/// formatting edit and hides a real language drift.
+#[test]
+fn language_all_codes_reads_a_wrapped_array() {
+    let wrapped = r#"
+impl Language {
+    pub const ALL: [Language; 4] = [
+        Language::Ru,
+        Language::En,
+        Language::Es,
+        Language::Uk,
+    ];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Language::Ru => "ru",
+            Language::En => "en",
+            Language::Es => "es",
+            Language::Uk => "uk",
+        }
+    }
+}
+"#;
+    let codes = language_all_codes(wrapped);
+    assert_eq!(
+        codes,
+        BTreeSet::from([
+            "en".to_string(),
+            "es".to_string(),
+            "ru".to_string(),
+            "uk".to_string(),
+        ])
+    );
+}
+
 /// Codes of the variants listed in `Language::ALL`, resolved through `code()`.
 ///
-/// The bracketed list after `=` is the value. The `[Language; N]` type before `=` is ignored.
-/// Each `Language::X` is mapped with the `code()` match arm, not with `label()` or `from_code`.
+/// The initializer may be one line or a rustfmt wrap. The span runs from
+/// `pub const ALL` through the statement's closing `];`, so a value bracket
+/// that starts on the next line is still part of the list. The bracketed list
+/// after `=` is the value. The `[Language; N]` type before `=` is ignored.
+/// Each `Language::X` is mapped with the `code()` match arm, not with `label()`
+/// or `from_code`.
 ///
 /// Args:
 ///     lang_rs: Full text of `crates/moon-core/src/config/lang.rs`.
@@ -291,11 +334,16 @@ fn languages_match_language_all() {
 ///     One code per `ALL` variant. Panics when `ALL` or a `code()` arm is missing.
 fn language_all_codes(lang_rs: &str) -> BTreeSet<String> {
     let arms = code_arms(lang_rs);
-    let all_line = lang_rs
-        .lines()
-        .find(|line| line.contains("pub const ALL"))
+    let start = lang_rs
+        .find("pub const ALL")
         .expect("Language::ALL must stay in crates/moon-core/src/config/lang.rs");
-    let after_eq = all_line
+    let tail = &lang_rs[start..];
+    let end = tail
+        .find("];")
+        .expect("Language::ALL must assign a bracketed list");
+    // `end` points at `]`; include `];` so the value's closing bracket stays in the span.
+    let span = &tail[..end + 2];
+    let after_eq = span
         .split_once('=')
         .expect("Language::ALL must assign a list")
         .1;
