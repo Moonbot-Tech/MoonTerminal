@@ -769,7 +769,7 @@ fn rebuild_sync(
 /// send produced; the caller sends them as `FeedMsg::CoreConfigEdit` and stamps their clock, the
 /// same as the events an event-batch-driven `SharedConfigSequence::drive` produces.
 pub(super) fn drain_commands(
-    cmd_rx: &Receiver<CoreCmd>,
+    cmd_rx: &Receiver<crate::feed::QueuedCmd>,
     client: &MoonClient,
     server: &ServerConfig,
     latest_market_role: &LatestMarketRole,
@@ -784,6 +784,7 @@ pub(super) fn drain_commands(
     core_config_events: &mut Vec<CoreConfigEditEvent>,
     chart_text: &mut ChartTextWanted,
     trace_asks: &mut Vec<i64>,
+    ready_since: Option<std::time::Instant>,
 ) -> CommandDrain {
     apply_latest_market_role(
         latest_market_role,
@@ -794,7 +795,8 @@ pub(super) fn drain_commands(
     );
     let mut drained = 0usize;
     loop {
-        match cmd_rx.try_recv() {
+        // A live action that waited out a lost connection is dropped here, never delivered late.
+        match super::stale::recv_fresh(cmd_rx, ready_since, server.id) {
             Ok(CoreCmd::SetMarket { .. }) => {}
             Ok(CoreCmd::StrategiesAction { checks, start_stop }) => {
                 // 1. Synchronize checkboxes: update local `checked` on changed entries and send

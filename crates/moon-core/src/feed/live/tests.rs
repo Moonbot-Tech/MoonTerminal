@@ -1,5 +1,5 @@
 use super::*;
-use crate::feed::{CoreCmdTx, CoreStartupState, LatestMarketRole};
+use crate::feed::{CoreCmd, CoreCmdTx, CoreStartupState, LatestMarketRole};
 use moonproto::state::BalanceEvent;
 use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
 use std::net::{IpAddr, Ipv4Addr};
@@ -32,7 +32,7 @@ fn latest_account_only_role_bypasses_a_long_command_backlog() {
         .unwrap();
 
     assert!(matches!(
-        data_rx.try_recv(),
+        data_rx.try_recv().map(|queued| queued.cmd),
         Ok(CoreCmd::SetMarket { provider: true, .. })
     ));
     let mut market_role = MarketRoleState::default();

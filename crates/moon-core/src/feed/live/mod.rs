@@ -19,6 +19,7 @@ mod identity_refresh;
 mod market_role;
 mod report_sync;
 mod shared_config;
+mod stale;
 mod startup_watchdog;
 mod telegram;
 mod temp_blacklist;
@@ -46,10 +47,10 @@ use super::strategies::{
     strat_db_dump, strat_display_name, strat_kind_name,
 };
 use super::{
-    ChartTextRows, ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine,
-    CoreStartupStatus, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx,
-    LatestMarketRole, SharedMoonClient, StrategyEditPhase, StrategyEditResolution,
-    StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
+    ChartTextRows, ConnStatus, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
+    CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    SharedMoonClient, StrategyEditPhase, StrategyEditResolution, StrategyEditResult,
+    StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::order_traces::{AskSink, TraceDbMsg};
@@ -483,7 +484,7 @@ pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
     tx: &FeedTx,
-    cmd_rx: &Receiver<CoreCmd>,
+    cmd_rx: &Receiver<crate::feed::QueuedCmd>,
     wake_tx: &Sender<()>,
     wake_rx: &Receiver<()>,
     reports: Option<&ReportTx>,
@@ -748,6 +749,9 @@ pub(super) fn run(
     // MoonBot never answers that method, and a warn per retry for the life of the session would be
     // noise. The first failure is worth seeing; the rest are not.
     let mut is_ready = false;
+    // When the connection last became operational, `None` while it is not: the gate a live action
+    // in the command queue must pass (`stale`) so one that waited out an outage is not delivered.
+    let mut ready_since: Option<Instant> = None;
     let mut api_expiry_failed_before = false;
     // Per-connection clock-offset estimator, fed every `Event::ServerLog` this connection
     // receives regardless of `feed.log`; see the sampling loop below and `note_ready` at Ready.
@@ -806,6 +810,7 @@ pub(super) fn run(
             &mut core_config_events,
             chart_text,
             &mut trace_asks,
+            ready_since,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
@@ -1079,7 +1084,17 @@ pub(super) fn run(
             // Ready buys nothing but a pending timeout. Reaching Ready is also the moment to ask —
             // the key may have been replaced while this core was away — subject to the poll's own
             // cooldown, which is what keeps a flapping core from asking on every reconnect.
-            is_ready = st == ConnStatus::Ready;
+            let ready = st == ConnStatus::Ready;
+            if ready && !is_ready {
+                ready_since = Some(Instant::now());
+            } else if !ready {
+                // Lost, including a moonproto reconnect inside this run: what still waits in the
+                // settings sequence would otherwise go out on the next Ready (`stale`).
+                if ready_since.take().is_some() {
+                    client_settings_sequence.drop_orders_of_lost_connection(server.id);
+                }
+            }
+            is_ready = ready;
             if is_ready {
                 account_reconciliation.poll_api_expiry_on_ready(Instant::now());
             }

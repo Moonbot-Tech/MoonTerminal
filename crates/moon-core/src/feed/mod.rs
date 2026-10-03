@@ -821,17 +821,33 @@ impl LatestMarketRole {
     }
 }
 
+/// One command in a core's queue, stamped when it was queued.
+///
+/// The stamp is what lets the live loop refuse a trading action that waited out a lost connection
+/// (`live::stale`): the queue outlives a disconnect, so without it a Stop or an order queued during
+/// an outage would fire whenever the core came back.
+pub(crate) struct QueuedCmd {
+    /// When the command entered the queue.
+    pub(crate) at: Instant,
+    /// The command itself.
+    pub(crate) cmd: CoreCmd,
+}
+
 /// Command sender that wakes the live loop and publishes market roles outside the bounded backlog.
 #[derive(Clone)]
 pub struct CoreCmdTx {
-    data: Sender<CoreCmd>,
+    data: Sender<QueuedCmd>,
     wake: Sender<()>,
     latest_market_role: LatestMarketRole,
 }
 
 impl CoreCmdTx {
     /// Creates a sender backed by one command queue, wake channel, and market-role snapshot.
-    fn new(data: Sender<CoreCmd>, wake: Sender<()>, latest_market_role: LatestMarketRole) -> Self {
+    fn new(
+        data: Sender<QueuedCmd>,
+        wake: Sender<()>,
+        latest_market_role: LatestMarketRole,
+    ) -> Self {
         Self {
             data,
             wake,
@@ -858,12 +874,18 @@ impl CoreCmdTx {
             }),
             _ => None,
         };
+        let queued = QueuedCmd {
+            at: Instant::now(),
+            cmd,
+        };
+        // The caller gets its own command back, as before the stamp existed.
+        let unsent = |error: SendError<QueuedCmd>| SendError(error.0.cmd);
         if let Some(assignment) = assignment {
             let mut latest = self.latest_market_role.lock();
-            self.data.send(cmd)?;
+            self.data.send(queued).map_err(unsent)?;
             *latest = Some(assignment);
         } else {
-            self.data.send(cmd)?;
+            self.data.send(queued).map_err(unsent)?;
         }
         let _ = self.wake.send(());
         Ok(())
@@ -926,7 +948,7 @@ pub fn spawn(
 ) -> FeedHandle {
     let (data_tx, rx) = std::sync::mpsc::channel();
     let tx = FeedTx::new(data_tx, wake);
-    let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<CoreCmd>();
+    let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<QueuedCmd>();
     let (run_wake_tx, run_wake_rx) = std::sync::mpsc::channel::<()>();
     let latest_market_role = LatestMarketRole::default();
     let cmd_tx = CoreCmdTx::new(cmd_data_tx, run_wake_tx.clone(), latest_market_role.clone());
@@ -951,6 +973,10 @@ pub fn spawn(
             let mut chart_text = live::ChartTextWanted::default();
             loop {
                 let started = Instant::now();
+                // A new connection: an order still waiting from the previous one goes, said out
+                // loud (`live::stale`). The run also drops it the moment the connection stops
+                // being operational; this covers a run that ended first.
+                client_settings_sequence.drop_orders_of_lost_connection(server.id);
                 client_settings_sequence.prepare_reconnect();
                 shared_config_sequence.prepare_reconnect();
                 match live::run(
@@ -1027,8 +1053,10 @@ pub fn spawn(
                         // now" from the coordinator.
                         //
                         // The accepted cost: a coordinator command queued in the moment the run was
-                        // dying loses its nudge and waits out the backoff. The command itself is
-                        // safe in `cmd_rx` and runs when the next attempt starts. The window is the
+                        // dying loses its nudge and waits out the backoff. Desired state is safe in
+                        // `cmd_rx` and runs when the next attempt starts; a live action, including
+                        // an order already in the settings sequence, is dropped instead
+                        // (`live::stale`). The window is the
                         // teardown itself, and the wait it falls into is `BACKOFF_MIN` until a core
                         // has failed repeatedly — which is exactly when an instant retry is the
                         // wrong answer anyway.

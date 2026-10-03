@@ -1,6 +1,6 @@
 use super::{
     ClientSettingsSequence, GroupExitSettings, MAX_EXIT_ATTEMPTS, ManualOrder, ManualOrderKind,
-    SequenceAction, TakeProfitMode, client_settings_from_proto,
+    SequenceAction, SequenceOp, SettingsMutation, TakeProfitMode, client_settings_from_proto,
 };
 use crate::feed::ClientSettingsEdit;
 
@@ -721,4 +721,54 @@ fn a_core_restart_forgets_the_orders_queued_for_the_old_process() {
             action_name(&other)
         ),
     }
+}
+
+/// Regression target: a manual order queued before a lost connection placed once the core is back,
+/// priced off a chart that may be minutes old. The settings queued beside it, a temporary ban
+/// included, keep their place.
+///
+/// Mutation: make `drop_orders_of_lost_connection` a no-op. The order is then still the next thing
+/// placed after the reconnect.
+#[test]
+fn a_lost_connection_drops_waiting_orders_but_keeps_settings() {
+    let core_holds = moonproto::ClientSettingsCommand::default();
+    let mut sequence = ClientSettingsSequence::new();
+    sequence.enqueue_order(waiting_order(0.074, 16.0));
+    sequence.enqueue_blacklist(true, "BTC".into());
+    sequence.enqueue_temp_blacklist(
+        vec![("ACEUSDT".into(), std::time::Duration::from_secs(3600))],
+        Vec::new(),
+    );
+
+    sequence.drop_orders_of_lost_connection(TEST_CORE);
+    sequence.prepare_reconnect();
+
+    assert!(
+        !sequence
+            .queue
+            .iter()
+            .any(|op| matches!(op, SequenceOp::Order(_))),
+        "no order from the lost connection may stay queued"
+    );
+    assert!(
+        sequence.queue.iter().any(|op| matches!(
+            op,
+            SequenceOp::Mutation(SettingsMutation::TempBlacklist { .. })
+        )),
+        "a temporary ban or lift already in the sequence is desired state and stays queued"
+    );
+    assert!(
+        sequence
+            .queue
+            .iter()
+            .any(|op| matches!(op, SequenceOp::Mutation(SettingsMutation::Blacklist { .. }))),
+        "the blacklist edit must stay queued"
+    );
+    assert!(
+        !matches!(
+            sequence.next_action(&core_holds, TEST_CORE),
+            SequenceAction::Place(_)
+        ),
+        "an order was placed after the reconnect"
+    );
 }
