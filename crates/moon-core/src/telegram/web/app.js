@@ -2206,9 +2206,13 @@
             if (entry.id === settingsCategoryId) category = entry;
         });
         if (category) {
-            var back = button("settings-back", tr("mini_back"), function () { settingsNavigate(null); });
-            back.setAttribute("data-settings-back", "");
-            host.appendChild(back);
+            // Telegram's header back arrow already returns to the list; the text link is only
+            // for a client without that button.
+            if (!headerBackAvailable()) {
+                var back = button("settings-back", tr("mini_back"), function () { settingsNavigate(null); });
+                back.setAttribute("data-settings-back", "");
+                host.appendChild(back);
+            }
             host.appendChild(el("h2", "settings-title", tr(category.titleKey)));
             category.render(host);
         } else {

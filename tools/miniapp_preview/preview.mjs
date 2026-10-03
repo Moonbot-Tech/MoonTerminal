@@ -397,7 +397,7 @@ const SCREENS = [
         if (!(await p.evaluate(() => document.querySelector(".settings-core-list").scrollTop > 0))) {
             throw new Error("core selection must retain the list's scroll position");
         }
-        await p.click("[data-settings-back]");
+        await p.evaluate(() => window.previewBack());
         if (await p.locator("[data-settings-card]").count() !== 0) throw new Error("back must return to registry");
         await p.click('[data-settings-category="notifications"]');
         if (await p.getAttribute('[data-settings-core="40"]', "aria-pressed") !== "true") {
@@ -680,7 +680,7 @@ async function interactions(browser, html, texts) {
     expect(await page.locator("[data-settings-save]").isDisabled(), "an empty explicit core scope must not save as All");
     await page.fill("[data-settings-search]", "Beta");
     await page.click('[data-settings-core="2"]');
-    await page.click("[data-settings-back]");
+    await page.evaluate(() => window.previewBack());
     expect((await page.locator(".settings-category-summary").innerText()) === texts.mini_settings_summary_trades,
         "category summary must reflect enabled trades in the retained draft");
     await page.click('[data-settings-category="notifications"]');
