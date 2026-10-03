@@ -1,0 +1,22 @@
+{
+  "settings": {
+    "trades": {
+      "on": false,
+      "cores": { "kind": "all" },
+      "min_volume_usd": null,
+      "profit_at_least_usd": null,
+      "loss_at_least_usd": null
+    },
+    "down": { "on": false, "after_minutes": 5 },
+    "daily": { "on": false, "hour": 21, "minute": 0 }
+  },
+  "cores": [
+    { "id": 1, "name": "Alpha", "exchange": "Binance" },
+    { "id": 2, "name": "Beta", "exchange": "Bybit" },
+    { "id": 3, "name": "Gamma", "exchange": "OKX" }
+  ],
+  "zone": "UTC",
+  "revision": 0,
+  "error": null,
+  "fault": null
+}

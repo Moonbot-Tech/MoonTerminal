@@ -977,6 +977,14 @@ pub fn telegram_web_asset_dir() -> PathBuf {
     telegram_dir().join("web")
 }
 
+/// Per-chat Telegram notification settings, announce ledger, and outbox.
+///
+/// Returns:
+///     `notifications.json` under [`telegram_dir`]. Constructing the path does not create it.
+pub fn telegram_notifications() -> PathBuf {
+    telegram_dir().join("notifications.json")
+}
+
 /// Legacy combined encrypted config for one-time migration. Read from beside the executable,
 /// where older builds left it.
 pub fn legacy_enc_path() -> PathBuf {

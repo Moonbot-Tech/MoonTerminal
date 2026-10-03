@@ -4,6 +4,7 @@ use super::{
     web::MiniAppApiRequest,
 };
 use crate::config::TelegramConfig;
+use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex, Weak,
     mpsc::{self, Receiver, SyncSender},
@@ -14,7 +15,12 @@ mod bot;
 mod history;
 mod menu;
 pub mod mini_app;
+mod notify;
+pub use notify::{NotifyStore, cores_kept, purge_outbox, purge_outbox_where, push_outbox};
 /// Authenticated work drained by the application's coordination loop.
+// `MiniApp` carries the settings document, so this variant is the large one.
+// Boxing it would allocate on every Mini App request.
+#[allow(clippy::large_enum_variant)]
 pub enum Work {
     Command {
         chat_id: i64,
@@ -58,26 +64,49 @@ pub struct TelegramService {
     authorization: SharedAuthorization,
     mini_config: Arc<Mutex<TelegramConfig>>,
     labels: Arc<Mutex<std::collections::BTreeMap<String, String>>>,
+    notifications: Option<Arc<Mutex<NotifyStore>>>,
 }
 impl TelegramService {
     /// Start background transport only for a non-empty saved token.
-    pub fn start(config: &TelegramConfig) -> Option<Self> {
-        Self::start_localized(config, std::collections::BTreeMap::new())
+    ///
+    /// Args:
+    ///     config: Saved token and chats. An empty token starts nothing.
+    ///     notifications_path: Durable outbox. `None` starts no sender and keeps no store.
+    pub fn start(config: &TelegramConfig, notifications_path: Option<PathBuf>) -> Option<Self> {
+        Self::start_localized(
+            config,
+            std::collections::BTreeMap::new(),
+            notifications_path,
+        )
     }
 
     /// Start transport carrying localized application strings without interpreting them.
+    ///
+    /// Args:
+    ///     config: Saved token and chats. An empty token starts nothing.
+    ///     labels: Localized button text. The transport does not interpret it.
+    ///     notifications_path: Durable outbox. `None` starts no sender and keeps no store.
     pub fn start_localized(
         config: &TelegramConfig,
         labels: std::collections::BTreeMap<String, String>,
+        notifications_path: Option<PathBuf>,
     ) -> Option<Self> {
-        Self::start_localized_with_menu_cleanup(config, labels, &[])
+        Self::start_localized_with_menu_cleanup(config, labels, &[], notifications_path)
     }
 
     /// Restart the same bot with retired chat IDs solely for clearing their native menus.
+    ///
+    /// Args:
+    ///     config: Saved token and chats. An empty token starts nothing.
+    ///     labels: Localized button text. The transport does not interpret it.
+    ///     retired_chats: Chats whose native menu is cleared and then forgotten.
+    ///     notifications_path: Durable outbox. `None` starts no sender and keeps no store.
+    ///         A file that cannot be parsed disables notifications and leaves the file untouched.
     pub fn start_localized_with_menu_cleanup(
         config: &TelegramConfig,
         labels: std::collections::BTreeMap<String, String>,
         retired_chats: &[i64],
+        notifications_path: Option<PathBuf>,
     ) -> Option<Self> {
         if config.token.is_empty() {
             return None;
@@ -118,6 +147,27 @@ impl TelegramService {
                 reason: mini_app::MiniAppFailReason::Server,
             }));
         }
+        let notifications = match notifications_path {
+            Some(path) => match notify::NotifyStore::open(path) {
+                Ok(mut store) => {
+                    if let Err(error) = store.forget_unpaired(&config.authorized_chat_ids) {
+                        log::warn!("telegram notifications kept unpaired chats: {error}");
+                    }
+                    let store = Arc::new(Mutex::new(store));
+                    joins.push(notify::spawn_sender(
+                        config.token.clone(),
+                        Arc::downgrade(&alive),
+                        Arc::clone(&store),
+                    ));
+                    Some(store)
+                }
+                Err(error) => {
+                    log::warn!("telegram notifications disabled: {error}");
+                    None
+                }
+            },
+            None => None,
+        };
         Some(Self {
             alive: Some(alive),
             joins,
@@ -125,7 +175,17 @@ impl TelegramService {
             authorization,
             mini_config,
             labels,
+            notifications,
         })
+    }
+
+    /// The durable outbox, when `start` was given a notifications path that loaded.
+    ///
+    /// Returns:
+    ///     The store the moon-tg host edits, or `None` when no path was given or the file
+    ///     failed to load. Callers handle `None`; this method does not panic.
+    pub fn notify_store(&self) -> Option<Arc<Mutex<NotifyStore>>> {
+        self.notifications.clone()
     }
     /// Drain one event without waiting on transport.
     pub fn try_recv(&self) -> Option<Work> {

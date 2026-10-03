@@ -5,6 +5,7 @@
 //! [`crate::tick`] — so no method needs to be thread-safe; the only work that leaves that thread
 //! is a [`Job`], and its result comes back through [`Finish`] on the same owner thread.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::SyncSender;
 
@@ -81,6 +82,12 @@ impl ReportRevision {
 pub trait TgHost {
     /// Which process this is.
     fn kind(&self) -> HostKind;
+
+    /// Durable notifications file for this host.
+    ///
+    /// The station keeps it beside `telegram.json`. The terminal keeps it in the telegram
+    /// directory. Constructing the path does not create the file.
+    fn notifications_path(&self) -> PathBuf;
 
     /// Saved configuration: the cores (`servers`), their order (`core_sort`) and `telegram`.
     fn config(&self) -> &AppConfig;

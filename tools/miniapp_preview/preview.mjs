@@ -137,7 +137,9 @@ async function openPage(browser, html, viewport, theme, api, log) {
 }
 
 // Every read route answered from the fixtures; commands succeed.
+// A save on this page echoes into the next read so a later visit is not a stale draft.
 function defaultApi() {
+    let notifySaved = null;
     return {
         "/api/session": { ok: true },
         "/api/report": (raw) => {
@@ -145,12 +147,28 @@ function defaultApi() {
             return { body: fixture(period === "month" || period === "last_month" ? "report_month" : "report_today") };
         },
         "/api/cores": fixture("cores"),
-        "/api/balances": fixture("balances"),
         "/api/orders": fixture("orders"),
         "/api/trades": fixture("trades"),
         "/api/strategies": fixture("strategies"),
         "/api/strategy/toggle": OK,
         "/api/order/cancel": OK,
+        "/api/notify": () => ({ body: notifySaved || fixture("notify") }),
+        "/api/notify/save": (raw) => {
+            let posted = {};
+            try { posted = JSON.parse(raw || "{}"); } catch { posted = {}; }
+            const base = fixture("notify");
+            const revision = typeof posted.revision === "number"
+                ? posted.revision + 1
+                : (typeof base.revision === "number" ? base.revision : 0);
+            notifySaved = {
+                settings: posted.settings || base.settings,
+                cores: base.cores,
+                zone: base.zone,
+                revision,
+                error: null,
+            };
+            return { body: notifySaved };
+        },
     };
 }
 
@@ -164,6 +182,21 @@ const openFirstGroup = async (page, tab) => {
     await page.click(`section[data-tab="${tab}"] .group-head`);
     await settle(page);
 };
+
+// The bar is five buttons, in this order, and the removed Balances tab stays gone.
+async function assertNav(page) {
+    const state = await page.evaluate(() => {
+        const buttons = [...document.querySelectorAll("#app-nav button")];
+        return {
+            tabs: buttons.map((node) => node.getAttribute("data-tab")),
+            stray: !!document.querySelector('[data-tab="balances"]'),
+        };
+    });
+    const wanted = "report,cores,deals,strategies,settings";
+    if (state.tabs.join(",") !== wanted || state.stray) {
+        throw new Error(`nav must be five buttons ${wanted} and no balances tab: ${JSON.stringify(state)}`);
+    }
+}
 
 const openTrade = async (page, nth) => {
     await nav(page, "deals"); await page.click('[data-seg="trades"]');
@@ -187,6 +220,133 @@ async function checkDealsSelection(page, expected) {
     if (state.order.join(",") !== "trades,orders" || state.selected.join(",") !== expected || state.visible.join(",") !== expected) {
         throw new Error(`Trades navigation must show Closed first and select ${expected}: ${JSON.stringify(state)}`);
     }
+}
+
+const SETTINGS_SAVE_ERROR = "Выберите хотя бы одно доступное ядро";
+
+function notifyTradesOn() {
+    const base = fixture("notify");
+    const settings = JSON.parse(JSON.stringify(base.settings));
+    settings.trades.on = true;
+    settings.trades.cores = { kind: "only", ids: [1, 2] };
+    settings.trades.min_volume_usd = 100;
+    settings.trades.profit_at_least_usd = 5;
+    settings.trades.loss_at_least_usd = null;
+    return Object.assign({}, base, { settings });
+}
+
+// Horizontal overflow or a label that ellipsizes. Vertical scroll is allowed.
+async function assertSettingsFit(page) {
+    const clip = await page.evaluate(() => {
+        const root = document.documentElement;
+        if (root.scrollWidth > window.innerWidth + 1) return "page";
+        const nodes = document.querySelectorAll(
+            'section[data-tab="settings"] .name, section[data-tab="settings"] .chip, section[data-tab="settings"] .settings-note, section[data-tab="settings"] .settings-label, section[data-tab="settings"] .settings-caption'
+        );
+        for (const node of nodes) {
+            const rect = node.getBoundingClientRect();
+            if (rect.width > 0 && (rect.left < -1 || rect.right > window.innerWidth + 1)) return "wide:" + node.textContent;
+            if (node.scrollWidth > node.clientWidth + 1) return "clipped:" + node.textContent;
+        }
+        return "";
+    });
+    if (clip) throw new Error(`settings must not clip: ${clip}`);
+}
+
+// A long coin quantity ellipsizes, and the value stays inside the row and the viewport.
+async function assertCoinQtyClips(page) {
+    const fault = await page.evaluate(() => {
+        const qty = [...document.querySelectorAll(".coin-qty")].find((node) =>
+            (node.textContent || "").includes("123456789")
+        );
+        if (!qty) return "missing TEST quantity";
+        const row = qty.closest(".coin-row");
+        if (!row) return "quantity has no row";
+        const value = row.querySelector(".balance-figure");
+        if (!value) return "row has no value";
+        const rowBox = row.getBoundingClientRect();
+        const valueBox = value.getBoundingClientRect();
+        if (valueBox.right > rowBox.right + 1) return "value past the row";
+        if (rowBox.right > window.innerWidth + 1) return "row past the viewport";
+        if (window.innerWidth <= 340 && qty.scrollWidth <= qty.clientWidth + 1) {
+            return "quantity did not clip";
+        }
+        return "";
+    });
+    if (fault) throw new Error(`coin quantity must stay in the row: ${fault}`);
+}
+
+async function assertSettingsDefault(page) {
+    const state = await page.evaluate(() => {
+        const pressed = (sel) => {
+            const node = document.querySelector(sel);
+            return node ? node.getAttribute("aria-pressed") : null;
+        };
+        const field = (sel) => {
+            const node = document.querySelector(sel);
+            return node ? { value: node.value, disabled: node.disabled } : null;
+        };
+        const save = document.querySelector("[data-settings-save]");
+        return {
+            cards: document.querySelectorAll("[data-settings-card]").length,
+            note: !!document.querySelector("[data-settings-note]"),
+            hint: !!document.querySelector("[data-settings-hint]"),
+            chips: document.querySelectorAll(".settings-chips .chip").length,
+            trades: pressed('[data-settings-card="trades"] [data-settings="card-on"]'),
+            down: pressed('[data-settings-card="down"] [data-settings="card-on"]'),
+            daily: pressed('[data-settings-card="daily"] [data-settings="card-on"]'),
+            all: pressed('[data-settings="scope-all"]'),
+            minutes: field('[data-settings="minutes"]'),
+            time: field('[data-settings="time"]'),
+            saveDisabled: save ? save.disabled : null,
+        };
+    });
+    const time = state.time && (state.time.value === "21:00" || state.time.value === "21:00:00");
+    if (state.cards !== 3 || !state.note || !state.hint || state.chips !== 4
+        || state.trades !== "false" || state.down !== "false" || state.daily !== "false"
+        || state.all !== "true"
+        || !state.minutes || state.minutes.value !== "5" || !state.minutes.disabled
+        || !time || !state.time.disabled
+        || state.saveDisabled !== true) {
+        throw new Error(`settings default must be three off cards: ${JSON.stringify(state)}`);
+    }
+    await assertSettingsFit(page);
+}
+
+async function assertSettingsTradesOn(page) {
+    const state = await page.evaluate(() => {
+        const pressed = (sel) => {
+            const node = document.querySelector(sel);
+            return node ? node.getAttribute("aria-pressed") : null;
+        };
+        const field = (sel) => {
+            const node = document.querySelector(sel);
+            return node ? { value: node.value, disabled: node.disabled } : null;
+        };
+        return {
+            trades: pressed('[data-settings-card="trades"] [data-settings="card-on"]'),
+            all: pressed('[data-settings="scope-all"]'),
+            c1: pressed('[data-settings-core="1"]'),
+            c2: pressed('[data-settings-core="2"]'),
+            c3: pressed('[data-settings-core="3"]'),
+            volumeOn: pressed('[data-settings="volume-switch"]'),
+            volume: field('[data-settings="min-volume"]'),
+            profitOn: pressed('[data-settings="profit-switch"]'),
+            profit: field('[data-settings="profit"]'),
+            lossOn: pressed('[data-settings="loss-switch"]'),
+            loss: field('[data-settings="loss"]'),
+            hint: !!document.querySelector("[data-settings-hint]"),
+        };
+    });
+    if (state.trades !== "true" || state.all !== "false"
+        || state.c1 !== "true" || state.c2 !== "true" || state.c3 !== "false"
+        || state.volumeOn !== "true" || !state.volume || state.volume.value !== "100" || state.volume.disabled
+        || state.profitOn !== "true" || !state.profit || state.profit.value !== "5" || state.profit.disabled
+        || state.lossOn !== "false" || !state.loss || !state.loss.disabled
+        || state.hint) {
+        throw new Error(`settings trades-on must select two cores and two thresholds: ${JSON.stringify(state)}`);
+    }
+    await assertSettingsFit(page);
 }
 
 // Each screen starts from a fresh page; `api` overrides replace fixture routes.
@@ -239,9 +399,73 @@ const SCREENS = [
     { name: "trade-sheet-strategy", run: async (p) => { await openTrade(p, 1); } },
     { name: "trade-sheet-unknown", run: async (p) => { await openTrade(p, 5); } },
     { name: "strategies-open", run: async (p) => { await nav(p, "strategies"); await openFirstGroup(p, "strategies"); } },
-    { name: "balances-masked", run: async (p) => { await nav(p, "balances"); await openFirstGroup(p, "balances"); } },
-    { name: "balances-unmasked", run: async (p) => {
-        await nav(p, "balances"); await p.click(".eye-btn"); await openFirstGroup(p, "balances");
+    // Cores carries the account total. Figures stay masked until the eye toggle.
+    { name: "cores-total-masked", run: async (p) => { await nav(p, "cores"); await openFirstGroup(p, "cores"); } },
+    { name: "cores-total-unmasked", run: async (p) => {
+        await nav(p, "cores"); await p.click(".eye-btn"); await openFirstGroup(p, "cores");
+    } },
+    { name: "cores-coins-expanded", run: async (p) => {
+        await nav(p, "cores");
+        await p.click(".eye-btn");
+        await openFirstGroup(p, "cores");
+        await p.click('section[data-tab="cores"] .coin-chev');
+        await settle(p);
+        await assertCoinQtyClips(p);
+    } },
+    { name: "settings-default", run: async (p) => {
+        await nav(p, "settings");
+        await p.waitForSelector('[data-settings-card="trades"]');
+        await assertSettingsDefault(p);
+    } },
+    { name: "settings-trades-on", api: { "/api/notify": () => ({ body: notifyTradesOn() }) }, run: async (p) => {
+        await nav(p, "settings");
+        await p.waitForSelector('[data-settings-card="trades"]');
+        await assertSettingsTradesOn(p);
+    } },
+    { name: "settings-save-error", api: {
+        "/api/notify/save": () => ({ body: Object.assign({}, fixture("notify"), { error: SETTINGS_SAVE_ERROR }) }),
+    }, run: async (p) => {
+        await nav(p, "settings");
+        await p.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
+        await p.click('[data-settings-card="trades"] [data-settings="card-on"]');
+        await settle(p);
+        await p.click("[data-settings-save]");
+        await p.waitForFunction((wanted) => {
+            const node = document.querySelector("[data-settings-status]");
+            return node && !node.hidden && node.textContent === wanted;
+        }, SETTINGS_SAVE_ERROR);
+        const pressed = await p.getAttribute('[data-settings-card="trades"] [data-settings="card-on"]', "aria-pressed");
+        if (pressed !== "true") throw new Error("a refused save must keep the draft switch on");
+        if (await p.locator("[data-settings-save]").isDisabled()) {
+            throw new Error("save stays enabled after a refused save while the draft is still valid");
+        }
+        await p.locator("[data-settings-status]").scrollIntoViewIfNeeded();
+        await assertSettingsFit(p);
+    } },
+    { name: "settings-draft-survives", run: async (p) => {
+        await nav(p, "settings");
+        await p.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
+        await p.click('[data-settings-card="trades"] [data-settings="card-on"]');
+        await settle(p);
+        await p.click('[data-settings="volume-switch"]');
+        await settle(p);
+        await p.fill('[data-settings="min-volume"]', "42");
+        await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await p.waitForTimeout(600);
+        const state = await p.evaluate(() => {
+            const card = document.querySelector('[data-settings-card="trades"] [data-settings="card-on"]');
+            const input = document.querySelector('[data-settings="min-volume"]');
+            return {
+                pressed: card ? card.getAttribute("aria-pressed") : null,
+                value: input ? input.value : null,
+                disabled: input ? input.disabled : null,
+            };
+        });
+        if (state.pressed !== "true" || state.value !== "42" || state.disabled) {
+            throw new Error(`a visibility return must keep the settings draft: ${JSON.stringify(state)}`);
+        }
+        await p.locator('[data-settings="min-volume"]').scrollIntoViewIfNeeded();
+        await assertSettingsFit(p);
     } },
     { name: "empty-orders", api: { "/api/orders": { orders: [], can_control: true } }, run: async (p) => {
         await nav(p, "deals"); await p.click('[data-seg="orders"]'); await settle(p);
@@ -290,6 +514,7 @@ async function shoot(browser, html, opts, texts) {
             const { page, context } = await openPage(browser, html, viewport, theme, api, log);
             await page.waitForSelector(screen.ready || "#app-nav:not([hidden])");
             await settle(page);
+            await assertNav(page);
             await screen.run(page);
             await volumeChecks(page, screen.name, texts);
             const file = path.join(opts.out, `${screen.name}-${viewport.width}x${viewport.height}-${theme}.png`);
@@ -298,8 +523,8 @@ async function shoot(browser, html, opts, texts) {
             await context.close();
         }
     }
-    // A 500 on one route is part of the error screen, not a page fault.
-    return { shots, errors: log.errors.filter((e) => !/status of 500|status of 403/.test(e)) };
+    // 500 and 403 are the error and denied screens. Unknown routes still answer 404.
+    return { shots, errors: log.errors.filter((e) => !/status of 500|status of 403|status of 404/.test(e)) };
 }
 
 // Owner commands: the exact bytes the page sends, and the line it shows on a refusal.
@@ -351,6 +576,40 @@ async function interactions(browser, html, texts) {
     const cancelWanted = `{"core":${order.core},"uid":"${order.uid}"}`;
     expect(cancels.length === 1 && cancels[0].raw === cancelWanted,
         `order cancel sent ${JSON.stringify(cancels.map((c) => c.raw))}, expected [${cancelWanted}]`);
+
+    await nav(page, "settings");
+    await page.waitForSelector('[data-settings-card="trades"] [data-settings="card-on"]');
+    await page.click('[data-settings-card="trades"] [data-settings="card-on"]');
+    await settle(page);
+    expect(!!await page.$("[data-settings-hint]"), "trades hint stays while both thresholds are off");
+    await page.click("[data-settings-save]");
+    await page.waitForFunction((wanted) => {
+        const node = document.querySelector("[data-settings-status]");
+        return node && !node.hidden && node.textContent === wanted;
+    }, texts.mini_settings_saved);
+    const firstSaves = log.sent.filter((s) => s.path === "/api/notify/save");
+    let firstSave = {};
+    try { firstSave = JSON.parse(firstSaves[0] ? firstSaves[0].raw : ""); } catch { firstSave = {}; }
+    expect(firstSaves.length === 1 && firstSave.revision === 0 && firstSave.settings && firstSave.settings.trades.on === true,
+        `first settings save ${JSON.stringify(firstSaves.map((s) => s.raw))}`);
+    await page.click('[data-settings="volume-switch"]');
+    await settle(page);
+    expect(!await page.$("[data-settings-hint]"), "volume alone hides the trades hint");
+    await page.fill('[data-settings="min-volume"]', "10");
+    await page.click('[data-settings="profit-switch"]');
+    await settle(page);
+    expect(!await page.$("[data-settings-hint]"), "profit on hides the trades hint");
+    await page.fill('[data-settings="profit"]', "5");
+    await page.click("[data-settings-save]");
+    await page.waitForFunction((wanted) => {
+        const node = document.querySelector("[data-settings-status]");
+        return node && !node.hidden && node.textContent === wanted;
+    }, texts.mini_settings_saved);
+    const secondSaves = log.sent.filter((s) => s.path === "/api/notify/save");
+    let secondSave = {};
+    try { secondSave = JSON.parse(secondSaves[1] ? secondSaves[1].raw : ""); } catch { secondSave = {}; }
+    expect(secondSaves.length === 2 && secondSave.revision === 1,
+        `second settings save revision ${secondSave.revision}, bodies ${JSON.stringify(secondSaves.map((s) => s.raw))}`);
     await context.close();
     // The refused toggle's own 400 is logged by the browser; that one is expected.
     for (const error of log.errors.filter((e) => !/status of 400/.test(e))) failures.push(`page error: ${error}`);

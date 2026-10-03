@@ -302,7 +302,7 @@ main {
     color: var(--hint);
 }
 
-/* Balances total: its label left, the eye that hides every figure of the tab right. */
+/* Cores total: its label left, the eye that hides every figure of the tab right. */
 .hero-head {
     display: flex;
     align-items: center;
@@ -423,12 +423,6 @@ main {
     font-size: var(--fs-meta);
 }
 
-.balance-side {
-    flex: none;
-    margin-left: 8px;
-    text-align: right;
-}
-
 .balance-figure {
     color: var(--ink);
     font-variant-numeric: tabular-nums;
@@ -491,13 +485,22 @@ main {
 }
 
 .core-row {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    column-gap: 8px;
+    row-gap: 2px;
+    align-items: start;
 }
 
 .core-row .dot {
+    grid-column: 1;
+    grid-row: 1;
     margin-top: 5px;
+}
+
+.core-row .grow {
+    grid-column: 2;
+    grid-row: 1;
 }
 
 .core-row .metrics {
@@ -511,6 +514,9 @@ main {
     row-gap: 2px;
     justify-content: end;
     text-align: right;
+    grid-column: 3;
+    grid-row: 1;
+    align-self: start;
 }
 
 .core-row .metrics .k {
@@ -574,10 +580,6 @@ main {
     color: var(--sub);
     font-size: 12px;
     line-height: 1.3;
-}
-
-.badge-bad {
-    color: var(--danger);
 }
 
 .badge-warn {
@@ -1035,8 +1037,7 @@ input:focus-visible {
 }
 
 .spread,
-.money-col,
-.balance-side {
+.money-col {
     min-width: 0;
 }
 
@@ -1279,6 +1280,15 @@ input:focus-visible {
     padding-left: 8px;
 }
 
+/* Cores exchange header: online count, total, and the stale and partial badges. The badges
+   wrap under the figures on a narrow phone. Orders headers stay on one line. */
+.group-head .group-meta.core-exchange-meta {
+    flex: 0 1 auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    row-gap: 4px;
+}
+
 @media (max-width: 360px) {
     .segments button {
         font-size: 12px;
@@ -1319,11 +1329,109 @@ input:focus-visible {
 }
 
 .core-row .row-chev {
+    grid-column: 4;
+    grid-row: 1 / span 2;
     flex: none;
     align-self: center;
     color: var(--hint);
     font-size: 20px;
     line-height: 1;
+}
+
+/* Balance and the coin chevron sit under the name, so the metrics stay beside the name. */
+.core-money {
+    grid-column: 2 / span 2;
+    grid-row: 2;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    min-width: 0;
+    gap: 2px;
+}
+
+.core-row .balance-figure {
+    text-align: left;
+}
+
+.core-balance {
+    display: flex;
+    flex: 0 1 auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    align-self: center;
+    gap: 6px;
+    min-width: 0;
+    text-align: left;
+}
+
+.coin-chev {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    color: var(--hint);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.coin-chev:focus-visible {
+    outline: 2px solid var(--link);
+    outline-offset: -2px;
+    border-radius: var(--r-ctl);
+}
+
+.coin-list {
+    padding: 0 12px 8px 36px;
+}
+
+.coin-row {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-height: 32px;
+}
+
+.coin-row .coin-id {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    gap: 8px;
+}
+
+.coin-row .name {
+    flex: none;
+}
+
+.coin-row .coin-qty {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--hint);
+}
+
+.coin-row .balance-figure,
+.coin-row .hint {
+    margin-left: auto;
+    flex: none;
+}
+
+.coin-unpriced {
+    color: var(--hint);
+}
+
+.coin-stale {
+    opacity: 0.55;
 }
 
 .strategy-row .cmd,
@@ -1579,4 +1687,123 @@ button.pill:disabled {
     margin: 0 16px var(--sp-2);
     color: var(--hint);
     font-size: var(--fs-meta);
+}
+
+/* Settings: one note, then three cards. A long card title wraps beside its pill. */
+.settings-note {
+    margin: 4px 16px 8px;
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    overflow-wrap: break-word;
+}
+
+.settings-card .name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+}
+
+.settings-head {
+    min-height: 44px;
+}
+
+.settings-options.is-off {
+    opacity: 0.55;
+}
+
+.settings-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--row-line);
+}
+
+.settings-label {
+    flex: 1 1 120px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    color: var(--ink);
+    font-size: var(--fs-body);
+}
+
+.settings-input {
+    flex: 1 1 120px;
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-ctl);
+    background: var(--card);
+    color: var(--ink);
+}
+
+.settings-input.invalid {
+    border-color: var(--neg);
+    color: var(--neg);
+}
+
+.settings-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 16px 12px;
+}
+
+.settings-chips .chip {
+    max-width: 100%;
+    height: auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+
+.chip.on {
+    border-color: var(--pill-on);
+    color: var(--pill-on);
+    background-color: var(--pill-on-fill);
+}
+
+.settings-hint,
+.settings-caption {
+    margin: 0;
+    padding: 4px 16px 12px;
+    color: var(--hint);
+    font-size: var(--fs-meta);
+    overflow-wrap: anywhere;
+}
+
+.settings-save-wrap {
+    margin: 4px 16px 16px;
+}
+
+.settings-save {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.settings-spin {
+    width: 16px;
+    height: 16px;
+    animation: spin 0.8s linear infinite;
+}
+
+.settings-status {
+    margin: 8px 0 0;
+    font-size: var(--fs-meta);
+    overflow-wrap: anywhere;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .settings-spin {
+        animation: none;
+    }
 }

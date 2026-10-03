@@ -73,6 +73,9 @@ pub fn reset_pairing(host: &mut dyn TgHost) {
 }
 
 /// Drain bounded transport work on the owner loop (the terminal's 100 ms tick).
+///
+/// Notification decisions also run when the service is absent, so a host with a store and no
+/// live poller still enqueues.
 pub fn tick(host: &mut dyn TgHost) {
     if host
         .state()
@@ -88,9 +91,15 @@ pub fn tick(host: &mut dyn TgHost) {
         state.start_saved(&saved);
         host.repaint();
     }
-    if host.state().service.is_none() {
-        return;
+    if host.state().service.is_some() {
+        drain_service(host);
     }
+    let now_utc = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
+    crate::notify::tick::run(host, now_utc);
+}
+
+/// Apply queued transport work while a service is running.
+fn drain_service(host: &mut dyn TgHost) {
     if host.state().configuration_pending {
         let saved = host.config().telegram.clone();
         let state = host.state_mut();

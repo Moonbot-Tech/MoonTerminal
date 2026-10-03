@@ -221,8 +221,8 @@ fn mini_report_cache_requires_same_grant() {
 /// `moon-tg mini_app/mod.rs:visible_cores` must keep an empty viewer list empty.
 ///
 /// Mutation: the viewer arm returns `true` instead of `ids.contains(&session.id)`.
-/// A viewer whose grant lists no cores then sees every core's orders, balances,
-/// and status.
+/// A viewer whose grant lists no cores then sees every core's orders, the Cores
+/// totals, and status.
 #[test]
 fn visible_cores_empty_viewer_grant_matches_nothing() {
     let source = read_tg_src("mini_app/mod.rs");
@@ -327,18 +327,19 @@ fn mini_core_units_come_from_labels() {
     );
 }
 
-/// `mini_app.rs:balance_text` must format through `usd_grouped_cents`.
+/// `mini_app/dto.rs:balance_text` must format through `usd_grouped_cents`.
 ///
-/// Mutation: call `fmt::usd_grouped` again. Exchange rows go back to one or
-/// two decimals (`10 000.0$` beside `170 293.47$`) while the hero uses the
-/// same helper, so the tab cannot keep a single width.
+/// The Cores hero, each exchange header, and each core row display this text.
+/// Mutation: call `fmt::usd_grouped` again. Those figures go back to one or
+/// two decimals (`10 000.0$` beside `170 293.47$`) and the Cores list cannot
+/// keep a single width.
 #[test]
 fn mini_balance_text_uses_fixed_cents() {
     let source = read_tg_src("mini_app/dto.rs");
     let body = braced_body(&source, "fn balance_text(");
     assert!(
         body.contains("fmt::usd_grouped_cents("),
-        "Mini App balances must format through usd_grouped_cents"
+        "Cores hero, exchange totals, and core rows must format through usd_grouped_cents"
     );
     assert!(
         !body.contains("fmt::usd_grouped("),
@@ -399,12 +400,12 @@ fn mini_app_css_keeps_the_narrow_popup_layout() {
 }
 
 /// `web/app.js:ensureCollapse` starts the groups of every pane collapsed: Orders,
-/// Strategies, Cores and Balances.
+/// Strategies and Cores.
 ///
 /// Mutation: restore `collapse[pane][slot] = count > 20 && !problem`, or drop
 /// the `collapseUser` skip. Small order groups then open on first paint and on
-/// every poll the user has not toggled. Dropping the cores or balances call
-/// brings back the wall of open exchange groups the owner asked to fold.
+/// every poll the user has not toggled. Dropping the cores call brings back
+/// the wall of open exchange groups the owner asked to fold.
 #[test]
 fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     let js = read_core_src("telegram/web/app.js");
@@ -424,9 +425,14 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
     assert!(
         js.contains("ensureCollapse(\"orders\", orders, orderCoreKey);")
             && js.contains("ensureCollapse(\"strategies\", withRows, strategyCoreKey);")
-            && js.contains("ensureCollapse(\"cores\", cores, null);")
-            && js.contains("ensureCollapse(\"balances\", perCore, null);"),
-        "orders, strategies, cores and balances must seed the collapsed default"
+            && js.contains("ensureCollapse(\"cores\", cores, null);"),
+        "orders, strategies and cores must seed the collapsed default"
+    );
+    assert!(
+        js.contains(
+            "var TAB_NAMES = [\"report\", \"cores\", \"orders\", \"trades\", \"strategies\", \"settings\"];"
+        ),
+        "TAB_NAMES must stay the six panes the page paints"
     );
     let append = braced_body(&js, "function appendGroups(");
     assert!(
@@ -437,9 +443,10 @@ fn mini_list_groups_start_collapsed_until_the_user_toggles() {
 
 /// Collapsed group headers must keep the summary the open rows used to show.
 ///
-/// Mutation: drop `coreGroupSummary` or `balanceGroupSummary` from the
-/// `appendGroups` call. A collapsed exchange then shows only its name, which
-/// is the popup the user could not read without opening every group.
+/// Mutation: drop `coreGroupSummary` from the `paintCores` `appendGroups` call,
+/// or stop reading `total_text` from that exchange's `per_exchange` row. A
+/// collapsed exchange then shows only its name, or the online count without
+/// the total the page already received.
 ///
 /// An order group's PnL sums the finite figures and shows nothing when none
 /// exist. Mutation: set `known = false` and `break` on the first order
@@ -454,10 +461,14 @@ fn mini_collapsed_groups_carry_their_summary() {
         cores.contains("\"mini_cores_online\"") && cores.contains("coreProblem("),
         "a core group must say how many are online and mark a faulted group"
     );
-    let balances = braced_body(&js, "function balanceGroupSummary(");
     assert!(
-        balances.contains("total_text"),
-        "a balance group must show the exchange total the page already received"
+        cores.contains("exchangeBalance(") && cores.contains("total_text"),
+        "a core group must show that exchange's per_exchange total"
+    );
+    let paint = braced_body(&js, "function paintCores(");
+    assert!(
+        paint.contains("coreGroupSummary"),
+        "paintCores must pass coreGroupSummary into appendGroups"
     );
     let known = braced_body(&js, "function knownPnl(");
     assert!(
@@ -472,6 +483,37 @@ fn mini_collapsed_groups_carry_their_summary() {
             && !orders.contains("\\u2014"),
         "an order group labels its count and shows PnL only when some order is valued"
     );
+}
+
+/// Balance figures on the Cores page draw through `paintFigure`, which masks them until
+/// the eye is pressed. `balanceRevealed` starts false.
+///
+/// Mutation: call `applyMoney` in place of `paintFigure`. That leaves rows unmasked.
+/// The eye would no longer hide the account total, an exchange header, a core balance,
+/// or a coin value.
+#[test]
+fn mini_balance_figures_stay_masked_until_revealed() {
+    let js = read_core_src("telegram/web/app.js");
+    assert!(
+        js.contains("var balanceRevealed = false;"),
+        "balances start hidden"
+    );
+    for signature in [
+        "function coreGroupSummary(",
+        "function coresHero(",
+        "function coreRow(",
+        "function coinLine(",
+    ] {
+        let body = braced_body(&js, signature);
+        assert!(
+            body.contains("paintFigure("),
+            "{signature} must draw money through paintFigure"
+        );
+        assert!(
+            !body.contains("applyMoney("),
+            "{signature}: applyMoney in place of paintFigure leaves rows unmasked"
+        );
+    }
 }
 
 /// The order row's entry-to-mark percent must be the desktop table's figure.
@@ -582,5 +624,37 @@ fn mini_stale_read_does_not_clear_a_newer_reads_busy_flag() {
         load.matches("inFlight[name] = null").count(),
         1,
         "the busy flag must not be cleared outside the ticket check"
+    );
+}
+
+/// `web/app.js` must not repaint Settings while the form is dirty or a save is in flight.
+///
+/// Mutation: drop the `settingsBusy()` guard from `loadTab`, `refreshCurrent`, or
+/// `onVisible`. A background read, the refresh button, or a return to the visible
+/// page then replaces the form and the unsaved edit is gone. Mutation: make
+/// `settingsBusy` return false again. The guards stay in the source and still do
+/// nothing, so the same reload wipes the draft.
+#[test]
+fn mini_settings_draft_is_not_wiped_while_busy() {
+    let js = read_core_src("telegram/web/app.js");
+    for signature in [
+        "function loadTab(",
+        "function refreshCurrent(",
+        "function onVisible(",
+    ] {
+        let body = braced_body(&js, signature);
+        assert!(
+            body.contains("settingsBusy()"),
+            "{signature} must skip Settings while the draft is dirty or a save is in flight"
+        );
+    }
+    let busy = braced_body(&js, "function settingsBusy(");
+    assert!(
+        busy.contains("settingsSaving") && busy.contains("settingsIsDirty()"),
+        "settingsBusy must be true while a save is in flight or the form differs from the last loaded settings"
+    );
+    assert!(
+        !busy.contains("return false"),
+        "settingsBusy must not stay a stub that always allows a reload"
     );
 }

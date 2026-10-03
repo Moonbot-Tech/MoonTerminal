@@ -13,8 +13,10 @@ rust_i18n::i18n!("../../locales", fallback = "en");
 
 mod dispatch;
 mod host;
+mod html;
 mod labels;
 mod mini_app;
+pub(crate) mod notify;
 mod report;
 mod state;
 mod station_status;

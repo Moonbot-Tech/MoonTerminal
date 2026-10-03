@@ -21,13 +21,7 @@ const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
 const RICH_MESSAGE_BLOCK_LIMIT: usize = 500;
 
 /// Escape all external text before inserting it into Telegram's restricted rich HTML.
-pub(crate) fn escape(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
+pub(crate) use crate::html::escape;
 
 /// Render complete USDT only; missing or unknown valuation never masquerades as zero.
 pub(super) fn profit(total: &QuoteBreakdown) -> String {

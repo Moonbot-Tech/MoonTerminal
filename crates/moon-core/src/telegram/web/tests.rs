@@ -149,9 +149,6 @@ fn accept(event: MiniAppApiRequest) {
         MiniAppApiRequest::Cores { reply, .. } => {
             let _ = reply.send(Err(MiniAppApiError::Rejected));
         }
-        MiniAppApiRequest::Balances { reply, .. } => {
-            let _ = reply.send(Err(MiniAppApiError::Rejected));
-        }
         MiniAppApiRequest::Orders { reply, .. } => {
             let _ = reply.send(Err(MiniAppApiError::Rejected));
         }
@@ -180,6 +177,25 @@ fn accept(event: MiniAppApiRequest) {
                 error: None,
             }));
         }
+        MiniAppApiRequest::Notify { reply, .. } | MiniAppApiRequest::NotifySave { reply, .. } => {
+            let _ = reply.send(Ok(notify_ok()));
+        }
+    }
+}
+
+/// The settings document the acceptor returns for both notify routes.
+fn notify_ok() -> super::dto::NotifyDto {
+    super::dto::NotifyDto {
+        settings: crate::telegram::notify::NotifySettings::default(),
+        cores: vec![super::dto::NotifyCoreDto {
+            id: 1,
+            name: "A".into(),
+            exchange: "Binance".into(),
+        }],
+        zone: "UTC".into(),
+        revision: 0,
+        error: None,
+        fault: None,
     }
 }
 
@@ -557,4 +573,240 @@ fn admission_changes_reach_the_running_listener() {
     server.update(vec![PAIRED_USER], std::collections::BTreeMap::new());
     assert_eq!(session_over_socket(port, &launch), 200);
     server.stop();
+}
+
+/// The Mini App nav is report, cores, deals, strategies, settings, and the balances tab is gone.
+///
+/// Mutation: put the balances section back, point the page at `/api/balances`, or reorder the
+/// nav buttons. The bottom bar would open a removed screen or hide Settings.
+/// Oracle: the nav buttons' `data-tab` values in document order, and the absence of the
+/// balances tab name and route in `index.html` and `app.js`.
+#[test]
+fn mini_app_nav_is_report_cores_deals_strategies_settings() {
+    const HTML: &str = include_str!("index.html");
+    const JS: &str = include_str!("app.js");
+    assert!(!HTML.contains("data-tab=\"balances\""));
+    assert!(!JS.contains("data-tab=\"balances\""));
+    assert!(!HTML.contains("/api/balances"));
+    assert!(!JS.contains("/api/balances"));
+    assert_eq!(
+        nav_tabs(HTML),
+        ["report", "cores", "deals", "strategies", "settings"]
+    );
+}
+
+/// `data-tab` values of the bottom-bar buttons, in document order.
+fn nav_tabs(html: &str) -> Vec<&str> {
+    let start = html
+        .find("<nav id=\"app-nav\"")
+        .expect("index.html has #app-nav");
+    let nav = &html[start..];
+    let end = nav.find("</nav>").expect("nav is closed");
+    let nav = &nav[..end];
+    let mut tabs = Vec::new();
+    let mut rest = nav;
+    let needle = "data-tab=\"";
+    while let Some(at) = rest.find(needle) {
+        let after = &rest[at + needle.len()..];
+        let quote = after.find('"').expect("data-tab is quoted");
+        tabs.push(&after[..quote]);
+        rest = &after[quote + 1..];
+    }
+    tabs
+}
+
+/// Builds a handler whose channel is not consumed, so a request that built an event is visible.
+fn handler_quiet() -> (App, std::sync::mpsc::Receiver<MiniAppApiRequest>) {
+    let (events_tx, events_rx) = std::sync::mpsc::sync_channel(8);
+    let app = App {
+        admission: Arc::new(RwLock::new(Admission {
+            chats: vec![PAIRED_USER],
+            labels: std::collections::BTreeMap::new(),
+        })),
+        token: Arc::new(Secret::new(BOT_TOKEN)),
+        events_tx,
+        stop: Arc::new(AtomicBool::new(false)),
+    };
+    (app, events_rx)
+}
+
+/// GET one path. Notify routes are POST-only.
+fn get(app: &App, path: &str) -> (u16, String) {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri(format!("http://127.0.0.1{path}"))
+        .header("host", "127.0.0.1")
+        .body(Body::from(Vec::new()))
+        .expect("the fixture request is valid HTTP");
+    let response = app.handle(request);
+    let status = response.status();
+    let mut reader = response.into_body().into_reader();
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .expect("the response body is readable");
+    let text = String::from_utf8(bytes).expect("the response body is UTF-8 JSON");
+    (status.as_u16(), text)
+}
+
+/// `POST /api/notify` and `POST /api/notify/save` refuse a bad launch, a non-object, an oversize
+/// body, and a save body with no `settings`, and they do that before an event is built.
+///
+/// Mutation: parse the save body after `try_send`, or skip the initData check on these two arms.
+/// A stranger then writes another chat's notification file, or a non-object becomes a command.
+/// Oracle: the statuses below, and `try_recv` stays empty.
+#[test]
+fn notify_routes_reject_bad_input_before_an_event_is_built() {
+    let (app, events) = handler_quiet();
+    let now = stable_unix_now();
+    let fresh = signed_at(now);
+    let one_past = signed_at(now.saturating_sub(INIT_DATA_MAX_AGE_SECS + 1));
+    let forged = with_forged_hash(&fresh);
+    let now_text = now.to_string();
+    let stranger = signed_init_data(&[
+        ("auth_date", now_text.as_str()),
+        ("query_id", "AAEAAQ"),
+        ("user", "{\"id\":42,\"first_name\":\"Eve\"}"),
+    ]);
+    let routes = ["/api/notify", "/api/notify/save"];
+
+    for path in routes {
+        let (status, text) = get(&app, path);
+        assert_eq!(status, 405, "{path} GET body {text}");
+        assert_eq!(error_code(&text), Some("method"), "{path} body {text}");
+        assert!(events.try_recv().is_err(), "{path} GET built an event");
+
+        let (status, text) = post(&app, path, None, "{}");
+        assert_eq!(status, 401, "{path} without initData body {text}");
+        assert_eq!(error_code(&text), Some("missing_init_data"));
+        assert!(
+            events.try_recv().is_err(),
+            "{path} missing initData built an event"
+        );
+
+        let (status, text) = post(&app, path, Some(&forged), "{}");
+        assert_eq!(status, 401, "{path} forged hash body {text}");
+        assert_eq!(error_code(&text), Some("hash"));
+        assert!(
+            events.try_recv().is_err(),
+            "{path} forged hash built an event"
+        );
+
+        let (status, text) = post(&app, path, Some(&one_past), "{}");
+        assert_eq!(status, 401, "{path} stale launch body {text}");
+        assert_eq!(error_code(&text), Some("stale"));
+        assert!(
+            events.try_recv().is_err(),
+            "{path} stale launch built an event"
+        );
+
+        let (status, text) = post(&app, path, Some(&stranger), "{}");
+        assert_eq!(status, 403, "{path} unpaired body {text}");
+        assert_eq!(error_code(&text), Some("unpaired"));
+        assert_ne!(status, 200);
+        assert!(events.try_recv().is_err(), "{path} unpaired built an event");
+
+        let (status, text) = post(&app, path, Some(&fresh), "[]");
+        assert_eq!(status, 400, "{path} non-object body {text}");
+        assert_eq!(error_code(&text), Some("json"));
+        assert!(
+            events.try_recv().is_err(),
+            "{path} non-object built an event"
+        );
+
+        let over = "x".repeat(usize::try_from(super::MAX_BODY_BYTES).unwrap() + 1);
+        let (status, text) = post(&app, path, Some(&fresh), &over);
+        assert_eq!(status, 413, "{path} oversize body {text}");
+        assert_eq!(error_code(&text), Some("body"));
+        assert!(events.try_recv().is_err(), "{path} oversize built an event");
+    }
+
+    let (status, text) = post(&app, "/api/notify/save", Some(&fresh), "{}");
+    assert_eq!(status, 400, "save without settings body {text}");
+    assert_eq!(error_code(&text), Some("json"));
+    assert!(
+        events.try_recv().is_err(),
+        "missing settings built an event"
+    );
+
+    let (status, text) = post(&app, "/api/notify/save", Some(&fresh), r#"{"settings":{}}"#);
+    assert_eq!(status, 400, "save without revision body {text}");
+    assert_eq!(error_code(&text), Some("json"));
+    assert!(
+        events.try_recv().is_err(),
+        "missing revision built an event"
+    );
+
+    let (status, text) = post(
+        &app,
+        "/api/notify/save",
+        Some(&fresh),
+        r#"{"settings":{},"revision":0,"extra":1}"#,
+    );
+    assert_eq!(status, 400, "save with an unknown field body {text}");
+    assert_eq!(error_code(&text), Some("json"));
+    assert!(
+        events.try_recv().is_err(),
+        "an unknown field built an event"
+    );
+}
+
+/// A fresh paired launch reaches both notify routes. They are not hard-coded rejects.
+///
+/// Mutation: answer 403 before the consumer, or leave the new variants out of `accept`.
+/// The page then cannot load or store settings. Oracle: 200 and the acceptor's document.
+#[test]
+fn notify_routes_accept_a_fresh_paired_launch() {
+    let app = handler_with_acceptor();
+    let fresh = signed_at(stable_unix_now());
+    let expected = serde_json::to_string(&notify_ok()).expect("acceptor document");
+
+    let (status, text) = post(&app, "/api/notify", Some(&fresh), "{}");
+    assert_eq!(status, 200, "read body {text}");
+    assert_eq!(text, expected);
+
+    let (status, text) = post(
+        &app,
+        "/api/notify/save",
+        Some(&fresh),
+        r#"{"settings":{},"revision":0}"#,
+    );
+    assert_eq!(status, 200, "save body {text}");
+    assert_eq!(text, expected);
+}
+
+/// Compact JSON the Mini App reads. Field order is the struct order `serde_json::to_vec` writes.
+///
+/// Mutation: skip `error` when it is null, or rename a settings field. The form then misses a
+/// key or reads a different default. Oracle: these exact strings.
+#[test]
+fn notify_dto_default_json_is_the_compact_document() {
+    use crate::telegram::notify::{CoreScope, NotifySettings};
+
+    let settings = NotifySettings::default();
+    assert_eq!(
+        serde_json::to_string(&settings).expect("settings"),
+        r#"{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5},"daily":{"on":false,"hour":21,"minute":0}}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&CoreScope::Only(vec![1, 2])).expect("only"),
+        r#"{"kind":"only","ids":[1,2]}"#
+    );
+
+    let dto = super::dto::NotifyDto {
+        settings,
+        cores: vec![super::dto::NotifyCoreDto {
+            id: 1,
+            name: "A".into(),
+            exchange: "Binance".into(),
+        }],
+        zone: "UTC".into(),
+        revision: 0,
+        error: None,
+        fault: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&dto).expect("dto"),
+        r#"{"settings":{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5},"daily":{"on":false,"hour":21,"minute":0}},"cores":[{"id":1,"name":"A","exchange":"Binance"}],"zone":"UTC","revision":0,"error":null,"fault":null}"#
+    );
 }

@@ -795,6 +795,14 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   separately holds the loopback server and the tunnel, otherwise one delayed poll would block HTTP.
   The host talks only through typed `Work` / `Response` channels: `moon_tg::tick` drains them on
   the host's owner loop — in the terminal the Backend's 100 ms loop (`Backend::tick_telegram`).
+  A third thread, `telegram-notify`, drains the notification outbox; see below.
+- **Notification sender.** `moon-tg`'s notify tick appends closed-trade, core-down, and
+  daily-summary HTML to the `NotifyStore` outbox in the same atomic save as the announce-once
+  ledger. `moon-core`'s `telegram-notify` thread owns its own Bot API client and deletes a row
+  only after Telegram accepts it, pacing each chat at one message per second. A timeout is
+  retried, so a rare duplicate is possible. A body over the 4096 UTF-16 limit is not queued.
+  Switches live on the Mini App settings tab and are off until that chat saves them. See
+  [Notifications](TELEGRAM_REPORTS.md#notifications).
 - **The token lives in a `Secret` inside `servers.enc`, not in `settings.toml`.** `TelegramConfig`
   is serialized only into the encrypted aggregate; `Secret` in `Debug` is `Secret(***)`, `ApiError` carries
   neither the token nor the Bot API URL. Settings masks the field and hashes only the token's emptiness.
@@ -855,8 +863,10 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   revoke old service liveness before retiring the worker, cancelling queued deliveries and retries.
   Settings edits remain a draft until Save; archived candidates load asynchronously from history
   independently of checkbox selection. Read-only viewers gain no core-control authority.
-- **The Mini App page is currently empty on purpose: its only request is the session check
-  (`POST /api/session`). This is a scope decision, not an unfinished screen.**
+- **Mini App.** Paired chats open reports, cores (balances included), orders, trades, strategies,
+  and settings. Notification switches are on the settings tab («Настройки») and stay off until
+  that chat saves them. `POST /api/session` remains the launch check; every other `/api/*` route
+  re-checks initData the same way. See [Notifications](TELEGRAM_REPORTS.md#notifications).
 - **Shutdown joins everything that was started.** A token or chat-list change is
   `TelegramState::restart`. Clearing the Mini App checkbox does not touch the bot (`MiniAppOwner::stop`: first
   the tunnel, then the listener). Exit is `TelegramState::stop`. `Drop` of `TelegramService` and

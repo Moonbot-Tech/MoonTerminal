@@ -10,14 +10,14 @@
     var REPORT_RETRY_MS = 2000;
     // The server answers within 5 s; a request still open well past that is dead, and the queue is serial.
     var FETCH_TIMEOUT_MS = 12000;
-    var TAB_NAMES = ["report", "cores", "balances", "orders", "trades", "strategies"];
+    var TAB_NAMES = ["report", "cores", "orders", "trades", "strategies", "settings"];
     // Nav buttons by data-tab; "deals" shows the orders or trades pane.
     var TAB_KEYS = {
         report: "mini_tab_report",
         cores: "mini_tab_cores",
-        balances: "mini_tab_balances",
         strategies: "mini_tab_strategies",
-        deals: "mini_tab_trades"
+        deals: "mini_tab_trades",
+        settings: "mini_tab_settings"
     };
     var PERIODS = [
         ["today", "mini_period_today"],
@@ -39,8 +39,8 @@
     var dealsSwitch = null;
     var buttons = {};
     var payloads = {};
-    var collapse = { cores: {}, balances: {}, orders: {}, strategies: {} };
-    var collapseUser = { cores: {}, balances: {}, orders: {}, strategies: {} };
+    var collapse = { cores: {}, orders: {}, strategies: {} };
+    var collapseUser = { cores: {}, orders: {}, strategies: {} };
     var hasData = {};
     var queue = [];
     var busy = false;
@@ -49,10 +49,20 @@
     var cmdTimer = null;
     var period = "today";
     var current = null;
-    // Every money figure of the balances tab starts masked; one eye toggle on the total reveals
-    // them together. Kept for the popup's life like a toggled group, never persisted.
+    // Every money figure starts masked; one eye toggle on the Cores total reveals them
+    // together. Kept for the popup's life like a toggled group, never persisted.
     var balanceRevealed = false;
     var BALANCE_MASK = "******";
+    // Which core ids have their coin list open. Survives a repaint; not persisted.
+    var coinsOpen = {};
+    // Today's realised profit on the Cores hero. A cancelled read leaves no line.
+    // `at` is the last completed fetch. A Cores poll or selecting the Cores tab
+    // reads again once that fetch is older than REPORT_POLL_MS.
+    var coresTodayGen = 0;
+    var coresTodayFlight = false;
+    var coresTodayShown = false;
+    var coresTodayPending = false;
+    var coresToday = { phase: "idle", line: null, at: 0 };
     var loadToken = 0;
     var sessionOk = false;
     var commandBusy = false;
@@ -194,6 +204,12 @@
     function maskMoney(node, baseClass) {
         node.className = baseClass + " masked";
         node.textContent = BALANCE_MASK;
+    }
+
+    // Mask a real amount. An empty text stays the unvalued note, masked or not.
+    function paintFigure(node, text, value, baseClass) {
+        if (!balanceRevealed && text) maskMoney(node, baseClass);
+        else applyMoney(node, baseClass, text, value);
     }
 
     // Open eye while the figures are hidden (tap to show), crossed eye while they are shown.
@@ -392,8 +408,16 @@
         }
     }
 
+    // True while the Settings draft differs from the last loaded or saved settings,
+    // or a save is still in flight. A reload must not replace that draft.
+    function settingsBusy() {
+        return settingsSaving || settingsIsDirty();
+    }
+
     function schedulePoll(name, token) {
         clearPoll();
+        // A timer would replace a future Settings draft. settingsBusy is the second guard.
+        if (name === "settings") return;
         if (document.visibilityState !== "visible") return;
         pollTimer = setTimeout(function () {
             pollTimer = null;
@@ -406,9 +430,9 @@
     function pathFor(name) {
         if (name === "report") return "/api/report";
         if (name === "cores") return "/api/cores";
-        if (name === "balances") return "/api/balances";
         if (name === "trades") return "/api/trades";
         if (name === "strategies") return "/api/strategies";
+        if (name === "settings") return "/api/notify";
         return "/api/orders";
     }
 
@@ -534,10 +558,6 @@
         return !core || core.conn !== "ready" || !!core.fault;
     }
 
-    function balanceProblem(row) {
-        return !row || row.state !== "live";
-    }
-
     function groupKeyOf(item, keyFn) {
         if (typeof keyFn === "function") return String(keyFn(item) || "");
         return item && item.exchange ? String(item.exchange) : "";
@@ -555,8 +575,7 @@
         }
     }
 
-    // Exchange header while the group is collapsed: online N of M, danger when
-    // any core is offline or faulted.
+    // Exchange header while the group is collapsed: online N of M, then that exchange's total.
     function coreGroupSummary(items) {
         var online = 0;
         var trouble = false;
@@ -566,34 +585,40 @@
             if (core && core.conn === "ready") online += 1;
             if (coreProblem(core)) trouble = true;
         }
+        var wrap = el("span", "group-meta core-exchange-meta");
         var span = el("span", trouble ? "count num neg" : "count num");
         span.textContent = tr("mini_cores_online")
             .replace("{online}", String(online))
             .replace("{total}", String(items.length));
-        return span;
+        wrap.appendChild(span);
+        var name = items.length && items[0] ? String(items[0].exchange || "") : "";
+        var found = name ? exchangeBalance(name) : null;
+        if (found) {
+            var fig = el("span", "");
+            paintFigure(fig, found.total_text, found.total, "num balance-figure");
+            wrap.appendChild(fig);
+            if (found.stale > 0) {
+                wrap.appendChild(el("span", "badge badge-warn", tr("mini_balance_stale")));
+            }
+            if (found.excluded > 0) {
+                wrap.appendChild(el(
+                    "span",
+                    "badge badge-warn",
+                    tr("mini_partial").replace("{n}", String(found.excluded))
+                ));
+            }
+        }
+        return wrap;
     }
 
-    function exchangeTotal(name) {
-        var data = payloads.balances || {};
+    function exchangeBalance(name) {
+        var data = payloads.cores || {};
         var rows = Array.isArray(data.per_exchange) ? data.per_exchange : [];
         var i;
         for (i = 0; i < rows.length; i++) {
             if (rows[i] && rows[i].exchange === name) return rows[i];
         }
         return null;
-    }
-
-    // Exchange header uses the preformatted two-decimal total already on the page.
-    function balanceGroupSummary(items) {
-        var name = items.length ? String(items[0].exchange || "") : "";
-        var found = exchangeTotal(name);
-        var wrap = el("span", "group-meta");
-        var span = el("span", "num balance-figure");
-        if (!found) applyMoney(span, "num balance-figure", null, null);
-        else if (!balanceRevealed && found.total_text) maskMoney(span, "num balance-figure");
-        else applyMoney(span, "num balance-figure", found.total_text, found.total);
-        wrap.appendChild(span);
-        return wrap;
     }
 
     // Signed dollars for a client PnL sum, the balance figures' "$" suffix; null when not finite.
@@ -751,9 +776,86 @@
         row.appendChild(body);
         var metrics = metricsBlock(core);
         if (metrics) row.appendChild(metrics);
+        var figure = core.balance;
+        var coins = Array.isArray(core.coins) ? core.coins : [];
+        if (figure || coins.length) {
+            var line = el("div", "core-money");
+            if (figure) {
+                var money = el("div", "core-balance");
+                var badge = balanceBadge(figure.state);
+                if (badge) money.appendChild(badge);
+                var total = el("span", "");
+                paintFigure(total, figure.total_text, figure.total, "num balance-figure");
+                money.appendChild(total);
+                line.appendChild(money);
+            }
+            if (coins.length) {
+                var open = !!coinsOpen[core.id];
+                var toggle = document.createElement("button");
+                toggle.type = "button";
+                toggle.className = "coin-chev";
+                toggle.setAttribute("aria-expanded", open ? "true" : "false");
+                toggle.setAttribute("aria-label", coinNames(coins));
+                toggle.textContent = open ? "\u25BE" : "\u25B8";
+                toggle.addEventListener("click", function (event) {
+                    event.stopPropagation();
+                    coinsOpen[core.id] = !coinsOpen[core.id];
+                    hapticSelection();
+                    paintCores();
+                });
+                line.appendChild(toggle);
+            }
+            row.appendChild(line);
+        }
         // Per-core controls live on the detail screen the row opens.
-        row.appendChild(el("span", "row-chev", "›"));
+        row.appendChild(el("span", "row-chev", "\u203A"));
         return row;
+    }
+
+    function coinNames(coins) {
+        var names = [];
+        var i;
+        for (i = 0; i < coins.length; i++) {
+            if (coins[i] && coins[i].coin) names.push(coins[i].coin);
+        }
+        return names.join(", ");
+    }
+
+    function coreBlock(core) {
+        var coins = Array.isArray(core.coins) ? core.coins : [];
+        if (!coinsOpen[core.id] || !coins.length) return coreRow(core);
+        var block = el("div", "core-block");
+        block.appendChild(coreRow(core));
+        block.appendChild(coinList(coins, core.balance));
+        return block;
+    }
+
+    function coinList(coins, figure) {
+        var list = el("div", "coin-list");
+        var i;
+        for (i = 0; i < coins.length; i++) list.appendChild(coinLine(coins[i], figure));
+        return list;
+    }
+
+    function coinLine(row, figure) {
+        var unpriced = !row || row.value == null;
+        var classes = "coin-row";
+        if (unpriced) classes += " coin-unpriced";
+        if (figure && figure.state && figure.state !== "live") classes += " coin-stale";
+        var line = el("div", classes);
+        var id = el("span", "coin-id");
+        id.appendChild(el("span", "name", row && row.coin ? row.coin : ""));
+        id.appendChild(el("span", "num coin-qty", row && row.qty_text ? row.qty_text : ""));
+        line.appendChild(id);
+        if (unpriced) {
+            var word = row && row.value_text ? row.value_text : tr("mini_coin_unpriced");
+            line.appendChild(el("span", "num hint", word));
+        } else {
+            var fig = el("span", "");
+            paintFigure(fig, row.value_text, row.value, "num balance-figure");
+            line.appendChild(fig);
+        }
+        return line;
     }
 
     function balanceBadge(state) {
@@ -761,32 +863,6 @@
         var text = tr("mini_balance_" + state);
         if (!text) return null;
         return el("span", "badge badge-warn", text);
-    }
-
-    function balanceRow(row) {
-        var wrap = el("div", "row");
-        var top = el("div", "spread");
-        top.appendChild(el("span", "name core-name", row.name || ""));
-        var badge = balanceBadge(row.state);
-        if (badge) top.appendChild(badge);
-        wrap.appendChild(top);
-        var bottom = el("div", "spread fine");
-        var free = el("span", "");
-        free.appendChild(el("span", "k", tr("mini_free") + " "));
-        var freeVal = el("span", "num");
-        if (!balanceRevealed && row.free_text) maskMoney(freeVal, "num");
-        else applyMoney(freeVal, "num", row.free_text, row.free);
-        free.appendChild(freeVal);
-        var total = el("span", "money-col");
-        total.appendChild(el("span", "k", tr("mini_total") + " "));
-        var totalVal = el("span", "num");
-        if (!balanceRevealed && row.total_text) maskMoney(totalVal, "num balance-figure");
-        else applyMoney(totalVal, "num balance-figure", row.total_text, row.total);
-        total.appendChild(totalVal);
-        bottom.appendChild(free);
-        bottom.appendChild(total);
-        wrap.appendChild(bottom);
-        return wrap;
     }
 
     // The wire keeps buy/sell; the page names the position side. LONG / SHORT stay untranslated.
@@ -1208,6 +1284,7 @@
         if (coreDetailId != null) {
             var shownCore = findCore(cores, coreDetailId);
             if (shownCore) {
+                coresTodayPending = false;
                 paintCoreDetail(host, shownCore, data);
                 restoreScroll(y);
                 return;
@@ -1225,10 +1302,14 @@
             if (coreProblem(cores[i])) problems += 1;
         }
         if (!cores.length) {
+            coresTodayPending = false;
             host.appendChild(emptyState(tr("mini_empty_cores"), refreshAction()));
             restoreScroll(y);
             return;
         }
+        coresTodayPending = false;
+        ensureCoresToday();
+        host.appendChild(coresHero(data));
         var strip = el("div", "stat-strip");
         strip.setAttribute("role", "group");
         strip.setAttribute(
@@ -1246,27 +1327,16 @@
         ensureCollapse("cores", cores, null);
         appendGroups(
             host, "cores", cores, coreProblem,
-            coreRow,
+            coreBlock,
             paintCores, null, null, null, coreGroupSummary
         );
         restoreScroll(y);
     }
 
-    function paintBalances() {
-        var host = sections.balances;
-        var y = window.pageYOffset || 0;
-        clear(host);
-        var data = payloads.balances || {};
-        var perCore = Array.isArray(data.per_core) ? data.per_core : [];
-        var perExchange = Array.isArray(data.per_exchange) ? data.per_exchange : [];
-        if (!perCore.length && !perExchange.length) {
-            host.appendChild(emptyState(tr("mini_empty_balances"), refreshAction()));
-            restoreScroll(y);
-            return;
-        }
+    function coresHero(data) {
         var hero = el("div", "card hero");
         var head = el("div", "hero-head");
-        head.appendChild(el("p", "label", tr("mini_total")));
+        head.appendChild(el("p", "label", tr("mini_cores_total")));
         var eye = document.createElement("button");
         eye.type = "button";
         eye.className = "eye-btn";
@@ -1276,43 +1346,88 @@
         eye.addEventListener("click", function () {
             balanceRevealed = !balanceRevealed;
             hapticSelection();
-            paintBalances();
+            paintCores();
             // The repaint rebuilds the button; hand keyboard focus to the new one.
-            var again = sections.balances.querySelector(".eye-btn");
+            var again = sections.cores.querySelector(".eye-btn");
             if (again) again.focus();
         });
         head.appendChild(eye);
         hero.appendChild(head);
         var big = el("p", "");
-        if (!balanceRevealed && data.total_text) maskMoney(big, "hero-value num");
-        else applyMoney(big, "hero-value num", data.total_text, data.total);
+        paintFigure(big, data.total_text, data.total, "hero-value num");
         hero.appendChild(big);
         if (data.stale > 0 || data.excluded > 0) {
             var meta = el("div", "hero-sub badges");
-            if (data.stale > 0) meta.appendChild(el("span", "badge badge-bad", tr("mini_balance_stale")));
+            if (data.stale > 0) meta.appendChild(el("span", "badge badge-warn", tr("mini_balance_stale")));
             if (data.excluded > 0) {
-                meta.appendChild(el("span", "", tr("mini_partial").replace("{n}", String(data.excluded))));
+                meta.appendChild(el(
+                    "span",
+                    "badge badge-warn",
+                    tr("mini_partial").replace("{n}", String(data.excluded))
+                ));
             }
             hero.appendChild(meta);
         }
-        host.appendChild(hero);
-        // Exchange groups start folded; the header carries the exchange total.
-        if (perCore.length) {
-            ensureCollapse("balances", perCore, null);
-            appendGroups(
-                host,
-                "balances",
-                perCore,
-                balanceProblem,
-                balanceRow,
-                paintBalances,
-                null,
-                null,
-                null,
-                balanceGroupSummary
-            );
+        var line = coresToday.line;
+        if (line && line.text) {
+            var today = el("p", "hero-sub");
+            today.appendChild(document.createTextNode(tr("mini_cores_today") + ": "));
+            var profit = el("span", "");
+            paintFigure(profit, line.text, line.usdt, "num");
+            today.appendChild(profit);
+            hero.appendChild(today);
+            coresTodayShown = true;
+        } else {
+            coresTodayShown = false;
         }
-        restoreScroll(y);
+        return hero;
+    }
+
+    function resetCoresToday() {
+        coresTodayGen += 1;
+        coresTodayFlight = false;
+        coresTodayShown = false;
+        coresTodayPending = true;
+        coresToday = { phase: "idle", line: null, at: 0 };
+    }
+
+    function todayLine(res) {
+        if (!res.ok || !res.data || !res.data.total) return null;
+        var total = res.data.total;
+        if (typeof total.unknown_orders === "number" && total.unknown_orders > 0) return null;
+        if (!total.text) return null;
+        return { text: total.text, usdt: total.usdt };
+    }
+
+    // One report read for today's profit. A cancel leaves no line. A completed read is kept
+    // until it is older than REPORT_POLL_MS. The Cores poll and selecting the Cores tab both
+    // call this. Do not start another read from the cancel callback: selectTab cancels before
+    // it changes the current tab, and a replacement read would outlive the switch.
+    function coresTodayFresh() {
+        return coresToday.phase === "ready" && Date.now() - coresToday.at < REPORT_POLL_MS;
+    }
+
+    function ensureCoresToday() {
+        if (coresTodayFlight || coresTodayFresh()) return;
+        coresTodayFlight = true;
+        var gen = coresTodayGen;
+        api("/api/report", { period: "today" }).then(function (res) {
+            if (gen !== coresTodayGen) return;
+            coresTodayFlight = false;
+            if (res.cancelled) {
+                coresToday = { phase: "idle", line: null, at: 0 };
+                return;
+            }
+            var line = todayLine(res);
+            var show = !!(line && line.text);
+            var prev = coresToday.line;
+            var textChanged = (!line) !== (!prev)
+                || (!!line && !!prev && (line.text !== prev.text || line.usdt !== prev.usdt));
+            coresToday = { phase: "ready", line: line, at: Date.now() };
+            if (current === "cores" && coreDetailId == null && (show !== coresTodayShown || textChanged)) {
+                paintCores();
+            }
+        });
     }
 
     function paintOrders() {
@@ -1795,13 +1910,613 @@
         restoreScroll(y);
     }
 
+    // Settings draft. Cores and zone are display data and stay out of the snapshot.
+    var settingsForm = null;
+    var settingsBaseSnap = "";
+    var settingsRevision = 0;
+    var settingsSaving = false;
+    var settingsPhase = "idle";
+    var settingsError = "";
+    var settingsSavedTimer = null;
+    var settingsCores = [];
+    var settingsZone = "";
+
+    function settingsIsDirty() {
+        if (!settingsForm || !settingsBaseSnap) return false;
+        return settingsSnap(settingsForm) !== settingsBaseSnap;
+    }
+
+    function settingsSortedIds(ids) {
+        var copy = ids.slice();
+        copy.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+        return copy;
+    }
+
+    function settingsFinite(text) {
+        var raw = String(text == null ? "" : text).trim().replace(/,/g, ".");
+        if (!/^\d+(\.\d+)?$/.test(raw)) return null;
+        var n = Number(raw);
+        if (n !== n || n === Infinity || n === -Infinity) return null;
+        return n;
+    }
+
+    function settingsAmountOk(text) {
+        var n = settingsFinite(text);
+        return n != null && n >= 0;
+    }
+
+    function settingsAmountCanon(text) {
+        if (!settingsAmountOk(text)) return String(text == null ? "" : text).trim();
+        return String(settingsFinite(text));
+    }
+
+    function settingsMinutesOk(text) {
+        var raw = String(text == null ? "" : text).trim();
+        if (!/^\d+$/.test(raw)) return false;
+        var n = Number(raw);
+        return n >= 1 && n <= 1440;
+    }
+
+    function settingsMinutesCanon(text) {
+        if (!settingsMinutesOk(text)) return String(text == null ? "" : text).trim();
+        return String(Number(String(text).trim()));
+    }
+
+    // HH:MM, or HH:MM:00 from a time input. Anything else is rejected before save.
+    function settingsParseTime(text) {
+        var raw = String(text == null ? "" : text).trim();
+        var parts = raw.split(":");
+        if (parts.length < 2 || parts.length > 3) return null;
+        if (parts.length === 3 && parts[2] !== "00") return null;
+        if (!/^\d{1,2}$/.test(parts[0]) || !/^\d{2}$/.test(parts[1])) return null;
+        var hour = Number(parts[0]);
+        var minute = Number(parts[1]);
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+        return { hour: hour, minute: minute };
+    }
+
+    function settingsTimeCanon(text) {
+        var parsed = settingsParseTime(text);
+        if (!parsed) return String(text == null ? "" : text).trim();
+        return twoDigits(parsed.hour) + ":" + twoDigits(parsed.minute);
+    }
+
+    function settingsSnap(form) {
+        var ids = form.scopeKind === "only" ? settingsSortedIds(form.scopeIds) : [];
+        return JSON.stringify({
+            t: form.tradesOn === true,
+            k: form.scopeKind === "only" ? "only" : "all",
+            ids: ids,
+            v: form.volumeOn === true ? settingsAmountCanon(form.volumeText) : "",
+            p: form.profitOn === true ? settingsAmountCanon(form.profitText) : "",
+            l: form.lossOn === true ? settingsAmountCanon(form.lossText) : "",
+            d: form.downOn === true,
+            m: settingsMinutesCanon(form.minutesText),
+            y: form.dailyOn === true,
+            h: settingsTimeCanon(form.timeText)
+        });
+    }
+
+    function settingsFormValid(form) {
+        if (!form) return false;
+        if (form.volumeOn && !settingsAmountOk(form.volumeText)) return false;
+        if (form.profitOn && !settingsAmountOk(form.profitText)) return false;
+        if (form.lossOn && !settingsAmountOk(form.lossText)) return false;
+        if (!settingsMinutesOk(form.minutesText)) return false;
+        if (!settingsParseTime(form.timeText)) return false;
+        if (form.scopeKind === "only" && !form.scopeIds.length) return false;
+        return true;
+    }
+
+    function settingsPayload(form) {
+        var time = settingsParseTime(form.timeText);
+        var cores = form.scopeKind === "only"
+            ? { kind: "only", ids: settingsSortedIds(form.scopeIds) }
+            : { kind: "all" };
+        return {
+            trades: {
+                on: form.tradesOn === true,
+                cores: cores,
+                min_volume_usd: form.volumeOn ? settingsFinite(form.volumeText) : null,
+                profit_at_least_usd: form.profitOn ? settingsFinite(form.profitText) : null,
+                loss_at_least_usd: form.lossOn ? settingsFinite(form.lossText) : null
+            },
+            down: {
+                on: form.downOn === true,
+                after_minutes: Number(String(form.minutesText).trim())
+            },
+            daily: {
+                on: form.dailyOn === true,
+                hour: time.hour,
+                minute: time.minute
+            }
+        };
+    }
+
+    // A revision past 2^53 is not an exact JS integer, so it cannot round-trip.
+    function settingsRevisionOf(data) {
+        var value = data && data.revision;
+        if (typeof value !== "number" || value !== value || value < 0 || value > 9007199254740991 || Math.floor(value) !== value) return 0;
+        return value;
+    }
+
+    // Take the server settings as the draft and the baseline. Display cores and zone too.
+    function settingsAdopt(data) {
+        var settings = data && data.settings;
+        var trades = settings && settings.trades;
+        var down = settings && settings.down;
+        var daily = settings && settings.daily;
+        if (!trades || !down || !daily) return false;
+        var scope = trades.cores || {};
+        var ids = [];
+        if (scope.kind === "only" && Array.isArray(scope.ids)) {
+            var i;
+            for (i = 0; i < scope.ids.length; i++) {
+                var id = scope.ids[i];
+                if (typeof id === "number" && id === id && id !== Infinity && id !== -Infinity) ids.push(id);
+            }
+        }
+        var hour = daily.hour;
+        var minute = daily.minute;
+        var timeText = "21:00";
+        if (typeof hour === "number" && typeof minute === "number" && hour === hour && minute === minute) {
+            timeText = twoDigits(hour) + ":" + twoDigits(minute);
+        }
+        var minutes = down.after_minutes;
+        var form = {
+            tradesOn: trades.on === true,
+            scopeKind: scope.kind === "only" ? "only" : "all",
+            scopeIds: ids,
+            volumeOn: typeof trades.min_volume_usd === "number",
+            volumeText: typeof trades.min_volume_usd === "number" ? String(trades.min_volume_usd) : "",
+            profitOn: typeof trades.profit_at_least_usd === "number",
+            profitText: typeof trades.profit_at_least_usd === "number" ? String(trades.profit_at_least_usd) : "",
+            lossOn: typeof trades.loss_at_least_usd === "number",
+            lossText: typeof trades.loss_at_least_usd === "number" ? String(trades.loss_at_least_usd) : "",
+            downOn: down.on === true,
+            minutesText: typeof minutes === "number" ? String(minutes) : "5",
+            dailyOn: daily.on === true,
+            timeText: timeText
+        };
+        settingsForm = form;
+        settingsCores = Array.isArray(data.cores) ? data.cores : [];
+        settingsZone = typeof data.zone === "string" ? data.zone : "";
+        settingsRevision = settingsRevisionOf(data);
+        settingsBaseSnap = settingsSnap(form);
+        return true;
+    }
+
+    function settingsTouch() {
+        if (settingsSavedTimer) {
+            clearTimeout(settingsSavedTimer);
+            settingsSavedTimer = null;
+        }
+        if (settingsPhase === "saved" || settingsPhase === "error") {
+            settingsPhase = "idle";
+            settingsError = "";
+        }
+    }
+
+    function settingsArmSaved() {
+        if (settingsSavedTimer) clearTimeout(settingsSavedTimer);
+        settingsSavedTimer = setTimeout(function () {
+            settingsSavedTimer = null;
+            if (settingsPhase !== "saved") return;
+            settingsPhase = "idle";
+            settingsSyncChrome();
+        }, 2000);
+    }
+
+    function settingsKnownCore(id) {
+        var i;
+        for (i = 0; i < settingsCores.length; i++) {
+            if (settingsCores[i].id === id) return true;
+        }
+        return false;
+    }
+
+    function settingsHasVisible(ids) {
+        var i;
+        for (i = 0; i < ids.length; i++) {
+            if (settingsKnownCore(ids[i])) return true;
+        }
+        return false;
+    }
+
+    function settingsHasUnknown(ids) {
+        var i;
+        for (i = 0; i < ids.length; i++) {
+            if (!settingsKnownCore(ids[i])) return true;
+        }
+        return false;
+    }
+
+    function settingsRender() {
+        var host = sections.settings;
+        if (!host || !settingsForm) return;
+        var y = window.pageYOffset || 0;
+        clear(host);
+        host.appendChild(settingsNote());
+        host.appendChild(settingsTradesCard());
+        host.appendChild(settingsDownCard());
+        host.appendChild(settingsDailyCard());
+        host.appendChild(settingsSaveBlock());
+        restoreScroll(y);
+    }
+
+    function settingsToggleDone() {
+        settingsTouch();
+        hapticSelection();
+        settingsRender();
+    }
+
+    function settingsSwitch(on, label, disabled, attr, onClick) {
+        var pill = button("pill " + (on ? "on" : "off"), on ? "ON" : "OFF", function () {
+            if (pill.disabled || settingsSaving) return;
+            onClick();
+        });
+        pill.setAttribute("aria-pressed", on ? "true" : "false");
+        pill.setAttribute("aria-label", label);
+        if (attr) pill.setAttribute("data-settings", attr);
+        pill.disabled = !!disabled || settingsSaving;
+        return pill;
+    }
+
+    function settingsTextInput(attr, value, disabled, invalid, label, mode, assign) {
+        var input = document.createElement("input");
+        input.type = "text";
+        input.setAttribute("inputmode", mode);
+        input.setAttribute("autocomplete", "off");
+        input.className = "settings-input" + (invalid ? " invalid" : "");
+        input.value = value;
+        input.disabled = !!disabled;
+        input.setAttribute("aria-label", label);
+        input.setAttribute("aria-invalid", invalid ? "true" : "false");
+        input.setAttribute("data-settings", attr);
+        function apply() {
+            if (settingsSaving || !settingsForm) return;
+            assign(input.value);
+            settingsTouch();
+            settingsSyncChrome();
+        }
+        input.addEventListener("input", apply);
+        input.addEventListener("change", apply);
+        return input;
+    }
+
+    function settingsTimeInput(value, disabled, invalid) {
+        var input = document.createElement("input");
+        input.type = "time";
+        input.step = "60";
+        input.className = "settings-input" + (invalid ? " invalid" : "");
+        input.value = value;
+        input.disabled = !!disabled;
+        input.setAttribute("aria-label", tr("mini_settings_time"));
+        input.setAttribute("aria-invalid", invalid ? "true" : "false");
+        input.setAttribute("data-settings", "time");
+        function apply() {
+            if (settingsSaving || !settingsForm) return;
+            settingsForm.timeText = input.value;
+            settingsTouch();
+            settingsSyncChrome();
+        }
+        input.addEventListener("input", apply);
+        input.addEventListener("change", apply);
+        return input;
+    }
+
+    function settingsMarkField(node, invalid) {
+        if (!node) return;
+        if (invalid) node.classList.add("invalid");
+        else node.classList.remove("invalid");
+        node.setAttribute("aria-invalid", invalid ? "true" : "false");
+    }
+
+    function settingsSyncChrome() {
+        var host = sections.settings;
+        if (!host || !settingsForm) return;
+        var form = settingsForm;
+        settingsMarkField(host.querySelector('[data-settings="min-volume"]'), form.volumeOn && !settingsAmountOk(form.volumeText));
+        settingsMarkField(host.querySelector('[data-settings="profit"]'), form.profitOn && !settingsAmountOk(form.profitText));
+        settingsMarkField(host.querySelector('[data-settings="loss"]'), form.lossOn && !settingsAmountOk(form.lossText));
+        settingsMarkField(host.querySelector('[data-settings="minutes"]'), !settingsMinutesOk(form.minutesText));
+        settingsMarkField(host.querySelector('[data-settings="time"]'), !settingsParseTime(form.timeText));
+        var save = host.querySelector("[data-settings-save]");
+        if (save) save.disabled = settingsSaving || !settingsFormValid(form) || !settingsIsDirty();
+        var status = host.querySelector("[data-settings-status]");
+        if (!status) return;
+        if (settingsPhase === "saved") {
+            status.hidden = false;
+            status.className = "settings-status pos";
+            status.textContent = tr("mini_settings_saved");
+        } else if (settingsPhase === "error") {
+            status.hidden = false;
+            status.className = "settings-status neg";
+            status.textContent = settingsError;
+        } else {
+            status.hidden = true;
+            status.textContent = "";
+            status.className = "settings-status";
+        }
+    }
+
+    function settingsNote() {
+        var note = el("p", "settings-note", tr("mini_settings_off_note"));
+        note.setAttribute("data-settings-note", "");
+        return note;
+    }
+
+    function settingsCard(kind, titleKey, onField) {
+        var card = el("div", "card settings-card");
+        card.setAttribute("data-settings-card", kind);
+        var head = el("div", "row spread settings-head");
+        head.appendChild(el("div", "name", tr(titleKey)));
+        head.appendChild(settingsSwitch(!!settingsForm[onField], tr(titleKey), false, "card-on", function () {
+            settingsForm[onField] = !settingsForm[onField];
+            settingsToggleDone();
+        }));
+        card.appendChild(head);
+        return card;
+    }
+
+    function settingsOptions(on) {
+        return el("div", "settings-options" + (on ? "" : " is-off"));
+    }
+
+    function settingsCoreChip(core, disabled) {
+        var id = core.id;
+        var selected = settingsForm.scopeKind === "only" && settingsForm.scopeIds.indexOf(id) >= 0;
+        var chip = button("chip" + (selected ? " on" : ""), (core.name || "") + " · " + (core.exchange || ""), function () {
+            if (chip.disabled || settingsSaving) return;
+            settingsToggleCore(id);
+        });
+        chip.setAttribute("data-settings-core", String(id));
+        chip.setAttribute("aria-pressed", selected ? "true" : "false");
+        chip.disabled = !!disabled;
+        return chip;
+    }
+
+    function settingsToggleCore(id) {
+        if (settingsSaving || !settingsForm) return;
+        var form = settingsForm;
+        var ids = form.scopeIds.slice();
+        if (form.scopeKind !== "only") {
+            form.scopeKind = "only";
+            form.scopeIds = [id];
+        } else {
+            var at = ids.indexOf(id);
+            if (at >= 0) ids.splice(at, 1);
+            else ids.push(id);
+            if (!settingsHasVisible(ids) && !settingsHasUnknown(ids)) {
+                form.scopeKind = "all";
+                form.scopeIds = [];
+            } else {
+                form.scopeKind = "only";
+                form.scopeIds = ids;
+            }
+        }
+        settingsToggleDone();
+    }
+
+    function settingsThresholdRow(labelKey, switchAttr, inputAttr, onField, textField, cardOn) {
+        var on = !!settingsForm[onField];
+        var text = settingsForm[textField];
+        var row = el("div", "settings-field");
+        row.appendChild(el("span", "settings-label", tr(labelKey)));
+        var locked = !cardOn || settingsSaving;
+        row.appendChild(settingsSwitch(on, tr(labelKey), locked, switchAttr, function () {
+            settingsForm[onField] = !settingsForm[onField];
+            settingsToggleDone();
+        }));
+        row.appendChild(settingsTextInput(
+            inputAttr,
+            text,
+            locked || !on,
+            on && !settingsAmountOk(text),
+            tr(labelKey),
+            "decimal",
+            function (value) { settingsForm[textField] = value; }
+        ));
+        return row;
+    }
+
+    function settingsTradesCard() {
+        var card = settingsCard("trades", "mini_settings_trades", "tradesOn");
+        var options = settingsOptions(settingsForm.tradesOn);
+        var locked = !settingsForm.tradesOn || settingsSaving;
+        var chips = el("div", "settings-chips");
+        var allOn = settingsForm.scopeKind !== "only";
+        var all = button("chip" + (allOn ? " on" : ""), tr("mini_settings_all_cores"), function () {
+            if (all.disabled || settingsSaving) return;
+            settingsForm.scopeKind = "all";
+            settingsForm.scopeIds = [];
+            settingsToggleDone();
+        });
+        all.setAttribute("data-settings", "scope-all");
+        all.setAttribute("aria-pressed", allOn ? "true" : "false");
+        all.disabled = locked;
+        chips.appendChild(all);
+        var i;
+        for (i = 0; i < settingsCores.length; i++) chips.appendChild(settingsCoreChip(settingsCores[i], locked));
+        options.appendChild(chips);
+        options.appendChild(settingsThresholdRow("mini_settings_min_volume", "volume-switch", "min-volume", "volumeOn", "volumeText", settingsForm.tradesOn));
+        options.appendChild(settingsThresholdRow("mini_settings_profit_at_least", "profit-switch", "profit", "profitOn", "profitText", settingsForm.tradesOn));
+        options.appendChild(settingsThresholdRow("mini_settings_loss_at_least", "loss-switch", "loss", "lossOn", "lossText", settingsForm.tradesOn));
+        if (!settingsForm.volumeOn && !settingsForm.profitOn && !settingsForm.lossOn) {
+            var hint = el("p", "settings-hint", tr("mini_settings_trades_hint"));
+            hint.setAttribute("data-settings-hint", "");
+            options.appendChild(hint);
+        }
+        card.appendChild(options);
+        return card;
+    }
+
+    function settingsDownCard() {
+        var card = settingsCard("down", "mini_settings_down", "downOn");
+        var options = settingsOptions(settingsForm.downOn);
+        var locked = !settingsForm.downOn || settingsSaving;
+        var row = el("div", "settings-field");
+        row.appendChild(el("span", "settings-label", tr("mini_settings_after_minutes")));
+        row.appendChild(settingsTextInput(
+            "minutes",
+            settingsForm.minutesText,
+            locked,
+            !settingsMinutesOk(settingsForm.minutesText),
+            tr("mini_settings_after_minutes"),
+            "numeric",
+            function (value) { settingsForm.minutesText = value; }
+        ));
+        options.appendChild(row);
+        card.appendChild(options);
+        return card;
+    }
+
+    function settingsDailyCard() {
+        var card = settingsCard("daily", "mini_settings_daily", "dailyOn");
+        var options = settingsOptions(settingsForm.dailyOn);
+        var locked = !settingsForm.dailyOn || settingsSaving;
+        var row = el("div", "settings-field");
+        row.appendChild(el("span", "settings-label", tr("mini_settings_time")));
+        row.appendChild(settingsTimeInput(settingsForm.timeText, locked, !settingsParseTime(settingsForm.timeText)));
+        options.appendChild(row);
+        options.appendChild(el("p", "settings-caption", tr("mini_settings_zone") + " " + settingsZone));
+        card.appendChild(options);
+        return card;
+    }
+
+    function settingsSpinner() {
+        var icon = svgEl("svg");
+        icon.setAttribute("viewBox", "0 0 24 24");
+        icon.setAttribute("class", "settings-spin");
+        icon.setAttribute("aria-hidden", "true");
+        var ring = svgEl("circle");
+        ring.setAttribute("cx", "12");
+        ring.setAttribute("cy", "12");
+        ring.setAttribute("r", "8");
+        ring.setAttribute("fill", "none");
+        ring.setAttribute("stroke", "currentColor");
+        ring.setAttribute("stroke-width", "2");
+        ring.setAttribute("stroke-dasharray", "14 36");
+        icon.appendChild(ring);
+        return icon;
+    }
+
+    function settingsSaveBlock() {
+        var wrap = el("div", "settings-save-wrap");
+        var btn = button("action-btn settings-save", tr("mini_settings_save"), settingsSave);
+        btn.setAttribute("data-settings-save", "");
+        btn.disabled = settingsSaving || !settingsFormValid(settingsForm) || !settingsIsDirty();
+        if (settingsSaving) {
+            btn.appendChild(settingsSpinner());
+            btn.setAttribute("aria-busy", "true");
+        }
+        wrap.appendChild(btn);
+        var status = el("p", "settings-status");
+        status.setAttribute("data-settings-status", "");
+        status.setAttribute("role", "status");
+        if (settingsPhase === "saved") {
+            status.className = "settings-status pos";
+            status.textContent = tr("mini_settings_saved");
+        } else if (settingsPhase === "error") {
+            status.className = "settings-status neg";
+            status.textContent = settingsError;
+        } else {
+            status.hidden = true;
+        }
+        wrap.appendChild(status);
+        return wrap;
+    }
+
+    function settingsSave() {
+        if (settingsSaving || !settingsForm) return;
+        if (!settingsFormValid(settingsForm) || !settingsIsDirty()) return;
+        settingsSaving = true;
+        settingsPhase = "saving";
+        settingsError = "";
+        hapticImpact("light");
+        settingsRender();
+        api("/api/notify/save", { settings: settingsPayload(settingsForm), revision: settingsRevision }, true).then(settingsSaved);
+    }
+
+    // A refused save is HTTP 200 with error set. Keep the draft, except a stale
+    // revision: another window saved, so the form shows the stored settings and
+    // the draft is cleared. Only a clean save replaces the baseline without an
+    // error. A cancelled keep-request drops the spinner and stops.
+    function settingsSaved(res) {
+        if (res.cancelled) {
+            settingsSaving = false;
+            if (settingsPhase === "saving") settingsPhase = "idle";
+            if (current === "settings") settingsRender();
+            return;
+        }
+        if (res.ok && res.data && res.data.fault === "stale" && settingsAdopt(res.data)) {
+            payloads.settings = res.data;
+            lastRaw.settings = res.raw || null;
+            hasData.settings = true;
+            settingsSaving = false;
+            settingsPhase = "error";
+            settingsError = String(res.data.error);
+            haptic("error");
+            if (current === "settings") settingsRender();
+            return;
+        }
+        if (!res.ok || !res.data || res.data.error != null) {
+            settingsSaving = false;
+            settingsPhase = "error";
+            settingsError = res.ok && res.data && res.data.error != null
+                ? String(res.data.error)
+                : tr("mini_settings_err_save");
+            haptic("error");
+            if (current === "settings") settingsRender();
+            return;
+        }
+        if (!settingsAdopt(res.data)) {
+            settingsSaving = false;
+            settingsPhase = "error";
+            settingsError = tr("mini_settings_err_save");
+            haptic("error");
+            if (current === "settings") settingsRender();
+            return;
+        }
+        payloads.settings = res.data;
+        lastRaw.settings = res.raw || null;
+        hasData.settings = true;
+        settingsSaving = false;
+        settingsPhase = "saved";
+        settingsError = "";
+        haptic("success");
+        markUpdated("settings");
+        if (current === "settings") {
+            settingsRender();
+            settingsArmSaved();
+        }
+    }
+
+    function paintSettings() {
+        var host = sections.settings;
+        if (!host) return;
+        var y = window.pageYOffset || 0;
+        // A dirty draft or a save in flight keeps what the user typed.
+        if (!settingsSaving && !settingsIsDirty()) {
+            if (!settingsAdopt(payloads.settings)) {
+                settingsForm = null;
+                settingsBaseSnap = "";
+                clear(host);
+                host.appendChild(emptyState(tr("mini_error_read")));
+                restoreScroll(y);
+                return;
+            }
+        }
+        settingsRender();
+    }
+
     var paint = {
         report: paintReport,
         cores: paintCores,
-        balances: paintBalances,
         orders: paintOrders,
         trades: paintTrades,
-        strategies: paintStrategies
+        strategies: paintStrategies,
+        settings: paintSettings
     };
 
     var lastClock = "";
@@ -1871,13 +2586,16 @@
 
     function refreshCurrent() {
         if (!current || inFlight[current]) return;
+        if (current === "settings" && settingsBusy()) return;
         hapticImpact("light");
         setSpinning(true);
+        if (current === "cores") resetCoresToday();
         reloadPane(current, !!hasData[current]);
     }
 
     function loadTab(name, token, silent) {
         if (name !== current || token !== loadToken) return;
+        if (name === "settings" && settingsBusy()) return;
         clearPoll();
         if (!silent) showLoading(paneBody(name));
         var ticket = {};
@@ -1891,6 +2609,7 @@
                 if (refreshButton && current && inFlight[current]) refreshButton.disabled = true;
             }
             if (res.cancelled || token !== loadToken || name !== current) return;
+            if (name === "settings" && settingsBusy()) return;
             if (!res.ok || !res.data) {
                 // A failed background read keeps the last good data on screen.
                 if (silent && hasData[name] && res.status !== 401 && res.status !== 403) {
@@ -1910,7 +2629,11 @@
             hasData[name] = true;
             payloads[name] = res.data;
             lastRaw[name] = res.raw || null;
+            if (name === "settings" && settingsBusy()) return;
             if (!same) paint[name]();
+            else if (name === "cores" && coreDetailId == null && coresToday.line && !coresTodayShown) paintCores();
+            else if (name === "cores" && coresTodayPending) paintCores();
+            if (name === "cores") ensureCoresToday();
             schedulePoll(name, token);
         });
     }
@@ -1951,6 +2674,7 @@
         }
         paintUpdated();
         loadTab(name, loadToken, !!hasData[name]);
+        if (name === "cores") ensureCoresToday();
     }
 
     function onVisible() {
@@ -1962,6 +2686,7 @@
         }
         paintUpdated();
         startUpdatedTimer();
+        if (current === "settings" && settingsBusy()) return;
         // A read still running reschedules the poll itself; a second one would only queue behind it.
         if (inFlight[current]) return;
         loadTab(current, loadToken, !!hasData[current]);
@@ -2113,7 +2838,7 @@
     }
 
     function anyGroupOpen() {
-        var panes = ["cores", "balances", "orders", "strategies"];
+        var panes = ["cores", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {
@@ -2126,7 +2851,7 @@
     }
 
     function collapseOpenGroups() {
-        var panes = ["cores", "balances", "orders", "strategies"];
+        var panes = ["cores", "orders", "strategies"];
         var p;
         var slot;
         for (p = 0; p < panes.length; p++) {

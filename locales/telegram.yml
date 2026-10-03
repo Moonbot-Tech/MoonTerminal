@@ -243,10 +243,82 @@ telegram.mini_tab_cores:
   ru: "Ядра"
   en: "Cores"
   es: "Núcleos"
-telegram.mini_tab_balances:
-  ru: "Балансы"
-  en: "Balances"
-  es: "Saldos"
+telegram.mini_tab_settings:
+  ru: "Настройки"
+  en: "Settings"
+  es: "Ajustes"
+telegram.mini_settings_err_cores:
+  ru: "Выберите хотя бы одно доступное ядро"
+  en: "Pick at least one core you can see"
+  es: "Elige al menos un núcleo que puedas ver"
+telegram.mini_settings_err_invalid:
+  ru: "Проверьте значения"
+  en: "Check the values"
+  es: "Revisa los valores"
+telegram.mini_settings_err_save:
+  ru: "Не удалось сохранить"
+  en: "Could not save"
+  es: "No se pudo guardar"
+telegram.mini_settings_err_stale:
+  ru: "Настройки изменены в другом окне — показаны актуальные"
+  en: "Settings changed elsewhere — showing the latest"
+  es: "Los ajustes cambiaron en otro lugar — se muestran los más recientes"
+telegram.mini_settings_trades:
+  ru: "Закрытые сделки"
+  en: "Closed trades"
+  es: "Operaciones cerradas"
+telegram.mini_settings_down:
+  ru: "Ядро упало / вернулось"
+  en: "Core down / back"
+  es: "Núcleo caído / de vuelta"
+telegram.mini_settings_daily:
+  ru: "Итог дня"
+  en: "Daily summary"
+  es: "Resumen del día"
+telegram.mini_settings_all_cores:
+  ru: "Все ядра"
+  en: "All cores"
+  es: "Todos los núcleos"
+telegram.mini_settings_min_volume:
+  ru: "Объём от, $"
+  en: "Min volume, $"
+  es: "Volumen desde, $"
+telegram.mini_settings_profit_at_least:
+  ru: "Прибыль от, $"
+  en: "Profit at least, $"
+  es: "Beneficio desde, $"
+telegram.mini_settings_loss_at_least:
+  ru: "Убыток от, $"
+  en: "Loss at least, $"
+  es: "Pérdida desde, $"
+telegram.mini_settings_trades_hint:
+  ru: "Нет порогов — приходят все сделки"
+  en: "No thresholds — every trade is sent"
+  es: "Sin umbrales — se envía cada operación"
+telegram.mini_settings_after_minutes:
+  ru: "Через, мин"
+  en: "After, min"
+  es: "Después, min"
+telegram.mini_settings_time:
+  ru: "Время"
+  en: "Time"
+  es: "Hora"
+telegram.mini_settings_zone:
+  ru: "Часовой пояс"
+  en: "Time zone"
+  es: "Zona horaria"
+telegram.mini_settings_save:
+  ru: "Сохранить"
+  en: "Save"
+  es: "Guardar"
+telegram.mini_settings_saved:
+  ru: "Сохранено"
+  en: "Saved"
+  es: "Guardado"
+telegram.mini_settings_off_note:
+  ru: "Уведомления приходят сообщениями бота в этот чат"
+  en: "Notifications arrive as bot messages in this chat"
+  es: "Los avisos llegan como mensajes del bot en este chat"
 telegram.mini_period_today:
   ru: "Сегодня"
   en: "Today"
@@ -343,14 +415,18 @@ telegram.mini_balance_unpriced:
   ru: "Нет цены"
   en: "No price"
   es: "Sin precio"
-telegram.mini_total:
+telegram.mini_coin_unpriced:
+  ru: "без оценки"
+  en: "unpriced"
+  es: "sin valoración"
+telegram.mini_cores_total:
   ru: "Всего"
   en: "Total"
   es: "Total"
-telegram.mini_free:
-  ru: "Свободно"
-  en: "Free"
-  es: "Libre"
+telegram.mini_cores_today:
+  ru: "Сегодня"
+  en: "Today"
+  es: "Hoy"
 telegram.mini_partial:
   ru: "Не учтено ядер: {n}"
   en: "Cores left out: {n}"
@@ -379,10 +455,6 @@ telegram.mini_empty_cores:
   ru: "Нет ядер"
   en: "No cores"
   es: "No hay núcleos"
-telegram.mini_empty_balances:
-  ru: "Нет балансов"
-  en: "No balances"
-  es: "No hay saldos"
 telegram.mini_empty_orders:
   ru: "Нет открытых ордеров"
   en: "No open orders"

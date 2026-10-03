@@ -110,7 +110,7 @@ pub fn keeps_reports(event: &Event) -> bool {
 
 /// Whether the station hosting the Mini App keeps a domain event: the light station's, plus the
 /// account — orders (the open-orders tab, Panic Sell's state), balances and account metadata (the
-/// balances tab and its repairs), strategies (the strategies tab), and the core's health and
+/// Cores tab and its repairs), strategies (the strategies tab), and the core's health and
 /// settings (the cores tab: CPU, memory, ping, trading and auto-detect).
 pub fn keeps_account(event: &Event) -> bool {
     keeps_reports(event)

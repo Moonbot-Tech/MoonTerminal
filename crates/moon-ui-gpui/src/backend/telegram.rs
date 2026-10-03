@@ -46,6 +46,10 @@ impl TgHost for GuiTgHost<'_, '_> {
         moon_core::util::display_time::zone_or_utc(self.backend.header_clock_zone())
     }
 
+    fn notifications_path(&self) -> std::path::PathBuf {
+        moon_core::config::paths::telegram_notifications()
+    }
+
     fn report_revision(&self) -> Option<moon_tg::ReportRevision> {
         let reports = self.backend.reports.as_ref()?;
         moon_tg::ReportRevision::current(

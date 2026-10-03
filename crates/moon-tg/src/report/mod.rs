@@ -1,5 +1,5 @@
 //! Localized rich reports over the same snapshot, time axis, and money reader as Report.
-use chrono::Days;
+use chrono::{Days, NaiveDate};
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
 use moon_core::{
@@ -12,7 +12,10 @@ use moon_core::{
     util::display_time,
 };
 use rust_i18n::t;
+use std::collections::BTreeSet;
 use std::sync::mpsc::SyncSender;
+
+use crate::notify::trades::ClosedTrade;
 
 use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
@@ -651,6 +654,326 @@ fn read_mini_trades_on(
     trades.sort_by_key(|trade| std::cmp::Reverse(trade.close_utc));
     trades.truncate(limit);
     Ok(trades)
+}
+
+/// Closed rows fetched per core on one notification page.
+const NOTIFY_READ_PAGE: usize = 32;
+/// Largest page before an equal-timestamp stampede steps the window back one second.
+const NOTIFY_READ_PAGE_CAP: usize = 1_048_576;
+
+/// Every closed trade with `close_utc >= from_utc`, paged until the replica is exhausted.
+///
+/// There is no UI cap. A window that crosses a core clock-offset change can admit or drop a
+/// trade within one offset of the edge, because the SQL bound uses each core's offset at now.
+///
+/// Args:
+///     zone: Display zone for the report axis.
+///     names: Current configured core names, shown in place of the stored ones.
+///     from_utc: Inclusive lower bound, true UTC seconds.
+///
+/// Returns:
+///     The trades, oldest close first, or the database error. No rows is an empty `Ok`.
+///
+/// Errors:
+///     The report replica could not be opened or read.
+pub(crate) fn read_closed_since(
+    zone: Tz,
+    names: db::CoreNames,
+    from_utc: i64,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    let conn = db::open_reader()?;
+    read_closed_since_on(&conn, zone, &names, from_utc)
+}
+
+/// [`read_closed_since`] on an already open connection.
+fn read_closed_since_on(
+    conn: &rusqlite::Connection,
+    zone: Tz,
+    names: &db::CoreNames,
+    from_utc: i64,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    read_closed_window_on(conn, zone, names, from_utc, None)
+}
+
+/// Closed trades whose close falls on `date` in `zone`.
+///
+/// Args:
+///     zone: Display zone. The day is that zone's calendar day.
+///     names: Current configured core names.
+///     date: Local calendar date.
+///
+/// Returns:
+///     The day's trades, oldest close first. A date chrono cannot bound is an empty `Ok`.
+///
+/// Errors:
+///     The report replica could not be opened or read.
+pub(crate) fn read_day(
+    zone: Tz,
+    names: db::CoreNames,
+    date: NaiveDate,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    let conn = db::open_reader()?;
+    read_day_on(&conn, zone, &names, date)
+}
+
+/// [`read_day`] on an already open connection.
+fn read_day_on(
+    conn: &rusqlite::Connection,
+    zone: Tz,
+    names: &db::CoreNames,
+    date: NaiveDate,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    let Some((from, to)) = local_day_bounds(date, zone) else {
+        return Ok(Vec::new());
+    };
+    read_closed_window_on(conn, zone, names, from, Some(to))
+}
+
+/// Inclusive UTC bounds of one local calendar day, or `None` at chrono's limits.
+fn local_day_bounds(date: NaiveDate, zone: Tz) -> Option<(i64, i64)> {
+    let from = display_time::day_start(date, zone)?;
+    let next = date.succ_opt()?;
+    let next_start = display_time::day_start(next, zone)?;
+    let to = next_start.saturating_sub(1);
+    (from <= to).then_some((from, to))
+}
+
+/// Closed trades in `[from_utc, to_utc]`, paging each core on its own.
+///
+/// One cross-core `(close_utc, rec_id)` cursor is unsafe: `LIMIT` can drop a later close on
+/// another core. `to_utc` of `None` reads through the newest row.
+fn read_closed_window_on(
+    conn: &rusqlite::Connection,
+    zone: Tz,
+    names: &db::CoreNames,
+    from_utc: i64,
+    to_utc: Option<i64>,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    let snap = db::read_snapshot(conn)?;
+    let cores = db::distinct_cores(&snap)?;
+    let axis = db::ReportAxis::load(&snap, zone)?;
+    let mut trades = Vec::new();
+    for (core, _) in cores {
+        trades.extend(page_closed_core(
+            &snap, &axis, names, core, from_utc, to_utc,
+        )?);
+    }
+    trades.sort_by(|left, right| {
+        left.close_utc
+            .cmp(&right.close_utc)
+            .then(left.rec_id.cmp(&right.rec_id))
+    });
+    Ok(trades)
+}
+
+/// SQL window and page size for one core.
+struct PageCursor {
+    window_to: Option<i64>,
+    limit: usize,
+}
+
+impl PageCursor {
+    /// Start at `to_utc` (inclusive) with the small page size.
+    fn start(to_utc: Option<i64>) -> Self {
+        Self {
+            window_to: to_utc,
+            limit: NOTIFY_READ_PAGE,
+        }
+    }
+
+    /// `true` once the inclusive upper bound has moved before `from_utc`.
+    fn exhausted(&self, from_utc: i64) -> bool {
+        self.window_to.is_some_and(|to| to < from_utc)
+    }
+
+    /// Move the window after one page. `false` means stop.
+    ///
+    /// A short page is done. A full page with no accepted close is done, because older rows are
+    /// earlier. No new row doubles the limit, then steps the bound back one second at the cap.
+    fn advance(&mut self, raw_len: usize, boundary: Option<i64>, added: usize) -> bool {
+        if raw_len < self.limit {
+            return false;
+        }
+        let Some(boundary) = boundary else {
+            return false;
+        };
+        if added == 0 {
+            return self.grow_or_step(boundary);
+        }
+        self.window_to = Some(boundary);
+        true
+    }
+
+    /// Widen the page, or step one second earlier once the page is already at the cap.
+    fn grow_or_step(&mut self, boundary: i64) -> bool {
+        if self.limit < NOTIFY_READ_PAGE_CAP {
+            self.limit = self.limit.saturating_mul(2).min(NOTIFY_READ_PAGE_CAP);
+            return true;
+        }
+        let next = boundary.saturating_sub(1);
+        if self.window_to == Some(next) {
+            return false;
+        }
+        self.window_to = Some(next);
+        self.limit = NOTIFY_READ_PAGE;
+        true
+    }
+}
+
+/// Page one core until its closed rows in the window are collected.
+fn page_closed_core(
+    snap: &rusqlite::Transaction<'_>,
+    axis: &db::ReportAxis,
+    names: &db::CoreNames,
+    core: u64,
+    from_utc: i64,
+    to_utc: Option<i64>,
+) -> db::ReadResult<Vec<ClosedTrade>> {
+    let mut cursor = PageCursor::start(to_utc);
+    let mut seen = BTreeSet::new();
+    let mut trades = Vec::new();
+    while !cursor.exhausted(from_utc) {
+        let filter = closed_filter(axis, names, core, from_utc, cursor.window_to);
+        let table = db::query_mini_trades(snap, &filter, cursor.limit)?;
+        let cols = ClosedCols::from_table(&table);
+        let mut boundary: Option<i64> = None;
+        let mut added = 0usize;
+        for (row_index, row) in table.rows.iter().enumerate() {
+            let Some(trade) = map_closed_row(&table, row, row_index, &cols, axis) else {
+                continue;
+            };
+            if !in_read_window(trade.close_utc, from_utc, to_utc) {
+                continue;
+            }
+            boundary = Some(boundary.map_or(trade.close_utc, |low| low.min(trade.close_utc)));
+            if seen.insert((trade.core, trade.rec_id)) {
+                added += 1;
+                trades.push(trade);
+            }
+        }
+        if !cursor.advance(table.rows.len(), boundary, added) {
+            break;
+        }
+    }
+    Ok(trades)
+}
+
+/// Report filter for one core's closed, non-emulator rows inside the SQL window.
+fn closed_filter(
+    axis: &db::ReportAxis,
+    names: &db::CoreNames,
+    core: u64,
+    from_utc: i64,
+    window_to: Option<i64>,
+) -> ReportFilter {
+    ReportFilter {
+        core_uids: vec![core],
+        date_from: Some(from_utc),
+        date_to: window_to,
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        axis: axis.clone(),
+        core_names: names.clone(),
+        ..Default::default()
+    }
+}
+
+/// `true` when `close_utc` is inside the original read window, inclusive.
+fn in_read_window(close_utc: i64, from_utc: i64, to_utc: Option<i64>) -> bool {
+    close_utc >= from_utc && to_utc.is_none_or(|to| close_utc <= to)
+}
+
+/// Column indexes used to map one notification row.
+struct ClosedCols {
+    coin: Option<usize>,
+    core_name: Option<usize>,
+    buy_price: Option<usize>,
+    buy_date: Option<usize>,
+    close_date: Option<usize>,
+    rec_id: Option<usize>,
+    channel: Option<usize>,
+    bought: Option<usize>,
+    rate: Option<usize>,
+    profit: Option<usize>,
+    pct: Option<usize>,
+}
+
+impl ClosedCols {
+    /// Resolve the columns this page actually returned.
+    fn from_table(table: &db::ReportTable) -> Self {
+        let index = |name: &str| table.cols.iter().position(|col| col == name);
+        Self {
+            coin: index("coin"),
+            core_name: index("core_name"),
+            buy_price: index("buyprice"),
+            buy_date: index("buydate"),
+            close_date: index("closedate"),
+            rec_id: index("id"),
+            channel: index("channelname"),
+            bought: index("boughtq"),
+            rate: index(db::MINI_ENTRY_VOLUME_RATE_COLUMN),
+            profit: index(db::VALUATION_PROFIT_COLUMN),
+            pct: index(db::PROFIT_PERCENT_COLUMN),
+        }
+    }
+}
+
+/// Map one report row. A missing buy time uses the close time, so the duration is zero.
+///
+/// `rec_id` is the replica `newrecid`. A legacy `0` falls back to the display `id` column.
+fn map_closed_row(
+    table: &db::ReportTable,
+    row: &[rusqlite::types::Value],
+    row_index: usize,
+    cols: &ClosedCols,
+    axis: &db::ReportAxis,
+) -> Option<ClosedTrade> {
+    let core = *table.core_uids.get(row_index)?;
+    let cell = |ix: Option<usize>| ix.and_then(|ix| row.get(ix));
+    let close_local = cell(cols.close_date)
+        .and_then(value_i64)
+        .filter(|secs| *secs > 0)?;
+    let close_utc = axis.to_utc(close_local, core);
+    let buy_utc = cell(cols.buy_date)
+        .and_then(value_i64)
+        .filter(|secs| *secs > 0)
+        .map(|secs| axis.to_utc(secs, core));
+    let replica = table.rec_ids.get(row_index).copied().unwrap_or(0);
+    let rec_id = if replica != 0 {
+        replica
+    } else {
+        cell(cols.rec_id).and_then(value_i64).unwrap_or(0)
+    };
+    Some(ClosedTrade {
+        core,
+        rec_id,
+        close_utc,
+        coin: cell(cols.coin).map(value_text).unwrap_or_default(),
+        core_name: cell(cols.core_name).map(value_text).unwrap_or_default(),
+        strategy: cell(cols.channel).map(value_text).unwrap_or_default(),
+        volume_usd: entry_volume_usd(
+            cell(cols.bought).and_then(value_f64),
+            cell(cols.buy_price).and_then(value_f64),
+            cell(cols.rate).and_then(value_f64),
+        ),
+        profit_usd: finite_number(cell(cols.profit).and_then(value_f64)),
+        profit_pct: finite_number(cell(cols.pct).and_then(value_f64)),
+        open_utc: buy_utc.unwrap_or(close_utc),
+    })
+}
+
+/// Entry notional in USD. Any non-finite or non-positive input or product is `None`.
+fn entry_volume_usd(bought: Option<f64>, price: Option<f64>, rate: Option<f64>) -> Option<f64> {
+    let bought = bought.filter(|value| value.is_finite() && *value > 0.0)?;
+    let price = price.filter(|value| value.is_finite() && *value > 0.0)?;
+    let rate = rate.filter(|value| value.is_finite() && *value > 0.0)?;
+    let product = bought * price * rate;
+    (product.is_finite() && product > 0.0).then_some(product)
+}
+
+/// Keep a finite number. `NaN` and infinities are unvalued.
+fn finite_number(value: Option<f64>) -> Option<f64> {
+    value.filter(|number| number.is_finite())
 }
 
 /// Label each `(uid, stored name)` core with its configured name, as the desktop Report does.
