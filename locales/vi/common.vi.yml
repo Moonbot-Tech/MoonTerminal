@@ -1,0 +1,72 @@
+# Strings shared by multiple panels: loading placeholders, report-database errors, and generic
+# labels such as an unidentified exchange.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+common.loading: "Đang tải…"
+common.empty_period: "Không có giao dịch đã đóng trong kỳ này."
+common.db_read_failed: "Không đọc được cơ sở dữ liệu báo cáo."
+common.db_read_failed_corrupt: "File cơ sở dữ liệu bị hỏng — thử lại cũng không giúp được. Xem tab Nhật ký."
+common.db_read_failed_other: "Đây là lỗi đọc, không phải không có giao dịch. Xem tab Nhật ký để biết chi tiết."
+common.db_read_failed_exhausted: "Quá nhiều lượt đọc báo cáo đang mở cùng lúc. Thường hết khi các lượt đọc khác xong. Nếu vẫn vậy, có thể tiến trình khác đang giữ file."
+common.db_read_failed_retry: "Cơ sở dữ liệu báo cáo đang bận. Thử lại — kỳ sẽ tính lại. Nếu cứ xảy ra, có thể tiến trình khác đang giữ file — đồng bộ đám mây trên %{data_dir}, phần mềm diệt virus, bản terminal thứ hai, hoặc công cụ DB bên ngoài."
+common.db_read_failed_detail: "File: %{path}  Thao tác: %{operation}  Mã: %{code}"
+common.db_read_failed_file: "File"
+common.db_read_failed_operation: "Thao tác"
+common.db_read_failed_code: "Mã"
+common.db_read_failed_copy: "Sao chép"
+common.db_read_failed_short: "Lỗi đọc DB"
+common.db_not_ready: "Cơ sở dữ liệu báo cáo chưa đồng bộ."
+common.incomparable_quote: "Các giao dịch đã chọn có quote khác nhau hoặc không rõ. Chọn một tiền tệ hoặc chuyển sang Profit %."
+common.period_out_of_range: "Kỳ được yêu cầu nằm ngoài khoảng đọc được."
+common.period_out_of_range_title: "Kỳ ngoài khoảng đọc được."
+common.period_out_of_range_hint: "Đây là kỳ bị từ chối, không phải kỳ trống — kiểm tra kỳ đã lưu hoặc dữ liệu core."
+common.exchange_unknown: "Không nhận ra sàn"
+common.exchange_spot: "Spot"
+common.exchange_futures: "Futures"
+# Binance COIN-M delivery contracts, which the core itself calls "Binance Quarterly".
+common.exchange_quarterly: "Quarterly"
+# The shared core picker, used by Orders, Alerts, Assets, Core Status, Report and Analytics. Its
+# strings live here rather than in any one panel's file for the same reason the Analytics
+# placeholders do: six panels share the control, so no single namespace owns it.
+#
+# Saved core groups: a named set of cores the user applies instead of re-picking them. A group row
+# ticks when the current selection IS that group, and its trailing count is what a CLICK produces —
+# the members the panel showing it can actually select. In the MENU that count is formatted by the
+# consumer's own `cores_n`, so it cannot read differently from the trigger right above it;
+# `group_cores_n` below serves the two modals, which have no trigger beside them.
+# Short "all" word for the shared core selector once a narrow row shrinks it to its icon: the noun
+# is what the glyph now says, so only "all" versus a count is left to render. Masculine in Spanish,
+# agreeing with núcleos — which is why it is not the strategy filter's own "all" word.
+common.core_pick.all_short: "Tất cả"
+common.core_pick.groups_heading: "Nhóm core"
+common.core_pick.group_cores_n: "%{n} core"
+# Members whose core is no longer configured. They are kept on purpose — a core can come back — so
+# this is a warning, not an error.
+common.core_pick.group_dead_n: "thiếu %{n}"
+common.core_pick.save_as_group: "Lưu lựa chọn thành nhóm…"
+common.core_pick.manage_groups: "Quản lý nhóm…"
+common.core_pick.save_title: "Nhóm core mới"
+common.core_pick.manage_title: "Nhóm core"
+# Refuses BOTH an empty name and a save blocked by the group ceiling: either way nothing was
+# created, and the dialog stays open. `dialogs.name_required` cannot be reused — it names a
+# strategy in all three languages.
+common.core_pick.group_name_required: "Nhập tên nhóm"
+common.core_pick.group_name_ph: "Tên nhóm"
+# Two-step delete rather than a confirmation dialog: MoonUI paints one dialog at a time, so a
+# confirm modal opened from the management modal would replace the list being edited. The second
+# click reuses the shared `dialogs.delete_q`.
+common.core_pick.group_delete: "Xóa"
+
+# A control edited for several things at once (strategies, cores) whose values disagree.
+common.mixed_values: "giá trị khác nhau"
+
+# Second part of every strategy-name search tooltip (Strategies tree, Analytics, Report): the one
+# shared query syntax with examples.
+common.strategy_query_syntax: "Dấu phẩy = HOẶC, cách = VÀ, !từ = loại trừ. Không phân biệt hoa thường.\nEMA, Hook — tên có EMA hoặc Hook\ndrops 1m — tên có drops và 1m\nshort !test — tên có short, không có test"
+
+# The button that writes a staged change and keeps its surface open.
+common.apply: "Áp dụng"
+common.size_kb: "%{value} KB"
+common.size_mb: "%{value} MB"
+common.size_gb: "%{value} GB"

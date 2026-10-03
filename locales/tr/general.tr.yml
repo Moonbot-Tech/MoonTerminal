@@ -1,0 +1,28 @@
+# General tab of the Settings window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+general.language: "Arayüz dili"
+general.language_hint: "Kaydettikten sonra uygulanır."
+general.valuation_mode: "USDT çevriminde kullanılan kur"
+general.valuation_mode.historical: "İşlem anındaki kur"
+general.valuation_mode.current: "Güncel kur"
+general.valuation_mode_hint: "Rapor ve Analitik, USDT'ye işlemin kapandığı dakikanın kuruyla çevirir. Bunu yalnızca bilinçli değiştirin: “Güncel kur” son bilinen kuru işlemin yapıldığı borsadan değil Binance/Bybit spotundan alır, birkaç dakikada bir yeniler ve hiçbir yere kaydetmez. Eşik ayarını da değiştirir: eşikler yeniden değerlenmiş geçmişe göre bulunur. Kaydettikten sonra uygulanır."
+general.charts_split_by_core: "Her çekirdek için ayrı grafik sekmesi"
+general.charts_split_by_core_hint: "AddToChart varsayılanı: açık — çekirdek başına sekme, kapalı — grubun tüm çekirdekleri tek sekmede. Çekirdeğin “Grafikler” sütunu (Bağlantılar) bunu geçersiz kılar: aynı bağ adını paylaşan çekirdekler tek sekmede birleşir."
+general.separate_control_zones: "Emir defteri bölgesinde grafik kaydırma"
+general.separate_control_zones_hint: "Açık — hiçbir emir çizgisine denk gelmeyen sol sürükleme, emir defteri bölgesinin içinden grafiği kaydırır; yerinden oynamayan tıklama eskisi gibi yerleştirir, taşır veya iptal eder. Kapalı — defter bölgesi yalnızca emirler içindir: orada ne kaydırma ne yakınlaştırma. Emir hareketleri Add ve ayrık pencereler dahil her sekmede her zaman defter bölgesindedir; grafik alanına tıklamak emir yerleştirmez, taşımaz ve iptal etmez. Defter üzerindeki tekerlek yine yığına / deftere aittir. Defter gizliyken emir bölgesi, sekmede “Defter gizliyken emir bölgesi” açık kaldığı sürece sağ kenarda işaret çizgili bir şerittir; bunu defterle birlikte kapatırsanız sekme kenardan kenara grafik olur — hiç emir hareketi kalmaz ve her yerde çift tıklama coin'i Main'de açar. Karşılaştırma modunda emir defterine indirilen grafik hiç bölünmez: defter her yanını kaplar ve üzerinde kaydırma, Main'de açan çift tıklama ve tam ekrandan çıkma dahil hiçbir grafik hareketi kalmaz."
+general.main_idle_close: "Boşta kalınca Main grafiklerini otomatik kapat"
+general.main_idle_close_secs: "Şu süre sonra kapat"
+general.main_idle_close_hint: "Boşta = Main penceresi odakta değil YA DA odakta ama fare kıpırdamıyor. Her grafik kendi hareketsizliğinin N saniyesinden sonra kapanır (en son açılan en son kapanır); tam ekran grafik de kapanır ve tam ekrandan çıkar. Emir defteri abonelikleri hemen düşer."
+general.seconds: "sn"
+general.charts_scroll: "Grafikleri kaydırmayla göster"
+general.charts_scroll_hint: "Açık — her grafiğin sabit yüksekliği ve dikey kaydırması vardır. Kapalı (eskisi gibi) — grafikler pencere yüksekliğini paylaşır (dikey ölçeklenir)."
+general.chart_height: "Grafik yüksekliği, px"
+general.compress_fill: "Sığdırarak sıkıştır (kaydırma yok)"
+general.compress_fill_hint: "Kaydırma çubuğu çıkmaz: grafikler pencerenin altına dayanana kadar ayarlı yükseklikte çizilir, sonra sıkışır (kaydırmasız hal gibi)."
+general.log_to_file: "Günlüğü dosyaya yaz"
+general.log_to_file_hint: "Uygulama ve çekirdek günlükleri logs/<date>_<source>.log dosyasına yazılır (kaynak başına günde bir dosya)."
+general.log_retention: "Günlüğü tut"
+general.log_retention_hint: "Bu süreden eski dosyalar açılışta ve günde bir kez silinir. 0 — hepsini tut."
+general.days: "gün"

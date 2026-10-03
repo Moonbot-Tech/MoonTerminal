@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Telegram trên core"
+
+telegram_core.intro: "Điều khiển trình đọc Telegram có sẵn trên core đã chọn. Trạng thái thuộc về core, không phải terminal này."
+
+telegram_core.core_pick: "Core"
+
+telegram_core.core_pick_none: "Chọn core"
+
+telegram_core.details: "Cài đặt core"
+
+telegram_core.enable: "Bật trình đọc"
+
+telegram_core.enable_tip: "Tắt chỉ dừng trình đọc của core này và không đăng xuất tài khoản Telegram."
+
+telegram_core.unsupported: "Đăng nhập từ xa không có trên dịch vụ này."
+
+telegram_core.unsupported_ver: "Đăng nhập từ xa không có trên dịch vụ này (phiên bản %{v})."
+
+telegram_core.stale: "Ảnh trạng thái đã cũ — thao tác vẫn tắt cho đến khi có trạng thái mới."
+
+telegram_core.sent_waiting: "Đã gửi, đang đợi core…"
+
+telegram_core.service_online: "Dịch vụ trực tuyến"
+
+telegram_core.service_offline: "Dịch vụ ngoại tuyến"
+
+telegram_core.client_state: "Trạng thái"
+
+telegram_core.setup_error: "Lỗi thiết lập"
+
+telegram_core.client_error: "Lỗi máy khách"
+
+telegram_core.disconnected: "Core chưa kết nối."
+
+telegram_core.no_snapshot: "Không có ảnh trạng thái."
+
+telegram_core.proxy_section: "Proxy"
+
+telegram_core.proxy_kind_none: "Không proxy"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Host"
+
+telegram_core.proxy_port: "Port"
+
+telegram_core.proxy_user: "Người dùng"
+
+telegram_core.proxy_password: "Mật khẩu"
+
+telegram_core.proxy_secret: "Bí mật"
+
+telegram_core.proxy_save: "Lưu proxy"
+
+telegram_core.proxy_secret_hint: "Core không trả lại mật khẩu hoặc bí mật đã lưu, nên hãy gõ lại. Để trống sẽ xóa nó, chứ không giữ giá trị cũ."
+
+telegram_core.proxy_actual: "Proxy đang dùng"
+
+telegram_core.proxy_actual_unknown: "chưa biết"
+
+telegram_core.proxy_error: "Lỗi proxy"
+
+telegram_core.proxy_password_set: "đã đặt mật khẩu"
+
+telegram_core.phone: "Điện thoại"
+
+telegram_core.phone_hint: "Định dạng quốc tế, ví dụ +15551234567."
+
+telegram_core.phone_send: "Gửi số"
+
+telegram_core.login_qr: "Đăng nhập bằng QR"
+
+telegram_core.login_phone: "Dùng số điện thoại"
+
+telegram_core.cancel_to_phone: "Hủy đăng nhập và quay lại nhập số"
+
+telegram_core.code: "Mã"
+
+telegram_core.code_send: "Gửi mã"
+
+telegram_core.password: "Mật khẩu 2FA"
+
+telegram_core.password_send: "Gửi mật khẩu"
+
+telegram_core.password_hint_label: "Gợi ý"
+
+telegram_core.recovery_email: "Email khôi phục"
+
+telegram_core.email: "Email"
+
+telegram_core.email_send: "Gửi email"
+
+telegram_core.email_code: "Mã email"
+
+telegram_core.email_code_send: "Gửi mã email"
+
+telegram_core.email_pattern: "Thư sẽ tới %{pattern}"
+
+telegram_core.code_length: "Độ dài mã: %{n}"
+
+telegram_core.first_name: "Tên"
+
+telegram_core.last_name: "Họ"
+
+telegram_core.terms_accept: "Tôi chấp nhận điều khoản"
+
+telegram_core.register: "Đăng ký"
+
+telegram_core.min_age: "Tuổi tối thiểu: %{n}"
+
+telegram_core.logged_in: "Tài khoản %{phone}"
+
+telegram_core.logged_in_unknown: "Tài khoản đã sẵn sàng"
+
+telegram_core.logout: "Đăng xuất"
+
+telegram_core.logout_title: "Đăng xuất Telegram trên core"
+
+telegram_core.logout_q: "Thao tác này đăng xuất và đặt lại dữ liệu tài khoản Telegram dùng chung trên máy của core đó. Mọi tiến trình MoonBot trên máy đó đều bị ảnh hưởng, không chỉ core này."
+
+telegram_core.premium: "Cần một bước Telegram bên ngoài. Hủy đăng nhập để quay lại số điện thoại."
+
+telegram_core.support_email: "Email hỗ trợ"
+
+telegram_core.support_subject: "Chủ đề"
+
+telegram_core.cancel_login: "Hủy đăng nhập"
+
+telegram_core.transitional: "Core đang xử lý, hãy đợi…"
+
+telegram_core.step_unknown: "Bước đăng nhập không rõ. Làm mới trạng thái; đừng đoán ô nào để gửi."
+
+telegram_core.refresh: "Làm mới"
+
+telegram_core.service_error: "Lỗi %{code}: %{message}"
+
+telegram_core.connection: "Mạng Telegram"
+
+telegram_core.conn.unknown: "không rõ"
+
+telegram_core.conn.waiting_for_network: "đang đợi mạng"
+
+telegram_core.conn.connecting_to_proxy: "đang kết nối tới proxy"
+
+telegram_core.conn.connecting: "đang kết nối"
+
+telegram_core.conn.updating: "đang cập nhật"
+
+telegram_core.conn.ready: "sẵn sàng"
+
+telegram_core.qr_failed: "Không tạo được QR. Hãy làm mới trạng thái."
+
+telegram_core.qr_wait: "Đang đợi liên kết QR…"
+
+telegram_core.resend: "Gửi lại mã"
+
+telegram_core.resend_in: "Gửi lại sau %{wait}"
+
+telegram_core.no_answer: "Core không trả lời. Làm mới trạng thái rồi thử lại."
+
+telegram_core.next_code: "Cách tiếp theo"
+
+telegram_core.code_kind.telegram: "Mã trong ứng dụng Telegram."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "Từ SMS, bắt đầu bằng “%{first_letter}”, từ đầu “%{first_word}”."
+
+telegram_core.code_kind.sms_phrase: "Cụm SMS: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Cuộc gọi."
+
+telegram_core.code_kind.flash_call: "Cuộc gọi flash, tiền tố %{prefix}."
+
+telegram_core.code_kind.missed_call: "Cuộc gọi nhỡ, tiền tố %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "Cách gửi này không được hỗ trợ."
+
+telegram_core.code_kind.other: "%{kind}"

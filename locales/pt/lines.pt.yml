@@ -1,0 +1,28 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "tracejado"
+lines.start_cross: "cruz no início"
+lines.end_cross: "cruz no fim"
+lines.knots: "nós"
+lines.thickness: "espessura"
+lines.cross_size: "tamanho da cruz"
+lines.cross_thickness: "espessura da cruz"
+lines.knot_size: "tamanho do nó"
+lines.pending_group: "Colocada (não executada):"
+lines.pending_alpha: "opacidade"
+lines.path_title: "Rastro de reajustes (caminho)"
+lines.path_line_color: "na cor da própria linha"
+lines.path_alpha: "opacidade"
+lines.path_hint: "Os degraus pelos quais o preço da ordem foi movido — enviados pelo núcleo ou reconstruídos aqui. O trecho do próprio movimento do stop sempre é desenhado."
+lines.global: "Global"
+lines.active_alpha: "Opacidade ativa"
+lines.closed_visibility: "Visibilidade canceladas/fechadas"
+lines.pending_dashed: "Ordem pendente: entrada tracejada"
+lines.max_closed: "Máx. ordens fechadas desenhadas"
+lines.hint: "As linhas Stop/Trailing/Liq só aparecem depois que a entrada é executada."
+lines.theme_hint: "Edição do conjunto de linhas do tema ativo: Claro usa o conjunto claro, Escuro e Grafite compartilham o escuro; mude o tema na aba Geral. Salvar grava os dois conjuntos em cfg/orders.toml ao lado do app — você pode compartilhar o arquivo."

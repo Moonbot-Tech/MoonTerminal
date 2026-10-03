@@ -1,0 +1,262 @@
+# Report panel (trades): filters, totals, and cell values.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Table headers come from `report.col.<runtime DB column name>` (`columns::header_label`).
+# Columns with no such key, the technical columns deliberately kept raw (see `locales/README.md`),
+# and dynamically added core fields all fall through to the raw name (`columns::header_for`).
+# Exports and the clipboard always use the raw name via `header_for`, never a `report.col.*` value.
+_version: 1
+
+# --- Column headers ---
+# In `crates/moon-core/src/db/report_read.rs::DISPLAY_COLUMNS` order. Every column NOT listed here
+# keeps its raw DB name as its header: the six `locales/README.md` deliberately-untranslated
+# technical columns (id, taskid, exorderid, strategyid, basecurrency, sellsetdate), plus `lev` and
+# `fname` — kept raw per this goal's own spec, not the README six — and every `*delta`/`*ratio`
+# metric column. This list is one decision mirrored in `columns::header_label`'s `matches!` guard —
+# keep both in sync, in the same `DISPLAY_COLUMNS` order.
+report.col.buydate: "Aberta"
+report.col.closedate: "Fechada"
+report.col.core_name: "Núcleo"
+report.col.coin: "Moeda"
+report.col.isshort: "Lado"
+report.col.quantity: "Qtd"
+report.col.boughtq: "Comprado"
+report.col.buyprice: "Compra"
+report.col.sellprice: "Venda"
+report.col.spentbtc: "Gasto"
+report.col.gainedbtc: "Recebido"
+report.col.profitbtc: "Lucro"
+report.col.valuation_profit_usdt: "Lucro USDT"
+# %{amount} arm precedent: locales/analytics.yml `analytics.col.profit_pct` keeps the same three
+# identical strings, so a mixed Rust/YAML review does not read it as a missed translation.
+report.col.profitpct: "Lucro %"
+report.col.valuation_rate: "Cotação"
+report.col.valuation_rate_source: "Fonte cot."
+report.col.source: "Fonte"
+report.col.channel: "Canal"
+report.col.channelname: "Nome do canal"
+report.col.signaltype: "Sinal"
+report.col.emulator: "Emu"
+report.col.status: "Status"
+report.col.sellreason: "Motivo do fechamento"
+report.col.comment: "Comentário"
+# The remaining keyed columns are MoonBot's own tuner/filter field grid labels
+# (`crates/moon-core/src/db/tuner/fields.rs`) — industry-standard abbreviations, not dictionary
+# words, so all three locales carry the identical label (the same convention `report.export.csv`
+# already uses for "CSV").
+report.col.pump1h: "Pump1H"
+report.col.dump1h: "Dump1H"
+report.col.d24h: "d24h"
+report.col.d3h: "d3h"
+report.col.d1h: "d1h"
+report.col.d15m: "d15m"
+report.col.d5m: "d5m"
+report.col.d1m: "d1m"
+report.col.dbtc1m: "dBTC1m"
+report.col.vd1m: "Vd1m"
+report.col.pricebug: "PriceBug"
+report.col.hvol: "H.Vol"
+report.col.hvolf: "H.VolF"
+report.col.dvol: "D.Vol"
+# `takeprofitlag` is deliberately NOT keyed: unlike every other column in this block it has no
+# `tuner/fields.rs` FieldSpec, so there is no MoonBot label to mirror and any wording here would be
+# invented rather than sourced. It falls through to its raw DB name via `columns::header_for`.
+report.col.last_update_at: "Atualizado"
+
+# --- Side/emulator cell values ---
+report.side.short: "Short"
+report.side.long: "Long"
+report.cell.emu: "emu"
+
+# --- Filters and combo boxes ---
+report.filter.all: "Todas"
+report.all_strategies: "Todas as estratégias"
+report.search_strategies: "Buscar estratégias..."
+# Separate Auto-workspace report filter. Unlike the exact picker search above, this value narrows the
+# report itself by a strategy-name query in the shared syntax (comma = OR, space = AND,
+# !word = exclude; see common.strategy_query_syntax).
+report.filter.strategy_mask_ph: "Máscara da estratégia"
+report.filter.strategy_mask_tip: "Filtra o relatório pelo nome da estratégia."
+report.filter.core: "Núcleo:"
+report.filter.side: "Lado:"
+report.filter.from: "De:"
+report.filter.to: "Até:"
+# Doubles as the field's caption: there is no label beside it, so the placeholder names it.
+report.filter.coin_ph: "Moeda"
+# Hover text of the coin field; a `=` beside the field marks the exact mode it describes.
+report.filter.coin_tip: "Parte de um ticker acha toda moeda que o contém (io: IO, BIO, IOTA). Um espaço no fim ou uma escolha da lista acha o ticker exato (io : só IO e os contratos como IO_0925), marcado por '=' ao lado do campo."
+report.filter.date_ph: "Data e hora"
+# Deleted row of the merged scope field. Off (default) hides trades soft-deleted in the core's
+# report; on shows ONLY them. Export follows the same filter.
+report.filter.deleted: "Só excluídas"
+# Lifecycle row of the merged scope field, an axis independent of the real/emulator group above:
+# that one is a trade's ORIGIN, this one is whether it has closed. On (default) shows still-running
+# positions alongside closed trades, in the table AND in the totals; off removes them from both,
+# and the export follows the same filter. Disabled on an Analytics-scoped Report, which forces
+# closed rows regardless. Wording matches `report.open_positions_tip` so the switch and the footer
+# figure it governs use one vocabulary.
+report.filter.open_rows: "Posições abertas"
+# Full-width comment pane between the table and the totals: `show` is its row in the scope field.
+# The pane reuses `show` as its caption; with no row selected the strip is simply empty.
+report.comment.show: "Comentário da operação"
+# Shown when a trade IS selected and its comment is empty. With no trade selected the pane stays
+# blank instead — the two states must not read alike.
+report.comment.empty: "sem comentário"
+# Tooltip of the merged scope field. It states the two switch semantics the row labels alone
+# cannot: the deleted one is EXCLUSIVE (on shows only those), the open-positions one is INCLUSIVE
+# (off removes them from the table and the totals alike).
+report.filter.scope_tip: "Direção, tipo de operação, operações excluídas, posições abertas e o painel de comentário. “Só excluídas” desligado — as excluídas ficam ocultas; ligado — só elas aparecem. “Posições abertas” desligado — a tabela e os totais mostram só operações fechadas."
+# Abbreviation appended to the scope trigger while the row above is on.
+report.filter.deleted_short: "excl."
+# Fixed title of the scope trigger; the non-default choices follow it after a middle dot.
+report.filter.title: "Filtros"
+# Difference appended to the scope trigger while "Open positions" is off.
+report.filter.closed_only_short: "fechadas"
+# First row of the scope field's direction group. Named "all sides" rather than a bare "all" so it
+# does not read as the same option as the kind group's own first row.
+report.filter.all_sides: "Todos os lados"
+# Error toast when a soft-delete/restore could not be sent (the core is offline or gone). The
+# affected rows stay selected so nothing is silently lost.
+report.delete_send_failed: "Não foi possível enviar a mudança: o núcleo está indisponível. As linhas continuam selecionadas."
+# Selection commands shown in the totals row only while report rows are selected.
+report.selection.count: "Selecionadas: %{n}"
+report.selection.clear: "Limpar"
+report.selection.copy: "Copiar"
+report.selection.delete: "Excluir (%{n})"
+report.selection.restore: "Restaurar (%{n})"
+report.selection.copied: "Operações copiadas: %{n}"
+report.selection.delete_queued: "Na fila para excluir: %{n}. A seleção some depois da resposta do núcleo."
+report.selection.restore_queued: "Na fila para restaurar: %{n}. A seleção some depois da resposta do núcleo."
+# The trigger draws a MoonUI icon asset, added in code; the dictionary contains text only.
+report.columns_menu: "Colunas"
+# Menu for saving the report to a file (the ⇩ button left of Columns). The query period comes from
+# the panel's current filter (preset or From/To dates). CSV and Excel remain untranslated.
+report.export_menu: "Salvar o relatório num arquivo (CSV / Excel)"
+report.export.ok: "Linhas exportadas: %{n}"
+report.export.fail: "A exportação falhou — nenhum arquivo foi salvo"
+report.export.csv: "CSV"
+report.export.csv_all: "CSV — todas as colunas"
+report.export.xlsx: "Excel (XLSX)"
+report.export.xlsx_all: "Excel — todas as colunas"
+
+# --- Empty states and totals ---
+report.all_cols_hidden: "Todas as colunas estão ocultas — ative algumas em “Colunas”."
+report.empty: "Nenhum relatório corresponde ao filtro (ou o banco está vazio)."
+# Footer caption while no snapshot is renderable, when there is no order count to state.
+report.totals: "Total:"
+# Footer caption over a loaded snapshot: the bracketed number is the orders the total sums.
+report.totals_n: "Total (%{n}):"
+# The same caption in the row tooltip, which has room to say what the number counts.
+report.totals_n_tip: "Total (%{n} ordens)"
+# Still-running positions under the same filter. The amount is UNREALIZED and is deliberately NOT
+# part of the total above it, which covers closed trades only.
+report.open_positions: "abertas: %{n} (%{amount})"
+# The same fact when no open row has a known currency, so there is no amount to state.
+report.open_positions_bare: "abertas: %{n}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.open_positions_tip: "Posições abertas: %{n}. P&L flutuante, fora do total"
+# The same tooltip when some open rows carry no known currency and are absent from the amount.
+report.open_positions_tip_unknown: "Posições abertas: %{n}. P&L flutuante, fora do total; moeda de cotação desconhecida: %{unknown}"
+# Unsigned entry-plus-exit notional over the exact loaded Report filter.
+report.traded_volume: "Volume: %{amount}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.traded_volume_tip: "Volume negociado total: %{amount}"
+# A unified mixed-quote amount converted with the loaded snapshot's current-rate mode.
+report.traded_volume_current: "Volume na cotação atual: %{amount}"
+report.traded_volume_current_tip: "Volume negociado total na cotação atual: %{amount}"
+# An amount over the reconstructed quote buckets only. The qualifier shares the fact with the
+# figure so a narrow dock cannot clip one without the other.
+report.traded_volume_partial: "Volume (parcial): %{amount}"
+# The recovery text has room for the shortfall itself: how many orders are excluded, and from where.
+report.traded_volume_partial_tip: "Volume negociado das operações reconstruídas: %{amount}. Ordens não contadas: %{n} (%{currencies})"
+# Names the excluded rows that have no quote ticker of their own to be named by.
+report.traded_volume_unknown_quote: "moeda de cotação desconhecida"
+# Realized profit as a percentage of the average order, single-core scope only. %{pct} arrives
+# pre-signed from signed_pct, e.g. "+11.6%".
+report.avg_order_pct: "%{pct} da ordem média"
+# Some counted rows were excluded from both sums (unknown quote, Funding, non-positive spend).
+report.avg_order_pct_partial: "%{pct} da ordem média (parcial)"
+# The count is stated as a LABEL ("orders counted: N"), never as a noun the number must agree
+# with, so it reads correctly at n=1 in every locale without a plural form - the same shape
+# report.traded_volume_partial_tip already uses for its shortfall.
+report.avg_order_pct_tip: "Lucro sobre a ordem média: %{pct}. Ordem média: %{avg}, ordens contadas: %{n}"
+report.avg_order_pct_partial_tip: "Lucro sobre a ordem média: %{pct}. Ordem média: %{avg}, ordens contadas: %{n}; não contadas: %{excluded}"
+# The unified arm under ValuationMode::Current only. A unified scope CAN still be partial - Funding,
+# non-positive-spend and unknown-quote rows shrink the counted scope independently of valuation - and
+# in that case the partial wording above wins and this key is not reached, because the shortfall is
+# the more important signal.
+report.avg_order_pct_current_tip: "Lucro sobre a ordem média na cotação atual: %{pct}. Ordem média: %{avg}, ordens contadas: %{n}"
+report.unknown_quote_orders: "moeda de cotação desconhecida: %{n}"
+# The unified figure needs no "in USDT" prefix: the ticker is already on the amount.
+report.valuation_total: "%{amount} USDT"
+report.valuation_progress: "avaliação em USDT: %{ready}/%{total}"
+report.valuation_unavailable: "cotação histórica indisponível: %{n}"
+report.valuation_retrying: "avaliação: tentando de novo"
+report.valuation_stalled: "avaliação parada"
+report.valuation_stalled_tip: "A avaliação em USDT não avança há %{minutes} min. Etapa: %{stage}. Causa: %{kind}. [%{codes}] %{detail}"
+# Keeps its qualifier: this figure is what the period would be worth TODAY, not what it earned,
+# and dropping the words would make the two conversions render identically.
+report.valuation_total_current: "na cotação atual: %{amount} USDT"
+report.valuation_current_progress: "cotação atual: %{ready}/%{total}"
+report.valuation_current_unavailable: "cotação atual indisponível: %{n}"
+report.shown_top: "mostradas: %{n}"
+
+report.filter.emu: "Emulador"
+# Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
+# naming that timestamp on the period preset.
+report.period_basis.close: "Pela data de fechamento"
+report.period_basis.open: "Pela data de abertura"
+# Scope-caption marker shown only while the period runs on the open date.
+report.period_basis.open_short: "abert."
+report.period_basis.tooltip_close: "O período seleciona operações pela data de fechamento"
+report.period_basis.tooltip_open: "O período seleciona operações pela data de abertura"
+report.period.today: "Hoje"
+report.period.yesterday: "Ontem"
+# Every preset here is named by its FAMILY: a calendar one says which period it is current within,
+# a rolling one is labelled by its day count. A bare week or year cannot be told apart from its
+# rolling counterpart once both are offered, which is why the rolling three are numeric. The same
+# wording is carried in analytics.period.* so the two windows do not disagree; analytics.period.*
+# has its own cur_year but no calendar-week key — the Profit Monitor borrows this cur_week key
+# directly instead of duplicating it.
+# A rolling 7-day window ending today.
+report.period.week: "7 dias"
+# Calendar week from Monday.
+report.period.cur_week: "Esta semana"
+# Calendar month from the 1st.
+report.period.cur_month: "Este mês"
+# Previous calendar month, 1st to last day inclusive.
+report.period.last_month: "Mês passado"
+# Calendar year from January 1st.
+report.period.cur_year: "Este ano"
+# A rolling 30-day window — NOT a calendar month, which is why it is labelled by number.
+report.period.month: "30 dias"
+# A rolling 365-day window — NOT a calendar year.
+report.period.year: "365 dias"
+report.cores_n: "Núcleos: %{n}"
+report.strategies_n: "Estratégias: %{n}"
+# The core-list field label matches Orders (orders.all_cores).
+report.all_cores: "Todos os núcleos"
+# Order-type list field, matching orders.kind.*. `report.kind.all` is the Analytics toolbar wording;
+# the Report scope field uses `all_kinds` so its row differs from the direction group's "all".
+report.kind.all: "Todos"
+report.kind.all_kinds: "Todos os tipos"
+report.kind.real: "Reais"
+report.kind.emu: "Emulador"
+# Abbreviations the scope trigger lists after its title when the kind differs ("Фильтры · реал.").
+report.kind.real_short: "reais"
+report.kind.emu_short: "emu"
+
+# --- Trade log (the core's own log lines for one trade, matched by its task number) ---
+report.trade_log.open: "Log da operação"
+# Shown DISABLED when the row carries no core task number: a log line has no other identity, so
+# there is nothing the scan could look for.
+report.trade_log.no_task: "Log da operação — sem número da tarefa"
+# Shown DISABLED when the row's core cannot be named, so no log file can be located.
+report.trade_log.no_core: "Log da operação — o núcleo não pode ser identificado"
+report.trade_log.title: "Log da operação"
+report.trade_log.loading: "Lendo arquivos de log..."
+report.trade_log.count: "Linhas: %{n}"
+report.trade_log.truncated: "Primeiras %{n} linhas mostradas — o resto foi cortado"
+report.trade_log.copy_all: "Copiar tudo"
+report.trade_log.empty: "Log não encontrado: o arquivo do dia passou da retenção, ou o repasse de log estava desligado neste núcleo"
+
+report.access_denied: "O acesso à réplica dos relatórios não está disponível."

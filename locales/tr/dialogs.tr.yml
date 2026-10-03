@@ -1,0 +1,26 @@
+# Create, rename, and delete dialogs plus shared buttons.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Shared buttons ---
+dialogs.cancel: "İptal"
+dialogs.done: "Tamam"
+dialogs.yes: "Evet"
+dialogs.no: "Hayır"
+dialogs.create: "Oluştur"
+dialogs.rename: "Yeniden adlandır"
+
+# --- Strategy dialog titles ---
+dialogs.new_strategy: "Yeni strateji"
+dialogs.new_folder: "Yeni klasör"
+dialogs.rename_folder: "Klasörü yeniden adlandır"
+dialogs.delete_q: "Silinsin mi?"
+dialogs.operation: "İşlem"
+
+# --- Dialog fields and hints ---
+dialogs.name_ph: "ad"
+dialogs.name_required: "Bir strateji adı girin"
+dialogs.folder_prefix: "klasör: %{path}"
+dialogs.into_prefix: "hedef: %{path}"
+dialogs.delete_confirm: "%{what} silinsin mi? Bu geri alınamaz."
+dialogs.close: "Kapat"

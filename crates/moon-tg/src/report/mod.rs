@@ -1,4 +1,5 @@
 //! Localized rich reports over the same snapshot, time axis, and money reader as Report.
+use crate::t;
 use chrono::{Days, NaiveDate};
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
@@ -11,7 +12,6 @@ use moon_core::{
     },
     util::display_time,
 };
-use rust_i18n::t;
 use std::collections::BTreeSet;
 use std::sync::mpsc::SyncSender;
 

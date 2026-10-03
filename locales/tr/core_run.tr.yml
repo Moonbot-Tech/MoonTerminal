@@ -1,0 +1,49 @@
+# Shared core RUN control: whether a core is up, detecting and trading, and the buttons that
+# change all three.
+# Used by every surface that lists cores; see `controls::core_run`.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Runtime status slot ---
+core_run.status_started: "Çekirdek çalışıyor"
+# Shown for a single stopped core and for a group where at least one core reported a stop.
+core_run.status_stopped: "Çekirdek durdu"
+# A caption stands for many cores, so it names how many of them reported a stop.
+core_run.status_stopped_group: "%{n} çekirdek durdu"
+core_run.status_offline: "Çekirdeğe ulaşılamıyor"
+core_run.status_unknown: "Çekirdek henüz durum bildirmedi"
+# `restart_now` is Moonbot's own Restart Now: it starts the market runtime, leaves passive mode AND
+# starts the checked strategies. The tooltip says so — this button can begin trading.
+core_run.restart: "Çekirdeği başlat (pasif moddan çıkar ve işaretli stratejileri başlatır)"
+
+# --- Trading slot: Moonbot's own Start/Stop of the strategy engine ---
+core_run.trading_start: "Otomatik işlemi başlat"
+core_run.trading_stop: "Otomatik işlemi durdur"
+# A scope where some cores trade and some do not: the button starts the remaining ones.
+# RU counts follow `core_run.status_stopped_group`'s idiom — the noun BEFORE the number, in a form
+# that does not decline with it. «на %{n} ядрах» reads wrong at n=1 and n=21, and this project has
+# no plural-form mechanism to select between them. EN/ES keep their own «core(s)» / «núcleo(s)»:
+# neither language declines the noun after the number.
+core_run.trading_start_partial: "Otomatik işlemi %{n} çekirdekte daha başlat"
+# The same two actions when the control stands for a whole group or exchange row.
+core_run.trading_start_group: "Otomatik işlemi %{n} çekirdekte başlat"
+core_run.trading_stop_group: "Otomatik işlemi %{n} çekirdekte durdur"
+# --- AutoDetect slot: Moonbot's AutoDetect, the inverse of passive mode ---
+# The face shows the STATE (green ring detecting, red ring passive); the tooltip says what the
+# press will do, so the two never say the same thing twice.
+core_run.auto_on: "AutoDetect'i aç"
+core_run.auto_off: "AutoDetect'i kapat"
+# A scope where some cores detect and some are passive: the press turns the remaining ones on.
+core_run.auto_on_partial: "AutoDetect'i %{n} çekirdekte daha aç"
+# The same two actions when the control stands for a whole group, an exchange row or the table.
+core_run.auto_on_group: "AutoDetect'i %{n} çekirdekte aç"
+core_run.auto_off_group: "AutoDetect'i %{n} çekirdekte kapat"
+
+# Wrapper for any state the CURRENT connection has not re-reported. The feed re-publishes both
+# halves from MoonProto's retained snapshot when a core returns, so this is usually a short window;
+# it lasts when the client itself was replaced. Shown faded rather than hidden — the value is still
+# the last thing the core said.
+core_run.unconfirmed: "%{state} · yeniden bağlanmadan önceki veri, yenisi yok"
+# The same note without a state to wrap, for a surface that shows several dots at once.
+core_run.unconfirmed_short: "Yeniden bağlanmadan önceki veri, yenisi yok"
+core_run.waiting: "Komut gönderildi, çekirdek bekleniyor"

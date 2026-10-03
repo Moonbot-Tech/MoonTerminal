@@ -1,7 +1,7 @@
 // Headless preview of the Telegram Mini App: renders every screen from fixture payloads and
 // checks entry-volume rendering and the owner commands the page sends. No core, no bot, no network.
 //
-//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]
+//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]
 //
 // Exits non-zero when an interaction check fails or the page throws.
 
@@ -28,7 +28,7 @@ function args() {
         else if (key === "--locale") out.locale = value;
         else if (key === "--only") out.only = value;
         else if (key === "--help" || key === "-h") {
-            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]");
+            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]");
             process.exit(0);
         } else throw new Error(`unknown argument ${key}`);
         i++;

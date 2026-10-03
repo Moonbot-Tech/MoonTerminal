@@ -37,14 +37,44 @@ pub use station_status::{
 };
 pub use units::size_text;
 
-/// Build this crate's dictionary now, at the base of the caller's stack.
+/// Build this crate's dictionary once, on a dedicated 8 MiB thread.
 ///
-/// `rust_i18n` builds a crate's dictionary on its first `t!`, in one stack frame sized by the
-/// number of keys. Reached deep inside a request the frame can overflow the stack, so every host
-/// calls this first thing in `main`, beside its own warm-up.
+/// `i18n!` materialises every key in the first lookup's frame. That frame fits an 8 MiB
+/// stack, the size the binaries link with (`/STACK` on MSVC, the default main stack on Linux).
+/// This function runs the build on such a thread and joins it, so the caller's stack does not
+/// hold the frame. A later call returns immediately.
+///
+/// Hosts call this at startup. [`t`] calls it before every lookup, so a `t!` reached deep in a
+/// request looks up a dictionary that already exists.
+///
+/// The lookup inside this function is `rust_i18n::t!`. [`t`] calls this function, so the inner
+/// lookup stays on `rust_i18n::t!` and does not re-enter it.
 pub fn warm_locales() {
-    let _ = rust_i18n::t!("common.loading");
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let _ = rust_i18n::t!("common.loading");
+            })
+            .expect("locale dictionary thread")
+            .join()
+            .expect("locale dictionary");
+    });
 }
+
+/// Look up a key in this crate's dictionary.
+///
+/// Calls [`warm_locales`] before the lookup, so the dictionary build runs on the dedicated
+/// thread. Arguments match [`rust_i18n::t`]: a key, an optional `locale`, and `name = value`
+/// replacements.
+macro_rules! t {
+    ($($all:tt)*) => {{
+        $crate::warm_locales();
+        rust_i18n::t!($($all)*)
+    }};
+}
+pub(crate) use t;
 
 /// Answer in `language` from now on.
 ///

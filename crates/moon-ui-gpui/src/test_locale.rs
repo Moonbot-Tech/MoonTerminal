@@ -14,7 +14,26 @@
 //! they cannot overlap each other, and the guard puts the previous locale back — including when the
 //! test panics, so one failure does not cascade into the next test's language.
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, Once, OnceLock};
+
+/// Build this crate's dictionary on a stack that can hold the first lookup.
+///
+/// `i18n!` materialises every key in that one frame. It fits the 8 MiB the binaries link with
+/// (`/STACK` on MSVC, the default main stack on Linux) and does not fit a Windows test thread's
+/// 2 MiB.
+pub(crate) fn warm() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let _ = rust_i18n::t!("common.loading");
+            })
+            .expect("locale dictionary thread")
+            .join()
+            .expect("locale dictionary");
+    });
+}
 
 /// The lock itself. Poisoning is deliberately ignored: a panicking test has already failed, and
 /// refusing the lock afterwards would turn one red test into a red suite.
@@ -35,6 +54,7 @@ fn lock() -> MutexGuard<'static, ()> {
 ///     A guard that restores the previous locale and releases the lock when dropped.
 #[must_use = "the locale is only held while the guard lives"]
 pub(crate) fn force(code: &str) -> LocaleGuard {
+    warm();
     let guard = lock();
     let previous = rust_i18n::locale().to_string();
     rust_i18n::set_locale(code);

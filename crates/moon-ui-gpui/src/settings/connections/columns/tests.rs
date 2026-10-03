@@ -263,6 +263,9 @@ fn total_trigger_fits_every_localized_option_at_each_zoom() {
         include_str!("../../../../../../locales/en/connections.en.yml"),
         include_str!("../../../../../../locales/es/connections.es.yml"),
         include_str!("../../../../../../locales/uk/connections.uk.yml"),
+        include_str!("../../../../../../locales/tr/connections.tr.yml"),
+        include_str!("../../../../../../locales/pt/connections.pt.yml"),
+        include_str!("../../../../../../locales/vi/connections.vi.yml"),
     ];
     let mut labels = Vec::new();
     for dictionary in dictionaries {
@@ -274,7 +277,7 @@ fn total_trigger_fits_every_localized_option_at_each_zoom() {
             labels.push(value.trim().trim_matches('"'));
         }
     }
-    assert_eq!(labels.len(), 12, "three modes in each shipped locale");
+    assert_eq!(labels.len(), 21, "three modes in each shipped locale");
     for zoom in [0.75, 1.0, 1.5] {
         let tokens =
             crate::startup::moon_theme_config_for_presentation(UiThemeMode::Dark, zoom).dark;

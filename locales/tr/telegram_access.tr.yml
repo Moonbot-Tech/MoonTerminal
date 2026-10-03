@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Sohbetler"
+telegram.access_chat: "Sohbet %{id}"
+telegram.access_owner_summary: "Sahip: tüm çekirdekler, tam erişim"
+telegram.access_viewer_summary: "İzleyici: %{count} çekirdek, salt okunur"
+telegram.access_waiting: "İzleyici: çekirdek atanmadı, veri erişimi yok"
+telegram.access_no_cores: "Bu sohbete henüz çekirdek atanmadı. Sahibinden MoonTerminal'de seçmesini isteyin: Ayarlar → Telegram."
+telegram.access_edit: "Yapılandır"
+telegram.access_collapse: "Daralt"
+telegram.access_name: "Terminaldeki sohbet adı"
+telegram.access_name_placeholder: "Örneğin, Ali — müşteri"
+telegram.access_transfer_hint: "Bu sohbet tüm çekirdeklere tam erişim alır. Önceki sahip, atanmış çekirdeği olmayan bir izleyici olur. Değişiklik kaydettikten sonra geçerli olur."
+telegram.access_transfer_confirm: "Sahip değişimini onayla"
+telegram.access_make_owner: "Sahip yap"
+telegram.access_remove: "Sohbeti ayır"
+telegram.access_cores: "Kullanılabilir çekirdekler: salt okunur"
+telegram.access_search: "Çekirdeği numara veya adla bul"
+telegram.access_select_current: "Tüm geçerli çekirdekleri seç"
+telegram.access_clear: "Seçimi temizle"
+telegram.access_archived: "Çekirdek bağlantılardan silindi (geçmiş erişimi)"
+telegram.access_no_matches: "Çekirdek bulunamadı. Bağlantı ekleyip kaydedin veya aramayı değiştirin."
+telegram.access_history_loading: "Geçmişten çekirdekler yükleniyor…"
+telegram.access_history_failed: "Geçmiş okunamadı. Yapılandırılmış çekirdekler ve kayıtlı atamalar kullanılabilir."
+telegram.access_retry: "Yeniden dene"
+
+telegram.chats_hint: "Sohbeti kodla ekleyin; ilki sahip olur, diğerleri Kaydet'ten sonra atanmış çekirdekleri görür."

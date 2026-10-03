@@ -1,0 +1,28 @@
+# Telegram owner and read-only viewer assignments.
+_version: 1
+
+telegram.access_title: "Chat"
+telegram.access_chat: "Chat %{id}"
+telegram.access_owner_summary: "Chủ: mọi core, toàn quyền"
+telegram.access_viewer_summary: "Người xem: %{count} core, chỉ đọc"
+telegram.access_waiting: "Người xem: chưa gán core, không có quyền dữ liệu"
+telegram.access_no_cores: "Chat này chưa được gán core. Hãy nhờ chủ chọn trong MoonTerminal: Cài đặt → Telegram."
+telegram.access_edit: "Cấu hình"
+telegram.access_collapse: "Thu gọn"
+telegram.access_name: "Tên chat trong terminal"
+telegram.access_name_placeholder: "Ví dụ, An — khách"
+telegram.access_transfer_hint: "Chat này sẽ có toàn quyền mọi core. Chủ trước thành người xem, không còn core được gán. Thay đổi có hiệu lực sau khi lưu."
+telegram.access_transfer_confirm: "Xác nhận đổi chủ"
+telegram.access_make_owner: "Đặt làm chủ"
+telegram.access_remove: "Hủy ghép chat"
+telegram.access_cores: "Core khả dụng: chỉ đọc"
+telegram.access_search: "Tìm core theo số hoặc tên"
+telegram.access_select_current: "Chọn mọi core hiện có"
+telegram.access_clear: "Bỏ chọn"
+telegram.access_archived: "Core đã xóa khỏi kết nối (còn xem lịch sử)"
+telegram.access_no_matches: "Không thấy core. Hãy thêm và lưu kết nối, hoặc đổi từ khóa."
+telegram.access_history_loading: "Đang tải core từ lịch sử…"
+telegram.access_history_failed: "Không đọc được lịch sử. Core đã cấu hình và các gán đã lưu vẫn dùng được."
+telegram.access_retry: "Thử lại"
+
+telegram.chats_hint: "Thêm chat bằng mã; chat đầu là chủ, các chat khác thấy core được gán sau khi Lưu."

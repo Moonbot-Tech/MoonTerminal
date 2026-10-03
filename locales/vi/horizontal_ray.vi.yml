@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Tia ngang"
+hotkeys.draw_horizontal_ray: "Tia ngang"
+hotkeys.draw_horizontal_ray_hint: "Một lần nhấp đặt gốc và giá của tia hướng sang phải. Nhấn lại để tắt công cụ."

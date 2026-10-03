@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "sem arquivo"
+sounds.missing_title: "Som não encontrado"
+sounds.missing_name: "O som \"%{name}\" não foi encontrado — %{fallback} toca no lugar. Coloque %{name}.wav em %{folder}."
+sounds.missing_ordinal: "O som nº %{n} não existe — %{fallback} toca no lugar. Coloque em %{folder} um arquivo chamado %{n}_nome.wav, ou escolha o som de novo nas configurações do núcleo."
+sounds.folder_title: "Seus próprios sons"
+sounds.folder_help: "Coloque arquivos .wav nesta pasta — eles aparecem em todas as listas de sons (estratégias, sons de operações, avisos, alertas). As configurações do núcleo guardam o som por NÚMERO: 1–%{last} são embutidos; um arquivo reivindica o próprio número pelo nome: %{first}_MySound.wav → som \"MySound\" nº %{first}. Um arquivo sem número não pode ser escolhido nas configurações do núcleo; um arquivo com o nome de um som embutido (ding1.wav) o substitui."
+sounds.open_folder: "Abrir pasta"
+sounds.rescan: "Atualizar"
+sounds.scan_summary: "Da pasta: %{folder} (numerados: %{numbered}), rejeitados: %{rejected}"
+sounds.numbered_title: "Seus números"
+sounds.scan_pending: "Lendo a pasta…"
+sounds.rejected_title: "Arquivos rejeitados"
+sounds.reject_not_pcm: "não é WAV PCM"
+sounds.reject_too_large: "maior que %{mb} MB"
+sounds.reject_over_total: "acima do total de %{mb} MB"
+sounds.reject_io: "ilegível: %{detail}"
+sounds.reject_number_reserved: "números abaixo de %{first} pertencem aos sons embutidos"
+sounds.reject_number_taken: "este número já está com \"%{by}\""
+sounds.reject_name_taken: "já existe um som com este nome — um arquivo numerado precisa de outro nome"

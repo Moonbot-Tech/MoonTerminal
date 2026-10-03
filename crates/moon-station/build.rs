@@ -35,4 +35,8 @@ fn main() {
         })
         .unwrap_or_default();
     println!("cargo:rustc-env=MOONSTATION_EXACT_TAGS={exact}");
+    // The i18n dictionary is built in one frame on the first t! (`moon_tg::warm_locales()` in main) and outgrows MSVC's 1 MiB default.
+    if std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|env| env == "msvc") {
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+    }
 }

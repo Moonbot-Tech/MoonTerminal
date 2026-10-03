@@ -2269,14 +2269,25 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
 
     // The hint must state both caveats in every language. Asserted on the TEXT, because a key that
     // resolves to one bland word would satisfy the reference check above and tell the user nothing.
-    // The Ukrainian sentence names the tuner as "підбір порогів"; it does not contain "тюнер".
-    let mut named_source = 0;
-    for (lang, tuner_word) in [
+    // Ukrainian names the tuner "підбір порогів" and does not contain "тюнер". Turkish names it
+    // "Eşik ayarı", Portuguese "ajuste" (the same noun Spanish uses), and Vietnamese
+    // "tinh chỉnh ngưỡng".
+    let hints = [
         ("ru", "тюнер"),
         ("en", "tuning"),
         ("es", "ajuste"),
         ("uk", "підбір порогів"),
-    ] {
+        ("tr", "Eşik ayarı"),
+        ("pt", "ajuste"),
+        ("vi", "tinh chỉnh ngưỡng"),
+    ];
+    let codes: [&str; SHIPPED.len()] = std::array::from_fn(|index| hints[index].0);
+    assert_eq!(
+        codes, SHIPPED,
+        "a future language must add its valuation-mode hint row"
+    );
+    let mut named_source = 0;
+    for (lang, tuner_word) in hints {
         let hint = locale_value("general", lang, "general.valuation_mode_hint");
         let hits = hint.matches("Binance/Bybit").count();
         assert_eq!(
@@ -2290,7 +2301,8 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         );
     }
     assert_eq!(
-        named_source, 4,
+        named_source,
+        SHIPPED.len(),
         "every shipped language must name where the current rate comes from"
     );
 

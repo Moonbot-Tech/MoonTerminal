@@ -4,11 +4,11 @@
 //! Names are cut to 64 chars before [`crate::html::escape`]. The outbox refuses
 //! oversized bodies rather than cutting HTML inside a tag or entity.
 
+use crate::t;
 use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::feed::order_math::MONEY_DECIMALS;
 use moon_core::util::{display_time, fmt};
-use rust_i18n::t;
 
 use super::daily::DaySummary;
 use super::trades::ClosedTrade;

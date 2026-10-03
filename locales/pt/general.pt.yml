@@ -1,0 +1,28 @@
+# General tab of the Settings window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+general.language: "Idioma da interface"
+general.language_hint: "Aplicado depois de salvar."
+general.valuation_mode: "Cotação usada na conversão para USDT"
+general.valuation_mode.historical: "No momento da operação"
+general.valuation_mode.current: "Cotação atual"
+general.valuation_mode_hint: "Relatório e Análise convertem para USDT pela cotação do minuto em que a operação fechou. Mude isto só de propósito: “Cotação atual” usa a última cotação conhecida do spot da Binance/Bybit, e não da corretora em que a operação foi feita, atualiza a cada poucos minutos e nunca a grava. Também muda o ajuste: os limites passam a ser calculados sobre o histórico reavaliado. Aplicado depois de salvar."
+general.charts_split_by_core: "Aba de gráfico separada por núcleo"
+general.charts_split_by_core_hint: "AddToChart padrão: ligado — uma aba por núcleo, desligado — todos os núcleos do grupo em uma. A coluna “Gráficos” do núcleo (Conexões) substitui isto: núcleos com o mesmo nome de conjunto se juntam em uma aba."
+general.separate_control_zones: "Arrastar o gráfico na zona do livro"
+general.separate_control_zones_hint: "Ligado — um arraste com o botão esquerdo que não acerta nenhuma linha de ordem move o gráfico de dentro da zona do livro; um clique sem movimento ainda coloca, move ou cancela como hoje. Desligado — a zona do livro é só de ordens: sem arrastar e sem zoom ali. Os gestos de ordem ficam sempre na zona do livro, em qualquer aba, inclusive Add e janelas destacadas; um clique no gráfico nunca coloca, move ou cancela uma ordem. A roda sobre o livro continua sendo da pilha / livro. Com o livro oculto, a zona de ordens é uma faixa na borda direita com uma linha marcadora, enquanto a aba mantiver “Zona de ordens com o livro oculto” ligada; desligue-a junto com o livro e a aba vira gráfico de ponta a ponta — nenhum gesto de ordem, e um clique duplo em qualquer ponto abre a moeda na Main. Um gráfico reduzido pela vassoura de comparação até o livro não se divide: o livro cobre toda a área, e não resta nenhum gesto de gráfico — arrastar, o clique duplo para abrir na Main, sair da tela cheia."
+general.main_idle_close: "Fechar gráficos da Main ao ficar ocioso"
+general.main_idle_close_secs: "Fechar após"
+general.main_idle_close_hint: "Ocioso = a janela Main não está em foco OU está em foco, mas o mouse não se move. Cada gráfico fecha após N segundos da própria inatividade (o aberto por último fecha por último); um gráfico em tela cheia também fecha e sai da tela cheia. As assinaturas do livro de ofertas são canceladas na hora."
+general.seconds: "seg"
+general.charts_scroll: "Mostrar gráficos com rolagem"
+general.charts_scroll_hint: "Ligado — cada gráfico tem altura fixa com rolagem vertical. Desligado (como antes) — os gráficos dividem a altura da janela (escala vertical)."
+general.chart_height: "Altura do gráfico, px"
+general.compress_fill: "Comprimir para caber (sem rolagem)"
+general.compress_fill_hint: "Não aparece barra de rolagem: os gráficos mantêm a altura definida até chegar ao fim da janela e então comprimem (como sem rolagem)."
+general.log_to_file: "Gravar log em arquivos"
+general.log_to_file_hint: "Os logs do app e dos núcleos são gravados em logs/<data>_<fonte>.log (um arquivo por fonte por dia)."
+general.log_retention: "Manter o log"
+general.log_retention_hint: "Arquivos mais antigos que isto são excluídos na inicialização e uma vez por dia. 0 — manter tudo."
+general.days: "dias"

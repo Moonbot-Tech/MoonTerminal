@@ -1,0 +1,12 @@
+# Header update button: Windows self-update, macOS installer image download.
+_version: 1
+
+update.available: "Cập nhật lên %{version}"
+update.tooltip: "Tải xuống, cài đặt và khởi động lại MoonTerminal"
+update.tooltip_image: "Tải trình cài MoonTerminal vào Tải xuống và mở nó"
+update.opened: "Đã mở trình cài"
+update.opened_tooltip: "Đã mở trình cài — kéo MoonTerminal vào Ứng dụng. Nhấn để mở lại"
+update.installing: "Đang cài bản cập nhật..."
+update.retry: "Thử cập nhật lại"
+update.failed: "Cập nhật thất bại: %{error}"
+update.recovered: "Bản cập nhật không khởi chạy. Phiên bản trước đã được khôi phục và mở lại."

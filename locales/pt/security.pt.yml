@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Segurança"
+security.password: "Senha"
+security.confirm: "Repetir"
+security.mismatch: "As senhas não coincidem"
+
+# --- Launch gate ---
+security.launch: "Senha ao abrir"
+security.launch_hint: "Uma trava local pedida em cada início. Qualquer tamanho. Ela NÃO criptografa as chaves dos núcleos — quem tem acesso aos arquivos ainda as lê."
+
+# --- servers.enc encryption password ---
+security.file: "Senha de criptografia do servers.enc"
+security.file_hint: "Pedida só quando o arquivo não abre com a chave da máquina: numa máquina nova, ou depois que o cofre de chaves do sistema se perde. Depois de digitada corretamente, fica memorizada nesta máquina e não é pedida de novo."
+security.file_warning: "Esta senha não pode ser recuperada. Se você perdê-la junto com a chave da máquina, perderá os núcleos."
+security.rule: "Pelo menos %{min} caracteres e duas classes de caracteres diferentes."
+security.bits: "≈%{bits} bits"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Fraca"
+security.level.fair: "Razoável"
+security.level.good: "Boa"
+security.level.strong: "Forte"
+security.issue.none: "Aceita"
+security.issue.short: "Curta demais: pelo menos %{min} caracteres"
+security.issue.common: "Contém uma palavra muito conhecida — adivinhada de uma vez"
+security.issue.repeats: "Repete demais um único caractere"
+security.issue.sequence: "Sequências de caracteres seguidos são adivinhadas na hora"
+security.issue.one_class: "Só uma classe de caracteres — acrescente um dígito, uma maiúscula ou um símbolo"
+security.issue.low_entropy: "Previsível demais — deixe mais longa e variada"
+
+# --- Machine key slots ---
+security.machines: "Máquinas com acesso: %{used} de %{max}"
+security.machines_unknown: "Máquinas com acesso: — de %{max}"
+security.forget_machines: "Esquecer as outras"
+security.machines_forgotten: "Acesso revogado nas outras máquinas"
+
+# --- Apply results ---
+security.applied: "Senhas salvas"
+security.pending_write: "Senhas aceitas; salvando…"
+security.err.not_saved: "A senha foi aceita, mas a configuração não foi salva; corrija o erro acima e salve de novo"
+security.err.empty: "Digite uma senha"
+security.err.mismatch: "As senhas não coincidem"
+security.err.not_editable: "A configuração não foi aberta nesta execução, então não há onde salvar a senha"
+security.err.backend: "O cofre de chaves está indisponível, então nada foi salvo"
+security.not_editable: "servers.enc não foi aberto nesta execução, então as senhas estão indisponíveis"
+security.err.weak: "A senha de criptografia é fraca demais"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Entrar"
+login.title: "Entrar"
+login.placeholder: "Senha"
+login.enter: "Entrar"
+login.exit: "Sair"
+login.start_over: "Começar de novo"
+login.file_subtitle: "servers.enc não abre com a chave desta máquina. Digite a senha de criptografia; a máquina memoriza o acesso depois."
+login.launch_subtitle: "Digite a senha de abertura."
+login.locked_subtitle: "servers.enc está criptografado com a chave de outra máquina e não tem senha de criptografia. Não há com o que abri-lo."
+login.throttled: "A entrada fica mais lenta depois de falhas repetidas"
+login.err.empty: "Digite uma senha"
+login.err.backend: "Não foi possível verificar a senha; veja o log"
+login.err.wrong: "Senha incorreta"

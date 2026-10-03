@@ -1,0 +1,7 @@
+# Error messages for settings validation and GPU failures.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+err.dup_name: "Tên máy chủ trùng: «%{name}»"
+err.dup_key: "Khóa trùng trên máy chủ «%{name}» (core này đã tồn tại)"
+err.no_gpu: "không có adapter GPU phù hợp"

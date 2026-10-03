@@ -1,0 +1,124 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+assets.window_title: "MoonTerminal — Varlıklar"
+assets.show_all: "tümünü göster"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "N $ altındaki varlıkları gizle (0 — tümünü göster; fare tekerleği değiştirir)"
+assets.cores_free_total: "Çekirdek · serbest/toplam"
+assets.cores_count: "Çekirdek (%{n})"
+assets.no_cores: "çekirdek yok"
+assets.empty: "varlık yok"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "açık pozisyon yok"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "Toz filtresinden sonraki tablo satırları; Σ bunların toplam değeri"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "%{n} satırın geçerli değeri yok — Σ onları saymaz"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "Kapsamdaki çekirdeklerin özsermayesi — tablo toplamı değil"
+assets.balances_total: "Toplam"
+assets.balances_free: "serbest"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "çevrimdışı"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "kur yok"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "bekleniyor: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "kur yok: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "çevrimdışı: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "aynı hesap: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "dışarıda: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores}, %{core} hesabını paylaşır: bir kez sayıldı"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "(Hyperliquid: terminal hesap kipini göremez, birleşik veya standart; cüzdanlar ayrıysa çekirdeği Ayarlar → Bağlantılar → Toplamda altında “Ayrı” yapın)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "Çekirdek ayarıyla dışarıda: %{cores}"
+assets.section_positions: "Pozisyonlar"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "Tüm çekirdekler"
+assets.cores_n: "Çekirdek: %{n}"
+
+# --- Asset table columns ---
+assets.col.core: "Çekirdek"
+assets.col.coin: "Varlık"
+assets.col.qty: "Mikt."
+assets.col.price: "Fiyat"
+assets.col.value: "Değer $"
+assets.col.pos: "Poz."
+assets.col.pos_price: "Poz. fiyat"
+assets.col.profit: "Kâr"
+assets.col.kind: "Piyasa"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "Düğmeler"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "Alanlar"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "Spot bakiyenin gerçekleşmemiş K/Z değeri yok"
+assets.actions.unavailable_qty: "Satılabilir %{coin} miktarı yok"
+assets.actions.unavailable_market_identity: "%{coin} için piyasa kimliği yok"
+assets.actions.unavailable_market_catalog: "%{market} piyasası çekirdek kataloğunda yok"
+
+# --- Position action buttons ---
+assets.open_global_hint: "Varlıkları ayrı pencerede aç (tüm çekirdekler)"
+assets.market_sell: "Piyasadan sat"
+assets.market_sell_confirm: "Piyasadan sat"
+assets.market_sell_no_price: "Satış iptal: piyasanın güncel fiyatı yok ve emir bir fiyat ister."
+assets.market_sell_q: "%{coin} gerçekten piyasadan satılsın mı?"
+assets.market_sell_scope_changed: "Satış iptal: çekirdek artık geçerli Varlıklar kapsamında değil."
+assets.order: "Order"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "Satışı yeniden koy: kendi %{coin} emirlerini iptal et ve tüm pozisyon için limit kapanış koy (Moonbot'taki Order gibi)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "%{coin} için limit satış koy: fiyat ve Size ile emir penceresi (spotta Moonbot'taki Order gibi)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "%{coin} sat"
+assets.order_dialog.side: "Emir"
+assets.order_dialog.size: "Size, %{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "Satış fiyatı"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "Güncel: %{p}"
+assets.order_dialog.bad_size: "Miktar pozitif bir sayı olmalı"
+assets.order_dialog.bad_price: "Fiyat pozitif bir sayı olmalı"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "%{coin} için Order komutu çekirdeğe gönderildi — sonucu Emirler'de ve çekirdek günlüğünde kontrol edin"
+assets.order_failed: "%{coin} pozisyonunun limit kapanışı gönderilmedi: çekirdeğe ulaşılamıyor"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "Spot"
+assets.wallet.kind.futures: "Futures"
+assets.wallet.kind.quarterly: "Quarterly"
+assets.wallet.filtered_empty: "%{n} varlığın tümü %{thr}$ değer filtresiyle gizli"
+assets.wallets_hint: "Cüzdanlar · bir coin'i kaplar arasında sürükleyin"
+assets.refresh_hint: "Çekirdek bakiyelerini yenile"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "Cüzdan ayarları"
+assets.settings.display: "Görünüm"
+assets.settings.group_by_venue: "Çekirdekleri borsaya göre grupla"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "Sütunu boyutlamak için sürükleyin. Çift tıklama sıfırlar"
+assets.transfer_title: "%{coin} aktarımı: %{from} -> %{to}"
+assets.free: "serbest: %{n}"
+assets.transfer_btn: "Aktar"

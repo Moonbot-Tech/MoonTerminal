@@ -1,0 +1,28 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "kesikli"
+lines.start_cross: "başlangıç artısı"
+lines.end_cross: "bitiş artısı"
+lines.knots: "düğümler"
+lines.thickness: "kalınlık"
+lines.cross_size: "artı boyutu"
+lines.cross_thickness: "artı kalınlığı"
+lines.knot_size: "düğüm boyutu"
+lines.pending_group: "Verildi (gerçekleşmedi):"
+lines.pending_alpha: "alfa"
+lines.path_title: "Fiyat taşıma izi (yol)"
+lines.path_line_color: "çizginin kendi renginde"
+lines.path_alpha: "alfa"
+lines.path_hint: "Emir fiyatının taşındığı adımlar — çekirdeğin gönderdiği veya burada kurulan. Stopun kendi hareket parçası her zaman çizilir."
+lines.global: "Genel"
+lines.active_alpha: "Aktif alfa"
+lines.closed_visibility: "İptal edilen/kapanan görünürlüğü"
+lines.pending_dashed: "Bekleyen emir: kesikli giriş"
+lines.max_closed: "Çizilen en fazla kapanmış emir"
+lines.hint: "Stop/Trailing/Liq çizgileri yalnızca giriş gerçekleşince görünür."
+lines.theme_hint: "Etkin temanın çizgi seti düzenleniyor: Açık tema açık seti kullanır, Koyu tema ile Grafit koyu seti paylaşır; temayı Genel sekmesinde değiştirin. Kaydet her iki seti de uygulamanın yanındaki cfg/orders.toml dosyasına yazar — dosyayı paylaşabilirsiniz."

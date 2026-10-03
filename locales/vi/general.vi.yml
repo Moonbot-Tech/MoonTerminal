@@ -1,0 +1,28 @@
+# General tab of the Settings window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+general.language: "Ngôn ngữ giao diện"
+general.language_hint: "Có hiệu lực sau khi lưu."
+general.valuation_mode: "Tỷ giá quy đổi USDT"
+general.valuation_mode.historical: "Lúc giao dịch"
+general.valuation_mode.current: "Tỷ giá hiện tại"
+general.valuation_mode_hint: "Báo cáo và Phân tích quy đổi sang USDT theo tỷ giá của phút giao dịch đóng. Chỉ đổi khi cố ý: “Tỷ giá hiện tại” lấy tỷ giá mới nhất trên spot Binance/Bybit chứ không phải sàn đã giao dịch, làm mới vài phút một lần và không lưu. Việc này cũng đổi tinh chỉnh ngưỡng: ngưỡng được chọn theo lịch sử đã định giá lại. Có hiệu lực sau khi lưu."
+general.charts_split_by_core: "Tab biểu đồ riêng cho mỗi core"
+general.charts_split_by_core_hint: "AddToChart mặc định: bật — một tab mỗi core, tắt — mọi core của một nhóm chung một tab. Cột “Biểu đồ” của core (Kết nối) ghi đè: các core cùng tên nhóm biểu đồ gộp vào một tab."
+general.separate_control_zones: "Kéo biểu đồ trong vùng sổ lệnh"
+general.separate_control_zones_hint: "Bật — kéo trái không trúng đường lệnh nào sẽ kéo biểu đồ từ trong vùng sổ lệnh; nhấp không di chuyển vẫn đặt, dời hoặc hủy như hiện nay. Tắt — vùng sổ lệnh chỉ cho lệnh: không kéo, không zoom. Thao tác lệnh luôn chỉ nằm trong vùng sổ lệnh, trên mọi tab kể cả Add và cửa sổ tách; nhấp vào vùng vẽ không bao giờ đặt, dời hay hủy lệnh. Con lăn trên sổ lệnh vẫn thuộc stack / sổ lệnh. Khi ẩn sổ lệnh, vùng lệnh là một dải sát mép phải có đường đánh dấu, chừng nào tab còn bật “Vùng lệnh khi ẩn sổ lệnh”; tắt nó cùng với sổ lệnh thì tab thành biểu đồ sát mép — không còn thao tác lệnh, và nhấp đúp ở bất kỳ đâu mở coin trên Main. Biểu đồ bị chổi so sánh thu về còn sổ lệnh thì không chia vùng: sổ lệnh phủ kín, và không còn thao tác biểu đồ — kéo, nhấp đúp mở trên Main, thoát toàn màn hình."
+general.main_idle_close: "Tự đóng biểu đồ Main khi không dùng"
+general.main_idle_close_secs: "Đóng sau"
+general.main_idle_close_hint: "Không dùng = cửa sổ Main không ở tiền cảnh HOẶC ở tiền cảnh nhưng chuột không di chuyển. Mỗi biểu đồ đóng sau N giây không hoạt động của chính nó (biểu đồ mở gần nhất đóng sau cùng); biểu đồ toàn màn hình cũng đóng và thoát toàn màn hình. Đăng ký sổ lệnh được hủy ngay."
+general.seconds: "giây"
+general.charts_scroll: "Hiện biểu đồ có thanh cuộn"
+general.charts_scroll_hint: "Bật — mỗi biểu đồ có chiều cao cố định, cuộn dọc. Tắt (như trước) — các biểu đồ chia chiều cao cửa sổ (co theo chiều dọc)."
+general.chart_height: "Cao biểu đồ, px"
+general.compress_fill: "Nén cho vừa (không cuộn)"
+general.compress_fill_hint: "Không hiện thanh cuộn: biểu đồ giữ chiều cao đã đặt đến khi chạm đáy cửa sổ, rồi bị nén (như khi không cuộn)."
+general.log_to_file: "Ghi log ra file"
+general.log_to_file_hint: "Log ứng dụng và core ghi vào logs/<ngày>_<nguồn>.log (một file mỗi nguồn mỗi ngày)."
+general.log_retention: "Giữ log"
+general.log_retention_hint: "File cũ hơn mức này bị xóa lúc khởi động và mỗi ngày một lần. 0 — giữ tất cả."
+general.days: "ngày"
