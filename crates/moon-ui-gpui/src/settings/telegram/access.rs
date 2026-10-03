@@ -42,6 +42,8 @@ pub(in crate::settings) struct ChatEd {
     pub(super) pending_owner: Option<i64>,
     name: Entity<MoonInputState>,
     search: Entity<MoonInputState>,
+    /// The opened chat's notifications.
+    pub(super) notify: super::chat_notify::NotifyEd,
 }
 
 impl ChatEd {
@@ -60,6 +62,7 @@ impl ChatEd {
             pending_owner: None,
             name,
             search,
+            notify: super::chat_notify::NotifyEd::new(window, cx),
         }
     }
 
@@ -98,14 +101,14 @@ impl ChatEd {
 }
 
 impl SettingsView {
-    fn chat_ed(&self, side: ChatsOf) -> &ChatEd {
+    pub(super) fn chat_ed(&self, side: ChatsOf) -> &ChatEd {
         match side {
             ChatsOf::Terminal => &self.telegram.chats,
             ChatsOf::Station => &self.telegram.server.chats,
         }
     }
 
-    fn chat_ed_mut(&mut self, side: ChatsOf) -> &mut ChatEd {
+    pub(super) fn chat_ed_mut(&mut self, side: ChatsOf) -> &mut ChatEd {
         match side {
             ChatsOf::Terminal => &mut self.telegram.chats,
             ChatsOf::Station => &mut self.telegram.server.chats,
@@ -391,6 +394,7 @@ impl SettingsView {
                                 ),
                         );
                 }
+                card = card.child(self.chat_notify_box(side, chat, cx));
             }
             section = section.child(card);
         }

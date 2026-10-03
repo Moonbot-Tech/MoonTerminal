@@ -249,6 +249,140 @@ pub(crate) fn save_chat_notify(
     }
 }
 
+/// Every paired chat's notifications as stored, with their revisions, for the settings window
+/// (the station's answer to the terminal included).
+///
+/// Returns:
+///     `None` when the bot runs no notifications store.
+pub fn notify_rows(
+    state: &crate::TelegramState,
+    telegram: &moon_core::config::TelegramConfig,
+) -> Option<std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>> {
+    let store = state
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)?;
+    let guard = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Some(
+        telegram
+            .authorized_chat_ids
+            .iter()
+            .map(|&chat| {
+                let row = guard.file.chats.get(&chat);
+                (
+                    chat,
+                    moon_core::station_api::ChatNotifyRow {
+                        settings: row.map(|r| r.settings.clone()).unwrap_or_default(),
+                        revision: row.map_or(0, |r| r.revision),
+                    },
+                )
+            })
+            .collect(),
+    )
+}
+
+/// The cores a trade rule of `chat` may name: the chat's grant — for the owner every core, so the
+/// rule's own list stands; for a viewer the assigned ones.
+fn rule_visible(
+    telegram: &moon_core::config::TelegramConfig,
+    chat: i64,
+    settings: &NotifySettings,
+) -> Result<Vec<u64>, String> {
+    use moon_core::config::telegram_access::TelegramReportAccess;
+    match telegram.report_access(chat) {
+        None => Err(t!("telegram.refusal").to_string()),
+        Some(TelegramReportAccess::Viewer(ids)) => Ok(ids),
+        Some(TelegramReportAccess::Owner) => Ok(match &settings.trades.cores {
+            CoreScope::Only(ids) => ids.clone(),
+            CoreScope::All => Vec::new(),
+        }),
+    }
+}
+
+/// Whether [`save_notify_rows`] would take every row as it is now: each chat paired, its stored
+/// revision the one given, its rules valid. Nothing is written — a caller with other changes
+/// checks before making them, so a refused row cannot leave half a change behind.
+pub fn check_notify_rows(
+    state: &crate::TelegramState,
+    telegram: &moon_core::config::TelegramConfig,
+    rows: &std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>,
+) -> Result<(), String> {
+    let store = state
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)
+        .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
+    let guard = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    check_rows(&guard.file, telegram, rows)
+}
+
+/// [`check_notify_rows`] on a notifications document.
+pub(super) fn check_rows(
+    file: &NotifyFile,
+    telegram: &moon_core::config::TelegramConfig,
+    rows: &std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>,
+) -> Result<(), String> {
+    for (&chat, row) in rows {
+        let visible = rule_visible(telegram, chat, &row.settings)?;
+        let stored = file.chats.get(&chat).map_or(0, |stored| stored.revision);
+        if stored != row.revision {
+            return Err(save_fault_text(SaveFault::Stale));
+        }
+        prepare_settings(row.settings.clone(), &visible).map_err(save_fault_text)?;
+    }
+    Ok(())
+}
+
+/// Save chats' notifications from the settings window, each through the Mini App's own checks
+/// and ledger edges ([`store_settings`]) and only while its stored revision is the one given.
+///
+/// A chat must be paired. The cores a trade rule may name are the chat's grant: every core for
+/// the owner, the assigned ones for a viewer.
+///
+/// Returns:
+///     Why a chat was refused or not saved, in words for the settings window; chats before it
+///     in id order are saved.
+pub fn save_notify_rows(
+    state: &crate::TelegramState,
+    telegram: &moon_core::config::TelegramConfig,
+    rows: &std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>,
+    zone: Tz,
+) -> Result<(), String> {
+    let store = state
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)
+        .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
+    let now = i64::try_from(now_unix_secs()).unwrap_or(i64::MAX);
+    let mut guard = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for (&chat, row) in rows {
+        let visible = rule_visible(telegram, chat, &row.settings)?;
+        match store_settings(
+            &mut guard,
+            chat,
+            row.settings.clone(),
+            &visible,
+            now,
+            zone,
+            row.revision,
+        ) {
+            SaveResult::Saved => {}
+            SaveResult::Refused(fault) => return Err(save_fault_text(fault)),
+            SaveResult::Failed(error) => {
+                log::warn!("telegram notification settings not saved for chat {chat}: {error}");
+                return Err(t!("telegram.mini_settings_err_save").to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Localized text for a refusal. The HTTP body carries this string, not the key.
 ///
 /// Args:

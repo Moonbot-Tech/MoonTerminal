@@ -160,3 +160,24 @@ fn the_pushed_zone_reads_back() {
     };
     assert!(super::pushed_zone(&unreadable).is_none());
 }
+
+/// Chats' notifications travel with a change but are never written into `telegram.json`.
+#[test]
+fn notifications_stay_out_of_the_pairing_file() {
+    use moon_core::station_api::ChatNotifyRow;
+    let current = Access {
+        authorized_chat_ids: vec![7],
+        owner_chat_id: Some(7),
+        bot: Some(Default::default()),
+        ..Access::default()
+    };
+    let change = Access {
+        notify: Some(std::collections::BTreeMap::from([(
+            7,
+            ChatNotifyRow::default(),
+        )])),
+        ..current.clone()
+    };
+    let saved = super::plan_access(&current, None, &current, change).unwrap();
+    assert_eq!(saved.notify, None);
+}

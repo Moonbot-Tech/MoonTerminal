@@ -258,6 +258,7 @@ impl StationTg {
     pub fn access(&self, config: &AppConfig) -> Access {
         Access {
             zone: Some(self.zone.name().to_owned()),
+            notify: moon_tg::notify_rows(&self.state, &config.telegram),
             ..Access::of(&config.telegram)
         }
     }
@@ -274,6 +275,18 @@ impl StationTg {
         base: &Access,
         access: Access,
     ) -> Result<Access, String> {
+        let notify = access.notify.clone();
+        // Chats' notifications are checked against the chats they will land on before anything
+        // is written: a stale or invalid row refuses the whole change, not half of it.
+        if let Some(rows) = notify.as_ref().filter(|rows| !rows.is_empty()) {
+            let mut landing = config.telegram.clone();
+            Access {
+                notify: None,
+                ..access.clone()
+            }
+            .apply_to(&mut landing);
+            moon_tg::check_notify_rows(&self.state, &landing, rows)?;
+        }
         let saved = plan_access(
             &self.access(config),
             self.zone_pushed.as_deref(),
@@ -295,6 +308,14 @@ impl StationTg {
             "telegram: chats replaced by the terminal, {} paired",
             saved.authorized_chat_ids.len()
         );
+        // Chats' notifications go to their own file, against the chats just saved.
+        if let Some(rows) = notify.filter(|rows| !rows.is_empty()) {
+            moon_tg::save_notify_rows(&self.state, &config.telegram, &rows, self.zone)?;
+            log::info!(
+                "telegram: notifications of {} chat(s) changed by the terminal",
+                rows.len()
+            );
+        }
         Ok(self.access(config))
     }
 
@@ -580,6 +601,8 @@ fn plan_access(
     Ok(Access {
         bot: access.bot.or_else(|| current.bot.clone()),
         zone: access.zone.or_else(|| pushed.map(str::to_owned)),
+        // Notifications have a file of their own, never `telegram.json`.
+        notify: None,
         ..access
     })
 }

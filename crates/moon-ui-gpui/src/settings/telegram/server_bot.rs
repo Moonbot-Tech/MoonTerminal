@@ -89,6 +89,11 @@ pub(in crate::settings) struct ServerBotEd {
 }
 
 impl ServerBotEd {
+    /// The server's chats, bot settings and chats' notifications as last read.
+    pub(super) fn access_seen(&self) -> Option<&Access> {
+        self.access_seen.as_ref()
+    }
+
     /// The server the station runs on, when this terminal set one up.
     pub(in crate::settings) fn known(&self) -> Option<&Target> {
         self.known.as_ref()
@@ -246,13 +251,15 @@ pub(super) fn draft_access(draft: &TelegramConfig, base: &Access) -> Access {
     access
 }
 
-/// Whether the station's draft differs from what it was taken from (the zone aside).
+/// Whether the station's draft differs from what it was taken from — the zone and the chats'
+/// notifications aside: those are saved on their own.
 pub(super) fn access_edited(draft: Option<&TelegramConfig>, base: Option<&Access>) -> bool {
     match (draft, base) {
         (Some(draft), Some(base)) => {
             draft_access(draft, base)
                 != Access {
                     zone: None,
+                    notify: None,
                     ..base.clone()
                 }
         }

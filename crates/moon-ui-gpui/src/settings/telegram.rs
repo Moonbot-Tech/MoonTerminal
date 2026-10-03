@@ -21,6 +21,7 @@ use moon_core::config::Secret;
 
 mod access;
 mod bot_menu;
+mod chat_notify;
 mod core_section;
 mod qr;
 mod server_auto_update;

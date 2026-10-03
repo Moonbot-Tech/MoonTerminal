@@ -1449,3 +1449,33 @@ fn pnl_sign_follows_the_rounded_text() {
     assert_eq!(pnl_sign(-0.01, "USDT"), -1);
     assert_eq!(pnl_sign(0.00000002, "BTC"), 1);
 }
+
+/// A row from the settings window is refused on a stale revision or an unpaired chat, and taken
+/// on the stored one — checked without writing.
+#[test]
+fn settings_window_rows_are_checked_before_any_write() {
+    use moon_core::station_api::ChatNotifyRow;
+    let mut telegram = moon_core::config::TelegramConfig::default();
+    telegram.pair_chat(7);
+    let mut file = moon_core::telegram::notify::NotifyFile::default();
+    file.chats.insert(
+        7,
+        moon_core::telegram::notify::ChatNotify {
+            revision: 3,
+            ..Default::default()
+        },
+    );
+    let row = |revision| {
+        std::collections::BTreeMap::from([(
+            7,
+            ChatNotifyRow {
+                settings: Default::default(),
+                revision,
+            },
+        )])
+    };
+    assert!(super::settings::check_rows(&file, &telegram, &row(3)).is_ok());
+    assert!(super::settings::check_rows(&file, &telegram, &row(2)).is_err());
+    let unpaired = std::collections::BTreeMap::from([(9, ChatNotifyRow::default())]);
+    assert!(super::settings::check_rows(&file, &telegram, &unpaired).is_err());
+}

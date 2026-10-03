@@ -19,7 +19,9 @@ use crate::config::telegram_access::TelegramChatAccess;
 use crate::config::telegram_menu::BotSettings;
 use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
 use crate::telegram::TelegramStatus;
+use crate::telegram::notify::NotifySettings;
 use crate::telegram::runtime::mini_app::MiniAppStatus;
+use std::collections::BTreeMap;
 
 /// Bumped on any change a peer of the previous version would misread — every type here, and the
 /// ones it carries (`TelegramStatus`, `MiniAppStatus`, `TelegramChatAccess`): they have no
@@ -58,7 +60,7 @@ pub struct CtlOutput {
 }
 
 /// What a client asks.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
 pub enum Request {
     /// The station's cores and its bot.
@@ -343,10 +345,11 @@ pub struct PairingCode {
 /// settings and the zone its reports are cut in. Also the station's own `telegram.json`.
 ///
 /// Unknown fields are ignored, not refused: a station binary rolled back after a newer one wrote
-/// the file must still start its bot. The bot's settings and the zone are optional both ways: a
-/// station or terminal that predates them leaves them out, which keeps the other side's — so
-/// [`PROTO_VERSION`] did not move for them. Nothing secret is here — the token is a credential.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// the file must still start its bot. The bot's settings, the zone and the chats' notifications
+/// are optional both ways: a station or terminal that predates them leaves them out, which keeps
+/// the other side's — so [`PROTO_VERSION`] did not move for them. The notifications are never
+/// part of the file. Nothing secret is here — the token is a credential.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Access {
     #[serde(default)]
     pub authorized_chat_ids: Vec<i64>,
@@ -362,6 +365,19 @@ pub struct Access {
     /// changes. Absent keeps the station's (and on disk, `station.toml`'s `[telegram] zone`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<String>,
+    /// Each chat's notifications with the revision they were read at: answered by the station
+    /// from its notifications file; in a change, the chats whose settings to replace — each only
+    /// while its stored revision is still the one given. Never written to `telegram.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
+}
+
+/// One chat's notification settings and the revision of the stored row they come from (`0` for a
+/// chat with none stored yet).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatNotifyRow {
+    pub settings: NotifySettings,
+    pub revision: u64,
 }
 
 impl Access {
@@ -373,6 +389,7 @@ impl Access {
             chat_access: telegram.chat_access.clone(),
             bot: Some(telegram.bot.clone()),
             zone: None,
+            notify: None,
         }
     }
 
@@ -396,7 +413,8 @@ impl Access {
 
     /// Whether a change edited from `self` (as the client read it) still applies to `current`:
     /// the same chats, and — when the client read the bot's settings — the same settings. The zone
-    /// is never compared: it is pushed on its own and an edit of the chats does not carry it.
+    /// is never compared: it is pushed on its own and an edit of the chats does not carry it. Nor
+    /// are the notifications: each chat's row carries its own revision.
     pub fn base_holds(&self, current: &Self) -> bool {
         self.same_chats(current)
             && self

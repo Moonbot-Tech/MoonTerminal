@@ -281,3 +281,26 @@ fn the_new_parts_are_optional_on_the_wire() {
     let back: Request = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
     assert_eq!(back, request);
 }
+
+/// Chats' notifications are optional on the wire and survive the trip with their revisions; a
+/// change of them alone still holds against its base.
+#[test]
+fn chats_notifications_ride_the_access() {
+    let mut row = ChatNotifyRow::default();
+    row.settings.daily.on = true;
+    row.revision = 4;
+    let access = Access {
+        authorized_chat_ids: vec![7],
+        owner_chat_id: Some(7),
+        notify: Some(std::collections::BTreeMap::from([(7, row)])),
+        ..Access::default()
+    };
+    let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
+    assert_eq!(back, access);
+    let read = Access {
+        notify: None,
+        ..access.clone()
+    };
+    assert!(read.base_holds(&access));
+    assert!(!serde_json::to_string(&read).unwrap().contains("notify"));
+}

@@ -31,6 +31,7 @@ mod test_locale;
 pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::{station_owner_navigation, status_text};
+pub use mini_app::{check_notify_rows, notify_rows, save_notify_rows};
 pub use state::TelegramState;
 pub use station_status::{
     ReleaseCheck, ReleaseFailure, Section, StatusFacts, UpdateRefusal, station_status_reply,

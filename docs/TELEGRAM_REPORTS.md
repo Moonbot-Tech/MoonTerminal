@@ -62,6 +62,12 @@ status. Each switch saves at once; button order and rows stay in the terminal's 
 thresholds and cores in the Mini App's Settings tab. A change made in the chat reaches an open
 terminal Settings window only where that window had not been edited.
 
+Each chat's notifications can also be set in Settings -> Telegram -> Chats: open a chat for
+its trade cards (cores, minimum volume, profit and loss thresholds), core down/back notices with
+their delay, and the daily summary with its time. "Save notifications" saves that chat alone,
+at once for a terminal-hosted bot and on the server for a station-hosted one; a change made
+meanwhile from the Mini App or the chat is refused rather than overwritten.
+
 The Report button opens a menu under one message, which turns into the report pressed. Custom
 period offers the last 7 days, the last 30 days, last week, and a calendar: the first press picks
 the first day, the second the last one, up to a year later.

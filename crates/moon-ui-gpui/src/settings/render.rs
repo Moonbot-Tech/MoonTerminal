@@ -29,6 +29,8 @@ impl Render for SettingsView {
         self.server_bot_sync(window, cx);
         // The bot menu trees take a new button order before they render.
         self.bot_menu_sync(cx);
+        // The opened chats' notification editors take their stored rows.
+        self.chat_notify_sync(window, cx);
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 

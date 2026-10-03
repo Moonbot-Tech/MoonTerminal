@@ -77,6 +77,12 @@ pub fn set_zone(target: &Target, zone: &str) -> anyhow::Result<Option<Access>> {
     if read.bot.is_none() {
         return Ok(None);
     }
+    // The zone alone: the chats and the menu go back as read, the chats' notifications not at
+    // all — sent back they would be saved again over any change made since the read.
+    let read = Access {
+        notify: None,
+        ..read
+    };
     let request = Request::AccessSet {
         access: Box::new(Access {
             zone: Some(zone.to_owned()),
