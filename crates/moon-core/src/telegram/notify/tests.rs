@@ -173,12 +173,24 @@ fn sample_file() -> NotifyFile {
                 hour: 9,
                 minute: 30,
             },
+            reports: AutoReports {
+                hourly: true,
+                today: false,
+                month: true,
+            },
         },
         ledger: NotifyLedger {
             trades_enabled_utc: Some(1_700_000_000),
             seen,
             down_announced,
             daily_last: NaiveDate::from_ymd_opt(2026, 3, 1),
+            reports: AutoLedger {
+                hourly: AutoSlot {
+                    slot_utc: Some(1_700_003_600),
+                    message: Some(42),
+                },
+                ..AutoLedger::default()
+            },
         },
         revision: 3,
     };
@@ -192,6 +204,7 @@ fn sample_file() -> NotifyFile {
             html: "<b>closed</b>".to_string(),
             created_utc: 1_700_000_200,
             cores: None,
+            auto: None,
         }],
         next_id: 2,
     }
@@ -241,13 +254,15 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
                         "profit_at_least_usd": 1.5
                     },
                     "down": {"on": true, "after_minutes": 12},
-                    "daily": {"on": false, "hour": 9, "minute": 30}
+                    "daily": {"on": false, "hour": 9, "minute": 30},
+                    "reports": {"hourly": true, "month": true}
                 },
                 "ledger": {
                     "trades_enabled_utc": 1700000000,
                     "seen": {"7": {"-5": 1700000050, "99": 1700000100}},
                     "down_announced": [7],
-                    "daily_last": "2026-03-01"
+                    "daily_last": "2026-03-01",
+                    "reports": {"hourly": {"slot_utc": 1700003600, "message": 42}}
                 },
                 "revision": 3
             }
@@ -286,6 +301,7 @@ fn missing_cores_field_is_none_and_an_array_is_some() {
         html: "quiet".into(),
         created_utc: 3,
         cores: Some(Vec::new()),
+        auto: None,
     });
     file.next_id = 2;
     file.save(&path).expect("save empty disclosure");
@@ -448,4 +464,38 @@ fn prune_seen_keeps_newer_and_drops_older_and_empty_cores() {
     expected.insert(1, BTreeMap::from([(11, 200), (14, 150)]));
     assert_eq!(ledger.seen, expected);
     assert!(ledger.down_announced.contains(&1));
+}
+
+/// A file from before automatic reports loads with them off and no slot recorded.
+#[test]
+fn a_file_without_auto_reports_loads_them_off() {
+    let json = r#"{
+        "chats": {"7": {"settings": {"daily": {"on": true}}, "ledger": {}, "revision": 2}},
+        "outbox": [{"id": 1, "chat": 7, "html": "x", "created_utc": 3}],
+        "next_id": 2
+    }"#;
+    let file: NotifyFile = serde_json::from_str(json).expect("old file");
+    let chat = &file.chats[&7];
+    assert!(chat.settings.daily.on);
+    assert!(!chat.settings.reports.any());
+    assert_eq!(chat.ledger.reports, AutoLedger::default());
+    assert_eq!(file.outbox[0].auto, None);
+}
+
+/// A queued automatic report of a kind this build does not know keeps the file readable.
+#[test]
+fn an_unknown_auto_report_kind_does_not_fail_the_file() {
+    let json = r#"{
+        "outbox": [{"id": 1, "chat": 7, "html": "x", "created_utc": 3,
+                    "auto": {"kind": "weekly", "keyboard": {"inline_keyboard": []}}},
+                   {"id": 2, "chat": 7, "html": "y", "created_utc": 4,
+                    "auto": {"kind": "hourly", "keyboard": {"inline_keyboard": []}}}],
+        "next_id": 3
+    }"#;
+    let file: NotifyFile = serde_json::from_str(json).expect("newer file");
+    assert_eq!(file.outbox[0].auto, None);
+    assert_eq!(
+        file.outbox[1].auto.as_ref().map(|auto| auto.kind),
+        Some(AutoReport::Hourly)
+    );
 }

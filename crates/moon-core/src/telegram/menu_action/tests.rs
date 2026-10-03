@@ -111,6 +111,11 @@ fn settings_actions_round_trip() {
         SettingsAction::DailyHour(23),
         SettingsAction::StationStatus,
     ];
+    actions.extend(
+        crate::telegram::notify::AutoReport::ALL
+            .into_iter()
+            .flat_map(|kind| [true, false].map(|on| SettingsAction::Auto(kind, on))),
+    );
     actions.extend(ReportView::ALL.map(SettingsAction::SetView));
     actions.extend(ReportBasis::ALL.map(SettingsAction::SetBasis));
     actions.extend(
@@ -141,6 +146,8 @@ fn settings_actions_round_trip() {
         "m:s:n:d:0",
         "m:s:n:d:1441",
         "m:s:n:h:24",
+        "m:s:n:a:w:1",
+        "m:s:n:a:h:2",
         "m:s:zzz",
     ] {
         assert_eq!(MenuAction::parse_callback(data), None, "{data}");

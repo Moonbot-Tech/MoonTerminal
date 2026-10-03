@@ -103,7 +103,70 @@ impl Default for DailyRule {
     }
 }
 
-/// One chat's three notification rules. Every switch defaults to off.
+/// One automatic report: a report the bot sends on its own at a slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoReport {
+    /// At every hh:00, the hour that just ended.
+    Hourly,
+    /// At every hh:00, today so far; at 00:00 the day that just ended.
+    Today,
+    /// At 00:00, the month up to the day that just ended; on the 1st the month that just ended.
+    Month,
+}
+
+impl AutoReport {
+    /// Every automatic report, in the order screens list them.
+    pub const ALL: [Self; 3] = [Self::Hourly, Self::Today, Self::Month];
+
+    /// Whether a new report of this kind takes the previous one's place in the chat. The running
+    /// totals (today, month) do; hourly reports stay in the chat's history (LinKvo 03.10).
+    pub fn replaces_previous(self) -> bool {
+        !matches!(self, Self::Hourly)
+    }
+}
+
+/// Which automatic reports a chat receives. All off by default; a report opens in the bot's own
+/// view and counts on the bot's own basis.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct AutoReports {
+    pub hourly: bool,
+    pub today: bool,
+    pub month: bool,
+}
+
+impl AutoReports {
+    /// Whether `kind` is switched on.
+    pub fn on(&self, kind: AutoReport) -> bool {
+        match kind {
+            AutoReport::Hourly => self.hourly,
+            AutoReport::Today => self.today,
+            AutoReport::Month => self.month,
+        }
+    }
+
+    /// Switch `kind` on or off.
+    pub fn set(&mut self, kind: AutoReport, on: bool) {
+        match kind {
+            AutoReport::Hourly => self.hourly = on,
+            AutoReport::Today => self.today = on,
+            AutoReport::Month => self.month = on,
+        }
+    }
+
+    /// Whether any automatic report is on.
+    pub fn any(&self) -> bool {
+        AutoReport::ALL.into_iter().any(|kind| self.on(kind))
+    }
+
+    /// Whether every automatic report is off.
+    pub fn is_off(&self) -> bool {
+        !self.any()
+    }
+}
+
+/// One chat's notification rules. Every switch defaults to off.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct NotifySettings {
@@ -113,6 +176,11 @@ pub struct NotifySettings {
     pub down: DownRule,
     /// Daily summary.
     pub daily: DailyRule,
+    /// Automatic reports. Missing JSON — a document from before them, or the Mini App's own save,
+    /// which does not know them — is all off. Not written while all off, so the Mini App's
+    /// document stays as it was.
+    #[serde(skip_serializing_if = "AutoReports::is_off")]
+    pub reports: AutoReports,
 }
 
 impl NotifySettings {
@@ -223,6 +291,16 @@ fn reject_threshold(field: &'static str, value: Option<f64>) -> Result<(), Notif
     }
 }
 
+/// What a queued automatic report needs beyond its HTML: it goes as a rich message with the
+/// report's own buttons, and it replaces the chat's previous report of its kind.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AutoRow {
+    /// Which automatic report this is.
+    pub kind: AutoReport,
+    /// The report's inline buttons: paging and views over its frozen period.
+    pub keyboard: crate::telegram::api::ReplyMarkup,
+}
+
 /// One HTML message accepted into the file and not yet confirmed by Telegram.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default)]
@@ -237,8 +315,9 @@ pub struct Pending {
     pub created_utc: i64,
     /// Cores this message discloses.
     ///
-    /// `None` is a row stored before cores were recorded. `Some` is an explicit
-    /// disclosure, and `Some([])` names no core (an empty-day summary). A missing
+    /// `None` is a row stored before cores were recorded, or an owner's automatic report, which
+    /// covers every core: either is kept for an owner and dropped for a viewer. `Some` is an
+    /// explicit disclosure, and `Some([])` names no core (an empty-day summary). A missing
     /// JSON field loads as `None`. A JSON array, including `[]`, loads as `Some`.
     #[serde(
         default,
@@ -246,6 +325,30 @@ pub struct Pending {
         deserialize_with = "cores_opt::deserialize"
     )]
     pub cores: Option<Vec<u64>>,
+    /// An automatic report: sent as a rich message with its buttons. `None` is an ordinary HTML
+    /// notification. A value this build cannot read loads as `None`, so a file written by a newer
+    /// build still opens; such a row then goes as plain HTML, which Telegram refuses for the rich
+    /// tags with a `Bad Request` the sender drops it on.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_auto::deserialize"
+    )]
+    pub auto: Option<AutoRow>,
+}
+
+/// [`Pending::auto`] read through a JSON value, so an unknown kind drops the field, not the file.
+mod lenient_auto {
+    use serde::{Deserialize, Deserializer};
+
+    /// Read the field as `Some` when it parses as an [`super::AutoRow`], otherwise `None`.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<super::AutoRow>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+        Ok(value.and_then(|value| serde_json::from_value(value).ok()))
+    }
 }
 
 /// JSON array form of [`Pending::cores`]. A missing field stays `None` via `#[serde(default)]`.
@@ -309,6 +412,48 @@ pub struct NotifyLedger {
     /// Host-local date last queued or suppressed when daily settings were enabled or moved.
     #[serde(default, with = "naive_date_opt")]
     pub daily_last: Option<NaiveDate>,
+    /// Each automatic report's last slot and the message it left in the chat.
+    pub reports: AutoLedger,
+}
+
+/// One automatic report's state in a chat.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct AutoSlot {
+    /// UTC seconds of the last slot this report was queued or suppressed for. A slot after it is due.
+    pub slot_utc: Option<i64>,
+    /// The message Telegram accepted for this report last, which the next one deletes. Recorded
+    /// only for a report that replaces its previous one ([`AutoReport::replaces_previous`]).
+    pub message: Option<i64>,
+}
+
+/// [`AutoSlot`] of each automatic report. Named fields, so a kind a newer build adds is ignored.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct AutoLedger {
+    pub hourly: AutoSlot,
+    pub today: AutoSlot,
+    pub month: AutoSlot,
+}
+
+impl AutoLedger {
+    /// `kind`'s state.
+    pub fn slot(&self, kind: AutoReport) -> &AutoSlot {
+        match kind {
+            AutoReport::Hourly => &self.hourly,
+            AutoReport::Today => &self.today,
+            AutoReport::Month => &self.month,
+        }
+    }
+
+    /// `kind`'s state, to edit.
+    pub fn slot_mut(&mut self, kind: AutoReport) -> &mut AutoSlot {
+        match kind {
+            AutoReport::Hourly => &mut self.hourly,
+            AutoReport::Today => &mut self.today,
+            AutoReport::Month => &mut self.month,
+        }
+    }
 }
 
 impl NotifyLedger {

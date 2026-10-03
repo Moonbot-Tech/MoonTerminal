@@ -127,6 +127,8 @@ fn full_total_is_the_final_summary_row() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -164,6 +166,8 @@ fn inline_buttons_keep_the_current_period() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -202,6 +206,8 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -607,6 +613,8 @@ fn native_average_keeps_small_btc_amount_visible() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -708,6 +716,8 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
@@ -787,6 +797,8 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -821,6 +833,8 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -910,6 +924,8 @@ fn today_omits_daily_navigation() {
             drilldowns: Vec::new(),
             scope_label: None,
             basis: ReportBasis::Close,
+            cores: Vec::new(),
+            caption: None,
         };
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
@@ -950,6 +966,8 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1324,4 +1342,68 @@ fn the_open_basis_counts_trades_by_when_they_opened() {
     let html = |page: &Page| super::render::report_html(page);
     assert!(html(&open).contains(&caption));
     assert!(!html(&close).contains(&caption));
+}
+
+/// An automatic report is the button's report over the slot's frozen period: its caption on top,
+/// its buttons carrying the window, the cores it may disclose; a viewer with no cores gets none.
+#[test]
+fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
+    use moon_core::config::AppConfig;
+    use moon_core::telegram::report::AutoWindow;
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,buydate INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'Core',1,50,150,7,100,0),(1,'Core',2,120,3700,5,100,0);").unwrap();
+    let window = AutoWindow {
+        at: 3600,
+        from: 0,
+        to: 3599,
+        period: Period::Hour,
+    };
+    let inputs = super::AutoInputs {
+        zone: chrono_tz::UTC,
+        basis: ReportBasis::Close,
+        view: moon_core::config::telegram_menu::ReportView::Cores,
+        order: moon_core::session::core_order::CoreOrder::new(&AppConfig::headless(Vec::new())),
+        names: Default::default(),
+        venues: Default::default(),
+    };
+    let page = super::read_auto_report(
+        &conn,
+        &window,
+        "Hourly report".into(),
+        &inputs,
+        &super::TelegramReportAccess::Owner,
+    )
+    .unwrap()
+    .expect("an owner always gets a report");
+    assert!(
+        page.html.starts_with("<p><b>Hourly report</b></p>"),
+        "{}",
+        page.html
+    );
+    assert_eq!(page.cores, None, "an owner's report names no core");
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = &page.keyboard else {
+        panic!("inline buttons")
+    };
+    let callbacks: Vec<&str> = markup
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .filter_map(|button| button.callback_data.as_deref())
+        .collect();
+    assert!(!callbacks.is_empty());
+    for data in callbacks {
+        let request = ReportRequest::parse_callback(data).expect(data);
+        assert_eq!(request.window, Some((0, 3599)), "{data}");
+    }
+    let none = super::read_auto_report(
+        &conn,
+        &window,
+        String::new(),
+        &inputs,
+        &super::TelegramReportAccess::Viewer(Vec::new()),
+    )
+    .unwrap();
+    assert!(none.is_none());
 }

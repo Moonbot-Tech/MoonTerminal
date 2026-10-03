@@ -80,7 +80,8 @@ struct ReadMiss;
 /// The notifications file could not be saved.
 struct SaveMiss;
 
-/// Run down/back notices, then at most one closed-trade and daily read.
+/// Run down/back notices, then at most one closed-trade and daily read, then at most one
+/// automatic-report read.
 ///
 /// Args:
 ///     host: The process that owns the bot. Down links come from its session.
@@ -99,6 +100,7 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
     }
     step_down(host, &store, now_utc);
     maybe_spawn(host, &store, now_utc);
+    crate::notify::reports::run(host, &store, now_utc);
 }
 
 /// Drop queued rows that name a core the chat can no longer see.
@@ -198,7 +200,7 @@ fn outbox_chats(store: &Mutex<NotifyStore>) -> Vec<i64> {
 ///
 /// Returns:
 ///     The store the tick edits, or `None` when this process has no file.
-fn current_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
+pub(super) fn current_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
     service_store(host).or_else(|| test_store(host))
 }
 
@@ -223,7 +225,7 @@ fn service_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
 ///
 /// Returns:
 ///     The guard. A poisoned lock still yields the inner store.
-fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
+pub(super) fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
     store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -240,15 +242,18 @@ fn anything_on(store: &Mutex<NotifyStore>) -> bool {
     lock_store(store).file.chats.values().any(chat_enabled)
 }
 
-/// `true` when this chat asked for trades, down/back, or a daily summary.
+/// `true` when this chat asked for trades, down/back, a daily summary or an automatic report.
 ///
 /// Args:
 ///     chat: One stored chat.
 ///
 /// Returns:
-///     Whether any of its three switches is on.
+///     Whether any of its switches is on.
 fn chat_enabled(chat: &ChatNotify) -> bool {
-    chat.settings.trades.on || chat.settings.down.on || chat.settings.daily.on
+    chat.settings.trades.on
+        || chat.settings.down.on
+        || chat.settings.daily.on
+        || chat.settings.reports.any()
 }
 
 /// Step every authorized chat whose down rule is on.

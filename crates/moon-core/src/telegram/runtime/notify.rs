@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::Secret;
 use crate::telegram::api::{BotApi, is_permanent_bad_request, is_unreachable_chat};
-use crate::telegram::notify::{NotifyFile, Pending};
+use crate::telegram::notify::{AutoReport, AutoRow, NotifyFile, Pending};
 use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
 
 /// Minimum gap between two successful sends to one private chat.
@@ -126,20 +126,44 @@ impl NotifyStore {
 
     /// Remove `id` and save. A missing id is success and does not rewrite the file.
     ///
+    /// An automatic report Telegram accepted, of a kind that replaces its previous one, is
+    /// recorded as its kind's message in the chat's ledger in the same save, even when the row is
+    /// already gone, and the message it replaces comes back for deletion.
+    ///
     /// Args:
     ///     id: [`Pending::id`] Telegram has accepted, or that the sender is dropping.
+    ///     chat: Chat that owns the row.
+    ///     replaced: The accepted automatic report's kind and message id, if it is one.
+    ///
+    /// Returns:
+    ///     The chat's previous message of that kind, to delete.
     ///
     /// Errors:
     ///     The save failed. The in-memory outbox still contains `id`.
-    fn ack(&mut self, id: u64) -> anyhow::Result<()> {
-        if !self.file.outbox.iter().any(|row| row.id == id) {
-            return Ok(());
+    fn ack(
+        &mut self,
+        id: u64,
+        chat: i64,
+        replaced: Option<(AutoReport, i64)>,
+    ) -> anyhow::Result<Option<i64>> {
+        let replaced = replaced.filter(|(kind, _)| kind.replaces_previous());
+        if replaced.is_none() && !self.file.outbox.iter().any(|row| row.id == id) {
+            return Ok(None);
         }
         let mut next = self.file.clone();
         next.outbox.retain(|row| row.id != id);
+        // A report switched off meanwhile is not recorded: a later run must not delete it.
+        let previous = replaced.and_then(|(kind, message)| {
+            let entry = next.chats.get_mut(&chat)?;
+            if !entry.settings.reports.on(kind) {
+                return None;
+            }
+            let slot = entry.ledger.reports.slot_mut(kind);
+            slot.message.replace(message).filter(|old| *old != message)
+        });
         next.save(&self.path)?;
         self.file = next;
-        Ok(())
+        Ok(previous)
     }
 
     /// Apply `edit` to a clone and save it before the in-memory file changes.
@@ -207,7 +231,57 @@ pub fn push_outbox(
     cores: Option<Vec<u64>>,
     now_utc: i64,
 ) -> bool {
-    let html = match accept_notification_html(html) {
+    push_row(file, chat, html, cores, None, now_utc)
+}
+
+/// Append one automatic report without saving. A kind that replaces its previous report
+/// ([`AutoReport::replaces_previous`]) also drops its report still queued for `chat`: only the
+/// newest total is worth sending.
+///
+/// The 4096-unit cap of [`push_outbox`] does not apply: a rich message has its own, larger
+/// limits, which the renderer already checked (`moon_tg::report::rich_message_fits`).
+///
+/// Args:
+///     file: Document to append to.
+///     chat: Destination chat id.
+///     html: Rich-message HTML of the report.
+///     cores: Cores the report discloses.
+///     auto: The report's kind and buttons.
+///     now_utc: Unix seconds stored on the row.
+///
+/// Returns:
+///     `true`: the row is always appended.
+pub fn push_auto_report(
+    file: &mut NotifyFile,
+    chat: i64,
+    html: String,
+    cores: Option<Vec<u64>>,
+    auto: AutoRow,
+    now_utc: i64,
+) -> bool {
+    let kind = auto.kind;
+    if kind.replaces_previous() {
+        file.outbox
+            .retain(|row| row.chat != chat || row.auto.as_ref().is_none_or(|a| a.kind != kind));
+    }
+    push_row(file, chat, html, cores, Some(auto), now_utc)
+}
+
+/// [`push_outbox`] with an optional automatic-report part; only a plain row is held to the
+/// plain-message cap.
+fn push_row(
+    file: &mut NotifyFile,
+    chat: i64,
+    html: String,
+    cores: Option<Vec<u64>>,
+    auto: Option<AutoRow>,
+    now_utc: i64,
+) -> bool {
+    let checked = match auto {
+        Some(_) => Ok(html),
+        None => accept_notification_html(html),
+    };
+    let html = match checked {
         Ok(html) => html,
         Err(len) => {
             log::error!(
@@ -224,6 +298,7 @@ pub fn push_outbox(
         html,
         created_utc: now_utc,
         cores,
+        auto,
     });
     true
 }
@@ -333,8 +408,8 @@ enum Held {
     Unpaired,
     /// The published map does not allow this row's cores. The row will be dropped.
     Revoked,
-    /// HTML to send.
-    Ready(String),
+    /// HTML to send, and the automatic-report part when it is one.
+    Ready(String, Option<AutoRow>),
 }
 
 /// Start the sender. [`super::TelegramService::stop`] joins the handle.
@@ -376,7 +451,9 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     let mut ready_at: HashMap<i64, Instant> = HashMap::new();
     let mut backoff: HashMap<i64, Duration> = HashMap::new();
     let mut sent_at: VecDeque<Instant> = VecDeque::new();
-    let mut delivered: HashSet<u64> = HashSet::new();
+    // Ids Telegram accepted and not yet acked, with the automatic report each one replaces.
+    let mut delivered: HashMap<u64, Option<(AutoReport, i64)>> = HashMap::new();
+    let mut stale: Vec<(i64, i64)> = Vec::new();
 
     while alive.upgrade().is_some() {
         let pending = snapshot(&store);
@@ -393,7 +470,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
         ready_at.retain(|chat, _| live.contains(chat));
         backoff.retain(|chat, _| live.contains(chat));
         let live_ids: HashSet<u64> = pending.iter().map(|row| row.id).collect();
-        delivered.retain(|id| live_ids.contains(id));
+        delivered.retain(|id, _| live_ids.contains(id));
 
         let mut progressed = false;
         let mut hit_global_cap = false;
@@ -415,7 +492,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                 hit_global_cap = true;
                 break;
             }
-            let retry_ack = delivered.contains(&item.id);
+            let retry_ack = delivered.contains_key(&item.id);
             match hold(&store, item.id, item.chat) {
                 Held::Missing => {
                     delivered.remove(&item.id);
@@ -433,6 +510,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                         &mut ready_at,
                         &mut backoff,
                         &mut delivered,
+                        &mut stale,
                     ) {
                         blocked.insert(item.chat);
                     }
@@ -450,13 +528,14 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                         &mut ready_at,
                         &mut backoff,
                         &mut delivered,
+                        &mut stale,
                     ) {
                         blocked.insert(item.chat);
                     }
                     progressed = true;
                 }
                 // Telegram already accepted this id. Retry the ack; do not send again.
-                Held::Ready(_) if retry_ack => {
+                Held::Ready(..) if retry_ack => {
                     if !ack_saved(
                         &store,
                         item.id,
@@ -464,17 +543,18 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                         &mut ready_at,
                         &mut backoff,
                         &mut delivered,
+                        &mut stale,
                     ) {
                         blocked.insert(item.chat);
                     }
                     progressed = true;
                 }
-                Held::Ready(html) => match api.send_html(item.chat, &html) {
-                    Ok(_) => {
+                Held::Ready(html, auto) => match send(&mut api, item.chat, &html, auto.as_ref()) {
+                    Ok(message) => {
                         let sent = Instant::now();
                         last_sent.insert(item.chat, sent);
                         sent_at.push_back(sent);
-                        delivered.insert(item.id);
+                        delivered.insert(item.id, auto.map(|auto| (auto.kind, message.message_id)));
                         backoff.remove(&item.chat);
                         ready_at.remove(&item.chat);
                         if !ack_saved(
@@ -484,6 +564,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                             &mut ready_at,
                             &mut backoff,
                             &mut delivered,
+                            &mut stale,
                         ) {
                             blocked.insert(item.chat);
                         }
@@ -510,6 +591,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                             &mut ready_at,
                             &mut backoff,
                             &mut delivered,
+                            &mut stale,
                         ) {
                             blocked.insert(item.chat);
                         }
@@ -527,6 +609,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                 },
             }
         }
+        tidy_replaced(&mut api, &mut stale);
         if !progressed || hit_global_cap {
             wait_while_alive(&alive, WAIT_SLICE);
         }
@@ -556,7 +639,7 @@ fn hold(store: &Mutex<NotifyStore>, id: u64, chat: i64) -> Held {
         return Held::Unpaired;
     };
     if grant_allows(&row.cores, grant) {
-        Held::Ready(row.html.clone())
+        Held::Ready(row.html.clone(), row.auto.clone())
     } else {
         Held::Revoked
     }
@@ -588,7 +671,9 @@ fn grant_allows(cores: &Option<Vec<u64>>, grant: &Option<BTreeSet<u64>>) -> bool
 ///     chat: Chat that owns the row. A failed save backs this chat off.
 ///     ready_at: Per-chat instant before which the sender skips the chat.
 ///     backoff: Per-chat extra wait. A failed save stores the next doubled wait here.
-///     delivered: Ids Telegram has accepted in this process and not yet acked.
+///     delivered: Ids Telegram has accepted in this process and not yet acked, with the
+///         automatic report each one is.
+///     stale: Receives `(chat, message)` of an automatic report the acked one replaced.
 ///
 /// Returns:
 ///     Whether the row is gone from the store.
@@ -598,13 +683,16 @@ fn ack_saved(
     chat: i64,
     ready_at: &mut HashMap<i64, Instant>,
     backoff: &mut HashMap<i64, Duration>,
-    delivered: &mut HashSet<u64>,
+    delivered: &mut HashMap<u64, Option<(AutoReport, i64)>>,
+    stale: &mut Vec<(i64, i64)>,
 ) -> bool {
-    let saved = finish_ack(store, id, chat, ready_at, backoff);
-    if saved {
-        delivered.remove(&id);
-    }
-    saved
+    let replaced = delivered.get(&id).copied().flatten();
+    let Some(previous) = finish_ack(store, id, chat, replaced, ready_at, backoff) else {
+        return false;
+    };
+    delivered.remove(&id);
+    stale.extend(previous.map(|message| (chat, message)));
+    true
 }
 
 /// Save the removal. On failure, back the chat off so a full disk does not spin the thread.
@@ -613,25 +701,50 @@ fn ack_saved(
 ///     store: Shared outbox.
 ///     id: Row to remove.
 ///     chat: Chat that owns the row.
+///     replaced: The accepted automatic report's kind and message id, if it is one.
 ///     ready_at: Per-chat instant before which the sender skips the chat.
 ///     backoff: Per-chat extra wait advanced by [`bump_backoff`] when the save fails.
 ///
 /// Returns:
-///     Whether the row is gone from the store.
+///     `Some` when the row is gone from the store, carrying the message the report replaced.
 fn finish_ack(
     store: &Mutex<NotifyStore>,
     id: u64,
     chat: i64,
+    replaced: Option<(AutoReport, i64)>,
     ready_at: &mut HashMap<i64, Instant>,
     backoff: &mut HashMap<i64, Duration>,
-) -> bool {
-    match lock_store(store).ack(id) {
-        Ok(()) => true,
+) -> Option<Option<i64>> {
+    match lock_store(store).ack(id, chat, replaced) {
+        Ok(previous) => Some(previous),
         Err(error) => {
             log::warn!("telegram notification ack failed for id {id}: {error}");
             let wait = bump_backoff(backoff, chat);
             ready_at.insert(chat, Instant::now() + wait);
-            false
+            None
+        }
+    }
+}
+
+/// Send one row: an automatic report as a rich message with its buttons, anything else as HTML.
+fn send(
+    api: &mut BotApi,
+    chat: i64,
+    html: &str,
+    auto: Option<&AutoRow>,
+) -> Result<crate::telegram::api::Message, crate::telegram::api::ApiError> {
+    match auto {
+        Some(auto) => api.rich_message(chat, None, html, &auto.keyboard),
+        None => api.send_html(chat, html),
+    }
+}
+
+/// Delete the messages automatic reports replaced. One attempt each: a message that cannot be
+/// deleted stays in the chat, which is not an error.
+fn tidy_replaced(api: &mut BotApi, stale: &mut Vec<(i64, i64)>) {
+    for (chat, message) in stale.drain(..) {
+        if let Err(error) = api.tidy_message(chat, message) {
+            log::debug!("telegram auto report {message} in chat {chat} not deleted: {error}");
         }
     }
 }

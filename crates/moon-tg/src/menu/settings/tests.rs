@@ -67,16 +67,19 @@ fn the_view_screen_marks_the_current_view() {
     }
 }
 
-/// The notifications screen switches all three rules, offers the down presets with the current
-/// one marked, and leads to the summary's hours; the hours screen offers all 24.
+/// The notifications screen switches every rule and automatic report, offers the down presets
+/// with the current one marked, and leads to the summary's hours; the hours screen offers all 24.
 #[test]
 fn the_notify_screens_switch_and_pick() {
     let _locale = crate::test_locale::force("en");
     let notify = NotifySettings::default();
     let (_, lines, rows) = super::notify_screen(&notify, chrono_tz::UTC);
-    assert_eq!(lines.len(), 4);
+    assert_eq!(lines.len(), 6);
     let all = actions(&rows);
     for wanted in [
+        SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Hourly, true),
+        SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Today, true),
+        SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Month, true),
         SettingsAction::Trades(true),
         SettingsAction::Down(true),
         SettingsAction::Daily(true),

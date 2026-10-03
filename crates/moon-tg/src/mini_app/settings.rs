@@ -6,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use chrono_tz::Tz;
-use moon_core::telegram::notify::{ChatNotify, CoreScope, NotifyFile, NotifySettings};
+use moon_core::telegram::notify::{AutoReport, ChatNotify, CoreScope, NotifyFile, NotifySettings};
 use moon_core::telegram::runtime::NotifyStore;
 use moon_core::telegram::web::MiniAppApiError;
 use moon_core::telegram::web::dto::{NotifyCoreDto, NotifyDto};
@@ -72,7 +72,10 @@ pub(super) fn prepare_settings(
 /// the timestamp. Saving again while trades stay on does not move that timestamp.
 ///
 /// `daily_last` is set to today only when daily turns on, or its hour or minute changes while
-/// it stays on, and today's target time in `zone` has already passed.
+/// it stays on, and today's target time in `zone` has already passed. An automatic report that
+/// turns on records its current slot as done, so its first report comes at the next slot; one
+/// that turns off forgets its last message, so a later run never deletes a report of an earlier
+/// one.
 /// [`crate::notify::daily::due`] is called with no previous send, so `Some` means that target
 /// is already due. An ordinary re-save, and a clock that has not passed, leave `daily_last`
 /// as it was.
@@ -113,6 +116,21 @@ pub(super) fn commit_settings(
         // `None` means today's target has not passed, so the previous date stays.
         ledger.daily_last =
             crate::notify::daily::due(now_utc, zone, &settings.daily, None).or(ledger.daily_last);
+    }
+    for kind in AutoReport::ALL {
+        let (was, is) = (
+            previous.settings.reports.on(kind),
+            settings.reports.on(kind),
+        );
+        let slot = ledger.reports.slot_mut(kind);
+        if !was
+            && is
+            && let Some(window) = moon_core::telegram::report::auto_window(kind, now_utc, zone)
+        {
+            slot.slot_utc = Some(window.at);
+        } else if was && !is {
+            slot.message = None;
+        }
     }
     let revision = previous.revision.saturating_add(1);
     file.chats.insert(
@@ -500,7 +518,7 @@ pub(super) fn mini_notify(host: &dyn TgHost, chat_id: i64) -> Result<NotifyDto, 
 pub(super) fn mini_notify_save(
     host: &dyn TgHost,
     chat_id: i64,
-    settings: NotifySettings,
+    mut settings: NotifySettings,
     revision: u64,
 ) -> Result<NotifyDto, MiniAppApiError> {
     let view = notify_view(host, chat_id)?;
@@ -510,6 +528,7 @@ pub(super) fn mini_notify_save(
         .store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    keep_stored_reports(&guard.file, chat_id, &mut settings);
     let outcome = store_settings(
         &mut guard, chat_id, settings, &visible, now, view.zone, revision,
     );
@@ -551,6 +570,15 @@ pub(super) fn mini_notify_save(
             ))
         }
     }
+}
+
+/// The page does not know automatic reports: what it submits keeps the chat's stored ones.
+pub(super) fn keep_stored_reports(file: &NotifyFile, chat: i64, settings: &mut NotifySettings) {
+    settings.reports = file
+        .chats
+        .get(&chat)
+        .map(|row| row.settings.reports)
+        .unwrap_or_default();
 }
 
 /// Machine kind stored in [`NotifyDto::fault`].

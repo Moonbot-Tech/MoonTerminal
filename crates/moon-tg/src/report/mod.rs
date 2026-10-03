@@ -40,6 +40,10 @@ struct Page {
     scope_label: Option<String>,
     /// Which timestamp the period was read on.
     basis: ReportBasis,
+    /// Cores the chat may see, whose trades the totals can include.
+    cores: Vec<u64>,
+    /// A line above the report: an automatic report names itself, its zone and its basis.
+    caption: Option<String>,
 }
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
@@ -278,6 +282,8 @@ fn read_page_on(
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
             basis,
+            cores: Vec::new(),
+            caption: None,
         }))
     };
     let size = paging::fitting_page_size(&active, fits);
@@ -300,7 +306,82 @@ fn read_page_on(
         drilldowns,
         scope_label,
         basis,
+        cores: accessible.iter().map(|(id, _)| *id).collect(),
+        caption: None,
     })
+}
+
+/// An automatic report ready to queue: the rich HTML, its buttons, the cores it discloses.
+pub(crate) struct AutoPage {
+    pub(crate) html: String,
+    pub(crate) keyboard: ReplyMarkup,
+    /// A viewer's report discloses its granted cores. An owner's covers every core the report
+    /// database holds, retired ones included, so it names none: `None` is kept while the chat is
+    /// the owner and dropped if it becomes a viewer.
+    pub(crate) cores: Option<Vec<u64>>,
+}
+
+/// What every automatic report of one read shares.
+#[derive(Clone)]
+pub(crate) struct AutoInputs {
+    pub(crate) zone: Tz,
+    pub(crate) basis: ReportBasis,
+    pub(crate) view: moon_core::config::telegram_menu::ReportView,
+    pub(crate) order: CoreOrder,
+    pub(crate) names: db::CoreNames,
+    pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+}
+
+/// Read one automatic report: the report a button opens, over the slot's frozen period, in the
+/// bot's view and basis, with `caption` above it.
+///
+/// Returns:
+///     `None` for a viewer with no cores, which has nothing to see, and for a report that does
+///     not fit a rich message even without its caption (logged). The caller spends the slot.
+pub(crate) fn read_auto_report(
+    conn: &rusqlite::Connection,
+    window: &moon_core::telegram::report::AutoWindow,
+    caption: String,
+    inputs: &AutoInputs,
+    access: &TelegramReportAccess,
+) -> db::ReadResult<Option<AutoPage>> {
+    if matches!(access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
+        return Ok(None);
+    }
+    let request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    let mut page = read_page_on(
+        conn,
+        request,
+        window.from,
+        window.to,
+        inputs.zone,
+        inputs.basis,
+        &inputs.names,
+        |cores| {
+            inputs.order.sort_by(cores, |(id, _)| *id);
+            (inputs.venues.clone(), access.clone())
+        },
+    )?;
+    page.caption = Some(caption);
+    let mut html = report_html(&page);
+    // The page was sized without the caption; a report it tips over goes without it.
+    if !rich_message_fits(&html) {
+        page.caption = None;
+        html = report_html(&page);
+    }
+    if !rich_message_fits(&html) {
+        log::warn!("telegram auto report does not fit a rich message; not sent");
+        return Ok(None);
+    }
+    let cores = match access {
+        TelegramReportAccess::Owner => None,
+        TelegramReportAccess::Viewer(_) => Some(page.cores.clone()),
+    };
+    Ok(Some(AutoPage {
+        html,
+        keyboard: render::keyboard(&page),
+        cores,
+    }))
 }
 
 /// One Mini App report: the period total plus every exchange, core, and day on that snapshot.

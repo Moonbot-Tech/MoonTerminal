@@ -1,6 +1,6 @@
 //! The notifications of the chat opened in the Chats box — what the Mini App's Settings tab edits:
 //! closed-trade cards (cores, volume and result thresholds), core down/back notices, the daily
-//! summary.
+//! summary — and the automatic reports, which only the bot's chat and this box edit.
 //!
 //! The terminal's bot saves them at once into its notifications file; the station's sends them in
 //! a change of their own, carrying only this chat's row — not the zone, not a draft of the chats.
@@ -17,8 +17,9 @@ use std::collections::BTreeMap;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::config::telegram_access::TelegramReportAccess;
+use moon_core::config::telegram_menu::ReportBasis;
 use moon_core::station_api::{Access, ChatNotifyRow};
-use moon_core::telegram::notify::{CoreScope, NotifySettings};
+use moon_core::telegram::notify::{AutoReport, CoreScope, NotifySettings};
 use moon_ui::{
     MoonButton, MoonCheckbox, MoonInput, MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
 };
@@ -535,6 +536,23 @@ impl SettingsView {
             .as_ref()
             .filter(|(c, _)| *c == chat)
             .map(|(_, status)| status.clone());
+        let auto = |kind: AutoReport| {
+            let key = match kind {
+                AutoReport::Hourly => "telegram.auto.hourly",
+                AutoReport::Today => "telegram.auto.today",
+                AutoReport::Month => "telegram.auto.month",
+            };
+            MoonCheckbox::new(id(&format!("auto-{kind:?}")))
+                .checked(draft.reports.on(kind))
+                .label(t!(key).to_string())
+                .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                    let v = *v;
+                    this.notify_edit(side, cx, |s| s.reports.set(kind, v));
+                }))
+        };
+        let open_basis = self
+            .chats(side, cx)
+            .is_some_and(|t| t.bot.period_basis == ReportBasis::Open);
         block
             .when(ed.stale, |block| {
                 block.child(
@@ -634,6 +652,29 @@ impl SettingsView {
                         t!("telegram.mini_settings_time").to_string(),
                     )),
             )
+            .child(
+                div()
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(t!("telegram.auto.title").to_string()),
+            )
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 16.0))
+                    .children(AutoReport::ALL.map(auto)),
+            )
+            .child(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.auto.hint").to_string()),
+            )
+            .when(open_basis && draft.reports.any(), |block| {
+                block.child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.auto.open_basis").to_string()),
+                )
+            })
             .child(
                 h_flex()
                     .flex_wrap()

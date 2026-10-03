@@ -8,6 +8,7 @@ use chrono::{Datelike, NaiveDate};
 
 use super::report::Preset;
 use crate::config::telegram_menu::{MenuItem, ReportBasis, ReportView};
+use crate::telegram::notify::AutoReport;
 
 /// What an inline menu button asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +62,8 @@ pub enum SettingsAction {
     DailyHours,
     /// The hour the daily summary is sent at.
     DailyHour(u8),
+    /// An automatic report on or off.
+    Auto(AutoReport, bool),
     /// The station's status, opened from the section: it leads back to it.
     StationStatus,
 }
@@ -86,6 +89,7 @@ impl SettingsAction {
             Self::Daily(on) => format!(":n:y:{}", flag(on)),
             Self::DailyHours => ":n:h".into(),
             Self::DailyHour(hour) => format!(":n:h:{hour}"),
+            Self::Auto(kind, on) => format!(":n:a:{}:{}", auto_code(kind), flag(on)),
             Self::StationStatus => ":st".into(),
         }
     }
@@ -117,6 +121,12 @@ impl SettingsAction {
                     .then_some(Self::DownAfter(minutes))?
             }
             ["n", "y", on] => Self::Daily(flag(on)?),
+            ["n", "a", kind, on] => Self::Auto(
+                AutoReport::ALL
+                    .into_iter()
+                    .find(|k| auto_code(*k) == *kind)?,
+                flag(on)?,
+            ),
             ["n", "h"] => Self::DailyHours,
             ["n", "h", hour] => {
                 let hour: u8 = hour.parse().ok()?;
@@ -124,6 +134,15 @@ impl SettingsAction {
             }
             _ => return None,
         })
+    }
+}
+
+/// An automatic report's code in a callback.
+fn auto_code(kind: AutoReport) -> &'static str {
+    match kind {
+        AutoReport::Hourly => "h",
+        AutoReport::Today => "t",
+        AutoReport::Month => "m",
     }
 }
 

@@ -75,7 +75,7 @@ fn ack_removes_the_row_and_persists() {
     store.enqueue(7, "one".into(), None, 10).expect("enqueue");
     let id = NotifyFile::load(&path).expect("reload").outbox[0].id;
 
-    store.ack(id).expect("ack");
+    store.ack(id, 7, None).expect("ack");
 
     let loaded = NotifyFile::load(&path).expect("reload after ack");
     assert!(loaded.outbox.is_empty(), "acked id {id} still on disk");
@@ -394,7 +394,7 @@ fn hold_revokes_an_unknown_viewer_row_and_readies_an_empty_disclosure() {
     let quiet_id = only_id(&quiet);
     publish(&quiet, viewers);
     match super::hold(&quiet, quiet_id, 7) {
-        super::Held::Ready(html) => assert_eq!(html, "body"),
+        super::Held::Ready(html, None) => assert_eq!(html, "body"),
         _ => panic!("an empty disclosure must be ready for a viewer"),
     }
 }
@@ -408,7 +408,113 @@ fn hold_readies_an_owner_row() {
     allowed.insert(7, None);
     publish(&store, allowed);
     match super::hold(&store, id, 7) {
-        super::Held::Ready(html) => assert_eq!(html, "body"),
+        super::Held::Ready(html, None) => assert_eq!(html, "body"),
         _ => panic!("an owner row must be ready"),
     }
+}
+
+/// A running-total report queued behind an unsent one of its kind takes its place; hourly reports,
+/// other kinds, other chats and ordinary notifications stay.
+#[test]
+fn a_new_auto_report_replaces_its_unsent_running_total_only() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    use crate::telegram::notify::{AutoReport, AutoRow};
+    let auto = |kind| AutoRow {
+        kind,
+        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        }),
+    };
+    let mut file = NotifyFile::default();
+    let mut push = |chat, html: &str, kind| {
+        super::push_auto_report(&mut file, chat, html.into(), None, auto(kind), 2)
+    };
+    assert!(push(7, "t1", AutoReport::Today));
+    assert!(push(7, "h1", AutoReport::Hourly));
+    assert!(push(8, "t-other", AutoReport::Today));
+    assert!(push(7, "m1", AutoReport::Month));
+    assert!(push(7, "t2", AutoReport::Today));
+    assert!(push(7, "h2", AutoReport::Hourly));
+    push_outbox(&mut file, 7, "card".into(), None, 1);
+    let bodies: Vec<&str> = file.outbox.iter().map(|row| row.html.as_str()).collect();
+    assert_eq!(bodies, vec!["h1", "t-other", "m1", "t2", "h2", "card"]);
+    // A rich report is not held to the 4096-unit cap of a plain message.
+    let big = "x".repeat(20_000);
+    assert!(super::push_auto_report(
+        &mut file,
+        7,
+        big,
+        None,
+        auto(AutoReport::Month),
+        6
+    ));
+    assert_eq!(file.outbox.last().unwrap().html.len(), 20_000);
+}
+
+/// Acking a running-total report records it as its kind's message and hands back the one it
+/// replaces, in one save; an hourly report and a chat with no stored settings record nothing.
+#[test]
+fn acking_an_auto_report_records_it_and_returns_the_replaced_one() {
+    use crate::telegram::notify::{AutoReport, ChatNotify};
+    let root = TempRoot::new("ack-auto");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).expect("open");
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            chat.settings.reports.set(AutoReport::Today, true);
+            chat.settings.reports.set(AutoReport::Hourly, true);
+            file.chats.insert(7, chat);
+        })
+        .expect("seed");
+    store
+        .enqueue(7, "report".into(), None, 10)
+        .expect("enqueue");
+    let id = store.file.outbox[0].id;
+    assert_eq!(
+        store.ack(id, 7, Some((AutoReport::Today, 100))).unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .ack(id + 50, 7, Some((AutoReport::Today, 101)))
+            .unwrap(),
+        Some(100)
+    );
+    // The same message again is not its own predecessor.
+    assert_eq!(
+        store
+            .ack(id + 51, 7, Some((AutoReport::Today, 101)))
+            .unwrap(),
+        None
+    );
+    // Hourly reports stay in the chat: nothing recorded, nothing to delete.
+    assert_eq!(
+        store
+            .ack(id + 52, 7, Some((AutoReport::Hourly, 200)))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .ack(id + 53, 7, Some((AutoReport::Hourly, 201)))
+            .unwrap(),
+        None
+    );
+    let loaded = NotifyFile::load(&path).expect("reload");
+    assert!(loaded.outbox.is_empty());
+    assert_eq!(loaded.chats[&7].ledger.reports.today.message, Some(101));
+    assert_eq!(loaded.chats[&7].ledger.reports.hourly.message, None);
+    assert_eq!(
+        store.ack(id + 54, 9, Some((AutoReport::Month, 5))).unwrap(),
+        None
+    );
+    // A report switched off while its message was in flight is not recorded.
+    assert_eq!(
+        store
+            .ack(id + 55, 7, Some((AutoReport::Month, 300)))
+            .unwrap(),
+        None
+    );
+    assert_eq!(store.file.chats[&7].ledger.reports.month.message, None);
 }

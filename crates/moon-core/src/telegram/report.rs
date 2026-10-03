@@ -296,5 +296,79 @@ impl ReportRequest {
     }
 }
 
+/// An automatic report's latest slot at or before a moment, and the period it reports.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoWindow {
+    /// UTC seconds of the slot: the local hh:00 (hourly, today) or 00:00 (month) it fires at.
+    pub at: i64,
+    /// Inclusive UTC bounds of the reported period; `to` is the second before `at`.
+    pub from: i64,
+    pub to: i64,
+    /// The preset the period is, for the report's own buttons.
+    pub period: Period,
+}
+
+/// `kind`'s latest slot at or before `now` in `zone`, and the finished period it reports.
+///
+/// The hour starts where the local clock reads hh:00, so a zone half an hour off UTC fires at its
+/// own hh:00, and the hour before a slot is always 3600 seconds, a daylight-saving change
+/// included. A day and a month start at local midnight through [`display_time::day_start`]: a day
+/// may last 23 or 25 hours.
+///
+/// Returns:
+///     `None` when the moment cannot be shown in the zone.
+pub fn auto_window(
+    kind: crate::telegram::notify::AutoReport,
+    now: i64,
+    zone: Tz,
+) -> Option<AutoWindow> {
+    use crate::telegram::notify::AutoReport;
+    let local = display_time::at(now, zone)?;
+    let hour = now - i64::from(local.minute()) * 60 - i64::from(local.second());
+    match kind {
+        AutoReport::Hourly => Some(AutoWindow {
+            at: hour,
+            from: hour - 3600,
+            to: hour - 1,
+            period: Period::Hour,
+        }),
+        AutoReport::Today => {
+            let date = display_time::at(hour, zone)?.date_naive();
+            let start = display_time::day_start(date, zone)?;
+            // At midnight today has nothing yet: the slot reports the day that just ended.
+            let (from, period) = if hour <= start {
+                let previous = date.checked_sub_days(Days::new(1))?;
+                (display_time::day_start(previous, zone)?, Period::Yesterday)
+            } else {
+                (start, Period::Today)
+            };
+            Some(AutoWindow {
+                at: hour,
+                from,
+                to: hour - 1,
+                period,
+            })
+        }
+        AutoReport::Month => {
+            let today = local.date_naive();
+            let at = display_time::day_start(today, zone)?;
+            let first = today.with_day(1)?;
+            // On the 1st the month just ended is reported whole.
+            let (first, period) = if today.day() == 1 {
+                let previous = first.checked_sub_days(Days::new(1))?.with_day(1)?;
+                (previous, Period::LastMonth)
+            } else {
+                (first, Period::Month)
+            };
+            Some(AutoWindow {
+                at,
+                from: display_time::day_start(first, zone)?,
+                to: at - 1,
+                period,
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

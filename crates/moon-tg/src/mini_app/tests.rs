@@ -10,7 +10,9 @@ use moon_core::telegram::notify::{
 use moon_core::telegram::runtime::NotifyStore;
 use moon_core::venue::CoreVenue;
 
-use super::settings::{SaveFault, SaveResult, prepare_settings, save_fault_text, store_settings};
+use super::settings::{
+    SaveFault, SaveResult, keep_stored_reports, prepare_settings, save_fault_text, store_settings,
+};
 
 use std::time::{Duration, Instant};
 
@@ -1478,4 +1480,73 @@ fn settings_window_rows_are_checked_before_any_write() {
     assert!(super::settings::check_rows(&file, &telegram, &row(2)).is_err());
     let unpaired = std::collections::BTreeMap::from([(9, ChatNotifyRow::default())]);
     assert!(super::settings::check_rows(&file, &telegram, &unpaired).is_err());
+}
+
+/// An automatic report that turns on records its current slot as done, so the first report
+/// comes at the next slot; a re-save while it stays on, and another report turning on, leave it.
+#[test]
+fn store_settings_marks_the_current_slot_when_an_auto_report_turns_on() {
+    use chrono::TimeZone;
+    use moon_core::telegram::notify::AutoReport;
+    let at = |hour, minute| {
+        chrono_tz::UTC
+            .with_ymd_and_hms(2026, 10, 3, hour, minute, 0)
+            .single()
+            .expect("utc instant")
+            .timestamp()
+    };
+    let root = NotifyTemp::new("auto-slot");
+    let mut store = empty_store(root.path("notifications.json"));
+    let mut rule = NotifySettings::default();
+    rule.reports.set(AutoReport::Hourly, true);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(14, 37)),
+        SaveResult::Saved
+    );
+    let slots = store.file.chats[&1].ledger.reports;
+    assert_eq!(slots.hourly.slot_utc, Some(at(14, 0)));
+    assert_eq!(slots.today.slot_utc, None);
+    rule.reports.set(AutoReport::Month, true);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(16, 5)),
+        SaveResult::Saved
+    );
+    let slots = store.file.chats[&1].ledger.reports;
+    assert_eq!(slots.hourly.slot_utc, Some(at(14, 0)), "hourly stayed on");
+    assert_eq!(slots.month.slot_utc, Some(at(0, 0)));
+    // Off forgets the last message: a later run must not delete a report of this one.
+    store
+        .file
+        .chats
+        .get_mut(&1)
+        .unwrap()
+        .ledger
+        .reports
+        .month
+        .message = Some(77);
+    rule.reports.set(AutoReport::Month, false);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(17, 0)),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&1].ledger.reports.month.message, None);
+}
+
+/// The Mini App's save keeps the chat's automatic reports: the page never sends them.
+#[test]
+fn a_mini_app_save_keeps_the_stored_auto_reports() {
+    use moon_core::telegram::notify::{AutoReport, ChatNotify};
+    let mut file = NotifyFile::default();
+    let mut stored = ChatNotify::default();
+    stored.settings.reports.set(AutoReport::Today, true);
+    file.chats.insert(5, stored);
+    let mut from_page = NotifySettings::default();
+    from_page.daily.on = true;
+    keep_stored_reports(&file, 5, &mut from_page);
+    assert!(from_page.daily.on);
+    assert!(from_page.reports.on(AutoReport::Today));
+    let mut fresh = NotifySettings::default();
+    fresh.reports.set(AutoReport::Hourly, true);
+    keep_stored_reports(&file, 6, &mut fresh);
+    assert!(!fresh.reports.any(), "a chat with no row has none");
 }

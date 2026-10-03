@@ -102,16 +102,22 @@ pub(super) fn report_html(page: &Page) -> String {
             .unwrap_or_default()
     };
     let title = page.scope_label.as_deref().unwrap_or(&heading);
-    let mut html = if page.request.by_exchange && page.scope_label.is_none() {
-        format!("<p>{} — {}</p>", stamp(page.from), stamp(page.to))
-    } else {
-        format!(
-            "<p><b>{}</b></p><p>{} — {}</p>",
-            escape(title),
-            stamp(page.from),
-            stamp(page.to)
-        )
-    };
+    let caption = page
+        .caption
+        .as_deref()
+        .map(|caption| format!("<p><b>{}</b></p>", escape(caption)))
+        .unwrap_or_default();
+    let mut html = caption
+        + &if page.request.by_exchange && page.scope_label.is_none() {
+            format!("<p>{} — {}</p>", stamp(page.from), stamp(page.to))
+        } else {
+            format!(
+                "<p><b>{}</b></p><p>{} — {}</p>",
+                escape(title),
+                stamp(page.from),
+                stamp(page.to)
+            )
+        };
     // The terminal's Report wording: the period counts trades by when they opened.
     if page.basis == ReportBasis::Open {
         html.push_str(&format!(

@@ -179,3 +179,87 @@ fn the_days_view_needs_more_than_one_day() {
         assert!(request.daily && !request.by_exchange, "{period:?}");
     }
 }
+
+/// UTC seconds of a civil time in `zone`.
+fn local(zone: chrono_tz::Tz, y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
+    zone.with_ymd_and_hms(y, mo, d, h, mi, 0)
+        .earliest()
+        .unwrap()
+        .timestamp()
+}
+
+/// The hourly report fires at the local hh:00 and reports the 3600 seconds before it.
+#[test]
+fn the_hourly_slot_is_the_hour_that_just_ended() {
+    use crate::telegram::notify::AutoReport;
+    let zone = chrono_tz::Europe::Moscow;
+    let window =
+        super::auto_window(AutoReport::Hourly, local(zone, 2026, 10, 3, 14, 37), zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 10, 3, 14, 0));
+    assert_eq!(window.from, local(zone, 2026, 10, 3, 13, 0));
+    assert_eq!(window.to, window.at - 1);
+    assert_eq!(window.period, Period::Hour);
+    // A zone 45 minutes off the hour fires at its own hh:00.
+    let nepal = chrono_tz::Asia::Kathmandu;
+    let window =
+        super::auto_window(AutoReport::Hourly, local(nepal, 2026, 10, 3, 9, 5), nepal).unwrap();
+    assert_eq!(window.at, local(nepal, 2026, 10, 3, 9, 0));
+    assert_eq!(window.at - window.from, 3600);
+}
+
+/// Across a daylight-saving change the hour before a slot is still one real hour.
+#[test]
+fn the_hourly_slot_spans_one_real_hour_across_a_clock_change() {
+    use crate::telegram::notify::AutoReport;
+    let zone = chrono_tz::Europe::Berlin;
+    // 2026-10-25 03:00 CEST becomes 02:00 CET: 02:xx happens twice.
+    let after = local(zone, 2026, 10, 25, 4, 10);
+    let window = super::auto_window(AutoReport::Hourly, after, zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 10, 25, 4, 0));
+    assert_eq!(window.at - window.from, 3600);
+}
+
+/// "Today" reports midnight up to the slot; at midnight, the whole day that just ended.
+#[test]
+fn the_today_slot_reports_today_so_far_or_the_day_just_ended() {
+    use crate::telegram::notify::AutoReport;
+    let zone = chrono_tz::Europe::Moscow;
+    let window =
+        super::auto_window(AutoReport::Today, local(zone, 2026, 10, 3, 14, 37), zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 10, 3, 14, 0));
+    assert_eq!(window.from, local(zone, 2026, 10, 3, 0, 0));
+    assert_eq!(window.period, Period::Today);
+    let window =
+        super::auto_window(AutoReport::Today, local(zone, 2026, 10, 4, 0, 20), zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 10, 4, 0, 0));
+    assert_eq!(window.from, local(zone, 2026, 10, 3, 0, 0));
+    assert_eq!(window.to, window.at - 1);
+    assert_eq!(window.period, Period::Yesterday);
+    // The day of a clock change lasts 25 hours.
+    let berlin = chrono_tz::Europe::Berlin;
+    let window =
+        super::auto_window(AutoReport::Today, local(berlin, 2026, 10, 26, 0, 5), berlin).unwrap();
+    assert_eq!(window.at - window.from, 25 * 3600);
+}
+
+/// The month report fires at midnight; on the 1st it reports the month that just ended whole.
+#[test]
+fn the_month_slot_reports_up_to_the_day_just_ended() {
+    use crate::telegram::notify::AutoReport;
+    let zone = chrono_tz::Europe::Moscow;
+    let window =
+        super::auto_window(AutoReport::Month, local(zone, 2026, 10, 3, 14, 37), zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 10, 3, 0, 0));
+    assert_eq!(window.from, local(zone, 2026, 10, 1, 0, 0));
+    assert_eq!(window.period, Period::Month);
+    let window =
+        super::auto_window(AutoReport::Month, local(zone, 2026, 11, 1, 0, 30), zone).unwrap();
+    assert_eq!(window.at, local(zone, 2026, 11, 1, 0, 0));
+    assert_eq!(window.from, local(zone, 2026, 10, 1, 0, 0));
+    assert_eq!(window.to, window.at - 1);
+    assert_eq!(window.period, Period::LastMonth);
+    // January 1st reports December of the year before.
+    let window =
+        super::auto_window(AutoReport::Month, local(zone, 2027, 1, 1, 3, 0), zone).unwrap();
+    assert_eq!(window.from, local(zone, 2026, 12, 1, 0, 0));
+}

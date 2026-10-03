@@ -58,14 +58,16 @@ next message; a button already on an older keyboard keeps working within the cha
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
 a station's is switched in the terminal's Settings), set this chat's notifications — trade
-cards, core down/back with a delay, the daily summary and its hour — and, on a station, open its
+cards, core down/back with a delay, the daily summary and its hour, the automatic reports — and,
+on a station, open its
 status. Each switch saves at once; button order and rows stay in the terminal's Settings, trade
 thresholds and cores in the Mini App's Settings tab. A change made in the chat reaches an open
 terminal Settings window only where that window had not been edited.
 
 Each chat's notifications can also be set in Settings -> Telegram -> Chats: open a chat for
 its trade cards (cores, minimum volume, profit and loss thresholds), core down/back notices with
-their delay, and the daily summary with its time. "Save notifications" saves that chat alone,
+their delay, the daily summary with its time, and the automatic reports. "Save notifications"
+saves that chat alone,
 at once for a terminal-hosted bot and on the server for a station-hosted one; a change made
 meanwhile from the Mini App or the chat is refused rather than overwritten.
 
@@ -132,7 +134,8 @@ The Mini App «Настройки» tab is where a paired chat turns on messages
 Every switch is off until that chat saves it. Each chat has its own settings. A viewer is limited
 to the cores that chat can see. The owner can hear about every core the host keeps.
 
-Three kinds of message can be sent. They are ordinary bot messages, not rich reports:
+Three kinds of message are ordinary bot messages, not rich reports (automatic reports, below, are
+rich):
 
 - Closed trades, with optional filters: which cores, a minimum volume in USD, a profit of at
   least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
@@ -146,6 +149,23 @@ Three kinds of message can be sent. They are ordinary bot messages, not rich rep
 - A daily summary at a chosen time in the display time zone, the same zone chat reports use.
   If the bot is down at that time, it sends the summary once later on that same local day, and
   not for an earlier day.
+
+Automatic reports are the rich report a menu button opens, sent by the bot on its own. They are
+switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->
+Chats (the Mini App does not show them, and its save leaves them as they are):
+
+- Hourly, at the top of every hour in the display time zone, for the hour that just ended. Every
+  hourly report stays in the chat.
+- Today, at the top of every hour, from midnight; at midnight, the whole day that just ended.
+- Month, at midnight, from the 1st to the end of the day that just ended; on the 1st, the whole
+  month that just ended.
+
+A new today or month report replaces the chat's previous one of its kind. Each opens in the bot's
+report view and counts on its period basis; a line on top names it, the zone offset and the basis,
+and its buttons keep the same frozen period. Reports with no trades are sent too. A report turned
+on starts at the next slot. A terminal-hosted bot sends only while the terminal runs; after a pause
+each kind sends its latest slot once, never the slots it missed. A station-hosted bot sends around
+the clock.
 
 Accepted messages wait in a durable outbox and are delivered after a restart if Telegram had not
 accepted them yet. A network timeout can leave the outcome ambiguous, so a rare duplicate is

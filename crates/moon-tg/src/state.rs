@@ -42,6 +42,12 @@ pub struct TelegramState {
     pub(crate) last_report_revision: Option<crate::ReportRevision>,
     /// When the last notification read was spawned. `None` allows the first run.
     pub(crate) last_notify_run: Option<Instant>,
+    /// At most one automatic-report read is in flight.
+    pub(crate) auto_busy: bool,
+    /// When the last automatic-report read was spawned. `None` allows the first run.
+    pub(crate) last_auto_run: Option<Instant>,
+    /// Injected automatic-report pages. `None` in production, which reads the report database.
+    pub(crate) injected_auto: Option<crate::notify::reports::InjectedAuto>,
     /// In-memory down timers, one per chat. Empty after a restart on purpose: the ledger on disk
     /// is what stops a second down notice.
     pub(crate) down_trackers: BTreeMap<i64, crate::notify::down::DownTracker>,
@@ -156,6 +162,9 @@ impl TelegramState {
             notify_busy: false,
             last_report_revision: None,
             last_notify_run: None,
+            auto_busy: false,
+            last_auto_run: None,
+            injected_auto: None,
             down_trackers: BTreeMap::new(),
             last_down_step: None,
             notify_clock_override: None,
@@ -195,12 +204,14 @@ impl TelegramState {
         let mini_report_pending = self.mini_report_pending;
         let mini_trades_pending = self.mini_trades_pending;
         let notify_busy = self.notify_busy;
+        let auto_busy = self.auto_busy;
         let notifications_path = self.notifications_path.clone();
         *self = Self::new_with_menu_cleanup(config, self.kind, retired, notifications_path);
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
         self.mini_trades_pending = mini_trades_pending;
         self.notify_busy = notify_busy;
+        self.auto_busy = auto_busy;
         // `mini_report_last` and `mini_trades_last` stay clear: a restarted service must not
         // replay the previous grant. Down timers and the read gate stay clear on purpose; the
         // ledger on disk stops a restart from replaying announcements.

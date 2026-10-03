@@ -11,7 +11,7 @@ use std::sync::mpsc::SyncSender;
 use moon_core::config::telegram_menu::{BotSettings, MenuItem, ReportBasis, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
-use moon_core::telegram::notify::{CoreScope, NotifySettings};
+use moon_core::telegram::notify::{AutoReport, CoreScope, NotifySettings};
 use moon_core::telegram::runtime::Response;
 use rust_i18n::t;
 
@@ -157,6 +157,10 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
         }
         A::Daily(on) => {
             notify(host, &|n| n.daily.on = on)?;
+            Screen::Notify
+        }
+        A::Auto(kind, on) => {
+            notify(host, &|n| n.reports.set(kind, on))?;
             Screen::Notify
         }
         A::DailyHours => Screen::DailyHours,
@@ -367,7 +371,8 @@ fn mark(current: bool) -> &'static str {
     if current { "\u{1f518}" } else { "\u{26aa}" }
 }
 
-/// This chat's notifications: three switches, the down delay, the summary's hour.
+/// This chat's notifications: the switches, the down delay, the summary's hour, the automatic
+/// reports.
 fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
     let trades = &notify.trades;
     let mut filters = Vec::new();
@@ -418,7 +423,21 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
                 false => on_off(false),
             }
         ),
+        format!(
+            "{}: {}",
+            t!("telegram.auto.title"),
+            match notify.reports.any() {
+                true => AutoReport::ALL
+                    .into_iter()
+                    .filter(|&kind| notify.reports.on(kind))
+                    .map(auto_title)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                false => on_off(false),
+            }
+        ),
         t!("telegram.settings.notify_hint").to_string(),
+        t!("telegram.auto.hint").to_string(),
     ];
     let mut rows = vec![
         vec![button(
@@ -466,12 +485,34 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
             ),
         ],
     ];
+    rows.push(
+        AutoReport::ALL
+            .into_iter()
+            .map(|kind| {
+                let on = notify.reports.on(kind);
+                button(
+                    format!("{} {}", tick(on), auto_title(kind)),
+                    SettingsAction::Auto(kind, !on),
+                )
+            })
+            .collect(),
+    );
     rows.push(back(SettingsAction::Root));
     (
         format!("\u{1f514} {}", t!("telegram.settings.notify")),
         lines,
         rows,
     )
+}
+
+/// An automatic report's name.
+fn auto_title(kind: AutoReport) -> String {
+    match kind {
+        AutoReport::Hourly => t!("telegram.auto.hourly"),
+        AutoReport::Today => t!("telegram.auto.today"),
+        AutoReport::Month => t!("telegram.auto.month"),
+    }
+    .to_string()
 }
 
 /// The hours of the day for the summary, the current one marked; minutes stay as they are.
