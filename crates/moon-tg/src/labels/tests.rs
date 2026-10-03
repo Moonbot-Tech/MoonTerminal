@@ -8,6 +8,7 @@ use moon_core::telegram::{
 /// A station bot answering a non-owner keeps the terminal's two-row layout, without Status.
 #[test]
 fn station_non_owner_keyboard_matches_the_terminal() {
+    let _locale = crate::test_locale::force("ru");
     let rows = |host, owner| {
         let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
             super::navigation_keyboard(host, owner, &moon_core::config::TelegramConfig::default())

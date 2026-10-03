@@ -96,8 +96,12 @@ Successful reply-button reports and Help replace the previous tracked answer by 
 then deleting it. Tracking is persisted per bot identity and survives service and terminal restarts.
 Failed delivery retains the previous answer. Answers at the 48-hour limit (with a one-minute margin) are skipped; missing or undeletable messages are quiet cleanup no-ops.
 
-Persistent reply navigation belongs to a separate permanent welcome message.
-The first rich response without a saved menu owner installs it; `/start` can reinstall it.
+Persistent reply navigation belongs to a separate welcome message. The first rich response
+without a saved menu owner installs it; `/start` can reinstall it; a changed keyboard (another
+menu, role or language) sends a new one and deletes the previous, so the chat keeps one. A
+reply-button press is deleted once the bot has answered it; a press left unanswered stays, and
+typed commands are never deleted. Tidying is one quiet attempt after the answer: it is never
+retried, skipped under a rate limit, and never changes the bot's status.
 Only report and Help message IDs enter cleanup tracking; Help never owns the reply keyboard.
 
 Only IDs and original Telegram timestamps are stored in the per-bot chat-history JSON.

@@ -489,13 +489,28 @@ impl BotApi {
         self.post(method, &body, false)
     }
 
-    /// Delete only a known outgoing answer after its replacement was successfully delivered.
-    pub fn delete_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
-        self.post(
+    /// Delete a message the chat no longer needs: one attempt with the ordinary request timeout,
+    /// never retried and never reported to the error observer, so tidying a chat cannot change
+    /// the bot's health. Skipped while a rate limit is pending. A rate limit it meets itself is
+    /// kept for the next real request, which would otherwise walk straight into it.
+    ///
+    /// Returns:
+    ///     `Ok(false)` when skipped; Telegram's answer otherwise.
+    pub fn tidy_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
+        if !self.running() || self.retry.pending.is_some() {
+            return Ok(false);
+        }
+        self.post_once(
             "deleteMessage",
             &serde_json::json!({"chat_id": chat, "message_id": message}),
             false,
         )
+        .map_err(|failure| {
+            if let Some(secs) = retry_after_of(&failure.error) {
+                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+            }
+            failure.error
+        })
     }
 
     /// Dismiss Telegram's callback spinner before waiting for report computation.

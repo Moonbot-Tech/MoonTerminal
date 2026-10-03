@@ -41,6 +41,18 @@ impl History {
             || self.navigation_markup.get(&chat) != Some(markup)
     }
 
+    /// Record `id` as the chat's keyboard owner with `markup`.
+    ///
+    /// Returns:
+    ///     The keyboard owner it replaces, to be deleted: a chat keeps one such message, not one
+    ///     per keyboard change.
+    pub fn replace_navigation(&mut self, chat: i64, id: i64, markup: ReplyMarkup) -> Option<i64> {
+        self.navigation_markup.insert(chat, markup);
+        self.navigation
+            .insert(chat, id)
+            .filter(|&previous| previous > 0 && previous != id)
+    }
+
     /// Missing, damaged, or oversized metadata fails closed to no cleanup targets.
     pub fn load(path: &Path) -> Self {
         let read = || -> anyhow::Result<Self> {

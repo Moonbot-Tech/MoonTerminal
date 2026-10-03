@@ -197,24 +197,33 @@ pub(super) fn run(
             {
                 continue;
             }
-            match result {
+            let answered = match result {
                 Response::Rich {
                     html,
                     keyboard,
                     navigation,
                 } => {
-                    // Keyboard owners are permanent and never enter answer cleanup tracking.
+                    // A keyboard owner stays until a new one replaces it; it never enters answer
+                    // cleanup tracking.
                     if history.needs_navigation(chat_id, &navigation.1, is_start) {
                         match api.send_message(chat_id, &navigation.0, Some(&navigation.1)) {
                             Ok(sent) => {
-                                history.navigation.insert(chat_id, sent.message_id);
-                                history.navigation_markup.insert(chat_id, navigation.1);
+                                let previous = history.replace_navigation(
+                                    chat_id,
+                                    sent.message_id,
+                                    navigation.1,
+                                );
                                 if let Some(path) = &history_path {
                                     if let Err(error) = history.save(path) {
                                         log::warn!(
                                             "telegram navigation persistence failed: {error}"
                                         );
                                     }
+                                }
+                                // The new message owns the keyboard now; the old one only
+                                // repeats the same hint above it.
+                                if let Some(previous) = previous {
+                                    tidy(&mut api, chat_id, previous, "keyboard");
                                 }
                             }
                             Err(error) => publish_error(&tx, error),
@@ -247,33 +256,57 @@ pub(super) fn run(
                                 if let Some(previous) = previous.filter(|answer| {
                                     answer.deletable(crate::util::time::now_unix_ms_i64() / 1000)
                                 }) {
-                                    if let Err(error) = api.delete_message(chat_id, previous.id) {
-                                        if !crate::telegram::api::is_unavailable_delete(
-                                            "deleteMessage",
-                                            &error,
-                                        ) {
-                                            log::warn!(
-                                                "telegram previous answer cleanup failed: {error}"
-                                            );
-                                        }
-                                    }
+                                    tidy(&mut api, chat_id, previous.id, "previous answer");
                                 }
                             }
+                            true
                         }
-                        Ok(_) => {}
+                        Ok(_) => true,
                         Err(error) => {
-                            if !crate::telegram::api::is_unchanged_edit("editMessageText", &error) {
+                            if crate::telegram::api::is_unchanged_edit("editMessageText", &error) {
+                                true
+                            } else {
                                 publish_error(&tx, error);
                                 report_failure(&mut api, &tx, &labels, chat_id);
+                                false
                             }
                         }
                     }
                 }
                 Response::Text { text, keyboard } | Response::PairSaved { text, keyboard, .. } => {
                     let keyboard = keyboard.as_ref().filter(|_| private_chat);
-                    send_text(&mut api, &tx, chat_id, &text, keyboard);
+                    send_text(&mut api, &tx, chat_id, &text, keyboard)
                 }
+            };
+            // An answered press has done its job: the button's text would only pile up in the
+            // chat. One left unanswered stays, beside whatever said why.
+            if let Some(pressed) = pressed_button(&update, answered && reply_button && private_chat)
+            {
+                tidy(&mut api, chat_id, pressed, "button press");
             }
+        }
+    }
+}
+
+/// The message of a reply-keyboard press to remove once answered: a private chat's own message,
+/// young enough for Telegram to delete (48 hours).
+fn pressed_button(update: &crate::telegram::api::Update, reply_button: bool) -> Option<i64> {
+    let message = update.message.as_ref().filter(|_| reply_button)?;
+    let now = crate::util::time::now_unix_ms_i64() / 1000;
+    super::history::Answer {
+        id: message.message_id,
+        sent_at: message.date,
+    }
+    .deletable(now)
+    .then_some(message.message_id)
+}
+
+/// Delete a message the chat no longer needs ([`BotApi::tidy_message`]); one already gone or too
+/// old is not worth a line, and any other failure is only logged.
+fn tidy(api: &mut BotApi, chat: i64, message: i64, what: &str) {
+    if let Err(error) = api.tidy_message(chat, message) {
+        if !crate::telegram::api::is_unavailable_delete("deleteMessage", &error) {
+            log::info!("telegram {what} cleanup skipped: {error}");
         }
     }
 }
@@ -299,13 +332,14 @@ fn send_text(
     chat: i64,
     text: &str,
     keyboard: Option<&ReplyMarkup>,
-) {
+) -> bool {
     for page in segment_pages(text) {
         if let Err(error) = api.send_message(chat, &page, keyboard) {
             publish_error(tx, error);
-            break;
+            return false;
         }
     }
+    true
 }
 /// Publish typed failure and avoid hot retries for invalid credentials.
 fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
@@ -349,3 +383,6 @@ fn wait_while_alive(alive: &Weak<()>, total: Duration) {
         std::thread::sleep((total - start.elapsed().min(total)).min(Duration::from_millis(100)));
     }
 }
+
+#[cfg(test)]
+mod tests;
