@@ -66,7 +66,7 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
 - **Issues, issue comments, commits and PR text are in English** as well — the tracker is the
   public record every contributor reads.
 - **UI strings go through `t!("key")`**, with the keys in `locales/<lang>/<area>.<lang>.yml`. No literals in panels.
-- A key is added in **all four languages at once** — ru/en/es/uk. [`locales/README.md`](locales/README.md)
+- A key is added in **all seven languages at once** — ru/en/es/uk/tr/pt/vi. [`locales/README.md`](locales/README.md)
   is binding, not background: it holds the deliberately-untranslated list and the rule that glyphs
   never live in dictionary values.
 - Every new or changed function, struct and module gets a docstring — public and private alike.

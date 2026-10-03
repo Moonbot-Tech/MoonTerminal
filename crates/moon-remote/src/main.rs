@@ -10,7 +10,7 @@
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
-//!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es])
+//!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi])
 //! ```
 //!
 //! A server not set up from this machine yet needs `--host-key`: without it `setup` only prints the

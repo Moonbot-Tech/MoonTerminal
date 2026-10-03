@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "Kuyrukta"
+core_update.phase.held: "Bekliyor — hat meşgul"
+core_update.phase.sent: "Komut gönderildi"
+core_update.phase.waiting: "Güncelleniyor"
+core_update.phase.verifying: "Sürüm doğrulanıyor"
+core_update.phase.succeeded: "Güncellendi"
+core_update.phase.installed: "Kuruldu"
+core_update.phase.unchanged: "Sürüm değişmedi"
+core_update.phase.failed.not_sent: "Komut gönderilemedi"
+core_update.phase.failed.never_dropped: "Çekirdek güncelleme için bağlantıyı kesmedi"
+core_update.phase.failed.not_ready: "Güncellemeyi almak için zamanında çevrimiçi olmadı"
+core_update.phase.failed.timeout: "Güncellemeden sonra dönmedi — zaman aşımı"
+core_update.phase.failed.gone: "Çekirdeğin adresi artık bilinmiyor"
+core_update.phase.failed.abandoned: "Uygulama kapanınca bırakıldı"
+core_update.phase.failed.rejected: "Çekirdek istenen sürüm adını reddetti"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Sürüm doğrulanmadı — yeniden bağlanma yok"
+core_update.phase.unverified.timeout: "Sürüm doğrulanmadı — çekirdek zamanında dönmedi"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "güncelleniyor"
+core_update.summary.queued: "kuyrukta"
+core_update.summary.failed: "başarısız"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Saat"
+core_update.col.core: "Çekirdek"
+core_update.col.server: "Sunucu"
+core_update.col.from_to: "Eski → yeni"
+core_update.col.target: "Hedef"
+core_update.col.outcome: "Sonuç"
+core_update.col.duration: "Süre"
+core_update.list_empty: "Güncelleme geçmişi yok"
+core_update.target.release: "Yayın"
+core_update.target.named: "Beta %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Bu çekirdeği güncelle"
+core_update.server.action: "Bu sunucudaki %{n} çekirdeği güncelle"
+core_update.retry: "Güncellemeyi yeniden dene"
+core_update.skipped_offline: "%{n} çevrimdışı"
+core_update.skipped_already: "%{n} zaten güncelleniyor"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Tümünü güncelle"
+core_update.fleet.behind: "Geridekileri güncelle"
+core_update.fleet.behind_none: "Burada görünen en yeni sürüme göre daha eski sürüm bildiren çekirdek yok ve terminal Moonbot yayınlarını göremiyor."
+core_update.fleet.selected: "Seçilenleri güncelle (%{n})"
+core_update.fleet.named: "Bir sürüme…"
+core_update.confirm.title: "Çekirdekleri güncelle"
+core_update.confirm.q: "%{servers} sunucudaki %{cores} çekirdek güncellensin mi? Güncellemeler sunucular arasında paralel gider — sunucu başına aynı anda en fazla bir çekirdek."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Yayın sürümüne güncelle"
+core_update.menu.named: "Adlı bir sürüme güncelle…"
+core_update.menu.named_prompt: "%{core} için sürüm adı:"
+core_update.menu.release_n: "%{n} çekirdeği yayın sürümüne güncelle"
+core_update.menu.named_n: "%{n} çekirdeği adlı bir sürüme güncelle…"
+core_update.menu.named_prompt_n: "%{n} çekirdek için sürüm adı:"
+core_update.confirm.named_prompt: "Sürüm adı:"
+core_update.menu.named_ph: "MoonBot-F8 veya %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "Yalnızca sürüm adını yazabilir veya kurulum komutunun tamamını yapıştırabilirsiniz — ikisi de olur."
+core_update.menu.unavailable: "Kullanılamaz — çekirdek hazır değil veya zaten güncelleniyor"

@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "Giờ này"
+
+telegram.help_daily: "Kết quả theo ngày trong tháng này"
+
+telegram.help_intro: "Chọn kỳ ở menu dưới. Nhấn lại để lấy báo cáo mới. Chọn sàn để mở các core của sàn."
+
+telegram.help_commands: "Lệnh và ngày tùy chọn"
+
+telegram.help_limits: "Ngày tính cả hai đầu, tối đa 366 ngày. Múi giờ: %{zone}. Hãy để terminal chạy."
+
+telegram.help_limits_station: "Ngày tính cả hai đầu, tối đa 366 ngày. Múi giờ: %{zone}. Báo cáo cập nhật suốt ngày đêm."
+
+telegram.help_custom: "Kỳ tùy chọn / theo ngày"
+
+telegram.help_mini: "Báo cáo trong chat không cần Mini App. Dùng /miniapp để mở khi đã bật trong cài đặt terminal."
+
+telegram.help_mini_station: "Báo cáo trong chat không cần Mini App. Dùng /miniapp để mở khi đã bật trên trạm."
+
+telegram.help_status_station: "Trạng thái trạm; có nút cập nhật khi có phiên bản mới"
+telegram.report_total: "Tổng"
+
+telegram.report_calculation_extra: "Tổng gồm cả nhóm và kỳ đã chọn, kể cả các trang khác. Lệnh trung bình tính trên giao dịch có dữ liệu phù hợp; phần loại trừ ghi trong chi tiết báo cáo."
+
+telegram.button_home: "Tổng quan"
+
+telegram.report_navigation_hint: "Chọn kỳ ở menu dưới. Nhấn lại để lấy báo cáo mới. Nút dưới báo cáo mở core hoặc ngày."
+
+telegram.report_all_cores: "Mọi core"
+
+telegram.report_by_days: "Theo ngày"
+
+telegram.report_days_scope: "Ngày của nhóm"
+
+telegram.report_cores_scope: "Core của nhóm"
+
+telegram.report_back: "Mọi sàn"
+
+telegram.report_calculation: "Cách tính"
+
+telegram.report_exchanges: "Sàn"
+
+telegram.report_exchanges_menu: "Sàn"
+
+telegram.report_exchanges_back: "Quay lại"
+
+telegram.report_exchange: "Sàn"
+
+telegram.report_scope_unavailable: "Sàn không dùng được"
+
+telegram.report_average_coverage: "tính %{counted}; loại %{excluded}"
+
+telegram.report_delivery_failed: "Không hiện được báo cáo. Hãy thử lại; nếu vẫn lỗi, kiểm tra kết nối terminal và cập nhật Telegram."
+telegram.report_delivery_failed_station: "Không hiện được báo cáo. Hãy thử lại; nếu vẫn lỗi, cập nhật Telegram."
+
+telegram.button_today: "Hôm nay"
+
+telegram.button_yesterday: "Hôm qua"
+
+telegram.button_month: "Tháng này"
+
+telegram.button_lastmonth: "Tháng trước"
+
+telegram.button_daily: "Theo ngày"
+
+telegram.report_days: "Ngày"
+
+telegram.report_cores: "Core"
+
+telegram.report_profit: "Lãi / lỗ"
+
+telegram.report_trades: "Giao dịch"
+
+telegram.report_date: "Ngày"
+
+telegram.report_bot: "Bot"
+
+telegram.report_details: "Tiền tệ và lệnh trung bình"
+
+telegram.report_average: "Lệnh trung bình"
+
+telegram.report_page: "Trang"
+
+telegram.report_prev: "Trước"
+
+telegram.report_next: "Sau"
+
+telegram.report_unvalued: "Chưa định giá"
+
+telegram.report_empty: "Không có giao dịch thật đã đóng trong kỳ này."
+
+telegram.report_scope: "Nhóm đã chọn trong lịch sử terminal · giao dịch thật đã đóng · tỷ giá lúc giao dịch. Lịch sử cục bộ; bot ngoại tuyến không cập nhật."
+telegram.report_scope_station: "Nhóm đã chọn trong lịch sử trạm · giao dịch thật đã đóng · tỷ giá lúc giao dịch. Trạm sao chép lịch sử core suốt ngày đêm; bot ngoại tuyến không cập nhật."
+
+telegram.report_missing_rates: "Nếu có giao dịch chưa định giá, tổng USDT đầy đủ không có. Chi tiết giữ tổng phụ của các tiền tệ đã biết; tiền tệ không rõ bị loại."
+
+telegram.report_busy: "Báo cáo trước vẫn đang tính. Hãy thử lại sau ít phút."
+
+telegram.report_failed: "Không đọc được lịch sử giao dịch. Hãy thử lại; lỗi đọc không có nghĩa là lãi bằng không."
+
+telegram.report_help: "Chọn kỳ bên dưới. Báo cáo có chế độ xem theo bot/ngày. Nhấn lại một kỳ để lấy dữ liệu mới.\n\n/hour — giờ này\n/today — hôm nay\n/daily — kết quả theo ngày trong tháng này\n/report 2026-09-01 2026-09-10 — kỳ tùy chọn\n/daily 2026-09-01 2026-09-10 — kết quả theo ngày tùy chọn\nNgày tính cả hai đầu, tối đa 366 ngày; múi giờ theo đồng hồ terminal. Hãy để terminal chạy."
+
+telegram.report_help_station: "Chọn kỳ bên dưới. Báo cáo có chế độ xem theo bot/ngày. Nhấn lại một kỳ để lấy dữ liệu mới.\n\n/hour — giờ này\n/today — hôm nay\n/daily — kết quả theo ngày trong tháng này\n/report 2026-09-01 2026-09-10 — kỳ tùy chọn\n/daily 2026-09-01 2026-09-10 — kết quả theo ngày tùy chọn\n/status — trạng thái trạm\nNgày tính cả hai đầu, tối đa 366 ngày; múi giờ theo cài đặt trạm. Báo cáo cập nhật suốt ngày đêm."
+
+telegram.notify_profit: "Lãi"
+
+telegram.notify_manual: "Thủ công"
+
+telegram.notify_unvalued: "Chưa định giá"
+
+telegram.notify_down: "mất kết nối từ"
+
+telegram.notify_back: "đã kết nối lại"
+
+telegram.notify_daily_title: "Tổng kết ngày"
+
+telegram.notify_trades: "Giao dịch"
+
+telegram.notify_unvalued_trades: "Chưa định giá"
+
+telegram.notify_best: "Tốt nhất"
+
+telegram.notify_worst: "Tệ nhất"

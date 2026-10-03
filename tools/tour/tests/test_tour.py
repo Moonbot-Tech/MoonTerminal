@@ -79,7 +79,10 @@ class LocaleLoad(unittest.TestCase):
     def test_load_reads_per_language_folders(self):
         locales = load_locales(paths.LOCALES_DIR)
         self.assertEqual(locales.file_of("shell.settings_btn"), "en/shell.en.yml")
-        self.assertEqual(locales.languages_of("shell.settings_btn"), {"ru", "en", "es", "uk"})
+        self.assertEqual(
+            locales.languages_of("shell.settings_btn"),
+            {"ru", "en", "es", "uk", "tr", "pt", "vi"},
+        )
         self.assertEqual(locales.get("shell.settings_btn", "en"), "Settings")
 
     def test_load_rejects_stem_folder_mismatch(self):

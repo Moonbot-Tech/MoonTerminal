@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Âm lượng âm thanh giao dịch"
+trade_sounds.tab: "Âm giao dịch"
+trade_sounds.help: "Chọn âm vào lệnh và thoát lệnh cho từng sàn. Thay đổi được lưu tự động."
+trade_sounds.exchange: "Sàn"
+trade_sounds.quiet_note: "Chế độ im lặng đang bật — âm thanh đã tắt."
+trade_sounds.open: "Mở vị thế"
+trade_sounds.close: "Đóng vị thế"
+trade_sounds.off: "Tắt tiếng"
+trade_sounds.preview: "Nghe thử"

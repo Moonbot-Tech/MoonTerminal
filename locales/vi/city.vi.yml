@@ -1,0 +1,59 @@
+# City names for the header clock's time-zone picker, keyed by the three-letter code the header
+# shows. The CODES are not translated (see README); the names are proper nouns that genuinely
+# differ across the three languages.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+city.UTC: "Giờ quốc tế"
+
+# --- Americas ---
+city.HNL: "Honolulu"
+city.ANC: "Anchorage"
+city.LAX: "Los Angeles"
+city.DEN: "Denver"
+city.MEX: "Thành phố Mexico"
+city.CHI: "Chicago"
+city.BOG: "Bogotá"
+city.NYC: "New York"
+city.TOR: "Toronto"
+city.SCL: "Santiago"
+city.BUE: "Buenos Aires"
+city.SAO: "São Paulo"
+
+# --- Europe and Africa ---
+city.LIS: "Lisboa"
+city.DUB: "Dublin"
+city.LON: "Luân Đôn"
+city.AMS: "Amsterdam"
+city.BER: "Berlin"
+city.MAD: "Madrid"
+city.PAR: "Paris"
+city.ROM: "Roma"
+city.ZRH: "Zürich"
+city.ATH: "Aten"
+city.HEL: "Helsinki"
+city.KIE: "Kyiv"
+city.WAW: "Warszawa"
+city.CAI: "Cairo"
+city.JNB: "Johannesburg"
+city.IST: "Istanbul"
+city.MOW: "Mát-xcơ-va"
+city.RUH: "Riyadh"
+
+# --- Asia and Oceania ---
+city.DXB: "Dubai"
+city.KHI: "Karachi"
+city.BOM: "Mumbai"
+city.ALA: "Almaty"
+city.BKK: "Băng Cốc"
+city.JKT: "Jakarta"
+city.PER: "Perth"
+city.SIN: "Singapore"
+city.HKG: "Hồng Kông"
+city.SHA: "Thượng Hải"
+city.TPE: "Đài Bắc"
+city.SEL: "Seoul"
+city.TYO: "Tokyo"
+city.BNE: "Brisbane"
+city.SYD: "Sydney"
+city.AKL: "Auckland"

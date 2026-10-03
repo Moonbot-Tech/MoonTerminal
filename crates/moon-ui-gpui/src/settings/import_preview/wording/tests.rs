@@ -249,6 +249,18 @@ fn every_preview_key_has_all_locales_and_matching_parameters() {
             "uk",
             include_str!("../../../../../../locales/uk/import.uk.yml"),
         ),
+        (
+            "tr",
+            include_str!("../../../../../../locales/tr/import.tr.yml"),
+        ),
+        (
+            "pt",
+            include_str!("../../../../../../locales/pt/import.pt.yml"),
+        ),
+        (
+            "vi",
+            include_str!("../../../../../../locales/vi/import.vi.yml"),
+        ),
     ];
     let mut by_lang: BTreeMap<&str, BTreeMap<&str, String>> = BTreeMap::new();
     for (lang, yaml) in files {

@@ -1,7 +1,7 @@
 // Headless preview of the Telegram Mini App: renders every screen from fixture payloads and
 // checks entry-volume rendering and the owner commands the page sends. No core, no bot, no network.
 //
-//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]
+//   node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]
 //
 // Exits non-zero when an interaction check fails or the page throws.
 
@@ -17,7 +17,13 @@ const WEB = path.join(ROOT, "crates", "moon-core", "src", "telegram", "web");
 const LOCALES = path.join(ROOT, "locales");
 const FIXTURES = path.join(HERE, "fixtures");
 
-// Command-line options: output folder, label locale, one screen by name.
+/**
+ * Read output folder, label locale, and optional screen name from the process arguments.
+ * Locale codes are passed through to the label loader without validation.
+ * Help prints usage and exits successfully.
+ * @returns {object} Options defaulting to the tool's out folder, Russian labels, and all screens.
+ * @throws {Error} If an argument is unrecognized or output path resolution fails.
+ */
 function args() {
     const out = { out: path.join(HERE, "out"), locale: "ru", only: null };
     const argv = process.argv.slice(2);
@@ -28,7 +34,7 @@ function args() {
         else if (key === "--locale") out.locale = value;
         else if (key === "--only") out.only = value;
         else if (key === "--help" || key === "-h") {
-            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk] [--only <screen>]");
+            console.log("usage: node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]");
             process.exit(0);
         } else throw new Error(`unknown argument ${key}`);
         i++;

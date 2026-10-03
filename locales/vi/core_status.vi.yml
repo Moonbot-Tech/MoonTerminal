@@ -1,0 +1,373 @@
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Top bar and footer ---
+core_status.all_cores: "Mọi core"
+core_status.cores_n: "%{n} core"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint: "Sắp trong từng sàn"
+core_status.cores: "Core"
+core_status.empty: "Không có dữ liệu core"
+core_status.mode.by_ip: "Theo IP"
+core_status.mode.flat: "Phẳng"
+core_status.mode.problems: "Sự cố"
+core_status.mode.warnings: "Cảnh báo"
+core_status.mode.updates: "Cập nhật"
+core_status.warn_empty: "Không có cảnh báo đã ghi"
+# Warnings-list columns.
+core_status.col.time: "Giờ"
+core_status.col.dur: "Thời lượng"
+core_status.col.type: "Loại"
+core_status.col.peak: "Đỉnh"
+core_status.footer: "Máy chủ: %{servers}  Core: %{cores}  Online: %{online}"
+
+# --- Server tree ---
+core_status.server_n: "Server %{n}"
+core_status.rename: "Đổi tên máy chủ"
+core_status.show_ip: "Hiện IP"
+core_status.hide_ip: "Ẩn IP"
+core_status.ip_unknown: "Terminal chưa có địa chỉ của máy chủ này"
+core_status.cpu_load: "%{value} (%{n})"
+core_status.mem_free: "%{pct}% (%{gb} GB)"
+core_status.unknown_server: "IP không rõ: %{core}"
+core_status.online: "Online"
+core_status.degraded: "Suy giảm"
+core_status.offline: "Ngoại tuyến"
+core_status.ready_count: "%{ready}/%{total} core"
+core_status.hide_server: "Ẩn tiến trình máy chủ"
+core_status.show_server: "Hiện tiến trình máy chủ"
+core_status.system_cpu: "CPU hệ thống %{value}"
+core_status.process_cpu: "CPU %{value}"
+core_status.process_memory: "RAM %{value}"
+core_status.process_memory_total: "RAM tiến trình %{value}"
+
+# --- Table columns ---
+core_status.col.server: "Máy chủ"
+core_status.col.core: "Core"
+core_status.col.status: "Trạng thái"
+core_status.col.cpu_proc: "CPU t.trình"
+core_status.col.cpu_sys: "CPU h.thống"
+core_status.col.mem_used: "RAM dùng"
+core_status.col.free_phys: "RAM trống"
+core_status.col.cpus: "CPU logic"
+core_status.col.ping: "Ping core"
+core_status.col.ping_exch: "Ping sàn"
+core_status.col.updated: "Đã cập nhật"
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
+# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version: "MoonBot"
+# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind: "Bản MoonBot cũ: %{have}. Bản mới nhất trong các core của bạn là %{newest}"
+# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
+# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
+# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
+# has none to be behind with), which is why this string must not tell the user to expand anything:
+# expanding a Uniform group reveals N cores all reporting the number they can already see.
+core_status.version_behind_group: "Mọi core trên máy chủ này chạy %{have}; đã có bản mới hơn: %{newest}"
+core_status.col.api_key: "API (ngày)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual: "Khóa không có ngày hết hạn"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus: "Số CPU logic trên máy"
+core_status.col_tip.tz_off: "Lệch đồng hồ core so với UTC"
+core_status.col_tip.api_key: "Số ngày tới khi khóa API sàn hết hạn"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota: "Giới hạn API"
+
+# --- By IP column header (the fixed caption row above the server tree) ---
+# CPU column: percentage plus the machine's logical-core count in parentheses.
+core_status.hdr.cpu: "CPU (core)"
+# Memory column: free share and the reconstructed total RAM.
+core_status.hdr.mem: "RAM trống"
+# IP column heading (the abbreviation is identical across locales).
+core_status.hdr.ip: "IP"
+# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
+# panel advertises them, and the Shift variant is the only reset a detached window offers.
+core_status.col_resize: "Kéo để đổi độ rộng. Nhấp đúp đặt lại cột này, Shift+nhấp đúp đặt lại mọi cột"
+# API-key column heading in the By-IP tree; carries the unit its cells omit.
+core_status.hdr.api_key: "API (ngày)"
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests: "lượt"
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota: "Giới hạn API"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu: "CPU"
+core_status.chart_mem: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
+core_status.chart_ping: "Ping"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch: "Sàn"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn: "Liên kết"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing: "đang diễn ra"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect: "Lúc phát hiện:"
+core_status.warn_server: "Máy chủ"
+core_status.chart_5m: "5 phút"
+core_status.chart_1h: "1 giờ"
+
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title: "Cảnh báo: theo dõi gì"
+core_status.warn_cfg.cpu: "CPU máy chủ"
+core_status.warn_cfg.mem: "Bộ nhớ tăng"
+core_status.warn_cfg.conn: "Core rớt"
+core_status.warn_cfg.ping: "Ping core vọt"
+core_status.warn_cfg.exch: "Ping sàn vọt"
+core_status.warn_cfg.api: "Khóa API sắp hết hạn"
+core_status.warn_cfg.api_quota: "Sắp hết giới hạn API"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on: "Bật"
+core_status.warn_cfg.col.chart: "Biểu đồ"
+core_status.warn_cfg.col.sound: "Tiếng"
+# Threshold captions.
+core_status.warn_cfg.p.threshold: "Ngưỡng"
+core_status.warn_cfg.p.hold: "Giữ"
+core_status.warn_cfg.p.growth: "Tăng"
+core_status.warn_cfg.p.window: "Cửa sổ"
+core_status.warn_cfg.p.yellow: "Vàng"
+core_status.warn_cfg.p.red: "Đỏ"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days: "Trong vòng"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests: "Lượt tối thiểu"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none: "Không"
+core_status.warn_cfg.u.sec: "giây"
+core_status.warn_cfg.u.day: "ngày"
+
+# --- Units and relative time ---
+core_status.mb: "MB"
+core_status.ms: "ms"
+core_status.ago_s: "%{n} giây"
+core_status.ago_m: "%{n} phút"
+core_status.ago_h: "%{n} giờ"
+core_status.ago_d: "%{n} ngày"
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
+core_status.api_days: "%{n} ngày"
+core_status.api_expired: "đã hết hạn"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup: "Khởi động"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs: "%{t} giây"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took: "trong %{t}"
+core_status.startup.rate: "%{v}/giây"
+core_status.startup.b: "B"
+core_status.startup.kb: "KB"
+core_status.startup.mb: "MB"
+# Startup phases.
+core_status.startup.state.connecting: "Đang nối"
+core_status.startup.state.initializing: "Đang khởi tạo"
+core_status.startup.state.ready: "Sẵn sàng"
+core_status.startup.state.reconnecting: "Đang nối lại"
+core_status.startup.state.failed: "Lỗi"
+core_status.startup.state.disconnected: "Mất kết nối"
+core_status.startup.state.unknown: "Không rõ"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check: "Kiểm tra tương thích"
+core_status.startup.step.auth_check: "Kiểm tra quyền"
+core_status.startup.step.markets_list: "Danh sách thị trường"
+core_status.startup.step.markets_update: "Giá và chỉ số"
+core_status.startup.step.strategy_schema: "Lược đồ chiến lược"
+core_status.startup.step.post_init_flush: "Làm mới ban đầu"
+core_status.startup.step.snapshot: "Ảnh chụp đầu"
+core_status.startup.step.events: "Sự kiện khởi động"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase: "Pha"
+core_status.startup.f.step: "Bước"
+core_status.startup.f.elapsed: "Đã qua"
+core_status.startup.f.received: "Đã nhận"
+core_status.startup.f.blocks: "Khối"
+core_status.startup.f.dupes: "bản trùng"
+core_status.startup.f.transfers: "Lần chuyển"
+core_status.startup.f.idle: "Im lặng"
+core_status.startup.f.retries: "Thử lại (bước · tổng)"
+core_status.startup.f.reconnects: "Lần nối lại"
+core_status.startup.f.local_port: "Cổng UDP cục bộ"
+core_status.startup.f.previous_port: "Cổng UDP trước"
+core_status.startup.f.port_changes: "Lần đổi cổng cục bộ"
+core_status.startup.packets: "gửi %{sent} · nhận %{recv}"
+core_status.startup.f.rtt: "RTT"
+core_status.startup.f.mtu: "MTU"
+core_status.startup.f.delivery: "Giao nhận"
+
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off: "Lệch UTC"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown: "—"
+core_status.tz_off.f.offset: "Độ lệch"
+core_status.tz_off.f.samples: "Mẫu"
+core_status.tz_off.f.observed: "Đã đo"
+core_status.tz_off.f.source: "Nguồn"
+# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+core_status.tz_off.f.unmeasured: "Chưa đo"
+core_status.tz_off.source.log: "Nhật ký core"
+core_status.tz_off.source.replica: "Dữ liệu bản sao"
+core_status.tz_off.source.skew: "Hiệu chỉnh lệch"
+core_status.tz_off.source.none: "—"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
+core_status.fault.short.local_port: "cổng cục bộ"
+core_status.fault.short.no_response: "không trả lời"
+core_status.fault.short.unparsed: "đã nhận UDP"
+core_status.fault.short.access: "khóa / quyền"
+core_status.fault.short.unidentified: "core không xưng danh"
+core_status.fault.short.syncing: "đang đồng bộ"
+core_status.fault.short.stalled: "kẹt ở một bước"
+core_status.fault.short.aborted: "đã dừng"
+core_status.fault.short.unknown: "chưa xác định"
+core_status.fault.short.key_empty: "chưa dán khóa"
+core_status.fault.short.key_unparsable: "không phải khóa MoonBot"
+core_status.fault.reason.local_port: "Terminal không chiếm được cổng UDP của mình (%{n} lần thử)"
+core_status.fault.reason.silent: "Trong %{t} giây không có một byte nào từ core"
+core_status.fault.reason.unparsed: "Đã nhận gói UDP: %{n}; terminal không chấp nhận bắt tay trong %{t} giây"
+core_status.fault.reason.partial: "Đã nhận %{bytes} từ core, nhưng kết nối không hoàn tất trong %{t} giây"
+core_status.fault.reason.access_refused: "Core không nhận khóa"
+core_status.fault.reason.access_timeout: "Core đã trả lời, nhưng kiểm tra quyền tài khoản không xong"
+core_status.fault.reason.access_failed: "Kiểm tra quyền tài khoản thất bại: %{msg}"
+core_status.fault.reason.unidentified_timeout: "Core không trả lời kiểm tra tương thích"
+core_status.fault.reason.unidentified_failed: "Kiểm tra tương thích thất bại: %{msg}"
+core_status.fault.reason.syncing: "Bước %{step} (%{done}/%{total}), %{t} giây, chưa có ảnh chụp"
+core_status.fault.reason.stalled: "Khởi tạo dừng ở bước %{step} (%{done}/%{total}), %{t} giây"
+core_status.fault.reason.aborted: "Terminal tự dừng lần thử"
+core_status.fault.reason.unknown: "Không xác định được nguyên nhân"
+core_status.fault.reason.key_empty: "Ô Khóa trống — không có gì để nối"
+core_status.fault.reason.key_unparsable: "Trong ô Khóa không phải khóa MoonBot — terminal không đọc được"
+core_status.fault.next.local_port: "Có thứ trên máy NÀY đang giữ cổng: VPN hoặc tường lửa cục bộ"
+core_status.fault.next.no_response: "Mở cổng UDP của core cả trong bảng nhà cung cấp lẫn tường lửa của chính máy. Máy ảo khôi phục từ ảnh chụp không mang theo nhóm luật, và Windows đánh dấu adapter mới là Public trong khi luật chỉ cho Private thì im"
+core_status.fault.next.unparsed: "Gói đã tới terminal: đây không phải cổng đóng. Gửi nhật ký và các bộ đếm này cho hỗ trợ"
+core_status.fault.next.try_mode: "Các core khác trên terminal này nối được ở chế độ %{mode} — thử chuyển core này sang %{mode}"
+core_status.fault.next.access: "Dán khóa xuất từ ĐÚNG bot này, và kiểm tra chế độ Kernel (VPS) đang bật trên core. Nó vẫn tắt khi tài khoản sàn chưa nằm dưới giới thiệu MoonBonus"
+core_status.fault.next.unidentified: "Core trả lời nhưng không qua kiểm tra tương thích. Kiểm tra lần lượt: Kernel (VPS) đã bật chưa, core có quá tải không, và cập nhật MoonBot trên máy của nó"
+core_status.fault.next.syncing: "Hãy đợi. Nếu con số đứng yên, trỏ vào cột khởi động: ở đó thấy mất kênh"
+core_status.fault.next.stalled: "Lần thử tự lặp lại. Nếu cùng một bước cứ thất bại, trỏ vào cột khởi động và gửi nhật ký"
+core_status.fault.next.aborted: "Không cần làm gì"
+core_status.fault.next.unknown: "Gửi dòng này và nhật ký cho hỗ trợ"
+core_status.fault.next.key: "Khóa được tạo trong MoonBot, không phải trên trang web. Trong MoonBot: chấm xanh góc dưới trái (cửa sổ Info) → dòng Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings → Key: → Copy Key (chưa có khóa — New Key). Dán cả khóa vào ô Khóa bằng nút Dán và nhấn Lưu — core tự nối"
+core_status.fault.core.legacy_named: "Core báo MoonBot %{server} và không có phiên bản giao thức: nó cũ hơn terminal này"
+core_status.fault.core.legacy_silent: "Core không báo phiên bản giao thức: nó cũ hơn terminal này"
+core_status.fault.retrying: "đang kết nối lại"
+core_status.fault.f.reason: "Nguyên nhân"
+core_status.fault.f.next: "Việc cần làm"
+core_status.fault.f.stage: "Bước"
+core_status.fault.f.core: "Core"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category: "Nhóm"
+core_status.col.problem_kind: "Dạng"
+core_status.col.problem_title: "Sự cố"
+# Shown only when EVERY core in scope delivered a list and all of them were empty.
+core_status.problems_empty: "Các core không báo sự cố"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown: "Chưa báo: %{n} — core cũ hơn, hoặc danh sách chưa tới"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated: "Đang hiện %{n} dòng đầu"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores: "Không có core trong phạm vi"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed: "Không có gì được báo"
+core_status.problem_cat.machine: "Máy"
+core_status.problem_cat.exchange: "Sàn"
+core_status.problem_cat.network: "Mạng"
+core_status.problem_cat.other: "Khác"
+
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+#
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
+core_status.problems_test: "Thử kênh"
+# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
+core_status.problems_clear: "Đặt lại"
+core_status.problems_test_tip: "Đăng một sự kiện thử qua bộ dò của chính core — khoảng hai giây. Chứng minh cả đường: bộ dò, dây, phép chiếu, bảng."
+core_status.problems_refresh: "Làm mới"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip: "Đọc lại những gì các core đã kết nối (%{cores}) đã gửi tới giờ. Nhấp một dòng để chỉ đọc lại core đó. Không xin được danh sách mới: giao thức không có lệnh đó — core tự gửi, khi kết nối và mỗi khi bộ dò của nó đổi danh sách. Nên nhấn sau khi core khởi động lại, khi các dòng cũ không còn nói về nó."
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one: "Đặt lại chẩn đoán của core đã chọn — không hoàn lại, và với mọi terminal. Nhấp lại dòng của nó để về cả phạm vi"
+core_status.problems_refresh_tip_one: "Đọc lại những gì core đã chọn đã gửi tới giờ. Không xin được danh sách mới: giao thức không có lệnh đó. Nhấp lại dòng của nó để về cả phạm vi"
+core_status.problems_clear_tip: "Đặt lại chẩn đoán. Core đã kết nối: %{cores}. Không hoàn lại, và với mọi terminal. Nhấp một dòng để chỉ đặt lại core đó"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
+core_status.problems_pick_core: "Lần thử đi tới một core: nhấp dòng sự cố của core đó trong bảng — hoặc thu phạm vi bảng về một core"
+core_status.problems_picked_offline: "Core đã chọn đang ngoại tuyến — lệnh sẽ đợi nó trở lại"
+core_status.problems_no_online: "Không có core nào trong phạm vi bảng đã kết nối"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
+core_status.problems_core_offline: "Core đang ngoại tuyến — lần thử sẽ đợi lần nối lại và đăng sự kiện vào một lúc không báo trước"
+core_status.problems_test_title: "Gửi một chẩn đoán thử?"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q: "Core %{core} sẽ đăng một sự kiện thử qua bộ dò của chính nó — khoảng hai giây. Dòng ở lại trên core, và cách DUY NHẤT để gỡ là đặt lại, việc đó cũng xóa các phát hiện thật của core đó."
+core_status.problems_test_sent: "Đã gửi thử tới %{core} — dòng xuất hiện sau vài giây"
+core_status.problems_clear_sent: "Đã gửi đặt lại tới %{core} — các dòng mất khi core gửi danh sách tiếp theo"
+core_status.problems_clear_sent_many: "Đã gửi đặt lại tới %{cores} core — các dòng mất khi các core đó gửi danh sách tiếp theo"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed: "Core đã đọc lại: %{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none: "Không tới core nào trong %{cores} core — ngoại tuyến, hoặc kênh lệnh của chúng đóng"
+core_status.problems_fleet_partial: "Tới %{sent} trong %{cores} core — số còn lại ngoại tuyến hoặc kênh đóng"
+core_status.problems_not_sent: "Không gửi: kênh lệnh của core đóng"
+core_status.problems_not_sent_offline: "Không gửi: core đang ngoại tuyến"
+core_status.problems_clear_title: "Đặt lại chẩn đoán của core?"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q: "Core %{core} sẽ bỏ mọi sự cố đã xác nhận và giả thuyết đang chờ — với mọi terminal, không có đường quay lại. Việc này không xử lý nguyên nhân: nếu nguyên nhân còn, core sẽ xác nhận sự cố lần nữa."
+core_status.problems_clear_title_many: "Đặt lại chẩn đoán của nhiều core?"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many: "Mỗi core trong %{cores} core này sẽ bỏ mọi sự cố đã xác nhận và giả thuyết đang chờ — với mọi terminal, không có đường quay lại. Việc này không xử lý nguyên nhân: những gì còn lại sẽ được xác nhận lần nữa."

@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Bảo mật"
+security.password: "Mật khẩu"
+security.confirm: "Nhập lại"
+security.mismatch: "Mật khẩu không khớp"
+
+# --- Launch gate ---
+security.launch: "Mật khẩu khi mở"
+security.launch_hint: "Chốt cục bộ, hỏi mỗi lần khởi động. Độ dài tùy ý. Nó KHÔNG mã hóa khóa core — ai có quyền đọc file vẫn đọc được."
+
+# --- servers.enc encryption password ---
+security.file: "Mật khẩu mã hóa servers.enc"
+security.file_hint: "Chỉ hỏi khi file không mở được bằng khóa máy: máy mới, hoặc mất kho khóa của hệ điều hành. Nhập đúng một lần thì máy này nhớ và không hỏi lại."
+security.file_warning: "Không khôi phục được mật khẩu này. Mất nó cùng khóa máy là mất các core."
+security.rule: "Ít nhất %{min} ký tự và hai lớp ký tự khác nhau."
+security.bits: "≈%{bits} bit"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Yếu"
+security.level.fair: "Trung bình"
+security.level.good: "Khá"
+security.level.strong: "Mạnh"
+security.issue.none: "Chấp nhận"
+security.issue.short: "Quá ngắn: ít nhất %{min} ký tự"
+security.issue.common: "Có một từ phổ biến — bị đoán như một khối"
+security.issue.repeats: "Quá nhiều một ký tự lặp lại"
+security.issue.sequence: "Dãy ký tự liên tiếp bị đoán ngay"
+security.issue.one_class: "Chỉ một lớp ký tự — thêm chữ số, chữ hoa hoặc ký hiệu"
+security.issue.low_entropy: "Quá dễ đoán — hãy dài hơn và đa dạng hơn"
+
+# --- Machine key slots ---
+security.machines: "Máy có quyền: %{used} / %{max}"
+security.machines_unknown: "Máy có quyền: — / %{max}"
+security.forget_machines: "Quên các máy khác"
+security.machines_forgotten: "Đã thu hồi quyền của các máy khác"
+
+# --- Apply results ---
+security.applied: "Đã lưu mật khẩu"
+security.pending_write: "Đã nhận mật khẩu; đang lưu…"
+security.err.not_saved: "Mật khẩu được nhận nhưng cấu hình chưa lưu; sửa lỗi phía trên rồi lưu lại"
+security.err.empty: "Nhập mật khẩu"
+security.err.mismatch: "Mật khẩu không khớp"
+security.err.not_editable: "Cấu hình không được mở trong lần chạy này, nên không có chỗ lưu mật khẩu"
+security.err.backend: "Kho khóa không dùng được, nên không lưu gì"
+security.not_editable: "servers.enc không được mở trong lần chạy này, nên mật khẩu không dùng được"
+security.err.weak: "Mật khẩu mã hóa quá yếu"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Đăng nhập"
+login.title: "Đăng nhập"
+login.placeholder: "Mật khẩu"
+login.enter: "Vào"
+login.exit: "Thoát"
+login.start_over: "Làm lại"
+login.file_subtitle: "servers.enc không mở được bằng khóa của máy này. Nhập mật khẩu mã hóa; sau đó máy sẽ nhớ quyền truy cập."
+login.launch_subtitle: "Nhập mật khẩu khởi động."
+login.locked_subtitle: "servers.enc được mã hóa bằng khóa của máy khác và không có mật khẩu mã hóa. Không có gì để mở nó."
+login.throttled: "Nhập chậm lại sau nhiều lần sai"
+login.err.empty: "Nhập mật khẩu"
+login.err.backend: "Không kiểm tra được mật khẩu; xem log"
+login.err.wrong: "Sai mật khẩu"

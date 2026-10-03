@@ -1,0 +1,66 @@
+# Security block of the General settings tab and the startup login window.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Settings → General → Security ---
+security.title: "Güvenlik"
+security.password: "Parola"
+security.confirm: "Tekrar"
+security.mismatch: "Parolalar uyuşmuyor"
+
+# --- Launch gate ---
+security.launch: "Açılışta parola"
+security.launch_hint: "Her açılışta sorulan yerel bir kilit. Uzunluk serbest. Çekirdek anahtarlarını ŞİFRELEMEZ — dosyaya erişen biri onları yine okur."
+
+# --- servers.enc encryption password ---
+security.file: "servers.enc şifreleme parolası"
+security.file_hint: "Yalnızca dosya makine anahtarıyla açılamadığında sorulur: yeni bir makinede veya işletim sistemi anahtarlığı kaybolunca. Doğru girilince bu makine için hatırlanır ve bir daha sorulmaz."
+security.file_warning: "Bu parola kurtarılamaz. Makine anahtarıyla birlikte kaybedilirse çekirdeklere erişim kaybolur."
+security.rule: "En az %{min} karakter ve iki farklı karakter sınıfı."
+security.bits: "≈%{bits} bit"
+
+# --- Strength meter ---
+security.level.empty: "—"
+security.level.weak: "Zayıf"
+security.level.fair: "Orta"
+security.level.good: "İyi"
+security.level.strong: "Güçlü"
+security.issue.none: "Kabul edildi"
+security.issue.short: "Çok kısa: en az %{min} karakter"
+security.issue.common: "Bilinen bir sözcük içeriyor — tek parça olarak tahmin edilir"
+security.issue.repeats: "Çoğu aynı karakterin tekrarı"
+security.issue.sequence: "Ardışık karakter dizileri anında tahmin edilir"
+security.issue.one_class: "Yalnızca bir karakter sınıfı — rakam, büyük harf veya simge ekleyin"
+security.issue.low_entropy: "Çok tahmin edilebilir — uzatın ve çeşitlendirin"
+
+# --- Machine key slots ---
+security.machines: "Erişimi olan makineler: %{used} / %{max}"
+security.machines_unknown: "Erişimi olan makineler: — / %{max}"
+security.forget_machines: "Diğerlerini unut"
+security.machines_forgotten: "Diğer makinelerin erişimi kaldırıldı"
+
+# --- Apply results ---
+security.applied: "Parolalar kaydedildi"
+security.pending_write: "Parolalar kabul edildi; kaydediliyor…"
+security.err.not_saved: "Parola kabul edildi ama yapılandırma kaydedilmedi; yukarıdaki hatayı düzeltip yeniden kaydedin"
+security.err.empty: "Bir parola girin"
+security.err.mismatch: "Parolalar uyuşmuyor"
+security.err.not_editable: "Yapılandırma bu çalıştırmada açılmadı, parolayı saklayacak yer yok"
+security.err.backend: "Anahtar deposu kullanılamıyor, hiçbir şey saklanmadı"
+security.not_editable: "servers.enc bu çalıştırmada açılmadı, parolalar kullanılamaz"
+security.err.weak: "Şifreleme parolası çok zayıf"
+
+# --- Login window ---
+login.window_title: "MoonTerminal — Giriş"
+login.title: "Giriş"
+login.placeholder: "Parola"
+login.enter: "Giriş yap"
+login.exit: "Çıkış"
+login.start_over: "Baştan başla"
+login.file_subtitle: "servers.enc bu makinenin anahtarıyla açılamıyor. Şifreleme parolasını girin; makine erişimi sonra hatırlar."
+login.launch_subtitle: "Açılış parolasını girin."
+login.locked_subtitle: "servers.enc başka bir makinenin anahtarıyla şifreli ve üzerinde şifreleme parolası yok. Dosyayı açmanın bir yolu yok."
+login.throttled: "Art arda hatalardan sonra giriş yavaşlar"
+login.err.empty: "Bir parola girin"
+login.err.backend: "Parola denetlenemedi; günlüğe bakın"
+login.err.wrong: "Yanlış parola"

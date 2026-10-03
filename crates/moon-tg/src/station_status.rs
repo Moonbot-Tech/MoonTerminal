@@ -2,11 +2,11 @@
 //! terminal's "Status" shows, and what the bot's chat "Status" answers — with an "Update" button
 //! while a newer release carries the station's binary.
 
+use crate::t;
 use moon_core::station_api::{Host, Status, TapeWindow};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::commands::STATION_UPDATE_CALLBACK;
 use moon_core::telegram::runtime::Response;
-use rust_i18n::t;
 
 /// What the station's look at the latest release found.
 #[derive(Clone, Debug, PartialEq, Eq)]

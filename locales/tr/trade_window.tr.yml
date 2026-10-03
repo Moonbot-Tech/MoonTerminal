@@ -1,0 +1,145 @@
+_version: 1
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open: "İşlem penceresini aç"
+
+trade_window.blocked.unresolved: "İşlem penceresi kullanılamıyor — çekirdek bağlı değil"
+
+trade_window.retry: "Yeniden dene"
+
+trade_window.other_trades: "Diğer işlemleri göster"
+
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip: "İşlem penceresi görünümü"
+
+trade_window.settings.title: "İşlem penceresi görünümü"
+
+trade_window.settings.frame_trades: "İşlemler"
+
+trade_window.settings.fit: "İşlemi pencereye sığdır"
+
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels: "Grafikte işlem yazıları"
+
+trade_window.settings.hide_rail: "Yan paneli gizle"
+
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone: "MoonShot bölgesi"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks: "Tikleri yükle"
+
+trade_window.source.candles_ticks_disabled: "%{min} dakikalık mum — tikler pencere ayarlarında kapalı"
+
+trade_window.state.loading: "Bu işlemin çevresindeki piyasa yükleniyor…"
+
+trade_window.state.failed: "Borsadan veri alınamadı. Yeniden deneyebilirsiniz."
+
+trade_window.state.rate_limited: "Borsa istekleri sınırlıyor. %{secs} sn sonra yeniden deneyin."
+
+trade_window.state.unknown_symbol: "Borsa bu piyasayı bilmiyor."
+
+trade_window.source.ticks: "borsa tikleri"
+
+trade_window.source.core_ticks: "çekirdek tikleri"
+
+trade_window.source.loading_more: "daha fazlası yükleniyor"
+
+trade_window.source.context_unavailable: "mum bağlamı yok"
+
+trade_window.source.awaiting_core: "%{min} dakikalık mum, çekirdek arşivi kontrol ediliyor"
+
+trade_window.source.core_ticks_bucketed: "çekirdek tikleri, %{secs} sn adım"
+
+trade_window.source.ticks_bucketed: "borsa tikleri, %{secs} sn adım"
+
+# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
+# словаре не хранится.
+trade_window.source.ticks_edges: "kenarlar %{min} dakikalık mumla dolduruldu"
+
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends: "giriş ve çıkış çevresinde tikler, arada %{min} dakikalık mum"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending: "%{min} dakikalık mum, tikler hâlâ alınıyor"
+
+trade_window.source.candles_no_route: "%{min} dakikalık mum — %{brand} genel tik vermiyor"
+
+trade_window.source.candles_retention: "%{min} dakikalık mum — borsa tikleri yalnızca %{hours} sa tutar"
+
+trade_window.source.candles_no_trades: "%{min} dakikalık mum — bu aralıkta borsada işlem olmadı"
+
+trade_window.source.candles_failed: "%{min} dakikalık mum — tikler yüklenemedi"
+
+trade_window.source.candles_rate_limited: "%{min} dakikalık mum — borsa sınırlıyor, tik istenmedi; pencereyi %{secs} sn sonra yeniden açın"
+
+trade_window.empty.no_data: "Piyasada bu dönem için veri yok."
+
+trade_window.empty.no_endpoint: "%{brand} için bu derlemenin kullanacağı genel geçmiş kaynağı yok."
+
+trade_window.empty.unknown_venue: "Bu derleme çekirdeğin borsasını tanımıyor."
+
+trade_window.empty.core_offline: "İşlemin çekirdeği bağlı değil, borsa ve piyasa belirlenemiyor."
+
+trade_window.empty.bad_window: "İşlemin açılış veya kapanış zamanı kullanılamaz."
+
+trade_window.figure.side: "Yön"
+
+trade_window.figure.entry: "Giriş"
+
+trade_window.figure.exit: "Çıkış"
+
+trade_window.figure.quantity: "Miktar"
+
+trade_window.figure.profit: "Kâr"
+
+trade_window.figure.profit_pct: "Kâr, %"
+
+trade_window.figure.opened: "Açıldı"
+
+trade_window.figure.closed: "Kapandı"
+
+trade_window.figure.held: "Pozisyonda"
+
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy: "Strateji"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted: "silinenlerde"
+trade_window.strategy.deleted: "silindi"
+trade_window.strategy.core_offline: "çekirdek bağlı değil"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version: "sürüm %{stamp}"
+trade_window.strategy.version_current: "sürüm: yürürlükte"
+trade_window.strategy.version_unknown: "sürüm bilinmiyor"
+trade_window.strategy.version_tip: "Girişte yürürlükte olan strateji sürümü — terminal kaydına göre: damga, terminalin ayarları gördüğü andır, çekirdeğin uyguladığı an değil. Tıklama o sürümü Sürümler bölmesinde açar."
+trade_window.strategy.version_unknown_tip: "İşlem, kaydedilen ilk sürümden eski: terminal bu çekirdeği henüz izlemiyordu"
+
+trade_window.figure.unknown: "bilinmiyor"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long: "LONG"
+
+trade_window.side.short: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders: "Emirler"
+trade_window.traces.pending: "izler aranıyor: önce arşiv, sonra çekirdek…"
+trade_window.traces.drawn: "%{own} kendi, %{inherited} devralınan"
+trade_window.traces.drawn_own: "grafikte %{own} çizgi"
+trade_window.traces.none: "arşivde iz yok — çıkış rapordan, giriş ok olarak"
+trade_window.traces.not_askable: "satır anahtarı gelmedi — işlem çekirdek güncellemesinden önce kopyalandı"
+trade_window.traces.failed: "çekirdek yanıt vermedi — eski çekirdek veya kopan bağlantı"
+trade_window.traces.retry_tip: "Emir izlerini çekirdekten yeniden iste"
+trade_window.traces.neighbours: "+%{n} komşu"

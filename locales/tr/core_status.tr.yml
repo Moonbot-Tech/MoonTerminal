@@ -1,0 +1,373 @@
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Top bar and footer ---
+core_status.all_cores: "Tüm çekirdekler"
+core_status.cores_n: "Çekirdek: %{n}"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint: "Her borsanın içinde sıralı"
+core_status.cores: "Çekirdekler"
+core_status.empty: "Çekirdek verisi yok"
+core_status.mode.by_ip: "IP'ye göre"
+core_status.mode.flat: "Düz"
+core_status.mode.problems: "Sorunlar"
+core_status.mode.warnings: "Uyarılar"
+core_status.mode.updates: "Güncellemeler"
+core_status.warn_empty: "Kayıtlı uyarı yok"
+# Warnings-list columns.
+core_status.col.time: "Saat"
+core_status.col.dur: "Süre"
+core_status.col.type: "Tür"
+core_status.col.peak: "Zirve"
+core_status.footer: "Sunucu: %{servers}  Çekirdek: %{cores}  Çevrimiçi: %{online}"
+
+# --- Server tree ---
+core_status.server_n: "Sunucu %{n}"
+core_status.rename: "Sunucuyu yeniden adlandır"
+core_status.show_ip: "IP'yi göster"
+core_status.hide_ip: "IP'yi gizle"
+core_status.ip_unknown: "Terminalin bu sunucu için henüz adresi yok"
+core_status.cpu_load: "%{value} (%{n})"
+core_status.mem_free: "%{pct}% (%{gb} GB)"
+core_status.unknown_server: "Bilinmeyen IP: %{core}"
+core_status.online: "Çevrimiçi"
+core_status.degraded: "Kısmi"
+core_status.offline: "Çevrimdışı"
+core_status.ready_count: "%{ready}/%{total} çekirdek"
+core_status.hide_server: "Sunucu süreçlerini gizle"
+core_status.show_server: "Sunucu süreçlerini göster"
+core_status.system_cpu: "Sistem CPU %{value}"
+core_status.process_cpu: "CPU %{value}"
+core_status.process_memory: "RAM %{value}"
+core_status.process_memory_total: "Süreç RAM %{value}"
+
+# --- Table columns ---
+core_status.col.server: "Sunucu"
+core_status.col.core: "Çekirdek"
+core_status.col.status: "Durum"
+core_status.col.cpu_proc: "CPU sür."
+core_status.col.cpu_sys: "CPU sis."
+core_status.col.mem_used: "Bellek"
+core_status.col.free_phys: "Boş fiz."
+core_status.col.cpus: "Mantıksal CPU"
+core_status.col.ping: "Çekirdek ping"
+core_status.col.ping_exch: "Borsa ping"
+core_status.col.updated: "Güncellendi"
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
+# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version: "MoonBot"
+# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind: "Eski MoonBot derlemesi: %{have}. Çekirdekleriniz arasındaki en yeni: %{newest}"
+# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
+# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
+# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
+# has none to be behind with), which is why this string must not tell the user to expand anything:
+# expanding a Uniform group reveals N cores all reporting the number they can already see.
+core_status.version_behind_group: "Bu sunucudaki tüm çekirdekler %{have} derlemesinde; daha yeni bir derleme var: %{newest}"
+core_status.col.api_key: "API (g)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual: "Bitiş tarihi olmayan anahtar"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus: "Makinedeki mantıksal CPU"
+core_status.col_tip.tz_off: "Çekirdek saatinin UTC'ye göre kayması"
+core_status.col_tip.api_key: "Borsa API anahtarının bitmesine kalan gün"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota: "API limiti"
+
+# --- By IP column header (the fixed caption row above the server tree) ---
+# CPU column: percentage plus the machine's logical-core count in parentheses.
+core_status.hdr.cpu: "CPU (çekirdek)"
+# Memory column: free share and the reconstructed total RAM.
+core_status.hdr.mem: "Boş bellek"
+# IP column heading (the abbreviation is identical across locales).
+core_status.hdr.ip: "IP"
+# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
+# panel advertises them, and the Shift variant is the only reset a detached window offers.
+core_status.col_resize: "Boyutlandırmak için sürükleyin. Çift tık bu sütunu sıfırlar, Shift+çift tık tümünü sıfırlar"
+# API-key column heading in the By-IP tree; carries the unit its cells omit.
+core_status.hdr.api_key: "API (g)"
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests: "ist."
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota: "API limiti"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu: "CPU"
+core_status.chart_mem: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
+core_status.chart_ping: "Ping"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch: "Borsa"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn: "Bağlantı"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing: "sürüyor"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect: "Tespit anında:"
+core_status.warn_server: "Sunucu"
+core_status.chart_5m: "5 dk"
+core_status.chart_1h: "1 sa"
+
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title: "Uyarılar: ne yakalansın"
+core_status.warn_cfg.cpu: "Sunucu CPU"
+core_status.warn_cfg.mem: "Bellek artışı"
+core_status.warn_cfg.conn: "Çekirdek kopması"
+core_status.warn_cfg.ping: "Çekirdek ping sıçraması"
+core_status.warn_cfg.exch: "Borsa ping sıçraması"
+core_status.warn_cfg.api: "API anahtarı bitiyor"
+core_status.warn_cfg.api_quota: "API kotası bitiyor"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on: "Açık"
+core_status.warn_cfg.col.chart: "Grafik"
+core_status.warn_cfg.col.sound: "Ses"
+# Threshold captions.
+core_status.warn_cfg.p.threshold: "Eşik"
+core_status.warn_cfg.p.hold: "Süre"
+core_status.warn_cfg.p.growth: "Artış"
+core_status.warn_cfg.p.window: "Pencere"
+core_status.warn_cfg.p.yellow: "Sarı"
+core_status.warn_cfg.p.red: "Kırmızı"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days: "İçinde"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests: "En az istek"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none: "Yok"
+core_status.warn_cfg.u.sec: "sn"
+core_status.warn_cfg.u.day: "gün"
+
+# --- Units and relative time ---
+core_status.mb: "MB"
+core_status.ms: "ms"
+core_status.ago_s: "%{n}sn"
+core_status.ago_m: "%{n}dk"
+core_status.ago_h: "%{n}sa"
+core_status.ago_d: "%{n}g"
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
+core_status.api_days: "%{n} g"
+core_status.api_expired: "süresi doldu"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup: "Başlangıç"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs: "%{t} sn"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took: "%{t} sürdü"
+core_status.startup.rate: "%{v}/s"
+core_status.startup.b: "B"
+core_status.startup.kb: "KB"
+core_status.startup.mb: "MB"
+# Startup phases.
+core_status.startup.state.connecting: "Bağlanıyor"
+core_status.startup.state.initializing: "Başlatılıyor"
+core_status.startup.state.ready: "Hazır"
+core_status.startup.state.reconnecting: "Yeniden bağlanıyor"
+core_status.startup.state.failed: "Başarısız"
+core_status.startup.state.disconnected: "Koptu"
+core_status.startup.state.unknown: "Bilinmiyor"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check: "Taban denetimi"
+core_status.startup.step.auth_check: "Erişim denetimi"
+core_status.startup.step.markets_list: "Piyasa listesi"
+core_status.startup.step.markets_update: "Fiyatlar ve endeksler"
+core_status.startup.step.strategy_schema: "Strateji şeması"
+core_status.startup.step.post_init_flush: "İlk yenilemeler"
+core_status.startup.step.snapshot: "İlk görüntü"
+core_status.startup.step.events: "Başlangıç olayları"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase: "Aşama"
+core_status.startup.f.step: "Adım"
+core_status.startup.f.elapsed: "Geçen"
+core_status.startup.f.received: "Alınan"
+core_status.startup.f.blocks: "Blok"
+core_status.startup.f.dupes: "yineleme"
+core_status.startup.f.transfers: "Aktarım"
+core_status.startup.f.idle: "Sessiz"
+core_status.startup.f.retries: "Yeniden deneme (adım · toplam)"
+core_status.startup.f.reconnects: "Yeniden bağlanma"
+core_status.startup.f.local_port: "Yerel UDP portu"
+core_status.startup.f.previous_port: "Önceki UDP portu"
+core_status.startup.f.port_changes: "Yerel port değişimi"
+core_status.startup.packets: "giden %{sent} · gelen %{recv}"
+core_status.startup.f.rtt: "RTT"
+core_status.startup.f.mtu: "MTU"
+core_status.startup.f.delivery: "Teslim"
+
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off: "UTC kayması"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown: "—"
+core_status.tz_off.f.offset: "Kayma"
+core_status.tz_off.f.samples: "Ölçüm"
+core_status.tz_off.f.observed: "Ölçüldü"
+core_status.tz_off.f.source: "Kaynak"
+# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+core_status.tz_off.f.unmeasured: "Henüz ölçülmedi"
+core_status.tz_off.source.log: "Çekirdek günlüğü"
+core_status.tz_off.source.replica: "Kopya verisi"
+core_status.tz_off.source.skew: "Kayma düzeltmesi"
+core_status.tz_off.source.none: "—"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
+core_status.fault.short.local_port: "yerel port"
+core_status.fault.short.no_response: "yanıt yok"
+core_status.fault.short.unparsed: "UDP alındı"
+core_status.fault.short.access: "anahtar / erişim"
+core_status.fault.short.unidentified: "çekirdek tanıtmadı"
+core_status.fault.short.syncing: "eşitleniyor"
+core_status.fault.short.stalled: "adımda takıldı"
+core_status.fault.short.aborted: "durdu"
+core_status.fault.short.unknown: "belirsiz"
+core_status.fault.short.key_empty: "anahtar yapıştırılmadı"
+core_status.fault.short.key_unparsable: "MoonBot anahtarı değil"
+core_status.fault.reason.local_port: "Terminal kendi UDP portunu bağlayamadı (deneme: %{n})"
+core_status.fault.reason.silent: "%{t} sn içinde çekirdekten tek bayt gelmedi"
+core_status.fault.reason.unparsed: "Alınan UDP paketi: %{n}; terminal %{t} sn içinde el sıkışmayı kabul etmedi"
+core_status.fault.reason.partial: "Çekirdekten %{bytes} geldi, ama bağlantı %{t} sn içinde tamamlanmadı"
+core_status.fault.reason.access_refused: "Çekirdek anahtarı kabul etmedi"
+core_status.fault.reason.access_timeout: "Çekirdek yanıtladı, ama hesap erişim denetimi tamamlanmadı"
+core_status.fault.reason.access_failed: "Hesap erişim denetimi başarısız oldu: %{msg}"
+core_status.fault.reason.unidentified_timeout: "Çekirdek uyumluluk denetimine yanıt vermedi"
+core_status.fault.reason.unidentified_failed: "Uyumluluk denetimi başarısız oldu: %{msg}"
+core_status.fault.reason.syncing: "Adım %{step} (%{done}/%{total}), %{t} sn, henüz görüntü yok"
+core_status.fault.reason.stalled: "Başlatma %{step} adımında durdu (%{done}/%{total}), %{t} sn"
+core_status.fault.reason.aborted: "Terminal denemeyi kendisi durdurdu"
+core_status.fault.reason.unknown: "Neden belirlenemedi"
+core_status.fault.reason.key_empty: "Anahtar alanı boş — bağlanacak bir şey yok"
+core_status.fault.reason.key_unparsable: "Anahtar alanındaki değer bir MoonBot anahtarı değil — terminal okuyamadı"
+core_status.fault.next.local_port: "Portu BU makinede bir şey tutuyor: bir VPN veya yerel güvenlik duvarı"
+core_status.fault.next.no_response: "Çekirdeğin UDP portunu hem sağlayıcı panelinde hem makinenin kendi güvenlik duvarında açın. Anlık görüntüden kurulan bir sanal makine kural grubunu taşımaz ve Windows yeni bağdaştırıcıyı Genel olarak işaretler; yalnızca Özel ağ için yazılmış kural devreye girmez"
+core_status.fault.next.unparsed: "Paketler terminale ulaştı: kapalı port değil. Günlüğü ve bu sayaçları desteğe gönderin"
+core_status.fault.next.try_mode: "Bu terminaldeki diğer çekirdekler %{mode} kipinde bağlandı — bunu %{mode} kipine almayı deneyin"
+core_status.fault.next.access: "Bu botun dışa aktardığı anahtarı yapıştırın ve çekirdekte Kernel (VPS) kipinin açık olduğunu denetleyin. Borsa hesabı MoonBonus referansına bağlı değilken etkin kalmaz"
+core_status.fault.next.unidentified: "Çekirdek yanıtlar ama uyumluluk denetimini geçmez. Sırayla bakın: Kernel (VPS) kipi açık mı, çekirdek aşırı yüklü mü, ve makinesindeki MoonBot'u güncelleyin"
+core_status.fault.next.syncing: "Bekleyin. Rakam ilerlemiyorsa başlangıç sütununun üzerine gelin: kanal kaybı orada görünür"
+core_status.fault.next.stalled: "Deneme kendiliğinden yinelenir. Aynı adım başarısız kalırsa başlangıç sütununun üzerine gelin ve günlüğü gönderin"
+core_status.fault.next.aborted: "Yapılacak bir şey yok"
+core_status.fault.next.unknown: "Bu satırı ve günlüğü desteğe gönderin"
+core_status.fault.next.key: "Anahtar sitede değil MoonBot'ta üretilir. MoonBot'ta: sol alttaki yeşil nokta (Info penceresi) → Moon Kernel satırı → Settings → Moon Proto penceresi, Settings sekmesi → Key: → Copy Key (anahtar yoksa New Key). Tamamını Anahtar alanına Yapıştır düğmesiyle yapıştırın ve Kaydet'e basın — çekirdek kendiliğinden bağlanır"
+core_status.fault.core.legacy_named: "Çekirdek MoonBot %{server} bildiriyor ve protokol sürümü yok: bu terminalden eski"
+core_status.fault.core.legacy_silent: "Çekirdek protokol sürümü bildirmiyor: bu terminalden eski"
+core_status.fault.retrying: "yeniden bağlanıyor"
+core_status.fault.f.reason: "Neden"
+core_status.fault.f.next: "Ne yapmalı"
+core_status.fault.f.stage: "Aşama"
+core_status.fault.f.core: "Çekirdek"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category: "Kategori"
+core_status.col.problem_kind: "Tür"
+core_status.col.problem_title: "Sorun"
+# Shown only when EVERY core in scope delivered a list and all of them were empty.
+core_status.problems_empty: "Çekirdekler sorun bildirmiyor"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown: "Bildirilmedi: %{n} — eski bir çekirdek veya liste henüz gelmedi"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated: "İlk %{n} gösteriliyor"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores: "Kapsamda çekirdek yok"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed: "Bildirilen yok"
+core_status.problem_cat.machine: "Makine"
+core_status.problem_cat.exchange: "Borsa"
+core_status.problem_cat.network: "Ağ"
+core_status.problem_cat.other: "Diğer"
+
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+#
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
+core_status.problems_test: "Kanalı dene"
+# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
+core_status.problems_clear: "Sıfırla"
+core_status.problems_test_tip: "Çekirdeğin kendi tespitçisi üzerinden bir deneme olgusu yayımlar — yaklaşık iki saniye. Tüm yolu kanıtlar: tespitçi, hat, izdüşüm, panel."
+core_status.problems_refresh: "Yenile"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip: "Şimdiye kadar bağlı çekirdeklerin (%{cores}) gönderdiğini yeniden okur. Yalnızca o çekirdeği okumak için bir satıra tıklayın. Taze liste istenemez: protokolde böyle bir komut yok — çekirdek listeyi kendisi gönderir, bağlanırken ve tespitçileri onu değiştirince. Çekirdek yeniden başladıktan sonra, eski satırlar artık ona ait değilken basmaya değer."
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one: "Seçili çekirdeğin tanılarını sıfırlar — geri alınamaz ve her terminal için. Tüm kapsama dönmek için satırına yeniden tıklayın"
+core_status.problems_refresh_tip_one: "Seçili çekirdeğin şimdiye kadar gönderdiğini yeniden okur. Taze liste istenemez: protokolde böyle bir komut yok. Tüm kapsama dönmek için satırına yeniden tıklayın"
+core_status.problems_clear_tip: "Tanıları sıfırlar. Bağlı çekirdek: %{cores}. Geri alınamaz ve her terminal için. Yalnızca o çekirdeği sıfırlamak için bir satıra tıklayın"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
+core_status.problems_pick_core: "Deneme tek çekirdeğe gider: tabloda o çekirdeğin bulgusuna tıklayın — veya panel kapsamını tek çekirdeğe daraltın"
+core_status.problems_picked_offline: "Seçili çekirdek çevrimdışı — komut onun dönmesini beklerdi"
+core_status.problems_no_online: "Panel kapsamında bağlı çekirdek yok"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
+core_status.problems_core_offline: "Çekirdek çevrimdışı — deneme yeniden bağlanmasını bekler ve olguyu haber verilmeyen bir anda yayımlardı"
+core_status.problems_test_title: "Deneme tanısı gönderilsin mi?"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q: "%{core} çekirdeği kendi tespitçisi üzerinden bir deneme olgusu yayımlayacak — yaklaşık iki saniye. Satır çekirdekte kalır ve onu kaldırmanın TEK yolu sıfırlamadır; o da bu çekirdeğin gerçek bulgularını siler."
+core_status.problems_test_sent: "Deneme %{core} çekirdeğine gönderildi — satır bir iki saniye içinde görünür"
+core_status.problems_clear_sent: "Sıfırlama %{core} çekirdeğine gönderildi — satırlar çekirdek sonraki listeyi gönderince gider"
+core_status.problems_clear_sent_many: "Sıfırlama %{cores} çekirdeğe gönderildi — satırlar o çekirdekler sonraki listelerini gönderince gider"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed: "Yeniden okunan çekirdek: %{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none: "%{cores} çekirdeğin hiçbirine ulaşılmadı — çevrimdışı veya komut kanalları kapalı"
+core_status.problems_fleet_partial: "%{cores} çekirdekten %{sent} tanesine ulaşıldı — kalanı çevrimdışı veya kanalları kapalı"
+core_status.problems_not_sent: "Gönderilmedi: çekirdeğin komut kanalı kapalı"
+core_status.problems_not_sent_offline: "Gönderilmedi: çekirdek çevrimdışı"
+core_status.problems_clear_title: "Çekirdeğin tanıları sıfırlansın mı?"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q: "%{core} çekirdeği onaylı her sorunu ve bekleyen her hipotezi bırakacak — tüm terminaller için, geri dönüş yok. Bu bir nedeni düzeltmez: neden duruyorsa çekirdek sorunu yeniden onaylar."
+core_status.problems_clear_title_many: "Birkaç çekirdeğin tanıları sıfırlansın mı?"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many: "Bu %{cores} çekirdeğin her biri onaylı her sorunu ve bekleyen her hipotezi bırakır — tüm terminaller için, geri dönüş yok. Bu nedenleri düzeltmez: duranlar yeniden onaylanır."

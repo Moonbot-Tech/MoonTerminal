@@ -8,7 +8,7 @@
 
 ## Telegram Mini App preview
 
-`node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es] [--only <screen>]`
+`node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]`
 renders every Mini App screen from the synthetic payloads in `miniapp_preview/fixtures/` (shaped
 like `crates/moon-core/src/telegram/web/dto.rs`) at 421x900 and 390x844, light and dark, into
 `<dir>` (default `tools/miniapp_preview/out/`, ignored), then checks the owner commands the page

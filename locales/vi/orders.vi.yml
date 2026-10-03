@@ -1,0 +1,74 @@
+# Right order pane and the Orders table in the bottom dock.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Intentionally untranslated: Buy · Sell.
+_version: 1
+
+# --- Right order pane ---
+order.title: "Lệnh"
+order.size: "số lượng %{n}"
+order.settings: "Cài đặt lệnh…"
+
+# --- Bottom dock: Orders table ---
+orders.title: "Lệnh đang mở của nhóm (%{count})"
+orders.empty: "không có lệnh đang mở"
+orders.col.core: "Core"
+orders.col.side: "Chiều"
+orders.col.token: "Mã"
+orders.col.price: "Giá"
+orders.col.tp_price: "Giá TP"
+orders.col.pnl_tp: "PNL TP"
+# Strategy user-assigned name column, distinct from the Strat (kind) column.
+orders.col.strat_name: "Tên"
+orders.open_hint: "Mở biểu đồ trên Main (core này)"
+orders.all_cores: "Mọi core"
+orders.cores_n: "%{n} core"
+orders.columns: "Trường"
+# Tooltip of the gear button that opens the sorting and filtering menu.
+orders.settings: "Cài đặt"
+orders.kind.all: "Tất cả"
+orders.kind.real: "Thật"
+orders.kind.emu: "Giả lập"
+orders.only_current: "Chỉ lệnh của thị trường hiện tại"
+# Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
+# than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
+# repeats the same three numbers with what each one counts.
+#
+# LABEL: VALUE, never an inflected noun phrase. «реальных %{real}» reads wrong at a count of one
+# («реальных 1»), and Russian and Spanish would each need their own plural rule to fix it; a
+# colon-separated label is grammatical at every count in all three languages and needs none. The
+# labels are the order-kind filter's own words (`orders.kind.real` / `.emu`) so the footer and the
+# dropdown above it name the same two things identically.
+orders.footer_total: "Tổng: %{total} · thật: %{real} · giả lập: %{emu}"
+# Tooltip of that footer. States the scope the counts are taken over, and that the order-kind
+# filter above the table does not narrow them (the split is computed before that filter runs).
+#
+# The real line says «real account, not the emulator» and deliberately NOT «placed on the
+# exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
+# `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
+orders.footer_total_tip: "Tổng: %{total} — lệnh đang mở của các core đã chọn (và chỉ thị trường hiện tại, khi bộ lọc đó bật).\nThật: %{real} — lệnh trên tài khoản thật, không phải giả lập.\nGiả lập: %{emu} — lệnh giả lập Moonbot.\nBộ lọc Tất cả / Thật / Giả lập không đổi các số này."
+orders.show_all: "Hiện tất cả"
+orders.sort.profit: "Profit trước"
+orders.sort.sell: "Sell trước"
+orders.sort.buy: "Buy trước"
+orders.sort.creation: "Theo lúc tạo lệnh"
+orders.sort.new: "Mới nhất trước"
+orders.sort.old: "Cũ nhất trước"
+# --- Active-order editor (click BUY/SELL or right-click an order line) ---
+orders.edit.title: "Lệnh đang mở"
+orders.edit.coin: "Coin:"
+orders.edit.side: "Loại:"
+orders.edit.status: "Trạng thái:"
+orders.edit.size: "Số lượng:"
+orders.edit.strategy: "Chiến lược:"
+orders.edit.core: "Core:"
+orders.edit.cond: "Điều kiện: Buy nếu ASK < %{p}"
+orders.edit.buy_price: "Giá BUY"
+orders.edit.sell_price: "Giá SELL"
+orders.edit.current: "Hiện tại: %{p}"
+orders.edit.stops: "Stop"
+orders.edit.fixed: "Fixed"
+orders.edit.vol_lt: "Vol <"
+
+# Move rows opened on Main to the top (two mutually exclusive checkboxes plus off).
+orders.sort.main_all: "Main lên trên: cả ticker"
+orders.sort.main_hi: "Main lên trên: chỉ dòng đang chọn"

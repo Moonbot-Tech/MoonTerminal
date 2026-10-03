@@ -129,7 +129,7 @@ fn shipped_catalogues() -> &'static BTreeMap<String, BTreeMap<String, LocaleEntr
 /// Catalogue for one shipped language, shared with every test in this process.
 ///
 /// Args:
-///     lang: Shipped language code (`en`, `ru`, `es`, `uk`).
+///     lang: Shipped language code (`en`, `ru`, `es`, `uk`, `tr`, `pt`, `vi`).
 ///
 /// Returns:
 ///     Shared key map. Panics when `lang` is not in [`SHIPPED`].
@@ -295,11 +295,14 @@ fn languages_match_language_all() {
 fn language_all_codes_reads_a_wrapped_array() {
     let wrapped = r#"
 impl Language {
-    pub const ALL: [Language; 4] = [
+    pub const ALL: [Language; 7] = [
         Language::Ru,
         Language::En,
         Language::Es,
         Language::Uk,
+        Language::Tr,
+        Language::Pt,
+        Language::Vi,
     ];
 
     pub fn code(self) -> &'static str {
@@ -308,6 +311,9 @@ impl Language {
             Language::En => "en",
             Language::Es => "es",
             Language::Uk => "uk",
+            Language::Tr => "tr",
+            Language::Pt => "pt",
+            Language::Vi => "vi",
         }
     }
 }
@@ -318,8 +324,11 @@ impl Language {
         BTreeSet::from([
             "en".to_string(),
             "es".to_string(),
+            "pt".to_string(),
             "ru".to_string(),
+            "tr".to_string(),
             "uk".to_string(),
+            "vi".to_string(),
         ])
     );
 }

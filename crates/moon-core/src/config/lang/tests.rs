@@ -10,6 +10,7 @@ fn code_roundtrip() {
     assert_eq!(Language::from_code("es_ES"), Some(Language::Es));
     assert_eq!(Language::from_code("ru-RU.UTF-8"), Some(Language::Ru));
     assert_eq!(Language::from_code("zh"), None);
+    assert_eq!(Language::from_code("xx"), None);
 }
 
 /// Ukrainian codes must select Ukrainian. Leaving them unmapped would keep
@@ -43,6 +44,63 @@ fn uk_serializes_as_uk() {
     let unknown: StoredLanguage =
         toml::from_str("language = \"zz\"\n").expect("unknown code must not reject the file");
     assert_eq!(unknown.language, Language::from_system());
+}
+
+/// Turkish, Brazilian Portuguese, and Vietnamese codes must select those
+/// languages. An unmapped `pt-BR` would keep a Brazilian system locale on
+/// English, so Settings could not follow it.
+#[test]
+fn tr_pt_vi_codes_map() {
+    assert_eq!(Language::from_code("tr"), Some(Language::Tr));
+    assert_eq!(Language::from_code("tr-TR"), Some(Language::Tr));
+    assert_eq!(Language::from_code("TR"), Some(Language::Tr));
+    assert_eq!(Language::from_code("pt"), Some(Language::Pt));
+    assert_eq!(Language::from_code("pt-BR"), Some(Language::Pt));
+    assert_eq!(Language::from_code("pt_PT"), Some(Language::Pt));
+    assert_eq!(Language::from_code("pt-AO"), Some(Language::Pt));
+    assert_eq!(Language::from_code("vi"), Some(Language::Vi));
+    assert_eq!(Language::from_code("vi-VN"), Some(Language::Vi));
+    assert_eq!(Language::from_code("vi_VN"), Some(Language::Vi));
+}
+
+/// settings.toml must store Turkish, Portuguese, and Vietnamese by code and
+/// load those codes back. A missing arm would persist the dropdown choice as
+/// another language.
+#[test]
+fn tr_pt_vi_serialize_as_their_codes() {
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct StoredLanguage {
+        language: Language,
+    }
+
+    for (language, code) in [
+        (Language::Tr, "tr"),
+        (Language::Pt, "pt"),
+        (Language::Vi, "vi"),
+    ] {
+        let text = toml::to_string(&StoredLanguage { language }).expect("must serialize");
+        assert_eq!(text, format!("language = \"{code}\"\n"));
+        let back: StoredLanguage = toml::from_str(&text).expect("must parse");
+        assert_eq!(back.language, language);
+    }
+}
+
+/// Dropdown codes and native names must stay distinct. A repeated code would
+/// make two Settings rows persist as the same language.
+#[test]
+fn all_codes_and_labels_are_unique_and_non_empty() {
+    let mut codes = std::collections::BTreeSet::new();
+    let mut labels = std::collections::BTreeSet::new();
+    for language in Language::ALL {
+        let code = language.code();
+        let label = language.label();
+        assert!(!code.is_empty(), "empty code");
+        assert!(!label.is_empty(), "empty label");
+        assert!(codes.insert(code), "duplicate code {code}");
+        assert!(labels.insert(label), "duplicate label {label}");
+    }
+    assert_eq!(codes.len(), Language::ALL.len());
+    assert_eq!(labels.len(), Language::ALL.len());
 }
 
 // The translation test (`t!`/rust_i18n) moved to the UI crate (moon-ui-gpui):

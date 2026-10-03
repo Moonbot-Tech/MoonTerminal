@@ -122,8 +122,9 @@ fn reduce_keeps_first_seen_order_and_skips_invalid_frames() {
     );
 }
 
-/// Ukrainian has no news translation. Returning Russian, Spanish, or a blank
-/// body would show the wrong language on the card and on the clipboard.
+/// Ukrainian, Turkish, Portuguese, and Vietnamese have no news translation.
+/// Returning Russian, Spanish, or a blank body would show the wrong language
+/// on the card and on the clipboard.
 #[test]
 fn uk_body_falls_back_to_english() {
     let item = NewsItem {
@@ -133,4 +134,7 @@ fn uk_body_falls_back_to_english() {
         ..NewsItem::default()
     };
     assert_eq!(item.body(crate::config::Language::Uk), "BTC up");
+    assert_eq!(item.body(crate::config::Language::Tr), "BTC up");
+    assert_eq!(item.body(crate::config::Language::Pt), "BTC up");
+    assert_eq!(item.body(crate::config::Language::Vi), "BTC up");
 }

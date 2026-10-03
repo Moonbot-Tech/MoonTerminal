@@ -1,0 +1,187 @@
+# Settings -> Telegram: the picked core's built-in Telegram reader.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+telegram_core.section: "Çekirdekteki Telegram"
+
+telegram_core.intro: "Seçilen çekirdekteki yerleşik Telegram okuyucusunu yönetin. Durum çekirdeğe aittir, bu terminale değil."
+
+telegram_core.core_pick: "Çekirdek"
+
+telegram_core.core_pick_none: "Bir çekirdek seçin"
+
+telegram_core.details: "Çekirdek ayarları"
+
+telegram_core.enable: "Okuyucuyu aç"
+
+telegram_core.enable_tip: "Bunu kapatmak yalnızca bu çekirdeğin okuyucusunu durdurur ve Telegram hesabından çıkış yapmaz."
+
+telegram_core.unsupported: "Uzaktan giriş bu hizmette yok."
+
+telegram_core.unsupported_ver: "Uzaktan giriş bu hizmette yok (sürüm %{v})."
+
+telegram_core.stale: "Anlık görüntü eski — taze durum gelene kadar eylemler kapalı."
+
+telegram_core.sent_waiting: "Gönderildi, çekirdek bekleniyor…"
+
+telegram_core.service_online: "Hizmet çevrimiçi"
+
+telegram_core.service_offline: "Hizmet çevrimdışı"
+
+telegram_core.client_state: "Durum"
+
+telegram_core.setup_error: "Kurulum hatası"
+
+telegram_core.client_error: "İstemci hatası"
+
+telegram_core.disconnected: "Çekirdek bağlı değil."
+
+telegram_core.no_snapshot: "Durum anlık görüntüsü yok."
+
+telegram_core.proxy_section: "Proxy"
+
+telegram_core.proxy_kind_none: "Proxy yok"
+
+telegram_core.proxy_kind_socks5: "SOCKS5"
+
+telegram_core.proxy_kind_mtproto: "MTProto"
+
+telegram_core.proxy_host: "Host"
+
+telegram_core.proxy_port: "Port"
+
+telegram_core.proxy_user: "Kullanıcı"
+
+telegram_core.proxy_password: "Parola"
+
+telegram_core.proxy_secret: "Gizli anahtar"
+
+telegram_core.proxy_save: "Proxy'yi kaydet"
+
+telegram_core.proxy_secret_hint: "Çekirdek kayıtlı parolayı veya gizli anahtarı geri vermez, yeniden yazın. Boş bırakmak eskisini tutmaz, siler."
+
+telegram_core.proxy_actual: "Etkin proxy"
+
+telegram_core.proxy_actual_unknown: "henüz bilinmiyor"
+
+telegram_core.proxy_error: "Proxy hatası"
+
+telegram_core.proxy_password_set: "parola ayarlı"
+
+telegram_core.phone: "Telefon"
+
+telegram_core.phone_hint: "Uluslararası biçim, örneğin +905551234567."
+
+telegram_core.phone_send: "Numarayı gönder"
+
+telegram_core.login_qr: "Bunun yerine QR ile gir"
+
+telegram_core.login_phone: "Bunun yerine telefon numarası kullan"
+
+telegram_core.cancel_to_phone: "Girişi iptal et ve telefon girişine dön"
+
+telegram_core.code: "Kod"
+
+telegram_core.code_send: "Kodu gönder"
+
+telegram_core.password: "2FA parolası"
+
+telegram_core.password_send: "Parolayı gönder"
+
+telegram_core.password_hint_label: "İpucu"
+
+telegram_core.recovery_email: "Kurtarma e-postası"
+
+telegram_core.email: "E-posta"
+
+telegram_core.email_send: "E-postayı gönder"
+
+telegram_core.email_code: "E-posta kodu"
+
+telegram_core.email_code_send: "E-posta kodunu gönder"
+
+telegram_core.email_pattern: "İleti %{pattern} adresine gelir"
+
+telegram_core.code_length: "Kod uzunluğu: %{n}"
+
+telegram_core.first_name: "Ad"
+
+telegram_core.last_name: "Soyad"
+
+telegram_core.terms_accept: "Koşulları kabul ediyorum"
+
+telegram_core.register: "Kaydol"
+
+telegram_core.min_age: "En az yaş: %{n}"
+
+telegram_core.logged_in: "Hesap %{phone}"
+
+telegram_core.logged_in_unknown: "Hesap hazır"
+
+telegram_core.logout: "Çıkış yap"
+
+telegram_core.logout_title: "Çekirdekteki Telegram'dan çıkış"
+
+telegram_core.logout_q: "Bu işlem, o çekirdeğin makinesinde Telegram hesabından çıkış yapar ve ortak Telegram hesap verisini sıfırlar. O makinedeki her MoonBot süreci etkilenir, yalnızca bu çekirdek değil."
+
+telegram_core.premium: "Dış bir Telegram adımı gerekir. Telefon numarasına dönmek için girişi iptal edin."
+
+telegram_core.support_email: "Destek e-postası"
+
+telegram_core.support_subject: "Konu"
+
+telegram_core.cancel_login: "Girişi iptal et"
+
+telegram_core.transitional: "Çekirdek çalışıyor, bekleyin…"
+
+telegram_core.step_unknown: "Bilinmeyen giriş adımı. Durumu yenileyin; hangi girdiyi göndereceğinizi tahmin etmeyin."
+
+telegram_core.refresh: "Yenile"
+
+telegram_core.service_error: "Hata %{code}: %{message}"
+
+telegram_core.connection: "Telegram ağı"
+
+telegram_core.conn.unknown: "bilinmiyor"
+
+telegram_core.conn.waiting_for_network: "ağ bekleniyor"
+
+telegram_core.conn.connecting_to_proxy: "proxy'ye bağlanıyor"
+
+telegram_core.conn.connecting: "bağlanıyor"
+
+telegram_core.conn.updating: "güncelleniyor"
+
+telegram_core.conn.ready: "hazır"
+
+telegram_core.qr_failed: "QR oluşturulamadı. Durumu yenileyin."
+
+telegram_core.qr_wait: "QR bağlantısı bekleniyor…"
+
+telegram_core.resend: "Kodu yeniden gönder"
+
+telegram_core.resend_in: "%{wait} sonra yeniden gönder"
+
+telegram_core.no_answer: "Çekirdek yanıt vermedi. Durumu yenileyip yeniden deneyin."
+
+telegram_core.next_code: "Sonraki yöntem"
+
+telegram_core.code_kind.telegram: "Kod Telegram uygulamasında."
+
+telegram_core.code_kind.sms: "SMS."
+
+telegram_core.code_kind.sms_word: "SMS sözcüğü, “%{first_letter}” ile başlar, ilk sözcük “%{first_word}”."
+
+telegram_core.code_kind.sms_phrase: "SMS tümcesi: %{first_word} (%{pattern})."
+
+telegram_core.code_kind.call: "Telefon araması."
+
+telegram_core.code_kind.flash_call: "Kısa arama, ön ek %{prefix}."
+
+telegram_core.code_kind.missed_call: "Cevapsız arama, ön ek %{prefix}."
+
+telegram_core.code_kind.fragment: "Fragment: %{url}"
+
+telegram_core.code_kind.unsupported: "Bu teslim yöntemi desteklenmiyor."
+
+telegram_core.code_kind.other: "%{kind}"

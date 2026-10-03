@@ -1,0 +1,12 @@
+# Header update button: Windows self-update, macOS installer image download.
+_version: 1
+
+update.available: "%{version} sürümüne güncelle"
+update.tooltip: "İndir, kur ve MoonTerminal'i yeniden başlat"
+update.tooltip_image: "MoonTerminal yükleyicisini İndirilenler'e indirip aç"
+update.opened: "Yükleyici açıldı"
+update.opened_tooltip: "Yükleyici açıldı — MoonTerminal'i Uygulamalar'a sürükleyin. Yeniden açmak için tıklayın"
+update.installing: "Güncelleme kuruluyor..."
+update.retry: "Güncellemeyi yeniden dene"
+update.failed: "Güncelleme başarısız: %{error}"
+update.recovered: "Güncelleme başlamadı. Önceki sürüm geri yüklendi ve yeniden açıldı."

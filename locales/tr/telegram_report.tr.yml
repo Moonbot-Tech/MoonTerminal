@@ -1,0 +1,124 @@
+_version: 1
+
+telegram.help_hour: "Bu saat"
+
+telegram.help_daily: "Bu ayın günlük sonuçları"
+
+telegram.help_intro: "Alt menüden bir dönem seçin. Taze rapor için yeniden dokunun. Çekirdeklerini açmak için bir borsa seçin."
+
+telegram.help_commands: "Komutlar ve özel tarihler"
+
+telegram.help_limits: "Tarihler dahil, en fazla 366 gün. Saat dilimi: %{zone}. Terminal açık kalsın."
+
+telegram.help_limits_station: "Tarihler dahil, en fazla 366 gün. Saat dilimi: %{zone}. Raporlar gün boyu güncellenir."
+
+telegram.help_custom: "Özel dönem / güne göre"
+
+telegram.help_mini: "Sohbet raporları Mini App gerektirmez. Terminal ayarlarında açıksa /miniapp ile açın."
+
+telegram.help_mini_station: "Sohbet raporları Mini App gerektirmez. İstasyonda açıksa /miniapp ile açın."
+
+telegram.help_status_station: "İstasyonun durumu; yeni sürüm çıkınca bir güncelle düğmesi"
+telegram.report_total: "Toplam"
+
+telegram.report_calculation_extra: "Toplam, diğer sayfalar dahil seçilen grubun ve dönemin tamamını kapsar. Ortalama emir, uygun verisi olan işlemleri kullanır; dışarıda kalanlar rapor ayrıntısında yazılıdır."
+
+telegram.button_home: "Özet"
+
+telegram.report_navigation_hint: "Dönemi alt menüden seçin. Taze rapor için yeniden dokunun. Raporun altındaki düğmeler çekirdekleri veya günleri açar."
+
+telegram.report_all_cores: "Tüm çekirdekler"
+
+telegram.report_by_days: "Güne göre"
+
+telegram.report_days_scope: "Grubun günleri"
+
+telegram.report_cores_scope: "Grubun çekirdekleri"
+
+telegram.report_back: "Tüm borsalar"
+
+telegram.report_calculation: "Hesap ayrıntısı"
+
+telegram.report_exchanges: "Borsalar"
+
+telegram.report_exchanges_menu: "Borsalar"
+
+telegram.report_exchanges_back: "Geri"
+
+telegram.report_exchange: "Borsa"
+
+telegram.report_scope_unavailable: "Borsa kullanılamaz"
+
+telegram.report_average_coverage: "%{counted} sayıldı; %{excluded} dışarıda"
+
+telegram.report_delivery_failed: "Rapor gösterilemedi. Yeniden deneyin; sürerse terminal bağlantısını kontrol edin ve Telegram'ı güncelleyin."
+telegram.report_delivery_failed_station: "Rapor gösterilemedi. Yeniden deneyin; sürerse Telegram'ı güncelleyin."
+
+telegram.button_today: "Bugün"
+
+telegram.button_yesterday: "Dün"
+
+telegram.button_month: "Bu ay"
+
+telegram.button_lastmonth: "Geçen ay"
+
+telegram.button_daily: "Günlük"
+
+telegram.report_days: "Günler"
+
+telegram.report_cores: "Çekirdekler"
+
+telegram.report_profit: "Kâr / zarar"
+
+telegram.report_trades: "İşlemler"
+
+telegram.report_date: "Tarih"
+
+telegram.report_bot: "Bot"
+
+telegram.report_details: "Para birimleri ve ortalama emir"
+
+telegram.report_average: "Ortalama emir"
+
+telegram.report_page: "Sayfa"
+
+telegram.report_prev: "Önceki"
+
+telegram.report_next: "Sonraki"
+
+telegram.report_unvalued: "Değer yok"
+
+telegram.report_empty: "Bu dönemde kapanmış gerçek işlem yok."
+
+telegram.report_scope: "Terminal geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. Yerel geçmiş; çevrimdışı botlar güncellenmez."
+telegram.report_scope_station: "İstasyon geçmişinde seçilen grup · kapanmış gerçek işlemler · işlem anındaki kur. İstasyon çekirdek geçmişini gün boyu kopyalar; çevrimdışı botlar güncellenmez."
+
+telegram.report_missing_rates: "Herhangi bir işlemin değeri yoksa tam USDT toplamı kullanılamaz. Ayrıntı, bilinen para birimi alt toplamlarını tutar; bilinmeyen para birimleri dışarıdadır."
+
+telegram.report_busy: "Önceki rapor hâlâ hesaplanıyor. Kısa süre sonra yeniden deneyin."
+
+telegram.report_failed: "İşlem geçmişi okunamadı. Yeniden deneyin; bir okuma hatası sıfır kâr demek değildir."
+
+telegram.report_help: "Aşağıdan bir dönem seçin. Raporlarda bot/gün görünümü vardır. Taze veri için döneme yeniden dokunun.\n\n/hour — bu saat\n/today — bugün\n/daily — bu ayın günlük sonuçları\n/report 2026-09-01 2026-09-10 — özel dönem\n/daily 2026-09-01 2026-09-10 — özel günlük sonuçlar\nTarihler dahil, en fazla 366 gün; saat dilimi terminal saatini izler. Terminal açık kalsın."
+
+telegram.report_help_station: "Aşağıdan bir dönem seçin. Raporlarda bot/gün görünümü vardır. Taze veri için döneme yeniden dokunun.\n\n/hour — bu saat\n/today — bugün\n/daily — bu ayın günlük sonuçları\n/report 2026-09-01 2026-09-10 — özel dönem\n/daily 2026-09-01 2026-09-10 — özel günlük sonuçlar\n/status — istasyonun durumu\nTarihler dahil, en fazla 366 gün; saat dilimi istasyon ayarlarını izler. Raporlar gün boyu güncellenir."
+
+telegram.notify_profit: "Kâr"
+
+telegram.notify_manual: "Elle"
+
+telegram.notify_unvalued: "Değer yok"
+
+telegram.notify_down: "bağlantı kesildi:"
+
+telegram.notify_back: "bağlantı geri geldi"
+
+telegram.notify_daily_title: "Günlük özet"
+
+telegram.notify_trades: "İşlemler"
+
+telegram.notify_unvalued_trades: "Değer yok"
+
+telegram.notify_best: "En iyi"
+
+telegram.notify_worst: "En kötü"

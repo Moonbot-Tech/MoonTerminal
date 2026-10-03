@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "Trong hàng"
+core_update.phase.held: "Đang giữ — làn bận"
+core_update.phase.sent: "Đã gửi lệnh"
+core_update.phase.waiting: "Đang cập nhật"
+core_update.phase.verifying: "Đang kiểm bản dựng"
+core_update.phase.succeeded: "Đã cập nhật"
+core_update.phase.installed: "Đã cài"
+core_update.phase.unchanged: "Phiên bản không đổi"
+core_update.phase.failed.not_sent: "Không gửi được lệnh"
+core_update.phase.failed.never_dropped: "Core không ngắt để cập nhật"
+core_update.phase.failed.not_ready: "Không trở lại trực tuyến kịp để nhận bản cập nhật"
+core_update.phase.failed.timeout: "Không trở lại sau cập nhật — hết thời gian"
+core_update.phase.failed.gone: "Điểm cuối của core không còn xác định"
+core_update.phase.failed.abandoned: "Bỏ dở khi ứng dụng thoát"
+core_update.phase.failed.rejected: "Core từ chối tên bản dựng được yêu cầu"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Chưa xác minh bản dựng — không kết nối lại được"
+core_update.phase.unverified.timeout: "Chưa xác minh bản dựng — core không trở lại kịp"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "đang cập nhật"
+core_update.summary.queued: "trong hàng"
+core_update.summary.failed: "lỗi"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Giờ"
+core_update.col.core: "Core"
+core_update.col.server: "Máy chủ"
+core_update.col.from_to: "Từ → sang"
+core_update.col.target: "Đích"
+core_update.col.outcome: "Kết quả"
+core_update.col.duration: "Thời lượng"
+core_update.list_empty: "Chưa có lịch sử cập nhật"
+core_update.target.release: "Bản phát hành"
+core_update.target.named: "Bản beta %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Cập nhật core này"
+core_update.server.action: "Cập nhật %{n} core trên máy chủ này"
+core_update.retry: "Thử cập nhật lại"
+core_update.skipped_offline: "%{n} ngoại tuyến"
+core_update.skipped_already: "%{n} đang cập nhật"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Cập nhật tất cả"
+core_update.fleet.behind: "Cập nhật bản cũ"
+core_update.fleet.behind_none: "Không core nào ở đây báo bản cũ hơn bản mới nhất đang thấy, và terminal không thấy các bản phát hành Moonbot."
+core_update.fleet.selected: "Cập nhật đã chọn (%{n})"
+core_update.fleet.named: "Tới một bản dựng…"
+core_update.confirm.title: "Cập nhật core"
+core_update.confirm.q: "Cập nhật %{cores} core trên %{servers} máy chủ? Cập nhật chạy song song giữa các máy chủ — không quá một core mỗi lần trên mỗi máy chủ."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Cập nhật lên bản phát hành"
+core_update.menu.named: "Cập nhật lên phiên bản đặt tên…"
+core_update.menu.named_prompt: "Tên bản dựng cho %{core}:"
+core_update.menu.release_n: "Cập nhật %{n} core lên bản phát hành"
+core_update.menu.named_n: "Cập nhật %{n} core lên phiên bản đặt tên…"
+core_update.menu.named_prompt_n: "Tên bản dựng cho %{n} core:"
+core_update.confirm.named_prompt: "Tên bản dựng:"
+core_update.menu.named_ph: "MoonBot-F8 hoặc %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "Có thể gõ mỗi tên bản dựng, hoặc dán cả lệnh cài — cách nào cũng được."
+core_update.menu.unavailable: "Không dùng được — core chưa sẵn sàng hoặc đang cập nhật"

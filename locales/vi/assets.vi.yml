@@ -1,0 +1,124 @@
+# Assets window/panel: controls, table columns, and wallets.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+assets.window_title: "MoonTerminal — Tài sản"
+assets.show_all: "hiện tất cả"
+# Hint for the top-bar dust-threshold slider; 0 shows everything.
+assets.min_value_hint: "Ẩn tài sản trị giá dưới N $ (0 — hiện tất cả; con lăn chuột đổi)"
+assets.cores_free_total: "Core · khả dụng/tổng"
+assets.cores_count: "%{n} core"
+assets.no_cores: "không có core"
+assets.empty: "không có tài sản"
+# Futures balances are quote-denominated and absent from the table, so its empty state describes
+# open positions rather than account equity; the balance surfaces carry the account figure.
+assets.empty_no_positions: "không có vị thế đang mở"
+# --- Footer: account balances across the in-scope cores ---
+# Tooltip on the LEFT footer group. The row carries two different sums side by side, so each
+# group states what it covers — a trader must never read Σ as the account equity.
+assets.footer_table_hint: "Các dòng bảng sau bộ lọc bụi; Σ là tổng giá trị của chúng"
+# Appended to the tooltip above when some visible rows have no valid value: the row count
+# includes them but Σ cannot, so a shortened sum must say what it left out.
+assets.footer_rows_unpriced: "%{n} dòng không có giá trị hợp lệ — Σ không tính chúng"
+# Closing line of the RIGHT group's tooltip — the counterpart to the hint above.
+assets.balances_scope_hint: "Vốn trên các core trong phạm vi — không phải tổng bảng"
+assets.balances_total: "Tổng"
+assets.balances_free: "khả dụng"
+# The retained figure is not confirmed current for the connection.
+assets.balance_stale: "ngoại tuyến"
+# A snapshot exists, but its USD valuation is incomplete or invalid rather than zero.
+assets.balance_unpriced: "chưa có giá"
+# Cores whose snapshot has not arrived yet: excluded from the total, but the state clears itself.
+assets.balances_awaiting: "đang đợi: %{n}"
+# Cores with a snapshot but no conversion rate: also excluded, and — unlike awaiting — it will
+# not resolve on its own, so it is counted separately rather than told to keep waiting.
+assets.balances_unpriced_n: "chưa có giá: %{n}"
+# Some cores were summed from a retained snapshot, so the total is not "as of now".
+assets.balances_stale_n: "ngoại tuyến: %{n}"
+# Cores left out of the total because another core already counts the same exchange account.
+assets.balances_folded_n: "cùng tài khoản: %{n}"
+# Cores the user set to stay out of the total (per-core setting).
+assets.balances_excluded_n: "đã loại: %{n}"
+# Tooltip line per shared account: which cores were folded into which counted one.
+assets.balances_folded_into: "%{cores} dùng chung tài khoản của %{core}: tính một lần"
+# Appended to a Hyperliquid fold line: the account mode is invisible to the terminal.
+assets.balances_folded_hl_caveat: "(Hyperliquid: terminal không thấy chế độ tài khoản, unified hay standard; nếu các ví tách riêng, đặt core thành \"Riêng\" trong Cài đặt → Kết nối → Tổng)"
+# Tooltip line naming the cores excluded by their own setting.
+assets.balances_excluded_list: "Loại theo cài đặt core: %{cores}"
+assets.section_positions: "Vị thế"
+# Core-selection field, matching `orders.all_cores` and `orders.cores_n`.
+assets.all_cores: "Mọi core"
+assets.cores_n: "%{n} core"
+
+# --- Asset table columns ---
+assets.col.core: "Core"
+assets.col.coin: "Tài sản"
+assets.col.qty: "Lượng"
+assets.col.price: "Giá"
+assets.col.value: "Giá trị $"
+assets.col.pos: "Vị thế"
+assets.col.pos_price: "Giá vị thế"
+assets.col.profit: "Lãi"
+assets.col.kind: "Thị trường"
+# Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
+# price of each leg. "PnL" is a trading term kept untranslated across the terminal.
+assets.col.pnl: "PnL"
+# Field-selector entry for the Market Sell / Order button column. The column header itself is
+# blank, so this name exists only in the menu.
+assets.col.actions: "Nút"
+# Tooltip of the table field selector, matching the Orders and Report wording.
+assets.columns: "Trường"
+
+# Tooltip labels for unavailable table values; the dash glyph itself remains in Rust.
+assets.pnl.spot_unavailable: "Số dư Spot không có PnL chưa chốt"
+assets.actions.unavailable_qty: "Không có số lượng %{coin} để bán"
+assets.actions.unavailable_market_identity: "Không có mã định danh thị trường cho %{coin}"
+assets.actions.unavailable_market_catalog: "Thị trường %{market} không có trong danh mục core"
+
+# --- Position action buttons ---
+assets.open_global_hint: "Mở Tài sản trong cửa sổ riêng (mọi core)"
+assets.market_sell: "Market sell"
+assets.market_sell_confirm: "Bán thị trường"
+assets.market_sell_no_price: "Đã hủy bán: thị trường không có giá hiện tại, mà lệnh cần giá đó."
+assets.market_sell_q: "Bán %{coin} theo giá thị trường?"
+assets.market_sell_scope_changed: "Đã hủy bán: core không còn trong phạm vi Tài sản hiện tại."
+assets.order: "Order"
+# Tooltip of the Order button on a position row: the core cancels its own sells on the market and
+# re-places a limit close for the WHOLE position at its own offset from the price — Moonbot's
+# `Order` gesture for a limit that was left behind by the market.
+assets.order_hint: "Đặt lại lệnh bán: hủy các lệnh %{coin} của mình và đặt lệnh giới hạn đóng cả vị thế (Order của Moonbot)"
+# Tooltip of the same button on a spot holding: Moonbot's Pending Order window in SELL mode.
+assets.order_hint_spot: "Đặt lệnh bán giới hạn %{coin}: cửa sổ lệnh với giá và số lượng (Order của Moonbot trên spot)"
+# --- The spot Order dialog (Moonbot's Pending Order window, SELL type) ---
+assets.order_dialog.title: "Bán %{coin}"
+assets.order_dialog.side: "Lệnh"
+assets.order_dialog.size: "Số lượng, %{coin}"
+assets.order_dialog.max: "Max"
+assets.order_dialog.price: "Giá bán"
+# The "Current:" label welded to the live price figure (MIXED NODE, mono).
+assets.order_dialog.current: "Hiện tại: %{p}"
+assets.order_dialog.bad_size: "Số lượng phải là số dương"
+assets.order_dialog.bad_price: "Giá phải là số dương"
+# Toasts of the position press. Said on enqueue only: the terminal knows the command left for the
+# core, not what the core did with it (a market it does not hold or a position already gone is a
+# silent no-op on its side).
+assets.order_sent: "Đã gửi lệnh %{coin} tới core — xem Lệnh và nhật ký core để biết kết quả"
+assets.order_failed: "Lệnh giới hạn đóng vị thế %{coin} không được gửi: không tới được core"
+
+# --- Wallets for transferring coins between containers ---
+assets.wallet.kind.spot: "Spot"
+assets.wallet.kind.futures: "Futures"
+assets.wallet.kind.quarterly: "Quarterly"
+assets.wallet.filtered_empty: "Cả %{n} tài sản bị ẩn bởi bộ lọc giá trị %{thr}$"
+assets.wallets_hint: "Ví · kéo coin giữa các ngăn"
+assets.refresh_hint: "Làm mới số dư core"
+# --- Wallet-section display settings (the gear beside the refresh button) ---
+assets.settings.title: "Cài đặt ví"
+assets.settings.display: "Hiển thị"
+assets.settings.group_by_venue: "Nhóm core theo sàn"
+# Hover on the roster column's resize divider. Double-click is the ONLY reset gesture here — one
+# column, so no Shift variant to advertise.
+assets.roster_resize: "Kéo để đổi độ rộng cột. Nhấp đúp để đặt lại"
+assets.transfer_title: "Chuyển %{coin}: %{from} -> %{to}"
+assets.free: "khả dụng: %{n}"
+assets.transfer_btn: "Chuyển"

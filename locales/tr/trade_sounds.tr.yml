@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "İşlem sesi düzeyi"
+trade_sounds.tab: "İşlem sesleri"
+trade_sounds.help: "Her borsa için giriş ve çıkış seslerini seçin. Değişiklikler otomatik kaydedilir."
+trade_sounds.exchange: "Borsa"
+trade_sounds.quiet_note: "Sessiz mod açık — sesler kapalı."
+trade_sounds.open: "Pozisyon açıldı"
+trade_sounds.close: "Pozisyon kapandı"
+trade_sounds.off: "Sessiz"
+trade_sounds.preview: "Önizle"

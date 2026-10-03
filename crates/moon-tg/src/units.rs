@@ -1,6 +1,6 @@
 //! Sizes in the user's language: the terminal's Storage tab and the station's status share them.
 
-use rust_i18n::t;
+use crate::t;
 
 const KIB: f64 = 1024.0;
 

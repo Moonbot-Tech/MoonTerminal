@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "dosya yok"
+sounds.missing_title: "Ses bulunamadı"
+sounds.missing_name: "\"%{name}\" sesi bulunamadı — yerine %{fallback} çalar. %{name}.wav dosyasını %{folder} klasörüne koyun."
+sounds.missing_ordinal: "%{n} numaralı ses yok — yerine %{fallback} çalar. %{folder} klasörüne %{n}_ad.wav adlı bir dosya koyun veya sesi çekirdek ayarlarından yeniden seçin."
+sounds.folder_title: "Kendi sesleriniz"
+sounds.folder_help: ".wav dosyalarını bu klasöre bırakın — her ses listesinde görünürler (stratejiler, işlem sesleri, uyarılar, alarmlar). Çekirdeğin ayarları sesi NUMARA ile saklar: 1–%{last} yerleşiktir; dosya numarasını adıyla alır: %{first}_MySound.wav → \"MySound\" sesi #%{first}. Numarasız dosya çekirdek ayarlarında seçilemez; yerleşik ses gibi adlandırılmış dosya (ding1.wav) onun yerine geçer."
+sounds.open_folder: "Klasörü aç"
+sounds.rescan: "Yeniden tara"
+sounds.scan_summary: "Klasörden: %{folder} (numaralı: %{numbered}), reddedilen: %{rejected}"
+sounds.numbered_title: "Kendi numaralarınız"
+sounds.scan_pending: "Klasör okunuyor…"
+sounds.rejected_title: "Reddedilen dosyalar"
+sounds.reject_not_pcm: "PCM WAV değil"
+sounds.reject_too_large: "%{mb} MB'den büyük"
+sounds.reject_over_total: "%{mb} MB toplam sınırının üstünde"
+sounds.reject_io: "okunamıyor: %{detail}"
+sounds.reject_number_reserved: "%{first} altındaki numaralar yerleşik seslere aittir"
+sounds.reject_number_taken: "bu numarayı zaten \"%{by}\" tutuyor"
+sounds.reject_name_taken: "bu adda bir ses zaten var — numaralı dosyanın adı farklı olmalı"

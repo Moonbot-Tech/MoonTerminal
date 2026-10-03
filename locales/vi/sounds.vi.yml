@@ -1,0 +1,22 @@
+_version: 1
+# The user's own sounds: the folder block on the "Trade sounds" tab, the missing-sound toast,
+# and the mark a picker puts on a stored name no file answers to.
+sounds.missing_mark: "không có file"
+sounds.missing_title: "Không tìm thấy âm"
+sounds.missing_name: "Không thấy âm \"%{name}\" — phát %{fallback} thay thế. Đặt %{name}.wav vào %{folder}."
+sounds.missing_ordinal: "Không có âm #%{n} — phát %{fallback} thay thế. Đặt file tên %{n}_tên.wav vào %{folder}, hoặc chọn lại âm trong cài đặt core."
+sounds.folder_title: "Âm của bạn"
+sounds.folder_help: "Thả file .wav vào thư mục này — chúng hiện trong mọi danh sách âm (chiến lược, âm giao dịch, cảnh báo, alert). Cài đặt core lưu âm theo SỐ: 1–%{last} là âm có sẵn; file tự lấy số bằng tên: %{first}_MySound.wav → âm \"MySound\" #%{first}. File không có số không chọn được trong cài đặt core; file trùng tên âm có sẵn (ding1.wav) sẽ thay nó."
+sounds.open_folder: "Mở thư mục"
+sounds.rescan: "Quét lại"
+sounds.scan_summary: "Từ thư mục: %{folder} (có số: %{numbered}), bị loại: %{rejected}"
+sounds.numbered_title: "Số của bạn"
+sounds.scan_pending: "Đang đọc thư mục…"
+sounds.rejected_title: "File bị loại"
+sounds.reject_not_pcm: "không phải PCM WAV"
+sounds.reject_too_large: "lớn hơn %{mb} MB"
+sounds.reject_over_total: "vượt tổng %{mb} MB"
+sounds.reject_io: "không đọc được: %{detail}"
+sounds.reject_number_reserved: "số dưới %{first} thuộc âm có sẵn"
+sounds.reject_number_taken: "số này đã thuộc file \"%{by}\""
+sounds.reject_name_taken: "đã có âm trùng tên — file có số cần tên khác"

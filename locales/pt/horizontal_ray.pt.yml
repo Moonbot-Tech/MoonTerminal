@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Raio horizontal"
+hotkeys.draw_horizontal_ray: "Raio horizontal"
+hotkeys.draw_horizontal_ray_hint: "Um clique define a origem e o preço de um raio para a direita. Pressione de novo para desarmar a ferramenta."

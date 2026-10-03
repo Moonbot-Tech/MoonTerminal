@@ -1,5 +1,6 @@
 //! The report's rich HTML, its inline keyboard, and Help.
 
+use crate::t;
 use moon_core::{
     db::QuoteBreakdown,
     telegram::{
@@ -9,7 +10,6 @@ use moon_core::{
     },
     util::{display_time, fmt},
 };
-use rust_i18n::t;
 
 use super::Page;
 use crate::HostKind;

@@ -1,0 +1,96 @@
+# Crowd statistics on an empty Main: the rolling minute and the service's two boards for the day.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Column headings are upper-case in every locale: they are a table's own chrome, read as a block
+# rather than as words, and a mixed-case column among upper-case ones reads as a different table.
+_version: 1
+
+# --- The minute, top right ---
+crowd.minute.title: "PİYASA · DAKİKA"
+crowd.minute.empty: "bu dakikada işlem gören coin yok"
+
+# The only word the wire still needs. Live, connecting and down are said by the COLOUR of the
+# service's name beside the heading; "synthetic" cannot be, because there the figures are invented
+# and no colour carries that.
+crowd.wire.synthetic: "sentetik"
+
+# --- The service's boards for the rolling day ---
+crowd.day.coins: "COIN · 24 SA"
+crowd.day.traders: "İLK SIRALAR · 24 SA"
+# The service's own day total, shown beside the trader board's caption: the board is a TOP of
+# fifty, this counts everybody.
+crowd.day.total: "(toplam %{money}, %{trades} işlem)"
+crowd.day.silent: "servis sessiz"
+
+# --- Column headings ---
+# PROFIT and LOSS are two separate columns, never a net figure: a coin that made $9k and lost $8k
+# had a loud minute, and one number would report it as a quiet one.
+crowd.col.coin: "COIN"
+crowd.col.profit: "KÂR"
+crowd.col.loss: "ZARAR"
+# The rank the service itself assigns, shown as a bare number sign.
+crowd.col.rank: "#"
+# The service's own account number: the only name half this board has, since an anonymous row has
+# no handle at all.
+crowd.col.id: "ID"
+crowd.col.who: "KİM"
+crowd.col.trades: "İŞLEM"
+
+# --- The switch on the empty screen ---
+crowd.settings.btn: "Boş ekran ayarları"
+crowd.settings.title: "Boş ekran"
+# The five blocks have no captions of their own here: each is one row of the placement section
+# below, captioned by its `crowd.block.*` name, with "hidden" as an entry of its dropdown. The three
+# tables also decide what is READ: a hidden table opens no connection to the statistics service.
+# The LOGO is the one that is not only about this screen — hiding it hides the same brand on an
+# empty AddToChart stack and on a chart slot waiting for data.
+
+# --- Where each block of the empty screen is drawn ---
+# One dropdown per block: the nine anchors, and "hidden" as the tenth entry. What is KEPT is still
+# two keys — a hidden block keeps the place it was given, and showing it again puts it back there.
+# The mark and the line under it are placed SEPARATELY because they are switched separately.
+crowd.settings.places: "Blokların yeri"
+crowd.settings.places_reset: "Sıfırla"
+crowd.settings.places_reset_tip: "Tüm blokları başlangıç yerine koy"
+
+# The blocks themselves, named as things rather than as actions: these captions sit beside a
+# position, not beside a switch.
+crowd.block.logo: "Logo"
+crowd.block.hint: "İpucu"
+crowd.block.minute: "Dakikalık işlem"
+crowd.block.traders: "24 sa ID sırası"
+crowd.block.coins: "24 sa coin sırası"
+
+# "Hidden" first, then the nine anchors, named by row and side. Two blocks may name the same one — they are then drawn
+# one under the other, which is how the logo and its hint share the middle by default.
+crowd.slot.hidden: "Gizli"
+crowd.slot.top_start: "Sol üst"
+crowd.slot.top_center: "Üst orta"
+crowd.slot.top_end: "Sağ üst"
+crowd.slot.middle_start: "Sol orta"
+crowd.slot.middle_center: "Orta"
+crowd.slot.middle_end: "Sağ orta"
+crowd.slot.bottom_start: "Sol alt"
+crowd.slot.bottom_center: "Alt orta"
+crowd.slot.bottom_end: "Sağ alt"
+
+# --- The rule, which is not a layer of this screen ---
+# It draws nothing here: it puts a card in the Detects panel when a coin's minute crosses both
+# lines. Its two thresholds are dead while it is off, which is why they are captioned as
+# comparisons rather than as settings — the switch above says WHETHER, and these say WHAT.
+crowd.settings.detect: "İstatistiğe göre tespit"
+crowd.settings.detect_profit: "Dakika kârı >"
+crowd.settings.detect_trades: "Dakikadaki işlem ≥"
+crowd.settings.detect_keep: "Tutma süresi, sn"
+# What happens when the rule fires and every seat is already taken. Off, the newcomer is dropped and
+# what is on screen lives out its time; on, the oldest gives up its seat. The count is interpolated
+# so one number in the code answers for the label, the rule's own burst and the feed's trim.
+crowd.settings.detect_evict: "En eskisini değiştir (en fazla %{max})"
+# A zero is not a line at zero — it switches that line off, and neither the caption nor the number
+# beside it can say so on its own. Both at zero asks nothing, and then nothing is read at all.
+crowd.settings.detect_hint: "0 bir koşulu kapatır; ikisi de sıfırsa hiçbir şey tetiklenmez"
+
+# --- The card the rule fires ---
+# Where a core detect prints the core that reported it, this prints what noticed: the crowd's own
+# pulse, on a card that has no core and no strategy behind it. Named for what it measures rather
+# than for whose numbers they are — the card already says the figures are a minute of the market.
+crowd.detect.source: "NABIZ"

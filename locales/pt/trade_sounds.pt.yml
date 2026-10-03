@@ -1,0 +1,10 @@
+_version: 1
+trade_sounds.volume: "Volume dos sons de operações"
+trade_sounds.tab: "Sons de operações"
+trade_sounds.help: "Escolha os sons de entrada e saída de cada corretora. As alterações são salvas automaticamente."
+trade_sounds.exchange: "Corretora"
+trade_sounds.quiet_note: "O modo silencioso está ligado — os sons estão mudos."
+trade_sounds.open: "Posição aberta"
+trade_sounds.close: "Posição fechada"
+trade_sounds.off: "Silencioso"
+trade_sounds.preview: "Ouvir"
