@@ -65,7 +65,7 @@ pub struct StationTg {
     /// Where the update request is filed.
     data_root: PathBuf,
     /// Chats' "Status" waiting for the main loop to read the station's status.
-    status_asks: Vec<SyncSender<Response>>,
+    status_asks: Vec<(SyncSender<Response>, bool)>,
     /// The look at the latest release each "Status" takes.
     release: ReleaseWatch,
     /// Optimistic Panic Sell override by `(core, market)`, reconciled every tick.
@@ -193,12 +193,14 @@ impl StationTg {
         let status = status(self.status(config));
         let navigation = moon_tg::station_owner_navigation(&config.telegram);
         let release = self.release.clone();
-        let answer = move |asks: Vec<SyncSender<Response>>, check: moon_tg::ReleaseCheck| {
-            for ask in asks {
+        let answer = move |asks: Vec<(SyncSender<Response>, bool)>,
+                           check: moon_tg::ReleaseCheck| {
+            for (ask, from_settings) in asks {
                 let _ = ask.try_send(moon_tg::station_status_reply(
                     &status,
                     &check,
                     navigation.clone(),
+                    from_settings,
                 ));
             }
         };
@@ -532,9 +534,9 @@ impl TgHost for StationHost<'_> {
         // Nothing on the station shows the bot's state.
     }
 
-    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
+    fn station_status(&mut self, reply: SyncSender<Response>, from_settings: bool) -> bool {
         // The status is read on the loop after this tick, where the cores and the host are.
-        self.tg.status_asks.push(reply);
+        self.tg.status_asks.push((reply, from_settings));
         true
     }
 

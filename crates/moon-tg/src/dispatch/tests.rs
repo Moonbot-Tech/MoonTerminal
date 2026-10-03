@@ -5,6 +5,8 @@ struct StationHost {
     config: moon_core::config::AppConfig,
     state: crate::TelegramState,
     status_calls: usize,
+    /// Whether the last status was asked from the Settings section.
+    status_from_settings: Option<bool>,
     update_calls: usize,
 }
 
@@ -21,6 +23,7 @@ impl StationHost {
             config,
             state,
             status_calls: 0,
+            status_from_settings: None,
             update_calls: 0,
         }
     }
@@ -100,8 +103,13 @@ impl crate::TgHost for StationHost {
     /// No display exists in this fixture.
     fn repaint(&mut self) {}
     /// Count a station status call and return a synthetic answer.
-    fn station_status(&mut self, reply: std::sync::mpsc::SyncSender<super::Response>) -> bool {
+    fn station_status(
+        &mut self,
+        reply: std::sync::mpsc::SyncSender<super::Response>,
+        from_settings: bool,
+    ) -> bool {
         self.status_calls += 1;
+        self.status_from_settings = Some(from_settings);
         super::answer(&reply, "fixture status".into());
         true
     }
@@ -278,4 +286,27 @@ fn the_settings_section_is_the_owners() {
         host.command(10, settings(SettingsAction::MiniApp(true))),
         super::Response::Text { .. }
     ));
+}
+
+/// The station's status asked from the Settings section is told so (its answer leads back
+/// there); asked from the keyboard it is not; a viewer gets neither.
+#[test]
+fn the_status_knows_where_it_was_asked_from() {
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    let mut host = StationHost::new();
+    host.command(
+        10,
+        super::ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus)),
+    );
+    assert_eq!(host.status_from_settings, Some(true));
+    host.command(10, super::ParsedCommand::StationStatus);
+    assert_eq!(host.status_from_settings, Some(false));
+    host.command(
+        20,
+        super::ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus)),
+    );
+    assert_eq!(
+        host.status_calls, 2,
+        "a viewer is refused before the station is asked"
+    );
 }

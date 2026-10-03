@@ -217,21 +217,10 @@ fn buttons_resolve_by_item_id() {
     );
 }
 
-/// The Settings section's status button reaches the station's status, under the same private
-/// identity as every callback; `/settings` opens the section.
+/// `/settings` opens the section; its station status is a Settings action, leading back to it.
 #[test]
 fn the_settings_entry_points_parse() {
     use crate::telegram::menu_action::{MenuAction, SettingsAction};
-    let update: crate::telegram::api::Update = serde_json::from_value(serde_json::json!({
-        "update_id":1,"callback_query":{"id":"c","from":{"id":7},
-        "message":{"message_id":10,"chat":{"id":7,"type":"private"}},
-        "data": super::STATION_STATUS_CALLBACK}
-    }))
-    .unwrap();
-    assert_eq!(
-        super::parse_update(&update, None).unwrap().command,
-        ParsedCommand::StationStatus
-    );
     assert_eq!(
         parse_text("/settings", None),
         ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root))
@@ -239,5 +228,26 @@ fn the_settings_entry_points_parse() {
     assert_eq!(
         parse_text("/settings now", None),
         ParsedCommand::InvalidArgument
+    );
+    let data = MenuAction::Settings(SettingsAction::StationStatus).callback();
+    assert_eq!(data, "m:s:st");
+    assert_eq!(
+        MenuAction::parse_callback(&data),
+        Some(MenuAction::Settings(SettingsAction::StationStatus))
+    );
+}
+
+/// The Settings status button of an earlier build still answers, as the section's status.
+#[test]
+fn an_earlier_settings_status_button_still_answers() {
+    use crate::telegram::menu_action::{MenuAction, SettingsAction};
+    let update: crate::telegram::api::Update = serde_json::from_value(serde_json::json!({
+        "update_id":1,"callback_query":{"id":"c","from":{"id":7},
+        "message":{"message_id":10,"chat":{"id":7,"type":"private"}},"data":"station:status"}
+    }))
+    .unwrap();
+    assert_eq!(
+        super::parse_update(&update, None).unwrap().command,
+        ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
     );
 }

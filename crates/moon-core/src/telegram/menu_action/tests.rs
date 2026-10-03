@@ -109,6 +109,7 @@ fn settings_actions_round_trip() {
         SettingsAction::DailyHours,
         SettingsAction::DailyHour(0),
         SettingsAction::DailyHour(23),
+        SettingsAction::StationStatus,
     ];
     actions.extend(ReportView::ALL.map(SettingsAction::SetView));
     actions.extend(ReportBasis::ALL.map(SettingsAction::SetBasis));

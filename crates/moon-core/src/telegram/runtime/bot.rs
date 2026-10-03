@@ -5,7 +5,7 @@ use crate::telegram::{
     TelegramStatus,
     api::{BotApi, ReplyMarkup},
     commands::{ParsedCommand, parse_reply_button, parse_update},
-    menu_action::MenuAction,
+    menu_action::{MenuAction, SettingsAction},
     reply::segment_pages,
 };
 use std::sync::{
@@ -148,7 +148,12 @@ pub(super) fn run(
                     | ParsedCommand::Menu(MenuAction::Preset(_))
             );
             // The station's status looks for a newer release before it answers.
-            let slow = is_report || inbound.command == ParsedCommand::StationStatus;
+            let slow = is_report
+                || matches!(
+                    inbound.command,
+                    ParsedCommand::StationStatus
+                        | ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
+                );
             let work = {
                 let Ok(mut ledger) = auth.lock() else {
                     return;

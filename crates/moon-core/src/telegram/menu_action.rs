@@ -61,6 +61,8 @@ pub enum SettingsAction {
     DailyHours,
     /// The hour the daily summary is sent at.
     DailyHour(u8),
+    /// The station's status, opened from the section: it leads back to it.
+    StationStatus,
 }
 
 impl SettingsAction {
@@ -89,6 +91,7 @@ impl SettingsAction {
             Self::Daily(on) => format!(":n:y:{}", flag(on)),
             Self::DailyHours => ":n:h".into(),
             Self::DailyHour(hour) => format!(":n:h:{hour}"),
+            Self::StationStatus => ":st".into(),
         }
     }
 
@@ -117,6 +120,7 @@ impl SettingsAction {
             ["p"] => Self::Basis,
             ["p", id] => Self::SetBasis(ReportBasis::ALL.into_iter().find(|b| b.id() == *id)?),
             ["m", on] => Self::MiniApp(flag(on)?),
+            ["st"] => Self::StationStatus,
             ["n"] => Self::Notify,
             ["n", "t", on] => Self::Trades(flag(on)?),
             ["n", "o", on] => Self::Down(flag(on)?),

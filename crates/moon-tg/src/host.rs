@@ -173,11 +173,15 @@ pub trait TgHost {
     /// Answer the station's status through `reply` (the chat's "Status"): the station reads it on
     /// its loop and looks for a newer release off it ([`crate::station_status_reply`]).
     ///
+    /// Args:
+    ///     from_settings: Asked from the Settings section, so the answer leads back to it; from
+    ///         the keyboard or `/status` it does not.
+    ///
     /// Returns:
     ///     `false` from a host with no station behind its bot — the terminal —, which then
     ///     answers it as a request it cannot run.
-    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
-        let _ = reply;
+    fn station_status(&mut self, reply: SyncSender<Response>, from_settings: bool) -> bool {
+        let _ = (reply, from_settings);
         false
     }
 

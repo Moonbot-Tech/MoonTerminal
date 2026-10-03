@@ -266,7 +266,7 @@ fn run_command(
             let _ = reply.try_send(Response::Text { text, keyboard });
         }
         ParsedCommand::StationStatus => {
-            if !host.station_status(reply.clone()) {
+            if !host.station_status(reply.clone(), false) {
                 cannot_run(host, chat_id, &reply);
             }
         }

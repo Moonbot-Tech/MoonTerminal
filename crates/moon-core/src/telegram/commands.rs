@@ -39,8 +39,9 @@ pub enum ParsedCommand {
 /// callbacks' `r:` namespace.
 pub const STATION_UPDATE_CALLBACK: &str = "station:update";
 
-/// Callback data of the station's status button in the bot's Settings section.
-pub const STATION_STATUS_CALLBACK: &str = "station:status";
+/// The Settings section's station-status button as earlier builds encoded it; a message carrying
+/// it still answers, as the section's status (with its way back).
+const SETTINGS_STATUS_BEFORE: &str = "station:status";
 
 /// Chat-scoped parse result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,7 +70,9 @@ pub fn parse_update(update: &Update, bot_username: Option<&str>) -> Option<Inbou
             chat_id: message.chat.id,
             command: match data {
                 Some(STATION_UPDATE_CALLBACK) => ParsedCommand::StationUpdate,
-                Some(STATION_STATUS_CALLBACK) => ParsedCommand::StationStatus,
+                Some(SETTINGS_STATUS_BEFORE) => {
+                    ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
+                }
                 _ => data
                     .and_then(|data| {
                         ReportRequest::parse_callback(data)

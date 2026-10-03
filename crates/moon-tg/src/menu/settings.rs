@@ -10,7 +10,6 @@ use std::sync::mpsc::SyncSender;
 
 use moon_core::config::telegram_menu::{BotSettings, MenuItem, MenuLevel, ReportBasis, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
-use moon_core::telegram::commands::STATION_STATUS_CALLBACK;
 use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
 use moon_core::telegram::notify::{CoreScope, NotifySettings};
 use moon_core::telegram::runtime::Response;
@@ -39,6 +38,13 @@ pub(super) fn run(
         Ok(screen) => screen,
     };
     let rows = match screen {
+        // The station's own answer, which leads back here; a terminal has none to give.
+        Screen::Status => {
+            if !host.station_status(reply.clone(), true) {
+                crate::labels::answer(reply, crate::labels::report_help(host.kind()));
+            }
+            return;
+        }
         Screen::Root => root(host, crate::mini_app::chat_notify(host, chat).is_some()),
         Screen::Buttons => buttons(&host.config().telegram.bot, host.kind()),
         Screen::View => view(host.config().telegram.bot.report_view),
@@ -78,6 +84,8 @@ enum Screen {
     Basis,
     Notify,
     DailyHours,
+    /// The station's status, answered by the station.
+    Status,
 }
 
 /// A screen: its title, its lines, its buttons.
@@ -152,6 +160,7 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
             Screen::Notify
         }
         A::DailyHours => Screen::DailyHours,
+        A::StationStatus => return Ok(Screen::Status),
         A::DailyHour(hour) => {
             notify(host, &|n| n.daily.hour = hour)?;
             Screen::Notify
@@ -263,9 +272,9 @@ fn root(host: &dyn TgHost, notify: bool) -> Rendered {
         )]);
     }
     if station {
-        rows.push(vec![InlineKeyboardButton::callback(
+        rows.push(vec![button(
             format!("\u{1f4e1} {}", t!("telegram.settings.station_status")),
-            STATION_STATUS_CALLBACK,
+            SettingsAction::StationStatus,
         )]);
     }
     (

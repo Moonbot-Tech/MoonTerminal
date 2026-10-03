@@ -182,6 +182,7 @@ fn the_chat_status_is_escaped_and_bounded() {
         &status,
         &ReleaseCheck::Current,
         crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+        true,
     ) else {
         panic!("the status is a rich message");
     };
@@ -220,6 +221,7 @@ fn the_update_button_comes_only_with_a_newer_release() {
         &status(None),
         &ReleaseCheck::Newer("v0.52.0".into()),
         crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+        false,
     )
     else {
         panic!("the status is a rich message");
@@ -261,15 +263,14 @@ fn the_update_button_comes_only_with_a_newer_release() {
             &status(None),
             &check,
             crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+            false,
         ) else {
             panic!("the status is a rich message");
         };
         assert!(html.ends_with(tail), "{html}");
         assert!(
-            matches!(keyboard, ReplyMarkup::Inline(ref markup)
-                if markup.inline_keyboard.len() == 1
-                    && markup.inline_keyboard[0][0].callback_data.as_deref() == Some("m:s")),
-            "{check:?} brings no Update button, only the way back to Settings"
+            matches!(keyboard, ReplyMarkup::Inline(ref markup) if markup.inline_keyboard.is_empty()),
+            "{check:?} from the keyboard brings no button at all"
         );
     }
 }

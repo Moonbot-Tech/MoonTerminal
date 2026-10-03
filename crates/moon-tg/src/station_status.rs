@@ -85,6 +85,7 @@ pub fn station_status_reply(
     status: &Status,
     release: &ReleaseCheck,
     navigation: ReplyMarkup,
+    from_settings: bool,
 ) -> Response {
     let facts = StatusFacts::of(status);
     let release_line = match release {
@@ -104,15 +105,17 @@ pub fn station_status_reply(
         )]],
         _ => Vec::new(),
     };
-    // The status is the owner's, as Settings are: the way there, or back when it came from there.
-    let mut inline = update.clone();
-    inline.push(vec![InlineKeyboardButton::callback(
-        format!("\u{2b05}\u{fe0f} {}", t!("telegram.button_settings")),
-        moon_core::telegram::menu_action::MenuAction::Settings(
-            moon_core::telegram::menu_action::SettingsAction::Root,
-        )
-        .callback(),
-    )]);
+    // Asked from the Settings section, the status edits that message in place: the way back.
+    let mut inline = update;
+    if from_settings {
+        inline.push(vec![InlineKeyboardButton::callback(
+            format!("\u{2b05}\u{fe0f} {}", t!("telegram.menu.back")),
+            moon_core::telegram::menu_action::MenuAction::Settings(
+                moon_core::telegram::menu_action::SettingsAction::Root,
+            )
+            .callback(),
+        )]);
+    }
     let html = facts.html(release_line.as_deref());
     if !crate::report::rich_message_fits(&html) {
         // Not expected with a bounded file list; plain text still answers the press.
@@ -121,7 +124,7 @@ pub fn station_status_reply(
             text.push_str("\n\n");
             text.push_str(&line);
         }
-        let keyboard = match update.is_empty() {
+        let keyboard = match inline.is_empty() {
             true => navigation,
             false => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(inline)),
         };
