@@ -126,19 +126,15 @@ pub(super) fn report_html(page: &Page) -> String {
         }),
         escape(&t!("telegram.report_trades"))
     ));
+    let by_core = !page.request.by_exchange && !page.request.daily;
     for (name, total) in &page.rows {
-        // Long user-controlled names cannot exhaust the rich-message budget.
-        let label: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
-        if !page.request.by_exchange && !page.request.daily {
-            html.push_str(&format!(
-                "<tr><td colspan=\"3\"><b>{}</b></td></tr>",
-                escape(&label)
-            ));
-        }
-        let label = if !page.request.by_exchange && !page.request.daily {
-            String::new()
+        // Long user-controlled names cannot exhaust the rich-message budget. A core is one row:
+        // its name keeps both ends (where the account number usually is), and the full name stays
+        // in the details below.
+        let label: String = if by_core {
+            compact_label(name)
         } else {
-            label
+            name.chars().filter(|c| !c.is_control()).take(200).collect()
         };
         html.push_str(&format!(
             "<tr><td>{}</td><td align=\"right\">{}</td><td align=\"right\">{}</td></tr>",

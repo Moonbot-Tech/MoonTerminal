@@ -13,10 +13,12 @@ Mini App and its tunnel are not needed. A terminal-hosted bot needs MoonTerminal
 history synchronization; a station-hosted bot runs independently and reads the station's history.
 
 Groups without trades are hidden before pagination. Zero-profit trades remain visible.
-By-exchange and by-day views list every active row in one message; pagination appears only
-when the rendered rich message would exceed Telegram's 32768-character or 500-block limit.
-Core lists still use six-row pages because that roster is unbounded. Core names span the table width;
-native currency amounts and averages are in an expandable two-column table. Dollar-denominated amounts
+Every view (exchanges, cores, days) lists all its active rows in one message; pagination appears
+only when the rendered rich message would exceed Telegram's 32768-character or 500-block limit,
+and then each page holds the largest of a fixed set of page sizes that still fits, so Next and
+Previous keep their rows when a trade closes between two presses. A core is one table row: a long name keeps its
+first 8 and last 15 characters, and the full name is in the details. Native currency amounts and
+averages are in an expandable two-column table. Dollar-denominated amounts
 use two decimals; crypto-denominated amounts retain up to eight. Calculation guidance is in Help; average-coverage counts remain in the monetary details only
 when rows were excluded.
 Exchange membership uses reported venue identity, including market type and HIP-3 DEX.
@@ -72,7 +74,7 @@ bot, public website, or trading permissions.
 Exchange buttons use brand-colored circles. Today omits the redundant daily view.
 Main-table USDT amounts carry a `$` suffix; native-currency details keep their own ticker.
 
-Core names occupy a full-width row above money columns; native details use two money columns.
+Native details use two money columns, with each full core name above its figures.
 Help is a standalone rich message with collapsed commands, calculation notes, and Mini App guidance.
 Successful reply-button reports and Help replace the previous tracked answer by sending first,
 then deleting it. Tracking is persisted per bot identity and survives service and terminal restarts.

@@ -20,13 +20,11 @@ use crate::notify::trades::ClosedTrade;
 use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
 
+mod paging;
 mod render;
 
 pub(crate) use render::{escape, help, rich_message_fits};
 use render::{render, report_html};
-
-/// Core lists are unbounded, so they still page; breakdown views try to show every row first.
-const PAGE_SIZE: usize = 6;
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
 struct Page {
@@ -189,7 +187,6 @@ fn read_page_on(
     };
     let total = db::query_totals(&snap, &filter)?.quotes;
     let mut groups = Vec::new();
-    let mut group_scopes = Vec::new();
     if request.daily {
         if let (Some(mut date), Some(end)) =
             (display_time::date(from, zone), display_time::date(to, zone))
@@ -218,7 +215,6 @@ fn read_page_on(
                     day.date_from = Some(start.max(from));
                     day.date_to = Some((stop - 1).min(to));
                     groups.push((date.to_string(), day));
-                    group_scopes.push(None);
                 }
                 date = next;
             }
@@ -233,61 +229,51 @@ fn read_page_on(
             let mut group = filter.clone();
             group.core_uids = members.iter().map(|&index| cores[index].0).collect();
             groups.push((section_label(venue), group));
-            group_scopes.push(Some(scope_of(venue)));
         }
     } else {
         for (id, name) in cores {
             let mut core = filter.clone();
             core.core_uids = vec![id];
             groups.push((name, core));
-            group_scopes.push(None);
         }
     }
     // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
     let mut active = Vec::new();
-    for ((name, filter), scope) in groups.into_iter().zip(group_scopes) {
+    for (name, filter) in groups {
         let total = db::query_totals(&snap, &filter)?.quotes;
         if total.orders > 0 {
-            active.push((name, total, scope));
+            active.push((name, total));
         }
     }
     let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
-    let breakdown = request.daily || request.by_exchange;
-    let take =
-        |active: &[(String, QuoteBreakdown, Option<ReportScope>)], page: usize, size: usize| {
-            active
-                .iter()
-                .skip(page * size)
-                .take(size)
-                .map(|(name, total, _)| (name.clone(), total.clone()))
-                .collect::<Vec<_>>()
-        };
-    let (rows, pages) = if breakdown {
-        let all = take(&active, 0, active.len().max(1));
-        let probe = Page {
-            request: request.clone(),
+    // Every view shows all its rows while the message fits; an oversized one pages with the
+    // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
+    // label it can show, so the page actually rendered is never longer than the one measured.
+    let fits = |rows: &[(String, QuoteBreakdown)]| {
+        let partial = rows.len() < active.len();
+        let mut probe = request.clone();
+        probe.page = if partial { 9_999 } else { 0 };
+        rich_message_fits(&report_html(&Page {
+            request: probe,
             from,
             to,
             zone,
             total: total.clone(),
-            rows: all.clone(),
-            pages: 1,
+            rows: rows.to_vec(),
+            pages: if partial { 10_000 } else { 1 },
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
-        };
-        if rich_message_fits(&report_html(&probe)) {
-            request.page = 0;
-            (all, 1)
-        } else {
-            let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-            request.page = request.page.min(pages - 1);
-            (take(&active, request.page, PAGE_SIZE), pages)
-        }
-    } else {
-        let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-        request.page = request.page.min(pages - 1);
-        (take(&active, request.page, PAGE_SIZE), pages)
+        }))
     };
+    let size = paging::fitting_page_size(&active, fits);
+    let pages = active.len().div_ceil(size).max(1);
+    request.page = request.page.min(pages - 1);
+    let rows: Vec<_> = active
+        .iter()
+        .skip(request.page * size)
+        .take(size)
+        .cloned()
+        .collect();
     Ok(Page {
         request,
         from,

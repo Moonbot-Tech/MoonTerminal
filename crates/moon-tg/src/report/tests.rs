@@ -226,7 +226,8 @@ fn detail_money_uses_readable_currency_precision() {
     assert_eq!(super::render::native(&btc), "+0.00001234 BTC");
 }
 
-/// Idle rows interleaved with zero-profit activity must neither consume page slots nor disappear from totals.
+/// Idle rows interleaved with zero-profit activity neither take a row nor disappear from totals, and
+/// a core list that fits the message is one page, not six-row pages.
 #[test]
 fn inactive_cores_do_not_consume_page_slots() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -240,24 +241,7 @@ fn inactive_cores_do_not_consume_page_slots() {
     }
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    let first = super::read_page_on(
-        &conn,
-        request.clone(),
-        100,
-        200,
-        chrono_tz::UTC,
-        &Default::default(),
-        |rows| {
-            rows.sort_by_key(|(id, _)| *id);
-            (Default::default(), super::TelegramReportAccess::Owner)
-        },
-    )
-    .unwrap();
-    assert_eq!(first.total.orders, 9);
-    assert_eq!(first.rows.len(), 6);
-    assert_eq!(first.pages, 2);
-    request.page = 1;
-    let last = super::read_page_on(
+    let page = super::read_page_on(
         &conn,
         request,
         100,
@@ -270,14 +254,15 @@ fn inactive_cores_do_not_consume_page_slots() {
         },
     )
     .unwrap();
+    assert_eq!(page.total.orders, 9);
+    assert_eq!(page.pages, 1);
     assert_eq!(
-        last.rows
+        page.rows
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        vec!["13", "15", "17"]
+        vec!["1", "3", "5", "7", "9", "11", "13", "15", "17"]
     );
-    assert_eq!(last.total.orders, 9);
 }
 
 /// Exchange aggregation keeps zero-profit activity, drops idle groups, and never broadens a missing scope.
@@ -359,7 +344,7 @@ fn daily_pages_include_partial_day_after_zone_change() {
     assert_eq!(page.rows.last().unwrap().1.orders, 1);
 }
 
-/// A month of daily rows and a handful of exchanges fit one message; cores still page at six.
+/// A month of daily rows and a handful of exchanges fit one message.
 #[test]
 fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -457,7 +442,8 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     }));
 }
 
-/// A year of daily rows exceeds Telegram's 500-block cap, so the six-row page size remains.
+/// Half a year of daily rows exceeds Telegram's 500-block cap, so the report pages — with the
+/// largest page that fits, not six rows.
 #[test]
 fn oversized_daily_report_still_pages() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -492,7 +478,8 @@ fn oversized_daily_report_still_pages() {
         page.pages,
         page.rows.len()
     );
-    assert_eq!(page.rows.len(), 6);
+    assert!(page.rows.len() > 6, "got {} rows per page", page.rows.len());
+    assert!(super::rich_message_fits(&super::report_html(&page)));
     let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal, true)
     else {
         panic!("expected rich report")
@@ -507,6 +494,57 @@ fn oversized_daily_report_still_pages() {
             .page
             == 1
     }));
+}
+
+/// A core roster too long for one message pages with pages far larger than six rows, and every
+/// page it makes fits the rich-message caps.
+///
+/// Mutation: restore the fixed six-row page for cores. The roster then needs 50 pages.
+#[test]
+fn an_oversized_core_list_pages_with_large_fitting_pages() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);").unwrap();
+    for id in 1..=300 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,1,100,0)",
+            rusqlite::params![
+                id,
+                format!("Desk {id:03} / a long account name of this core")
+            ],
+        )
+        .unwrap();
+    }
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    let mut seen = 0;
+    let mut page_index = 0;
+    loop {
+        request.page = page_index;
+        let page = super::read_page_on(
+            &conn,
+            request.clone(),
+            100,
+            200,
+            chrono_tz::UTC,
+            &Default::default(),
+            |rows| {
+                rows.sort_by_key(|(id, _)| *id);
+                (Default::default(), super::TelegramReportAccess::Owner)
+            },
+        )
+        .unwrap();
+        assert!(page.pages > 1 && page.pages < 50, "{} pages", page.pages);
+        assert!(super::rich_message_fits(&super::report_html(&page)));
+        seen += page.rows.len();
+        page_index += 1;
+        if page_index == page.pages {
+            break;
+        }
+    }
+    assert_eq!(
+        seen, 300,
+        "every core appears exactly once across the pages"
+    );
 }
 
 /// Small native averages must retain significant digits and exclude uncounted entries.
@@ -541,7 +579,8 @@ fn native_average_keeps_small_btc_amount_visible() {
     assert!(!html.replace("&#160;", " ").contains("0.00 BTC"));
 }
 
-/// The production reader excludes open/emulator/deleted rows and keeps page totals global.
+/// The production reader excludes open/emulator/deleted rows, keeps the total global, and clamps a
+/// stale page index to the pages that exist.
 #[test]
 fn report_reader_preserves_filters_and_full_total_across_pages() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -582,7 +621,8 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     .unwrap();
     assert_eq!(first.total.orders, 13);
     assert_eq!(first.total.totals[0].profit, 18.0);
-    assert_eq!(first.rows.len(), 6);
+    assert_eq!(first.rows.len(), 12);
+    assert_eq!(first.pages, 1);
     assert_eq!(first.rows[0].1.orders, 2);
     assert_eq!(first.rows[0].1.totals[0].profit, 7.0);
     request.page = 1;
@@ -599,9 +639,10 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
         },
     )
     .unwrap();
+    assert_eq!(second.request.page, 0);
     assert_eq!(second.total.orders, 13);
     assert_eq!(second.total.totals[0].profit, 18.0);
-    assert_eq!(second.rows.len(), 6);
+    assert_eq!(second.rows.len(), 12);
 }
 use moon_core::{
     db::{QuoteBreakdown, UsdtTotal, ValuationCoverage},
@@ -823,9 +864,12 @@ fn today_omits_daily_navigation() {
     }
 }
 
-/// Long core identities get the full table width rather than an ambiguous middle truncation.
+/// A core is one table row: its name keeps both ends, and the full name stays in the details.
+///
+/// Mutation: restore the full-width name row. The main table then has two rows per core, the
+/// "every other line" layout.
 #[test]
-fn core_names_span_the_money_columns() {
+fn a_core_is_one_row_with_its_full_name_in_details() {
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
     let name = "Sample Desk / ACCOUNT No 11 with a long server name";
@@ -835,7 +879,10 @@ fn core_names_span_the_money_columns() {
         to: 1,
         zone: chrono_tz::UTC,
         total: QuoteBreakdown::default(),
-        rows: vec![(name.into(), QuoteBreakdown::default())],
+        rows: vec![
+            (name.into(), QuoteBreakdown::default()),
+            ("Short".into(), QuoteBreakdown::default()),
+        ],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
@@ -843,7 +890,12 @@ fn core_names_span_the_money_columns() {
     let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
         panic!("expected rich report")
     };
-    assert!(html.contains(&format!("<td colspan=\"3\"><b>{name}</b>")));
+    let main = &html[..html.find("<details>").unwrap()];
+    // Header, one row per core, the total.
+    assert_eq!(main.matches("<tr>").count(), 4);
+    assert!(!main.contains("colspan"));
+    assert!(main.contains("<tr><td>Sample D…ong server name</td>"));
+    assert!(main.contains("<tr><td>Short</td>"));
     assert!(html.contains(&format!("<td colspan=\"2\"><b>{name}</b>")));
 }
 
