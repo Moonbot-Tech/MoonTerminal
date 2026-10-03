@@ -41,6 +41,7 @@ pub(super) fn run(
     let _ = tx.try_send(Work::Status(TelegramStatus::Starting));
     let mut username = None;
     let mut history = super::history::History::default();
+    let mut commands = Commands::default();
     let mut history_path = None;
     while alive.upgrade().is_some() {
         if username.is_none() {
@@ -69,6 +70,7 @@ pub(super) fn run(
                 }
             }
         }
+        commands.sync(&mut api, &labels, Instant::now());
         let menu_intent = menu.lock().map(|intent| intent.clone());
         if let Ok(intent) = menu_intent {
             if let Err(error) = menu_sync.sync(&intent, Instant::now(), |chat, button| {
@@ -287,6 +289,81 @@ pub(super) fn run(
         }
     }
 }
+
+/// The command list Telegram holds for the bot, kept in step with the host's labels: published
+/// when it differs from what was last published (the first poll, a language switch), retried
+/// after [`COMMANDS_RETRY`] when publishing failed. Without a list Telegram hides the chat's menu
+/// button whenever it is not the Mini App's.
+#[derive(Default)]
+struct Commands {
+    published: Option<Vec<(String, String)>>,
+    retry_at: Option<Instant>,
+}
+
+/// How long a failed publication waits before the next attempt.
+const COMMANDS_RETRY: Duration = Duration::from_secs(60);
+
+impl Commands {
+    /// Publish the list the labels describe now, when it is not the one published.
+    fn sync(
+        &mut self,
+        api: &mut BotApi,
+        labels: &std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+        now: Instant,
+    ) {
+        let wanted = labels
+            .lock()
+            .map(|labels| bot_commands(&labels))
+            .unwrap_or_default();
+        if wanted.is_empty()
+            || self.published.as_ref() == Some(&wanted)
+            || self.retry_at.is_some_and(|at| now < at)
+        {
+            return;
+        }
+        match api.set_my_commands(&wanted) {
+            Ok(Some(true)) => {
+                self.published = Some(wanted);
+                self.retry_at = None;
+            }
+            // Skipped for a pending rate limit: the next pass tries again.
+            Ok(None) => {}
+            Ok(Some(false)) => {
+                log::info!("telegram command list not accepted");
+                self.retry_at = Some(now + COMMANDS_RETRY);
+            }
+            Err(error) => {
+                log::info!("telegram command list not published: {error}");
+                self.retry_at = Some(now + COMMANDS_RETRY);
+            }
+        }
+    }
+}
+
+/// The command list from the host's labels, in menu order.
+fn bot_commands(labels: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+    COMMANDS
+        .iter()
+        .filter_map(|name| {
+            labels
+                .get(&format!("command_{name}"))
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| ((*name).to_owned(), text.chars().take(256).collect()))
+        })
+        .collect()
+}
+
+/// The commands every paired chat may use, in menu order. The owner's Settings and Status are on
+/// the owner's own keyboard; the Mini App has its own menu button while it runs.
+const COMMANDS: [&str; 7] = [
+    "today",
+    "yesterday",
+    "month",
+    "lastmonth",
+    "daily",
+    "hour",
+    "help",
+];
 
 /// The message of a reply-keyboard press to remove once answered: a private chat's own message,
 /// young enough for Telegram to delete (48 hours).

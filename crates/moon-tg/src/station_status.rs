@@ -80,7 +80,7 @@ const FILE_NAME_CHARS: usize = 48;
 /// release, and — only while a newer release carries the station's binary — the "Update" button
 /// under it. The dispatcher admits only the owner before the host produces this response.
 ///
-/// `navigation` is the owner's persistent keyboard ([`crate::station_owner_navigation`]).
+/// `navigation` is the owner's reply keyboard ([`crate::station_owner_navigation`]).
 pub fn station_status_reply(
     status: &Status,
     release: &ReleaseCheck,
@@ -104,6 +104,15 @@ pub fn station_status_reply(
         )]],
         _ => Vec::new(),
     };
+    // The status is the owner's, as Settings are: the way there, or back when it came from there.
+    let mut inline = update.clone();
+    inline.push(vec![InlineKeyboardButton::callback(
+        format!("\u{2b05}\u{fe0f} {}", t!("telegram.button_settings")),
+        moon_core::telegram::menu_action::MenuAction::Settings(
+            moon_core::telegram::menu_action::SettingsAction::Root,
+        )
+        .callback(),
+    )]);
     let html = facts.html(release_line.as_deref());
     if !crate::report::rich_message_fits(&html) {
         // Not expected with a bounded file list; plain text still answers the press.
@@ -114,7 +123,7 @@ pub fn station_status_reply(
         }
         let keyboard = match update.is_empty() {
             true => navigation,
-            false => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(update)),
+            false => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(inline)),
         };
         return Response::Text {
             text,
@@ -123,7 +132,7 @@ pub fn station_status_reply(
     }
     Response::Rich {
         html,
-        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(update)),
+        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(inline)),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
             navigation,

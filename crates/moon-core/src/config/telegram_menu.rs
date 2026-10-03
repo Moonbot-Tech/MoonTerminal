@@ -82,7 +82,7 @@ impl Serialize for MenuItem {
 /// Which level of the menu a row list is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MenuLevel {
-    /// The persistent reply keyboard under the chat.
+    /// The reply keyboard under the chat.
     Keyboard,
     /// The Report section's inline menu.
     Report,

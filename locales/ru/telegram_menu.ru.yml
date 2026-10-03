@@ -56,3 +56,4 @@ telegram.settings.mini_app_station: "Mini App станции включаетс�
 telegram.settings.not_saved: "Настройку не удалось сохранить."
 telegram.settings.on: "вкл"
 telegram.settings.off: "выкл"
+telegram.server.applying: "Применяется на сервере…"

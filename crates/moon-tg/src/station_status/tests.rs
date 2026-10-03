@@ -196,7 +196,15 @@ fn the_chat_status_is_escaped_and_bounded() {
     let ReplyMarkup::Inline(markup) = keyboard else {
         panic!("rich messages carry an inline keyboard");
     };
-    assert!(markup.inline_keyboard.is_empty());
+    assert_eq!(
+        markup.inline_keyboard.len(),
+        1,
+        "only the way back to Settings"
+    );
+    assert_eq!(
+        markup.inline_keyboard[0][0].callback_data.as_deref(),
+        Some("m:s")
+    );
 }
 
 /// The chat's "Update" button comes only with a newer release, carrying the callback the bot
@@ -258,8 +266,10 @@ fn the_update_button_comes_only_with_a_newer_release() {
         };
         assert!(html.ends_with(tail), "{html}");
         assert!(
-            matches!(keyboard, ReplyMarkup::Inline(ref markup) if markup.inline_keyboard.is_empty()),
-            "{check:?} brings no Update button"
+            matches!(keyboard, ReplyMarkup::Inline(ref markup)
+                if markup.inline_keyboard.len() == 1
+                    && markup.inline_keyboard[0][0].callback_data.as_deref() == Some("m:s")),
+            "{check:?} brings no Update button, only the way back to Settings"
         );
     }
 }

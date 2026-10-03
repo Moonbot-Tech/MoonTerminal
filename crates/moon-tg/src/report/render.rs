@@ -68,7 +68,7 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
-/// `host` words delivery failures; `navigation` is the chat's persistent keyboard.
+/// `host` words delivery failures; `navigation` is the chat's reply keyboard.
 pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Response {
     let html = report_html(page);
     if !rich_message_fits(&html) {
@@ -217,11 +217,11 @@ pub(super) fn report_html(page: &Page) -> String {
     html
 }
 
-/// Help is disposable rich content; a separate permanent message owns persistent navigation.
+/// Help is disposable rich content; a separate message owns the reply keyboard.
 ///
 /// `host` picks the lines that say what the bot depends on: a terminal must keep running, a
 /// station reports around the clock. `owner` controls station command help; `navigation` is the
-/// chat's persistent keyboard.
+/// chat's reply keyboard.
 pub(crate) fn help(zone: &str, host: HostKind, owner: bool, navigation: ReplyMarkup) -> Response {
     let (limits, mini) = match host {
         HostKind::Terminal => ("telegram.help_limits", "telegram.help_mini"),

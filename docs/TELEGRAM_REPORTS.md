@@ -1,7 +1,9 @@
 # Telegram chat reports
 
 Pair your private chat in Settings -> Telegram, then send `/start`. A short welcome installs a
-persistent reply keyboard with period choices and Help. The separate report opens in the bot's
+reply keyboard with period choices and Help; it can be folded away and opened again with the
+keyboard icon, and Android's Back folds it before leaving the chat. The bot also registers its
+commands, so the chat's menu button lists them whenever it is not the Mini App's. The separate report opens in the bot's
 report view (by exchange unless changed) with its inline keyboard already attached. Both messages remain editable only
 where Telegram permits it: the welcome is not reused as a report.
 
@@ -79,7 +81,7 @@ Changing saved permissions cancels pending deliveries through the previous servi
 already delivered Telegram messages are not recalled. Existing Telegram functionality remains
 reporting: assigning the owner role does not add trading or core-control commands in the chat.
 On a station-hosted bot, the owner also has a Status reply button and `/status`. Its status answer
-offers Update when a newer release contains the station binary. Status, Update and Settings are
+offers Update when a newer release contains the station binary, and a way to Settings. Status, Update and Settings are
 refused for viewers; a terminal-hosted bot cannot run either station action.
 
 Reports

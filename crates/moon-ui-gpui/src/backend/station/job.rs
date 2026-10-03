@@ -82,6 +82,9 @@ pub(crate) enum Job {
         target: Target,
         base: Access,
         access: Access,
+        /// The user's edits of the chats or the bot's menu, applied by "Apply on the server" —
+        /// not a reset of the pairing: its end is shown beside those buttons.
+        edits: bool,
     },
     /// Switch the station's Mini App on or off: `[telegram] mini_app`, then a restart — the
     /// station picks its profile at start.
@@ -357,6 +360,7 @@ fn run(
             target,
             base,
             access,
+            ..
         } => {
             let saved = station::api::set_access(&target, &base, &access)?;
             say(Progress::Text(
@@ -367,11 +371,15 @@ fn run(
                 .to_string(),
             ));
             // Changed permissions restart the bot's transport: its state once it polls again. The
-            // change is saved either way, so a bot slow to come back is a line, not a failure.
-            let state = settled(&target, bot::wait_bot(&target, say), say)?;
+            // change is saved either way, so a bot slow to come back — or a read of it that fails
+            // too — is a line, not a failure; the read after the job brings the new state.
+            let state = settled(&target, bot::wait_bot(&target, say), say);
+            if let Err(error) = &state {
+                say(Progress::Text(super::text::error(error)));
+            }
             Ok(Done::Ok {
                 transferred: false,
-                bot: Some(state),
+                bot: state.ok(),
                 bot_off: false,
             })
         }

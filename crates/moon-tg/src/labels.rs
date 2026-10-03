@@ -58,7 +58,7 @@ pub fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// The persistent reply keyboard: the bot's configured menu (`TelegramConfig::bot`) limited to
+/// The reply keyboard under the chat: the bot's configured menu (`TelegramConfig::bot`) limited to
 /// what this chat may use. Status is a station owner's only; a menu with nothing left to show
 /// keeps the Report section, so a chat is never left without a way in.
 pub(crate) fn navigation_keyboard(
@@ -84,10 +84,12 @@ pub(crate) fn navigation_keyboard(
                 .collect()
         })
         .collect();
+    // Not persistent: a chat can fold the keyboard away and open it with the keyboard icon, and
+    // Android's Back closes it and then leaves the chat instead of being swallowed by it.
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
         keyboard,
         resize_keyboard: true,
-        is_persistent: true,
+        is_persistent: false,
     })
 }
 
@@ -212,6 +214,18 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
             format!("button_help_{locale}"),
             t!("telegram.button_help", locale = locale).to_string(),
         );
+    }
+    // The command list the chat's menu button shows (`setMyCommands`): what every chat may use.
+    for (command, key) in [
+        ("today", "telegram.button_today"),
+        ("yesterday", "telegram.button_yesterday"),
+        ("month", "telegram.button_month"),
+        ("lastmonth", "telegram.button_lastmonth"),
+        ("daily", "telegram.help_daily"),
+        ("hour", "telegram.help_hour"),
+        ("help", "telegram.button_help"),
+    ] {
+        labels.insert(format!("command_{command}"), t!(key).to_string());
     }
     for key in MINI_LABEL_KEYS {
         let path = format!("telegram.{key}");

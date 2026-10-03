@@ -190,7 +190,7 @@ fn viewer_dispatch_navigation_never_offers_station_commands() {
 /// Parse rendered buttons through transport aliases rather than assuming row positions.
 fn assert_status_button(markup: moon_core::telegram::api::ReplyMarkup, expected: bool) {
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = markup else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
     let labels = super::telegram_labels(crate::HostKind::Station);
     let commands: Vec<_> = markup

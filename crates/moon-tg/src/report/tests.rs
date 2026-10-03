@@ -730,7 +730,7 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
                     panic!("expected rich response")
                 };
                 let moon_core::telegram::api::ReplyMarkup::Reply(markup) = navigation.1 else {
-                    panic!("expected persistent navigation")
+                    panic!("expected the reply keyboard")
                 };
                 assert_eq!(
                     markup.keyboard.iter().flatten().any(|button| {
@@ -967,9 +967,9 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
     assert!(html.contains(&format!("<td colspan=\"2\"><b>{name}</b>")));
 }
 
-/// Deletable Help must not own the persistent keyboard; accounting stays collapsed and escaped.
+/// Deletable Help must not own the reply keyboard; accounting stays collapsed and escaped.
 #[test]
-fn help_keeps_persistent_navigation_on_a_separate_message() {
+fn help_keeps_the_reply_keyboard_on_a_separate_message() {
     let Response::Rich {
         html,
         keyboard,

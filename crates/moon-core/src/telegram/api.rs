@@ -389,6 +389,44 @@ impl BotApi {
         self.post("getMe", &EmptyBody {}, false)
     }
 
+    /// Publish the bot's command list (`setMyCommands`), which the chat's menu button shows when
+    /// it is not the Mini App. One quiet attempt like [`Self::tidy_message`]: a failure is the
+    /// caller's to log and retry, never the bot's health; a rate limit it meets is kept for the
+    /// next request.
+    ///
+    /// Args:
+    ///     commands: `(command, description)` pairs; the command without its slash.
+    ///
+    /// Returns:
+    ///     `Ok(None)` when skipped for a pending rate limit or shutdown; Telegram's answer
+    ///     otherwise.
+    pub fn set_my_commands(
+        &mut self,
+        commands: &[(String, String)],
+    ) -> Result<Option<bool>, ApiError> {
+        if !self.running() || self.retry.pending.is_some() {
+            return Ok(None);
+        }
+        let commands: Vec<_> = commands
+            .iter()
+            .map(|(command, description)| {
+                serde_json::json!({"command": command, "description": description})
+            })
+            .collect();
+        self.post_once(
+            "setMyCommands",
+            &serde_json::json!({"commands": commands}),
+            false,
+        )
+        .map(Some)
+        .map_err(|failure| {
+            if let Some(secs) = retry_after_of(&failure.error) {
+                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+            }
+            failure.error
+        })
+    }
+
     /// Replace a private chat's menu using the same redacted, cancellable transport as replies.
     pub fn set_chat_menu_button(
         &mut self,

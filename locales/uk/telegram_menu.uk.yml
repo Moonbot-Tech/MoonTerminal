@@ -56,3 +56,4 @@ telegram.settings.mini_app_station: "Mini App станції вмикаєтьс�
 telegram.settings.not_saved: "Налаштування не вдалося зберегти."
 telegram.settings.on: "увімк"
 telegram.settings.off: "вимк"
+telegram.server.applying: "Застосовується на сервері…"

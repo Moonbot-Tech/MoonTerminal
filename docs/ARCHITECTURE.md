@@ -825,7 +825,7 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   inline launcher remains available and uses the current `MiniAppStatus::Tunneling` URL.
   Pairing reset retains cleanup-only chat IDs across same-token service restarts for the lifetime
   of the desktop process; token changes discard them. Those IDs never grant app authorization.
-- **Bot navigation.** Pairing and `/help` install the persistent reply keyboard; `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
+- **Bot navigation.** Pairing and `/help` install the reply keyboard (foldable, not persistent); `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
   Reply buttons own global period selection and Help. Inline report buttons own exchange
   drill-down, core/day views, back and paging; periods are not duplicated. A repeated reply-keyboard
   period request fetches fresh data. The complete-scope Total row follows the main table rows;

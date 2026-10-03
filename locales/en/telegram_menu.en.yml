@@ -56,3 +56,4 @@ telegram.settings.mini_app_station: "The station's Mini App is switched in the t
 telegram.settings.not_saved: "The setting could not be saved."
 telegram.settings.on: "on"
 telegram.settings.off: "off"
+telegram.server.applying: "Applying on the server…"

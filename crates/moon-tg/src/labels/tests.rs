@@ -14,7 +14,7 @@ fn station_non_owner_keyboard_matches_the_terminal() {
         let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
             super::navigation_keyboard(host, owner, &moon_core::config::TelegramConfig::default())
         else {
-            panic!("expected persistent keyboard")
+            panic!("expected a reply keyboard")
         };
         markup
             .keyboard
@@ -32,14 +32,14 @@ fn station_non_owner_keyboard_matches_the_terminal() {
 /// The reply keyboard keeps its rows: short period labels with Help, then the two month labels;
 /// the owner's has Settings below them.
 #[test]
-fn persistent_keyboard_keeps_its_rows() {
+fn the_keyboard_keeps_its_rows() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
         crate::HostKind::Terminal,
         true,
         &moon_core::config::TelegramConfig::default(),
     ) else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
     assert_eq!(
         markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -68,16 +68,17 @@ fn persistent_keyboard_keeps_its_rows() {
 
 /// Every visible emoji button must resolve through exact localized aliases without guessing text.
 #[test]
-fn persistent_navigation_buttons_have_recognized_commands() {
+fn navigation_buttons_have_recognized_commands() {
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
         crate::HostKind::Terminal,
         true,
         &moon_core::config::TelegramConfig::default(),
     ) else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
-    assert!(markup.is_persistent);
+    // Foldable: Android's Back must not be swallowed by a keyboard that cannot hide.
+    assert!(!markup.is_persistent);
     for row in markup.keyboard {
         for button in row {
             assert_ne!(
@@ -100,7 +101,7 @@ fn only_the_station_keyboard_has_its_status() {
         true,
         &moon_core::config::TelegramConfig::default(),
     ) else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
     assert_eq!(
         markup.keyboard.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -178,7 +179,7 @@ fn keyboard_texts(
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
         super::navigation_keyboard(host, owner, telegram)
     else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
     markup
         .keyboard
@@ -299,4 +300,30 @@ fn full_menu(
         report: BotMenu::default().report,
     }
     .normalized()
+}
+
+/// The command list has a description for every command every chat may use, on both hosts, and
+/// nothing of the owner's (Settings, Status) that a viewer would only be refused.
+#[test]
+fn every_listed_command_has_a_description() {
+    for host in [crate::HostKind::Terminal, crate::HostKind::Station] {
+        let labels = super::telegram_labels(host);
+        for command in [
+            "today",
+            "yesterday",
+            "month",
+            "lastmonth",
+            "daily",
+            "hour",
+            "help",
+        ] {
+            let key = format!("command_{command}");
+            assert!(
+                labels.get(&key).is_some_and(|text| !text.is_empty()),
+                "{key}"
+            );
+        }
+        assert!(!labels.contains_key("command_status"));
+        assert!(!labels.contains_key("command_settings"));
+    }
 }

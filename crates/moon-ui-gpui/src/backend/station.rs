@@ -101,6 +101,10 @@ pub(crate) struct StationJobs {
     pending_cores: bool,
     /// The last user job said nothing about the bot: its state is read again after it.
     pending_refresh: bool,
+    /// The running job is an "Apply on the server" of the chats and the bot's menu.
+    pub(crate) applying: bool,
+    /// How the last "Apply on the server" ended, shown beside its buttons; cleared by a revert.
+    pub(crate) applied: Option<Result<String, String>>,
     /// The zone the last zone push carried: after it ends the zone is pushed again only when the
     /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
     zone_pushed: Option<String>,
@@ -186,6 +190,8 @@ impl StationJobs {
         st.pending_cores = false;
         st.pending_refresh = false;
         st.zone_pushed = None;
+        st.applying = false;
+        st.applied = None;
         st.waiting = None;
         st.lines.clear();
         st.status = None;
@@ -394,8 +400,13 @@ impl Backend {
             self.station.pending = pending;
             self.telegram.suspend();
         }
+        let applying = matches!(job, job::Job::Access { edits: true, .. });
         let st = &mut self.station;
         st.running = true;
+        st.applying = applying;
+        if applying {
+            st.applied = None;
+        }
         st.kind = kind;
         st.handing_over = hand_over;
         match kind {
@@ -627,6 +638,14 @@ impl Backend {
                     reason
                 }));
             }
+        }
+        // An "Apply on the server" keeps its own end beside its buttons, and in the log.
+        if std::mem::take(&mut self.station.applying) {
+            match &self.station.outcome {
+                Some(Err(reason)) => log::warn!("station: apply on the server failed: {reason}"),
+                _ => log::info!("station: applied on the server"),
+            }
+            self.station.applied = self.station.outcome.clone();
         }
         // A job that ended without the bot's state may have changed it: read it again.
         self.station.pending_refresh |= !said_bot;

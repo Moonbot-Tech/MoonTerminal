@@ -56,3 +56,4 @@ telegram.settings.mini_app_station: "La Mini App de la estación se activa en lo
 telegram.settings.not_saved: "No se pudo guardar el ajuste."
 telegram.settings.on: "sí"
 telegram.settings.off: "no"
+telegram.server.applying: "Aplicando en el servidor…"

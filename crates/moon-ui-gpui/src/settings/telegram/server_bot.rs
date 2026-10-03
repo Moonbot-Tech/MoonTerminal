@@ -737,6 +737,7 @@ impl SettingsView {
                                                 target,
                                                 base,
                                                 access: Access::default(),
+                                                edits: false,
                                             }),
                                             cx,
                                         );
@@ -847,7 +848,16 @@ impl SettingsView {
     /// "Apply on the server" and "Revert" for the station's draft — chats and bot menu alike;
     /// shown under each box that edits it, `id` keeping each pair's elements apart.
     pub(super) fn server_access_actions(&self, id: &str, cx: &Context<Self>) -> AnyElement {
-        let busy = self.backend.read(cx).station.busy();
+        let station = &self.backend.read(cx).station;
+        let busy = station.busy();
+        let p = MoonPalette::active(cx);
+        // How the last "Apply on the server" came out, here beside its buttons.
+        let outcome = match (&station.applied, station.applying) {
+            (_, true) => Some((t!("telegram.server.applying").to_string(), p.text_muted)),
+            (Some(Ok(text)), false) => Some((text.clone(), p.text_muted)),
+            (Some(Err(reason)), false) => Some((reason.clone(), p.red_text)),
+            (None, false) => None,
+        };
         let ed = &self.telegram.server;
         let edited = access_edited(ed.access_draft.as_ref(), ed.access_base.as_ref());
         v_flex()
@@ -873,6 +883,7 @@ impl SettingsView {
                                             target,
                                             base,
                                             access,
+                                            edits: true,
                                         }),
                                         cx,
                                     );
@@ -891,11 +902,19 @@ impl SettingsView {
                                 ed.access_draft = ed.access_seen.as_ref().map(draft_of);
                                 ed.access_base = ed.access_seen.clone();
                                 ed.chats.close();
+                                this.backend.update(cx, |b, bcx| {
+                                    b.station.applied = None;
+                                    b.station.revision = b.station.revision.wrapping_add(1);
+                                    bcx.notify();
+                                });
                                 cx.notify();
                             }))
                             .render(),
                     ),
             )
+            .when_some(outcome, |s, (text, color)| {
+                s.child(div().text_color(rgba_from(color, 1.0)).child(text))
+            })
             .into_any_element()
     }
 
