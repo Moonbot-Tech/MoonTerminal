@@ -150,3 +150,6 @@ telegram.control.bad_coin: "No parece una moneda: solo letras, dígitos, «_», 
 telegram.control.coin_banned: "%{coin} está en la lista negra del núcleo."
 telegram.control.coin_lifted: "%{coin} salió de la lista negra del núcleo."
 telegram.control.coin_not_listed: "%{coin} no está en la lista negra del núcleo."
+telegram.control.light_station: "La estación funciona con el perfil ligero: no tiene órdenes, estrategias ni estado de trading. Muestre Control en el menú del bot y reinicie la estación."
+telegram.menu_editor.station_control_note: "Control en una estación la pasa al perfil completo (órdenes, estrategias, estado de trading: más tráfico y CPU). Surte efecto tras reiniciar la estación."
+telegram.control.help: "Controlar los núcleos: trading, posiciones, estrategias, listas negras"

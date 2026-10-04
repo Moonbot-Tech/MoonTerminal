@@ -87,8 +87,19 @@ cores captures that list: cores added later are not automatically shared. Press 
 roles, assignments or an individual unpairing. Ownership transfer requires confirmation and leaves
 the previous owner as a viewer with no assigned cores. Reset pairing revokes every chat and role.
 Changing saved permissions cancels pending deliveries through the previous service generation;
-already delivered Telegram messages are not recalled. Existing Telegram functionality remains
-reporting: assigning the owner role does not add trading or core-control commands in the chat.
+already delivered Telegram messages are not recalled. Viewers only read; the owner can also
+command the cores from the chat (Control, below).
+
+The owner's Control button (and `/control`) — hidden until shown in the bot menu — opens the cores
+a page at a time with "All cores" on top. A core's card shows its link, trading, auto detect, open
+positions and its own blacklist, and starts or stops trading, switches auto detect, panic-sells
+every open position, cancels all orders, reconnects, and puts a typed coin on or off the core's
+blacklist (the next message is the coin, for two minutes). From there the core's open positions
+each panic-sell, go on the core's or the strategy's blacklist, or have their market banned for
+1 h, 4 h, 24 h or 3 days; its strategies switch on and off. Stopping or starting all cores, panic
+sell and cancel all ask for confirmation first. Commands go only to connected cores, through the
+same calls as the Mini App's. On a station, showing Control switches it to the full feed profile
+(orders, strategies, trading state; more traffic and CPU) from its next start.
 On a station-hosted bot, the owner also has a Status reply button and `/status`. Its status answer
 offers Update when a newer release contains the station binary, and a way to Settings. Status, Update and Settings are
 refused for viewers; a terminal-hosted bot cannot run either station action.

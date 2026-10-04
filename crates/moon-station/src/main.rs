@@ -118,11 +118,15 @@ fn main() -> anyhow::Result<()> {
     let station = cores::load(&config_path)?;
     // The station's window around a trade (`[tape]`), before the recorder builds its first one.
     apply_tape(&station.tape);
-    let profile = station.profile();
+    // The bot's menu, as the terminal last delivered it, says whether Control is shown: that
+    // needs the account's orders, strategies and run state, as the Mini App does.
+    let profile = station.profile(tg::control_shown(&data_root));
     let telegram = station.telegram;
     let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
     let mut cfg = station.config;
+    // `load` gave the cores the feed of `station.toml` alone; the menu may ask for more.
+    cores::set_feed(&mut cfg, profile);
     log_cores(&cfg);
     log::info!("profile: {profile:?}");
 

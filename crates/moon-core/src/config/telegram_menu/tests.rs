@@ -21,8 +21,8 @@ name = "viewer"
 core_uids = [3]
 "#;
 
-/// A configuration saved before the menu existed loads with the bot as it was, plus what came
-/// later shown by default: the owner's Control beside Settings.
+/// A configuration saved before the menu existed loads with the bot as it was: the owner's
+/// Control, which came later, stays hidden until shown.
 #[test]
 fn an_old_servers_file_loads_with_the_old_menu() {
     let file: ServersFile = toml::from_str(OLD_SERVERS_TOML).unwrap();
@@ -37,9 +37,10 @@ fn an_old_servers_file_loads_with_the_old_menu() {
         vec![
             vec![Today, Yesterday, Help],
             vec![Month, LastMonth],
-            vec![Status, Settings, Control],
+            vec![Status, Settings],
         ]
     );
+    assert!(!file.telegram.bot.menu.shows(Control));
 }
 
 /// A configured bot survives the TOML round trip `servers.enc` takes.

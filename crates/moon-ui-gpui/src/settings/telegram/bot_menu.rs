@@ -346,7 +346,13 @@ impl SettingsView {
                     .child(t!("telegram.menu_editor.delivery").to_string()),
             )
             .when(side == ChatsOf::Station, |section| {
-                section.child(self.server_access_actions("server-menu", cx))
+                section
+                    .child(
+                        div()
+                            .text_color(muted)
+                            .child(t!("telegram.menu_editor.station_control_note").to_string()),
+                    )
+                    .child(self.server_access_actions("server-menu", cx))
             })
             .into_any_element()
     }

@@ -143,11 +143,14 @@ pub struct Station {
 }
 
 impl Station {
-    /// The profile this configuration asks for: the account one with the Mini App open — and a
-    /// bot to open it, since without its token nobody reads that account.
-    pub fn profile(&self) -> Profile {
+    /// The profile this configuration asks for: the account one with the Mini App open, or with
+    /// the bot's Control section shown (`control`) — and a bot to read it, since without its
+    /// token nobody reads that account. Chosen once, at the start.
+    pub fn profile(&self, control: bool) -> Profile {
         match &self.telegram {
-            Some(telegram) if telegram.mini_app && telegram.token.is_some() => Profile::Account,
+            Some(telegram) if (telegram.mini_app || control) && telegram.token.is_some() => {
+                Profile::Account
+            }
             _ => Profile::Reports,
         }
     }
@@ -276,7 +279,8 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         auto_update: file.update.auto.unwrap_or(true),
         skipped_cores,
     };
-    let profile = station.profile();
+    // What `station.toml` alone asks for; the station's start adds the bot's menu (`profile`).
+    let profile = station.profile(false);
     set_feed(&mut station.config, profile);
     Ok(station)
 }

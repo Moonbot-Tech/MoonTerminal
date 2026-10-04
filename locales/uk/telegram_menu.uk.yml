@@ -150,3 +150,6 @@ telegram.control.bad_coin: "Це не схоже на монету: лише л�
 telegram.control.coin_banned: "%{coin} додано до ЧС ядра."
 telegram.control.coin_lifted: "%{coin} прибрано з ЧС ядра."
 telegram.control.coin_not_listed: "%{coin} немає в ЧС ядра."
+telegram.control.light_station: "Станція працює в легкому профілі: ордерів, стратегій і стану торгівлі в неї немає. Покажіть «Керування» в меню бота й перезапустіть станцію."
+telegram.menu_editor.station_control_note: "«Керування» на станції переводить її в повний профіль (ордери, стратегії, стан торгівлі — дорожче за трафіком і CPU). Діє після перезапуску станції."
+telegram.control.help: "Керування ядрами: торгівля, позиції, стратегії, ЧС"

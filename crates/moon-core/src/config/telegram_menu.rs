@@ -31,6 +31,8 @@ pub enum MenuItem {
     /// The bot's own settings, under one message; the owner's only.
     Settings,
     /// Commands to the cores — run switches, orders, strategies, blacklists; the owner's only.
+    /// Hidden until the owner shows it: trading from the chat is a deliberate choice, and on a
+    /// station it costs the full feed profile.
     Control,
 }
 
@@ -130,7 +132,7 @@ impl Default for BotMenu {
             keyboard: vec![
                 vec![E::shown(Today), E::shown(Yesterday), E::shown(Help)],
                 vec![E::shown(Month), E::shown(LastMonth)],
-                vec![E::shown(Status), E::shown(Settings), E::shown(Control)],
+                vec![E::shown(Status), E::shown(Settings), E::hidden(Control)],
                 vec![E::hidden(Report), E::hidden(Daily), E::hidden(Custom)],
             ],
         }
@@ -138,6 +140,14 @@ impl Default for BotMenu {
 }
 
 impl BotMenu {
+    /// Whether the keyboard shows `item`.
+    pub fn shows(&self, item: MenuItem) -> bool {
+        self.keyboard
+            .iter()
+            .flatten()
+            .any(|entry| entry.item == item && entry.show)
+    }
+
     /// The shown keyboard items that `keep` admits, row by row; rows left empty are dropped.
     ///
     /// Args:

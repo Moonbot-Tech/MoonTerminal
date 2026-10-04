@@ -379,6 +379,10 @@ fn cores(host: &dyn TgHost, page: usize, said: Option<String>) -> Rendered {
     } else {
         lines.push(t!("telegram.control.pick").to_string());
     }
+    // A light station keeps no orders, strategies or run state: say why the cards are empty.
+    if moon_core::feed::station::profile() == Some(moon_core::feed::station::Profile::Reports) {
+        lines.push(t!("telegram.control.light_station").to_string());
+    }
     for (core, core_name) in all.iter().skip(page * PAGE).take(PAGE) {
         let state = host.session().core_run_state(*core);
         rows.push(vec![button(

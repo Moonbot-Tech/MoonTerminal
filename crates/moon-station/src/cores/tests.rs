@@ -181,12 +181,26 @@ fn the_mini_app_turns_the_account_feed_on() {
     let core = "[[core]]\nuid = 3\nname = \"A\"\n";
 
     let light = from_station_file(core, Some(&dir)).unwrap();
-    assert_eq!(light.profile(), Profile::Reports);
+    assert_eq!(light.profile(false), Profile::Reports);
     assert!(!light.config.servers[0].feed.orders);
 
     let reports_bot = format!("{core}[telegram]\nzone = \"Europe/Moscow\"\nlanguage = \"ru\"\n");
     let bot = from_station_file(&reports_bot, Some(&dir)).unwrap();
-    assert_eq!(bot.profile(), Profile::Reports, "a bot alone reads reports");
+    assert_eq!(
+        bot.profile(false),
+        Profile::Reports,
+        "a bot alone reads reports"
+    );
+    assert_eq!(
+        bot.profile(true),
+        Profile::Account,
+        "the bot's Control section reads the account, as the Mini App does"
+    );
+    assert_eq!(
+        light.profile(true),
+        Profile::Reports,
+        "no bot, nobody to command from"
+    );
     let telegram = bot.telegram.as_ref().unwrap();
     assert_eq!(telegram.token.as_ref().map(Secret::expose), Some("123:abc"));
     assert_eq!(telegram.zone, chrono_tz::Europe::Moscow);
@@ -194,7 +208,7 @@ fn the_mini_app_turns_the_account_feed_on() {
 
     let mini =
         from_station_file(&format!("{core}[telegram]\nmini_app = true\n"), Some(&dir)).unwrap();
-    assert_eq!(mini.profile(), Profile::Account);
+    assert_eq!(mini.profile(false), Profile::Account);
     let feed = mini.config.servers[0].feed;
     assert!(feed.orders && feed.balance && feed.strategies && feed.reports);
     assert!(
@@ -222,7 +236,7 @@ fn a_broken_telegram_section_is_refused() {
     assert!(station.telegram.as_ref().unwrap().token.is_none());
     assert_eq!(station.config.servers.len(), 1);
     assert_eq!(
-        station.profile(),
+        station.profile(true),
         Profile::Reports,
         "no bot, no Mini App: the account nobody reads is not fetched"
     );

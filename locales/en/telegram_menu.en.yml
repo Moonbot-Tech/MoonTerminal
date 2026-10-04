@@ -150,3 +150,6 @@ telegram.control.bad_coin: "That does not look like a coin: letters, digits, \"_
 telegram.control.coin_banned: "%{coin} is on the core blacklist."
 telegram.control.coin_lifted: "%{coin} is off the core blacklist."
 telegram.control.coin_not_listed: "%{coin} is not on the core blacklist."
+telegram.control.light_station: "The station runs its light profile: it keeps no orders, strategies or trading state. Show Control in the bot menu and restart the station."
+telegram.menu_editor.station_control_note: "Control on a station switches it to the full profile (orders, strategies, trading state — more traffic and CPU). It takes effect after the station restarts."
+telegram.control.help: "Command the cores: trading, positions, strategies, blacklists"

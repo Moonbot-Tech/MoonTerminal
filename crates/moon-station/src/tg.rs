@@ -608,6 +608,19 @@ fn plan_access(
 }
 
 /// The saved pairing; none yet is an empty one.
+/// Whether the bot's saved menu shows the Control section — only a menu the terminal delivered;
+/// a station that never got one runs as it did. An unreadable file says no: the bot will not
+/// start on it either.
+pub fn control_shown(data_root: &Path) -> bool {
+    load_pairing(&data_root.join(PAIRING_FILE))
+        .ok()
+        .and_then(|pairing| pairing.bot)
+        .is_some_and(|bot| {
+            bot.menu
+                .shows(moon_core::config::telegram_menu::MenuItem::Control)
+        })
+}
+
 fn load_pairing(path: &Path) -> anyhow::Result<Access> {
     match std::fs::read_to_string(path) {
         Ok(text) => {
