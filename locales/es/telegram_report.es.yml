@@ -103,8 +103,6 @@ telegram.report_help: "Elige un período. Cada informe permite cambiar bot/día.
 
 telegram.report_help_station: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\n/status — estado de la estación\nFechas inclusive, máximo 366 días; zona de los ajustes de la estación. Los informes se actualizan las 24 horas."
 
-telegram.notify_profit: "Beneficio"
-
 telegram.notify_manual: "Manual"
 
 telegram.notify_unvalued: "Sin valoración"
@@ -118,13 +116,3 @@ telegram.notify_events_more: "…y %{n} más"
 telegram.notify_down: "sin conexión desde"
 
 telegram.notify_back: "conexión restablecida"
-
-telegram.notify_daily_title: "Resumen del día"
-
-telegram.notify_trades: "Operaciones"
-
-telegram.notify_unvalued_trades: "Sin valoración"
-
-telegram.notify_best: "Mejor"
-
-telegram.notify_worst: "Peor"

@@ -89,7 +89,8 @@ fn presets_count_back_from_today() {
 }
 
 /// Every Settings screen and switch survives its callback, inside Telegram's 64 bytes; a button
-/// of the retired Report-section level, or a value out of range, is refused.
+/// of the retired Report-section level or of the removed daily summary, or a value out of range,
+/// is refused.
 #[test]
 fn settings_actions_round_trip() {
     use crate::config::telegram_menu::{MenuItem, ReportBasis, ReportView};
@@ -105,10 +106,6 @@ fn settings_actions_round_trip() {
         SettingsAction::Down(false),
         SettingsAction::DownAfter(1),
         SettingsAction::DownAfter(1440),
-        SettingsAction::Daily(true),
-        SettingsAction::DailyHours,
-        SettingsAction::DailyHour(0),
-        SettingsAction::DailyHour(23),
         SettingsAction::Opened(true),
         SettingsAction::Opened(false),
         SettingsAction::Detects(true),
@@ -149,7 +146,9 @@ fn settings_actions_round_trip() {
         "m:s:v:weekly",
         "m:s:n:d:0",
         "m:s:n:d:1441",
-        "m:s:n:h:24",
+        "m:s:n:y:1",
+        "m:s:n:h",
+        "m:s:n:h:7",
         "m:s:n:a:w:1",
         "m:s:n:a:h:2",
         "m:s:zzz",

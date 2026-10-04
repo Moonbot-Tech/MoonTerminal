@@ -49,9 +49,8 @@ pub(super) fn run(
         Screen::Buttons => buttons(&host.config().telegram.bot, host.kind()),
         Screen::View => view(host.config().telegram.bot.report_view),
         Screen::Basis => basis(host.config().telegram.bot.period_basis),
-        Screen::Notify | Screen::DailyHours => match crate::mini_app::chat_notify(host, chat) {
-            Some(notify) if screen == Screen::Notify => notify_screen(&notify, host.report_zone()),
-            Some(notify) => daily_hours(notify.daily.hour),
+        Screen::Notify => match crate::mini_app::chat_notify(host, chat) {
+            Some(notify) => notify_screen(&notify),
             None => {
                 crate::labels::answer(reply, t!("telegram.mini_settings_err_save").to_string());
                 return;
@@ -83,7 +82,6 @@ enum Screen {
     View,
     Basis,
     Notify,
-    DailyHours,
     /// The station's status, answered by the station.
     Status,
 }
@@ -155,10 +153,6 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
             notify(host, &|n| n.down.after_minutes = minutes)?;
             Screen::Notify
         }
-        A::Daily(on) => {
-            notify(host, &|n| n.daily.on = on)?;
-            Screen::Notify
-        }
         A::Auto(kind, on) => {
             notify(host, &|n| n.reports.set(kind, on))?;
             Screen::Notify
@@ -171,12 +165,7 @@ fn apply(host: &mut dyn TgHost, chat: i64, action: SettingsAction) -> Result<Scr
             notify(host, &|n| n.events.detects = on)?;
             Screen::Notify
         }
-        A::DailyHours => Screen::DailyHours,
         A::StationStatus => return Ok(Screen::Status),
-        A::DailyHour(hour) => {
-            notify(host, &|n| n.daily.hour = hour)?;
-            Screen::Notify
-        }
     })
 }
 
@@ -379,9 +368,8 @@ fn mark(current: bool) -> &'static str {
     if current { "\u{1f518}" } else { "\u{26aa}" }
 }
 
-/// This chat's notifications: the switches, the down delay, the summary's hour, the automatic
-/// reports.
-fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
+/// This chat's notifications: the switches, the down delay, the automatic reports.
+fn notify_screen(notify: &NotifySettings) -> Rendered {
     let trades = &notify.trades;
     let mut filters = Vec::new();
     if matches!(trades.cores, CoreScope::Only(_)) {
@@ -417,17 +405,6 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
                     minutes = notify.down.after_minutes
                 )
                 .to_string(),
-                false => on_off(false),
-            }
-        ),
-        format!(
-            "{}: {}",
-            t!("telegram.mini_settings_daily"),
-            match notify.daily.on {
-                true => format!(
-                    "{:02}:{:02} ({})",
-                    notify.daily.hour, notify.daily.minute, zone
-                ),
                 false => on_off(false),
             }
         ),
@@ -490,23 +467,6 @@ fn notify_screen(notify: &NotifySettings, zone: chrono_tz::Tz) -> Rendered {
                 )
             })
             .collect(),
-        vec![
-            button(
-                format!(
-                    "{} {}",
-                    tick(notify.daily.on),
-                    t!("telegram.mini_settings_daily")
-                ),
-                SettingsAction::Daily(!notify.daily.on),
-            ),
-            button(
-                format!(
-                    "\u{1f552} {:02}:{:02}",
-                    notify.daily.hour, notify.daily.minute
-                ),
-                SettingsAction::DailyHours,
-            ),
-        ],
     ];
     rows.push(
         AutoReport::ALL
@@ -554,32 +514,6 @@ fn auto_title(kind: AutoReport) -> String {
         AutoReport::Month => t!("telegram.auto.month"),
     }
     .to_string()
-}
-
-/// The hours of the day for the summary, the current one marked; minutes stay as they are.
-fn daily_hours(current: u8) -> Rendered {
-    let hours: Vec<u8> = (0..24).collect();
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = hours
-        .chunks(6)
-        .map(|chunk| {
-            chunk
-                .iter()
-                .map(|&hour| {
-                    let text = match hour == current {
-                        true => format!("\u{2022}{hour:02}"),
-                        false => format!("{hour:02}"),
-                    };
-                    button(text, SettingsAction::DailyHour(hour))
-                })
-                .collect()
-        })
-        .collect();
-    rows.push(back(SettingsAction::Notify));
-    (
-        t!("telegram.mini_settings_daily").to_string(),
-        vec![t!("telegram.settings.daily_hours_hint").to_string()],
-        rows,
-    )
 }
 
 #[cfg(test)]

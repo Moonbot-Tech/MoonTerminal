@@ -81,3 +81,45 @@ fn a_coin_answer_is_one_token() {
     assert!(!valid_coin("ADA BTC"));
     assert!(!valid_coin(&"A".repeat(31)));
 }
+
+/// A command is redrawn as the screen it answered with; a press that only shows a screen is not
+/// redrawn at all.
+#[test]
+fn a_command_is_redrawn_as_the_screen_it_answered_with() {
+    use super::redrawn_as;
+    let run = |target| ControlAction::Run {
+        target,
+        switch: ControlSwitch::AutoDetect,
+        on: true,
+        confirmed: false,
+    };
+    assert_eq!(
+        redrawn_as(run(ControlTarget::Core(4))),
+        Some(ControlAction::Core(4))
+    );
+    assert_eq!(
+        redrawn_as(run(ControlTarget::All)),
+        Some(ControlAction::All)
+    );
+    assert_eq!(
+        redrawn_as(ControlAction::StrategyToggle {
+            core: 4,
+            id: 9,
+            on: false,
+            page: 2
+        }),
+        Some(ControlAction::Strategies { core: 4, page: 2 })
+    );
+    assert_eq!(
+        redrawn_as(ControlAction::CancelAll {
+            core: 4,
+            confirmed: true
+        }),
+        Some(ControlAction::Core(4))
+    );
+    assert_eq!(redrawn_as(ControlAction::Core(4)), None);
+    assert_eq!(
+        redrawn_as(ControlAction::Strategies { core: 4, page: 0 }),
+        None
+    );
+}

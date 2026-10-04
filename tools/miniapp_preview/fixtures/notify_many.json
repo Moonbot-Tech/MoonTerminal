@@ -16,11 +16,6 @@
     "down": {
       "on": false,
       "after_minutes": 5
-    },
-    "daily": {
-      "on": false,
-      "hour": 21,
-      "minute": 0
     }
   },
   "cores": [
@@ -225,7 +220,6 @@
       "exchange": "Bybit"
     }
   ],
-  "zone": "UTC",
   "revision": 0,
   "error": null,
   "fault": null

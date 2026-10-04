@@ -95,6 +95,7 @@ pub fn tick(host: &mut dyn TgHost) {
     if host.state().service.is_some() {
         drain_service(host);
     }
+    crate::menu::control_tick(host);
     let now_utc = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
     crate::notify::tick::run(host, now_utc);
 }
@@ -129,8 +130,9 @@ fn drain_service(host: &mut dyn TgHost) {
             Work::Command {
                 chat_id,
                 command,
+                message,
                 reply,
-            } => run_command(host, chat_id, command, reply),
+            } => run_command(host, chat_id, command, message, reply),
             Work::MiniApp(request) => mini_request(host, request),
         }
     }
@@ -186,6 +188,7 @@ fn run_command(
     host: &mut dyn TgHost,
     chat_id: i64,
     command: ParsedCommand,
+    message: Option<i64>,
     reply: SyncSender<Response>,
 ) {
     if matches!(command, ParsedCommand::Pair { .. }) {
@@ -218,7 +221,9 @@ fn run_command(
             report::telegram_report(host, chat_id, ReportRequest::preset(Period::Today), reply)
         }
         ParsedCommand::Report(request) => report::telegram_report(host, chat_id, request, reply),
-        ParsedCommand::Menu(action) => crate::menu::run(host, chat_id, action, owner, reply),
+        ParsedCommand::Menu(action) => {
+            crate::menu::run(host, chat_id, action, owner, message, reply)
+        }
         ParsedCommand::Text(text) => {
             if !crate::menu::answer_text(host, chat_id, &text, &reply) {
                 cannot_run(host, chat_id, &reply);

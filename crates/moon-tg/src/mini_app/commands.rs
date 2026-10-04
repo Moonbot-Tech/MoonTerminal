@@ -19,9 +19,11 @@ fn miss(refusal: Refusal) -> CommandResultDto {
     command_miss(match refusal {
         Refusal::NotFound => CommandErrorDto::NotFound,
         Refusal::Offline => CommandErrorDto::Offline,
-        Refusal::Unavailable | Refusal::NotOwner | Refusal::NotReady | Refusal::NoList => {
-            CommandErrorDto::Unavailable
-        }
+        Refusal::Unavailable
+        | Refusal::NotOwner
+        | Refusal::NotReady
+        | Refusal::NoList
+        | Refusal::LightStation => CommandErrorDto::Unavailable,
     })
 }
 
@@ -164,7 +166,8 @@ fn run_switch(switch: CoreSwitchDto) -> RunSwitch {
     }
 }
 
-/// Cancel every open order of one core through the desktop's session call.
+/// Cancel the pending buy orders of one core, as the chat's Control section does
+/// ([`control::cancel_buys`]).
 ///
 /// Args:
 ///     chat_id: Paired chat that sent the command.
@@ -172,16 +175,16 @@ fn run_switch(switch: CoreSwitchDto) -> RunSwitch {
 ///
 /// Returns:
 ///     `Ok` with `NotFound` for a core that is not configured and `Offline` for one that is not
-///     connected; nothing is sent for either. A refused send is `Unavailable`. `Err` is only the
-///     owner gate.
+///     connected; nothing is sent for either. A refused send, or a light station that keeps no
+///     orders to cancel, is `Unavailable`. `Err` is only the owner gate.
 pub(super) fn mini_cancel_all(
     host: &mut dyn TgHost,
     chat_id: i64,
     core: u64,
 ) -> Result<CommandResultDto, MiniAppApiError> {
     mini_owner(host, chat_id)?;
-    Ok(match control::cancel_all(host, chat_id, core) {
-        Ok(()) => command_hit(None),
+    Ok(match control::cancel_buys(host, chat_id, core) {
+        Ok(_) => command_hit(None),
         Err(refusal) => miss(refusal),
     })
 }

@@ -21,7 +21,7 @@ use crate::labels::section_label;
 use crate::report::{MiniReport, MiniTrade};
 
 /// How long a strategy toggle stays `Pending` before it is reported as `TimedOut`.
-const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
+pub(crate) const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
 
 /// Map a stored order into the Mini App row.
 ///

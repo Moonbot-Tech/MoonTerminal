@@ -15,7 +15,7 @@ use super::store::CoreId;
 mod tests;
 
 /// Which run switch a command flips.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RunSwitch {
     /// The global strategy engine (Moonbot's own Start/Stop).
     Trading,

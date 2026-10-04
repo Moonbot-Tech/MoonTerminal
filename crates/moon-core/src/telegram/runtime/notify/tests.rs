@@ -577,3 +577,89 @@ fn acking_a_waiting_card_records_its_message() {
     store.ack(id + 9, 7, None, Some((gone, 556))).expect("ack");
     assert!(!store.file.chats[&7].ledger.cards[&3].contains_key(&45));
 }
+
+/// A redraw of a menu screen carries its buttons, and only the newest one per message waits: an
+/// older picture of the same message goes, while edits of a card, another message and another
+/// chat stay. A press on the message drops its redraw alone.
+#[test]
+fn a_redraw_keeps_only_the_newest_picture_of_its_message() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    let keyboard = || {
+        ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        })
+    };
+    let mut file = NotifyFile::default();
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "old".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_edit(&mut file, 7, 100, "card".into(), None, 1));
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        101,
+        "other message".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_redraw(
+        &mut file,
+        8,
+        100,
+        "other chat".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "new".into(),
+        keyboard(),
+        2
+    ));
+    let rows: Vec<(&str, Option<i64>, bool)> = file
+        .outbox
+        .iter()
+        .map(|row| (row.html.as_str(), row.edit, row.redraw.is_some()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("card", Some(100), false),
+            ("other message", Some(101), true),
+            ("other chat", Some(100), true),
+            ("new", Some(100), true),
+        ]
+    );
+    assert_eq!(super::drop_redraws(&mut file, 7, 100), 1);
+    let left: Vec<&str> = file.outbox.iter().map(|row| row.html.as_str()).collect();
+    assert_eq!(left, vec!["card", "other message", "other chat"]);
+}
+
+/// A redraw stays worth sending for a minute; an ordinary notification has no such limit.
+#[test]
+fn a_redraw_outlives_its_minute_and_a_notification_does_not() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    let mut file = NotifyFile::default();
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "screen".into(),
+        ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        }),
+        1_000,
+    ));
+    push_outbox(&mut file, 7, "card".into(), None, 1_000);
+    let (redraw, card) = (&file.outbox[0], &file.outbox[1]);
+    assert!(!super::redraw_outlived(redraw, 1_060));
+    assert!(super::redraw_outlived(redraw, 1_061));
+    assert!(!super::redraw_outlived(card, 100_000));
+}

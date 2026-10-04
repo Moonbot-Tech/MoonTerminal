@@ -32,6 +32,14 @@ const GLOBAL_PER_SECOND: usize = 25;
 const GLOBAL_WINDOW: Duration = Duration::from_secs(1);
 /// Idle and pace waits. Shutdown is observed at least this often.
 const WAIT_SLICE: Duration = Duration::from_millis(500);
+/// How long a queued redraw of a menu screen stays worth sending, in seconds.
+const REDRAW_TTL_SECS: u64 = 60;
+
+/// Whether `row` is a redraw queued longer ago than [`REDRAW_TTL_SECS`].
+fn redraw_outlived(row: &Pending, now_utc: u64) -> bool {
+    let queued = u64::try_from(row.created_utc).unwrap_or(0);
+    row.redraw.is_some() && now_utc.saturating_sub(queued) > REDRAW_TTL_SECS
+}
 
 /// In-memory copy of one notifications file. Every enqueue, ack, and chat edit is saved before
 /// it returns.
@@ -304,6 +312,49 @@ pub fn push_edit(
     pushed
 }
 
+/// Queue a redraw of a screen the bot already shows: the message is replaced with `html` and its
+/// buttons with `keyboard`. A redraw of the same message still queued is dropped first — only the
+/// newest picture of a screen is worth sending. The row names no core: a screen is the owner's.
+///
+/// Args:
+///     file: Document to append to.
+///     chat: Chat the message is in.
+///     message: The message to redraw.
+///     html: The screen's rich-message HTML.
+///     keyboard: The screen's buttons.
+///     now_utc: Unix seconds stored on the row.
+///
+/// Returns:
+///     `true` when the row was appended. `false` when the body was refused.
+pub fn push_redraw(
+    file: &mut NotifyFile,
+    chat: i64,
+    message: i64,
+    html: String,
+    keyboard: crate::telegram::api::ReplyMarkup,
+    now_utc: i64,
+) -> bool {
+    drop_redraws(file, chat, message);
+    let pushed = push_row(file, chat, html, None, None, now_utc);
+    if let Some(row) = file.outbox.last_mut().filter(|_| pushed) {
+        row.edit = Some(message);
+        row.redraw = Some(keyboard);
+    }
+    pushed
+}
+
+/// Drop the redraws of `message` still queued: the screen it shows was just answered by a press,
+/// and an older picture sent after that answer would put the press's screen back.
+///
+/// Returns:
+///     How many rows were removed. The file is not saved; the caller writes it.
+pub fn drop_redraws(file: &mut NotifyFile, chat: i64, message: i64) -> usize {
+    let before = file.outbox.len();
+    file.outbox
+        .retain(|row| !(row.chat == chat && row.edit == Some(message) && row.redraw.is_some()));
+    before - file.outbox.len()
+}
+
 /// Append one automatic report without saving. A kind that replaces its previous report
 /// ([`AutoReport::replaces_previous`]) also drops its report still queued for `chat`: only the
 /// newest total is worth sending.
@@ -371,6 +422,7 @@ fn push_row(
         auto,
         card: None,
         edit: None,
+        redraw: None,
     });
     true
 }
@@ -630,6 +682,27 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                     }
                     progressed = true;
                 }
+                // A menu screen's picture outlived by a backoff or a restart would cover whatever
+                // the chat shows now with an old state: it goes unsent.
+                Held::Ready(row) if redraw_outlived(&row, crate::util::time::now_unix_secs()) => {
+                    log::info!(
+                        "telegram redraw dropped for chat {}: older than {}s",
+                        item.chat,
+                        REDRAW_TTL_SECS
+                    );
+                    if !ack_saved(
+                        &store,
+                        item.id,
+                        item.chat,
+                        &mut ready_at,
+                        &mut backoff,
+                        &mut delivered,
+                        &mut stale,
+                    ) {
+                        blocked.insert(item.chat);
+                    }
+                    progressed = true;
+                }
                 Held::Ready(row) => match send(&mut api, item.chat, &row) {
                     Ok(message) => {
                         let sent = Instant::now();
@@ -814,8 +887,8 @@ fn finish_ack(
     }
 }
 
-/// Send one row: an automatic report as a rich message with its buttons, an edit as an edit of
-/// its message, anything else as HTML.
+/// Send one row: an automatic report as a rich message with its buttons, a redraw as an edit of
+/// its message with its buttons, an edit as an edit of its message, anything else as HTML.
 fn send(
     api: &mut BotApi,
     chat: i64,
@@ -823,7 +896,10 @@ fn send(
 ) -> Result<crate::telegram::api::Message, crate::telegram::api::ApiError> {
     match (&row.auto, row.edit) {
         (Some(auto), _) => api.rich_message(chat, None, &row.html, &auto.keyboard),
-        (None, Some(message)) => api.edit_html(chat, message, &row.html),
+        (None, Some(message)) => match &row.redraw {
+            Some(keyboard) => api.rich_message(chat, Some(message), &row.html, keyboard),
+            None => api.edit_html(chat, message, &row.html),
+        },
         (None, None) => api.send_html(chat, &row.html),
     }
 }

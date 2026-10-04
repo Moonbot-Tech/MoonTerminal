@@ -58,7 +58,7 @@ next message; a button already on an older keyboard keeps working within the cha
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
 a station's is switched in the terminal's Settings), set this chat's notifications — trade
-cards, core down/back with a delay, the daily summary and its hour, the automatic reports — and,
+cards, core down/back with a delay, the automatic reports — and,
 on a station, open its
 status. Each switch saves at once; button order and rows stay in the terminal's Settings, trade
 thresholds and cores in the terminal's Settings and the Mini App's Settings tab. A change made in
@@ -66,8 +66,8 @@ the chat reaches an open terminal Settings window only where that window had not
 
 Each chat's notifications can also be set in Settings -> Telegram, in the right column of the
 "Bot menu and notifications" box: pick a chat, then its trade cards (cores, minimum volume, profit
-and loss thresholds, the dollar follow-up), core down/back notices with their delay, the daily
-summary with its time, and the automatic reports. "Save notifications" saves that chat alone,
+and loss thresholds, the dollar follow-up), core down/back notices with their delay, and the
+automatic reports. "Save notifications" saves that chat alone,
 at once for a terminal-hosted bot and on the server for a station-hosted one; a change made
 meanwhile from the Mini App or the chat is refused rather than overwritten.
 
@@ -93,13 +93,16 @@ command the cores from the chat (Control, below).
 The owner's Control button (and `/control`) — hidden until shown in the bot menu — opens the cores
 a page at a time with "All cores" on top. A core's card shows its link, trading, auto detect, open
 positions and its own blacklist, and starts or stops trading, switches auto detect, panic-sells
-every open position, cancels all orders, reconnects, and puts a typed coin on or off the core's
-blacklist (the next message is the coin, for two minutes). From there the core's open positions
-each panic-sell, go on the core's or the strategy's blacklist, or have their market banned for
-1 h, 4 h, 24 h or 3 days; its strategies switch on and off. Stopping or starting all cores, panic
-sell and cancel all ask for confirmation first. Commands go only to connected cores, through the
-same calls as the Mini App's. On a station, showing Control switches it to the full feed profile
-(orders, strategies, trading state; more traffic and CPU) from its next start.
+every open position, cancels its buy orders still waiting to fill (per market, positions and their
+sells stay), reconnects, and puts a typed coin on or off the core's blacklist (the next message is
+the coin, for two minutes; the question lists the blacklist as it stands). From there the core's
+open positions each panic-sell, go on the core's or the strategy's blacklist, or have their market
+banned for 1 h, 4 h, 24 h or 3 days; its strategies switch on and off. Stopping or starting all
+cores, panic sell and cancelling buys ask for confirmation first. A command the core still has to
+confirm shows ⏳, and the bot redraws the same message once the core reports the asked state, or
+says it did not. Commands go only to connected cores, through the same calls as the Mini App's. On
+a station, showing Control switches it to the full feed profile (orders, strategies, trading state;
+more traffic and CPU) from its next start.
 On a station-hosted bot, the owner also has a Status reply button and `/status`. Its status answer
 offers Update when a newer release contains the station binary, and a way to Settings. Status, Update and Settings are
 refused for viewers; a terminal-hosted bot cannot run either station action.
@@ -164,9 +167,6 @@ rich):
   message. A core that leaves the configured set is forgotten: it does not stay announced as
   down, and no back message is sent for it. If it returns and is lost again, the delay starts
   over.
-- A daily summary at a chosen time in the display time zone, the same zone chat reports use.
-  If the bot is down at that time, it sends the summary once later on that same local day, and
-  not for an earlier day.
 - What the cores themselves would send to their own Telegram, which does not come over the
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the

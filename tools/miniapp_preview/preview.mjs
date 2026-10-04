@@ -322,21 +322,17 @@ async function assertSettingsDefault(page) {
             chips: document.querySelectorAll(".settings-chips .chip").length,
             trades: pressed('[data-settings-card="trades"] [data-settings="card-on"]'),
             down: pressed('[data-settings-card="down"] [data-settings="card-on"]'),
-            daily: pressed('[data-settings-card="daily"] [data-settings="card-on"]'),
             all: pressed('[data-settings="scope-all"]'),
             minutes: field('[data-settings="minutes"]'),
-            time: field('[data-settings="time"]'),
             saveDisabled: save ? save.disabled : null,
         };
     });
-    const time = state.time && (state.time.value === "21:00" || state.time.value === "21:00:00");
-    if (state.cards !== 3 || !state.note || !state.hint || state.chips !== 1
-        || state.trades !== "false" || state.down !== "false" || state.daily !== "false"
+    if (state.cards !== 2 || !state.note || !state.hint || state.chips !== 1
+        || state.trades !== "false" || state.down !== "false"
         || state.all !== "true"
         || !state.minutes || state.minutes.value !== "5" || !state.minutes.disabled
-        || !time || !state.time.disabled
         || state.saveDisabled !== true) {
-        throw new Error(`settings default must be three off cards: ${JSON.stringify(state)}`);
+        throw new Error(`settings default must be two off cards: ${JSON.stringify(state)}`);
     }
     await assertSettingsFit(page);
 }

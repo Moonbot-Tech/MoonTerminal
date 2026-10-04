@@ -167,6 +167,12 @@ pub(super) fn run(
                     ParsedCommand::StationStatus
                         | ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
                 );
+            // The message under which the pressed button sits; a typed command has none.
+            let pressed = update
+                .callback_query
+                .as_ref()
+                .and_then(|callback| callback.message.as_ref())
+                .map(|message| message.message_id);
             let work = {
                 let Ok(mut ledger) = auth.lock() else {
                     return;
@@ -177,6 +183,7 @@ pub(super) fn run(
                         command: ParsedCommand::Pair {
                             code: String::new(),
                         },
+                        message: None,
                         reply,
                     },
                     ParsedCommand::Pair { ref code }
@@ -190,11 +197,13 @@ pub(super) fn run(
                         command: ParsedCommand::Pair {
                             code: String::new(),
                         },
+                        message: None,
                         reply,
                     },
                     command => Work::Command {
                         chat_id,
                         command,
+                        message: pressed,
                         reply,
                     },
                 }

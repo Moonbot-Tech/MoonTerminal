@@ -1944,7 +1944,6 @@
     var settingsError = "";
     var settingsSavedTimer = null;
     var settingsCores = [];
-    var settingsZone = "";
     // Category and search are popup-local navigation, like the other tabs' detail views.
     var settingsCategoryId = null;
     var settingsCoreSearch = "";
@@ -1958,7 +1957,6 @@
         var active = [];
         if (settingsForm.tradesOn) active.push(tr("mini_settings_summary_trades"));
         if (settingsForm.downOn) active.push(tr("mini_settings_summary_cores"));
-        if (settingsForm.dailyOn) active.push(tr("mini_settings_summary_daily"));
         return active.length ? active.join(" · ") : tr("mini_settings_summary_off");
     }
 
@@ -1977,7 +1975,6 @@
         host.appendChild(settingsNote());
         host.appendChild(settingsTradesCard());
         host.appendChild(settingsDownCard());
-        host.appendChild(settingsDailyCard());
         host.appendChild(settingsSaveBlock());
     }
 
@@ -2029,26 +2026,6 @@
         return String(Number(String(text).trim()));
     }
 
-    // Parse HH:MM or HH:MM:00 into hour and minute; return null for any other clock text.
-    function settingsParseTime(text) {
-        var raw = String(text == null ? "" : text).trim();
-        var parts = raw.split(":");
-        if (parts.length < 2 || parts.length > 3) return null;
-        if (parts.length === 3 && parts[2] !== "00") return null;
-        if (!/^\d{1,2}$/.test(parts[0]) || !/^\d{2}$/.test(parts[1])) return null;
-        var hour = Number(parts[0]);
-        var minute = Number(parts[1]);
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-        return { hour: hour, minute: minute };
-    }
-
-    /** Normalize valid time `text` to HH:MM, retaining invalid text trimmed. */
-    function settingsTimeCanon(text) {
-        var parsed = settingsParseTime(text);
-        if (!parsed) return String(text == null ? "" : text).trim();
-        return twoDigits(parsed.hour) + ":" + twoDigits(parsed.minute);
-    }
-
     /** Serialize `form`'s normalized rules for comparison, ignoring disabled threshold text. */
     function settingsSnap(form) {
         var ids = form.scopeKind === "only" ? settingsSortedIds(form.scopeIds) : [];
@@ -2060,27 +2037,23 @@
             p: form.profitOn === true ? settingsAmountCanon(form.profitText) : "",
             l: form.lossOn === true ? settingsAmountCanon(form.lossText) : "",
             d: form.downOn === true,
-            m: settingsMinutesCanon(form.minutesText),
-            y: form.dailyOn === true,
-            h: settingsTimeCanon(form.timeText)
+            m: settingsMinutesCanon(form.minutesText)
         });
     }
 
-    /** Validate `form`'s enabled thresholds, scope, delay, and clock before allowing Save. */
+    /** Validate `form`'s enabled thresholds, scope, and delay before allowing Save. */
     function settingsFormValid(form) {
         if (!form) return false;
         if (form.volumeOn && !settingsAmountOk(form.volumeText)) return false;
         if (form.profitOn && !settingsAmountOk(form.profitText)) return false;
         if (form.lossOn && !settingsAmountOk(form.lossText)) return false;
         if (!settingsMinutesOk(form.minutesText)) return false;
-        if (!settingsParseTime(form.timeText)) return false;
         if (form.scopeKind === "only" && !form.scopeIds.length) return false;
         return true;
     }
 
     /** Return the wire rules for a valid `form`; disabled thresholds become null. */
     function settingsPayload(form) {
-        var time = settingsParseTime(form.timeText);
         var cores = form.scopeKind === "only"
             ? { kind: "only", ids: settingsSortedIds(form.scopeIds) }
             : { kind: "all" };
@@ -2095,11 +2068,6 @@
             down: {
                 on: form.downOn === true,
                 after_minutes: Number(String(form.minutesText).trim())
-            },
-            daily: {
-                on: form.dailyOn === true,
-                hour: time.hour,
-                minute: time.minute
             }
         };
     }
@@ -2111,13 +2079,12 @@
         return value;
     }
 
-    // Adopt server settings, cores, zone and revision as the draft baseline; false leaves it unchanged.
+    // Adopt server settings, cores and revision as the draft baseline; false leaves it unchanged.
     function settingsAdopt(data) {
         var settings = data && data.settings;
         var trades = settings && settings.trades;
         var down = settings && settings.down;
-        var daily = settings && settings.daily;
-        if (!trades || !down || !daily) return false;
+        if (!trades || !down) return false;
         var scope = trades.cores || {};
         var ids = [];
         if (scope.kind === "only" && Array.isArray(scope.ids)) {
@@ -2126,12 +2093,6 @@
                 var id = scope.ids[i];
                 if (typeof id === "number" && id === id && id !== Infinity && id !== -Infinity) ids.push(id);
             }
-        }
-        var hour = daily.hour;
-        var minute = daily.minute;
-        var timeText = "21:00";
-        if (typeof hour === "number" && typeof minute === "number" && hour === hour && minute === minute) {
-            timeText = twoDigits(hour) + ":" + twoDigits(minute);
         }
         var minutes = down.after_minutes;
         var form = {
@@ -2145,13 +2106,10 @@
             lossOn: typeof trades.loss_at_least_usd === "number",
             lossText: typeof trades.loss_at_least_usd === "number" ? String(trades.loss_at_least_usd) : "",
             downOn: down.on === true,
-            minutesText: typeof minutes === "number" ? String(minutes) : "5",
-            dailyOn: daily.on === true,
-            timeText: timeText
+            minutesText: typeof minutes === "number" ? String(minutes) : "5"
         };
         settingsForm = form;
         settingsCores = Array.isArray(data.cores) ? data.cores : [];
-        settingsZone = typeof data.zone === "string" ? data.zone : "";
         settingsRevision = settingsRevisionOf(data);
         settingsBaseSnap = settingsSnap(form);
         return true;
@@ -2294,29 +2252,6 @@
         return input;
     }
 
-    /** Return a minute-resolution time input initialized from `value` and bound to the draft. */
-    function settingsTimeInput(value, disabled, invalid) {
-        var input = document.createElement("input");
-        input.type = "time";
-        input.step = "60";
-        input.className = "settings-input" + (invalid ? " invalid" : "");
-        input.value = value;
-        input.disabled = !!disabled;
-        input.setAttribute("aria-label", tr("mini_settings_time"));
-        input.setAttribute("aria-invalid", invalid ? "true" : "false");
-        input.setAttribute("data-settings", "time");
-        /** Copy this input's clock into the draft unless a save is in flight. */
-        function apply() {
-            if (settingsSaving || !settingsForm) return;
-            settingsForm.timeText = input.value;
-            settingsTouch();
-            settingsSyncChrome();
-        }
-        input.addEventListener("input", apply);
-        input.addEventListener("change", apply);
-        return input;
-    }
-
     /** Update `node`'s visual and accessible invalid state, ignoring an absent node. */
     function settingsMarkField(node, invalid) {
         if (!node) return;
@@ -2334,7 +2269,6 @@
         settingsMarkField(host.querySelector('[data-settings="profit"]'), form.profitOn && !settingsAmountOk(form.profitText));
         settingsMarkField(host.querySelector('[data-settings="loss"]'), form.lossOn && !settingsAmountOk(form.lossText));
         settingsMarkField(host.querySelector('[data-settings="minutes"]'), !settingsMinutesOk(form.minutesText));
-        settingsMarkField(host.querySelector('[data-settings="time"]'), !settingsParseTime(form.timeText));
         var save = host.querySelector("[data-settings-save]");
         if (save) save.disabled = settingsSaving || !settingsFormValid(form) || !settingsIsDirty();
         var status = host.querySelector("[data-settings-status]");
@@ -2536,20 +2470,6 @@
             function (value) { settingsForm.minutesText = value; }
         ));
         options.appendChild(row);
-        card.appendChild(options);
-        return card;
-    }
-
-    /** Return the daily card with a minute-resolution clock and the host's report zone. */
-    function settingsDailyCard() {
-        var card = settingsCard("daily", "mini_settings_daily", "dailyOn");
-        var options = settingsOptions(settingsForm.dailyOn);
-        var locked = !settingsForm.dailyOn || settingsSaving;
-        var row = el("div", "settings-field");
-        row.appendChild(el("span", "settings-label", tr("mini_settings_time")));
-        row.appendChild(settingsTimeInput(settingsForm.timeText, locked, !settingsParseTime(settingsForm.timeText)));
-        options.appendChild(row);
-        options.appendChild(el("p", "settings-caption", tr("mini_settings_zone") + " " + settingsZone));
         card.appendChild(options);
         return card;
     }

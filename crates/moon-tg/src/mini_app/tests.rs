@@ -917,7 +917,7 @@ fn prepare_settings_keeps_visible_only_ids_and_leaves_all() {
     );
 
     let mut invalid = NotifySettings::default();
-    invalid.daily.hour = 24;
+    invalid.down.after_minutes = 0;
     assert_eq!(prepare_settings(invalid, &[]), Err(SaveFault::Invalid));
 }
 
@@ -1001,7 +1001,7 @@ fn store_settings_refuses_before_it_writes() {
         SaveResult::Refused(SaveFault::Cores)
     );
     let mut invalid = NotifySettings::default();
-    invalid.daily.hour = 24;
+    invalid.down.after_minutes = 0;
     assert_eq!(
         save_known(&mut store, 8, invalid, &[1], 50),
         SaveResult::Refused(SaveFault::Invalid)
@@ -1170,7 +1170,7 @@ fn store_settings_failed_save_keeps_the_previous_document() {
 
     let mut next = NotifySettings::default();
     next.trades.on = false;
-    next.daily.hour = 9;
+    next.down.on = true;
     let failed = save_known(&mut store, 7, next, &[], 90);
     assert!(
         matches!(failed, SaveResult::Failed(ref text) if !text.is_empty()),
@@ -1181,86 +1181,6 @@ fn store_settings_failed_save_keeps_the_previous_document() {
     assert!(store.file.chats[&7].settings.trades.on);
     assert_eq!(NotifyFile::load(&path).expect("seed file"), seeded);
     assert!(!seeded.chats.contains_key(&8));
-}
-
-/// Enabling daily after today's clock, or moving that clock to a time that has already passed,
-/// records today so the summary is not sent again. A clock that has not passed leaves the ledger.
-///
-/// Mutation: stamp `daily_last` on every save, or skip the off-to-on edge. Turning the summary
-/// on at 22:00 for a 21:00 rule then sends today's summary immediately, or moving 21:00 to 18:00
-/// after 18:00 does the same. Oracle: 2024-06-15 20:00 UTC is before 21:00 and after 18:00;
-/// 22:00 UTC is after 21:00. Those instants are built here and are not read from `due`.
-#[test]
-fn store_settings_marks_today_when_daily_becomes_due() {
-    use chrono::{NaiveDate, TimeZone};
-
-    let day = NaiveDate::from_ymd_opt(2024, 6, 15).expect("civil day");
-    let at = |hour: u32, minute: u32| {
-        chrono_tz::UTC
-            .from_local_datetime(&day.and_hms_opt(hour, minute, 0).expect("civil time"))
-            .single()
-            .expect("utc instant")
-            .timestamp()
-    };
-    let at_20 = at(20, 0);
-    let at_21 = at(21, 0);
-    let at_22 = at(22, 0);
-    assert!(
-        at_20 < at_21 && at_21 <= at_22,
-        "20:00 is before the 21:00 rule and 22:00 is not"
-    );
-
-    let root = NotifyTemp::new("daily");
-    let mut store = empty_store(root.path("notifications.json"));
-    let mut rule = NotifySettings::default();
-    rule.daily.on = true;
-    rule.daily.hour = 21;
-
-    assert_eq!(
-        store_settings(&mut store, 1, rule.clone(), &[], at_22, chrono_tz::UTC, 0),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&1].ledger.daily_last, Some(day));
-    assert_eq!(store.file.chats[&1].revision, 1);
-
-    assert_eq!(
-        store_settings(&mut store, 2, rule.clone(), &[], at_20, chrono_tz::UTC, 0),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&2].ledger.daily_last, None);
-    assert_eq!(store.file.chats[&2].revision, 1);
-
-    assert_eq!(
-        store_settings(&mut store, 2, rule.clone(), &[], at_22, chrono_tz::UTC, 1),
-        SaveResult::Saved
-    );
-    assert_eq!(
-        store.file.chats[&2].ledger.daily_last, None,
-        "an ordinary re-save after the clock has passed must not stamp today"
-    );
-    assert_eq!(store.file.chats[&2].revision, 2);
-
-    let mut earlier = rule.clone();
-    earlier.daily.hour = 18;
-    assert_eq!(
-        store_settings(&mut store, 2, earlier, &[], at_20, chrono_tz::UTC, 2),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&2].ledger.daily_last, Some(day));
-    assert_eq!(store.file.chats[&2].revision, 3);
-
-    let mut later = rule;
-    later.daily.hour = 23;
-    assert_eq!(
-        store_settings(&mut store, 2, later, &[], at_22, chrono_tz::UTC, 3),
-        SaveResult::Saved
-    );
-    assert_eq!(
-        store.file.chats[&2].ledger.daily_last,
-        Some(day),
-        "moving the clock to a time that has not passed must not clear today"
-    );
-    assert_eq!(store.file.chats[&2].settings.daily.hour, 23);
 }
 
 /// A revision the page did not load is refused before validation and before the file is written.
@@ -1297,7 +1217,7 @@ fn store_settings_refuses_a_stale_revision_and_stores_a_match() {
     store.path = dir;
 
     let mut stale_invalid = NotifySettings::default();
-    stale_invalid.daily.hour = 24;
+    stale_invalid.down.after_minutes = 0;
     stale_invalid.trades.on = true;
     assert_eq!(
         store_settings(&mut store, 9, stale_invalid, &[1], 50, chrono_tz::UTC, 1,),
@@ -1542,9 +1462,9 @@ fn a_mini_app_save_keeps_the_stored_auto_reports() {
     stored.settings.reports.set(AutoReport::Today, true);
     file.chats.insert(5, stored);
     let mut from_page = NotifySettings::default();
-    from_page.daily.on = true;
+    from_page.down.on = true;
     keep_stored_bot_fields(&file, 5, &mut from_page);
-    assert!(from_page.daily.on);
+    assert!(from_page.down.on);
     assert!(from_page.reports.on(AutoReport::Today));
     let mut fresh = NotifySettings::default();
     fresh.reports.set(AutoReport::Hourly, true);

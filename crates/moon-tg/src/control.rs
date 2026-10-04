@@ -32,6 +32,8 @@ pub(crate) enum Refusal {
     /// The order has no strategy coin list to put its coin on: a manual order, or a strategy kind
     /// without one.
     NoList,
+    /// The light station keeps no orders, so it cannot tell which to cancel; nothing was sent.
+    LightStation,
 }
 
 /// Whether `chat` is the owner: the one check every command passes first.
@@ -111,8 +113,19 @@ pub(crate) fn run_many(
     Ok((targets, outcome))
 }
 
-/// Cancel every open order of one connected core.
-pub(crate) fn cancel_all(host: &mut dyn TgHost, chat: i64, core: CoreId) -> Result<(), Refusal> {
+/// Cancel every buy order of one connected core still waiting for its fill: the chart's Cancel
+/// Buy, once per market that holds one, through the core's order commands, as Panic Sell goes.
+/// Positions and their sells stay. The exchange-wide Engine cancel is not used: a Hyperliquid
+/// core left its pending buys in place under it (LinKvo, 04.10).
+///
+/// Returns:
+///     How many pending buys the core held; `0` sends nothing. A light station, which keeps no
+///     orders, is `LightStation` and sends nothing either.
+pub(crate) fn cancel_buys(
+    host: &mut dyn TgHost,
+    chat: i64,
+    core: CoreId,
+) -> Result<usize, Refusal> {
     owner(host, chat)?;
     if !known(host, core) {
         return Err(Refusal::NotFound);
@@ -121,9 +134,41 @@ pub(crate) fn cancel_all(host: &mut dyn TgHost, chat: i64, core: CoreId) -> Resu
     if !host.session().core_run_state(core).online {
         return Err(Refusal::Offline);
     }
-    host.session_mut()
-        .cancel_all_orders(core)
-        .map_err(|_| Refusal::Unavailable)
+    // An empty order list there says nothing about the core's buys.
+    if moon_core::feed::station::profile() == Some(moon_core::feed::station::Profile::Reports) {
+        return Err(Refusal::LightStation);
+    }
+    let buys = pending_buy_markets(host, core);
+    let markets: std::collections::BTreeSet<String> = buys.iter().cloned().collect();
+    for market in markets {
+        host.session()
+            .cancel_market_buys(core, market)
+            .map_err(|_| Refusal::Unavailable)?;
+    }
+    Ok(buys.len())
+}
+
+/// How many buys `core` still waits to fill.
+pub(crate) fn pending_buys(host: &dyn TgHost, core: CoreId) -> usize {
+    pending_buy_markets(host, core).len()
+}
+
+/// The market of each buy `core` has not filled yet: not on the exchange (`None`) or a limit buy
+/// waiting (`BuySet`) — the orders the feed's Cancel Buy takes.
+fn pending_buy_markets(host: &dyn TgHost, core: CoreId) -> Vec<String> {
+    host.session()
+        .store()
+        .core(core)
+        .map(|data| {
+            data.orders
+                .iter()
+                .filter(|order| {
+                    !order.job_is_done && matches!(order.status.as_str(), "None" | "BuySet")
+                })
+                .map(|order| order.market.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Cancel one open order.

@@ -64,7 +64,7 @@ pub(super) fn prepare_settings(
     Ok(settings)
 }
 
-/// Replace `chat` and apply the ledger edges for a trades, down, or daily switch.
+/// Replace `chat` and apply the ledger edges for a trades, down, or automatic-report switch.
 ///
 /// Enabling trades records `now_utc` and clears `seen` and `held`. Disabling trades clears
 /// `trades_enabled_utc` and `held` and leaves `seen`. Cards waiting for their dollar value are
@@ -72,22 +72,17 @@ pub(super) fn prepare_settings(
 /// edge. A chat that was not stored starts from the all-off default, so enabling it records
 /// the timestamp. Saving again while trades stay on does not move that timestamp.
 ///
-/// `daily_last` is set to today only when daily turns on, or its hour or minute changes while
-/// it stays on, and today's target time in `zone` has already passed. An automatic report that
-/// turns on records its current slot as done, so its first report comes at the next slot; one
-/// that turns off forgets its last message, so a later run never deletes a report of an earlier
-/// one.
-/// [`crate::notify::daily::due`] is called with no previous send, so `Some` means that target
-/// is already due. An ordinary re-save, and a clock that has not passed, leave `daily_last`
-/// as it was.
+/// An automatic report that turns on records its current slot as done, so its first report comes
+/// at the next slot; one that turns off forgets its last message, so a later run never deletes a
+/// report of an earlier one.
 ///
 /// Args:
 ///     file: Document the caller will save.
 ///     chat: Paired chat id.
 ///     settings: Rules already prepared.
-///     now_utc: Unix seconds for a trades-on edge and the daily clock check. This function does
-///         not read the clock.
-///     zone: Host report zone. The daily clock is interpreted here.
+///     now_utc: Unix seconds for a trades-on edge and the automatic reports' current slot. This
+///         function does not read the clock.
+///     zone: Host report zone. The automatic reports' slots are cut in it.
 pub(super) fn commit_settings(
     file: &mut NotifyFile,
     chat: i64,
@@ -113,16 +108,6 @@ pub(super) fn commit_settings(
     }
     if was_down && !settings.down.on {
         ledger.down_announced.clear();
-    }
-    let was_daily = previous.settings.daily.on;
-    let clock_moved = previous.settings.daily.hour != settings.daily.hour
-        || previous.settings.daily.minute != settings.daily.minute;
-    let opened_or_moved =
-        (!was_daily && settings.daily.on) || (was_daily && settings.daily.on && clock_moved);
-    if opened_or_moved {
-        // `None` means today's target has not passed, so the previous date stays.
-        ledger.daily_last =
-            crate::notify::daily::due(now_utc, zone, &settings.daily, None).or(ledger.daily_last);
     }
     for kind in AutoReport::ALL {
         let (was, is) = (
@@ -160,8 +145,8 @@ pub(super) fn commit_settings(
 ///     chat: Paired chat id.
 ///     settings: Rules the page submitted.
 ///     visible: Core ids this chat may name.
-///     now_utc: Unix seconds for a trades-on edge and the daily clock check.
-///     zone: Host report zone. The daily clock is interpreted here.
+///     now_utc: Unix seconds for a trades-on edge and the automatic reports' current slot.
+///     zone: Host report zone. The automatic reports' slots are cut in it.
 ///     revision: Revision the page loaded. It must equal the stored revision.
 ///
 /// Returns:
@@ -497,7 +482,6 @@ pub(super) fn mini_notify(host: &dyn TgHost, chat_id: i64) -> Result<NotifyDto, 
     Ok(dto_of(
         view.settings,
         &view.cores,
-        view.zone.to_string(),
         view.revision,
         None,
         None,
@@ -544,22 +528,13 @@ pub(super) fn mini_notify_save(
         None => (NotifySettings::default(), 0),
     };
     drop(guard);
-    let zone = view.zone.to_string();
     match outcome {
-        SaveResult::Saved => Ok(dto_of(
-            current,
-            &view.cores,
-            zone,
-            stored_revision,
-            None,
-            None,
-        )),
+        SaveResult::Saved => Ok(dto_of(current, &view.cores, stored_revision, None, None)),
         SaveResult::Refused(fault) => {
             let code = fault_code(&fault).to_string();
             Ok(dto_of(
                 current,
                 &view.cores,
-                zone,
                 stored_revision,
                 Some(save_fault_text(fault)),
                 Some(code),
@@ -570,7 +545,6 @@ pub(super) fn mini_notify_save(
             Ok(dto_of(
                 current,
                 &view.cores,
-                zone,
                 stored_revision,
                 Some(t!("telegram.mini_settings_err_save").to_string()),
                 Some("save".to_string()),
@@ -613,7 +587,6 @@ fn fault_code(fault: &SaveFault) -> &'static str {
 /// Args:
 ///     settings: Rules to show. On a refusal these are the stored rules, not the draft.
 ///     cores: Cores this chat may name.
-///     zone: IANA name of the host report zone.
 ///     revision: Stored revision after the attempt. `0` when the chat has no row.
 ///     error: Localized refusal, or `None` when the call succeeded.
 ///     fault: Machine kind (`stale`, `cores`, `invalid`, `save`), or `None` on success.
@@ -623,7 +596,6 @@ fn fault_code(fault: &SaveFault) -> &'static str {
 fn dto_of(
     settings: NotifySettings,
     cores: &[(u64, String, String)],
-    zone: String,
     revision: u64,
     error: Option<String>,
     fault: Option<String>,
@@ -638,7 +610,6 @@ fn dto_of(
                 exchange: exchange.clone(),
             })
             .collect(),
-        zone,
         revision,
         error,
         fault,

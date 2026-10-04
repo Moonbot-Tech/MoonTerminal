@@ -1,5 +1,5 @@
 //! Localized rich reports over the same snapshot, time axis, and money reader as Report.
-use chrono::{Days, NaiveDate};
+use chrono::Days;
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
 use moon_core::{
@@ -771,77 +771,21 @@ pub(crate) fn read_closed_since(
 }
 
 /// [`read_closed_since`] on an already open connection.
+///
+/// Each core is paged on its own: one cross-core `(close_utc, rec_id)` cursor is unsafe, because
+/// `LIMIT` can drop a later close on another core.
 fn read_closed_since_on(
     conn: &rusqlite::Connection,
     zone: Tz,
     names: &db::CoreNames,
     from_utc: i64,
 ) -> db::ReadResult<Vec<ClosedTrade>> {
-    read_closed_window_on(conn, zone, names, from_utc, None)
-}
-
-/// Closed trades whose close falls on `date` in `zone`.
-///
-/// Args:
-///     zone: Display zone. The day is that zone's calendar day.
-///     names: Current configured core names.
-///     date: Local calendar date.
-///
-/// Returns:
-///     The day's trades, oldest close first. A date chrono cannot bound is an empty `Ok`.
-///
-/// Errors:
-///     The report replica could not be opened or read.
-pub(crate) fn read_day(
-    zone: Tz,
-    names: db::CoreNames,
-    date: NaiveDate,
-) -> db::ReadResult<Vec<ClosedTrade>> {
-    let conn = db::open_reader()?;
-    read_day_on(&conn, zone, &names, date)
-}
-
-/// [`read_day`] on an already open connection.
-fn read_day_on(
-    conn: &rusqlite::Connection,
-    zone: Tz,
-    names: &db::CoreNames,
-    date: NaiveDate,
-) -> db::ReadResult<Vec<ClosedTrade>> {
-    let Some((from, to)) = local_day_bounds(date, zone) else {
-        return Ok(Vec::new());
-    };
-    read_closed_window_on(conn, zone, names, from, Some(to))
-}
-
-/// Inclusive UTC bounds of one local calendar day, or `None` at chrono's limits.
-fn local_day_bounds(date: NaiveDate, zone: Tz) -> Option<(i64, i64)> {
-    let from = display_time::day_start(date, zone)?;
-    let next = date.succ_opt()?;
-    let next_start = display_time::day_start(next, zone)?;
-    let to = next_start.saturating_sub(1);
-    (from <= to).then_some((from, to))
-}
-
-/// Closed trades in `[from_utc, to_utc]`, paging each core on its own.
-///
-/// One cross-core `(close_utc, rec_id)` cursor is unsafe: `LIMIT` can drop a later close on
-/// another core. `to_utc` of `None` reads through the newest row.
-fn read_closed_window_on(
-    conn: &rusqlite::Connection,
-    zone: Tz,
-    names: &db::CoreNames,
-    from_utc: i64,
-    to_utc: Option<i64>,
-) -> db::ReadResult<Vec<ClosedTrade>> {
     let snap = db::read_snapshot(conn)?;
     let cores = db::distinct_cores(&snap)?;
     let axis = db::ReportAxis::load(&snap, zone)?;
     let mut trades = Vec::new();
     for (core, _) in cores {
-        trades.extend(page_closed_core(
-            &snap, &axis, names, core, from_utc, to_utc,
-        )?);
+        trades.extend(page_closed_core(&snap, &axis, names, core, from_utc)?);
     }
     trades.sort_by(|left, right| {
         left.close_utc
@@ -858,10 +802,10 @@ struct PageCursor {
 }
 
 impl PageCursor {
-    /// Start at `to_utc` (inclusive) with the small page size.
-    fn start(to_utc: Option<i64>) -> Self {
+    /// Start at the newest row with the small page size.
+    fn start() -> Self {
         Self {
-            window_to: to_utc,
+            window_to: None,
             limit: NOTIFY_READ_PAGE,
         }
     }
@@ -912,9 +856,8 @@ fn page_closed_core(
     names: &db::CoreNames,
     core: u64,
     from_utc: i64,
-    to_utc: Option<i64>,
 ) -> db::ReadResult<Vec<ClosedTrade>> {
-    let mut cursor = PageCursor::start(to_utc);
+    let mut cursor = PageCursor::start();
     let mut seen = BTreeSet::new();
     let mut trades = Vec::new();
     while !cursor.exhausted(from_utc) {
@@ -927,7 +870,7 @@ fn page_closed_core(
             let Some(trade) = map_closed_row(&table, row, row_index, &cols, axis) else {
                 continue;
             };
-            if !in_read_window(trade.close_utc, from_utc, to_utc) {
+            if trade.close_utc < from_utc {
                 continue;
             }
             boundary = Some(boundary.map_or(trade.close_utc, |low| low.min(trade.close_utc)));
@@ -961,11 +904,6 @@ fn closed_filter(
         core_names: names.clone(),
         ..Default::default()
     }
-}
-
-/// `true` when `close_utc` is inside the original read window, inclusive.
-fn in_read_window(close_utc: i64, from_utc: i64, to_utc: Option<i64>) -> bool {
-    close_utc >= from_utc && to_utc.is_none_or(|to| close_utc <= to)
 }
 
 /// Column indexes used to map one notification row.

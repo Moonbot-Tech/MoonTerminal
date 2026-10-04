@@ -1,10 +1,8 @@
 //! Pins for notification HTML. Each test names the edit that would break it.
 
-use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::telegram::reply::TELEGRAM_MESSAGE_UTF16_LIMIT;
 
-use super::super::daily::DaySummary;
 use super::super::trades::ClosedTrade;
 use super::*;
 
@@ -117,31 +115,6 @@ alpha
     );
     assert!(!html.contains("0.00"));
     assert!(!html.contains('$'));
-    assert_only_allowed_tags(&html);
-}
-
-/// A day with only unvalued rows has no best or worst. Inventing either from
-/// the zero sum would name a coin the day did not value.
-#[test]
-fn daily_summary_omits_extremes_when_nothing_is_valued() {
-    let _locale = crate::test_locale::force("en");
-    let summary = DaySummary {
-        profit_usd: 0.0,
-        count: 3,
-        unvalued: 3,
-        best: None,
-        worst: None,
-    };
-    let date = NaiveDate::from_ymd_opt(2026, 10, 2).expect("civil date");
-    let html = daily_summary(date, &summary);
-    let expected = "\
-<b>Daily summary 2026-10-02</b>
-Profit: 0.00$
-Trades: 3
-Unvalued: 3";
-    assert_eq!(html, expected);
-    assert!(!html.contains("Best:"));
-    assert!(!html.contains("Worst:"));
     assert_only_allowed_tags(&html);
 }
 

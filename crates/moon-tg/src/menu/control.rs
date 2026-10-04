@@ -45,17 +45,29 @@ const ASK_FOR: Duration = Duration::from_secs(120);
 /// Longest coin a blacklist answer may name, in characters.
 const COIN_CHARS: usize = 30;
 
+/// Most characters of the core's blacklist a question shows; Telegram takes 4096 per message.
+const BLACKLIST_CHARS: usize = 3000;
+
 /// Answer a Control button: run its command, if any, then show the screen it leads to. Any button
 /// but the question itself withdraws a question for a coin.
+///
+/// `message` is the message the button sits under, which the answer replaces. A press there
+/// settles the redraw that message waits for ([`wait::press`]); a command the core still has to
+/// confirm leaves a new one.
 pub(super) fn run(
     host: &mut dyn TgHost,
     chat: i64,
     action: ControlAction,
+    message: Option<i64>,
     reply: &SyncSender<Response>,
 ) {
     if !matches!(action, ControlAction::AskCoin { .. }) {
         host.state_mut().awaiting_coin.remove(&chat);
     }
+    let carried = match message {
+        Some(message) => wait::press(host, chat, message, action),
+        None => Vec::new(),
+    };
     if !shown(host) {
         send(host, hidden(), reply);
         return;
@@ -63,8 +75,36 @@ pub(super) fn run(
     if is_command(action) {
         log::info!("telegram control: chat {chat} {action:?}");
     }
-    let rendered = screen(host, chat, action);
+    let mut asks = Vec::new();
+    let rendered = screen(host, chat, action, &mut asks);
     send(host, rendered, reply);
+    // Only a press that sent something waits: one answered with a question or a refusal shows
+    // no card a redraw could replace without taking the question's buttons away.
+    if !asks.is_empty()
+        && let Some(screen) = redrawn_as(action)
+    {
+        asks.extend(carried);
+        wait::watch(host, chat, message, screen, asks);
+    }
+}
+
+/// The screen a command's message is redrawn with once the core answers: the one it answered
+/// with. `None` for a press that asks the core nothing.
+fn redrawn_as(action: ControlAction) -> Option<ControlAction> {
+    use ControlAction as A;
+    match action {
+        A::Run {
+            target: ControlTarget::Core(core),
+            ..
+        }
+        | A::CancelAll { core, .. } => Some(A::Core(core)),
+        A::Run {
+            target: ControlTarget::All,
+            ..
+        } => Some(A::All),
+        A::StrategyToggle { core, page, .. } => Some(A::Strategies { core, page }),
+        _ => None,
+    }
 }
 
 /// Whether the bot's menu shows the section: hidden, nothing in it runs.
@@ -153,6 +193,7 @@ fn ask_coin(host: &dyn TgHost, core: CoreId, lift: bool, said: Option<String>) -
     let mut lines: Vec<String> = said.into_iter().collect();
     lines.push(question.to_string());
     lines.push(t!("telegram.control.ask_coin_hint").to_string());
+    lines.push(blacklist_now(host, core));
     (
         t!("telegram.control.blacklist").to_string(),
         lines,
@@ -161,6 +202,43 @@ fn ask_coin(host: &dyn TgHost, core: CoreId, lift: bool, said: Option<String>) -
             ControlAction::Core(core),
         )]],
     )
+}
+
+/// The core's blacklist as it stands, its coins comma-separated as the core keeps them — the list
+/// a coin is added to or taken off. Cut at [`BLACKLIST_CHARS`] so a long list cannot push the
+/// message past Telegram's limit; the coins left out are counted.
+fn blacklist_now(host: &dyn TgHost, core: CoreId) -> String {
+    let Some((on, coins)) = control::core_blacklist_state(host, core) else {
+        return t!("telegram.control.blacklist_unread").to_string();
+    };
+    let state = on_off(Some(on));
+    if coins.is_empty() {
+        return t!("telegram.control.blacklist_empty", state = state).to_string();
+    }
+    let mut shown = String::new();
+    let mut left = coins.len();
+    for coin in &coins {
+        let next = shown.chars().count() + coin.chars().count() + 2;
+        if !shown.is_empty() && next > BLACKLIST_CHARS {
+            break;
+        }
+        if !shown.is_empty() {
+            shown.push_str(", ");
+        }
+        shown.push_str(coin);
+        left -= 1;
+    }
+    if left > 0 {
+        shown.push(' ');
+        shown.push_str(&t!("telegram.control.blacklist_more", n = left));
+    }
+    t!(
+        "telegram.control.blacklist_now",
+        state = state,
+        n = coins.len(),
+        coins = shown
+    )
+    .to_string()
 }
 
 /// Whether `action` is a confirmed press this chat was asked for, within [`ASK_FOR`]: taken once.
@@ -231,15 +309,11 @@ fn valid_coin(coin: &str) -> bool {
 
 /// Send a screen as the section's message, with the owner's navigation keyboard.
 fn send(host: &dyn TgHost, rendered: Rendered, reply: &SyncSender<Response>) {
-    let (title, lines, rows) = rendered;
+    let (html, keyboard) = html(rendered);
     let navigation = navigation_keyboard(host.kind(), true, &host.config().telegram);
-    let mut html = format!("<p><b>{}</b></p>", escape(&title));
-    for line in lines {
-        html.push_str(&format!("<p>{}</p>", escape(&line)));
-    }
     let _ = reply.try_send(Response::Rich {
         html,
-        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(rows)),
+        keyboard,
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
             navigation,
@@ -247,8 +321,37 @@ fn send(host: &dyn TgHost, rendered: Rendered, reply: &SyncSender<Response>) {
     });
 }
 
-/// The screen for `action`, after running its command.
-fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
+/// A screen as a message: its HTML and its buttons.
+fn html(rendered: Rendered) -> (String, ReplyMarkup) {
+    let (title, lines, rows) = rendered;
+    let mut html = format!("<p><b>{}</b></p>", escape(&title));
+    for line in lines {
+        html.push_str(&format!("<p>{}</p>", escape(&line)));
+    }
+    (
+        html,
+        ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(rows)),
+    )
+}
+
+/// `screen` drawn again from the cores' state, with `said` on top: a redraw ([`redrawn_as`]).
+fn draw(host: &dyn TgHost, screen: ControlAction, said: String) -> Rendered {
+    use ControlAction as A;
+    match screen {
+        A::Core(core) => core_card(host, core, Some(said)),
+        A::Strategies { core, page } => strategies(host, core, usize::from(page), Some(said)),
+        _ => all_card(host, Some(said)),
+    }
+}
+
+/// The screen for `action`, after running its command; what the command asked of a core goes to
+/// `asks`.
+fn screen(
+    host: &mut dyn TgHost,
+    chat: i64,
+    action: ControlAction,
+    asks: &mut Vec<wait::Ask>,
+) -> Rendered {
     use ControlAction as A;
     match action {
         A::Cores(page) => cores(host, usize::from(page), None),
@@ -272,7 +375,15 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
             match target {
                 ControlTarget::Core(core) => {
                     let said = match control::run_one(host, chat, core, run_switch, on) {
-                        Ok(true) => t!("telegram.control.sent").to_string(),
+                        Ok(true) => {
+                            wait::arm_run(host, core, run_switch, on);
+                            asks.push(wait::Ask::Run {
+                                core,
+                                switch: run_switch,
+                                on,
+                            });
+                            t!("telegram.control.waiting").to_string()
+                        }
                         Ok(false) => t!("telegram.control.already").to_string(),
                         Err(refusal) => refusal_text(refusal),
                     };
@@ -284,14 +395,24 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                         .map(|(id, _)| id)
                         .collect();
                     let said = match control::run_many(host, chat, &cores, run_switch, on) {
-                        Ok((targets, outcome)) => t!(
-                            "telegram.control.scope",
-                            sent = outcome.sent.len(),
-                            n = targets.len(),
-                            already = outcome.already,
-                            offline = outcome.offline
-                        )
-                        .to_string(),
+                        Ok((targets, outcome)) => {
+                            for &core in &outcome.sent {
+                                wait::arm_run(host, core, run_switch, on);
+                                asks.push(wait::Ask::Run {
+                                    core,
+                                    switch: run_switch,
+                                    on,
+                                });
+                            }
+                            t!(
+                                "telegram.control.scope",
+                                sent = outcome.sent.len(),
+                                n = targets.len(),
+                                already = outcome.already,
+                                offline = outcome.offline
+                            )
+                            .to_string()
+                        }
                         Err(refusal) => refusal_text(refusal),
                     };
                     all_card(host, Some(said))
@@ -312,7 +433,14 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                     ControlAction::Core(core),
                 );
             }
-            let said = said(control::cancel_all(host, chat, core));
+            let said = match control::cancel_buys(host, chat, core) {
+                Ok(0) => t!("telegram.control.buys_none").to_string(),
+                Ok(n) => {
+                    asks.push(wait::Ask::CancelBuys { core });
+                    t!("telegram.control.buys_sent", n = n).to_string()
+                }
+                Err(refusal) => refusal_text(refusal),
+            };
             core_card(host, core, Some(said))
         }
         A::PanicAll { target, .. } => {
@@ -375,7 +503,10 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                 Some(refusal_text(Refusal::Offline))
             } else {
                 match control::strategy_toggle(host, chat, core, id, on) {
-                    Ok(()) => None,
+                    Ok(()) => {
+                        asks.push(wait::Ask::Strategy { core, id, on });
+                        None
+                    }
                     Err(refusal) => Some(refusal_text(refusal)),
                 }
             };
@@ -420,14 +551,6 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
     }
 }
 
-/// What a single-core command came to, in the chat's words.
-fn said(result: Result<(), Refusal>) -> String {
-    match result {
-        Ok(()) => t!("telegram.control.sent").to_string(),
-        Err(refusal) => refusal_text(refusal),
-    }
-}
-
 /// A refusal in the chat's words.
 fn refusal_text(refusal: Refusal) -> String {
     match refusal {
@@ -437,6 +560,7 @@ fn refusal_text(refusal: Refusal) -> String {
         Refusal::Unavailable => t!("telegram.control.not_sent"),
         Refusal::NotReady => t!("telegram.control.not_ready"),
         Refusal::NoList => t!("telegram.control.no_list"),
+        Refusal::LightStation => t!("telegram.control.light_station"),
     }
     .to_string()
 }
@@ -553,15 +677,23 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
         true => format!("\u{1f7e2} {}", t!("telegram.control.online")),
         false => format!("\u{1f534} {}", t!("telegram.control.offline")),
     });
+    // A switch sent and not yet reported shows where it is going, and its button only shows the
+    // card again: a second send would race the first.
+    let trading_wait = wait::run_waiting(host, core, RunSwitch::Trading);
+    let detect_wait = wait::run_waiting(host, core, RunSwitch::AutoDetect);
+    let face = |waiting: Option<bool>, now: Option<bool>| match waiting {
+        Some(on) => format!("\u{23f3} {}", on_off(Some(on))),
+        None => on_off(now),
+    };
     lines.push(format!(
         "{}: {}",
         t!("telegram.control.trading"),
-        on_off(state.trading)
+        face(trading_wait, state.trading)
     ));
     lines.push(format!(
         "{}: {}",
         t!("telegram.control.autodetect"),
-        on_off(state.auto_detect)
+        face(detect_wait, state.auto_detect)
     ));
     lines.push(t!("telegram.control.positions", n = positions).to_string());
     if let Some((on, coins)) = control::core_blacklist_state(host, core) {
@@ -580,29 +712,43 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
         confirmed: false,
     };
     let mut trading_row = Vec::new();
-    if state.trading != Some(true) {
+    if let Some(on) = trading_wait {
+        let label = match on {
+            true => t!("telegram.control.start"),
+            false => t!("telegram.control.stop"),
+        };
         trading_row.push(button(
-            format!("\u{25b6}\u{fe0f} {}", t!("telegram.control.start")),
-            run(ControlSwitch::Trading, true),
+            format!("\u{23f3} {label}"),
+            ControlAction::Core(core),
         ));
+    } else {
+        if state.trading != Some(true) {
+            trading_row.push(button(
+                format!("\u{25b6}\u{fe0f} {}", t!("telegram.control.start")),
+                run(ControlSwitch::Trading, true),
+            ));
+        }
+        if state.trading != Some(false) {
+            trading_row.push(button(
+                format!("\u{23f8}\u{fe0f} {}", t!("telegram.control.stop")),
+                run(ControlSwitch::Trading, false),
+            ));
+        }
     }
-    if state.trading != Some(false) {
-        trading_row.push(button(
-            format!("\u{23f8}\u{fe0f} {}", t!("telegram.control.stop")),
-            run(ControlSwitch::Trading, false),
-        ));
-    }
-    let detect_on = state.auto_detect == Some(true);
+    // AutoDetect is one button that flips the state it shows: waiting, or with no state reported
+    // yet, it only shows the card again rather than guess which way to send.
+    let detect = t!("telegram.control.autodetect");
+    let detect_button = match (detect_wait, state.auto_detect) {
+        (Some(_), _) => button(format!("\u{23f3} {detect}"), ControlAction::Core(core)),
+        (None, None) => button(format!("\u{2754} {detect}"), ControlAction::Core(core)),
+        (None, Some(on)) => button(
+            format!("{} {detect}", if on { "\u{2705}" } else { "\u{2b1c}" }),
+            run(ControlSwitch::AutoDetect, !on),
+        ),
+    };
     let rows = vec![
         trading_row,
-        vec![button(
-            format!(
-                "{} {}",
-                if detect_on { "\u{2705}" } else { "\u{2b1c}" },
-                t!("telegram.control.autodetect")
-            ),
-            run(ControlSwitch::AutoDetect, !detect_on),
-        )],
+        vec![detect_button],
         vec![
             button(
                 format!("\u{1f9ef} {}", t!("telegram.control.panic")),
@@ -692,13 +838,15 @@ fn strategies(host: &dyn TgHost, core: CoreId, page: usize, said: Option<String>
         .skip(page * STRATEGY_PAGE)
         .take(STRATEGY_PAGE)
         .map(|(id, strategy, on)| {
-            let mark = if control::strategy_waiting(host, core, *id) {
-                "\u{23f3}"
-            } else if *on {
-                "\u{2705}"
-            } else {
-                "\u{2b1c}"
-            };
+            // A row still waiting for the core only shows the page again: its mark may already
+            // be the asked state, and a toggle from it would send the switch back.
+            if control::strategy_waiting(host, core, *id) {
+                return vec![button(
+                    format!("\u{23f3} {strategy}"),
+                    ControlAction::Strategies { core, page: page16 },
+                )];
+            }
+            let mark = if *on { "\u{2705}" } else { "\u{2b1c}" };
             vec![button(
                 format!("{mark} {strategy}"),
                 ControlAction::StrategyToggle {
@@ -934,6 +1082,10 @@ fn all_card(host: &dyn TgHost, said: Option<String>) -> Rendered {
     ];
     (t!("telegram.control.all").to_string(), lines, rows)
 }
+
+mod wait;
+
+pub(crate) use wait::{Redraws, tick};
 
 #[cfg(test)]
 mod tests;

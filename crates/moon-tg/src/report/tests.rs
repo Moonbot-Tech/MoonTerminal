@@ -1284,21 +1284,6 @@ fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
         990,
         "a missing core offset leaves the stored buy time unchanged"
     );
-
-    let day = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let next = chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
-    let first = super::read_day_on(&conn, chrono_tz::UTC, &names, day).unwrap();
-    let second = super::read_day_on(&conn, chrono_tz::UTC, &names, next).unwrap();
-    let first_ids: std::collections::BTreeSet<i64> =
-        first.iter().map(|trade| trade.rec_id).collect();
-    let second_ids: std::collections::BTreeSet<i64> =
-        second.iter().map(|trade| trade.rec_id).collect();
-    let mut expected_day = expected_since.clone();
-    expected_day.remove(&90000);
-    expected_day.insert(500);
-    assert_eq!(first_ids, expected_day);
-    assert_eq!(first.len(), expected_day.len());
-    assert_eq!(second_ids, std::collections::BTreeSet::from([90000]));
 }
 
 /// The keyboard a chat of `owner` gets from a bot with the default menu.

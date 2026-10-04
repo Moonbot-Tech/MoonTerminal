@@ -67,14 +67,14 @@ fn the_view_screen_marks_the_current_view() {
     }
 }
 
-/// The notifications screen switches every rule and automatic report, offers the down presets
-/// with the current one marked, and leads to the summary's hours; the hours screen offers all 24.
+/// The notifications screen switches every rule and automatic report and offers the down presets
+/// with the current one marked.
 #[test]
 fn the_notify_screens_switch_and_pick() {
     let _locale = crate::test_locale::force("en");
     let notify = NotifySettings::default();
-    let (_, lines, rows) = super::notify_screen(&notify, chrono_tz::UTC);
-    assert_eq!(lines.len(), 8);
+    let (_, lines, rows) = super::notify_screen(&notify);
+    assert_eq!(lines.len(), 7);
     let all = actions(&rows);
     for wanted in [
         SettingsAction::Opened(true),
@@ -84,8 +84,6 @@ fn the_notify_screens_switch_and_pick() {
         SettingsAction::Auto(moon_core::telegram::notify::AutoReport::Month, true),
         SettingsAction::Trades(true),
         SettingsAction::Down(true),
-        SettingsAction::Daily(true),
-        SettingsAction::DailyHours,
         SettingsAction::DownAfter(5),
         SettingsAction::Root,
     ] {
@@ -101,12 +99,4 @@ fn the_notify_screens_switch_and_pick() {
         marked,
         vec![MenuAction::Settings(SettingsAction::DownAfter(5))]
     );
-    let (_, _, hours) = super::daily_hours(21);
-    let picks: Vec<_> = actions(&hours)
-        .into_iter()
-        .filter(|a| matches!(a, SettingsAction::DailyHour(_)))
-        .collect();
-    assert_eq!(picks.len(), 24);
-    assert!(hours.iter().flatten().any(|b| b.text == "\u{2022}21"));
-    assert_eq!(actions(&hours).last(), Some(&SettingsAction::Notify));
 }

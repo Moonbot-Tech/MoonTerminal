@@ -1,9 +1,8 @@
 //! Notification decisions and the owner-thread tick that applies them.
 //!
-//! `decide`, `due`, and `DownTracker::step` stay pure. [`tick`] reads the report
+//! `decide` and `DownTracker::step` stay pure. [`tick`] reads the report
 //! replica and writes the durable outbox; [`reports`] does the same for automatic reports.
 
-pub(crate) mod daily;
 pub(crate) mod down;
 pub(crate) mod events;
 pub(crate) mod render;

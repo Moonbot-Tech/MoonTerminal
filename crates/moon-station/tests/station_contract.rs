@@ -222,7 +222,7 @@ const TG_READ_CALLS: [&str; 6] = [
 /// away from a core that is not connected; the raw senders are crate-private.
 const TG_TRADE_CALLS: [&str; 8] = [
     "apply_strategies",
-    "cancel_all_orders",
+    "cancel_market_buys",
     "cancel_order",
     "dispatch_run",
     "set_temp_ban",

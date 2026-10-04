@@ -379,8 +379,6 @@ pub struct NotifyDto {
     pub settings: crate::telegram::notify::NotifySettings,
     /// Cores this chat is allowed to see, in Mini App order.
     pub cores: Vec<NotifyCoreDto>,
-    /// IANA zone reports use. Daily time is shown in this zone.
-    pub zone: String,
     /// Stored chat revision. `0` when this chat has no row yet.
     pub revision: u64,
     /// Localized save problem, or `null` when nothing went wrong.

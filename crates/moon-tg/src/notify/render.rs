@@ -1,16 +1,14 @@
-//! Telegram HTML for one notification: a closed-trade card, a down or back
-//! line, and the daily summary.
+//! Telegram HTML for one notification: a closed-trade card, or a down or back
+//! line.
 //!
 //! Names are cut to 64 chars before [`crate::html::escape`]. The outbox refuses
 //! oversized bodies rather than cutting HTML inside a tag or entity.
 
-use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::feed::order_math::MONEY_DECIMALS;
 use moon_core::util::{display_time, fmt};
 use rust_i18n::t;
 
-use super::daily::DaySummary;
 use super::trades::ClosedTrade;
 use crate::html::escape;
 
@@ -151,45 +149,6 @@ pub(crate) fn back_line(core_name: &str, down_for_secs: i64) -> String {
     )
 }
 
-/// The day's profit, trade count, and valued extremes.
-///
-/// Args:
-///     date: Local calendar date the summary covers.
-///     s: Totals from [`super::daily::summarize`]. `best` and `worst` of
-///         `None` are omitted. `unvalued` is omitted when it is zero.
-///
-/// Returns:
-///     HTML whose only tag is `<b>` around the title and the date.
-pub(crate) fn daily_summary(date: NaiveDate, s: &DaySummary) -> String {
-    let mut lines = vec![
-        format!(
-            "<b>{} {}</b>",
-            escape(&t!("telegram.notify_daily_title")),
-            date.format("%Y-%m-%d")
-        ),
-        format!(
-            "{}: {}",
-            escape(&t!("telegram.notify_profit")),
-            signed_money(s.profit_usd)
-        ),
-        format!("{}: {}", escape(&t!("telegram.notify_trades")), s.count),
-    ];
-    if s.unvalued > 0 {
-        lines.push(format!(
-            "{}: {}",
-            escape(&t!("telegram.notify_unvalued_trades")),
-            s.unvalued
-        ));
-    }
-    if let Some(trade) = &s.best {
-        lines.push(extreme_line(&t!("telegram.notify_best"), trade));
-    }
-    if let Some(trade) = &s.worst {
-        lines.push(extreme_line(&t!("telegram.notify_worst"), trade));
-    }
-    lines.join("\n")
-}
-
 /// Strategy line: `<i>source · name</i>`, or the manual word when the row stored none.
 ///
 /// A stored channel name of the form `Source: (strategy <NAME>)` is split.
@@ -267,16 +226,6 @@ fn whole_dollar_volume(value: Option<f64>) -> Option<String> {
     let rounded = fmt::round_to(value?, 0)?;
     let digits = format!("{rounded:.0}");
     Some(format!("{}$", fmt::group_thousands(&digits)))
-}
-
-/// `label: coin money` for one extreme. The coin is a name; the money is the
-/// row's profit, or the unvalued word when that profit is absent.
-fn extreme_line(label: &str, trade: &ClosedTrade) -> String {
-    let profit = match trade.profit_usd {
-        Some(value) => signed_money(value),
-        None => escape(&t!("telegram.notify_unvalued")),
-    };
-    format!("{}: {} {profit}", escape(label), name(&trade.coin))
 }
 
 /// Profit and percent. The trade's own amount is bold, with the dollars after it once known

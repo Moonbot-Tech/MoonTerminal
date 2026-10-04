@@ -31,7 +31,7 @@ impl StationHost {
     /// Run the production dispatcher and receive its synchronous fixture answer.
     fn command(&mut self, chat: i64, command: super::ParsedCommand) -> super::Response {
         let (reply, receiver) = std::sync::mpsc::sync_channel(1);
-        super::run_command(self, chat, command, reply);
+        super::run_command(self, chat, command, None, reply);
         receiver.try_recv().expect("fixture command must answer")
     }
 }

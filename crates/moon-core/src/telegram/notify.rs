@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::Context;
-use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 /// Which cores a trade notification applies to.
@@ -70,41 +69,6 @@ impl Default for DownRule {
         Self {
             on: false,
             after_minutes: default_after_minutes(),
-        }
-    }
-}
-
-/// Hour of the daily summary. Default is 21:00.
-const fn default_daily_hour() -> u8 {
-    21
-}
-
-/// Minute of the daily summary. Default is 21:00.
-const fn default_daily_minute() -> u8 {
-    0
-}
-
-/// Once-a-day summary. `on` defaults to off, and the clock defaults to 21:00.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
-#[serde(default)]
-pub struct DailyRule {
-    /// Queue the summary for the calendar day in the host's report zone.
-    pub on: bool,
-    /// Hour in `0..24`.
-    #[serde(default = "default_daily_hour")]
-    pub hour: u8,
-    /// Minute in `0..60`.
-    #[serde(default = "default_daily_minute")]
-    pub minute: u8,
-}
-
-impl Default for DailyRule {
-    /// Keep summaries off and use 21:00 in the host's report zone when settings are absent.
-    fn default() -> Self {
-        Self {
-            on: false,
-            hour: default_daily_hour(),
-            minute: default_daily_minute(),
         }
     }
 }
@@ -173,6 +137,9 @@ impl AutoReports {
 }
 
 /// One chat's notification rules. Every switch defaults to off.
+///
+/// Unknown fields are ignored, not rejected: a document written before the daily summary was
+/// removed still carries `"daily"`, and it must keep loading.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct NotifySettings {
@@ -180,8 +147,6 @@ pub struct NotifySettings {
     pub trades: TradeRule,
     /// Core down and back notices.
     pub down: DownRule,
-    /// Daily summary.
-    pub daily: DailyRule,
     /// Automatic reports. Missing JSON — a document from before them, or the Mini App's own save,
     /// which does not know them — is all off. Not written while all off, so the Mini App's
     /// document stays as it was.
@@ -221,8 +186,7 @@ impl NotifySettings {
     /// Reject a document later batches must not persist.
     ///
     /// Returns the first broken rule. Set thresholds must be finite and `>= 0`.
-    /// `after_minutes` is `1..=1440`. `hour` is `0..24` and `minute` is `0..60`.
-    /// [`CoreScope::Only`] must list at least one core.
+    /// `after_minutes` is `1..=1440`. [`CoreScope::Only`] must list at least one core.
     ///
     /// # Errors
     ///
@@ -237,16 +201,6 @@ impl NotifySettings {
         if !(1..=1440).contains(&self.down.after_minutes) {
             return Err(NotifyError::AfterMinutes {
                 value: self.down.after_minutes,
-            });
-        }
-        if self.daily.hour >= 24 {
-            return Err(NotifyError::Hour {
-                value: self.daily.hour,
-            });
-        }
-        if self.daily.minute >= 60 {
-            return Err(NotifyError::Minute {
-                value: self.daily.minute,
             });
         }
         Ok(())
@@ -268,16 +222,6 @@ pub enum NotifyError {
         /// The rejected minute count.
         value: u16,
     },
-    /// [`DailyRule::hour`] is not in `0..24`.
-    Hour {
-        /// The rejected hour.
-        value: u8,
-    },
-    /// [`DailyRule::minute`] is not in `0..60`.
-    Minute {
-        /// The rejected minute.
-        value: u8,
-    },
     /// [`CoreScope::Only`] listed no cores.
     EmptyCores,
 }
@@ -293,16 +237,6 @@ impl std::fmt::Display for NotifyError {
             NotifyError::AfterMinutes { value } => write!(
                 formatter,
                 "core-down delay must be from 1 to 1440 minutes, got {value}"
-            ),
-            NotifyError::Hour { value } => {
-                write!(
-                    formatter,
-                    "daily summary hour must be from 0 to 23, got {value}"
-                )
-            }
-            NotifyError::Minute { value } => write!(
-                formatter,
-                "daily summary minute must be from 0 to 59, got {value}"
             ),
             NotifyError::EmptyCores => formatter.write_str(
                 "trade notifications need at least one core when the scope is an explicit list",
@@ -351,7 +285,7 @@ pub struct Pending {
     ///
     /// `None` is a row stored before cores were recorded, or an owner's automatic report, which
     /// covers every core: either is kept for an owner and dropped for a viewer. `Some` is an
-    /// explicit disclosure, and `Some([])` names no core (an empty-day summary). A missing
+    /// explicit disclosure, and `Some([])` names no core. A missing
     /// JSON field loads as `None`. A JSON array, including `[]`, loads as `Some`.
     #[serde(
         default,
@@ -378,6 +312,11 @@ pub struct Pending {
     /// of a new message. A build that predates the field sends the row as a new message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub edit: Option<i64>,
+    /// With [`Self::edit`]: a screen of the bot's menu redrawn in place — the message is edited as
+    /// a rich message and its buttons are replaced with these. A build that predates the field
+    /// edits the text alone, which drops the buttons.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redraw: Option<crate::telegram::api::ReplyMarkup>,
 }
 
 /// One closed trade: its core and report record id.
@@ -428,40 +367,9 @@ mod cores_opt {
     }
 }
 
-/// `YYYY-MM-DD` form of [`NaiveDate`]. Chrono's `serde` feature is not enabled on this crate.
-mod naive_date_opt {
-    use chrono::NaiveDate;
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    const FORMAT: &str = "%Y-%m-%d";
-
-    /// Serialize a present date as `YYYY-MM-DD`, or an absent date as null.
-    pub fn serialize<S>(value: &Option<NaiveDate>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            Some(date) => serializer.serialize_some(&date.format(FORMAT).to_string()),
-            None => serializer.serialize_none(),
-        }
-    }
-
-    /// Read null or a `YYYY-MM-DD` string, returning a serde error for invalid dates.
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<NaiveDate>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let text = Option::<String>::deserialize(deserializer)?;
-        match text {
-            None => Ok(None),
-            Some(text) => NaiveDate::parse_from_str(&text, FORMAT)
-                .map(Some)
-                .map_err(serde::de::Error::custom),
-        }
-    }
-}
-
 /// Announce-once state for one chat. Restart reads this instead of replaying history.
+///
+/// Unknown fields are ignored, so a ledger an older build wrote with a since-removed field loads.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default)]
 pub struct NotifyLedger {
@@ -473,9 +381,6 @@ pub struct NotifyLedger {
     pub seen: BTreeMap<u64, BTreeMap<i64, i64>>,
     /// Cores whose down notice was queued and whose back notice has not been queued.
     pub down_announced: BTreeSet<u64>,
-    /// Host-local date last queued or suppressed when daily settings were enabled or moved.
-    #[serde(default, with = "naive_date_opt")]
-    pub daily_last: Option<NaiveDate>,
     /// Each automatic report's last slot and the message it left in the chat.
     pub reports: AutoLedger,
     /// Closes a threshold could not judge yet because their dollar value is unknown: core, record

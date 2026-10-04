@@ -796,8 +796,8 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   The host talks only through typed `Work` / `Response` channels: `moon_tg::tick` drains them on
   the host's owner loop — in the terminal the Backend's 100 ms loop (`Backend::tick_telegram`).
   A third thread, `telegram-notify`, drains the notification outbox; see below.
-- **Notification sender.** `moon-tg`'s notify tick appends closed-trade, core-down, and
-  daily-summary HTML to the `NotifyStore` outbox in the same atomic save as the announce-once
+- **Notification sender.** `moon-tg`'s notify tick appends closed-trade and core-down HTML to
+  the `NotifyStore` outbox in the same atomic save as the announce-once
   ledger. `moon-core`'s `telegram-notify` thread owns its own Bot API client and deletes a row
   only after Telegram accepts it, pacing each chat at one message per second. A timeout is
   retried, so a rare duplicate is possible. A body over the 4096 UTF-16 limit is not queued.

@@ -103,8 +103,6 @@ telegram.report_help: "Оберіть період нижче. У звітах �
 
 telegram.report_help_station: "Оберіть період нижче. У звітах є вигляд за ботами і днями. Натисніть період ще раз, щоб отримати свіжі дані.\n\n/hour — ця година\n/today — сьогодні\n/daily — по днях за цей місяць\n/report 2026-09-01 2026-09-10 — власний період\n/daily 2026-09-01 2026-09-10 — власні результати по днях\n/status — статус станції\nДати включно, до 366 днів; часовий пояс — з налаштувань станції. Звіти оновлюються цілодобово."
 
-telegram.notify_profit: "Прибуток"
-
 telegram.notify_manual: "Вручну"
 
 telegram.notify_unvalued: "Без оцінки"
@@ -118,13 +116,3 @@ telegram.notify_events_more: "…і ще %{n}"
 telegram.notify_down: "немає зв'язку з"
 
 telegram.notify_back: "зв'язок відновлено"
-
-telegram.notify_daily_title: "Підсумок дня"
-
-telegram.notify_trades: "Угоди"
-
-telegram.notify_unvalued_trades: "Без оцінки"
-
-telegram.notify_best: "Найкраща"
-
-telegram.notify_worst: "Найгірша"

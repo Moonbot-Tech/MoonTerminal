@@ -1,7 +1,7 @@
 //! The notifications of one chat, picked in the Notifications column of the bot box beside the
 //! menu tree — what the Mini App's Settings tab edits: closed-trade cards (cores, volume and result
-//! thresholds), core down/back notices, the daily summary — and what only the bot's chat and this
-//! column edit: the cards' dollar follow-up and the automatic reports.
+//! thresholds) and core down/back notices — and what only the bot's chat and this column edit:
+//! the cards' dollar follow-up, the automatic reports and the cores' own events.
 //!
 //! The terminal's bot saves them at once into its notifications file; the station's sends them in
 //! a change of their own, carrying only this chat's row — not the zone, not a draft of the chats.
@@ -52,7 +52,7 @@ pub(in crate::settings) struct NotifyEd {
     /// The chat and the stored row the editor was filled from.
     loaded: Option<(i64, ChatNotifyRow)>,
     /// What the fields were filled with, to tell the user's edits from the stored row.
-    loaded_fields: [String; 5],
+    loaded_fields: [String; 4],
     /// Why there is nothing to edit for the picked chat, from the last read.
     unavailable: Option<Unavailable>,
     /// The stored row moved on while the editor held unsaved edits.
@@ -62,7 +62,6 @@ pub(in crate::settings) struct NotifyEd {
     profit: Entity<MoonInputState>,
     loss: Entity<MoonInputState>,
     after_minutes: Entity<MoonInputState>,
-    daily_time: Entity<MoonInputState>,
     /// A save sent to the station for this chat at this revision, awaiting its answer.
     sending: Option<(i64, u64)>,
     /// How the last save of this chat came out.
@@ -84,20 +83,18 @@ impl NotifyEd {
             profit: input(),
             loss: input(),
             after_minutes: input(),
-            daily_time: input(),
             sending: None,
             status: None,
         }
     }
 
     /// The fields as typed now.
-    fn fields(&self, cx: &App) -> [String; 5] {
+    fn fields(&self, cx: &App) -> [String; 4] {
         [
             &self.min_volume,
             &self.profit,
             &self.loss,
             &self.after_minutes,
-            &self.daily_time,
         ]
         .map(|field| field.read(cx).value().to_string())
     }
@@ -128,33 +125,22 @@ fn parse_amount(text: &str) -> Result<Option<f64>, ()> {
     }
 }
 
-/// `HH:MM` as typed: an hour of the day and a minute.
-fn parse_time(text: &str) -> Result<(u8, u8), ()> {
-    let (hour, minute) = text.trim().split_once(':').ok_or(())?;
-    let hour: u8 = hour.trim().parse().map_err(|_| ())?;
-    let minute: u8 = minute.trim().parse().map_err(|_| ())?;
-    (hour < 24 && minute < 60)
-        .then_some((hour, minute))
-        .ok_or(())
-}
-
 /// The fields' texts for a stored row.
-fn fields_of(settings: &NotifySettings) -> [String; 5] {
+fn fields_of(settings: &NotifySettings) -> [String; 4] {
     [
         amount_text(settings.trades.min_volume_usd),
         amount_text(settings.trades.profit_at_least_usd),
         amount_text(settings.trades.loss_at_least_usd),
         settings.down.after_minutes.to_string(),
-        format!("{:02}:{:02}", settings.daily.hour, settings.daily.minute),
     ]
 }
 
 /// The draft with the fields' numbers in it, or which field does not read.
 fn settings_from(
     draft: &NotifySettings,
-    fields: [&str; 5],
+    fields: [&str; 4],
 ) -> Result<NotifySettings, &'static str> {
-    let [min_volume, profit, loss, after, time] = fields;
+    let [min_volume, profit, loss, after] = fields;
     let mut settings = draft.clone();
     settings.trades.min_volume_usd =
         parse_amount(min_volume).map_err(|_| "telegram.notify_editor.err_amount")?;
@@ -168,9 +154,6 @@ fn settings_from(
         .ok()
         .filter(|m| (1..=1440).contains(m))
         .ok_or("telegram.notify_editor.err_minutes")?;
-    let (hour, minute) = parse_time(time).map_err(|_| "telegram.notify_editor.err_time")?;
-    settings.daily.hour = hour;
-    settings.daily.minute = minute;
     if matches!(&settings.trades.cores, CoreScope::Only(ids) if ids.is_empty()) {
         return Err("telegram.mini_settings_err_cores");
     }
@@ -309,7 +292,6 @@ impl SettingsView {
             ed.profit.clone(),
             ed.loss.clone(),
             ed.after_minutes.clone(),
-            ed.daily_time.clone(),
         ];
         for (field, value) in fields.into_iter().zip(values) {
             field.update(cx, |state, cx| state.set_value(value, window, cx));
@@ -380,17 +362,15 @@ impl SettingsView {
             return;
         };
         let fields = ed.fields(cx);
-        let settings = match settings_from(
-            &ed.draft,
-            [&fields[0], &fields[1], &fields[2], &fields[3], &fields[4]],
-        ) {
-            Ok(settings) => settings,
-            Err(key) => {
-                self.notify_ed_mut(side).status = Some((chat, Err(t!(key).to_string())));
-                cx.notify();
-                return;
-            }
-        };
+        let settings =
+            match settings_from(&ed.draft, [&fields[0], &fields[1], &fields[2], &fields[3]]) {
+                Ok(settings) => settings,
+                Err(key) => {
+                    self.notify_ed_mut(side).status = Some((chat, Err(t!(key).to_string())));
+                    cx.notify();
+                    return;
+                }
+            };
         let rows = BTreeMap::from([(chat, ChatNotifyRow { settings, revision })]);
         match side {
             ChatsOf::Terminal => {
@@ -755,22 +735,6 @@ impl SettingsView {
                         &ed.after_minutes,
                         "after",
                         t!("telegram.mini_settings_after_minutes").to_string(),
-                    )),
-            )
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(switch(
-                        "daily",
-                        t!("telegram.mini_settings_daily").to_string(),
-                        draft.daily.on,
-                        |s, v| s.daily.on = v,
-                    ))
-                    .child(field(
-                        &ed.daily_time,
-                        "time",
-                        t!("telegram.mini_settings_time").to_string(),
                     )),
             )
             .child(

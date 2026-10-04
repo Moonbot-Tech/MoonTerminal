@@ -282,12 +282,6 @@ pub enum SettingsAction {
     Down(bool),
     /// How long a core must stay down before the notice, in minutes.
     DownAfter(u16),
-    /// The daily summary on or off.
-    Daily(bool),
-    /// The hour picker of the daily summary.
-    DailyHours,
-    /// The hour the daily summary is sent at.
-    DailyHour(u8),
     /// An automatic report on or off.
     Auto(AutoReport, bool),
     /// The cores' own "trade opened" reports on or off.
@@ -316,9 +310,6 @@ impl SettingsAction {
             Self::Trades(on) => format!(":n:t:{}", flag(on)),
             Self::Down(on) => format!(":n:o:{}", flag(on)),
             Self::DownAfter(minutes) => format!(":n:d:{minutes}"),
-            Self::Daily(on) => format!(":n:y:{}", flag(on)),
-            Self::DailyHours => ":n:h".into(),
-            Self::DailyHour(hour) => format!(":n:h:{hour}"),
             Self::Auto(kind, on) => format!(":n:a:{}:{}", auto_code(kind), flag(on)),
             Self::Opened(on) => format!(":n:e:o:{}", flag(on)),
             Self::Detects(on) => format!(":n:e:d:{}", flag(on)),
@@ -352,7 +343,6 @@ impl SettingsAction {
                     .contains(&minutes)
                     .then_some(Self::DownAfter(minutes))?
             }
-            ["n", "y", on] => Self::Daily(flag(on)?),
             ["n", "a", kind, on] => Self::Auto(
                 AutoReport::ALL
                     .into_iter()
@@ -361,11 +351,6 @@ impl SettingsAction {
             ),
             ["n", "e", "o", on] => Self::Opened(flag(on)?),
             ["n", "e", "d", on] => Self::Detects(flag(on)?),
-            ["n", "h"] => Self::DailyHours,
-            ["n", "h", hour] => {
-                let hour: u8 = hour.parse().ok()?;
-                (hour < 24).then_some(Self::DailyHour(hour))?
-            }
             _ => return None,
         })
     }

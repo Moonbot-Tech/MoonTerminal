@@ -32,13 +32,13 @@ pub struct TelegramState {
     pub(crate) mini_report_last: Option<CachedReport>,
     /// At most one Mini App trades read is computed at a time, including timed-out requests.
     pub(crate) mini_trades_pending: bool,
-    /// At most one closed-trade and daily notification read is in flight.
+    /// At most one closed-trade notification read is in flight.
     pub(crate) notify_busy: bool,
     /// Report revision captured at spawn and retained after that notification read saved.
     ///
     /// `None` is a host that cannot name a revision, the value after a service restart, and the
     /// value after a read that did not save. A later tick spawns again only when this differs
-    /// from the host's revision or a daily rule is due, and only after the interval.
+    /// from the host's revision, and only after the interval.
     pub(crate) last_report_revision: Option<crate::ReportRevision>,
     /// When the last notification read was spawned. `None` allows the first run.
     pub(crate) last_notify_run: Option<Instant>,
@@ -69,8 +69,7 @@ pub struct TelegramState {
     pub(crate) last_down_step: Option<Instant>,
     /// Frozen UTC Unix seconds for notification tests. `None` in production.
     ///
-    /// When set, finish names today's date from this instant instead of the wall clock, and the
-    /// one-second down gate does not apply.
+    /// When set, the one-second down gate does not apply.
     pub(crate) notify_clock_override: Option<i64>,
     /// Store used when no service is running. Production leaves this `None` and reads the service.
     pub(crate) notify_store_override: Option<Arc<Mutex<moon_core::telegram::runtime::NotifyStore>>>,
@@ -90,6 +89,12 @@ pub struct TelegramState {
     /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
     /// service restart.
     pub(crate) mini_strategy_wanted: HashMap<(CoreId, u64), (bool, Instant, u64, u64)>,
+    /// Run switches the chat's Control section sent and the core has not reported yet, by
+    /// `(core, switch)`: the asked state and when. Cleared on service restart.
+    pub(crate) run_wanted: HashMap<(CoreId, moon_core::session::RunSwitch), (bool, Instant)>,
+    /// Control messages to redraw once the core answers their press, by `(chat, message)`.
+    /// Cleared on service restart.
+    pub(crate) control_redraws: crate::menu::ControlRedraws,
     pub service: Option<TelegramService>,
     pub status: TelegramStatus,
     pub mini_status: MiniAppStatus,
@@ -189,6 +194,8 @@ impl TelegramState {
             injected_reads: None,
             mini_trades_last: None,
             mini_strategy_wanted: HashMap::new(),
+            run_wanted: HashMap::new(),
+            control_redraws: HashMap::new(),
             service,
             status,
             mini_status: MiniAppStatus::Stopped,
@@ -342,6 +349,8 @@ impl TelegramState {
         self.mini_report_last = None;
         self.mini_trades_last = None;
         self.mini_strategy_wanted.clear();
+        self.run_wanted.clear();
+        self.control_redraws.clear();
         self.pairing = None;
         self.status = TelegramStatus::Stopping;
         self.mini_status = MiniAppStatus::Stopped;

@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
-use chrono::NaiveDate;
 use moon_core::telegram::notify::{ChatNotify, NotifyFile, Pending};
 use moon_core::telegram::runtime::NotifyStore;
 
@@ -16,10 +15,7 @@ use crate::notify::test_host::{CHAT, DuringJob, TempRoot, TickHost};
 use crate::notify::trades::ClosedTrade;
 /// No rows. Installed so a mistaken job does not open the report database.
 fn empty_reads() -> InjectedReads {
-    InjectedReads {
-        trades: Vec::new(),
-        days: BTreeMap::new(),
-    }
+    InjectedReads { trades: Vec::new() }
 }
 
 /// One closed trade on core 7.
@@ -51,14 +47,13 @@ fn closed_trade(rec_id: i64, close_utc: i64, coin: &str, profit_usd: Option<f64>
 /// The two closes the trade tests inject: one after enable, one before it.
 ///
 /// Returns:
-///     Rec 11 closed at 1500, and rec 12 closed at 900. No day rows.
+///     Rec 11 closed at 1500, and rec 12 closed at 900.
 fn closes_around_enable() -> InjectedReads {
     InjectedReads {
         trades: vec![
             closed_trade(11, 1_500, "NEWCOIN", None),
             closed_trade(12, 900, "OLDCOIN", None),
         ],
-        days: BTreeMap::new(),
     }
 }
 
@@ -302,57 +297,6 @@ fn replaced_store_skips_every_chat() {
     assert!(!host.state.notify_busy);
 }
 
-/// The summary for 1970-01-01 is sent once, from the injected day rather than the trade list.
-#[test]
-fn daily_summary_is_sent_once_on_the_due_day() {
-    let _locale = crate::test_locale::force("en");
-    let root = TempRoot::new("daily");
-    let date = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date");
-    let mut days = BTreeMap::new();
-    days.insert(date, vec![closed_trade(21, 1_500, "DAYCOIN", Some(1.5))]);
-    let mut host = TickHost::open(root.notifications());
-    host.admit(CHAT);
-    host.edit(|file| {
-        let mut chat = ChatNotify {
-            revision: 1,
-            ..ChatNotify::default()
-        };
-        chat.settings.daily.on = true;
-        chat.settings.daily.hour = 0;
-        chat.settings.daily.minute = 0;
-        file.chats.insert(CHAT, chat);
-    });
-    host.state.visible_override = Some(vec![7]);
-    host.state.injected_reads = Some(InjectedReads {
-        trades: Vec::new(),
-        days,
-    });
-    host.tick(2_000);
-    let rows = host.outbox();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].chat, CHAT);
-    assert_eq!(rows[0].created_utc, 2_000);
-    assert_eq!(rows[0].cores, Some(vec![7]));
-    assert!(
-        rows[0].html.contains("Daily summary 1970-01-01"),
-        "{}",
-        rows[0].html
-    );
-    assert!(rows[0].html.contains("DAYCOIN"), "{}", rows[0].html);
-    assert_eq!(
-        host.file()
-            .chats
-            .get(&CHAT)
-            .and_then(|chat| chat.ledger.daily_last),
-        Some(date)
-    );
-    assert_eq!(host.jobs, 1);
-    host.state.last_notify_run = None;
-    host.tick(2_000);
-    assert_eq!(host.jobs, 1, "today's summary is already recorded");
-    assert_eq!(host.outbox().len(), 1);
-}
-
 /// One queued row for a viewer fixture.
 ///
 /// Args:
@@ -419,61 +363,11 @@ fn owner_outbox_keeps_unknown_rows_and_drops_a_hidden_core() {
     assert_eq!(host.jobs, 0, "an all-off chat must not send");
 }
 
-/// A viewer's empty-day summary discloses no core and survives the next purge.
+/// `seen` and `trades_enabled_utc` written after the down snapshot must survive the write.
 #[test]
-fn viewer_empty_day_summary_survives_the_tick_purge() {
-    let _locale = crate::test_locale::force("en");
-    let root = TempRoot::new("empty-day");
-    let date = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date");
-    let mut host = TickHost::open(root.notifications());
-    host.config.telegram.authorized_chat_ids = vec![CHAT];
-    host.config.telegram.owner_chat_id = None;
-    host.config.telegram.chat_profile_mut(CHAT).core_uids = vec![8];
-    host.edit(|file| {
-        let mut chat = ChatNotify {
-            revision: 1,
-            ..ChatNotify::default()
-        };
-        chat.settings.daily.on = true;
-        chat.settings.daily.hour = 0;
-        chat.settings.daily.minute = 0;
-        file.chats.insert(CHAT, chat);
-    });
-    host.state.visible_override = Some(vec![8]);
-    host.state.injected_reads = Some(InjectedReads {
-        trades: Vec::new(),
-        days: BTreeMap::new(),
-    });
-    host.tick(2_000);
-    let rows = host.outbox();
-    assert_eq!(rows.len(), 1, "an empty day still sends the summary");
-    assert_eq!(rows[0].cores, Some(Vec::new()));
-    assert!(
-        rows[0].html.contains("Daily summary 1970-01-01"),
-        "{}",
-        rows[0].html
-    );
-    assert_eq!(
-        host.file()
-            .chats
-            .get(&CHAT)
-            .and_then(|chat| chat.ledger.daily_last),
-        Some(date)
-    );
-    let queued_id = rows[0].id;
-    host.tick(2_000);
-    let kept = host.outbox();
-    assert_eq!(kept.len(), 1, "a quiet-day summary must survive the purge");
-    assert_eq!(kept[0].cores, Some(Vec::new()));
-    assert_eq!(kept[0].id, queued_id);
-}
-
-/// `seen` and `daily_last` written after the down snapshot must survive the write.
-#[test]
-fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
+fn write_down_keeps_seen_and_the_trade_floor_set_after_the_snapshot() {
     let root = TempRoot::new("down-partial");
     let store = Mutex::new(NotifyStore::open(root.notifications()).expect("open"));
-    let date = NaiveDate::from_ymd_opt(2026, 3, 1).expect("date");
     {
         let mut guard = store
             .lock()
@@ -500,7 +394,7 @@ fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
             .update(|file| {
                 let entry = file.chats.get_mut(&CHAT).expect("chat");
                 entry.ledger.seen.insert(9, BTreeMap::from([(3, 50)]));
-                entry.ledger.daily_last = Some(date);
+                entry.ledger.trades_enabled_utc = Some(40);
             })
             .expect("live edit");
     }
@@ -515,7 +409,7 @@ fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
         .ledger
         .clone();
     assert_eq!(ledger.down_announced, stepped.down_announced);
-    assert_eq!(ledger.daily_last, Some(date));
+    assert_eq!(ledger.trades_enabled_utc, Some(40));
     assert_eq!(
         ledger.seen.get(&9).and_then(|rows| rows.get(&3)).copied(),
         Some(50)
@@ -549,7 +443,6 @@ fn a_waiting_card_gets_its_dollars_written_in() {
     usdt.profit_native = Some(1.0);
     host.state.injected_reads = Some(InjectedReads {
         trades: vec![btc.clone(), usdt],
-        days: BTreeMap::new(),
     });
     host.tick(2_000);
     let rows = host.outbox();
@@ -576,10 +469,7 @@ fn a_waiting_card_gets_its_dollars_written_in() {
         wait.get_mut(&11).unwrap().message = Some(555);
     });
     btc.profit_usd = Some(7.5);
-    host.state.injected_reads = Some(InjectedReads {
-        trades: vec![btc],
-        days: BTreeMap::new(),
-    });
+    host.state.injected_reads = Some(InjectedReads { trades: vec![btc] });
     host.state.last_notify_run = None;
     host.tick(2_100);
     let rows = host.outbox();

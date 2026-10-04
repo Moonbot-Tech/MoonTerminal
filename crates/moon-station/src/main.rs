@@ -141,7 +141,7 @@ fn main() -> anyhow::Result<()> {
     let reports = moon_core::db::spawn_writer(permit)
         .ok_or_else(|| anyhow::anyhow!("report writer did not start"))?;
     // The USDT valuation of reports whose quote is not USDT, on either profile: the bot's trade
-    // cards, reports and daily summary read it as much as the Mini App does.
+    // cards and reports read it as much as the Mini App does.
     let valuation = moon_core::db::valuation::spawn_worker(reports.tx.clone());
     let epoch = moon_core::util::now_unix_ms_i64() as f64;
     let mut session =
