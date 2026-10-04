@@ -1,0 +1,67 @@
+# Core Status panel: per-core update-queue phase badges/tooltips and the fleet-wide footer
+# counters. Separate from `update.yml`, which is the TERMINAL's own self-update namespace.
+_version: 1
+
+# --- Per-core phase, shown as a badge beside the reported build and as its hover text ---
+core_update.phase.queued: "Na fila"
+core_update.phase.held: "Em espera — faixa ocupada"
+core_update.phase.sent: "Comando enviado"
+core_update.phase.waiting: "Atualizando"
+core_update.phase.verifying: "Verificando a build"
+core_update.phase.succeeded: "Atualizado"
+core_update.phase.installed: "Instalado"
+core_update.phase.unchanged: "Versão inalterada"
+core_update.phase.failed.not_sent: "Falha ao enviar o comando"
+core_update.phase.failed.never_dropped: "O núcleo não se desconectou para a atualização"
+core_update.phase.failed.not_ready: "Não voltou a ficar pronto a tempo de receber a atualização"
+core_update.phase.failed.timeout: "Não voltou depois da atualização — tempo esgotado"
+core_update.phase.failed.gone: "O endereço do núcleo ficou desconhecido"
+core_update.phase.failed.abandoned: "Abandonado quando o aplicativo fechou"
+core_update.phase.failed.rejected: "O núcleo recusou o nome de build pedido"
+
+# --- Unverified: the update finished but the terminal could not confirm the returned build ---
+core_update.phase.unverified.unavailable: "Build não verificada — reconexão indisponível"
+core_update.phase.unverified.timeout: "Build não verificada — o núcleo não voltou a tempo"
+
+# --- Fleet-wide footer counters, drawn only while a campaign is active ---
+core_update.summary.updating: "atualizando"
+core_update.summary.queued: "na fila"
+core_update.summary.failed: "com falha"
+
+# --- Updates list (Core Status "Updates" mode): columns, empty state, target wording ---
+core_update.col.time: "Hora"
+core_update.col.core: "Núcleo"
+core_update.col.server: "Servidor"
+core_update.col.from_to: "De → para"
+core_update.col.target: "Alvo"
+core_update.col.outcome: "Resultado"
+core_update.col.duration: "Duração"
+core_update.list_empty: "Sem histórico de atualização"
+core_update.target.release: "Release"
+core_update.target.named: "Beta %{name}"
+# --- Hover-revealed row/server update control (shared control, controls/core_update) ---
+core_update.row.action: "Atualizar este núcleo"
+core_update.server.action: "Atualizar neste servidor · núcleos: %{n}"
+core_update.retry: "Repetir a atualização"
+core_update.skipped_offline: "offline: %{n}"
+core_update.skipped_already: "já atualizando: %{n}"
+# --- Footer fleet-wide bulk actions and their single shared confirm ---
+core_update.fleet.all: "Atualizar todos"
+core_update.fleet.behind: "Atualizar os atrasados"
+core_update.fleet.behind_none: "Nenhum núcleo aqui tem build mais antiga que a mais nova visível, e o terminal não vê os releases do Moonbot."
+core_update.fleet.selected: "Atualizar selecionados (%{n})"
+core_update.fleet.named: "Para uma build…"
+core_update.confirm.title: "Atualizar núcleos"
+core_update.confirm.q: "Atualizar núcleos: %{cores} em servidores: %{servers}? As atualizações rodam em paralelo entre servidores — no máximo um núcleo por vez em cada."
+# --- Row context menu: the ordinary release update, and the named beta/test build one level
+# deeper (a free-text prompt -- MoonProto has no list of available builds to offer) ---
+core_update.menu.release: "Atualizar para o release"
+core_update.menu.named: "Atualizar para uma versão nomeada…"
+core_update.menu.named_prompt: "Nome da build para %{core}:"
+core_update.menu.release_n: "Atualizar para o release · núcleos: %{n}"
+core_update.menu.named_n: "Atualizar para uma versão nomeada · núcleos: %{n}"
+core_update.menu.named_prompt_n: "Nome da build para núcleos: %{n}"
+core_update.confirm.named_prompt: "Nome da build:"
+core_update.menu.named_ph: "MoonBot-F8 ou %{cmd} MoonBot-F8"
+core_update.menu.named_hint: "Você pode digitar só o nome da build, ou colar o comando de instalação inteiro — os dois funcionam."
+core_update.menu.unavailable: "Indisponível — núcleo não está pronto ou já está atualizando"

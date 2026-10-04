@@ -1,0 +1,28 @@
+# Lines tab of the Settings window (order-line styling, orders.toml).
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# Line names (Order lines, Buy/Sell/Stop/Trailing/Take Profit/VStop/Pending cond/
+# Liquidation) are trading terms and intentionally remain untranslated: lines.rs keeps them as
+# English literals. This file contains only attributes and shared labels.
+lines.dashed: "nét đứt"
+lines.start_cross: "chữ thập đầu"
+lines.end_cross: "chữ thập cuối"
+lines.knots: "nút"
+lines.thickness: "độ dày"
+lines.cross_size: "cỡ chữ thập"
+lines.cross_thickness: "độ dày chữ thập"
+lines.knot_size: "cỡ nút"
+lines.pending_group: "Đã đặt (chưa khớp):"
+lines.pending_alpha: "độ trong"
+lines.path_title: "Vết đổi giá (đường)"
+lines.path_line_color: "theo màu của đường"
+lines.path_alpha: "độ trong"
+lines.path_hint: "Các bước giá lệnh đã được dời — do core gửi hoặc dựng lại tại đây. Đoạn tự dời của Stop luôn được vẽ."
+lines.global: "Chung"
+lines.active_alpha: "Độ trong lệnh đang mở"
+lines.closed_visibility: "Độ hiện lệnh đã hủy/đóng"
+lines.pending_dashed: "Lệnh chờ: đường vào lệnh nét đứt"
+lines.max_closed: "Số lệnh đã đóng tối đa trên biểu đồ"
+lines.hint: "Đường Stop/Trailing/Liq chỉ hiện sau khi vào lệnh đã khớp."
+lines.theme_hint: "Đang sửa bộ đường của chủ đề đang dùng: Sáng dùng bộ sáng, Tối và Than chì dùng chung bộ tối; đổi chủ đề ở tab Chung. Lưu ghi cả hai bộ vào cfg/orders.toml cạnh ứng dụng — có thể chia sẻ file."

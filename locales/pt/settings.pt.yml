@@ -1,0 +1,54 @@
+# Settings window: general content and tab labels.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- General settings-window content ---
+settings.save: "Salvar"
+settings.saved: "Salvo"
+# Caption beside the Save button. It is an INDICATOR, never a fence: the button stays enabled in
+# both states and closing the window still discards the draft without a confirmation.
+settings.dirty: "alterações não salvas"
+settings.clean: "sem alterações"
+settings.window_title: "MoonTerminal — Configurações"
+settings.title: "Configurações"
+# --- Copy/Paste tab settings (the text is the portable file's contents) ---
+settings.copy: "Copiar"
+settings.paste: "Colar"
+settings.copied: "Configurações da aba copiadas para a área de transferência"
+settings.pasted: "Colado — revise e pressione Salvar"
+settings.paste_wrong: "A área de transferência não contém as configurações desta aba"
+settings.paste_empty: "A área de transferência está vazia"
+
+# --- Settings tab labels ---
+tab.connections: "Conexões"
+tab.general: "Geral"
+tab.hotkeys: "Atalhos"
+tab.interface: "Interface"
+# Line-type names such as Buy/Sell/Stop remain English. This file localizes only the tab label;
+# attribute labels are localized in locales/lines.yml.
+tab.lines: "Linhas"
+tab.badges: "Selos"
+tab.interface_colors: "Cores"
+tab.general_main: "Principal"
+
+# --- Badges tab (detect types) ---
+badges.title: "Selos dos tipos de detecção"
+badges.theme_hint: "Editando as cores do tema ativo. Mude o tema na aba Geral e salve."
+badges.col_type: "Tipo (ordinal)"
+badges.col_name: "Nome"
+badges.col_code: "Código (≤3)"
+badges.col_color: "Cor"
+badges.col_active: "ativo"
+badges.distinguish: "L/S"
+badges.use_outline: "Contorno"
+badges.outline_long: "long"
+badges.outline_short: "short"
+badges.ordinal_tip: "Número do tipo de detecção (StrategyKind) — a chave que associa o selo a uma detecção. Mude só se você souber por quê: outro número vincula o selo a outro tipo."
+badges.code_tip: "Código do selo (≤3 caracteres) mostrado no selo. Para long e para as duas direções quando a divisão long/short está desligada."
+badges.code_short_tip: "Código do selo de SHORT (≤3 caracteres) — usado só com a divisão long/short (L/S) ligada."
+badges.add: "Adicionar tipo"
+badges.delete: "Excluir"
+badges.direction_group: "Direção (isShort)"
+badges.mark_direction: "Marcar a direção com o contorno do selo"
+badges.short_outline: "Contorno short"
+badges.long_outline: "Contorno long"

@@ -3,7 +3,7 @@
 MoonTerminal interface localisation dictionaries. Format — rust-i18n `_version: 1`
 (the first real line of each file). Each file is one language: flat dotted keys,
 one `key: "value"` (or a single-quoted scalar) per line. The shipped languages
-are `ru`, `en`, `es`, and `uk`, each in its own folder. Variable interpolation:
+are `ru`, `en`, `es`, `uk`, `tr`, `pt`, and `vi`, each in its own folder. Variable interpolation:
 `%{var}`.
 
 A file lives at `locales/<lang>/<area>.<lang>.yml`. rust-i18n reads the locale

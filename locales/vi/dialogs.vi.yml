@@ -1,0 +1,26 @@
+# Create, rename, and delete dialogs plus shared buttons.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Shared buttons ---
+dialogs.cancel: "Hủy"
+dialogs.done: "Xong"
+dialogs.yes: "Có"
+dialogs.no: "Không"
+dialogs.create: "Tạo"
+dialogs.rename: "Đổi tên"
+
+# --- Strategy dialog titles ---
+dialogs.new_strategy: "Chiến lược mới"
+dialogs.new_folder: "Thư mục mới"
+dialogs.rename_folder: "Đổi tên thư mục"
+dialogs.delete_q: "Xóa?"
+dialogs.operation: "Thao tác"
+
+# --- Dialog fields and hints ---
+dialogs.name_ph: "tên"
+dialogs.name_required: "Nhập tên chiến lược"
+dialogs.folder_prefix: "thư mục: %{path}"
+dialogs.into_prefix: "vào: %{path}"
+dialogs.delete_confirm: "Xóa %{what}? Không hoàn tác được."
+dialogs.close: "Đóng"

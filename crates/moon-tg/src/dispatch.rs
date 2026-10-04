@@ -3,6 +3,7 @@
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
+use crate::t;
 use moon_core::config::TelegramConfig;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
@@ -13,7 +14,6 @@ use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 use moon_core::telegram::runtime::{Response, Work};
 use moon_core::telegram::web::{MiniAppApiError, MiniAppApiRequest};
 use moon_core::telegram::{TelegramService, TelegramStatus};
-use rust_i18n::t;
 
 use crate::labels::{answer, navigation_keyboard, telegram_labels};
 use crate::{TelegramState, TgHost, mini_app, report};

@@ -4,12 +4,12 @@
 //! the last and opens the report. A day after today, or more than a year after the first day, is
 //! out of reach and does nothing; a day before the first one starts the pick again from there.
 
+use crate::t;
 use chrono::{Datelike, Days, Months, NaiveDate};
 use moon_core::config::telegram_menu::ReportView;
 use moon_core::telegram::api::InlineKeyboardButton;
 use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{MAX_SPAN_DAYS, ReportRequest};
-use rust_i18n::t;
 
 /// A cell that shows nothing; Telegram refuses an empty button text.
 const BLANK: &str = "\u{2800}";

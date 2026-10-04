@@ -1,0 +1,145 @@
+_version: 1
+
+# Окно детали сделки: открывается по двойному клику на закрытой сделке в «Отчёте».
+# Свой файл, а не блок в report.yml: это отдельная область интерфейса (см. README).
+
+trade_window.open: "Mở cửa sổ giao dịch"
+
+trade_window.blocked.unresolved: "Cửa sổ giao dịch không dùng được - core chưa kết nối"
+
+trade_window.retry: "Thử lại"
+
+trade_window.other_trades: "Hiện giao dịch khác"
+
+# The header's ⚙: one popup for everything the window draws (trades, history, candles); every row
+# is stored at once, for every trade window.
+trade_window.settings.tip: "Kiểu xem cửa sổ giao dịch"
+
+trade_window.settings.title: "Kiểu xem cửa sổ giao dịch"
+
+trade_window.settings.frame_trades: "Giao dịch"
+
+trade_window.settings.fit: "Hiển thị trọn giao dịch trong cửa sổ"
+
+# The trade's own captions at the top of the chart: its strategy, the detect it fired on, why it
+# closed. On in a trade window, off in the tuner's pane — each remembers its own.
+trade_window.settings.show_labels: "Chú thích giao dịch trên biểu đồ"
+
+trade_window.settings.hide_rail: "Ẩn bảng bên"
+
+# The entry corridor the core saved for a MoonShot order, shaded from the order's placement to its
+# fill. Off by default: the band is loud and the corridor is an input, not an event.
+trade_window.settings.moonshot_zone: "Vùng MoonShot"
+
+# The tick stage: the venue's own prints around the position, paged from its public REST — slow
+# on some venues, so the reader can leave the window on bars alone.
+trade_window.settings.load_ticks: "Tải tick"
+
+trade_window.source.candles_ticks_disabled: "nến %{min} phút - tick tắt trong cài đặt cửa sổ"
+
+trade_window.state.loading: "Đang tải thị trường quanh giao dịch này…"
+
+trade_window.state.failed: "Không lấy được dữ liệu từ sàn. Có thể thử lại."
+
+trade_window.state.rate_limited: "Sàn đang giới hạn tốc độ yêu cầu. Thử lại sau %{secs} giây."
+
+trade_window.state.unknown_symbol: "Sàn không có thị trường này."
+
+trade_window.source.ticks: "tick từ sàn"
+
+trade_window.source.core_ticks: "tick từ core"
+
+trade_window.source.loading_more: "đang tải thêm"
+
+trade_window.source.context_unavailable: "không có ngữ cảnh nến"
+
+trade_window.source.awaiting_core: "nến %{min} phút, đang kiểm tra kho core"
+
+trade_window.source.core_ticks_bucketed: "tick từ core, bước %{secs} giây"
+
+trade_window.source.ticks_bucketed: "tick từ sàn, bước %{secs} giây"
+
+# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
+# словаре не хранится.
+trade_window.source.ticks_edges: "hai mép được lấp bằng nến %{min} phút"
+
+# Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
+trade_window.source.ticks_ends: "tick quanh vào lệnh và thoát lệnh, nến %{min} phút ở giữa"
+
+# Таймфрейм подставляется из САМИХ строк, а не заявляется константой: раньше здесь стояла
+# фиксированная «минутные свечи», пока панель пересобирала минутки в пятиминутки. Свечи теперь
+# всегда называют причину, по которой окно показывает их вместо тиков.
+trade_window.source.candles_ticks_pending: "nến %{min} phút, vẫn đang tải tick"
+
+trade_window.source.candles_no_route: "nến %{min} phút - %{brand} không có tick công khai"
+
+trade_window.source.candles_retention: "nến %{min} phút - sàn chỉ giữ tick %{hours} giờ"
+
+trade_window.source.candles_no_trades: "nến %{min} phút - sàn không có giao dịch ở đây"
+
+trade_window.source.candles_failed: "nến %{min} phút - không tải được tick"
+
+trade_window.source.candles_rate_limited: "nến %{min} phút - sàn đang giới hạn tốc độ, chưa yêu cầu tick; mở lại cửa sổ sau %{secs} giây"
+
+trade_window.empty.no_data: "Thị trường không có dữ liệu cho kỳ này."
+
+trade_window.empty.no_endpoint: "%{brand} không có nguồn lịch sử công khai mà bản này dùng được."
+
+trade_window.empty.unknown_venue: "Bản này không nhận ra sàn của core."
+
+trade_window.empty.core_offline: "Core của giao dịch chưa kết nối, nên không xác định được sàn và thị trường."
+
+trade_window.empty.bad_window: "Giờ mở hoặc giờ đóng của giao dịch không dùng được."
+
+trade_window.figure.side: "Chiều"
+
+trade_window.figure.entry: "Vào lệnh"
+
+trade_window.figure.exit: "Thoát lệnh"
+
+trade_window.figure.quantity: "Số lượng"
+
+trade_window.figure.profit: "Lãi"
+
+trade_window.figure.profit_pct: "Lãi, %"
+
+trade_window.figure.opened: "Giờ mở"
+
+trade_window.figure.closed: "Giờ đóng"
+
+trade_window.figure.held: "Thời gian giữ"
+
+# Блок стратегии в начале рейла — только у сделок, у которых стратегия есть (#561).
+trade_window.figure.strategy: "Chiến lược"
+# Метки состояния под именем: стратегии на ядре больше нет, но её история сохранена локально /
+# нет нигде / ядро, которому она принадлежит, сейчас не подключено.
+trade_window.strategy.in_deleted: "trong mục đã xóa"
+trade_window.strategy.deleted: "đã xóa"
+trade_window.strategy.core_offline: "core chưa kết nối"
+# Строка версии: штамп — тот же, каким панель «Версии» подписывает свои строки, чтобы юзер нашёл
+# её глазами; «действует» — то же слово, что стоит там у текущей версии.
+trade_window.strategy.version: "phiên bản %{stamp}"
+trade_window.strategy.version_current: "phiên bản: đang dùng"
+trade_window.strategy.version_unknown: "không rõ phiên bản"
+trade_window.strategy.version_tip: "Phiên bản chiến lược đang dùng lúc vào lệnh — theo ghi nhận của terminal: mốc là lúc terminal thấy cài đặt, không phải lúc core áp dụng. Nhấn mở phiên bản đó trong khung Phiên bản."
+trade_window.strategy.version_unknown_tip: "Giao dịch sớm hơn phiên bản lưu đầu tiên: terminal chưa theo dõi core này"
+
+trade_window.figure.unknown: "không rõ"
+
+# LONG / SHORT — отраслевой стандарт, не переводится (см. README), но живёт в словаре,
+# чтобы обе подписи правились в одном месте.
+trade_window.side.long: "LONG"
+
+trade_window.side.short: "SHORT"
+
+# Блок «Ордера» в рельсе: архивные трассы ордеров этой сделки из ядра (#569). Пустой ответ ядра —
+# окончательное «трасс нет», без вечного спиннера; ошибка/таймаут — с кнопкой «Повторить».
+trade_window.figure.orders: "Lệnh"
+trade_window.traces.pending: "đang tìm vết: kho lưu, rồi tới core…"
+trade_window.traces.drawn: "%{own} riêng, %{inherited} kế thừa"
+trade_window.traces.drawn_own: "%{own} đường trên biểu đồ"
+trade_window.traces.none: "không có vết trong kho — thoát theo báo cáo, vào lệnh bằng mũi tên"
+trade_window.traces.not_askable: "chưa nhận khóa dòng — giao dịch được sao chép trước bản cập nhật core"
+trade_window.traces.failed: "core không trả lời — core cũ hoặc mất kết nối"
+trade_window.traces.retry_tip: "Yêu cầu lại vết lệnh từ core"
+trade_window.traces.neighbours: "+%{n} lân cận"

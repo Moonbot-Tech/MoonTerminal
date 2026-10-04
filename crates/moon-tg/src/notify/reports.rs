@@ -9,6 +9,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::t;
 use chrono::Offset;
 use chrono_tz::Tz;
 use moon_core::config::telegram_access::TelegramReportAccess;
@@ -19,7 +20,6 @@ use moon_core::telegram::notify::{AutoReport, AutoRow, NotifyFile};
 use moon_core::telegram::report::{AutoWindow, auto_window};
 use moon_core::telegram::runtime::{NotifyStore, push_auto_report};
 use moon_core::util::display_time;
-use rust_i18n::t;
 
 use crate::notify::tick::{current_store, lock_store};
 use crate::report::{AutoInputs, AutoPage, read_auto_report};

@@ -1,4 +1,4 @@
-//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es"/"uk");
+//! Interface language. Stored in settings.toml as a code ("ru"/"en"/"es"/"uk"/"tr"/"pt"/"vi");
 //! applied through `rust_i18n::set_locale(lang.code())`.
 //!
 //! The default is the system locale (sys-locale), falling back to English when the
@@ -13,11 +13,22 @@ pub enum Language {
     En,
     Es,
     Uk,
+    Tr,
+    Pt,
+    Vi,
 }
 
 impl Language {
     /// All supported languages (order = order in the settings dropdown).
-    pub const ALL: [Language; 4] = [Language::Ru, Language::En, Language::Es, Language::Uk];
+    pub const ALL: [Language; 7] = [
+        Language::Ru,
+        Language::En,
+        Language::Es,
+        Language::Uk,
+        Language::Tr,
+        Language::Pt,
+        Language::Vi,
+    ];
 
     /// Locale code for rust_i18n / settings.toml.
     pub fn code(self) -> &'static str {
@@ -26,6 +37,9 @@ impl Language {
             Language::En => "en",
             Language::Es => "es",
             Language::Uk => "uk",
+            Language::Tr => "tr",
+            Language::Pt => "pt",
+            Language::Vi => "vi",
         }
     }
 
@@ -36,10 +50,16 @@ impl Language {
             Language::En => "English",
             Language::Es => "Español",
             Language::Uk => "Українська",
+            Language::Tr => "Türkçe",
+            Language::Pt => "Português (Brasil)",
+            Language::Vi => "Tiếng Việt",
         }
     }
 
-    /// Parses a code ("ru", "en-US", "es_ES", "uk-UA", …), considering only the language prefix.
+    /// Parse the leading ASCII language prefix, ignoring case and any region suffix.
+    ///
+    /// Codes such as `en-US`, `es_ES`, and `pt-BR` select the same language as `en`, `es`,
+    /// and `pt`. Returns `None` when the prefix is empty or unsupported.
     pub fn from_code(s: &str) -> Option<Language> {
         let prefix: String = s
             .chars()
@@ -51,6 +71,9 @@ impl Language {
             "en" => Some(Language::En),
             "es" => Some(Language::Es),
             "uk" => Some(Language::Uk),
+            "tr" => Some(Language::Tr),
+            "pt" => Some(Language::Pt),
+            "vi" => Some(Language::Vi),
             _ => None,
         }
     }

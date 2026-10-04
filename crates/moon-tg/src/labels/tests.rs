@@ -9,7 +9,7 @@ use moon_core::telegram::{
 /// Settings — the same as a terminal's viewer.
 #[test]
 fn station_non_owner_keyboard_matches_the_terminal() {
-    let _locale = crate::test_locale::force("ru");
+    let _locale = crate::test_locale::force("en");
     let rows = |host, owner| {
         let moon_core::telegram::api::ReplyMarkup::Reply(markup) =
             super::navigation_keyboard(host, owner, &moon_core::config::TelegramConfig::default())
@@ -33,6 +33,7 @@ fn station_non_owner_keyboard_matches_the_terminal() {
 /// the owner's has Settings below them, and Control once shown.
 #[test]
 fn the_keyboard_keeps_its_rows() {
+    let _locale = crate::test_locale::force("en");
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let mut telegram = moon_core::config::TelegramConfig::default();
     telegram
@@ -76,6 +77,7 @@ fn the_keyboard_keeps_its_rows() {
 /// Every visible emoji button must resolve through exact localized aliases without guessing text.
 #[test]
 fn navigation_buttons_have_recognized_commands() {
+    let _locale = crate::test_locale::force("en");
     let labels = super::telegram_labels(crate::HostKind::Terminal);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
         crate::HostKind::Terminal,
@@ -102,6 +104,7 @@ fn navigation_buttons_have_recognized_commands() {
 /// a station's labels parse its Status: a terminal's bot has no station to report on.
 #[test]
 fn only_the_station_keyboard_has_its_status() {
+    let _locale = crate::test_locale::force("en");
     let labels = super::telegram_labels(crate::HostKind::Station);
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = super::navigation_keyboard(
         crate::HostKind::Station,
@@ -161,12 +164,18 @@ fn station_labels_replace_the_terminal_wording() {
     let station = super::telegram_labels(crate::HostKind::Station);
     for key in super::STATION_WORDED {
         assert_ne!(terminal[*key], station[*key], "{key}");
-        for locale in ["ru", "en", "es"] {
+        for locale in moon_core::config::Language::ALL.map(moon_core::config::Language::code) {
             let path = format!("telegram.{key}_station");
             let text = rust_i18n::t!(&path, locale = locale).to_lowercase();
             assert_ne!(text, path.to_lowercase(), "{path} is missing in {locale}");
+            // tr/pt keep the loanword "terminal". Ukrainian uses "термінал" and Vietnamese
+            // "thiết bị đầu cuối"; a denied-chat key may still name where to turn the app on.
             assert!(
-                !text.contains("terminal") && !text.contains("терминал") || key.contains("denied"),
+                !text.contains("terminal")
+                    && !text.contains("терминал")
+                    && !text.contains("термінал")
+                    && !text.contains("thiết bị đầu cuối")
+                    || key.contains("denied"),
                 "{path} ({locale}) names the terminal: {text}"
             );
         }

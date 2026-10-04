@@ -8,12 +8,12 @@
 
 use std::sync::mpsc::SyncSender;
 
+use crate::t;
 use moon_core::config::telegram_menu::{BotSettings, MenuItem, ReportBasis, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
 use moon_core::telegram::notify::{AutoReport, CoreScope, NotifySettings};
 use moon_core::telegram::runtime::Response;
-use rust_i18n::t;
 
 use crate::html::escape;
 use crate::labels::{button_text, navigation_keyboard};

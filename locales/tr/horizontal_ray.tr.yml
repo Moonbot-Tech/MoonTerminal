@@ -1,0 +1,4 @@
+_version: 1
+alerts.fig.horizontal_ray: "Yatay ışın"
+hotkeys.draw_horizontal_ray: "Yatay ışın"
+hotkeys.draw_horizontal_ray_hint: "Tek tıklama, sağa giden ışının başlangıcını ve fiyatını belirler. Aracı kapatmak için tekrar basın."

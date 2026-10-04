@@ -14,10 +14,10 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::t;
 use moon_core::session::{CoreId, CoreRunState, RunSwitch};
 use moon_core::telegram::menu_action::ControlAction;
 use moon_core::telegram::runtime::{drop_redraws, push_redraw};
-use rust_i18n::t;
 
 use crate::TgHost;
 use crate::control;

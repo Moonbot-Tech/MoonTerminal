@@ -45,7 +45,7 @@ pub fn read_src(rel: &str) -> String {
 ///
 /// `languages_match_language_all` reads `crates/moon-core/src/config/lang.rs` as text and
 /// checks that this list and the codes of `ALL` contain the same set of languages.
-pub const SHIPPED: [&str; 4] = ["ru", "en", "es", "uk"];
+pub const SHIPPED: [&str; 7] = ["ru", "en", "es", "uk", "tr", "pt", "vi"];
 
 /// Repository `locales/` directory, next to the workspace crates.
 pub fn locales_root() -> PathBuf {

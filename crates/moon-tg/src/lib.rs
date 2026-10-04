@@ -44,14 +44,48 @@ pub use station_status::{
 };
 pub use units::size_text;
 
-/// Build this crate's dictionary now, at the base of the caller's stack.
+/// Initialize this crate's dictionary once on a joined thread with an 8 MiB stack.
 ///
-/// `rust_i18n` builds a crate's dictionary on its first `t!`, in one stack frame sized by the
-/// number of keys. Reached deep inside a request the frame can overflow the stack, so every host
-/// calls this first thing in `main`, beside its own warm-up.
+/// The seven-locale dictionary outgrows a default spawned thread's stack, so the initializing
+/// lookup runs on this larger stack rather than the caller's. Concurrent calls wait for
+/// initialization; after it succeeds, later calls reuse the completed `Once`.
+///
+/// Hosts call this at startup, and the crate-local [`t`] macro calls it before every lookup.
+/// A successful return means the dictionary is ready, including when the first wrapped lookup
+/// is reached deep inside a request.
+///
+/// The initializing lookup uses `rust_i18n::t!` directly to avoid recursively entering [`t`].
+///
+/// # Panics
+///
+/// Panics if the thread cannot be spawned, its lookup panics, or an earlier initialization
+/// attempt poisoned the `Once`.
 pub fn warm_locales() {
-    let _ = rust_i18n::t!("common.loading");
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                let _ = rust_i18n::t!("common.loading");
+            })
+            .expect("locale dictionary thread")
+            .join()
+            .expect("locale dictionary");
+    });
 }
+
+/// Look up a key in this crate's dictionary.
+///
+/// Calls [`warm_locales`] before forwarding all arguments unchanged to `rust_i18n::t!`, so
+/// a lookup on a small caller stack uses an initialized dictionary. Available only inside
+/// this crate; initialization panics are described by [`warm_locales`].
+macro_rules! t {
+    ($($all:tt)*) => {{
+        $crate::warm_locales();
+        rust_i18n::t!($($all)*)
+    }};
+}
+pub(crate) use t;
 
 /// Answer in `language` from now on.
 ///

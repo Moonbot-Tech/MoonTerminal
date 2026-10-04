@@ -1,0 +1,106 @@
+# Connections tab in Settings: cores, groups, statuses, columns, and tooltips.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Table columns use short labels; translations should remain short as well.
+_version: 1
+
+conn.servers_heading: "Core (máy chủ)"
+conn.market_src: "Nguồn dữ liệu thị trường"
+conn.market_src_tip: "Chữ thập và sổ lệnh lấy từ đâu. Dedup: mỗi sàn một core nguồn lấy dữ liệu thị trường cho tất cả (tiết kiệm khi nhiều core). Theo core: mỗi biểu đồ đọc thị trường từ core của nó (không dedup)."
+conn.market_dedup: "Dữ liệu chung — một core mỗi sàn"
+conn.market_percore: "Riêng — mỗi biểu đồ một core"
+conn.core_sort: "Thứ tự core"
+conn.core_sort_tip: "Thứ tự core xuất hiện trong MỌI danh sách của ứng dụng: đầu cửa sổ, Lệnh, Tài sản, Báo cáo, Phân tích, Bộ lọc, Chiến lược, Nhật ký. Core mất kết nối giữ chỗ — trạng thái hiện ở chấm trạng thái."
+conn.core_sort.name: "Theo tên — bảng chữ cái"
+conn.core_sort.added: "Theo lúc thêm — cũ trước"
+conn.core_sort.added_newest: "Theo lúc thêm — mới trước"
+conn.groups_heading: "Nhóm"
+conn.no_groups: "thêm một core ở trên và ghi “Nhóm” — nhánh nhóm sẽ hiện"
+conn.show_group: "Hiện cửa sổ nhóm"
+# The + glyph is prepended in code; the locale entry contains only text.
+conn.add_core: "Thêm core (vào “default”)"
+conn.add_core_short: "core"
+conn.groups_panel_heading: "Core theo nhóm và sàn"
+conn.groups_panel_tip: "Một nhóm = một cửa sổ chính riêng. Trong mỗi nhóm, core được gom tự động theo sàn mà kết nối báo. Cột “Biểu đồ” gộp tín hiệu từ vài core của nhóm vào một biểu đồ."
+conn.pending_cores: "Core mới — cấu hình trước khi lưu"
+# Shared by BOTH the group header and the pending/exchange subsection headings, where a count of
+# 1..4 is ordinary -- so the abbreviated form stays: Russian has no single plural form that is
+# right at 1, 2 and 56, and this file has no plural-selection convention to reach for.
+conn.member_count: "%{n} core"
+conn.icon_btn: "Icon"
+conn.bulk_mode_btn: "Chế độ"
+conn.bulk_mode_tip: "Đặt chế độ vận chuyển MoonProto cho mọi core trong nhóm này cùng lúc, thay vì từng dòng. Áp dụng khi Lưu: mỗi core đã đổi tự kết nối lại."
+conn.icon_for: "Biểu tượng cho “%{name}”"
+conn.pick: "chọn"
+conn.delete: "Xóa"
+conn.reconnect: "Kết nối lại"
+conn.filter_note: "lọc phía client"
+
+# Connection-status dot at the end of a server row.
+conn.status.ready: "Đã kết nối"
+conn.status.connecting: "Đang kết nối…"
+conn.status.stage: "Đang kết nối: %{stage}"
+conn.status.failed: "Lỗi: %{err}"
+conn.status.disconnected: "Mất kết nối"
+conn.status.inactive: "Không kết nối (ô “Bật” đang tắt)"
+conn.status.none: "Chưa có dữ liệu (lưu cài đặt để kết nối)"
+
+# Server-table column headings.
+conn.col.act: "Bật"
+conn.col.name: "Tên"
+conn.col.key: "Khóa"
+conn.col.endpoint: "Địa chỉ:cổng"
+conn.tip.endpoint: "Địa chỉ và cổng core từ khóa đã dán, trước khi kết nối"
+conn.endpoint_duplicate: "Địa chỉ và cổng này đã được core %{name} dùng"
+conn.col.proto: "Proto"
+conn.col.preset: "Mẫu"
+conn.col.total: "Tổng"
+conn.col.group: "Nhóm"
+conn.col.bundle: "Biểu đồ"
+conn.col.color: "Màu"
+conn.col.data: "Dữ liệu"
+conn.col.orders: "Lệnh"
+conn.col.detects: "Tín"
+conn.col.reports: "Báo"
+conn.col.balance: "Dư"
+conn.col.strat: "CL"
+conn.col.log: "Log"
+conn.col.alerts: "CB"
+conn.col.arb: "Arb"
+
+# Group-table column headings.
+conn.gcol.ico: "Ico"
+
+# Tooltips.
+conn.tip.act: "Kết nối tới core"
+conn.tip.name: "Tên core (tùy ý, để hiện trong terminal)"
+conn.tip.key: "Khóa được tạo trong MoonBot, không phải trên trang web, và được sao chép SAU khi core đã cài — khóa mang host, cổng và chế độ theo, nên không nhập chúng ở đây. Thứ tự: 1) trên máy chủ MoonBot, mở cổng UDP của core cho lưu lượng vào; 2) trong MoonBot: chấm xanh góc dưới trái (cửa sổ Info) → Moon Kernel → Settings → cửa sổ Moon Proto, tab Settings: chọn Kernel (VPS), đặt Port, chọn V0/V1/V2 (mặc định V0), nhấn Apply; 3) ở đó, Key: → Copy Key (chưa có khóa — New Key); 4) dán vào đây bằng nút Dán và nhấn Lưu. Con mắt hiện hoặc ẩn khóa."
+conn.key_ph: "Copy Key trong MoonBot"
+conn.key_unreadable: "Đây không phải khóa MoonBot — terminal không đọc được. Sao chép khóa trong MoonBot bằng Copy Key (cửa sổ Moon Proto → Settings → Key:) và dán cả khóa vào đây bằng nút Dán"
+# Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
+# `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
+conn.bundle_ph: "tên liên kết"
+conn.paste_key: "Dán"
+conn.paste_key_tip: "Dán khóa từ clipboard"
+conn.tip.color: "Màu core: dùng để tô giao dịch và dấu trên biểu đồ của core này."
+conn.tip.flags: "Dữ liệu nhận từ core. Xám = bật hết; có màu = một số mục tắt. Nhấn để cấu hình."
+conn.tip.proto: "Chế độ vận chuyển MoonProto - cùng bộ V0/V1/V2 như trong cài đặt Moon Proto của core; hai phía phải cùng MỘT chế độ. Lấy từ khóa MỘT lần, khi chưa có chế độ; sau đó là của bạn, và khóa mới không còn ghi đè - nên không cần phát hành lại khóa chỉ để đổi chế độ. Gạch ngang nghĩa là khóa không ghi gì (bản xuất cũ) và kết nối chạy như V0. Áp dụng khi Lưu: core tự kết nối lại. Vì vậy chỉ nhấn Copy Key SAU KHI đã đặt Port và phiên bản trên core bằng nút V0/V1/V2 (MoonBot tạo khóa V0 theo mặc định): khóa mang chúng theo."
+conn.tip.preset: "Core này hiện trong danh sách ở chế độ không gian làm việc nào: cả hai, chỉ MANUAL, hoặc chỉ AUTO. Chỉ là hiển thị — core bị ẩn vẫn kết nối và vẫn ghi dữ liệu."
+conn.tip.total: "Core này tính vào tổng chân trang Tài sản thế nào. Tự động: các core cùng tài khoản sàn tính một lần. Loại: core không vào tổng. Riêng: core luôn tính một mình, không gộp."
+conn.preset.both: "Cả hai"
+# The same two mode NAMES the header dropdown lists (`workspace.mode.*`): this column picks which
+# of them shows the core, so a name that drifted apart here would read as a third mode.
+conn.preset.classic: "MANUAL"
+conn.preset.auto: "AUTO"
+conn.total.auto: "Tự động (theo tài khoản)"
+conn.total.exclude: "Loại"
+conn.total.separate: "Riêng"
+conn.tip.group: "Nhóm = một cửa sổ chính RIÊNG. Mọi core cùng tên nhóm nằm trong một cửa sổ; tên nhóm mới → cửa sổ chính mới."
+conn.tip.bundle: "Tên liên kết biểu đồ: tín hiệu AddToChart từ NHIỀU core của một nhóm cùng tên gộp thành MỘT biểu đồ (một tab, tên ở tiêu đề). Trống = theo cài đặt chung (một tab mỗi core / tất cả trong một)."
+conn.tip.orders: "Lệnh đang mở"
+conn.tip.detects: "Tín hiệu"
+conn.tip.reports: "Báo cáo lệnh đã đóng → SQLite"
+conn.tip.balance: "Số dư / tài khoản"
+conn.tip.strat: "Chiến lược"
+conn.tip.log: "Nhật ký máy chủ"
+conn.tip.alerts: "Cảnh báo biểu đồ / chữ"
+conn.tip.arb: "Chênh lệch giá"

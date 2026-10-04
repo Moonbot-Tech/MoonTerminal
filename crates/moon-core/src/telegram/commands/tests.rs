@@ -122,19 +122,30 @@ fn navigation_commands_keep_address_and_argument_guards() {
     }
 }
 
-/// Exact old-locale labels remain usable, including Ukrainian; partial text and
-/// command-shaped labels stay inert. A loop that still skipped `uk` would leave
-/// a Ukrainian reply button unmatched.
+/// Exact old-locale labels remain usable, including Ukrainian, Turkish,
+/// Portuguese, and Vietnamese; partial text and command-shaped labels stay
+/// inert. A loop that still skipped one of those codes would leave its reply
+/// button unmatched.
 #[test]
 fn reply_labels_accept_all_locales_without_loose_command_matching() {
     let labels = BTreeMap::from([
         ("button_miniapp_ru".into(), "Открыть Mini App".into()),
         ("button_miniapp_en".into(), "Open Mini App".into()),
         ("button_miniapp_uk".into(), "Open Mini App UK".into()),
+        ("button_miniapp_tr".into(), "Open Mini App TR".into()),
+        ("button_miniapp_pt".into(), "Open Mini App PT".into()),
+        ("button_miniapp_vi".into(), "Open Mini App VI".into()),
         ("button_help_es".into(), "Ayuda".into()),
         ("button_help_ru".into(), "/help@other".into()),
     ]);
-    for text in ["Открыть Mini App", "Open Mini App", "Open Mini App UK"] {
+    for text in [
+        "Открыть Mini App",
+        "Open Mini App",
+        "Open Mini App UK",
+        "Open Mini App TR",
+        "Open Mini App PT",
+        "Open Mini App VI",
+    ] {
         assert_eq!(parse_reply_button(text, &labels), ParsedCommand::MiniApp);
     }
     assert_eq!(parse_reply_button("Ayuda", &labels), ParsedCommand::Help);

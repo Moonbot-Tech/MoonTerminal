@@ -14,6 +14,7 @@
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
+use crate::t;
 use moon_core::config::TempBanSpan;
 use moon_core::config::telegram_menu::MenuItem;
 use moon_core::session::{CoreId, RunSwitch};
@@ -23,7 +24,6 @@ use moon_core::telegram::menu_action::{
 };
 use moon_core::telegram::runtime::Response;
 use moon_core::util::fmt;
-use rust_i18n::t;
 
 use crate::TgHost;
 use crate::control::{self, Refusal};

@@ -17,13 +17,13 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::t;
 use moon_core::db::CoreNames;
 use moon_core::feed::CoreTgEvent;
 use moon_core::session::TgEventRow;
 use moon_core::telegram::notify::EventRule;
 use moon_core::telegram::reply::utf16_len;
 use moon_core::telegram::runtime::{NotifyStore, push_outbox};
-use rust_i18n::t;
 
 use crate::TgHost;
 use crate::html::escape;

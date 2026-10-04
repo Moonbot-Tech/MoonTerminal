@@ -8,6 +8,7 @@
 
 use std::sync::mpsc::SyncSender;
 
+use crate::t;
 use chrono::NaiveDate;
 use moon_core::config::telegram_menu::{MenuItem, REPORT_SECTION, ReportView};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
@@ -15,7 +16,6 @@ use moon_core::telegram::menu_action::MenuAction;
 use moon_core::telegram::report::{Period, ReportRequest};
 use moon_core::telegram::runtime::Response;
 use moon_core::util::display_time;
-use rust_i18n::t;
 
 use crate::TgHost;
 use crate::html::escape;

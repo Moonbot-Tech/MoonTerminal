@@ -1,0 +1,57 @@
+# Auto-trading workspace selector, navigation rail, and availability labels.
+_version: 1
+
+# The two workspace modes. AUTO and MANUAL are NAMES, not words: they stay Latin capitals in every
+# locale, like BUY/SELL/ON/OFF above in README's "намеренно НЕ переводим" list, so the mode a user
+# names in a screenshot or a chat is the same string everywhere.
+#
+# Two key shapes per mode, deliberately. The SHORT name is what an aggregate's scope marker
+# interpolates ("режим: MANUAL"), where the word "режим" is already the sentence. The `_item` label
+# is what the header dropdown lists, where the row must say what KIND of thing it selects.
+workspace.mode.auto: "AUTO"
+workspace.mode.classic: "MANUAL"
+workspace.mode.auto_item: "modo AUTO"
+workspace.mode.classic_item: "modo MANUAL"
+workspace.mode.classic_tip: "Modo manual: o layout é por servidor e pode ser editado, e as janelas podem ser destacadas"
+workspace.mode.auto_tip: "Espaço de trading automático; o layout é compartilhado entre os servidores e destacar janelas fica desligado"
+workspace.summary: "Núcleos: %{configured} · prontos: %{ready} · problemas: %{problem}"
+# The three segments of the rail summary, rendered separately so the problem count can carry its
+# own colour. `workspace.summary` above stays byte-identical and remains the tooltip / tour string.
+workspace.summary_cores: "Núcleos: %{n}"
+workspace.summary_ready: "prontos: %{n}"
+workspace.summary_problem: "problemas: %{n}"
+# The rail's first row is a MODE, not a core: it aggregates every core at once, while every row
+# below it selects exactly one. The label says "full" so the two readings cannot be confused.
+workspace.overview: "Resumo completo"
+workspace.overview_tip: "Todos os núcleos disponíveis do grupo %{group}"
+workspace.core_tip: "%{name} · grupo %{group} · %{status}"
+workspace.status.disabled: "Desativado"
+workspace.status.unavailable: "Indisponível"
+workspace.status.problem: "Problema"
+workspace.status.ready: "Pronto"
+# The scope marker every membership-filtered aggregate renders when the active preset hides at
+# least one configured core (`workspace::scope_marker::ScopeMarker`). Two facts, deliberately, so
+# the count survives when the preset name clips: "режим: AUTO · 12 из 20 ядер".
+workspace.scope.preset: "modo: %{mode}"
+workspace.scope.cores_n_of_m: "núcleos: %{n} de %{total}"
+workspace.scope.hint: "Alguns núcleos estão ocultos pelo modo ativo do espaço de trabalho — troque o modo ou confira a visibilidade em Configurações → Conexões"
+# The same recovery advice for the case where the preset hid EVERY core, so the opening clause
+# cannot say "some". Only the first clause differs from `workspace.scope.hint`; the two are one
+# choice inside `ScopeMarker::tooltip`, gated on `hides_everything`.
+workspace.scope.all_hidden_hint: "Todos os núcleos estão ocultos pelo modo ativo do espaço de trabalho — troque o modo ou confira a visibilidade em Configurações → Conexões"
+# The empty state of a surface the preset emptied COMPLETELY, shared by every such surface
+# (`workspace::scope_marker::scope_empty_text`). Deliberately not per-surface and deliberately not
+# the surface's own "no orders" / "no data" / "connect a core" line: those assert that nothing
+# exists, and would send the user to fix a connection that is already fine. This one asserts that
+# the data exists and names what is withholding it, and it is read alongside the marker's own
+# "· 0 из 56 ядер" fact in the footer directly below.
+workspace.scope.all_hidden: "Todos os núcleos estão ocultos pelo modo ativo do espaço de trabalho"
+# The tooltip a pinned scope chip shows in place of the picker menu it replaces — the picker is
+# disabled by the active workspace, and this is the only place that says why (`panels::common`).
+workspace.scope.pinned_hint: "O escopo é definido pelo espaço de trabalho: %{scope}. Mude-o no painel à esquerda"
+# The rail's ⚙ popup: which core-run controls the rows carry. The checkbox labels reuse
+# `profit_monitor.settings.*` — the same controls, the same wording; only the popup title and the
+# exchange-scope row are the rail's own.
+workspace.settings.title: "Configurações da lista de núcleos"
+# One press there reaches every core under the heading, which is why it is its own opt-out.
+workspace.settings.exchange_controls: "Os mesmos controles no título da corretora, para todos os núcleos dela"

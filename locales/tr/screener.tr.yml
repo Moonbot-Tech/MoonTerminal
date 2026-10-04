@@ -1,0 +1,15 @@
+# Screener window with a Moonbot-style coin table.
+# Column headers (Vol./ASK/Funding/…) are Moonbot domain tokens and remain untranslated in code.
+_version: 1
+
+screener.window_title: "MoonTerminal — Tarayıcı"
+# Three different reasons the coin table can be empty, three different sentences. `screener.empty`
+# is the only one that asks for an action, so it is reserved for the only case where that action
+# helps: no core is connected at all. A connected core that has not published a book yet gets
+# `screener.empty_no_data`, and a core hidden by the workspace preset gets the shared
+# `workspace.scope.all_hidden` instead of either.
+screener.empty: "Piyasa verisi yok — bir çekirdek bağlayın"
+screener.empty_no_data: "Henüz piyasa verisi gelmedi"
+screener.coins: "coin"
+screener.all_cores: "Tüm çekirdekler"
+screener.columns: "Sütunlar"

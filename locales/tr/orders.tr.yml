@@ -1,0 +1,74 @@
+# Right order pane and the Orders table in the bottom dock.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Intentionally untranslated: Buy · Sell.
+_version: 1
+
+# --- Right order pane ---
+order.title: "Emir"
+order.size: "büyüklük %{n}"
+order.settings: "Emir ayarları…"
+
+# --- Bottom dock: Orders table ---
+orders.title: "Grubun açık emirleri (%{count})"
+orders.empty: "açık emir yok"
+orders.col.core: "Çekirdek"
+orders.col.side: "Yön"
+orders.col.token: "Token"
+orders.col.price: "Fiyat"
+orders.col.tp_price: "TP fiyatı"
+orders.col.pnl_tp: "PNL TP"
+# Strategy user-assigned name column, distinct from the Strat (kind) column.
+orders.col.strat_name: "Ad"
+orders.open_hint: "Grafiği Main'de aç (bu çekirdek)"
+orders.all_cores: "Tüm çekirdekler"
+orders.cores_n: "Çekirdek: %{n}"
+orders.columns: "Alanlar"
+# Tooltip of the gear button that opens the sorting and filtering menu.
+orders.settings: "Ayarlar"
+orders.kind.all: "Tümü"
+orders.kind.real: "Gerçek"
+orders.kind.emu: "Emülatör"
+orders.only_current: "Yalnızca geçerli piyasanın emirleri"
+# Bottom footer: total open orders, split into real and emulated. The split is SPELLED rather
+# than parenthesised — `(923/100)` is unreadable without this file open — and the tooltip below
+# repeats the same three numbers with what each one counts.
+#
+# LABEL: VALUE, never an inflected noun phrase. «реальных %{real}» reads wrong at a count of one
+# («реальных 1»), and Russian and Spanish would each need their own plural rule to fix it; a
+# colon-separated label is grammatical at every count in all three languages and needs none. The
+# labels are the order-kind filter's own words (`orders.kind.real` / `.emu`) so the footer and the
+# dropdown above it name the same two things identically.
+orders.footer_total: "Toplam: %{total} · gerçek: %{real} · emülatör: %{emu}"
+# Tooltip of that footer. States the scope the counts are taken over, and that the order-kind
+# filter above the table does not narrow them (the split is computed before that filter runs).
+#
+# The real line says «real account, not the emulator» and deliberately NOT «placed on the
+# exchange»: the count is `!OrderRow::emulator` alone, and a real order that is still
+# `OrderRow::pending` (`moon-core/src/feed/types.rs:250`) has not reached the exchange yet.
+orders.footer_total_tip: "Toplam: %{total} — seçilen çekirdeklerin açık emirleri (bu filtre açıkken yalnızca geçerli piyasa).\nGerçek: %{real} — gerçek hesaptaki emirler, emülatör değil.\nEmülatör: %{emu} — Moonbot emülatör emirleri.\nTümü / Gerçek / Emülatör filtresi bu sayaçları değiştirmez."
+orders.show_all: "Tümünü göster"
+orders.sort.profit: "Önce kâr"
+orders.sort.sell: "Önce Sell"
+orders.sort.buy: "Önce Buy"
+orders.sort.creation: "Emir oluşturulmasına göre"
+orders.sort.new: "Önce yeniler"
+orders.sort.old: "Önce eskiler"
+# --- Active-order editor (click BUY/SELL or right-click an order line) ---
+orders.edit.title: "Aktif emir"
+orders.edit.coin: "Coin:"
+orders.edit.side: "Tür:"
+orders.edit.status: "Durum:"
+orders.edit.size: "Size:"
+orders.edit.strategy: "Strateji:"
+orders.edit.core: "Çekirdek:"
+orders.edit.cond: "Koşul: ASK < %{p} ise Buy"
+orders.edit.buy_price: "BUY emir fiyatı"
+orders.edit.sell_price: "Sell fiyatı"
+orders.edit.current: "Güncel: %{p}"
+orders.edit.stops: "Stoplar"
+orders.edit.fixed: "Fixed"
+orders.edit.vol_lt: "Vol <"
+
+# Move rows opened on Main to the top (two mutually exclusive checkboxes plus off).
+orders.sort.main_all: "Main üstte: tüm ticker"
+orders.sort.main_hi: "Main üstte: yalnızca vurgulananlar"

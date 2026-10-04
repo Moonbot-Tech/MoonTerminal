@@ -6,13 +6,13 @@
 use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
+use crate::t;
 use moon_core::config::telegram_menu::MenuItem;
 use moon_core::config::{Language, TelegramConfig};
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::runtime::Response;
 use moon_core::venue::{CoreVenue, caption};
-use rust_i18n::t;
 
 /// Translate one caption key through this crate's dictionary.
 fn tr(key: &str) -> Cow<'_, str> {

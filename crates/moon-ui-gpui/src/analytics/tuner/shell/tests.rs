@@ -250,13 +250,14 @@ fn a_stopped_run_warns_either_way_and_only_the_caption_changes() {
     assert_eq!(empty_tail.last().map(String::as_str), Some(note.as_str()));
 }
 
-/// `analytics.tuner.sugg_axis_moved` in `locales/<lang>/analytics.<lang>.yml` must be a real string in ru, en, and es.
+/// `analytics.tuner.sugg_axis_moved` in `locales/<lang>/analytics.<lang>.yml` must be a real
+/// string for every `moon_core::config::Language::ALL` code.
 ///
 /// Breakage: deleting one language. `rust_i18n` echoes the missing key, so the status band would
 /// show `analytics.tuner.sugg_axis_moved` instead of the axis-shift caption.
 #[test]
 fn sugg_axis_moved_is_translated_for_every_shipped_locale() {
-    for code in ["ru", "en", "es"] {
+    for code in moon_core::config::Language::ALL.map(moon_core::config::Language::code) {
         let _locale = crate::test_locale::force(code);
         let text = t!("analytics.tuner.sugg_axis_moved").to_string();
         assert_ne!(

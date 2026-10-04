@@ -830,7 +830,7 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   drill-down, core/day views, back and paging; periods are not duplicated. A repeated reply-keyboard
   period request fetches fresh data. The complete-scope Total row follows the main table rows;
   calculation explanations are in Help, not an additional report disclosure. Emoji-decorated
-  aliases and older plain labels are matched exactly in ru/en/es. Identity checks precede both
+  aliases and older plain labels are matched exactly in every `Language::ALL` code. Identity checks precede both
   welcome and report delivery. Reports always carry inline markup from the first send: Telegram
   disallows editing messages with a reply keyboard. The temporary removal/deletion flow is gone.
   The native menu and `/miniapp` retain the independent Mini App launcher.

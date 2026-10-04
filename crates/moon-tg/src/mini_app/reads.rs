@@ -639,7 +639,7 @@ pub(super) fn coin_rows(
         }
     }
     let priced = reading.usable();
-    let unpriced_word = rust_i18n::t!("telegram.mini_coin_unpriced").to_string();
+    let unpriced_word = crate::t!("telegram.mini_coin_unpriced").to_string();
     let mut rows: Vec<CoinBalanceDto> = drafts
         .into_iter()
         .map(|draft| {

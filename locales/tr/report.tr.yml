@@ -1,0 +1,262 @@
+# Report panel (trades): filters, totals, and cell values.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+# Table headers come from `report.col.<runtime DB column name>` (`columns::header_label`).
+# Columns with no such key, the technical columns deliberately kept raw (see `locales/README.md`),
+# and dynamically added core fields all fall through to the raw name (`columns::header_for`).
+# Exports and the clipboard always use the raw name via `header_for`, never a `report.col.*` value.
+_version: 1
+
+# --- Column headers ---
+# In `crates/moon-core/src/db/report_read.rs::DISPLAY_COLUMNS` order. Every column NOT listed here
+# keeps its raw DB name as its header: the six `locales/README.md` deliberately-untranslated
+# technical columns (id, taskid, exorderid, strategyid, basecurrency, sellsetdate), plus `lev` and
+# `fname` — kept raw per this goal's own spec, not the README six — and every `*delta`/`*ratio`
+# metric column. This list is one decision mirrored in `columns::header_label`'s `matches!` guard —
+# keep both in sync, in the same `DISPLAY_COLUMNS` order.
+report.col.buydate: "Açıldı"
+report.col.closedate: "Kapandı"
+report.col.core_name: "Çekirdek"
+report.col.coin: "Coin"
+report.col.isshort: "Yön"
+report.col.quantity: "Mikt."
+report.col.boughtq: "Alınan"
+report.col.buyprice: "Alış"
+report.col.sellprice: "Satış"
+report.col.spentbtc: "Harcanan"
+report.col.gainedbtc: "Gelen"
+report.col.profitbtc: "Kâr"
+report.col.valuation_profit_usdt: "Kâr USDT"
+# %{amount} arm precedent: locales/analytics.yml `analytics.col.profit_pct` keeps the same three
+# identical strings, so a mixed Rust/YAML review does not read it as a missed translation.
+report.col.profitpct: "Kâr %"
+report.col.valuation_rate: "Kur"
+report.col.valuation_rate_source: "Kur kaynağı"
+report.col.source: "Kaynak"
+report.col.channel: "Kanal"
+report.col.channelname: "Kanal adı"
+report.col.signaltype: "Sinyal"
+report.col.emulator: "Emu"
+report.col.status: "Durum"
+report.col.sellreason: "Kapanış nedeni"
+report.col.comment: "Yorum"
+# The remaining keyed columns are MoonBot's own tuner/filter field grid labels
+# (`crates/moon-core/src/db/tuner/fields.rs`) — industry-standard abbreviations, not dictionary
+# words, so all three locales carry the identical label (the same convention `report.export.csv`
+# already uses for "CSV").
+report.col.pump1h: "Pump1H"
+report.col.dump1h: "Dump1H"
+report.col.d24h: "d24h"
+report.col.d3h: "d3h"
+report.col.d1h: "d1h"
+report.col.d15m: "d15m"
+report.col.d5m: "d5m"
+report.col.d1m: "d1m"
+report.col.dbtc1m: "dBTC1m"
+report.col.vd1m: "Vd1m"
+report.col.pricebug: "PriceBug"
+report.col.hvol: "H.Vol"
+report.col.hvolf: "H.VolF"
+report.col.dvol: "D.Vol"
+# `takeprofitlag` is deliberately NOT keyed: unlike every other column in this block it has no
+# `tuner/fields.rs` FieldSpec, so there is no MoonBot label to mirror and any wording here would be
+# invented rather than sourced. It falls through to its raw DB name via `columns::header_for`.
+report.col.last_update_at: "Güncellendi"
+
+# --- Side/emulator cell values ---
+report.side.short: "Short"
+report.side.long: "Long"
+report.cell.emu: "emu"
+
+# --- Filters and combo boxes ---
+report.filter.all: "Tümü"
+report.all_strategies: "Tüm stratejiler"
+report.search_strategies: "Strateji ara..."
+# Separate Auto-workspace report filter. Unlike the exact picker search above, this value narrows the
+# report itself by a strategy-name query in the shared syntax (comma = OR, space = AND,
+# !word = exclude; see common.strategy_query_syntax).
+report.filter.strategy_mask_ph: "Strateji maskesi"
+report.filter.strategy_mask_tip: "Raporu strateji adına göre süzer."
+report.filter.core: "Çekirdek:"
+report.filter.side: "Yön:"
+report.filter.from: "Başlangıç:"
+report.filter.to: "Bitiş:"
+# Doubles as the field's caption: there is no label beside it, so the placeholder names it.
+report.filter.coin_ph: "Coin"
+# Hover text of the coin field; a `=` beside the field marks the exact mode it describes.
+report.filter.coin_tip: "Ticker'ın bir parçası onu içeren her coini bulur (io: IO, BIO, IOTA). Sondaki boşluk veya listeden seçim tam ticker'ı arar (io : yalnızca IO ve IO_0925 gibi sözleşmeleri); alanın yanında '=' belirir."
+report.filter.date_ph: "Tarih ve saat"
+# Deleted row of the merged scope field. Off (default) hides trades soft-deleted in the core's
+# report; on shows ONLY them. Export follows the same filter.
+report.filter.deleted: "Yalnızca silinenler"
+# Lifecycle row of the merged scope field, an axis independent of the real/emulator group above:
+# that one is a trade's ORIGIN, this one is whether it has closed. On (default) shows still-running
+# positions alongside closed trades, in the table AND in the totals; off removes them from both,
+# and the export follows the same filter. Disabled on an Analytics-scoped Report, which forces
+# closed rows regardless. Wording matches `report.open_positions_tip` so the switch and the footer
+# figure it governs use one vocabulary.
+report.filter.open_rows: "Açık pozisyonlar"
+# Full-width comment pane between the table and the totals: `show` is its row in the scope field.
+# The pane reuses `show` as its caption; with no row selected the strip is simply empty.
+report.comment.show: "İşlem yorumu"
+# Shown when a trade IS selected and its comment is empty. With no trade selected the pane stays
+# blank instead — the two states must not read alike.
+report.comment.empty: "yorum yok"
+# Tooltip of the merged scope field. It states the two switch semantics the row labels alone
+# cannot: the deleted one is EXCLUSIVE (on shows only those), the open-positions one is INCLUSIVE
+# (off removes them from the table and the totals alike).
+report.filter.scope_tip: "Yön, işlem türü, silinen işlemler, açık pozisyonlar ve yorum paneli. “Yalnızca silinenler” kapalı — silinen işlemler gizli; açık — yalnızca onlar görünür. “Açık pozisyonlar” kapalı — tablo ve toplamlar yalnızca kapanmış işlemleri gösterir."
+# Abbreviation appended to the scope trigger while the row above is on.
+report.filter.deleted_short: "silin."
+# Fixed title of the scope trigger; the non-default choices follow it after a middle dot.
+report.filter.title: "Filtreler"
+# Difference appended to the scope trigger while "Open positions" is off.
+report.filter.closed_only_short: "kapanan"
+# First row of the scope field's direction group. Named "all sides" rather than a bare "all" so it
+# does not read as the same option as the kind group's own first row.
+report.filter.all_sides: "Tüm yönler"
+# Error toast when a soft-delete/restore could not be sent (the core is offline or gone). The
+# affected rows stay selected so nothing is silently lost.
+report.delete_send_failed: "Değişiklik gönderilemedi: çekirdeğe ulaşılamıyor. Satırlar seçili kalır."
+# Selection commands shown in the totals row only while report rows are selected.
+report.selection.count: "Seçili: %{n}"
+report.selection.clear: "Kaldır"
+report.selection.copy: "Kopyala"
+report.selection.delete: "Sil (%{n})"
+report.selection.restore: "Geri yükle (%{n})"
+report.selection.copied: "Kopyalanan işlem: %{n}"
+report.selection.delete_queued: "Silme kuyruğunda: %{n}. Seçim, çekirdek yanıtından sonra kalkar."
+report.selection.restore_queued: "Geri yükleme kuyruğunda: %{n}. Seçim, çekirdek yanıtından sonra kalkar."
+# The trigger draws a MoonUI icon asset, added in code; the dictionary contains text only.
+report.columns_menu: "Sütunlar"
+# Menu for saving the report to a file (the ⇩ button left of Columns). The query period comes from
+# the panel's current filter (preset or From/To dates). CSV and Excel remain untranslated.
+report.export_menu: "Raporu dosyaya kaydet (CSV / Excel)"
+report.export.ok: "%{n} satır dışa aktarıldı"
+report.export.fail: "Dışa aktarma başarısız — dosya kaydedilmedi"
+report.export.csv: "CSV"
+report.export.csv_all: "CSV — tüm sütunlar"
+report.export.xlsx: "Excel (XLSX)"
+report.export.xlsx_all: "Excel — tüm sütunlar"
+
+# --- Empty states and totals ---
+report.all_cols_hidden: "Tüm sütunlar gizli — “Sütunlar”dan birkaçını açın."
+report.empty: "Filtreye uyan rapor yok (veya veritabanı boş)."
+# Footer caption while no snapshot is renderable, when there is no order count to state.
+report.totals: "Toplam:"
+# Footer caption over a loaded snapshot: the bracketed number is the orders the total sums.
+report.totals_n: "Toplam (%{n}):"
+# The same caption in the row tooltip, which has room to say what the number counts.
+report.totals_n_tip: "Toplam (%{n} emir)"
+# Still-running positions under the same filter. The amount is UNREALIZED and is deliberately NOT
+# part of the total above it, which covers closed trades only.
+report.open_positions: "açık: %{n} (%{amount})"
+# The same fact when no open row has a known currency, so there is no amount to state.
+report.open_positions_bare: "açık: %{n}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.open_positions_tip: "Açık pozisyon: %{n}. Gerçekleşmemiş K/Z, toplama dahil değil"
+# The same tooltip when some open rows carry no known currency and are absent from the amount.
+report.open_positions_tip_unknown: "Açık pozisyon: %{n}. Gerçekleşmemiş K/Z, toplama dahil değil; bilinmeyen kotasyon: %{unknown}"
+# Unsigned entry-plus-exit notional over the exact loaded Report filter.
+report.traded_volume: "Hacim: %{amount}"
+# Fully spelled recovery text used by the shared footer tooltip when the compact fact is clipped.
+report.traded_volume_tip: "Toplam işlem hacmi: %{amount}"
+# A unified mixed-quote amount converted with the loaded snapshot's current-rate mode.
+report.traded_volume_current: "Güncel kurda hacim: %{amount}"
+report.traded_volume_current_tip: "Güncel kurda toplam işlem hacmi: %{amount}"
+# An amount over the reconstructed quote buckets only. The qualifier shares the fact with the
+# figure so a narrow dock cannot clip one without the other.
+report.traded_volume_partial: "Hacim (kısmi): %{amount}"
+# The recovery text has room for the shortfall itself: how many orders are excluded, and from where.
+report.traded_volume_partial_tip: "Yeniden kurulan işlemlerin hacmi: %{amount}. Hesaba katılmayan emir: %{n} (%{currencies})"
+# Names the excluded rows that have no quote ticker of their own to be named by.
+report.traded_volume_unknown_quote: "bilinmeyen kotasyon"
+# Realized profit as a percentage of the average order, single-core scope only. %{pct} arrives
+# pre-signed from signed_pct, e.g. "+11.6%".
+report.avg_order_pct: "ort. emre göre %{pct}"
+# Some counted rows were excluded from both sums (unknown quote, Funding, non-positive spend).
+report.avg_order_pct_partial: "ort. emre göre %{pct} (kısmi)"
+# The count is stated as a LABEL ("orders counted: N"), never as a noun the number must agree
+# with, so it reads correctly at n=1 in every locale without a plural form - the same shape
+# report.traded_volume_partial_tip already uses for its shortfall.
+report.avg_order_pct_tip: "Ort. emre göre kâr: %{pct}. Ort. emir: %{avg}, sayılan emir: %{n}"
+report.avg_order_pct_partial_tip: "Ort. emre göre kâr: %{pct}. Ort. emir: %{avg}, sayılan emir: %{n}; hesaba katılmayan: %{excluded}"
+# The unified arm under ValuationMode::Current only. A unified scope CAN still be partial - Funding,
+# non-positive-spend and unknown-quote rows shrink the counted scope independently of valuation - and
+# in that case the partial wording above wins and this key is not reached, because the shortfall is
+# the more important signal.
+report.avg_order_pct_current_tip: "Güncel kurda ort. emre göre kâr: %{pct}. Ort. emir: %{avg}, sayılan emir: %{n}"
+report.unknown_quote_orders: "bilinmeyen kotasyon: %{n}"
+# The unified figure needs no "in USDT" prefix: the ticker is already on the amount.
+report.valuation_total: "%{amount} USDT"
+report.valuation_progress: "USDT değerleme: %{ready}/%{total}"
+report.valuation_unavailable: "geçmiş kur yok: %{n}"
+report.valuation_retrying: "değerleme: yeniden deneniyor"
+report.valuation_stalled: "değerleme durdu"
+report.valuation_stalled_tip: "USDT değerlemesi %{minutes} dk ilerlemedi. Aşama: %{stage}. Neden: %{kind}. [%{codes}] %{detail}"
+# Keeps its qualifier: this figure is what the period would be worth TODAY, not what it earned,
+# and dropping the words would make the two conversions render identically.
+report.valuation_total_current: "güncel kurda: %{amount} USDT"
+report.valuation_current_progress: "güncel kur: %{ready}/%{total}"
+report.valuation_current_unavailable: "güncel kur yok: %{n}"
+report.shown_top: "gösterilen: %{n}"
+
+report.filter.emu: "Emülatör"
+# Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
+# naming that timestamp on the period preset.
+report.period_basis.close: "Kapanış tarihine göre"
+report.period_basis.open: "Açılış tarihine göre"
+# Scope-caption marker shown only while the period runs on the open date.
+report.period_basis.open_short: "açılış"
+report.period_basis.tooltip_close: "Dönem, işlemleri kapanış tarihine göre seçer"
+report.period_basis.tooltip_open: "Dönem, işlemleri açılış tarihine göre seçer"
+report.period.today: "Bugün"
+report.period.yesterday: "Dün"
+# Every preset here is named by its FAMILY: a calendar one says which period it is current within,
+# a rolling one is labelled by its day count. A bare week or year cannot be told apart from its
+# rolling counterpart once both are offered, which is why the rolling three are numeric. The same
+# wording is carried in analytics.period.* so the two windows do not disagree; analytics.period.*
+# has its own cur_year but no calendar-week key — the Profit Monitor borrows this cur_week key
+# directly instead of duplicating it.
+# A rolling 7-day window ending today.
+report.period.week: "7 gün"
+# Calendar week from Monday.
+report.period.cur_week: "Bu hafta"
+# Calendar month from the 1st.
+report.period.cur_month: "Bu ay"
+# Previous calendar month, 1st to last day inclusive.
+report.period.last_month: "Geçen ay"
+# Calendar year from January 1st.
+report.period.cur_year: "Bu yıl"
+# A rolling 30-day window — NOT a calendar month, which is why it is labelled by number.
+report.period.month: "30 gün"
+# A rolling 365-day window — NOT a calendar year.
+report.period.year: "365 gün"
+report.cores_n: "Çekirdek: %{n}"
+report.strategies_n: "Strateji: %{n}"
+# The core-list field label matches Orders (orders.all_cores).
+report.all_cores: "Tüm çekirdekler"
+# Order-type list field, matching orders.kind.*. `report.kind.all` is the Analytics toolbar wording;
+# the Report scope field uses `all_kinds` so its row differs from the direction group's "all".
+report.kind.all: "Tümü"
+report.kind.all_kinds: "Tüm türler"
+report.kind.real: "Gerçek"
+report.kind.emu: "Emülatör"
+# Abbreviations the scope trigger lists after its title when the kind differs ("Фильтры · реал.").
+report.kind.real_short: "ger."
+report.kind.emu_short: "emü."
+
+# --- Trade log (the core's own log lines for one trade, matched by its task number) ---
+report.trade_log.open: "İşlem günlüğü"
+# Shown DISABLED when the row carries no core task number: a log line has no other identity, so
+# there is nothing the scan could look for.
+report.trade_log.no_task: "İşlem günlüğü — görev numarası yok"
+# Shown DISABLED when the row's core cannot be named, so no log file can be located.
+report.trade_log.no_core: "İşlem günlüğü — çekirdek belirlenemedi"
+report.trade_log.title: "İşlem günlüğü"
+report.trade_log.loading: "Günlük dosyaları okunuyor..."
+report.trade_log.count: "Satır: %{n}"
+report.trade_log.truncated: "İlk %{n} satır gösteriliyor — kalanı kesildi"
+report.trade_log.copy_all: "Tümünü kopyala"
+report.trade_log.empty: "Günlük bulunamadı: günün dosyası saklama süresini aştı veya bu çekirdekte günlük aktarımı kapalıydı"
+
+report.access_denied: "Rapor kopyasına erişim yok."

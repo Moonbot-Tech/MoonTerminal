@@ -1,0 +1,7 @@
+# Error messages for settings validation and GPU failures.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+err.dup_name: "Yinelenen sunucu adı: «%{name}»"
+err.dup_key: "«%{name}» sunucusunda yinelenen anahtar (bu çekirdek zaten var)"
+err.no_gpu: "uygun GPU adaptörü yok"

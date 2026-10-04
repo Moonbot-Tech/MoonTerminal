@@ -1,0 +1,4 @@
+# Shared MoonDataTable labels for resetting column widths and similar actions.
+_version: 1
+
+tables.reset_widths: "Redefinir larguras das colunas (auto)"

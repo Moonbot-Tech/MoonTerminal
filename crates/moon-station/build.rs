@@ -3,7 +3,7 @@
 #[path = "../build-support/git_meta.rs"]
 mod git_meta;
 
-/// Embed the release baseline and the revision the station reports and updates from.
+/// Embed station release metadata and reserve an 8 MiB main stack for MSVC binaries.
 fn main() {
     let manifest = std::path::PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set"),
@@ -35,4 +35,9 @@ fn main() {
         })
         .unwrap_or_default();
     println!("cargo:rustc-env=MOONSTATION_EXACT_TAGS={exact}");
+    // Give station binaries an 8 MiB main stack on MSVC, whose default is 1 MiB.
+    // moon_tg::warm_locales() initializes its dictionary on a separate 8 MiB thread.
+    if std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|env| env == "msvc") {
+        println!("cargo:rustc-link-arg-bins=/STACK:8388608");
+    }
 }

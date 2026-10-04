@@ -1,0 +1,373 @@
+# Core Status panel: core system metrics from `Event::KernelHealth`, including CPU and memory, plus status.
+# rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
+_version: 1
+
+# --- Top bar and footer ---
+core_status.all_cores: "Todos os núcleos"
+core_status.cores_n: "Núcleos: %{n}"
+# Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
+# sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
+core_status.section_sort_hint: "Ordenado dentro de cada corretora"
+core_status.cores: "Núcleos"
+core_status.empty: "Sem dados de núcleo"
+core_status.mode.by_ip: "Por IP"
+core_status.mode.flat: "Lista"
+core_status.mode.problems: "Problemas"
+core_status.mode.warnings: "Alertas"
+core_status.mode.updates: "Atualizações"
+core_status.warn_empty: "Nenhum alerta registrado"
+# Warnings-list columns.
+core_status.col.time: "Hora"
+core_status.col.dur: "Duração"
+core_status.col.type: "Tipo"
+core_status.col.peak: "Pico"
+core_status.footer: "Servidores: %{servers}  Núcleos: %{cores}  Online: %{online}"
+
+# --- Server tree ---
+core_status.server_n: "Servidor %{n}"
+core_status.rename: "Renomear servidor"
+core_status.show_ip: "Mostrar IP"
+core_status.hide_ip: "Ocultar IP"
+core_status.ip_unknown: "O terminal ainda não tem endereço deste servidor"
+core_status.cpu_load: "%{value} (%{n})"
+core_status.mem_free: "%{pct}% (%{gb} GB)"
+core_status.unknown_server: "IP desconhecido: %{core}"
+core_status.online: "Online"
+core_status.degraded: "Degradado"
+core_status.offline: "Offline"
+core_status.ready_count: "núcleos: %{ready}/%{total}"
+core_status.hide_server: "Ocultar processos do servidor"
+core_status.show_server: "Mostrar processos do servidor"
+core_status.system_cpu: "CPU do sistema %{value}"
+core_status.process_cpu: "CPU %{value}"
+core_status.process_memory: "RAM %{value}"
+core_status.process_memory_total: "RAM do processo %{value}"
+
+# --- Table columns ---
+core_status.col.server: "Servidor"
+core_status.col.core: "Núcleo"
+core_status.col.status: "Status"
+core_status.col.cpu_proc: "CPU proc"
+core_status.col.cpu_sys: "CPU sis"
+core_status.col.mem_used: "Mem usada"
+core_status.col.free_phys: "Fís. livre"
+core_status.col.cpus: "CPUs lógicas"
+core_status.col.ping: "Ping do núcleo"
+core_status.col.ping_exch: "Ping corr."
+core_status.col.updated: "Atualizado"
+# Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
+# bare number.
+# MoonBot build the core reported. The product noun IS the heading, so the cells hold
+# a bare number; it is a proper name and is not translated. BOTH views read this one key --
+# they would never legitimately differ, and two identical values are one translator edit away
+# from disagreeing. `core_status.col.startup` is shared the same way.
+core_status.col.version: "MoonBot"
+# Hover on a MoonBot cell whose core runs an older build than the newest one currently reported
+# across the user's cores. The reference is the FLEET, not a release feed: the terminal asks no
+# server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
+# `util::fmt::core_build` at the call site.
+core_status.version_behind: "Build do MoonBot desatualizada: %{have}. A mais nova entre os seus núcleos é %{newest}"
+# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
+# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
+# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
+# has none to be behind with), which is why this string must not tell the user to expand anything:
+# expanding a Uniform group reveals N cores all reporting the number they can already see.
+core_status.version_behind_group: "Todo núcleo neste servidor roda %{have}; existe uma build mais nova: %{newest}"
+core_status.col.api_key: "API (d)"
+# Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
+# lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
+# the only place the reader can learn what it claims.
+core_status.api_perpetual: "Chave sem data de expiração"
+
+# --- Flat column header hovers ------------------------------------------------------------------
+# Three Flat headings are abbreviated past the point of being readable on their own, because the
+# column is narrower than the phrase. The heading keeps the abbreviation (widening the column would
+# cost the metrics their room); the hover carries the full phrase.
+core_status.col_tip.cpus: "CPUs lógicas da máquina"
+core_status.col_tip.tz_off: "Desvio do relógio do núcleo em relação ao UTC"
+core_status.col_tip.api_key: "Dias até a chave de API da corretora expirar"
+# Remaining exchange API request quota. Only HyperLiquid cores report one; every other core shows
+# a dash. Named for the budget rather than the exchange, so the column still reads right the day a
+# second venue starts publishing a quota.
+core_status.col.api_quota: "Limite de API"
+
+# --- By IP column header (the fixed caption row above the server tree) ---
+# CPU column: percentage plus the machine's logical-core count in parentheses.
+core_status.hdr.cpu: "CPU (núcleos)"
+# Memory column: free share and the reconstructed total RAM.
+core_status.hdr.mem: "Mem. livre"
+# IP column heading (the abbreviation is identical across locales).
+core_status.hdr.ip: "IP"
+# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
+# panel advertises them, and the Shift variant is the only reset a detached window offers.
+core_status.col_resize: "Arraste para redimensionar. Um clique duplo restaura esta coluna, Shift+clique duplo restaura todas"
+# API-key column heading in the By-IP tree; carries the unit its cells omit.
+core_status.hdr.api_key: "API (d)"
+# The same axis named as a KIND in the Warnings episode list, where no unit belongs.
+core_status.axis_api: "API"
+# Unit for a request count in the Warnings peak column.
+core_status.requests: "req."
+# The quota axis named as a KIND in the Warnings episode list.
+core_status.axis_api_quota: "Limite de API"
+
+# --- Detached-window chart legend ---
+core_status.chart_cpu: "CPU"
+core_status.chart_mem: "RAM"
+# Ping/RTT axis label on the warning badge card and the Warnings list (client↔core ping).
+core_status.chart_ping: "Ping"
+# Core→exchange order-latency label (the exchange ping) on the chart legend and the card.
+core_status.chart_exch: "Corretora"
+# Connectivity axis label on a chart warning badge's hover card.
+core_status.warn_conn: "Link"
+# Shown as a warning cluster's duration while it is still active.
+core_status.warn_ongoing: "em curso"
+# Warning-badge card: heading above the server/core state captured when the warning fired.
+core_status.warn_at_detect: "Na detecção:"
+core_status.warn_server: "Servidor"
+core_status.chart_5m: "5 min"
+core_status.chart_1h: "1 h"
+
+# --- Alert-axis toggles (Core Status gear popup) ---
+# Popup heading and one label per warning axis the engine can catch.
+core_status.warn_cfg.title: "Alertas: o que monitorar"
+core_status.warn_cfg.cpu: "CPU do servidor"
+core_status.warn_cfg.mem: "Crescimento da memória"
+core_status.warn_cfg.conn: "Queda do núcleo"
+core_status.warn_cfg.ping: "Pico de ping do núcleo"
+core_status.warn_cfg.exch: "Pico de ping da corretora"
+core_status.warn_cfg.api: "Chave de API expirando"
+core_status.warn_cfg.api_quota: "Cota de API acabando"
+# Column captions on a warning row (above the controls).
+core_status.warn_cfg.col.on: "Ligado"
+core_status.warn_cfg.col.chart: "Gráfico"
+core_status.warn_cfg.col.sound: "Som"
+# Threshold captions.
+core_status.warn_cfg.p.threshold: "Nível"
+core_status.warn_cfg.p.hold: "Espera"
+core_status.warn_cfg.p.growth: "Subida"
+core_status.warn_cfg.p.window: "Janela"
+core_status.warn_cfg.p.yellow: "Amarelo"
+core_status.warn_cfg.p.red: "Vermelho"
+# How many days before expiration the API-key warning starts.
+core_status.warn_cfg.p.days: "Dentro de"
+# Floor for the API-quota warning: it fires while the remaining request count is at or below this.
+core_status.warn_cfg.p.min_requests: "Mín. de pedidos"
+# "no sound" option and the seconds unit in the alert popup.
+core_status.warn_cfg.sound_none: "Nenhum"
+core_status.warn_cfg.u.sec: "s"
+core_status.warn_cfg.u.day: "dias"
+
+# --- Units and relative time ---
+core_status.mb: "MB"
+core_status.ms: "ms"
+core_status.ago_s: "%{n}s"
+core_status.ago_m: "%{n}m"
+core_status.ago_h: "%{n}h"
+core_status.ago_d: "%{n}d"
+# Day count WITH its unit — used by the Warnings list's mixed-unit "Peak" column only; the API
+# column itself prints a bare number under a heading that carries the unit.
+core_status.api_days: "%{n} d"
+core_status.api_expired: "expirada"
+
+# --- Startup telemetry (polled MoonProto StartupStatus) ---
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.startup: "Inicialização"
+# Completed init steps out of the total, while the core is still coming up.
+core_status.startup.progress: "%{done}/%{total}"
+# Seconds with one decimal. The unit is here so the number and its unit stay one token.
+core_status.startup.secs: "%{t} s"
+# The FROZEN figure once the core is up. The past-tense preposition is what stops a settled
+# number from reading as a running clock; do not reduce this to a bare duration.
+core_status.startup.took: "em %{t}"
+core_status.startup.rate: "%{v}/s"
+core_status.startup.b: "B"
+core_status.startup.kb: "KB"
+core_status.startup.mb: "MB"
+# Startup phases.
+core_status.startup.state.connecting: "Conectando"
+core_status.startup.state.initializing: "Inicializando"
+core_status.startup.state.ready: "Pronto"
+core_status.startup.state.reconnecting: "Reconectando"
+core_status.startup.state.failed: "Falhou"
+core_status.startup.state.disconnected: "Desconectado"
+core_status.startup.state.unknown: "Desconhecido"
+# Init steps, in the order the core runs them.
+core_status.startup.step.base_check: "Checagem de compatibilidade"
+core_status.startup.step.auth_check: "Checagem de acesso"
+core_status.startup.step.markets_list: "Lista de mercados"
+core_status.startup.step.markets_update: "Preços e índices"
+core_status.startup.step.strategy_schema: "Esquema da estratégia"
+core_status.startup.step.post_init_flush: "Atualizações iniciais"
+core_status.startup.step.snapshot: "Primeiro snapshot"
+core_status.startup.step.events: "Eventos de inicialização"
+# Hover fact labels. RTT and MTU stay untranslated per locales/README.md.
+core_status.startup.f.phase: "Fase"
+core_status.startup.f.step: "Passo"
+core_status.startup.f.elapsed: "Decorrido"
+core_status.startup.f.received: "Recebido"
+core_status.startup.f.blocks: "Blocos"
+core_status.startup.f.dupes: "duplicatas"
+core_status.startup.f.transfers: "Transferências"
+core_status.startup.f.idle: "Ocioso"
+core_status.startup.f.retries: "Tentativas (passo · total)"
+core_status.startup.f.reconnects: "Reconexões"
+core_status.startup.f.local_port: "Porta UDP local"
+core_status.startup.f.previous_port: "Porta UDP anterior"
+core_status.startup.f.port_changes: "Mudanças da porta local"
+core_status.startup.packets: "enviados %{sent} · recebidos %{recv}"
+core_status.startup.f.rtt: "RTT"
+core_status.startup.f.mtu: "MTU"
+core_status.startup.f.delivery: "Entrega"
+
+# --- Clock offset (measured core-vs-UTC skew) --------------------------------------------------
+# The column caption doubles as the By-IP heading and the hover title.
+core_status.col.tz_off: "Desvio UTC"
+# The never-measured cell, and the collapsed-group cell when no core on the server ever measured
+# an offset. Deliberately never "UTC": a core that runs on UTC and a core nobody has measured must
+# not read the same.
+core_status.tz_off.unknown: "—"
+core_status.tz_off.f.offset: "Desvio"
+core_status.tz_off.f.samples: "Amostras"
+core_status.tz_off.f.observed: "Observado"
+core_status.tz_off.f.source: "Fonte"
+# Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
+core_status.tz_off.f.unmeasured: "Ainda não medido"
+core_status.tz_off.source.log: "Log do núcleo"
+core_status.tz_off.source.replica: "Dados da réplica"
+core_status.tz_off.source.skew: "Correção de desvio"
+core_status.tz_off.source.none: "—"
+
+# --- Connection verdict: why a core is not usable, and what to do about it. -------------------
+# `core_status.fault.short.*` is the two-word cell form; `reason`/`next` are the hover and the
+# status-bar line. The wording never claims a cause the terminal did not observe: `unidentified`
+# names every possibility it cannot separate, `unknown` names the raw stage instead of guessing,
+# and the key class (`key_empty` / `key_unparsable`) names a field the terminal could not decode
+# before any socket existed.
+core_status.fault.short.local_port: "porta local"
+core_status.fault.short.no_response: "sem resposta"
+core_status.fault.short.unparsed: "UDP recebido"
+core_status.fault.short.access: "chave / acesso"
+core_status.fault.short.unidentified: "núcleo não se identificou"
+core_status.fault.short.syncing: "sincronizando"
+core_status.fault.short.stalled: "parado num passo"
+core_status.fault.short.aborted: "interrompido"
+core_status.fault.short.unknown: "indeterminado"
+core_status.fault.short.key_empty: "chave não colada"
+core_status.fault.short.key_unparsable: "não é chave MoonBot"
+core_status.fault.reason.local_port: "O terminal não conseguiu abrir a própria porta UDP (tentativas: %{n})"
+core_status.fault.reason.silent: "Nenhum byte chegou do núcleo em %{t} s"
+core_status.fault.reason.unparsed: "Pacotes UDP recebidos: %{n}; o terminal não aceitou um handshake em %{t} s"
+core_status.fault.reason.partial: "%{bytes} chegaram do núcleo, mas a conexão não se completou em %{t} s"
+core_status.fault.reason.access_refused: "O núcleo não aceitou a chave"
+core_status.fault.reason.access_timeout: "O núcleo respondeu, mas a checagem de acesso da conta não se completou"
+core_status.fault.reason.access_failed: "A checagem de acesso da conta falhou: %{msg}"
+core_status.fault.reason.unidentified_timeout: "O núcleo não respondeu à checagem de compatibilidade"
+core_status.fault.reason.unidentified_failed: "A checagem de compatibilidade falhou: %{msg}"
+core_status.fault.reason.syncing: "Passo %{step} (%{done}/%{total}), %{t} s, ainda sem snapshot"
+core_status.fault.reason.stalled: "A inicialização parou no passo %{step} (%{done}/%{total}), %{t} s"
+core_status.fault.reason.aborted: "O terminal interrompeu a tentativa"
+core_status.fault.reason.unknown: "Não foi possível determinar a causa"
+core_status.fault.reason.key_empty: "O campo Chave está vazio — não há com o que conectar"
+core_status.fault.reason.key_unparsable: "O que está no campo Chave não é uma chave MoonBot — o terminal não conseguiu ler"
+core_status.fault.next.local_port: "Algo NESTA máquina segura a porta: uma VPN ou um firewall local"
+core_status.fault.next.no_response: "Abra a porta UDP do núcleo no painel da hospedagem e no firewall da própria máquina. Uma VM restaurada de um snapshot não leva o grupo de regras, e o Windows marca um adaptador novo como Public enquanto uma regra só de Private fica em silêncio"
+core_status.fault.next.unparsed: "Os pacotes chegaram ao terminal: não é uma porta fechada. Envie o log e estes contadores ao suporte"
+core_status.fault.next.try_mode: "Outros núcleos neste terminal conectaram bem no modo %{mode} — tente mudar este para %{mode}"
+core_status.fault.next.access: "Cole a chave exportada DESTE bot e confira se o modo Kernel (VPS) está ligado no núcleo. Ele fica inativo enquanto a conta da corretora não está sob a indicação MoonBonus"
+core_status.fault.next.unidentified: "O núcleo responde, mas não passa na checagem de compatibilidade. Confira, nesta ordem: se o modo Kernel (VPS) está ligado, se o núcleo está sobrecarregado, e atualize o MoonBot no host"
+core_status.fault.next.syncing: "Espere. Se o número parar de se mover, passe o ponteiro na coluna de inicialização: ela mostra a perda do canal"
+core_status.fault.next.stalled: "A tentativa se repete sozinha. Se o mesmo passo continuar falhando, passe o ponteiro na coluna de inicialização e envie o log"
+core_status.fault.next.aborted: "Nada a fazer"
+core_status.fault.next.unknown: "Envie esta linha e o log ao suporte"
+core_status.fault.next.key: "A chave é feita no MoonBot, não no site. No MoonBot: o ponto verde embaixo à esquerda (janela Info) → a linha Moon Kernel → Settings → a janela Moon Proto, aba Settings → Key: → Copy Key (ainda sem chave — New Key). Cole-a inteira no campo Chave com o botão Colar e pressione Salvar — o núcleo conecta sozinho"
+core_status.fault.core.legacy_named: "O núcleo informa MoonBot %{server} e nenhuma versão de protocolo: é anterior a este terminal"
+core_status.fault.core.legacy_silent: "O núcleo não informa versão de protocolo: é anterior a este terminal"
+core_status.fault.retrying: "reconectando"
+core_status.fault.f.reason: "Motivo"
+core_status.fault.f.next: "O que fazer"
+core_status.fault.f.stage: "Etapa"
+core_status.fault.f.core: "Núcleo"
+
+# --- Problems mode: the cores' OWN confirmed diagnostics (moonproto ProblemsState) ---
+# Distinct from the Warnings list, which holds THIS terminal's measured episodes. The wording
+# keeps that difference visible: these rows are the core's conclusions, not our thresholds.
+core_status.col.problem_category: "Categoria"
+core_status.col.problem_kind: "Tipo"
+core_status.col.problem_title: "Problema"
+# Shown only when EVERY core in scope delivered a list and all of them were empty.
+core_status.problems_empty: "Os núcleos não informam problemas"
+# Shown when at least one core has never delivered a list — it is older than the extension, or its
+# list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
+# that a core is healthy.
+core_status.problems_unknown: "Não informados: %{n} — um núcleo mais velho, ou a lista ainda não chegou"
+# Shown when the row list hit its cap, so a shortened view never reads as the complete picture.
+core_status.problems_truncated: "Mostrando os primeiros: %{n}"
+# Shown above the table when the panel's scope covers no cores at all: an empty table then says
+# nothing about anyone's health.
+core_status.problems_no_cores: "Nenhum núcleo no escopo"
+# Neutral empty state used whenever the notice above the table already explains the gap. It must not
+# contradict that notice by claiming a clean bill.
+core_status.problems_nothing_listed: "Nada informado"
+core_status.problem_cat.machine: "Máquina"
+core_status.problem_cat.exchange: "Corretora"
+core_status.problem_cat.network: "Rede"
+core_status.problem_cat.other: "Outro"
+
+# --- Problems mode: the three diagnostic actions ---
+# The reset and the re-read mirror MoonBot's own Problems window; the test is ours.
+#
+# A test publishes a `test` fact through the core's own detector worker (~2 s) and PROVES the
+# channel end to end. It leaves a row behind that only the reset removes, which is why that pair
+# ships together.
+core_status.problems_test: "Testar o canal"
+# Deliberately NOT MoonBot's "reset all", though it is the same command on the wire. MoonBot's
+# window belongs to one core, so "all" there means all of that core's findings; this panel spans a
+# fleet, where the same word reads as "all cores" and would be a lie the moment the operator has
+# picked one. The button acts on the panel's scope, and the tooltip and the confirm both say how
+# many cores that is.
+core_status.problems_clear: "Redefinir"
+core_status.problems_test_tip: "Publica um fato de teste pelo detector do próprio núcleo — cerca de dois segundos. Prova o caminho inteiro: detector, fio, projeção, painel."
+core_status.problems_refresh: "Atualizar"
+# Said out loud because the label promises a round trip the protocol cannot make: a core pushes its
+# list, nothing can ask for one. Saying so here is cheaper than an operator concluding the button is
+# broken when a stale row does not move.
+core_status.problems_refresh_tip: "Relê o que os núcleos conectados (%{cores}) enviaram até agora. Clique numa linha para reler só aquele núcleo. Uma lista nova não pode ser pedida: o protocolo não tem esse comando — o núcleo envia uma sozinho, na conexão e sempre que os detectores a mudam. Vale pressionar depois de reiniciar um núcleo, quando as linhas velhas já não são sobre ele."
+# The blast radius, stated BEFORE the dialog: an operator who picked no core is acting on the whole
+# scope, and that is the difference between a tidy-up and a fleet-wide loss.
+# The one-core forms, for when a clicked finding has narrowed the action. The scope-wide wording
+# would state a falsehood about the panel ("connected cores: 1" for a scope of twenty-six) and would
+# keep advising a click that, in this state, cancels the pick instead of making one.
+core_status.problems_clear_tip_one: "Redefine o diagnóstico do núcleo selecionado — sem volta, e para todo terminal. Clique na linha de novo para voltar ao escopo inteiro"
+core_status.problems_refresh_tip_one: "Relê o que o núcleo selecionado enviou até agora. Uma lista nova não pode ser pedida: o protocolo não tem esse comando. Clique na linha de novo para voltar ao escopo inteiro"
+core_status.problems_clear_tip: "Redefine o diagnóstico. Núcleos conectados: %{cores}. Sem volta, e para todo terminal. Clique numa linha para redefinir só aquele núcleo"
+# The test is per-core on the wire and has no fleet-wide form worth having: publishing a test fact
+# on two hundred cores litters two hundred cores. So it alone needs one core named.
+core_status.problems_pick_core: "O teste vai para um núcleo: clique no achado daquele núcleo na tabela — ou estreite o escopo do painel a um único núcleo"
+core_status.problems_picked_offline: "O núcleo selecionado está offline — o comando esperaria ele voltar"
+core_status.problems_no_online: "Nenhum núcleo no escopo do painel está conectado"
+# Guards the TEST alone. The command channel outlives the connection, so a queued test would fire on
+# the next reconnect and publish its fact at some unannounced later moment, on a core the operator
+# stopped looking at hours ago.
+core_status.problems_core_offline: "O núcleo está offline — o teste esperaria a reconexão e publicaria o fato num momento posterior, sem aviso"
+core_status.problems_test_title: "Enviar um diagnóstico de teste?"
+# The consequence is the whole reason this action is confirmed at all.
+core_status.problems_test_q: "O núcleo %{core} vai publicar um fato de teste pelo próprio detector — cerca de dois segundos. A linha fica no núcleo, e a ÚNICA forma de removê-la é a redefinição, que também apaga os achados reais daquele núcleo."
+core_status.problems_test_sent: "Teste enviado a %{core} — a linha aparece em alguns segundos"
+core_status.problems_clear_sent: "Redefinição enviada a %{core} — as linhas somem quando o núcleo enviar a próxima lista"
+core_status.problems_clear_sent_many: "Redefinição enviada (núcleos: %{cores}) — as linhas somem quando esses núcleos enviarem as próximas listas"
+# Says what it re-read, not "done": the honest outcome of a re-read that found nothing new is an
+# unchanged table, and a message claiming more would make that look like a failure.
+core_status.problems_refreshed: "Núcleos relidos: %{cores}"
+# The shortfall, never a bare success: a fleet action that reached nine of twelve cores has failed
+# on three, and only the toast can say so.
+core_status.problems_fleet_none: "Nenhum núcleo alcançado (de %{cores}) — offline, ou o canal de comando está fechado"
+core_status.problems_fleet_partial: "Alcançados: %{sent} de %{cores} — o resto está offline ou o canal está fechado"
+core_status.problems_not_sent: "Não enviado: o canal de comando do núcleo está fechado"
+core_status.problems_not_sent_offline: "Não enviado: o núcleo está offline"
+core_status.problems_clear_title: "Redefinir o diagnóstico do núcleo?"
+# Blunt on purpose: the protocol's own warning is that cleared real diagnostics cannot be restored.
+core_status.problems_clear_q: "O núcleo %{core} vai descartar todo problema confirmado e toda hipótese pendente — para todos os terminais, sem volta. Não corrige nenhuma causa: se uma permanecer, o núcleo confirma o problema de novo."
+core_status.problems_clear_title_many: "Redefinir o diagnóstico de vários núcleos?"
+# The core NAMES, not just how many: a count is nothing an operator can check, and this dialog is
+# the last place the mistake is still cheap.
+core_status.problems_clear_q_many: "Cada um destes núcleos (%{cores}) descarta todo problema confirmado e toda hipótese pendente — para todos os terminais, sem volta. Não corrige nenhuma causa: o que permanecer será confirmado de novo."
