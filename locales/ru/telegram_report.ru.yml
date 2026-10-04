@@ -30,13 +30,10 @@ telegram.report_navigation_hint: "Период выбирайте в нижне�
 telegram.report_all_cores: "Все ядра"
 
 telegram.report_by_days: "По дням"
-telegram.report_by_groups: "По группам"
-telegram.report_groups: "Группы"
-telegram.report_no_group: "Без группы"
 
-telegram.report_days_scope: "Дни группы"
+telegram.report_days_scope: "Дни биржи"
 
-telegram.report_cores_scope: "Ядра группы"
+telegram.report_cores_scope: "Ядра биржи"
 
 telegram.report_back: "Все биржи"
 

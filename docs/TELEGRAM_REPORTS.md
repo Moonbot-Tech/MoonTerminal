@@ -49,15 +49,19 @@ daily grouping on the next request; a station-hosted bot receives the new zone w
 Settings -> Telegram -> Bot menu lays out the reply keyboard as rows of buttons: a tick shows a
 button, "new row" starts a row, the arrows change the order. The Report section always shows all
 its periods; the Mini App opens from the chat's menu button, not from the keyboard. The same box
-sets the view reports open in (by exchange, by core, by group, by day) and whether periods count
+sets the view reports open in (by exchange or by core; by day is a button under the report, a
+menu button and `/daily`) and whether periods count
 trades by close time (the default, as the terminal's Report) or by open time; a report read by open
 time says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot
 takes them with "Apply on the server", without a restart. Chats get a changed keyboard with the
 bot's next message; a button already on an older keyboard keeps working within the chat's role.
 
-The view by group uses the terminal's saved core groups: one row per group over its own cores (a
-core in two groups counts in each, the total counts it once), then "No group" for the rest; "Groups"
-opens a group's cores. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
+The view by core lists the cores under the terminal's saved core groups, as the Profit Monitor
+does: a caption per group, its cores, and a "Group: total" row; groups by name, "Ungrouped" last. A
+core in two groups is listed under both and counts in both subtotals, while the report's total
+counts it once; a group of one core has no subtotal, and when one group would hold every core the
+list stays flat. A report long enough to page repeats a group's caption on the page that continues
+it. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
 was last sent. The station's bot menu shows whether its groups are this terminal's and offers "Send
 groups to the station" when they are not — never on its own, so a terminal without groups cannot
 wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
@@ -162,9 +166,11 @@ rich):
   least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
   that closes after the switch is turned on is eligible, and the dedup window is 72 hours.
   A close older than that window is not announced. The card leaves within about five seconds of
-  the trade reaching the report replica and shows the trade in its own currency (`+0.00012 BTC`,
-  `+3.3 USDC`); outside a USD stablecoin the dollar value follows it once the USDT valuation has
-  it. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
+  the trade reaching the report replica. It reads like the cores' own bot: the core's name and a
+  colon, then the coin as a hashtag (`#MARSCOIN`, tap it for every message about that coin) with
+  the profit in the trade's own currency (`+0.00012 BTC`, `+3.3 USDC`; outside a USD stablecoin the
+  dollar value follows once the USDT valuation has it), the entry and exit price
+  (`0.10739 → 0.10844`), and the strategy. It names no volume and no duration. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
   A trade in another currency that a filter needs to judge waits up to five minutes for its
   valuation; after that it is sent with a line saying its thresholds were not checked. With the
   dollar follow-up on (terminal Settings only), a card sent before its valuation gets the dollar
@@ -178,7 +184,9 @@ rich):
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
   terminal's Settings and the bot's Settings -> Notifications; emulator trades are included, and
-  the chat adds no filters of its own. The first event after a quiet spell goes at once; what
+  the chat adds no filters of its own. Laid out as the trade cards: the core's name and a colon,
+  then each event with its coin as a hashtag and the strategy on the line below; consecutive
+  events of one core share its name. The first event after a quiet spell goes at once; what
   follows within 2 seconds (5 in a group, which Telegram takes slower) is merged into one message,
   so a burst of detects is one list; a long list is cut and counted. Only what happens
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for

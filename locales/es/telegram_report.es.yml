@@ -30,13 +30,10 @@ telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa 
 telegram.report_all_cores: "Todos los núcleos"
 
 telegram.report_by_days: "Por día"
-telegram.report_by_groups: "Por grupo"
-telegram.report_groups: "Grupos"
-telegram.report_no_group: "Sin grupo"
 
-telegram.report_days_scope: "Días del grupo"
+telegram.report_days_scope: "Días del exchange"
 
-telegram.report_cores_scope: "Núcleos del grupo"
+telegram.report_cores_scope: "Núcleos del exchange"
 
 telegram.report_back: "Todos los exchanges"
 

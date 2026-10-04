@@ -7,7 +7,7 @@ use moon_core::{
     config::{CoreGroup, telegram_access::TelegramReportAccess, telegram_menu::ReportBasis},
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
     telegram::{
-        report::{ReportRequest, ReportScope, group_key},
+        report::{ReportRequest, ReportScope},
         runtime::Response,
     },
     util::display_time,
@@ -23,9 +23,44 @@ use moon_core::telegram::api::ReplyMarkup;
 
 mod paging;
 mod render;
+mod sections;
 
 pub(crate) use render::{escape, help, rich_message_fits};
 use render::{render, report_html};
+
+/// One row of a report table.
+#[derive(Clone, Debug)]
+pub(super) enum Row {
+    /// An exchange, a core or a day, with its money.
+    Line(String, QuoteBreakdown),
+    /// A core already listed under an earlier group: in the table again, not in the details.
+    Repeat(String, QuoteBreakdown),
+    /// A saved core group's caption above its cores, or the caption of the cores in none.
+    Group(String),
+    /// A group's own total below its cores: the database's sum over them.
+    Subtotal(String, QuoteBreakdown),
+}
+
+#[cfg(test)]
+impl Row {
+    /// The row's name or caption.
+    pub(super) fn name(&self) -> &str {
+        match self {
+            Self::Line(name, _)
+            | Self::Repeat(name, _)
+            | Self::Group(name)
+            | Self::Subtotal(name, _) => name,
+        }
+    }
+
+    /// The row's money; a caption has none.
+    pub(super) fn total(&self) -> Option<&QuoteBreakdown> {
+        match self {
+            Self::Line(_, total) | Self::Repeat(_, total) | Self::Subtotal(_, total) => Some(total),
+            Self::Group(_) => None,
+        }
+    }
+}
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
 struct Page {
@@ -34,13 +69,10 @@ struct Page {
     to: i64,
     zone: Tz,
     total: QuoteBreakdown,
-    rows: Vec<(String, QuoteBreakdown)>,
+    rows: Vec<Row>,
     pages: usize,
     drilldowns: Vec<(String, ReportScope)>,
     scope_label: Option<String>,
-    /// Whether a saved core group holds a core this chat may see: the other views then offer the
-    /// one by groups.
-    has_groups: bool,
     /// Which timestamp the period was read on.
     basis: ReportBasis,
     /// Cores the chat may see, whose trades the totals can include.
@@ -188,8 +220,8 @@ fn read_page_on(
 
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
 ///
-/// `groups` are the bot's saved core groups: the rows of the view by groups, then the cores in
-/// none, and what [`ReportScope::Group`] names. A group's row is the database's own total over its
+/// `groups` are the bot's saved core groups: the view by cores lists its cores under them, as the
+/// Profit monitor does ([`sections`]). A group's subtotal is the database's own total over its
 /// cores, so a core in two groups counts in each, while the headline counts every core once.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
@@ -218,19 +250,12 @@ fn read_page_with(
         cores.retain(|(id, _)| allowed.contains(id));
     }
     let accessible = cores.clone();
-    let scoped_group = |key: u32| groups.iter().find(|group| group_key(&group.name) == key);
     let in_scope = |id: u64| match request.scope {
         ReportScope::All => true,
-        ReportScope::Group(key) => scoped_group(key).is_some_and(|group| group.cores.contains(&id)),
         scope => scope_of(venues.get(&id)) == scope,
     };
     let scope_label = match request.scope {
         ReportScope::All => None,
-        ReportScope::Group(key) => Some(
-            scoped_group(key)
-                .map(|group| group.name.clone())
-                .unwrap_or_else(|| t!("telegram.report_scope_unavailable").to_string()),
-        ),
         _ => Some(
             cores
                 .iter()
@@ -258,7 +283,10 @@ fn read_page_with(
         ..Default::default()
     };
     let total = db::query_totals(&snap, &filter)?.quotes;
+    let by_core = !request.daily && !request.by_exchange;
     let mut rows_by = Vec::new();
+    // The core of each row of the view by cores, by position.
+    let mut row_cores = Vec::new();
     if request.daily {
         if let (Some(mut date), Some(end)) =
             (display_time::date(from, zone), display_time::date(to, zone))
@@ -291,29 +319,6 @@ fn read_page_with(
                 date = next;
             }
         }
-    } else if request.by_group {
-        for group in groups {
-            let members: Vec<u64> = cores
-                .iter()
-                .map(|(id, _)| *id)
-                .filter(|id| group.cores.contains(id))
-                .collect();
-            if !members.is_empty() {
-                let mut row = filter.clone();
-                row.core_uids = members;
-                rows_by.push((group.name.clone(), row));
-            }
-        }
-        let loose: Vec<u64> = cores
-            .iter()
-            .map(|(id, _)| *id)
-            .filter(|id| !groups.iter().any(|group| group.cores.contains(id)))
-            .collect();
-        if !loose.is_empty() {
-            let mut row = filter.clone();
-            row.core_uids = loose;
-            rows_by.push((t!("telegram.report_no_group").to_string(), row));
-        }
     } else if request.by_exchange {
         for (venue, members) in core_order::exchange_sections(
             cores
@@ -330,33 +335,74 @@ fn read_page_with(
             let mut core = filter.clone();
             core.core_uids = vec![id];
             rows_by.push((name, core));
+            row_cores.push(id);
         }
     }
     // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
     let mut active = Vec::new();
-    for (name, filter) in rows_by {
+    let mut active_cores = Vec::new();
+    for (index, (name, filter)) in rows_by.into_iter().enumerate() {
         let total = db::query_totals(&snap, &filter)?.quotes;
         if total.orders > 0 {
-            active.push((name, total));
+            active.push(Row::Line(name, total));
+            active_cores.extend(row_cores.get(index).copied());
         }
     }
-    let drilldowns = if request.by_group {
-        group_drilldowns(&snap, &accessible, groups, &filter)?
-    } else {
-        exchange_drilldowns(&snap, &accessible, &venues, &filter)?
+    let active = match sections::sections(&active_cores, groups).filter(|_| by_core) {
+        Some(sections) => {
+            let mut rows = Vec::new();
+            let mut listed = std::collections::HashSet::new();
+            for section in sections {
+                let name = section.group.map_or_else(
+                    || t!("profit_monitor.group.ungrouped").to_string(),
+                    |group| group.name.clone(),
+                );
+                rows.push(Row::Group(name.clone()));
+                for &index in &section.members {
+                    rows.push(match active[index].clone() {
+                        Row::Line(name, total) if !listed.insert(index) => Row::Repeat(name, total),
+                        row => row,
+                    });
+                }
+                // One core's subtotal would restate its own row.
+                if section.members.len() > 1 {
+                    let mut members = filter.clone();
+                    members.core_uids = section
+                        .members
+                        .iter()
+                        .map(|&index| active_cores[index])
+                        .collect();
+                    rows.push(Row::Subtotal(
+                        t!("profit_monitor.group.subtotal", name = name).to_string(),
+                        db::query_totals(&snap, &members)?.quotes,
+                    ));
+                }
+            }
+            rows
+        }
+        None => active,
     };
-    // A viewer is offered the view by groups only when one of them holds a core it may see.
-    let has_groups = groups.iter().any(|group| {
-        group
-            .cores
-            .iter()
-            .any(|id| accessible.iter().any(|(core, _)| core == id))
-    });
+    let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
     // Every view shows all its rows while the message fits; an oversized one pages with the
     // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
     // label it can show, so the page actually rendered is never longer than the one measured.
-    let fits = |rows: &[(String, QuoteBreakdown)]| {
+    // A partial page may open with its group's caption repeated: measured with the longest one.
+    let widest_caption = active
+        .iter()
+        .filter_map(|row| match row {
+            Row::Group(name) => Some(name),
+            _ => None,
+        })
+        // Telegram counts characters of the escaped text.
+        .max_by_key(|name| escape(name).chars().count())
+        .cloned();
+    let fits = |rows: &[Row]| {
         let partial = rows.len() < active.len();
+        let mut probed = Vec::with_capacity(rows.len() + 1);
+        if partial {
+            probed.extend(widest_caption.clone().map(Row::Group));
+        }
+        probed.extend_from_slice(rows);
         let mut probe = request.clone();
         probe.page = if partial { 9_999 } else { 0 };
         rich_message_fits(&report_html(&Page {
@@ -365,11 +411,10 @@ fn read_page_with(
             to,
             zone,
             total: total.clone(),
-            rows: rows.to_vec(),
+            rows: probed,
             pages: if partial { 10_000 } else { 1 },
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
-            has_groups,
             basis,
             cores: Vec::new(),
             caption: None,
@@ -378,12 +423,7 @@ fn read_page_with(
     let size = paging::fitting_page_size(&active, fits);
     let pages = active.len().div_ceil(size).max(1);
     request.page = request.page.min(pages - 1);
-    let rows: Vec<_> = active
-        .iter()
-        .skip(request.page * size)
-        .take(size)
-        .cloned()
-        .collect();
+    let rows = page_rows(&active, request.page * size, size);
     Ok(Page {
         request,
         from,
@@ -394,11 +434,33 @@ fn read_page_with(
         pages,
         drilldowns,
         scope_label,
-        has_groups,
         basis,
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
     })
+}
+
+/// The rows of the page that starts at `start` and holds `size` of `rows`, kept readable when it
+/// cuts a group: a page that opens inside a group repeats the group's caption first, and a caption
+/// that would close a page without its cores is left to the next page, which then opens with it.
+fn page_rows(rows: &[Row], start: usize, size: usize) -> Vec<Row> {
+    let mut page: Vec<Row> = rows.iter().skip(start).take(size).cloned().collect();
+    if page.len() > 1
+        && start + page.len() < rows.len()
+        && matches!(page.last(), Some(Row::Group(_)))
+    {
+        page.pop();
+    }
+    let opens_inside = !matches!(rows.get(start), None | Some(Row::Group(_)));
+    if opens_inside
+        && let Some(caption) = rows[..start]
+            .iter()
+            .rev()
+            .find(|row| matches!(row, Row::Group(_)))
+    {
+        page.insert(0, caption.clone());
+    }
+    page
 }
 
 /// An automatic report ready to queue: the rich HTML, its buttons, the cores it discloses.
@@ -420,7 +482,7 @@ pub(crate) struct AutoInputs {
     pub(crate) order: CoreOrder,
     pub(crate) names: db::CoreNames,
     pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
-    /// The bot's saved core groups, for a report in the view by groups.
+    /// The bot's saved core groups, for a report in the view by cores.
     pub(crate) groups: Vec<CoreGroup>,
 }
 
@@ -1008,7 +1070,7 @@ struct ClosedCols {
     coin: Option<usize>,
     core_name: Option<usize>,
     buy_price: Option<usize>,
-    buy_date: Option<usize>,
+    sell_price: Option<usize>,
     close_date: Option<usize>,
     rec_id: Option<usize>,
     channel: Option<usize>,
@@ -1030,7 +1092,7 @@ impl ClosedCols {
             coin: index("coin"),
             core_name: index("core_name"),
             buy_price: index("buyprice"),
-            buy_date: index("buydate"),
+            sell_price: index("sellprice"),
             close_date: index("closedate"),
             rec_id: index("id"),
             channel: index("channelname"),
@@ -1055,7 +1117,7 @@ fn is_funding(row: &[rusqlite::types::Value], cols: &ClosedCols) -> bool {
     )
 }
 
-/// Map one report row. A missing buy time uses the close time, so the duration is zero.
+/// Map one report row.
 ///
 /// `rec_id` is the replica `newrecid`. A legacy `0` falls back to the display `id` column.
 fn map_closed_row(
@@ -1071,10 +1133,6 @@ fn map_closed_row(
         .and_then(value_i64)
         .filter(|secs| *secs > 0)?;
     let close_utc = axis.to_utc(close_local, core);
-    let buy_utc = cell(cols.buy_date)
-        .and_then(value_i64)
-        .filter(|secs| *secs > 0)
-        .map(|secs| axis.to_utc(secs, core));
     let replica = table.rec_ids.get(row_index).copied().unwrap_or(0);
     let rec_id = if replica != 0 {
         replica
@@ -1101,7 +1159,8 @@ fn map_closed_row(
         profit_native: finite_number(cell(cols.profit_native).and_then(value_f64)),
         volume_native: finite_number(cell(cols.volume_native).and_then(value_f64))
             .filter(|volume| *volume > 0.0),
-        open_utc: buy_utc.unwrap_or(close_utc),
+        buy_price: finite_number(cell(cols.buy_price).and_then(value_f64)),
+        sell_price: finite_number(cell(cols.sell_price).and_then(value_f64)),
     })
 }
 
@@ -1166,8 +1225,7 @@ fn exchange_key(venue: Option<&moon_core::venue::CoreVenue>) -> String {
             format!("{:x}.{:x}", id.code, id.dex)
         }
         moon_core::telegram::report::ReportScope::Unidentified
-        | moon_core::telegram::report::ReportScope::All
-        | moon_core::telegram::report::ReportScope::Group(_) => "unidentified".to_string(),
+        | moon_core::telegram::report::ReportScope::All => "unidentified".to_string(),
     }
 }
 
@@ -1190,35 +1248,6 @@ fn exchange_drilldowns(
         let total = db::query_totals(snap, &group)?.quotes;
         if total.orders > 0 {
             drilldowns.push((section_label(venue), scope_of(venue)));
-        }
-    }
-    Ok(drilldowns)
-}
-
-/// One button per saved group with trades in the period, in the groups' own order.
-fn group_drilldowns(
-    snap: &rusqlite::Transaction<'_>,
-    cores: &[(u64, String)],
-    groups: &[CoreGroup],
-    filter: &ReportFilter,
-) -> db::ReadResult<Vec<(String, ReportScope)>> {
-    let mut drilldowns = Vec::new();
-    for group in groups {
-        let members: Vec<u64> = cores
-            .iter()
-            .map(|(id, _)| *id)
-            .filter(|id| group.cores.contains(id))
-            .collect();
-        if members.is_empty() {
-            continue;
-        }
-        let mut row = filter.clone();
-        row.core_uids = members;
-        if db::query_totals(snap, &row)?.quotes.orders > 0 {
-            drilldowns.push((
-                group.name.clone(),
-                ReportScope::Group(group_key(&group.name)),
-            ));
         }
     }
     Ok(drilldowns)

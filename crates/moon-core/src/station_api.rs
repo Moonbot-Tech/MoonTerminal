@@ -374,7 +374,7 @@ pub struct Access {
         deserialize_with = "chat_keyed"
     )]
     pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
-    /// The terminal's saved core groups, for the bot's report by groups: answered by a station
+    /// The terminal's saved core groups, for the bot's report by cores: answered by a station
     /// that knows them, sent only when the user sends them (another terminal's set is not
     /// overwritten by a terminal that has none). Absent keeps the station's. Core uids are the
     /// terminal's, which the station shares.

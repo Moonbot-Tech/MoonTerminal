@@ -17,7 +17,6 @@ fn trade() -> ClosedTrade {
         volume_usd: Some(100.0),
         profit_usd: Some(12.5),
         profit_pct: Some(1.25),
-        open_utc: 0,
         ..ClosedTrade::default()
     }
 }
@@ -58,6 +57,7 @@ fn assert_only_allowed_tags(html: &str) {
 
 /// Letting `<`, `&`, `>`, or `"` through would make Telegram parse a coin or
 /// a strategy as markup, and the card would fail to send or show the wrong text.
+/// A coin is a hashtag, which holds no markup character at all.
 #[test]
 fn names_are_escaped_before_they_enter_html() {
     let _locale = crate::test_locale::force("en");
@@ -66,11 +66,64 @@ fn names_are_escaped_before_they_enter_html() {
     row.core_name = "core<&>\"".to_string();
     row.strategy = "strat<&>\"".to_string();
     let html = trade_card(&row, false);
-    assert!(html.contains("<b>BTC&lt;&amp;&gt;&quot;USDT</b>"));
-    assert!(html.contains("core&lt;&amp;&gt;&quot;"));
+    assert!(html.contains("#BTC____USDT "), "{html}");
+    assert!(html.starts_with("core&lt;&amp;&gt;&quot;:\n"), "{html}");
     assert!(html.contains("<i>strat&lt;&amp;&gt;&quot;</i>"));
     assert!(!html.contains("<&>"));
     assert_only_allowed_tags(&html);
+}
+
+/// The card as the cores' own bot writes it: the core first, the coin as a tag, the profit, the
+/// entry and exit price, the strategy. No volume and no duration (LinKvo, 04.10).
+#[test]
+fn the_card_reads_like_the_cores_own_bot() {
+    let _locale = crate::test_locale::force("en");
+    let mut row = trade();
+    row.coin = "MARSCOIN".to_string();
+    row.core_name = "BinF4RMain".to_string();
+    row.strategy = "MoonShot: (strategy <MainShotL>)".to_string();
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(1);
+    row.profit_native = Some(3.36);
+    row.profit_pct = Some(0.96);
+    row.buy_price = Some(0.10739);
+    row.sell_price = Some(0.10844);
+    assert_eq!(
+        trade_card(&row, false),
+        "BinF4RMain:\n\u{1f7e2} #MARSCOIN <b>+3.36 USDT</b> (+0.96%)\n0.10739 \u{2192} 0.10844\n<i>MoonShot \u{00b7} MainShotL</i>"
+    );
+}
+
+/// Prices keep enough digits to tell an exit from its entry; a row without both prices, or with
+/// one the row could not read, prints no price line rather than a half or a zero.
+#[test]
+fn prices_tell_the_exit_from_the_entry() {
+    assert_eq!(
+        prices_text(Some(0.014860), Some(0.015238)).as_deref(),
+        Some("0.01486 \u{2192} 0.015238")
+    );
+    assert_eq!(
+        prices_text(Some(1.234561), Some(1.234564)).as_deref(),
+        Some("1.234561 \u{2192} 1.234564")
+    );
+    assert_eq!(
+        prices_text(Some(65432.37), Some(65440.0)).as_deref(),
+        Some("65432.4 \u{2192} 65440")
+    );
+    assert_eq!(
+        prices_text(Some(2.5), Some(2.5)).as_deref(),
+        Some("2.5 \u{2192} 2.5")
+    );
+    assert_eq!(
+        prices_text(Some(0.000_000_012_345_6), Some(0.000_000_012_345_9)).as_deref(),
+        Some("0.0000000123456 \u{2192} 0.0000000123459")
+    );
+    assert_eq!(prices_text(None, Some(1.0)), None);
+    assert_eq!(prices_text(Some(1.0), Some(f64::NAN)), None);
+    assert_eq!(prices_text(Some(0.0), Some(1.0)), None);
+    let _locale = crate::test_locale::force("en");
+    let mut row = trade();
+    row.buy_price = Some(1.0);
+    assert_eq!(trade_card(&row, false).lines().count(), 3);
 }
 
 /// Cutting a name after escaping, or on a byte index, would either split
@@ -95,74 +148,54 @@ fn long_strategy_is_cut_to_64_chars_before_escape() {
 }
 
 /// Printing `0.00` for a missing profit would tell the chat the trade broke
-/// even, and a white mark on a real loss would hide the sign. The volume
-/// segment must disappear when the row has no volume, or a blank notional
-/// reads as a zero fill.
+/// even, and a white mark on a real loss would hide the sign.
 #[test]
-fn unvalued_profit_is_a_word_and_missing_volume_is_omitted() {
+fn unvalued_profit_is_a_word() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
     row.profit_usd = None;
     row.profit_pct = None;
-    row.volume_usd = None;
     let html = trade_card(&row, false);
-    assert_eq!(
-        html,
-        "\
-\u{26aa} <b>BTC</b> \u{00b7} Unvalued \u{00b7} 2m
-alpha
-<i>grid</i>"
-    );
+    assert_eq!(html, "alpha:\n\u{26aa} #BTC Unvalued\n<i>grid</i>");
     assert!(!html.contains("0.00"));
     assert!(!html.contains('$'));
     assert_only_allowed_tags(&html);
 }
 
-/// Dropping the hour or the day, or keeping seconds, would make a two-day
-/// hold and a two-minute hold look like the same kind of number. Dropping the
-/// leading plus, painting a gain red, or marking a profit that rounds to
-/// `0.00` as a gain would make the figure and the mark disagree.
+/// Dropping the leading plus, painting a gain red, or marking a profit that rounds to `0.00` as a
+/// gain would make the figure and the mark disagree. The outage line keeps its duration.
 #[test]
-fn duration_and_sign_follow_the_rounded_figure() {
+fn sign_follows_the_rounded_figure() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
-    row.volume_usd = None;
+    let second = |row: &ClosedTrade| trade_card(row, false).lines().nth(1).map(str::to_string);
     assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
+        second(&row).as_deref(),
+        Some("\u{1f7e2} #BTC <b>+12.50$</b> (+1.25%)")
     );
     row.profit_usd = Some(-4.0);
     row.profit_pct = Some(-0.5);
     assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some("\u{1f534} <b>BTC</b> \u{00b7} <b>-4.00$</b> (-0.50%) \u{00b7} 2m")
+        second(&row).as_deref(),
+        Some("\u{1f534} #BTC <b>-4.00$</b> (-0.50%)")
     );
     row.profit_usd = Some(0.0);
     row.profit_pct = Some(0.0);
     assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some("\u{26aa} <b>BTC</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 2m")
+        second(&row).as_deref(),
+        Some("\u{26aa} #BTC <b>0.00$</b> (0.00%)")
     );
     assert!(!trade_card(&row, false).contains("+0.00$"));
     row.profit_usd = Some(0.001);
-    row.profit_pct = Some(0.0);
-    assert!(trade_card(&row, false).starts_with('\u{26aa}'));
+    assert!(second(&row).unwrap().starts_with('\u{26aa}'));
     assert!(trade_card(&row, false).contains("<b>0.00$</b>"));
-    row.profit_usd = Some(12.5);
-    row.profit_pct = Some(1.25);
-    row.open_utc = 0;
-    row.close_utc = 3 * 86_400 + 4 * 3_600;
-    assert!(trade_card(&row, false).contains(" \u{00b7} 3d 4h"));
-    row.close_utc = 2 * 3_600 + 5 * 60;
-    assert!(trade_card(&row, false).contains(" \u{00b7} 2h 5m"));
-    row.close_utc = 90;
-    assert!(trade_card(&row, false).contains(" \u{00b7} 1m"));
-    row.close_utc = 45;
-    assert!(trade_card(&row, false).contains(" \u{00b7} 0m"));
-    assert!(!trade_card(&row, false).contains("Duration"));
     assert_eq!(
         back_line("alpha", 3 * 86_400 + 4 * 3_600),
         "\u{1f7e2} alpha \u{2014} connection restored (3d 4h)"
+    );
+    assert_eq!(
+        back_line("alpha", 2 * 3_600 + 5 * 60),
+        "\u{1f7e2} alpha \u{2014} connection restored (2h 5m)"
     );
     assert_eq!(
         back_line("alpha", -5),
@@ -246,27 +279,6 @@ fn strategy_channel_parses_source_and_name_or_stays_whole() {
     assert_only_allowed_tags(&trade_card(&row, false));
 }
 
-/// Keeping cents on the entry volume, or gluing the thousands together, would
-/// make `5992.4` read as a different notional than the whole-dollar figure.
-#[test]
-fn entry_volume_is_grouped_whole_dollars() {
-    let _locale = crate::test_locale::force("en");
-    let mut row = trade();
-    row.volume_usd = Some(5992.4);
-    assert!(trade_card(&row, false).contains(" \u{00b7} 5 992$ \u{00b7} "));
-    row.volume_usd = Some(5992.5);
-    assert!(trade_card(&row, false).contains(" \u{00b7} 5 993$ \u{00b7} "));
-    row.volume_usd = Some(10_000.0);
-    assert!(trade_card(&row, false).contains(" \u{00b7} 10 000$ \u{00b7} "));
-    row.volume_usd = Some(0.0);
-    assert!(trade_card(&row, false).contains(" \u{00b7} 0$ \u{00b7} "));
-    row.volume_usd = Some(f64::NAN);
-    assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
-    );
-}
-
 /// A missing percent must keep the dollars and say the percent is unvalued.
 /// Dropping the parentheses would make the word look like a second profit.
 #[test]
@@ -274,7 +286,6 @@ fn missing_percent_keeps_the_unvalued_word_beside_the_dollars() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
     row.profit_pct = None;
-    row.volume_usd = None;
     assert!(trade_card(&row, false).contains("<b>+12.50$</b> (Unvalued)"));
 }
 
@@ -288,33 +299,25 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     row.coin = "ETHBTC".to_string();
     row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
     row.profit_native = Some(0.00012);
-    row.volume_native = Some(0.0105);
     row.profit_usd = None;
-    row.volume_usd = None;
+    let second = |row: &ClosedTrade| trade_card(row, false).lines().nth(1).map(str::to_string);
     assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some(
-            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
-        )
+        second(&row).as_deref(),
+        Some("\u{1f7e2} #ETHBTC <b>+0.00012 BTC</b> (+1.25%)")
     );
     row.profit_usd = Some(7.5);
     assert_eq!(
-        trade_card(&row, false).lines().next(),
-        Some(
-            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> \u{2248} +7.50$ (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
-        )
+        second(&row).as_deref(),
+        Some("\u{1f7e2} #ETHBTC <b>+0.00012 BTC</b> \u{2248} +7.50$ (+1.25%)")
     );
     row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(8);
     row.profit_native = Some(-3.3);
     row.profit_usd = Some(-3.29);
-    row.volume_native = Some(1234.4);
     row.profit_pct = Some(-0.5);
     let card = trade_card(&row, true);
     assert_eq!(
-        card.lines().next(),
-        Some(
-            "\u{1f534} <b>ETHBTC</b> \u{00b7} <b>-3.3 USDC</b> (-0.50%) \u{00b7} 1 234 USDC \u{00b7} 2m"
-        )
+        card.lines().nth(1),
+        Some("\u{1f534} #ETHBTC <b>-3.3 USDC</b> (-0.50%)")
     );
     assert_eq!(
         card.lines().nth(3),
@@ -322,15 +325,10 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     );
     assert_only_allowed_tags(&card);
     row.profit_native = Some(0.0);
-    row.volume_native = Some(0.4);
-    let flat = trade_card(&row, false);
+    let flat = second(&row).unwrap();
     assert!(flat.starts_with('\u{26aa}'), "{flat}");
     assert!(
         flat.contains("<b>0 USDC</b>"),
         "a flat trade claims no gain: {flat}"
-    );
-    assert!(
-        flat.contains(" 0.4 USDC "),
-        "a notional under one keeps its cents: {flat}"
     );
 }

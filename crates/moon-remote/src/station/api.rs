@@ -97,7 +97,7 @@ pub fn set_zone(target: &Target, zone: &str) -> anyhow::Result<Option<Access>> {
     }
 }
 
-/// Send the terminal's saved core groups to the station, for the bot's report by groups: the
+/// Send the terminal's saved core groups to the station, for the bot's report by cores: the
 /// station's set is replaced whole. Only on the user's word — another terminal's groups are not
 /// overwritten by one that has none.
 ///

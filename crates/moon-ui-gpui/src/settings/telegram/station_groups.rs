@@ -1,4 +1,4 @@
-//! The station's copy of the terminal's saved core groups, for the bot's report by groups.
+//! The station's copy of the terminal's saved core groups, for the bot's report by cores.
 //!
 //! Groups are sent on the user's word, never on their own: several terminals may serve one station,
 //! and one without groups must not wipe the set another sent. So the box compares what the station

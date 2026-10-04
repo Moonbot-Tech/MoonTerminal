@@ -15,7 +15,6 @@ fn trade(core: u64, rec_id: i64, close_utc: i64) -> ClosedTrade {
         volume_usd: Some(100.0),
         profit_usd: Some(1.0),
         profit_pct: Some(0.5),
-        open_utc: close_utc.saturating_sub(60),
         ..ClosedTrade::default()
     }
 }

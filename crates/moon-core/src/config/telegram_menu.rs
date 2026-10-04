@@ -345,23 +345,29 @@ impl<'de> Deserialize<'de> for BotMenu {
 pub enum ReportView {
     #[default]
     Exchanges,
+    /// One row per core, under the terminal's saved core groups when there are any, as the
+    /// Profit monitor lists them.
     Cores,
-    Days,
-    /// The terminal's saved core groups, as the station holds them (`station_api::Access::groups`).
-    Groups,
 }
 
 impl ReportView {
     /// Every view, in picker order.
-    pub const ALL: [Self; 4] = [Self::Exchanges, Self::Cores, Self::Groups, Self::Days];
+    pub const ALL: [Self; 2] = [Self::Exchanges, Self::Cores];
 
     /// Stable saved id.
     pub fn id(self) -> &'static str {
         match self {
             Self::Exchanges => "exchanges",
             Self::Cores => "cores",
-            Self::Days => "days",
-            Self::Groups => "groups",
+        }
+    }
+
+    /// The view saved as `id`. The retired `days` and `groups` views read as the cores view: the
+    /// cores view now carries the groups, and a split by days is a button of its own.
+    pub(crate) fn from_id(id: &str) -> Option<Self> {
+        match id {
+            "days" | "groups" => Some(Self::Cores),
+            id => Self::ALL.into_iter().find(|value| value.id() == id),
         }
     }
 }
@@ -389,6 +395,11 @@ impl ReportBasis {
         }
     }
 
+    /// The basis saved as `id`.
+    fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.id() == id)
+    }
+
     /// The database filter's basis.
     pub fn period_basis(self) -> crate::db::PeriodBasis {
         match self {
@@ -411,10 +422,7 @@ macro_rules! id_serde {
         impl<'de> Deserialize<'de> for $ty {
             fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
                 let id = String::deserialize(d)?;
-                Ok(Self::ALL
-                    .into_iter()
-                    .find(|value| value.id() == id)
-                    .unwrap_or_default())
+                Ok(Self::from_id(&id).unwrap_or_default())
             }
         }
     };

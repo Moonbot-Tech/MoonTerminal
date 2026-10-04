@@ -122,18 +122,18 @@ fn the_second_pick_opens_the_report() {
         Some(day(2026, 10, 1)),
         Some(from),
         day(2026, 10, 3),
-        ReportView::Days,
+        ReportView::Cores,
     );
     let Press::Report(request) = press(cell(&rows, "2")) else {
         panic!("the second pick opens a report")
     };
     assert_eq!(request.period, Period::Dates(from, day(2026, 10, 2)));
-    assert!(request.daily && !request.follow_view);
+    assert!(!request.daily && !request.by_exchange && !request.follow_view);
     let rows = super::custom_rows(
         Some(day(2026, 9, 1)),
         Some(from),
         day(2026, 10, 3),
-        ReportView::Days,
+        ReportView::Cores,
     );
     assert!(rows.iter().flatten().any(|b| b.text == "\u{2022}28"));
     let Press::Report(single) = press(cell(&rows, "28")) else {
