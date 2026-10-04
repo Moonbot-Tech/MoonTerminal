@@ -50,7 +50,7 @@ MoonTerminal is a native desktop trading terminal for the **[Moonbot](https://mo
 - **Trading panels** — orders and order editing, order book, reports, assets & wallets, a market screener, and a strategy tree for your Moonbot cores.
 - **Order lines on chart** — live order lines are built from the current snapshot plus captured events, so short terminal statuses (`Cancel` / `Fail` / `Done`) are never dropped.
 - **Detachable multi-window layout** — chart tabs and dock panels pop out into separate windows; dock and layout state persist between sessions.
-- **Localized UI** — Russian, English, and Spanish via `rust-i18n`.
+- **Localized UI** — Russian, English, Spanish, Ukrainian, Turkish, Brazilian Portuguese, and Vietnamese via `rust-i18n`.
 - **Encrypted configuration** — server credentials are stored through the OS secure storage / keyring (Secret Service on Linux).
 - **Desk-ready details** — alert sounds, coin icons, custom hotkeys and themes, plus a built-in `chart-smoke` FireTest probe that reports real chart bounds, native input, and CPU/GPU/RAM counters.
 
