@@ -3,8 +3,12 @@ use moon_core::config::telegram_menu::{BotMenu, MenuItem};
 
 /// The tree's shape follows the button order only: showing or starting a row reads from the draft
 /// at render and pushes nothing.
+///
+/// The signature hashes the interface locale, which a test switching it on another thread would
+/// change between the two reads: the locale is held for the whole test.
 #[test]
 fn the_shape_moves_with_the_order_only() {
+    let _locale = crate::test_locale::force("en");
     let mut menu = BotMenu::default();
     let shape = shape_sig(&menu);
     assert!(menu.set_shown(MenuItem::Report, true));
