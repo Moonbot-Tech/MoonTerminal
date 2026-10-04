@@ -135,3 +135,7 @@ telegram.control.banned_core: "Монета добавлена в ЧС ядра.
 telegram.control.banned_strategy: "Монета добавлена в ЧС стратегии."
 telegram.control.banned_temp: "Рынок во временном ЧС на %{hours} ч."
 telegram.control.already_banned: "Монета уже в этом ЧС."
+telegram.control.strategies: "Стратегии"
+telegram.control.no_strategies: "Стратегий нет — или ядро их ещё не прислало."
+telegram.control.strategies_count: "Включено %{on} из %{n}. Нажмите стратегию, чтобы включить или выключить её."
+telegram.control.strategy_waiting: "ядро ещё не подтвердило"

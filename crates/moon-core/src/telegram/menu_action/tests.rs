@@ -202,6 +202,18 @@ fn control_actions_round_trip() {
         uid: u64::MAX,
         confirmed: true,
     });
+    actions.push(ControlAction::Strategies {
+        core: u64::MAX,
+        page: u16::MAX,
+    });
+    for on in [false, true] {
+        actions.push(ControlAction::StrategyToggle {
+            core: u64::MAX,
+            id: u64::MAX,
+            on,
+            page: u16::MAX,
+        });
+    }
     let bans = [OrderBan::Core, OrderBan::Strategy]
         .into_iter()
         .chain(crate::config::TempBanSpan::ALL.map(OrderBan::Temp));

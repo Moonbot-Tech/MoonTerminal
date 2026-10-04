@@ -27,6 +27,9 @@ use crate::labels::navigation_keyboard;
 /// Cores on one page of the list.
 const PAGE: usize = 8;
 
+/// Strategies on one page of a core's list.
+const STRATEGY_PAGE: usize = 12;
+
 /// A screen: its title, its lines, its buttons.
 type Rendered = (String, Vec<String>, Vec<Vec<InlineKeyboardButton>>);
 
@@ -156,6 +159,14 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                 Err(refusal) => refusal_text(refusal),
             };
             core_card(host, core, Some(said))
+        }
+        A::Strategies { core, page } => strategies(host, core, usize::from(page), None),
+        A::StrategyToggle { core, id, on, page } => {
+            let said = match control::strategy_toggle(host, chat, core, id, on) {
+                Ok(()) => None,
+                Err(refusal) => Some(refusal_text(refusal)),
+            };
+            strategies(host, core, usize::from(page), said)
         }
         A::Orders { core, page } => orders(host, core, usize::from(page), None),
         A::Order { core, uid } => order_card(host, core, uid, None),
@@ -402,10 +413,16 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
                 },
             ),
         ],
-        vec![button(
-            format!("\u{1f4cb} {} ({positions})", t!("telegram.control.orders")),
-            ControlAction::Orders { core, page: 0 },
-        )],
+        vec![
+            button(
+                format!("\u{1f4cb} {} ({positions})", t!("telegram.control.orders")),
+                ControlAction::Orders { core, page: 0 },
+            ),
+            button(
+                format!("\u{1f9e9} {}", t!("telegram.control.strategies")),
+                ControlAction::Strategies { core, page: 0 },
+            ),
+        ],
         vec![button(
             format!("\u{1f504} {}", t!("telegram.control.reconnect")),
             ControlAction::Reconnect(core),
@@ -416,6 +433,90 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
         )],
     ];
     (name(host, core), lines, rows)
+}
+
+/// One core's strategies, `page` of them, in the core's order: each a button that checks or
+/// unchecks it, marked while the core has not confirmed the change.
+fn strategies(host: &dyn TgHost, core: CoreId, page: usize, said: Option<String>) -> Rendered {
+    let all: Vec<(u64, String, bool)> = host
+        .session()
+        .store()
+        .core(core)
+        .map(|data| {
+            data.strategies
+                .iter()
+                .map(|row| (row.id, row.name.clone(), row.checked))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pages = all.len().div_ceil(STRATEGY_PAGE).max(1);
+    let page = page.min(pages - 1);
+    let checked = all.iter().filter(|(_, _, on)| *on).count();
+    let mut lines: Vec<String> = said.into_iter().collect();
+    match all.is_empty() {
+        true => lines.push(t!("telegram.control.no_strategies").to_string()),
+        false => {
+            lines.push(
+                t!(
+                    "telegram.control.strategies_count",
+                    on = checked,
+                    n = all.len()
+                )
+                .to_string(),
+            );
+            lines.push(format!(
+                "\u{23f3} \u{2014} {}",
+                t!("telegram.control.strategy_waiting")
+            ));
+        }
+    }
+    let page16 = u16::try_from(page).unwrap_or(u16::MAX);
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = all
+        .iter()
+        .skip(page * STRATEGY_PAGE)
+        .take(STRATEGY_PAGE)
+        .map(|(id, strategy, on)| {
+            let mark = if control::strategy_waiting(host, core, *id) {
+                "\u{23f3}"
+            } else if *on {
+                "\u{2705}"
+            } else {
+                "\u{2b1c}"
+            };
+            vec![button(
+                format!("{mark} {strategy}"),
+                ControlAction::StrategyToggle {
+                    core,
+                    id: *id,
+                    on: !on,
+                    page: page16,
+                },
+            )]
+        })
+        .collect();
+    if pages > 1 {
+        let to = |page: usize| ControlAction::Strategies {
+            core,
+            page: u16::try_from(page).unwrap_or(u16::MAX),
+        };
+        let mut nav = Vec::new();
+        if page > 0 {
+            nav.push(button("\u{25c0}".into(), to(page - 1)));
+        }
+        nav.push(InlineKeyboardButton::callback(
+            format!("{}/{pages}", page + 1),
+            MenuAction::Noop.callback(),
+        ));
+        if page + 1 < pages {
+            nav.push(button("\u{25b6}".into(), to(page + 1)));
+        }
+        rows.push(nav);
+    }
+    rows.push(vec![button(
+        format!("\u{2b05}\u{fe0f} {}", name(host, core)),
+        ControlAction::Core(core),
+    )]);
+    (t!("telegram.control.strategies").to_string(), lines, rows)
 }
 
 /// One core's open positions, `page` of them, newest first.

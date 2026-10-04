@@ -298,6 +298,27 @@ pub(crate) fn strategy_toggle(
     Ok(())
 }
 
+/// Whether a toggle of `core`'s strategy `id` is still on its way: sent and neither echoed by the
+/// core nor timed out.
+pub(crate) fn strategy_waiting(host: &dyn TgHost, core: CoreId, id: u64) -> bool {
+    let Some(entry) = host.state().mini_strategy_wanted.get(&(core, id)).copied() else {
+        return false;
+    };
+    let Some(data) = host.session().store().core(core) else {
+        return false;
+    };
+    let Some(row) = data.strategies.iter().find(|row| row.id == id) else {
+        return false;
+    };
+    crate::mini_app::dto::strategy_pending(
+        entry,
+        data.strategies_ack_rev,
+        data.strategies_rev,
+        row.checked,
+        Instant::now(),
+    ) == Some(StrategyPendingDto::Pending)
+}
+
 /// `core`'s open positions — entries filled and not yet closed — newest first.
 pub(crate) fn open_orders(host: &dyn TgHost, core: CoreId) -> Vec<OrderRow> {
     let mut orders: Vec<OrderRow> = host

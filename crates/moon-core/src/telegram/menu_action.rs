@@ -88,6 +88,15 @@ pub enum ControlAction {
     },
     /// Put an order's coin on a blacklist.
     OrderBan { core: u64, uid: u64, ban: OrderBan },
+    /// One core's strategies, a page of them.
+    Strategies { core: u64, page: u16 },
+    /// Check or uncheck one strategy, then show the same page again.
+    StrategyToggle {
+        core: u64,
+        id: u64,
+        on: bool,
+        page: u16,
+    },
 }
 
 /// Which blacklist an order's coin goes on.
@@ -150,6 +159,10 @@ impl ControlAction {
                 };
                 format!(":b:{core}:{uid}:{code}")
             }
+            Self::Strategies { core, page } => format!(":s:{core}:{page}"),
+            Self::StrategyToggle { core, id, on, page } => {
+                format!(":g:{core}:{id}:{}:{page}", flag(on))
+            }
         }
     }
 
@@ -200,6 +213,16 @@ impl ControlAction {
                 core: core.parse().ok()?,
                 uid: uid.parse().ok()?,
                 confirmed: flag(confirmed)?,
+            },
+            ["s", core, page] => Self::Strategies {
+                core: core.parse().ok()?,
+                page: page.parse().ok()?,
+            },
+            ["g", core, id, on, page] => Self::StrategyToggle {
+                core: core.parse().ok()?,
+                id: id.parse().ok()?,
+                on: flag(on)?,
+                page: page.parse().ok()?,
             },
             ["b", core, uid, code] => Self::OrderBan {
                 core: core.parse().ok()?,
