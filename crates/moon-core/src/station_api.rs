@@ -368,8 +368,32 @@ pub struct Access {
     /// Each chat's notifications with the revision they were read at: answered by the station
     /// from its notifications file; in a change, the chats whose settings to replace — each only
     /// while its stored revision is still the one given. Never written to `telegram.json`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "chat_keyed"
+    )]
     pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
+}
+
+/// Read a map keyed by chat id. The ids are a JSON object's keys, strings on the wire; inside an
+/// internally tagged [`Request`] serde has buffered them first and no longer turns a string key
+/// into an `i64` — so they are read as strings and parsed here.
+fn chat_keyed<'de, D>(d: D) -> Result<Option<BTreeMap<i64, ChatNotifyRow>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(rows) = Option::<BTreeMap<String, ChatNotifyRow>>::deserialize(d)? else {
+        return Ok(None);
+    };
+    rows.into_iter()
+        .map(|(chat, row)| {
+            chat.parse()
+                .map(|chat| (chat, row))
+                .map_err(|_| serde::de::Error::custom(format!("chat id {chat:?}")))
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
 }
 
 /// One chat's notification settings and the revision of the stored row they come from (`0` for a

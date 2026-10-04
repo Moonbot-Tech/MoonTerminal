@@ -287,7 +287,7 @@ fn the_new_parts_are_optional_on_the_wire() {
 #[test]
 fn chats_notifications_ride_the_access() {
     let mut row = ChatNotifyRow::default();
-    row.settings.daily.on = true;
+    row.settings.down.on = true;
     row.revision = 4;
     let access = Access {
         authorized_chat_ids: vec![7],
@@ -303,4 +303,28 @@ fn chats_notifications_ride_the_access() {
     };
     assert!(read.base_holds(&access));
     assert!(!serde_json::to_string(&read).unwrap().contains("notify"));
+}
+
+/// A change of chats' notifications reaches the station: the chat ids are a JSON object's keys —
+/// strings on the wire — and an `access.set` is an internally tagged request, which serde buffers
+/// before it reads the fields. A group's id is negative.
+#[test]
+fn chats_notifications_ride_an_access_set() {
+    let access = Access {
+        authorized_chat_ids: vec![230057918, -1001234567890],
+        owner_chat_id: Some(230057918),
+        notify: Some(std::collections::BTreeMap::from([
+            (230057918, ChatNotifyRow::default()),
+            (-1001234567890, ChatNotifyRow::default()),
+        ])),
+        ..Access::default()
+    };
+    let request = Request::AccessSet {
+        base: Box::new(access.clone()),
+        access: Box::new(access),
+    };
+    let wire = serde_json::to_string(&request).unwrap();
+    assert!(wire.contains(r#""230057918":"#), "{wire}");
+    let back: Request = serde_json::from_str(&wire).unwrap();
+    assert_eq!(back, request);
 }
