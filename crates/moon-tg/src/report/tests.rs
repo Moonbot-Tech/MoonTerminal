@@ -30,7 +30,7 @@ fn viewer_membership_filters_every_report_view_and_total() {
         assert_eq!(page.total.orders, 1);
         assert_eq!(page.total.totals[0].profit, 7.0);
         assert_eq!(page.rows.len(), 1);
-        assert_eq!(page.rows[0].1.totals[0].profit, 7.0);
+        assert_eq!(page.rows[0].total().unwrap().totals[0].profit, 7.0);
         let Response::Rich { html, .. } = render(
             &page,
             crate::HostKind::Terminal,
@@ -120,7 +120,7 @@ fn full_total_is_the_tables_top_row() {
         to: 1,
         zone: chrono_tz::UTC,
         total,
-        rows: vec![(
+        rows: vec![super::Row::Line(
             "Visible row".into(),
             QuoteBreakdown::from_groups([(Some(0), 1.0, 1)]),
         )],
@@ -130,7 +130,6 @@ fn full_total_is_the_tables_top_row() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -170,7 +169,6 @@ fn inline_buttons_keep_the_current_period() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -204,14 +202,13 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![("Fixture".into(), total)],
+        rows: vec![super::Row::Line("Fixture".into(), total)],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -286,10 +283,7 @@ fn inactive_cores_do_not_consume_page_slots() {
     assert_eq!(page.total.orders, 9);
     assert_eq!(page.pages, 1);
     assert_eq!(
-        page.rows
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>(),
+        page.rows.iter().map(|row| row.name()).collect::<Vec<_>>(),
         vec!["1", "3", "5", "7", "9", "11", "13", "15", "17"]
     );
 }
@@ -323,9 +317,9 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
     let zero = page
         .rows
         .iter()
-        .find(|(_, total)| total.orders == 2)
+        .find(|row| row.total().unwrap().orders == 2)
         .unwrap();
-    assert_eq!(zero.1.totals[0].profit, 0.0);
+    assert_eq!(zero.total().unwrap().totals[0].profit, 0.0);
     assert_eq!(page.drilldowns.len(), 2);
     let mut scoped = request;
     scoped.scope = ReportScope::Venue(ExchangeId::new(13));
@@ -370,10 +364,10 @@ fn daily_pages_include_partial_day_after_zone_change() {
         |_| (Default::default(), super::TelegramReportAccess::Owner),
     )
     .unwrap();
-    assert_eq!(page.rows.last().unwrap().0, "2025-01-01");
+    assert_eq!(page.rows.last().unwrap().name(), "2025-01-01");
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.total.orders, 1);
-    assert_eq!(page.rows.last().unwrap().1.orders, 1);
+    assert_eq!(page.rows.last().unwrap().total().unwrap().orders, 1);
 }
 
 /// A month of daily rows and a handful of exchanges fit one message.
@@ -612,14 +606,13 @@ fn native_average_keeps_small_btc_amount_visible() {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![("Fixture".into(), total)],
+        rows: vec![super::Row::Line("Fixture".into(), total)],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -677,8 +670,8 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     assert_eq!(first.total.totals[0].profit, 18.0);
     assert_eq!(first.rows.len(), 12);
     assert_eq!(first.pages, 1);
-    assert_eq!(first.rows[0].1.orders, 2);
-    assert_eq!(first.rows[0].1.totals[0].profit, 7.0);
+    assert_eq!(first.rows[0].total().unwrap().orders, 2);
+    assert_eq!(first.rows[0].total().unwrap().totals[0].profit, 7.0);
     request.page = 1;
     let second = super::read_page_on(
         &conn,
@@ -723,7 +716,6 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
@@ -798,14 +790,16 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![(format!("<b>&{}", "x".repeat(50_000)), total)],
+        rows: vec![super::Row::Line(
+            format!("<b>&{}", "x".repeat(50_000)),
+            total,
+        )],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -842,7 +836,6 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -934,7 +927,6 @@ fn today_omits_daily_navigation() {
             basis: ReportBasis::Close,
             cores: Vec::new(),
             caption: None,
-            has_groups: false,
         };
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
@@ -968,8 +960,8 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         zone: chrono_tz::UTC,
         total: QuoteBreakdown::default(),
         rows: vec![
-            (name.into(), QuoteBreakdown::default()),
-            ("Short".into(), QuoteBreakdown::default()),
+            super::Row::Line(name.into(), QuoteBreakdown::default()),
+            super::Row::Line("Short".into(), QuoteBreakdown::default()),
         ],
         pages: 1,
         drilldowns: Vec::new(),
@@ -977,7 +969,6 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
-        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -1073,7 +1064,7 @@ fn chat_report_names_a_renamed_core_by_its_configured_name() {
         },
     )
     .unwrap();
-    let labels: Vec<&str> = page.rows.iter().map(|(name, _)| name.as_str()).collect();
+    let labels: Vec<&str> = page.rows.iter().map(|row| row.name()).collect();
     assert_eq!(labels, ["core-a-renamed", "core-b-gone"]);
     let Response::Rich { html, .. } = render(
         &page,
@@ -1236,15 +1227,17 @@ fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
     conn.execute_batch(
         "CREATE TABLE orders_rep (
             core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT,
-            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
+            buyprice REAL, sellprice REAL
         )",
     )
     .unwrap();
     let mut insert = conn
         .prepare(
             "INSERT INTO orders_rep
-             (core_uid, core_name, newrecid, coin, buydate, closedate, channelname, emulator)
-             VALUES (1, 'CoreA', ?1, 'BTC', ?2, ?3, '', 0)",
+             (core_uid, core_name, newrecid, coin, buydate, closedate, channelname, emulator,
+              buyprice, sellprice)
+             VALUES (1, 'CoreA', ?1, 'BTC', ?2, ?3, '', 0, 0.10739, 0.10844)",
         )
         .unwrap();
     for close in 1000_i64..=1059 {
@@ -1285,14 +1278,15 @@ fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
     );
     assert!(since.len() > super::MINI_TRADES_LIMIT);
     assert!(since.len() > super::NOTIFY_READ_PAGE);
+    let first = since.iter().find(|trade| trade.rec_id == 1000).unwrap();
     assert_eq!(
-        since
-            .iter()
-            .find(|trade| trade.rec_id == 1000)
-            .unwrap()
-            .open_utc,
-        990,
-        "a missing core offset leaves the stored buy time unchanged"
+        first.close_utc, 1000,
+        "a missing core offset leaves the stored close time unchanged"
+    );
+    assert_eq!(
+        (first.buy_price, first.sell_price),
+        (Some(0.10739), Some(0.10844)),
+        "the card's prices come off the row"
     );
 }
 
@@ -1456,14 +1450,13 @@ fn a_days_report_is_compact() {
             to: 8 * 3600 + 59 * 60,
             zone: chrono_tz::UTC,
             total: QuoteBreakdown::default(),
-            rows: vec![("Core".into(), QuoteBreakdown::default())],
+            rows: vec![super::Row::Line("Core".into(), QuoteBreakdown::default())],
             pages: 1,
             drilldowns: Vec::new(),
             scope_label: None,
             basis: ReportBasis::Close,
             cores: Vec::new(),
             caption: None,
-            has_groups: false,
         };
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
@@ -1512,22 +1505,23 @@ fn funding_is_not_a_trade_card() {
     );
 }
 
-/// The view by groups: one row per saved group over its own cores — a core in two groups counts in
-/// each — then the cores in none; the headline counts every core once. A group's drill-down reads
-/// its cores alone, and a group gone from the list reads as nothing, never as every core.
+/// The view by cores lists its cores under the saved groups, as the Profit monitor does: groups by
+/// name, a core in two groups under both, the cores in none last; a group's subtotal is the
+/// database's sum over its cores, a group of one core has none, and the headline counts every core
+/// once. The details name each core once.
 #[test]
-fn groups_are_rows_of_their_cores_and_the_total_counts_each_core_once() {
+fn cores_are_listed_under_their_groups() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
         INSERT INTO orders_rep VALUES (1,'A',1,150,10,100,0),(2,'B',1,150,20,100,0),(3,'C',1,150,40,100,0);").unwrap();
     let groups = vec![
         moon_core::config::CoreGroup {
-            name: "main".into(),
-            cores: vec![1, 2],
-        },
-        moon_core::config::CoreGroup {
             name: "margo".into(),
             cores: vec![2],
+        },
+        moon_core::config::CoreGroup {
+            name: "main".into(),
+            cores: vec![2, 1],
         },
     ];
     let read = |request: ReportRequest| {
@@ -1540,47 +1534,175 @@ fn groups_are_rows_of_their_cores_and_the_total_counts_each_core_once() {
             ReportBasis::Close,
             &Default::default(),
             &groups,
-            |_| (Default::default(), super::TelegramReportAccess::Owner),
+            |cores| {
+                cores.sort_by_key(|(id, _)| *id);
+                (Default::default(), super::TelegramReportAccess::Owner)
+            },
         )
         .unwrap()
     };
     let _locale = crate::test_locale::force("en");
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    request.by_group = true;
     let page = read(request.clone());
-    let rows: Vec<(String, f64)> = page
+    let rows: Vec<(String, Option<f64>)> = page
         .rows
         .iter()
-        .map(|(name, total)| (name.clone(), total.totals[0].profit))
+        .map(|row| {
+            let kind = match row {
+                super::Row::Line(..) => "",
+                super::Row::Repeat(..) => "~ ",
+                super::Row::Group(_) => "# ",
+                super::Row::Subtotal(..) => "= ",
+            };
+            (
+                format!("{kind}{}", row.name()),
+                row.total().map(|total| total.totals[0].profit),
+            )
+        })
         .collect();
     assert_eq!(
         rows,
         vec![
-            ("main".to_string(), 30.0),
-            ("margo".to_string(), 20.0),
-            ("No group".to_string(), 40.0),
+            ("# main".to_string(), None),
+            ("A".to_string(), Some(10.0)),
+            ("B".to_string(), Some(20.0)),
+            ("= main: total".to_string(), Some(30.0)),
+            ("# margo".to_string(), None),
+            ("~ B".to_string(), Some(20.0)),
+            ("# Ungrouped".to_string(), None),
+            ("C".to_string(), Some(40.0)),
         ]
     );
     assert_eq!(page.total.totals[0].profit, 70.0, "each core counted once");
-    assert!(page.has_groups);
-    assert_eq!(
-        page.drilldowns
+    let Response::Rich { html, keyboard, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
+        panic!("expected report");
+    };
+    assert!(
+        html.contains("<tr><td colspan=\"3\"><b>main</b></td></tr>"),
+        "{html}"
+    );
+    assert!(html.contains("<td><i>main: total</i></td>"), "{html}");
+    let details = &html[html.find("<details>").unwrap()..];
+    assert_eq!(details.matches("<b>B</b>").count(), 1, "{details}");
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
+        panic!("expected inline navigation")
+    };
+    assert!(
+        markup.inline_keyboard.iter().flatten().all(|button| {
+            !button
+                .callback_data
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("r:g")
+        }),
+        "no view by groups is offered"
+    );
+    // The view by exchanges and by days stay flat.
+    request.by_exchange = true;
+    assert!(
+        read(request)
+            .rows
             .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["main", "margo"]
+            .all(|row| matches!(row, super::Row::Line(..)))
     );
-    let mut margo = request.clone();
-    margo.by_group = false;
-    margo.scope = moon_core::telegram::report::ReportScope::Group(
-        moon_core::telegram::report::group_key("margo"),
+    // One group holding every listed core puts one caption over everything: flat.
+    let all = vec![moon_core::config::CoreGroup {
+        name: "all".into(),
+        cores: vec![1, 2, 3],
+    }];
+    let mut flat = ReportRequest::new(Period::Today, false);
+    flat.by_exchange = false;
+    let page = super::read_page_with(
+        &conn,
+        flat,
+        100,
+        200,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        &Default::default(),
+        &all,
+        |_| (Default::default(), super::TelegramReportAccess::Owner),
+    )
+    .unwrap();
+    assert_eq!(page.rows.len(), 3);
+    assert!(
+        page.rows
+            .iter()
+            .all(|row| matches!(row, super::Row::Line(..)))
     );
-    let page = read(margo.clone());
-    assert_eq!(page.total.totals[0].profit, 20.0);
-    assert_eq!(page.scope_label.as_deref(), Some("margo"));
-    margo.scope = moon_core::telegram::report::ReportScope::Group(
-        moon_core::telegram::report::group_key("gone"),
-    );
-    assert_eq!(read(margo).total.orders, 0, "a group gone reads as nothing");
+}
+
+/// A page cut inside a group repeats the group's caption, and a caption that would end a page
+/// without its cores moves to the next one.
+#[test]
+fn a_page_cut_inside_a_group_keeps_its_caption() {
+    use super::Row::{Group, Line, Subtotal};
+    let total = QuoteBreakdown::default;
+    let rows = vec![
+        Group("a".into()),
+        Line("1".into(), total()),
+        Line("2".into(), total()),
+        Subtotal("a: total".into(), total()),
+        Group("b".into()),
+        Line("3".into(), total()),
+    ];
+    let names = |page: Vec<super::Row>| {
+        page.iter()
+            .map(|row| row.name().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(super::page_rows(&rows, 0, 2)), ["a", "1"]);
+    assert_eq!(names(super::page_rows(&rows, 2, 2)), ["a", "2", "a: total"]);
+    // The page [a: total, b] would end on b's caption; b opens the next page instead.
+    assert_eq!(names(super::page_rows(&rows, 3, 2)), ["a", "a: total"]);
+    assert_eq!(names(super::page_rows(&rows, 4, 2)), ["b", "3"]);
+    assert_eq!(names(super::page_rows(&rows, 5, 2)), ["b", "3"]);
+    assert_eq!(names(super::page_rows(&rows, 0, 6)), names(rows.clone()));
+    let flat = vec![Line("x".into(), total()), Line("y".into(), total())];
+    assert_eq!(names(super::page_rows(&flat, 1, 1)), ["y"]);
+}
+
+/// A core listed again on a page whose first listing of it is on another page is in that page's
+/// details; listed twice on one page, it is there once.
+#[test]
+fn a_repeat_alone_on_its_page_keeps_its_details() {
+    use super::Row::{Group, Line, Repeat};
+    let _locale = crate::test_locale::force("en");
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    let page = |rows| Page {
+        request: request.clone(),
+        from: 0,
+        to: 1,
+        zone: chrono_tz::UTC,
+        total: QuoteBreakdown::default(),
+        rows,
+        pages: 2,
+        drilldowns: Vec::new(),
+        scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+    };
+    let details = |rows| {
+        let html = super::report_html(&page(rows));
+        html[html.find("<details>").unwrap()..].to_string()
+    };
+    let alone = details(vec![
+        Group("margo".into()),
+        Repeat("Bcore".into(), QuoteBreakdown::default()),
+    ]);
+    assert_eq!(alone.matches("<b>Bcore</b>").count(), 1, "{alone}");
+    let both = details(vec![
+        Group("main".into()),
+        Line("Bcore".into(), QuoteBreakdown::default()),
+        Group("margo".into()),
+        Repeat("Bcore".into(), QuoteBreakdown::default()),
+    ]);
+    assert_eq!(both.matches("<b>Bcore</b>").count(), 1, "{both}");
 }

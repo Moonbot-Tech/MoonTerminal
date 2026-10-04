@@ -48,7 +48,7 @@ fn an_old_servers_file_loads_with_the_old_menu() {
 fn settings_survive_the_servers_file_round_trip() {
     let mut file: ServersFile = toml::from_str(OLD_SERVERS_TOML).unwrap();
     file.telegram.bot = BotSettings {
-        report_view: ReportView::Days,
+        report_view: ReportView::Cores,
         period_basis: ReportBasis::Open,
         menu: BotMenu {
             keyboard: vec![
@@ -83,6 +83,17 @@ fn unknown_ids_degrade_instead_of_failing() {
     assert_eq!(bot.menu.keyboard[1], vec![MenuEntry::hidden(Help)]);
     let back: BotSettings = serde_json::from_str(&serde_json::to_string(&bot).unwrap()).unwrap();
     assert_eq!(back, bot);
+}
+
+/// A bot saved with a retired view opens its reports by cores: the cores view carries the groups
+/// now, and days are a button of their own.
+#[test]
+fn retired_views_read_as_cores() {
+    for id in ["days", "groups"] {
+        let json = format!(r#"{{"report_view": "{id}"}}"#);
+        let bot: BotSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(bot.report_view, ReportView::Cores, "{id}");
+    }
 }
 
 /// A menu saved while the Report section was configurable and the keyboard had a Mini App button

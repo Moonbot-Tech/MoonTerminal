@@ -30,13 +30,10 @@ telegram.report_navigation_hint: "Dönemi alt menüden seçin. Taze rapor için 
 telegram.report_all_cores: "Tüm çekirdekler"
 
 telegram.report_by_days: "Güne göre"
-telegram.report_by_groups: "Gruba göre"
-telegram.report_groups: "Gruplar"
-telegram.report_no_group: "Grupsuz"
 
-telegram.report_days_scope: "Grubun günleri"
+telegram.report_days_scope: "Borsanın günleri"
 
-telegram.report_cores_scope: "Grubun çekirdekleri"
+telegram.report_cores_scope: "Borsanın çekirdekleri"
 
 telegram.report_back: "Tüm borsalar"
 

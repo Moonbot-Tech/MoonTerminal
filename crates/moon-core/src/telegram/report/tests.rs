@@ -156,27 +156,15 @@ fn the_basis_survives_the_callback() {
     }
 }
 
-/// The days view splits only a period that covers several days; one day opens by exchanges.
+/// A period button opens in the bot's view, never split by days: days are a button of their own.
 #[test]
-fn the_days_view_needs_more_than_one_day() {
+fn a_preset_opens_in_the_bots_view() {
     use crate::config::telegram_menu::ReportView;
-    let day = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
-    for period in [
-        Period::Hour,
-        Period::Today,
-        Period::Yesterday,
-        Period::Dates(day, day),
-    ] {
-        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Days);
+    for period in [Period::Today, Period::Month] {
+        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Cores);
+        assert!(!request.by_exchange && !request.daily, "{period:?}");
+        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Exchanges);
         assert!(request.by_exchange && !request.daily, "{period:?}");
-    }
-    for period in [
-        Period::Month,
-        Period::LastMonth,
-        Period::Dates(day, day.succ_opt().unwrap()),
-    ] {
-        let request = ReportRequest::preset(period.clone()).resolve_view(ReportView::Days);
-        assert!(request.daily && !request.by_exchange, "{period:?}");
     }
 }
 
@@ -264,22 +252,13 @@ fn the_month_slot_reports_up_to_the_day_just_ended() {
     assert_eq!(window.from, local(zone, 2026, 12, 1, 0, 0));
 }
 
-/// The view by groups and a group's drill-down survive the callback, inside Telegram's limit.
+/// A button of the retired view by groups, still in a chat's history, opens by cores; one scoped to
+/// a single group no longer decodes.
 #[test]
-fn group_view_and_scope_round_trip() {
-    let mut request = ReportRequest::new(Period::Today, false)
-        .in_view(crate::config::telegram_menu::ReportView::Groups);
-    assert!(request.by_group && !request.by_exchange && !request.daily);
-    request.exchanges_open = true;
-    request.basis = Some(crate::config::telegram_menu::ReportBasis::Close);
-    assert_eq!(
-        ReportRequest::parse_callback(&request.callback()),
-        Some(request.clone())
-    );
-    request.by_group = false;
-    request.scope = super::ReportScope::Group(super::group_key("margo"));
-    assert_ne!(super::group_key("margo"), super::group_key("main"));
-    let encoded = request.callback();
-    assert!(encoded.len() <= 64, "{encoded}");
-    assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
+fn retired_group_buttons() {
+    let request = ReportRequest::parse_callback("r:gkz:t:0").unwrap();
+    assert!(!request.by_exchange && !request.daily);
+    assert_eq!(request.scope, super::ReportScope::All);
+    assert!(request.exchanges_open);
+    assert_eq!(ReportRequest::parse_callback("r:cq1a2b:t:0"), None);
 }

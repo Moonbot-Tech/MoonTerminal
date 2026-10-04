@@ -30,13 +30,10 @@ telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap agai
 telegram.report_all_cores: "All cores"
 
 telegram.report_by_days: "By day"
-telegram.report_by_groups: "By group"
-telegram.report_groups: "Groups"
-telegram.report_no_group: "No group"
 
-telegram.report_days_scope: "Group by day"
+telegram.report_days_scope: "Exchange by day"
 
-telegram.report_cores_scope: "Group cores"
+telegram.report_cores_scope: "Exchange cores"
 
 telegram.report_back: "All exchanges"
 

@@ -238,7 +238,7 @@ fn a_base_holds_on_chats_and_the_settings_it_read() {
     };
     assert!(unread_settings.base_holds(&Access {
         bot: Some(BotSettings {
-            report_view: ReportView::Days,
+            report_view: ReportView::Cores,
             ..BotSettings::default()
         }),
         ..current.clone()

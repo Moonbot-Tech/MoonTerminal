@@ -91,7 +91,7 @@ pub(crate) enum Job {
     MiniApp { target: Target, on: bool },
     /// Make the terminal's header-clock zone the one the station's reports are cut in, live.
     Zone { target: Target, zone: String },
-    /// Send the terminal's saved core groups to the station, for the bot's report by groups —
+    /// Send the terminal's saved core groups to the station, for the bot's report by cores —
     /// only on the user's word: another terminal's groups are not overwritten by one that has
     /// none.
     Groups {

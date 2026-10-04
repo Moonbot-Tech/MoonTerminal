@@ -31,13 +31,10 @@ telegram.report_navigation_hint: "Escolha o período no menu de baixo. Toque de 
 telegram.report_all_cores: "Todos os núcleos"
 
 telegram.report_by_days: "Por dia"
-telegram.report_by_groups: "Por grupo"
-telegram.report_groups: "Grupos"
-telegram.report_no_group: "Sem grupo"
 
-telegram.report_days_scope: "Dias do grupo"
+telegram.report_days_scope: "Dias da corretora"
 
-telegram.report_cores_scope: "Núcleos do grupo"
+telegram.report_cores_scope: "Núcleos da corretora"
 
 telegram.report_back: "Todas as corretoras"
 

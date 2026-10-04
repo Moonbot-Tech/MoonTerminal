@@ -845,7 +845,8 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
   days. `moon-tg/src/report/` reads on the host's background worker, a pinned SQLite snapshot,
   `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
-  Core groups use `CoreOrder`. Every view lists all active groups in one message while it fits the
+  Core groups use `CoreOrder`; the view by core lists its cores under the saved core groups with a
+  caption and a subtotal each, by the Profit Monitor's rules (`report/sections.rs`). Every view lists all active groups in one message while it fits the
   rich-message caps; an oversized one pages with the largest fitting rung of a fixed ladder
   (`report/paging.rs`), with the complete-scope total on every page.
   Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership

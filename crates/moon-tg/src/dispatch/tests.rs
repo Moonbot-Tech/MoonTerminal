@@ -244,12 +244,12 @@ fn the_settings_section_is_the_owners() {
     let _locale = crate::test_locale::force("en");
     let mut host = StationHost::new();
     let settings = |action| super::ParsedCommand::Menu(MenuAction::Settings(action));
-    let refused = host.command(20, settings(SettingsAction::SetView(ReportView::Days)));
+    let refused = host.command(20, settings(SettingsAction::SetView(ReportView::Cores)));
     assert!(matches!(refused, super::Response::Text { .. }));
     assert_eq!(host.config.telegram.bot.report_view, ReportView::Exchanges);
-    let shown = host.command(10, settings(SettingsAction::SetView(ReportView::Days)));
+    let shown = host.command(10, settings(SettingsAction::SetView(ReportView::Cores)));
     assert!(matches!(shown, super::Response::Rich { .. }));
-    assert_eq!(host.config.telegram.bot.report_view, ReportView::Days);
+    assert_eq!(host.config.telegram.bot.report_view, ReportView::Cores);
     let shown = |host: &StationHost, item| {
         host.config
             .telegram

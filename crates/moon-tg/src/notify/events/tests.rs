@@ -58,26 +58,29 @@ fn each_switch_relays_its_own_kind() {
     assert!(!wanted(entries, &detect(1, 1, "A", "").row.event));
 }
 
-/// One message per batch: every event a line, names escaped, the configured core name used, an
-/// emulator entry marked; and the message discloses exactly the cores it names.
+/// One message per batch, laid out as the cores' own bot writes it: the core and a colon, then each
+/// event with its coin as a tag and its strategy below; a run of one core's events shares its name.
+/// Names are escaped, the configured core name is used, an emulator entry is marked, and the
+/// message discloses exactly the cores it names.
 #[test]
-fn a_batch_is_one_message_of_lines() {
+fn a_batch_is_one_message_under_its_cores() {
     let _locale = crate::test_locale::force("en");
-    let names = CoreNames::from_pairs([(1u64, "Alpha")]);
+    let names = CoreNames::from_pairs([(1u64, "Al<pha")]);
     let a = detect(1, 1, "BTC<USDT>", "price +3% in 1m");
-    let b = opened(2, 2, true);
-    let (html, cores) = render(&[&a, &b], &names, 0).expect("a message");
-    let lines: Vec<&str> = html.lines().collect();
-    assert_eq!(lines.len(), 2, "{html}");
-    assert!(lines[0].starts_with(
-        "\u{1f514} <b>BTC&lt;USDT&gt;</b> \u{00b7} Alpha \u{00b7} <i>Pump &lt;1&gt;</i>"
-    ));
-    assert!(lines[0].ends_with("price +3% in 1m"));
-    assert!(
-        lines[1].contains("core 2"),
-        "an unnamed core names itself: {html}"
+    let b = opened(1, 2, false);
+    let c = opened(2, 3, true);
+    let (html, cores) = render(&[&a, &b, &c], &names, 0).expect("a message");
+    assert_eq!(
+        html,
+        "Al&lt;pha:\n\
+         \u{1f514} #BTC_USDT_ \u{2014} price +3% in 1m\n\
+         <i>Pump &lt;1&gt;</i>\n\
+         \u{1f7e6} #ACE \u{2014} Trade opened\n\
+         <i>MS</i>\n\
+         core 2:\n\
+         \u{1f7e6} #ACE \u{2014} Trade opened (emulator)\n\
+         <i>MS</i>"
     );
-    assert!(lines[1].contains("Trade opened (emulator)"), "{html}");
     assert_eq!(cores, vec![1, 2]);
     assert!(render(&[], &names, 0).is_none());
     let (lost_only, lost_cores) = render(&[], &names, 3).expect("the loss is told");

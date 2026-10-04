@@ -329,7 +329,8 @@ impl SettingsAction {
             ["b"] => Self::Buttons,
             ["b", "k", id, show] => Self::ShowButton(MenuItem::from_id(id)?, flag(show)?),
             ["v"] => Self::View,
-            ["v", id] => Self::SetView(ReportView::ALL.into_iter().find(|v| v.id() == *id)?),
+            // A picker button of a retired view, still in a chat's history, picks its successor.
+            ["v", id] => Self::SetView(ReportView::from_id(id)?),
             ["p"] => Self::Basis,
             ["p", id] => Self::SetBasis(ReportBasis::ALL.into_iter().find(|b| b.id() == *id)?),
             ["m", on] => Self::MiniApp(flag(on)?),

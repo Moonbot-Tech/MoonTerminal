@@ -39,8 +39,10 @@ pub(crate) struct ClosedTrade {
     pub profit_native: Option<f64>,
     /// Entry notional in [`Self::quote`], where the Report's volume gates prove it.
     pub volume_native: Option<f64>,
-    /// Open time, UTC Unix seconds.
-    pub open_utc: i64,
+    /// Entry price, as the row stored it.
+    pub buy_price: Option<f64>,
+    /// Exit price, as the row stored it.
+    pub sell_price: Option<f64>,
 }
 
 impl ClosedTrade {

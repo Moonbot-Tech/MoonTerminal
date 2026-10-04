@@ -12,7 +12,7 @@ use moon_core::{
     util::{display_time, fmt},
 };
 
-use super::Page;
+use super::{Page, Row};
 use crate::HostKind;
 
 /// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
@@ -118,8 +118,6 @@ pub(super) fn report_html(page: &Page) -> String {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
         t!("telegram.report_exchanges")
-    } else if page.request.by_group {
-        t!("telegram.report_groups")
     } else {
         t!("telegram.report_cores")
     };
@@ -150,31 +148,62 @@ pub(super) fn report_html(page: &Page) -> String {
         escape(&profit(&page.total)),
         page.total.orders
     ));
-    let by_core = !page.request.by_exchange && !page.request.daily && !page.request.by_group;
-    for (name, total) in &page.rows {
-        // Long user-controlled names cannot exhaust the rich-message budget. A core is one row:
-        // its name keeps both ends (where the account number usually is), and the full name stays
-        // in the details below.
-        let label: String = if by_core {
-            compact_label(name)
-        } else {
-            name.chars().filter(|c| !c.is_control()).take(200).collect()
-        };
-        html.push_str(&format!(
-            "<tr><td>{}</td><td align=\"right\">{}</td><td align=\"right\">{}</td></tr>",
-            escape(&label),
-            escape(&profit(total)),
-            total.orders
-        ));
+    let by_core = !page.request.by_exchange && !page.request.daily;
+    for row in &page.rows {
+        match row {
+            // Long user-controlled names cannot exhaust the rich-message budget. A core is one
+            // row: its name keeps both ends (where the account number usually is), and the full
+            // name stays in the details below.
+            Row::Line(name, total) | Row::Repeat(name, total) => {
+                let label: String = if by_core {
+                    compact_label(name)
+                } else {
+                    plain_label(name)
+                };
+                html.push_str(&format!(
+                    "<tr><td>{}</td><td align=\"right\">{}</td><td align=\"right\">{}</td></tr>",
+                    escape(&label),
+                    escape(&profit(total)),
+                    total.orders
+                ));
+            }
+            Row::Group(name) => html.push_str(&format!(
+                "<tr><td colspan=\"3\"><b>{}</b></td></tr>",
+                escape(&plain_label(name))
+            )),
+            Row::Subtotal(name, total) => html.push_str(&format!(
+                "<tr><td><i>{}</i></td><td align=\"right\"><b>{}</b></td><td align=\"right\">{}</td></tr>",
+                escape(&plain_label(name)),
+                escape(&profit(total)),
+                total.orders
+            )),
+        }
     }
     html.push_str("</table>");
+    // The details name each core of the page once, however many groups list it: a repeat counts
+    // only when its first listing is on another page.
+    let mut lines: Vec<(&String, &QuoteBreakdown)> = page
+        .rows
+        .iter()
+        .filter_map(|row| match row {
+            Row::Line(name, total) => Some((name, total)),
+            Row::Repeat(..) | Row::Group(_) | Row::Subtotal(..) => None,
+        })
+        .collect();
+    for row in &page.rows {
+        if let Row::Repeat(name, total) = row
+            && !lines.iter().any(|(listed, _)| *listed == name)
+        {
+            lines.push((name, total));
+        }
+    }
     html.push_str(&format!(
         "<details><summary>{}</summary><table compact><tr><th>PnL</th><th>{}</th></tr>",
         escape(&t!("telegram.report_details")),
         escape(&t!("telegram.report_average"))
     ));
-    for (name, total) in &page.rows {
-        let label: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
+    for &(name, total) in &lines {
+        let label = plain_label(name);
         let average = total
             .average_order_return()
             .map(|value| {
@@ -197,7 +226,7 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str("</table>");
-    for (name, total) in &page.rows {
+    for &(name, total) in &lines {
         let (counted, excluded) = total
             .average_order_return()
             .map(|value| (value.counted, value.excluded))
@@ -209,7 +238,7 @@ pub(super) fn report_html(page: &Page) -> String {
                 (counted, total.orders.saturating_sub(counted))
             });
         if excluded > 0 {
-            let label: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
+            let label = plain_label(name);
             html.push_str(&format!(
                 "<p>{}: {}</p>",
                 escape(&label),
@@ -308,6 +337,11 @@ pub(crate) fn help(zone: &str, host: HostKind, owner: bool, navigation: ReplyMar
     }
 }
 
+/// A user-controlled name without control characters, cut to 200 of them.
+fn plain_label(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).take(200).collect()
+}
+
 /// Preserve both ends of a long core name; the complete identity remains in details.
 fn compact_label(name: &str) -> String {
     let chars: Vec<_> = name.chars().filter(|c| !c.is_control()).collect();
@@ -326,7 +360,6 @@ fn exchange_icon(scope: ReportScope) -> &'static str {
     use moon_core::venue::{Brand, venue};
     let brand = match scope {
         ReportScope::Venue(id) => venue(id.code).map(|v| v.brand),
-        ReportScope::Group(_) => return "\u{1f465}",
         _ => None,
     };
     match brand {
@@ -349,7 +382,6 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             "telegram.report_next" => "\u{27a1}\u{fe0f}",
             "telegram.report_all_cores" | "telegram.report_cores_scope" => "\u{1f9e9}",
             "telegram.report_exchanges_back" => "\u{2190}",
-            "telegram.report_by_groups" => "\u{1f465}",
             _ => "\u{1f4c5}",
         };
         InlineKeyboardButton::callback(format!("{icon} {}", t!(key)), request.callback())
@@ -364,7 +396,6 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
                         let mut next = request.clone();
                         next.scope = *scope;
                         next.by_exchange = false;
-                        next.by_group = false;
                         next.daily = false;
                         next.page = 0;
                         next.exchanges_open = true;
@@ -384,23 +415,17 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
         open.exchanges_open = true;
         let mut cores = request.clone();
         cores.by_exchange = false;
-        cores.by_group = false;
         cores.daily = false;
         cores.page = 0;
-        // The view by groups lists its groups under this menu; every other view, the exchanges.
-        let menu = if request.by_group {
-            t!("telegram.report_groups")
-        } else {
-            t!("telegram.report_exchanges_menu")
-        };
+        let menu = t!("telegram.report_exchanges_menu");
         rows.push(vec![
             InlineKeyboardButton::callback(format!("{menu} \u{25be}"), open.callback()),
             button("telegram.report_all_cores", cores),
         ]);
     }
     let mut views = Vec::new();
-    for (key, exchanges, daily, groups) in [
-        ("telegram.report_back", true, false, false),
+    for (key, exchanges, daily) in [
+        ("telegram.report_back", true, false),
         (
             if request.scope == ReportScope::All {
                 "telegram.report_all_cores"
@@ -409,9 +434,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             },
             false,
             false,
-            false,
         ),
-        ("telegram.report_by_groups", false, false, true),
         (
             if request.scope == ReportScope::All {
                 "telegram.report_by_days"
@@ -420,27 +443,21 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             },
             false,
             true,
-            false,
         ),
     ] {
-        // A single day has nothing to split by days (`ReportRequest::in_view` agrees), and a chat
-        // none of whose cores is in a saved group has no view by groups.
+        // A single day has nothing to split by days.
         if (daily && !request.period.spans_days())
-            || (groups && !page.has_groups)
-            || (request.by_exchange == exchanges
-                && request.daily == daily
-                && request.by_group == groups)
+            || (request.by_exchange == exchanges && request.daily == daily)
             // The collapsed top row already carries All cores; do not repeat it below.
-            || (!request.exchanges_open && !exchanges && !daily && !groups)
+            || (!request.exchanges_open && !exchanges && !daily)
         {
             continue;
         }
         let mut next = request.clone();
         next.by_exchange = exchanges;
-        next.by_group = groups;
         next.daily = daily;
         next.page = 0;
-        if exchanges || groups {
+        if exchanges {
             next.scope = ReportScope::All;
         }
         views.push(button(key, next));

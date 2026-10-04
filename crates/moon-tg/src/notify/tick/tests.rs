@@ -39,7 +39,6 @@ fn closed_trade(rec_id: i64, close_utc: i64, coin: &str, profit_usd: Option<f64>
         volume_usd: None,
         profit_usd,
         profit_pct: None,
-        open_utc: close_utc - 10,
         ..ClosedTrade::default()
     }
 }

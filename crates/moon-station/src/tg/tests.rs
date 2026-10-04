@@ -68,7 +68,7 @@ fn a_newer_field_does_not_stop_the_bot() {
 fn a_change_keeps_what_it_leaves_out() {
     use moon_core::config::telegram_menu::{BotSettings, ReportView};
     let bot = BotSettings {
-        report_view: ReportView::Days,
+        report_view: ReportView::Cores,
         ..BotSettings::default()
     };
     let current = Access {

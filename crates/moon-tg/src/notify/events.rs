@@ -26,7 +26,7 @@ use moon_core::telegram::reply::utf16_len;
 use moon_core::telegram::runtime::{NotifyStore, push_outbox};
 
 use crate::TgHost;
-use crate::html::escape;
+use crate::html::{coin_tag, escape};
 
 /// Shortest gap between two batches to a private chat. Telegram takes its message a second
 /// (`CHAT_GAP_PRIVATE`), so a storm's lists stay ahead of the sender, not behind it.
@@ -252,9 +252,13 @@ fn wanted(rule: EventRule, event: &CoreTgEvent) -> bool {
     }
 }
 
-/// One message for `events`, one line each, until the budget is spent; the rest, and `lost`
-/// events that fell off a ring before they could be read, are counted on a last line. `None`
-/// when there is nothing to tell.
+/// One message for `events` until the budget is spent; the rest, and `lost` events that fell off
+/// a ring before they could be read, are counted on a last line. `None` when there is nothing to
+/// tell.
+///
+/// Laid out as the cores' own bot writes it (LinKvo, 04.10): the core's name and a colon, then
+/// its events, each on its own line with the strategy in italics below. A run of one core's
+/// events shares its name.
 ///
 /// Args:
 ///     events: What one chat is told, oldest first.
@@ -275,15 +279,25 @@ pub(crate) fn render(
     let mut used = 0usize;
     let mut cores: Vec<u64> = Vec::new();
     let mut rest = 0usize;
+    let mut last_core = None;
     for (shown, event) in events.iter().enumerate() {
-        let line = line(event, names);
-        let cost = utf16_len(&line) + 1;
+        let mut block = Vec::with_capacity(3);
+        if last_core != Some(event.core) {
+            let fallback = format!("core {}", event.core);
+            block.push(format!(
+                "{}:",
+                cut(names.resolve(event.core, &fallback), NAME_CHARS)
+            ));
+        }
+        block.extend(line(event));
+        let cost: usize = block.iter().map(|line| utf16_len(line) + 1).sum();
         if shown > 0 && used + cost > MESSAGE_BUDGET {
             rest = events.len() - shown;
             break;
         }
         used += cost;
-        lines.push(line);
+        lines.extend(block);
+        last_core = Some(event.core);
         if !cores.contains(&event.core) {
             cores.push(event.core);
         }
@@ -295,29 +309,23 @@ pub(crate) fn render(
     Some((lines.join("\n"), cores))
 }
 
-/// One event's line: mark, coin, core, strategy, and the detect's own text or the entry word.
-fn line(event: &Fresh, names: &CoreNames) -> String {
-    let fallback = format!("core {}", event.core);
-    let core = cut(names.resolve(event.core, &fallback), NAME_CHARS);
-    match &event.row.event {
+/// One event's lines under its core: the mark, the coin as a hashtag and the detect's own text or
+/// the entry word; then the strategy in italics, when it has a name.
+fn line(event: &Fresh) -> Vec<String> {
+    let (head, strat_name) = match &event.row.event {
         CoreTgEvent::Detect {
             market,
             msg,
             strat_name,
             ..
         } => {
-            let mut text = format!(
-                "\u{1f514} <b>{}</b> \u{00b7} {} \u{00b7} <i>{}</i>",
-                cut(market, NAME_CHARS),
-                core,
-                cut(strat_name, NAME_CHARS)
-            );
+            let mut text = format!("\u{1f514} {}", coin_tag(market, NAME_CHARS));
             let msg = msg.trim();
             if !msg.is_empty() {
                 text.push_str(" \u{2014} ");
                 text.push_str(&cut(msg, MSG_CHARS));
             }
-            text
+            (text, strat_name)
         }
         CoreTgEvent::Opened {
             coin,
@@ -329,15 +337,22 @@ fn line(event: &Fresh, names: &CoreNames) -> String {
             if *emulator {
                 word = format!("{word} ({})", t!("telegram.notify_emulator"));
             }
-            format!(
-                "\u{1f7e6} <b>{}</b> \u{00b7} {} \u{00b7} <i>{}</i> \u{2014} {}",
-                cut(coin, NAME_CHARS),
-                core,
-                cut(strat_name, NAME_CHARS),
-                escape(&word)
+            (
+                format!(
+                    "\u{1f7e6} {} \u{2014} {}",
+                    coin_tag(coin, NAME_CHARS),
+                    escape(&word)
+                ),
+                strat_name,
             )
         }
+    };
+    let mut lines = vec![head];
+    let strat_name = strat_name.trim();
+    if !strat_name.is_empty() {
+        lines.push(format!("<i>{}</i>", cut(strat_name, NAME_CHARS)));
     }
+    lines
 }
 
 /// First `chars` Unicode scalars, then HTML-escaped.

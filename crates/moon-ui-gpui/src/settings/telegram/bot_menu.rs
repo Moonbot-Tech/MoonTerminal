@@ -364,8 +364,6 @@ fn view_caption(view: ReportView) -> String {
     match view {
         ReportView::Exchanges => t!("telegram.menu_editor.view_exchanges"),
         ReportView::Cores => t!("telegram.menu_editor.view_cores"),
-        ReportView::Days => t!("telegram.menu_editor.view_days"),
-        ReportView::Groups => t!("telegram.menu_editor.view_groups"),
     }
     .to_string()
 }

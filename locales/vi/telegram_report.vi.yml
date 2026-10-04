@@ -30,13 +30,10 @@ telegram.report_navigation_hint: "Chọn kỳ ở menu dưới. Nhấn lại đ�
 telegram.report_all_cores: "Mọi core"
 
 telegram.report_by_days: "Theo ngày"
-telegram.report_by_groups: "Theo nhóm"
-telegram.report_groups: "Nhóm"
-telegram.report_no_group: "Không nhóm"
 
-telegram.report_days_scope: "Ngày của nhóm"
+telegram.report_days_scope: "Ngày của sàn"
 
-telegram.report_cores_scope: "Core của nhóm"
+telegram.report_cores_scope: "Core của sàn"
 
 telegram.report_back: "Mọi sàn"
 

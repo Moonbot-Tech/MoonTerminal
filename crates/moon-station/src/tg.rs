@@ -119,7 +119,7 @@ impl StationTg {
         }
         let pushed = pushed_zone(&pairing);
         let zone = pushed.as_ref().map_or(telegram.zone, |(_, zone)| *zone);
-        // The core groups a terminal sent, for the report by groups; uids are the terminal's.
+        // The core groups a terminal sent, for the report by cores; uids are the terminal's.
         config.core_groups = pairing.groups.clone().unwrap_or_default();
         moon_core::config::sanitize_core_groups(&mut config.core_groups);
         let bot = &mut config.telegram;
