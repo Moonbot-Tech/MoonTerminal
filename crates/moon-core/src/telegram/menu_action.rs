@@ -88,6 +88,9 @@ pub enum ControlAction {
     },
     /// Put an order's coin on a blacklist.
     OrderBan { core: u64, uid: u64, ban: OrderBan },
+    /// Ask for a coin to put on the core's own blacklist, or with `lift` to take off it: the
+    /// chat's next plain text is the answer.
+    AskCoin { core: u64, lift: bool },
     /// One core's strategies, a page of them.
     Strategies { core: u64, page: u16 },
     /// Check or uncheck one strategy, then show the same page again.
@@ -159,6 +162,7 @@ impl ControlAction {
                 };
                 format!(":b:{core}:{uid}:{code}")
             }
+            Self::AskCoin { core, lift } => format!(":w:{core}:{}", flag(lift)),
             Self::Strategies { core, page } => format!(":s:{core}:{page}"),
             Self::StrategyToggle { core, id, on, page } => {
                 format!(":g:{core}:{id}:{}:{page}", flag(on))
@@ -213,6 +217,10 @@ impl ControlAction {
                 core: core.parse().ok()?,
                 uid: uid.parse().ok()?,
                 confirmed: flag(confirmed)?,
+            },
+            ["w", core, lift] => Self::AskCoin {
+                core: core.parse().ok()?,
+                lift: flag(lift)?,
             },
             ["s", core, page] => Self::Strategies {
                 core: core.parse().ok()?,

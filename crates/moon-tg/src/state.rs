@@ -47,6 +47,9 @@ pub struct TelegramState {
     pub(crate) events_cursor: HashMap<CoreId, u64>,
     /// When the last batch of core events went. `None` allows the first.
     pub(crate) events_flush: Option<Instant>,
+    /// Chats asked for a coin for a core's blacklist (`menu::control`): the core, whether to take
+    /// the coin off, and until when the question stands.
+    pub(crate) awaiting_coin: HashMap<i64, (CoreId, bool, Instant)>,
     /// At most one automatic-report read is in flight.
     pub(crate) auto_busy: bool,
     /// When the last automatic-report read was spawned. `None` allows the first run.
@@ -169,6 +172,7 @@ impl TelegramState {
             last_notify_run: None,
             events_cursor: HashMap::new(),
             events_flush: None,
+            awaiting_coin: HashMap::new(),
             auto_busy: false,
             last_auto_run: None,
             injected_auto: None,

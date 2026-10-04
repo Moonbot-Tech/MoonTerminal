@@ -219,6 +219,11 @@ fn run_command(
         }
         ParsedCommand::Report(request) => report::telegram_report(host, chat_id, request, reply),
         ParsedCommand::Menu(action) => crate::menu::run(host, chat_id, action, owner, reply),
+        ParsedCommand::Text(text) => {
+            if !crate::menu::answer_text(host, chat_id, &text, &reply) {
+                cannot_run(host, chat_id, &reply);
+            }
+        }
         ParsedCommand::Help => {
             let zone = host.report_zone();
             let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);

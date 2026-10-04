@@ -86,6 +86,20 @@ pub(crate) fn run(
     }
 }
 
+/// Take a chat's plain text as the answer to a question a section asked it.
+///
+/// Returns:
+///     Whether a question was waiting and took the text; otherwise the caller answers it as an
+///     unknown command.
+pub(crate) fn answer_text(
+    host: &mut dyn TgHost,
+    chat: i64,
+    text: &str,
+    reply: &SyncSender<Response>,
+) -> bool {
+    control::answer_text(host, chat, text, reply)
+}
+
 /// Today in the zone reports are cut in.
 fn today(host: &dyn TgHost) -> Option<NaiveDate> {
     let now = i64::try_from(moon_core::util::time::now_unix_secs()).ok()?;

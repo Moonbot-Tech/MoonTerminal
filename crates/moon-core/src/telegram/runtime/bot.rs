@@ -123,6 +123,19 @@ pub(super) fn run(
                         inbound.command = parse_reply_button(text, &labels);
                         reply_button = inbound.command != ParsedCommand::Unknown;
                     }
+                    // Neither a command nor a button: an answer the owner thread may be waiting
+                    // for, or an unknown command if it is not.
+                    let text = text.trim();
+                    if inbound.command == ParsedCommand::Unknown
+                        && !text.is_empty()
+                        && !text.starts_with('/')
+                    {
+                        inbound.command = ParsedCommand::Text(
+                            text.chars()
+                                .take(crate::telegram::commands::TEXT_KEEP)
+                                .collect(),
+                        );
+                    }
                 }
             }
             let chat_id = inbound.chat_id;

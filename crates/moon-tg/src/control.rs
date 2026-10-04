@@ -319,6 +319,47 @@ pub(crate) fn strategy_waiting(host: &dyn TgHost, core: CoreId, id: u64) -> bool
     ) == Some(StrategyPendingDto::Pending)
 }
 
+/// Put one coin on the core's own blacklist, or with `lift` take it off.
+///
+/// Returns:
+///     Whether a command was sent; `false` when the list already said so.
+pub(crate) fn core_blacklist(
+    host: &dyn TgHost,
+    chat: i64,
+    core: CoreId,
+    coin: &str,
+    lift: bool,
+) -> Result<bool, Refusal> {
+    owner(host, chat)?;
+    if !known(host, core) {
+        return Err(Refusal::NotFound);
+    }
+    if !host.session().core_run_state(core).online {
+        return Err(Refusal::Offline);
+    }
+    host.session()
+        .write_core_blacklist(core, coin, lift)
+        .map_err(|_| Refusal::Unavailable)
+}
+
+/// `core`'s own blacklist as it last sent it: whether it is on, and its coins.
+pub(crate) fn core_blacklist_state(host: &dyn TgHost, core: CoreId) -> Option<(bool, Vec<String>)> {
+    let settings = host
+        .session()
+        .store()
+        .core(core)?
+        .client_settings
+        .as_ref()?;
+    let coins = settings
+        .blacklist_text
+        .split(',')
+        .map(str::trim)
+        .filter(|coin| !coin.is_empty())
+        .map(str::to_string)
+        .collect();
+    Some((settings.use_blacklist, coins))
+}
+
 /// `core`'s open positions — entries filled and not yet closed — newest first.
 pub(crate) fn open_orders(host: &dyn TgHost, core: CoreId) -> Vec<OrderRow> {
     let mut orders: Vec<OrderRow> = host

@@ -8,6 +8,7 @@
 //! button sends the same action confirmed.
 
 use std::sync::mpsc::SyncSender;
+use std::time::{Duration, Instant};
 
 use moon_core::config::TempBanSpan;
 use moon_core::session::{CoreId, RunSwitch};
@@ -33,14 +34,73 @@ const STRATEGY_PAGE: usize = 12;
 /// A screen: its title, its lines, its buttons.
 type Rendered = (String, Vec<String>, Vec<Vec<InlineKeyboardButton>>);
 
-/// Answer a Control button: run its command, if any, then show the screen it leads to.
+/// How long a question for a coin stands.
+const ASK_FOR: Duration = Duration::from_secs(120);
+
+/// Longest coin a blacklist answer may name, in characters.
+const COIN_CHARS: usize = 30;
+
+/// Answer a Control button: run its command, if any, then show the screen it leads to. Any button
+/// but the question itself withdraws a question for a coin.
 pub(super) fn run(
     host: &mut dyn TgHost,
     chat: i64,
     action: ControlAction,
     reply: &SyncSender<Response>,
 ) {
-    let (title, lines, rows) = screen(host, chat, action);
+    if !matches!(action, ControlAction::AskCoin { .. }) {
+        host.state_mut().awaiting_coin.remove(&chat);
+    }
+    let rendered = screen(host, chat, action);
+    send(host, rendered, reply);
+}
+
+/// Take a chat's plain text as the coin a question asked for, and put it on (or take it off) the
+/// core's blacklist.
+///
+/// Returns:
+///     Whether a question was standing; an expired one is withdrawn and takes nothing.
+pub(super) fn answer_text(
+    host: &mut dyn TgHost,
+    chat: i64,
+    text: &str,
+    reply: &SyncSender<Response>,
+) -> bool {
+    let Some((core, lift, until)) = host.state_mut().awaiting_coin.remove(&chat) else {
+        return false;
+    };
+    if Instant::now() >= until {
+        return false;
+    }
+    let coin = text.trim();
+    let said = if !valid_coin(coin) {
+        t!("telegram.control.bad_coin").to_string()
+    } else {
+        match control::core_blacklist(host, chat, core, coin, lift) {
+            Ok(true) if lift => t!("telegram.control.coin_lifted", coin = coin).to_string(),
+            Ok(true) => t!("telegram.control.coin_banned", coin = coin).to_string(),
+            Ok(false) if lift => t!("telegram.control.coin_not_listed", coin = coin).to_string(),
+            Ok(false) => t!("telegram.control.already_banned").to_string(),
+            Err(refusal) => refusal_text(refusal),
+        }
+    };
+    send(host, core_card(host, core, Some(said)), reply);
+    true
+}
+
+/// Whether `coin` can be a coin token: one word of letters, digits, `_`, `-` or `.`, at most
+/// [`COIN_CHARS`] long — never a list, which would put several coins on the blacklist at once.
+fn valid_coin(coin: &str) -> bool {
+    !coin.is_empty()
+        && coin.chars().count() <= COIN_CHARS
+        && coin
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// Send a screen as the section's message, with the owner's navigation keyboard.
+fn send(host: &dyn TgHost, rendered: Rendered, reply: &SyncSender<Response>) {
+    let (title, lines, rows) = rendered;
     let navigation = navigation_keyboard(host.kind(), true, &host.config().telegram);
     let mut html = format!("<p><b>{}</b></p>", escape(&title));
     for line in lines {
@@ -159,6 +219,29 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                 Err(refusal) => refusal_text(refusal),
             };
             core_card(host, core, Some(said))
+        }
+        A::AskCoin { core, lift } => {
+            if !control::is_owner(host, chat) {
+                return core_card(host, core, Some(refusal_text(Refusal::NotOwner)));
+            }
+            host.state_mut()
+                .awaiting_coin
+                .insert(chat, (core, lift, Instant::now() + ASK_FOR));
+            let question = match lift {
+                true => t!("telegram.control.ask_coin_lift", core = name(host, core)),
+                false => t!("telegram.control.ask_coin_ban", core = name(host, core)),
+            };
+            (
+                t!("telegram.control.blacklist").to_string(),
+                vec![
+                    question.to_string(),
+                    t!("telegram.control.ask_coin_hint").to_string(),
+                ],
+                vec![vec![button(
+                    format!("\u{274c} {}", t!("telegram.control.cancel")),
+                    ControlAction::Core(core),
+                )]],
+            )
         }
         A::Strategies { core, page } => strategies(host, core, usize::from(page), None),
         A::StrategyToggle { core, id, on, page } => {
@@ -366,6 +449,14 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
         on_off(state.auto_detect)
     ));
     lines.push(t!("telegram.control.positions", n = positions).to_string());
+    if let Some((on, coins)) = control::core_blacklist_state(host, core) {
+        lines.push(format!(
+            "{}: {} \u{00b7} {}",
+            t!("telegram.control.blacklist"),
+            on_off(Some(on)),
+            t!("telegram.control.coins", n = coins.len())
+        ));
+    }
     let target = ControlTarget::Core(core);
     let run = |switch: ControlSwitch, on: bool| ControlAction::Run {
         target,
@@ -421,6 +512,16 @@ fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered 
             button(
                 format!("\u{1f9e9} {}", t!("telegram.control.strategies")),
                 ControlAction::Strategies { core, page: 0 },
+            ),
+        ],
+        vec![
+            button(
+                format!("\u{26d4} {}", t!("telegram.control.blacklist_add")),
+                ControlAction::AskCoin { core, lift: false },
+            ),
+            button(
+                format!("\u{2705} {}", t!("telegram.control.blacklist_remove")),
+                ControlAction::AskCoin { core, lift: true },
             ),
         ],
         vec![button(

@@ -206,6 +206,12 @@ fn control_actions_round_trip() {
         core: u64::MAX,
         page: u16::MAX,
     });
+    for lift in [false, true] {
+        actions.push(ControlAction::AskCoin {
+            core: u64::MAX,
+            lift,
+        });
+    }
     for on in [false, true] {
         actions.push(ControlAction::StrategyToggle {
             core: u64::MAX,

@@ -33,7 +33,14 @@ pub enum ParsedCommand {
     InvalidArgument,
     /// A section menu or one of its screens (`m:` callbacks, the Report and Custom buttons).
     Menu(MenuAction),
+    /// Plain text that is neither a command nor a keyboard button: the answer to a question the
+    /// bot asked the chat (a coin for a blacklist), bounded to [`TEXT_KEEP`] characters. Without
+    /// a question waiting it is answered as an unknown command.
+    Text(String),
 }
+
+/// Longest plain text kept as a [`ParsedCommand::Text`], in Unicode scalars.
+pub const TEXT_KEEP: usize = 64;
 
 /// Callback data of the "Update" button under the station's status; outside the report
 /// callbacks' `r:` namespace.

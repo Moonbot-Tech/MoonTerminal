@@ -3,7 +3,7 @@
 use moon_core::session::CoreRunState;
 use moon_core::telegram::menu_action::{ControlAction, ControlSwitch, ControlTarget, MenuAction};
 
-use super::{confirm, state_marks};
+use super::{confirm, state_marks, valid_coin};
 
 fn action_of(button: &moon_core::telegram::api::InlineKeyboardButton) -> Option<MenuAction> {
     button
@@ -67,4 +67,17 @@ fn state_marks_tell_link_and_trading() {
     state.online = false;
     state.trading = None;
     assert_eq!(state_marks(&state), "\u{1f534}\u{2754}");
+}
+
+/// The answer to "which coin" is written into the core's list as one token: a comma or a space
+/// would smuggle several coins (or a broken entry) in at once.
+#[test]
+fn a_coin_answer_is_one_token() {
+    assert!(valid_coin("ADA"));
+    assert!(valid_coin("1kBONKPERP"));
+    assert!(valid_coin("BTC_RP"));
+    assert!(!valid_coin(""));
+    assert!(!valid_coin("ADA,BTC"));
+    assert!(!valid_coin("ADA BTC"));
+    assert!(!valid_coin(&"A".repeat(31)));
 }
