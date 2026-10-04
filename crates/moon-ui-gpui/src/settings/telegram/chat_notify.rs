@@ -52,16 +52,19 @@ pub(in crate::settings) struct NotifyEd {
     /// The chat and the stored row the editor was filled from.
     loaded: Option<(i64, ChatNotifyRow)>,
     /// What the fields were filled with, to tell the user's edits from the stored row.
-    loaded_fields: [String; 4],
+    loaded_fields: [String; FIELDS],
     /// Why there is nothing to edit for the picked chat, from the last read.
     unavailable: Option<Unavailable>,
     /// The stored row moved on while the editor held unsaved edits.
     stale: bool,
-    draft: NotifySettings,
+    pub(super) draft: NotifySettings,
     min_volume: Entity<MoonInputState>,
     profit: Entity<MoonInputState>,
     loss: Entity<MoonInputState>,
     after_minutes: Entity<MoonInputState>,
+    /// The deal chart rule's thresholds (`chat_notify_charts`).
+    pub(super) chart_profit: Entity<MoonInputState>,
+    pub(super) chart_loss: Entity<MoonInputState>,
     /// A save sent to the station for this chat at this revision, awaiting its answer.
     sending: Option<(i64, u64)>,
     /// How the last save of this chat came out.
@@ -83,20 +86,29 @@ impl NotifyEd {
             profit: input(),
             loss: input(),
             after_minutes: input(),
+            chart_profit: input(),
+            chart_loss: input(),
             sending: None,
             status: None,
         }
     }
 
-    /// The fields as typed now.
-    fn fields(&self, cx: &App) -> [String; 4] {
+    /// The fields, in [`fields_of`]'s order.
+    fn inputs(&self) -> [&Entity<MoonInputState>; FIELDS] {
         [
             &self.min_volume,
             &self.profit,
             &self.loss,
             &self.after_minutes,
+            &self.chart_profit,
+            &self.chart_loss,
         ]
-        .map(|field| field.read(cx).value().to_string())
+    }
+
+    /// The fields as typed now.
+    fn fields(&self, cx: &App) -> [String; FIELDS] {
+        self.inputs()
+            .map(|field| field.read(cx).value().to_string())
     }
 
     /// Whether the editor holds edits the stored row does not.
@@ -107,6 +119,9 @@ impl NotifyEd {
             || self.fields(cx) != self.loaded_fields
     }
 }
+
+/// How many number fields the editor has.
+const FIELDS: usize = 6;
 
 /// A threshold as a field shows it: empty for none.
 fn amount_text(value: Option<f64>) -> String {
@@ -126,21 +141,23 @@ fn parse_amount(text: &str) -> Result<Option<f64>, ()> {
 }
 
 /// The fields' texts for a stored row.
-fn fields_of(settings: &NotifySettings) -> [String; 4] {
+fn fields_of(settings: &NotifySettings) -> [String; FIELDS] {
     [
         amount_text(settings.trades.min_volume_usd),
         amount_text(settings.trades.profit_at_least_usd),
         amount_text(settings.trades.loss_at_least_usd),
         settings.down.after_minutes.to_string(),
+        amount_text(settings.charts.profit_at_least_usd),
+        amount_text(settings.charts.loss_at_least_usd),
     ]
 }
 
 /// The draft with the fields' numbers in it, or which field does not read.
 fn settings_from(
     draft: &NotifySettings,
-    fields: [&str; 4],
+    fields: [&str; FIELDS],
 ) -> Result<NotifySettings, &'static str> {
-    let [min_volume, profit, loss, after] = fields;
+    let [min_volume, profit, loss, after, chart_profit, chart_loss] = fields;
     let mut settings = draft.clone();
     settings.trades.min_volume_usd =
         parse_amount(min_volume).map_err(|_| "telegram.notify_editor.err_amount")?;
@@ -154,6 +171,10 @@ fn settings_from(
         .ok()
         .filter(|m| (1..=1440).contains(m))
         .ok_or("telegram.notify_editor.err_minutes")?;
+    settings.charts.profit_at_least_usd =
+        parse_amount(chart_profit).map_err(|_| "telegram.notify_editor.err_amount")?;
+    settings.charts.loss_at_least_usd =
+        parse_amount(chart_loss).map_err(|_| "telegram.notify_editor.err_amount")?;
     if matches!(&settings.trades.cores, CoreScope::Only(ids) if ids.is_empty()) {
         return Err("telegram.mini_settings_err_cores");
     }
@@ -161,7 +182,7 @@ fn settings_from(
 }
 
 impl SettingsView {
-    fn notify_ed(&self, side: ChatsOf) -> &NotifyEd {
+    pub(super) fn notify_ed(&self, side: ChatsOf) -> &NotifyEd {
         &self.chat_ed(side).notify
     }
 
@@ -287,12 +308,7 @@ impl SettingsView {
         ed.draft = row.settings.clone();
         ed.loaded = Some((chat, row));
         ed.loaded_fields = values.clone();
-        let fields = [
-            ed.min_volume.clone(),
-            ed.profit.clone(),
-            ed.loss.clone(),
-            ed.after_minutes.clone(),
-        ];
+        let fields = ed.inputs().map(Clone::clone);
         for (field, value) in fields.into_iter().zip(values) {
             field.update(cx, |state, cx| state.set_value(value, window, cx));
         }
@@ -329,7 +345,7 @@ impl SettingsView {
     }
 
     /// Change `side`'s draft switches.
-    fn notify_edit(
+    pub(super) fn notify_edit(
         &mut self,
         side: ChatsOf,
         cx: &mut Context<Self>,
@@ -362,15 +378,14 @@ impl SettingsView {
             return;
         };
         let fields = ed.fields(cx);
-        let settings =
-            match settings_from(&ed.draft, [&fields[0], &fields[1], &fields[2], &fields[3]]) {
-                Ok(settings) => settings,
-                Err(key) => {
-                    self.notify_ed_mut(side).status = Some((chat, Err(t!(key).to_string())));
-                    cx.notify();
-                    return;
-                }
-            };
+        let settings = match settings_from(&ed.draft, fields.each_ref().map(String::as_str)) {
+            Ok(settings) => settings,
+            Err(key) => {
+                self.notify_ed_mut(side).status = Some((chat, Err(t!(key).to_string())));
+                cx.notify();
+                return;
+            }
+        };
         let rows = BTreeMap::from([(chat, ChatNotifyRow { settings, revision })]);
         match side {
             ChatsOf::Terminal => {
@@ -697,6 +712,9 @@ impl SettingsView {
                     .to_string(),
                 ),
             )
+            .when(side == ChatsOf::Station, |block| {
+                block.child(self.chart_notify_block(side, chat, cx))
+            })
             .child(
                 div()
                     .text_color(rgba_from(p.text, 1.0))

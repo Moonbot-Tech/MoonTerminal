@@ -15,20 +15,27 @@ fn amounts_read_as_typed() {
 #[test]
 fn the_fields_complete_the_draft() {
     let draft = NotifySettings::default();
-    let settings = settings_from(&draft, ["50", "", "1,5", "10"]).unwrap();
+    let settings = settings_from(&draft, ["50", "", "1,5", "10", "100", "12"]).unwrap();
     assert_eq!(settings.trades.min_volume_usd, Some(50.0));
     assert_eq!(settings.trades.profit_at_least_usd, None);
     assert_eq!(settings.trades.loss_at_least_usd, Some(1.5));
     assert_eq!(settings.down.after_minutes, 10);
+    assert_eq!(settings.charts.profit_at_least_usd, Some(100.0));
+    assert_eq!(settings.charts.loss_at_least_usd, Some(12.0));
     assert!(settings.validate().is_ok());
     assert_eq!(
-        settings_from(&draft, ["", "", "", "0"]),
+        settings_from(&draft, ["", "", "", "0", "", ""]),
         Err("telegram.notify_editor.err_minutes")
+    );
+    assert_eq!(
+        settings_from(&draft, ["", "", "", "5", "", "-1"]),
+        Err("telegram.notify_editor.err_amount"),
+        "a chart threshold is held to the card's rule"
     );
     let mut none_picked = draft.clone();
     none_picked.trades.cores = CoreScope::Only(Vec::new());
     assert_eq!(
-        settings_from(&none_picked, ["", "", "", "5"]),
+        settings_from(&none_picked, ["", "", "", "5", "", ""]),
         Err("telegram.mini_settings_err_cores")
     );
 }

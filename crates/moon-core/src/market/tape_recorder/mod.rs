@@ -64,6 +64,7 @@
 
 mod compare;
 mod donor;
+mod peek;
 mod plan;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -72,6 +73,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use donor::{Donor, Reply};
+pub use peek::{TapeMiss, TradeTape, trade_tape};
 pub use plan::TradeId;
 use plan::{Filing, KeyTask, QUIET_TAIL_MS};
 
@@ -157,6 +159,13 @@ enum Cmd {
     FreeDisk(i64),
     /// The process is stopping: file what is drained, and answer once it is on disk.
     Shutdown(Sender<()>),
+    /// What the recorder holds of a closed trade ([`trade_tape`]).
+    Peek {
+        trade: TradeId,
+        lead_ms: i64,
+        tail_ms: i64,
+        reply: Sender<Result<TradeTape, TapeMiss>>,
+    },
 }
 
 fn cores() -> std::sync::MutexGuard<'static, Vec<Core>> {
@@ -371,6 +380,8 @@ struct Recorder {
     replies: Vec<Reply>,
     ticks: Vec<Tick>,
     compares: Vec<PendingCompare>,
+    /// Closes a reader may still ask about ([`trade_tape`]).
+    closed: peek::ClosedTrades,
 }
 
 impl Recorder {
@@ -396,6 +407,7 @@ impl Recorder {
             replies: Vec::new(),
             ticks: Vec::new(),
             compares: Vec::new(),
+            closed: peek::ClosedTrades::default(),
         })
     }
 
@@ -445,6 +457,7 @@ impl Recorder {
             } => {
                 line(&format!("close {exchange} {market} {open_ms}..{close_ms}"));
                 let key = (exchange, market);
+                self.closed.closed(trade, &key, open_ms, close_ms);
                 // A station's close of a trade it never saw open — it opened before a restart and
                 // its resent open did not come first: what the file holds of it counts as filed.
                 let known = self.tasks.get(&key).is_some_and(|t| t.knows(trade));
@@ -462,6 +475,14 @@ impl Recorder {
             }
             // Taken by `run` before a command reaches here.
             Cmd::Shutdown(_) => {}
+            Cmd::Peek {
+                trade,
+                lead_ms,
+                tail_ms,
+                reply,
+            } => {
+                let _ = reply.send(self.peek(trade, lead_ms, tail_ms));
+            }
             Cmd::FreeDisk(bytes) => {
                 line(&format!(
                     "the server is short of {} KB: the oldest prints go",
@@ -512,6 +533,7 @@ impl Recorder {
     fn tick(&mut self, now: Instant, now_ms: i64) {
         self.collect_replies(now, now_ms);
         self.expire(now);
+        self.closed.prune(now);
         if now >= self.next_drain {
             self.next_drain = now + DRAIN_EVERY;
             self.drain();

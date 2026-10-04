@@ -1084,6 +1084,47 @@ fn store_settings_trades_ledger_follows_the_on_edge() {
     assert_eq!(NotifyFile::load(&path).expect("reload"), store.file);
 }
 
+/// The deal chart rule starts at its own switch-on and forgets its ledger at its switch-off,
+/// whatever the card rule does.
+///
+/// Mutation: leave `enabled_utc` unset, reuse the card rule's moment, or keep `seen` across a
+/// switch-off. Charts then never come, come for trades closed before the switch, or a trade seen
+/// before is skipped after the rule comes back.
+#[test]
+fn store_settings_chart_ledger_follows_its_own_on_edge() {
+    let root = NotifyTemp::new("charts");
+    let mut store = empty_store(root.path("notifications.json"));
+    let mut on = NotifySettings::default();
+    on.charts.on = true;
+    assert_eq!(
+        save_known(&mut store, 6, on.clone(), &[1], 100),
+        SaveResult::Saved
+    );
+    let ledger = &store.file.chats[&6].ledger;
+    assert_eq!(ledger.charts.enabled_utc, Some(100));
+    assert_eq!(ledger.trades_enabled_utc, None, "the card rule stays off");
+    store
+        .file
+        .chats
+        .get_mut(&6)
+        .unwrap()
+        .ledger
+        .charts
+        .seen
+        .insert(1, BTreeMap::from([(5, 90)]));
+    assert_eq!(
+        save_known(&mut store, 6, on.clone(), &[1], 200),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&6].ledger.charts.enabled_utc, Some(100));
+    let mut off = on.clone();
+    off.charts.on = false;
+    assert_eq!(save_known(&mut store, 6, off, &[1], 300), SaveResult::Saved);
+    assert!(store.file.chats[&6].ledger.charts.is_empty());
+    assert_eq!(save_known(&mut store, 6, on, &[1], 400), SaveResult::Saved);
+    assert_eq!(store.file.chats[&6].ledger.charts.enabled_utc, Some(400));
+}
+
 /// `down_announced` is cleared only when down goes from on to off.
 ///
 /// Mutation: clear the set on every save, or when down turns on. A core that is still down is

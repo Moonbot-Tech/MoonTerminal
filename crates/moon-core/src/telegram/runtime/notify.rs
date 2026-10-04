@@ -8,7 +8,7 @@
 //! a row whose ack never landed.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -17,6 +17,9 @@ use crate::config::Secret;
 use crate::telegram::api::{BotApi, is_permanent_bad_request, is_unreachable_chat};
 use crate::telegram::notify::{AutoReport, AutoRow, CardKey, NotifyFile, Pending};
 use crate::telegram::reply::{TELEGRAM_MESSAGE_UTF16_LIMIT, utf16_len};
+
+mod photo;
+pub use photo::{chart_spool_dir, push_photo};
 
 /// Minimum gap between two successful sends to one private chat.
 const CHAT_GAP_PRIVATE: Duration = Duration::from_secs(1);
@@ -74,11 +77,13 @@ impl NotifyStore {
     ///     The path is unreadable, or the body is not a [`NotifyFile`]. The file is left as it was.
     pub fn open(path: PathBuf) -> anyhow::Result<Self> {
         let file = NotifyFile::load(&path)?;
-        Ok(Self {
+        let store = Self {
             path,
             file,
             allowed: None,
-        })
+        };
+        store.sweep_charts();
+        Ok(store)
     }
 
     /// Replace the in-memory allow map when `next` differs from the published one.
@@ -163,6 +168,11 @@ impl NotifyStore {
             return Ok(None);
         }
         let mut next = self.file.clone();
+        let photo = next
+            .outbox
+            .iter()
+            .find(|row| row.id == id)
+            .and_then(|row| row.photo.clone());
         next.outbox.retain(|row| row.id != id);
         // A card the chat stopped waiting for meanwhile has no entry and is not recorded.
         if let Some((key, message)) = card {
@@ -186,6 +196,9 @@ impl NotifyStore {
         });
         next.save(&self.path)?;
         self.file = next;
+        if let Some(photo) = photo {
+            self.drop_chart(&photo);
+        }
         Ok(previous)
     }
 
@@ -423,6 +436,7 @@ fn push_row(
         card: None,
         edit: None,
         redraw: None,
+        photo: None,
     });
     true
 }
@@ -495,11 +509,22 @@ pub fn purge_outbox_where(
     if !store.file.outbox.iter().any(|row| !keep(row)) {
         return Ok(0);
     }
-    store.update(|file| {
+    let photos: Vec<String> = store
+        .file
+        .outbox
+        .iter()
+        .filter(|row| !keep(row))
+        .filter_map(|row| row.photo.clone())
+        .collect();
+    let removed = store.update(|file| {
         let before = file.outbox.len();
         file.outbox.retain(|row| keep(row));
         before.saturating_sub(file.outbox.len())
-    })
+    })?;
+    for photo in photos {
+        store.drop_chart(&photo);
+    }
+    Ok(removed)
 }
 
 /// Accept `html` when it fits the Bot API text limit.
@@ -580,6 +605,7 @@ pub(crate) fn spawn_sender(
 fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
     let mut api = BotApi::new(token);
     api.set_liveness(alive.clone());
+    let store_path = lock_store(&store).path.clone();
     let mut last_sent: HashMap<i64, Instant> = HashMap::new();
     let mut ready_at: HashMap<i64, Instant> = HashMap::new();
     let mut backoff: HashMap<i64, Duration> = HashMap::new();
@@ -703,7 +729,7 @@ fn run_sender(token: Secret, alive: Weak<()>, store: Arc<Mutex<NotifyStore>>) {
                     }
                     progressed = true;
                 }
-                Held::Ready(row) => match send(&mut api, item.chat, &row) {
+                Held::Ready(row) => match send(&mut api, item.chat, &row, &store_path) {
                     Ok(message) => {
                         let sent = Instant::now();
                         last_sent.insert(item.chat, sent);
@@ -887,13 +913,18 @@ fn finish_ack(
     }
 }
 
-/// Send one row: an automatic report as a rich message with its buttons, a redraw as an edit of
-/// its message with its buttons, an edit as an edit of its message, anything else as HTML.
+/// Send one row: a deal chart as a photo with its caption (the caption alone when its file is
+/// gone), an automatic report as a rich message with its buttons, a redraw as an edit of its
+/// message with its buttons, an edit as an edit of its message, anything else as HTML.
 fn send(
     api: &mut BotApi,
     chat: i64,
     row: &Pending,
+    store_path: &Path,
 ) -> Result<crate::telegram::api::Message, crate::telegram::api::ApiError> {
+    if let Some(png) = photo::read_photo(store_path, row) {
+        return photo::send_chart(api, chat, png, &row.html);
+    }
     match (&row.auto, row.edit) {
         (Some(auto), _) => api.rich_message(chat, None, &row.html, &auto.keyboard),
         (None, Some(message)) => match &row.redraw {

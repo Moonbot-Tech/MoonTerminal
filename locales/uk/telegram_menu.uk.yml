@@ -77,6 +77,8 @@ telegram.notify_editor.events: "Від самого ядра — те, що ст
 telegram.notify_editor.opened: "Угоду відкрито"
 telegram.notify_editor.detects: "Детект"
 telegram.notify_editor.events_hint: "Надсилаються, лише якщо в стратегії увімкнено «Угоди в Telegram» або «Звіт у Telegram»; емулятор теж. Перше йде одразу; те, що прийшло за наступні 2 с (у групі 5 с), склеюється в одне повідомлення."
+telegram.notify_editor.charts: "Картинка угоди — графік стрічки навколо угоди"
+telegram.notify_editor.charts_hint: "Приходить окремо від карток, підпис — картка угоди. Надсилається після перерахунку в $ (стейблкоїн 1:1, інша валюта чекає оцінку до %{minutes} хв; не оцінилася — картинки немає). Пороги: прибуток від або збиток від; порожньо — для кожної угоди. Стрічку пише станція."
 telegram.auto.title: "Автозвіти"
 telegram.auto.hourly: "Годинний звіт"
 telegram.auto.today: "Звіт за сьогодні"

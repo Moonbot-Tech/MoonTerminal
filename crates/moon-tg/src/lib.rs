@@ -12,6 +12,7 @@
 rust_i18n::i18n!("../../locales", fallback = "en");
 
 mod control;
+mod deal_chart;
 mod dispatch;
 mod host;
 mod html;

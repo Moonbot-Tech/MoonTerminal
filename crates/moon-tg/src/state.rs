@@ -57,6 +57,13 @@ pub struct TelegramState {
     /// The confirmed press each chat was asked for (`menu::control`), and until when it counts.
     pub(crate) awaiting_confirm:
         HashMap<i64, (moon_core::telegram::menu_action::ControlAction, Instant)>,
+    /// Deal charts decided and not drawn yet (`notify::charts`), oldest first. Lost with the
+    /// process, as the tape recorder's memory of a close is.
+    pub(crate) chart_queue: Vec<crate::notify::charts::Due>,
+    /// At most one chart drawing job is in flight.
+    pub(crate) charts_busy: bool,
+    /// When the last chart drawing job was spawned. `None` allows the first run.
+    pub(crate) last_chart_run: Option<Instant>,
     /// At most one automatic-report read is in flight.
     pub(crate) auto_busy: bool,
     /// When the last automatic-report read was spawned. `None` allows the first run.
@@ -187,6 +194,9 @@ impl TelegramState {
             events_sent: HashMap::new(),
             awaiting_coin: HashMap::new(),
             awaiting_confirm: HashMap::new(),
+            chart_queue: Vec::new(),
+            charts_busy: false,
+            last_chart_run: None,
             auto_busy: false,
             last_auto_run: None,
             injected_auto: None,

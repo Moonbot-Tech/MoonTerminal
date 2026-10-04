@@ -10,6 +10,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::config::Secret;
 
+mod photo;
+pub use photo::CAPTION_UTF16_LIMIT;
+
+/// How one request's body goes on the wire: JSON for every method but `sendPhoto`, whose upload
+/// is multipart. Retries call it again, so it builds the body from borrowed parts each time.
+type SendBody<'a> = &'a dyn Fn(
+    ureq::RequestBuilder<ureq::typestate::WithBody>,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error>;
+
 /// How long a non-polling Bot API call may take, matching the crowd REST client.
 ///
 /// `getMe` / `sendMessage` are short JSON posts; fifteen seconds is the
@@ -413,18 +422,15 @@ impl BotApi {
                 serde_json::json!({"command": command, "description": description})
             })
             .collect();
-        self.post_once(
-            "setMyCommands",
-            &serde_json::json!({"commands": commands}),
-            false,
-        )
-        .map(Some)
-        .map_err(|failure| {
-            if let Some(secs) = retry_after_of(&failure.error) {
-                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
-            }
-            failure.error
-        })
+        let body = serde_json::json!({"commands": commands});
+        self.post_once("setMyCommands", false, &|request| request.send_json(&body))
+            .map(Some)
+            .map_err(|failure| {
+                if let Some(secs) = retry_after_of(&failure.error) {
+                    self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+                }
+                failure.error
+            })
     }
 
     /// Replace a private chat's menu using the same redacted, cancellable transport as replies.
@@ -567,17 +573,14 @@ impl BotApi {
         if !self.running() || self.retry.pending.is_some() {
             return Ok(false);
         }
-        self.post_once(
-            "deleteMessage",
-            &serde_json::json!({"chat_id": chat, "message_id": message}),
-            false,
-        )
-        .map_err(|failure| {
-            if let Some(secs) = retry_after_of(&failure.error) {
-                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
-            }
-            failure.error
-        })
+        let body = serde_json::json!({"chat_id": chat, "message_id": message});
+        self.post_once("deleteMessage", false, &|request| request.send_json(&body))
+            .map_err(|failure| {
+                if let Some(secs) = retry_after_of(&failure.error) {
+                    self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+                }
+                failure.error
+            })
     }
 
     /// Dismiss Telegram's callback spinner before waiting for report computation.
@@ -595,6 +598,19 @@ impl BotApi {
         T: DeserializeOwned,
         B: Serialize,
     {
+        self.post_with(method, long_poll, &|request| request.send_json(body))
+    }
+
+    /// [`Self::post`] for a body `send` puts on the wire.
+    fn post_with<T>(
+        &mut self,
+        method: &str,
+        long_poll: bool,
+        send: SendBody<'_>,
+    ) -> Result<T, ApiError>
+    where
+        T: DeserializeOwned,
+    {
         let mut last_error = ApiError::Transport;
         for attempt in 0..MAX_ATTEMPTS {
             if !self.running() {
@@ -611,7 +627,7 @@ impl BotApi {
                     );
                 }
             }
-            let result = self.post_once(method, body, long_poll);
+            let result = self.post_once(method, long_poll, send);
             if let (Err(failure), Some(observer)) = (&result, &self.error_observer) {
                 // A chat out of reach says nothing about the bot's own health.
                 if !is_unchanged_edit(method, &failure.error)
@@ -648,10 +664,14 @@ impl BotApi {
     }
 
     /// Send one bounded request without sleeping or changing retry state.
-    fn post_once<T, B>(&self, method: &str, body: &B, long_poll: bool) -> Result<T, AttemptError>
+    fn post_once<T>(
+        &self,
+        method: &str,
+        long_poll: bool,
+        send: SendBody<'_>,
+    ) -> Result<T, AttemptError>
     where
         T: DeserializeOwned,
-        B: Serialize,
     {
         let url = format!(
             "https://api.telegram.org/bot{}/{}",
@@ -663,7 +683,7 @@ impl BotApi {
         } else {
             &self.request_agent
         };
-        let response = match agent.post(&url).send_json(body) {
+        let response = match send(agent.post(&url)) {
             Ok(response) => response,
             Err(err) => {
                 drop(url);

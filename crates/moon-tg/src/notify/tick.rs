@@ -18,9 +18,13 @@ use moon_core::telegram::runtime::{
     NotifyStore, cores_kept, purge_outbox_where, push_edit, push_outbox, push_trade_card,
 };
 
+use crate::notify::charts::Due;
 use crate::notify::down::{DownEvent, Link, link_of};
 use crate::notify::render::{back_line, down_line, shows_dollars, trade_card};
-use crate::notify::trades::{Announced, ClosedTrade, decide, hold_until, read_from_utc};
+use crate::notify::trades::{
+    Announced, ClosedTrade, decide, decide_charts, floor_from, held_until, hold_until,
+    read_from_utc,
+};
 use crate::{Finish, Job, ReportRevision, TelegramState, TgHost};
 
 /// Minimum gap between notification reads. Down and back notices are not gated by it. A read
@@ -119,11 +123,13 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
         let state = host.state_mut();
         state.events_cursor.clear();
         state.events_waiting.clear();
+        state.chart_queue.clear();
         return;
     }
     step_down(host, &store, now_utc);
     crate::notify::events::run(host, &store, now_utc);
     maybe_spawn(host, &store, now_utc);
+    crate::notify::charts::run(host, &store, now_utc);
     crate::notify::reports::run(host, &store, now_utc);
 }
 
@@ -279,6 +285,7 @@ fn chat_enabled(chat: &ChatNotify) -> bool {
         || chat.settings.down.on
         || chat.settings.reports.any()
         || chat.settings.events.any()
+        || chat.settings.charts.on
 }
 
 /// Step every authorized chat whose down rule is on.
@@ -644,10 +651,11 @@ fn paired_snapshots(host: &dyn TgHost, store: &Mutex<NotifyStore>) -> Vec<ChatSn
 ///     entry: Stored settings and ledger.
 ///
 /// Returns:
-///     `None` when the chat is unpaired or the trade rule is off. Chats without trade cards are
-///     not read from the replica.
+///     `None` when the chat is unpaired or both the trade and the chart rule are off. Chats
+///     without either are not read from the replica.
 fn snap_if_reading(authorized: &[i64], chat: i64, entry: &ChatNotify) -> Option<ChatSnap> {
-    if !authorized.contains(&chat) || !entry.settings.trades.on {
+    let settings = &entry.settings;
+    if !authorized.contains(&chat) || !(settings.trades.on || settings.charts.on) {
         return None;
     }
     Some(ChatSnap {
@@ -689,12 +697,19 @@ fn shots_from(host: &dyn TgHost, snaps: Vec<ChatSnap>, now_utc: i64) -> Vec<Chat
 /// Returns:
 ///     The shot. `read_from` is `None` when trades are off or were never enabled.
 fn shot_for(snap: ChatSnap, access: TelegramReportAccess, now_utc: i64) -> ChatShot {
-    let read_from = snap
+    let trades = snap
         .settings
         .trades
         .on
         .then(|| read_from_utc(&snap.ledger, now_utc))
         .flatten();
+    let charts = snap
+        .settings
+        .charts
+        .on
+        .then(|| floor_from(snap.ledger.charts.enabled_utc, now_utc))
+        .flatten();
+    let read_from = trades.into_iter().chain(charts).min();
     ChatShot {
         chat: snap.chat,
         revision: snap.revision,
@@ -734,10 +749,15 @@ fn waits_are_due(host: &dyn TgHost, store: &Mutex<NotifyStore>, now_utc: i64) ->
         .last_notify_run
         .is_none_or(|at| at.elapsed() >= CARD_RECHECK);
     lock_store(store).file.chats.values().any(|entry| {
+        let ledger = &entry.ledger;
+        if entry.settings.charts.on
+            && held_until(&ledger.charts.held).is_some_and(|until| now_utc >= until)
+        {
+            return true;
+        }
         if !entry.settings.trades.on {
             return false;
         }
-        let ledger = &entry.ledger;
         hold_until(ledger).is_some_and(|until| now_utc >= until)
             || (recheck
                 && ledger
@@ -943,9 +963,18 @@ fn apply_finish(
         return;
     }
     match save_applies(&store, &applies, &loaded, now_utc) {
-        Ok(skipped) => {
+        Ok((skipped, charts)) => {
             log_skips(&skipped);
-            host.state_mut().last_report_revision = revision;
+            let decided = Instant::now();
+            let state = host.state_mut();
+            state
+                .chart_queue
+                .extend(charts.into_iter().map(|(chat, trade)| Due {
+                    chat,
+                    trade,
+                    decided,
+                }));
+            state.last_report_revision = revision;
             clear_busy(host);
         }
         Err(SaveMiss) => {
@@ -1049,7 +1078,7 @@ pub(crate) fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> V
 ///
 /// Returns:
 ///     Chats the save skipped because they disappeared or their settings
-///     revision moved.
+///     revision moved, and the deal charts the save decided, by chat.
 ///
 /// Errors:
 ///     [`SaveMiss`] when the atomic write failed. Nothing was advanced.
@@ -1058,7 +1087,7 @@ fn save_applies(
     applies: &[ChatApply],
     loaded: &Loaded,
     now_utc: i64,
-) -> Result<Vec<i64>, SaveMiss> {
+) -> Result<(Vec<i64>, Vec<(i64, ClosedTrade)>), SaveMiss> {
     lock_store(store)
         .update(|file| apply_messages(file, applies, loaded, now_utc))
         .map_err(|_| SaveMiss)
@@ -1073,21 +1102,26 @@ fn save_applies(
 ///     now_utc: UTC Unix seconds for `decide` and the outbox.
 ///
 /// Returns:
-///     Chats skipped because they disappeared or their settings revision moved.
+///     Chats skipped because they disappeared or their settings revision moved, and the deal
+///     charts decided, by chat.
 fn apply_messages(
     file: &mut NotifyFile,
     applies: &[ChatApply],
     loaded: &Loaded,
     now_utc: i64,
-) -> Vec<i64> {
+) -> (Vec<i64>, Vec<(i64, ClosedTrade)>) {
     let mut skipped = Vec::new();
+    let mut charts = Vec::new();
     for apply in applies {
         match messages_for(file, apply, loaded, now_utc) {
-            Some(messages) => enqueue_all(file, apply.chat, messages, now_utc),
+            Some((messages, due)) => {
+                enqueue_all(file, apply.chat, messages, now_utc);
+                charts.extend(due.into_iter().map(|trade| (apply.chat, trade)));
+            }
             None => skipped.push(apply.chat),
         }
     }
-    skipped
+    (skipped, charts)
 }
 
 /// Messages for one chat, or `None` when the chat or its revision no longer matches.
@@ -1099,19 +1133,28 @@ fn apply_messages(
 ///     now_utc: UTC Unix seconds passed to `decide`.
 ///
 /// Returns:
-///     Rendered rows, each with the cores it discloses. Empty is still a
-///     successful apply: the ledger may have changed. `None` means skip this chat.
+///     Rendered rows, each with the cores it discloses, and the trades whose deal chart is due.
+///     Empty is still a successful apply: the ledger may have changed. `None` means skip this
+///     chat.
 fn messages_for(
     file: &mut NotifyFile,
     apply: &ChatApply,
     loaded: &Loaded,
     now_utc: i64,
-) -> Option<Vec<Outgoing>> {
+) -> Option<(Vec<Outgoing>, Vec<ClosedTrade>)> {
     let entry = file.chats.get_mut(&apply.chat)?;
     if entry.revision != apply.revision {
         return None;
     }
-    Some(render_chat(entry, apply, loaded, now_utc))
+    let messages = render_chat(entry, apply, loaded, now_utc);
+    let charts = decide_charts(
+        &entry.settings.charts,
+        &mut entry.ledger.charts,
+        &apply.visible,
+        &loaded.trades,
+        now_utc,
+    );
+    Some((messages, charts))
 }
 
 /// Dollar fills for waiting cards, then trade cards.

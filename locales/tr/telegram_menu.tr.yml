@@ -77,6 +77,8 @@ telegram.notify_editor.events: "Çekirdeğin kendisinden — stratejinin Telegra
 telegram.notify_editor.opened: "İşlem açıldı"
 telegram.notify_editor.detects: "Tespit"
 telegram.notify_editor.events_hint: "Yalnızca stratejide \"İşlemleri Telegram'a yaz\" veya \"Telegram'a rapor\" açıksa gönderilir; emülatör de. İlki hemen gider; sonraki 2 sn içinde (grupta 5 sn) gelenler tek iletide birleşir."
+telegram.notify_editor.charts: "İşlem grafiği — işlemin etrafındaki akış bir resim olarak"
+telegram.notify_editor.charts_hint: "Kartlardan ayrı gelir, açıklaması işlem kartıdır. İşlem $ cinsinden hesaplanınca gönderilir (stablecoin 1:1 sayılır, başka para birimi değerlemeyi %{minutes} dk bekler; değerlenmezse resim yok). Eşikler: kârdan itibaren veya zarardan itibaren; boş — her işlem. Akışı istasyon kaydeder."
 telegram.auto.title: "Otomatik raporlar"
 telegram.auto.hourly: "Saatlik rapor"
 telegram.auto.today: "Bugünün raporu"

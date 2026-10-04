@@ -77,6 +77,8 @@ telegram.notify_editor.events: "Del propio núcleo — lo que la estrategia marc
 telegram.notify_editor.opened: "Operación abierta"
 telegram.notify_editor.detects: "Detección"
 telegram.notify_editor.events_hint: "Se envían solo si la estrategia tiene activado «Operaciones a Telegram» o «Informe a Telegram»; el emulador también. El primero se envía al instante; lo que llega en los 2 s siguientes (5 s en un grupo) se agrupa en un mensaje."
+telegram.notify_editor.charts: "Gráfico de la operación — la cinta alrededor de la operación como imagen"
+telegram.notify_editor.charts_hint: "Llega aparte de las tarjetas, con la tarjeta de la operación como pie. Se envía cuando la operación está en $ (una stablecoin cuenta 1:1, otra moneda espera su valoración hasta %{minutes} min; sin valoración, sin imagen). Umbrales: beneficio desde o pérdida desde; vacío — cada operación. La cinta la graba la estación."
 telegram.auto.title: "Informes automáticos"
 telegram.auto.hourly: "Informe por hora"
 telegram.auto.today: "Informe de hoy"

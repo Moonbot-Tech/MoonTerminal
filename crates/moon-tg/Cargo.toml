@@ -15,6 +15,8 @@ chrono-tz = "0.10"
 log = "0.4"
 rusqlite = "0.40.1"
 rust-i18n = "4.1"
+# The deal chart (`deal_chart`): the PNG's deflate and CRC32 (already in the tree through moon-core).
+flate2 = "1"
 
 [lints]
 workspace = true

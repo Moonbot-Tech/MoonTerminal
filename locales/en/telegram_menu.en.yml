@@ -77,6 +77,8 @@ telegram.notify_editor.events: "From the core itself — what a strategy marks f
 telegram.notify_editor.opened: "Trade opened"
 telegram.notify_editor.detects: "Detect"
 telegram.notify_editor.events_hint: "Sent only when the strategy has \"Report trades to Telegram\" or \"Report to Telegram\" on; emulator too. The first goes at once; what follows within 2 s (5 s in a group) is merged into one message."
+telegram.notify_editor.charts: "Trade chart — the tape around the trade as a picture"
+telegram.notify_editor.charts_hint: "Comes apart from the cards, with the trade card as its caption. Sent once the trade is in $ (a stablecoin counts 1:1, another currency waits up to %{minutes} min for its valuation; no valuation, no picture). Thresholds: profit from or loss from; empty — every trade. The station records the tape."
 telegram.auto.title: "Automatic reports"
 telegram.auto.hourly: "Hourly report"
 telegram.auto.today: "Today's report"

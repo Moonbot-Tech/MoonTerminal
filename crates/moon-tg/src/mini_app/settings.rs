@@ -64,7 +64,11 @@ pub(super) fn prepare_settings(
     Ok(settings)
 }
 
-/// Replace `chat` and apply the ledger edges for a trades, down, or automatic-report switch.
+/// Replace `chat` and apply the ledger edges for a trades, chart, down, or automatic-report
+/// switch.
+///
+/// Enabling deal charts records `now_utc` as their own enable moment with nothing seen or held;
+/// disabling them forgets their whole ledger.
 ///
 /// Enabling trades records `now_utc` and clears `seen` and `held`. Disabling trades clears
 /// `trades_enabled_utc` and `held` and leaves `seen`. Cards waiting for their dollar value are
@@ -101,6 +105,17 @@ pub(super) fn commit_settings(
     } else if was_trades && !settings.trades.on {
         ledger.trades_enabled_utc = None;
         ledger.held.clear();
+    }
+    // The chart rule starts at its own switch-on, as the card rule does.
+    match (previous.settings.charts.on, settings.charts.on) {
+        (false, true) => {
+            ledger.charts = moon_core::telegram::notify::ChartLedger {
+                enabled_utc: Some(now_utc),
+                ..Default::default()
+            };
+        }
+        (true, false) => ledger.charts = Default::default(),
+        _ => {}
     }
     // Nothing waits to be filled in with dollars once the chat stops asking for it.
     if !(settings.trades.on && settings.trades.usd_followup) {
@@ -553,8 +568,8 @@ pub(super) fn mini_notify_save(
     }
 }
 
-/// The page knows neither automatic reports, the dollar follow-up of trade cards, nor the cores'
-/// own events: what it submits keeps the chat's stored ones.
+/// The page knows neither automatic reports, the dollar follow-up of trade cards, the cores' own
+/// events, nor deal charts: what it submits keeps the chat's stored ones.
 pub(super) fn keep_stored_bot_fields(file: &NotifyFile, chat: i64, settings: &mut NotifySettings) {
     let stored = file
         .chats
@@ -565,6 +580,7 @@ pub(super) fn keep_stored_bot_fields(file: &NotifyFile, chat: i64, settings: &mu
     settings.reports = stored.reports;
     settings.trades.usd_followup = stored.trades.usd_followup;
     settings.events = stored.events;
+    settings.charts = stored.charts;
 }
 
 /// Machine kind stored in [`NotifyDto::fault`].
