@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Dönemi alt menüden seçin. Taze rapor için 
 telegram.report_all_cores: "Tüm çekirdekler"
 
 telegram.report_by_days: "Güne göre"
+telegram.report_by_groups: "Gruba göre"
+telegram.report_groups: "Gruplar"
+telegram.report_no_group: "Grupsuz"
 
 telegram.report_days_scope: "Grubun günleri"
 
@@ -44,8 +47,6 @@ telegram.report_exchanges: "Borsalar"
 telegram.report_exchanges_menu: "Borsalar"
 
 telegram.report_exchanges_back: "Geri"
-
-telegram.report_exchange: "Borsa"
 
 telegram.report_scope_unavailable: "Borsa kullanılamaz"
 
@@ -74,8 +75,6 @@ telegram.report_trades: "İşlemler"
 
 telegram.report_date: "Tarih"
 
-telegram.report_bot: "Bot"
-
 telegram.report_details: "Para birimleri ve ortalama emir"
 
 telegram.report_average: "Ortalama emir"
@@ -103,22 +102,16 @@ telegram.report_help: "Aşağıdan bir dönem seçin. Raporlarda bot/gün görü
 
 telegram.report_help_station: "Aşağıdan bir dönem seçin. Raporlarda bot/gün görünümü vardır. Taze veri için döneme yeniden dokunun.\n\n/hour — bu saat\n/today — bugün\n/daily — bu ayın günlük sonuçları\n/report 2026-09-01 2026-09-10 — özel dönem\n/daily 2026-09-01 2026-09-10 — özel günlük sonuçlar\n/status — istasyonun durumu\nTarihler dahil, en fazla 366 gün; saat dilimi istasyon ayarlarını izler. Raporlar gün boyu güncellenir."
 
-telegram.notify_profit: "Kâr"
-
 telegram.notify_manual: "Elle"
 
 telegram.notify_unvalued: "Değer yok"
 
+telegram.notify_unchecked: "Eşikler denetlenmedi: dolar değeri yok"
+
+telegram.notify_opened: "İşlem açıldı"
+telegram.notify_emulator: "emülatör"
+telegram.notify_events_more: "…ve %{n} tane daha"
+
 telegram.notify_down: "bağlantı kesildi:"
 
 telegram.notify_back: "bağlantı geri geldi"
-
-telegram.notify_daily_title: "Günlük özet"
-
-telegram.notify_trades: "İşlemler"
-
-telegram.notify_unvalued_trades: "Değer yok"
-
-telegram.notify_best: "En iyi"
-
-telegram.notify_worst: "En kötü"

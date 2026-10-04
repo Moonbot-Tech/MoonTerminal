@@ -5,15 +5,15 @@
 //! terminal never sets it, so every branch below leaves the terminal as it was. It carries one of
 //! two [`Profile`]s.
 //!
-//! [`Profile::Reports`] — the light station: the report replica, the order traces and the tape
-//! around trades. What it turns off:
+//! [`Profile::Reports`] — the light station: the report replica with its USDT valuation, the order
+//! traces and the tape around trades. What it turns off:
 //!
 //! - the client's periodic market refresh and its full-size history rings (`Compact`);
-//! - every domain event but reports, archive answers and the core's log (the log is sampled for
-//!   the clock offset alone, see [`keeps_reports`]);
+//! - every domain event but reports, archive answers, the core's log (sampled for the clock
+//!   offset alone) and detects (judged for the bot alone), see [`keeps_reports`];
 //! - the requests a terminal sends on Ready and on a reconnect — license, settings, hedge mode,
 //!   balances, chart alerts, Telegram — and the recurring API-key poll;
-//! - the Assets publications, the 5-minute kline recorder and the valuation outbox.
+//! - the Assets publications and the 5-minute kline recorder.
 //!
 //! Without the periodic refresh the main client's market prices stay zero for the whole session
 //! (moonproto fills bid/ask/mark on `UpdateMarketsList` ticks, not in Init) and a market listed
@@ -24,7 +24,7 @@
 //! [`Profile::Account`] — the station that hosts the Mini App: everything above, plus the account
 //! the Mini App shows and commands, taken the terminal's way — orders, balances and their repairs,
 //! strategies, the core's health and run state (the Ready-time requests), the Assets publications
-//! with the periodic price refresh they are priced by, and the valuation outbox its reports read.
+//! with the periodic price refresh they are priced by.
 //! Still off: the full-size rings, the core's own Telegram, the API-key poll, transfer assets,
 //! trade sounds, the strategy version archive (`strategies.sqlite`) and the kline recorder —
 //! nothing the Mini App shows.
@@ -91,20 +91,18 @@ pub fn enabled() -> bool {
     profile().is_some()
 }
 
-/// Whether this process runs the account path: a terminal, or a station hosting the Mini App.
-pub fn runs_account() -> bool {
-    profile().is_none_or(Profile::runs_account)
-}
-
 /// Whether the light station keeps a domain event.
 ///
 /// `ServerLog` stays for one reader only: the clock-offset estimator samples it in a pass that
 /// ignores `feed.log`, and nothing else reads it with the station's flags. Without it the offset
 /// has no source at all — `Replica` and `Skew` are never produced (§9, question 27).
+///
+/// `Detect` stays for the bot alone: with `feed.detects` off no detect reaches the store, and
+/// only one whose strategy has `ReportToTelegram` leaves the feed, as a Telegram event.
 pub fn keeps_reports(event: &Event) -> bool {
     matches!(
         event,
-        Event::Report(_) | Event::MarketHistory(_) | Event::ServerLog(_)
+        Event::Report(_) | Event::MarketHistory(_) | Event::ServerLog(_) | Event::Detect(_)
     )
 }
 

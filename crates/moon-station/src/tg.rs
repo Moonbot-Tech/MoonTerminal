@@ -7,8 +7,10 @@
 //! reads that must not hold the loop.
 //!
 //! What the terminal keeps in `servers.enc` — the chats paired with the bot, its owner and the
-//! viewers' grants — the station keeps in `telegram.json` in its data root: its own state, which
-//! it rewrites on every pairing. The token is a systemd credential and never lands there.
+//! viewers' grants, the bot's menu and report settings — the station keeps in `telegram.json` in
+//! its data root: its own state, which it rewrites on every pairing. So does the zone the
+//! terminal pushes from its header clock, which then wins over `station.toml`'s `[telegram]
+//! zone`. The token is a systemd credential and never lands there.
 //!
 //! While no chat is paired the station keeps a pairing code issued itself and logs it. The
 //! terminal's Settings reach the rest through the control API (`api.rs`): the bot's state, a code
@@ -52,7 +54,10 @@ const CONFLICT_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(6
 /// The bot, the Mini App, and what the station keeps for them between two ticks.
 pub struct StationTg {
     state: TelegramState,
+    /// The zone reports are cut in: [`Self::zone_pushed`] when there is one, else `station.toml`'s.
     zone: Tz,
+    /// The zone the terminal pushed (`telegram.json`), kept to be written back with the pairing.
+    zone_pushed: Option<String>,
     /// The report writer's and the valuation worker's generations, which the Mini App's cached
     /// reads are compared on.
     generations: (Arc<AtomicU64>, Option<Arc<AtomicU64>>),
@@ -60,7 +65,7 @@ pub struct StationTg {
     /// Where the update request is filed.
     data_root: PathBuf,
     /// Chats' "Status" waiting for the main loop to read the station's status.
-    status_asks: Vec<SyncSender<Response>>,
+    status_asks: Vec<(SyncSender<Response>, bool)>,
     /// The look at the latest release each "Status" takes.
     release: ReleaseWatch,
     /// Optimistic Panic Sell override by `(core, market)`, reconciled every tick.
@@ -108,17 +113,26 @@ impl StationTg {
             write_pairing(&pairing_path, &pairing)?;
         }
         moon_tg::set_locale(telegram.language);
+        // A pushed zone this build cannot read leaves the one `station.toml` names.
+        if let Some(name) = pairing.zone.as_deref().filter(|n| n.parse::<Tz>().is_err()) {
+            log::warn!("telegram: zone {name:?} in {PAIRING_FILE} is not an IANA time zone");
+        }
+        let pushed = pushed_zone(&pairing);
+        let zone = pushed.as_ref().map_or(telegram.zone, |(_, zone)| *zone);
+        // The core groups a terminal sent, for the report by groups; uids are the terminal's.
+        config.core_groups = pairing.groups.clone().unwrap_or_default();
+        moon_core::config::sanitize_core_groups(&mut config.core_groups);
         let bot = &mut config.telegram;
         bot.token = token;
         bot.mini_app_enabled = telegram.mini_app;
         bot.authorized_chat_ids = pairing.authorized_chat_ids;
         bot.owner_chat_id = pairing.owner_chat_id;
         bot.chat_access = pairing.chat_access;
+        bot.bot = pairing.bot.unwrap_or_default();
         log::info!(
-            "telegram: bot starting, {} chat(s) paired, Mini App {}, zone {}",
+            "telegram: bot starting, {} chat(s) paired, Mini App {}, zone {zone}",
             bot.authorized_chat_ids.len(),
             if bot.mini_app_enabled { "on" } else { "off" },
-            telegram.zone
         );
         let (finished_tx, finished_rx) = mpsc::channel();
         Ok(Self {
@@ -127,7 +141,8 @@ impl StationTg {
                 HostKind::Station,
                 Some(data_root.join(NOTIFY_FILE)),
             ),
-            zone: telegram.zone,
+            zone,
+            zone_pushed: pushed.map(|(name, _)| name),
             generations,
             pairing_path,
             data_root: data_root.to_path_buf(),
@@ -179,10 +194,17 @@ impl StationTg {
         }
         let asks = std::mem::take(&mut self.status_asks);
         let status = status(self.status(config));
+        let navigation = moon_tg::station_owner_navigation(&config.telegram);
         let release = self.release.clone();
-        let answer = move |asks: Vec<SyncSender<Response>>, check: moon_tg::ReleaseCheck| {
-            for ask in asks {
-                let _ = ask.try_send(moon_tg::station_status_reply(&status, &check));
+        let answer = move |asks: Vec<(SyncSender<Response>, bool)>,
+                           check: moon_tg::ReleaseCheck| {
+            for (ask, from_settings) in asks {
+                let _ = ask.try_send(moon_tg::station_status_reply(
+                    &status,
+                    &check,
+                    navigation.clone(),
+                    from_settings,
+                ));
             }
         };
         // Handed over through a slot, so a thread that cannot be started leaves the answer here:
@@ -235,31 +257,73 @@ impl StationTg {
         self.pairing_code()
     }
 
+    /// The chats, the bot's settings and the zone in force, as the control API answers them.
+    pub fn access(&self, config: &AppConfig) -> Access {
+        Access {
+            zone: Some(self.zone.name().to_owned()),
+            notify: moon_tg::notify_rows(&self.state, &config.telegram),
+            groups: Some(config.core_groups.clone()),
+            ..Access::of(&config.telegram)
+        }
+    }
+
     /// Replace the paired chats with `access`, only while they are still `base` — what the
-    /// terminal read before its user edited them; a chat paired here since is not dropped. Saved
-    /// before it is adopted, then applied to the running bot as a terminal's Save applies it: a
-    /// revoked or changed grant restarts the transport; captions and added chats reach it in place.
+    /// terminal read before its user edited them; a chat paired here since is not dropped, nor
+    /// bot settings changed here since. The bot's settings and the zone `access` leaves out stay
+    /// as they are. Saved before it is adopted, then applied to the running bot as a terminal's
+    /// Save applies it: a revoked or changed grant restarts the transport; captions, added chats,
+    /// the menu and the zone reach it in place.
     pub fn set_access(
         &mut self,
         config: &mut AppConfig,
         base: &Access,
         access: Access,
     ) -> Result<Access, String> {
-        if Access::of(&config.telegram) != *base {
-            return Err(
-                "the chats changed on the station after these edits began: discard the edits and make them again".into(),
-            );
+        let notify = access.notify.clone();
+        // Chats' notifications are checked against the chats they will land on before anything
+        // is written: a stale or invalid row refuses the whole change, not half of it.
+        if let Some(rows) = notify.as_ref().filter(|rows| !rows.is_empty()) {
+            let mut landing = config.telegram.clone();
+            Access {
+                notify: None,
+                ..access.clone()
+            }
+            .apply_to(&mut landing);
+            moon_tg::check_notify_rows(&self.state, &landing, rows)?;
         }
-        access.check()?;
-        write_pairing(&self.pairing_path, &access).map_err(|e| format!("{e:#}"))?;
+        let saved = plan_access(
+            &self.access(config),
+            self.zone_pushed.as_deref(),
+            base,
+            access,
+        )?;
+        write_pairing(&self.pairing_path, &saved).map_err(|e| format!("{e:#}"))?;
         let before = config.telegram.clone();
-        access.apply_to(&mut config.telegram);
+        saved.apply_to(&mut config.telegram);
+        if let Some(groups) = &saved.groups {
+            config.core_groups = groups.clone();
+        }
+        if let Some((name, zone)) = pushed_zone(&saved) {
+            if zone != self.zone {
+                log::info!("telegram: report zone now {name}");
+            }
+            self.zone = zone;
+            self.zone_pushed = Some(name);
+        }
         moon_tg::reconcile(&mut self.state, &config.telegram, &before);
         log::info!(
             "telegram: chats replaced by the terminal, {} paired",
-            access.authorized_chat_ids.len()
+            saved.authorized_chat_ids.len()
         );
-        Ok(access)
+        // Chats' notifications go to their own file, against the chats just saved.
+        if let Some(rows) = notify.filter(|rows| !rows.is_empty()) {
+            moon_tg::save_notify_rows(&self.state, &config.telegram, &rows, self.zone)?;
+            log::info!(
+                "telegram: notifications of {} chat(s) changed by the terminal",
+                rows.len()
+            );
+        }
+        Ok(self.access(config))
     }
 
     /// The code the bot accepts now, while it is still accepted.
@@ -360,7 +424,13 @@ impl StationHost<'_> {
     ) -> bool {
         let mut candidate = self.config.telegram.clone();
         change(&mut candidate);
-        if let Err(e) = write_pairing(&self.tg.pairing_path, &Access::of(&candidate)) {
+        let pairing = Access {
+            zone: self.tg.zone_pushed.clone(),
+            // A pairing saved from the chat keeps the groups the terminal sent.
+            groups: Some(self.config.core_groups.clone()),
+            ..Access::of(&candidate)
+        };
+        if let Err(e) = write_pairing(&self.tg.pairing_path, &pairing) {
             log::error!("telegram: pairing not saved: {e:#}");
             return false;
         }
@@ -425,6 +495,14 @@ impl TgHost for StationHost<'_> {
         self.save_pairing(|telegram| telegram.clear_pairing())
     }
 
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
+        let saved = self.save_pairing(|telegram| telegram.bot = bot);
+        if saved {
+            log::info!("telegram: the bot's settings changed from the chat");
+        }
+        saved
+    }
+
     fn is_panic_armed(&self, core: CoreId, market: &str) -> bool {
         let local = self
             .tg
@@ -486,14 +564,78 @@ impl TgHost for StationHost<'_> {
         // Nothing on the station shows the bot's state.
     }
 
-    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
+    fn station_status(&mut self, reply: SyncSender<Response>, from_settings: bool) -> bool {
         // The status is read on the loop after this tick, where the cores and the host are.
-        self.tg.status_asks.push(reply);
+        self.tg.status_asks.push((reply, from_settings));
         true
     }
 
     fn request_station_update(&mut self) -> Option<Result<(), moon_tg::UpdateRefusal>> {
         Some(release::request_update(&self.tg.data_root))
+    }
+}
+
+/// The zone a saved pairing carries, when it names one this build reads.
+fn pushed_zone(pairing: &Access) -> Option<(String, Tz)> {
+    let name = pairing.zone.as_deref()?;
+    name.parse::<Tz>().ok().map(|zone| (name.to_owned(), zone))
+}
+
+/// What a change from the terminal saves, or why it is refused.
+///
+/// Args:
+///     current: The station's access now ([`StationTg::access`]: its zone is the one in force).
+///     pushed: The zone the terminal pushed earlier, if any — kept when the change names none,
+///         so `station.toml`'s zone stays the fallback until a push.
+///     base: What the terminal read before its edit; refused when it no longer holds.
+///     access: The change; a part it leaves out keeps the station's.
+///
+/// Returns:
+///     The whole pairing to save, with the bot's settings always present.
+fn plan_access(
+    current: &Access,
+    pushed: Option<&str>,
+    base: &Access,
+    access: Access,
+) -> Result<Access, String> {
+    if !base.base_holds(current) {
+        return Err(
+            "the chats or the bot's settings changed on the station after these edits began: discard the edits and make them again".into(),
+        );
+    }
+    access.check()?;
+    if let Some(name) = access.zone.as_deref().filter(|n| n.parse::<Tz>().is_err()) {
+        return Err(format!("zone {name:?} is not an IANA time zone"));
+    }
+    // Groups go on their own and are not part of the base: a terminal's set replaces the
+    // station's whole, kept in the shape the terminal's own are.
+    let groups = access.groups.clone().map(|mut groups| {
+        moon_core::config::sanitize_core_groups(&mut groups);
+        groups
+    });
+    Ok(Access {
+        bot: access.bot.or_else(|| current.bot.clone()),
+        zone: access.zone.or_else(|| pushed.map(str::to_owned)),
+        groups: groups.or_else(|| current.groups.clone()),
+        // Notifications have a file of their own, never `telegram.json`.
+        notify: None,
+        ..access
+    })
+}
+
+/// Whether the bot's saved menu shows the Control section — only a menu the terminal delivered;
+/// a station that never got one runs as it did. An unreadable file says no, and says why in the
+/// log: the bot will not start on it either.
+pub fn control_shown(data_root: &Path) -> bool {
+    match load_pairing(&data_root.join(PAIRING_FILE)) {
+        Ok(pairing) => pairing.bot.is_some_and(|bot| {
+            bot.menu
+                .shows(moon_core::config::telegram_menu::MenuItem::Control)
+        }),
+        Err(e) => {
+            log::warn!("telegram: {PAIRING_FILE} unreadable, the light profile stays: {e:#}");
+            false
+        }
     }
 }
 

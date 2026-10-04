@@ -75,7 +75,7 @@ fn ack_removes_the_row_and_persists() {
     store.enqueue(7, "one".into(), None, 10).expect("enqueue");
     let id = NotifyFile::load(&path).expect("reload").outbox[0].id;
 
-    store.ack(id).expect("ack");
+    store.ack(id, 7, None, None).expect("ack");
 
     let loaded = NotifyFile::load(&path).expect("reload after ack");
     assert!(loaded.outbox.is_empty(), "acked id {id} still on disk");
@@ -394,7 +394,7 @@ fn hold_revokes_an_unknown_viewer_row_and_readies_an_empty_disclosure() {
     let quiet_id = only_id(&quiet);
     publish(&quiet, viewers);
     match super::hold(&quiet, quiet_id, 7) {
-        super::Held::Ready(html) => assert_eq!(html, "body"),
+        super::Held::Ready(row) if row.auto.is_none() => assert_eq!(row.html, "body"),
         _ => panic!("an empty disclosure must be ready for a viewer"),
     }
 }
@@ -408,7 +408,258 @@ fn hold_readies_an_owner_row() {
     allowed.insert(7, None);
     publish(&store, allowed);
     match super::hold(&store, id, 7) {
-        super::Held::Ready(html) => assert_eq!(html, "body"),
+        super::Held::Ready(row) if row.auto.is_none() => assert_eq!(row.html, "body"),
         _ => panic!("an owner row must be ready"),
     }
+}
+
+/// A running-total report queued behind an unsent one of its kind takes its place; hourly reports,
+/// other kinds, other chats and ordinary notifications stay.
+#[test]
+fn a_new_auto_report_replaces_its_unsent_running_total_only() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    use crate::telegram::notify::{AutoReport, AutoRow};
+    let auto = |kind| AutoRow {
+        kind,
+        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        }),
+    };
+    let mut file = NotifyFile::default();
+    let mut push = |chat, html: &str, kind| {
+        super::push_auto_report(&mut file, chat, html.into(), None, auto(kind), 2)
+    };
+    assert!(push(7, "t1", AutoReport::Today));
+    assert!(push(7, "h1", AutoReport::Hourly));
+    assert!(push(8, "t-other", AutoReport::Today));
+    assert!(push(7, "m1", AutoReport::Month));
+    assert!(push(7, "t2", AutoReport::Today));
+    assert!(push(7, "h2", AutoReport::Hourly));
+    push_outbox(&mut file, 7, "card".into(), None, 1);
+    let bodies: Vec<&str> = file.outbox.iter().map(|row| row.html.as_str()).collect();
+    assert_eq!(bodies, vec!["h1", "t-other", "m1", "t2", "h2", "card"]);
+    // A rich report is not held to the 4096-unit cap of a plain message.
+    let big = "x".repeat(20_000);
+    assert!(super::push_auto_report(
+        &mut file,
+        7,
+        big,
+        None,
+        auto(AutoReport::Month),
+        6
+    ));
+    assert_eq!(file.outbox.last().unwrap().html.len(), 20_000);
+}
+
+/// Acking a running-total report records it as its kind's message and hands back the one it
+/// replaces, in one save; an hourly report and a chat with no stored settings record nothing.
+#[test]
+fn acking_an_auto_report_records_it_and_returns_the_replaced_one() {
+    use crate::telegram::notify::{AutoReport, ChatNotify};
+    let root = TempRoot::new("ack-auto");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).expect("open");
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            chat.settings.reports.set(AutoReport::Today, true);
+            chat.settings.reports.set(AutoReport::Hourly, true);
+            file.chats.insert(7, chat);
+        })
+        .expect("seed");
+    store
+        .enqueue(7, "report".into(), None, 10)
+        .expect("enqueue");
+    let id = store.file.outbox[0].id;
+    assert_eq!(
+        store
+            .ack(id, 7, Some((AutoReport::Today, 100)), None)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .ack(id + 50, 7, Some((AutoReport::Today, 101)), None)
+            .unwrap(),
+        Some(100)
+    );
+    // The same message again is not its own predecessor.
+    assert_eq!(
+        store
+            .ack(id + 51, 7, Some((AutoReport::Today, 101)), None)
+            .unwrap(),
+        None
+    );
+    // Hourly reports stay in the chat: nothing recorded, nothing to delete.
+    assert_eq!(
+        store
+            .ack(id + 52, 7, Some((AutoReport::Hourly, 200)), None)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        store
+            .ack(id + 53, 7, Some((AutoReport::Hourly, 201)), None)
+            .unwrap(),
+        None
+    );
+    let loaded = NotifyFile::load(&path).expect("reload");
+    assert!(loaded.outbox.is_empty());
+    assert_eq!(loaded.chats[&7].ledger.reports.today.message, Some(101));
+    assert_eq!(loaded.chats[&7].ledger.reports.hourly.message, None);
+    assert_eq!(
+        store
+            .ack(id + 54, 9, Some((AutoReport::Month, 5)), None)
+            .unwrap(),
+        None
+    );
+    // A report switched off while its message was in flight is not recorded.
+    assert_eq!(
+        store
+            .ack(id + 55, 7, Some((AutoReport::Month, 300)), None)
+            .unwrap(),
+        None
+    );
+    assert_eq!(store.file.chats[&7].ledger.reports.month.message, None);
+}
+
+/// Acking a trade card the chat waits to fill in records its message against the trade in the
+/// same save; a card the chat stopped waiting for is not recorded, and an edit row carries its
+/// target message.
+#[test]
+fn acking_a_waiting_card_records_its_message() {
+    use crate::telegram::notify::{CardKey, CardWait};
+    let root = TempRoot::new("ack-card");
+    let path = root.path("notifications.json");
+    let mut store = NotifyStore::open(path.clone()).expect("open");
+    let key = CardKey {
+        core: 3,
+        rec_id: 44,
+    };
+    store
+        .update(|file| {
+            let mut chat = ChatNotify::default();
+            chat.ledger
+                .cards
+                .entry(3)
+                .or_default()
+                .insert(44, CardWait::default());
+            file.chats.insert(7, chat);
+            assert!(super::push_trade_card(
+                file,
+                7,
+                "card".into(),
+                Some(vec![3]),
+                Some(key),
+                10
+            ));
+            assert!(super::push_edit(
+                file,
+                7,
+                900,
+                "filled".into(),
+                Some(vec![3]),
+                11
+            ));
+        })
+        .expect("seed");
+    assert_eq!(store.file.outbox[0].card, Some(key));
+    assert_eq!(store.file.outbox[1].edit, Some(900));
+    let id = store.file.outbox[0].id;
+    store.ack(id, 7, None, Some((key, 555))).expect("ack");
+    let loaded = NotifyFile::load(&path).expect("reload");
+    assert_eq!(loaded.outbox.len(), 1);
+    assert_eq!(loaded.chats[&7].ledger.cards[&3][&44].message, Some(555));
+    let gone = CardKey {
+        core: 3,
+        rec_id: 45,
+    };
+    store.ack(id + 9, 7, None, Some((gone, 556))).expect("ack");
+    assert!(!store.file.chats[&7].ledger.cards[&3].contains_key(&45));
+}
+
+/// A redraw of a menu screen carries its buttons, and only the newest one per message waits: an
+/// older picture of the same message goes, while edits of a card, another message and another
+/// chat stay. A press on the message drops its redraw alone.
+#[test]
+fn a_redraw_keeps_only_the_newest_picture_of_its_message() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    let keyboard = || {
+        ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        })
+    };
+    let mut file = NotifyFile::default();
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "old".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_edit(&mut file, 7, 100, "card".into(), None, 1));
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        101,
+        "other message".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_redraw(
+        &mut file,
+        8,
+        100,
+        "other chat".into(),
+        keyboard(),
+        1
+    ));
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "new".into(),
+        keyboard(),
+        2
+    ));
+    let rows: Vec<(&str, Option<i64>, bool)> = file
+        .outbox
+        .iter()
+        .map(|row| (row.html.as_str(), row.edit, row.redraw.is_some()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("card", Some(100), false),
+            ("other message", Some(101), true),
+            ("other chat", Some(100), true),
+            ("new", Some(100), true),
+        ]
+    );
+    assert_eq!(super::drop_redraws(&mut file, 7, 100), 1);
+    let left: Vec<&str> = file.outbox.iter().map(|row| row.html.as_str()).collect();
+    assert_eq!(left, vec!["card", "other message", "other chat"]);
+}
+
+/// A redraw stays worth sending for a minute; an ordinary notification has no such limit.
+#[test]
+fn a_redraw_outlives_its_minute_and_a_notification_does_not() {
+    use crate::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    let mut file = NotifyFile::default();
+    assert!(super::push_redraw(
+        &mut file,
+        7,
+        100,
+        "screen".into(),
+        ReplyMarkup::Inline(InlineKeyboardMarkup {
+            inline_keyboard: Vec::new(),
+        }),
+        1_000,
+    ));
+    push_outbox(&mut file, 7, "card".into(), None, 1_000);
+    let (redraw, card) = (&file.outbox[0], &file.outbox[1]);
+    assert!(!super::redraw_outlived(redraw, 1_060));
+    assert!(super::redraw_outlived(redraw, 1_061));
+    assert!(!super::redraw_outlived(card, 100_000));
 }

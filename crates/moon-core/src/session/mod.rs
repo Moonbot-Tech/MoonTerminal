@@ -19,6 +19,7 @@ pub mod core_time_offset;
 pub mod core_update;
 pub mod order_lines;
 pub mod panic_override;
+pub mod run_dispatch;
 pub mod run_state;
 pub mod store;
 
@@ -33,8 +34,9 @@ pub use crate::feed::{
     ApiKeyExpiry, ConnFault, ConnFaultKind, CoreIdentityFacts, CoreInitStep, CoreStartupState,
     CoreStartupStatus, CoreSysStatus, INIT_STEPS_TOTAL, ReportSyncProgress,
 };
+pub use run_dispatch::{RunDispatch, RunSwitch, RunTarget};
 pub use run_state::{AutoAction, CoreRunState, RunSummary, TradingAction};
-pub use store::{BalanceState, CoreId, CoreStore};
+pub use store::{BalanceState, CoreId, CoreStore, TgEventRow};
 
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -138,6 +140,12 @@ pub struct LicenseSummary {
 
 /// Owns core feeds, account/market routing, and pending notifications for the UI drain.
 pub struct SessionManager {
+    /// Coin blacklists this process sent, keyed by core and strategy (`None` for the core's own
+    /// list): while the store still holds what it held when one went, its echo is not in yet, and
+    /// the next one-coin edit starts from what was sent rather than drop the coin just added. Any
+    /// change in the store — the echo, or an edit made elsewhere — ends that. See
+    /// [`SessionManager::write_core_blacklist`].
+    blacklists_sent: std::sync::Mutex<HashMap<(CoreId, Option<u64>), commands::SentBlacklist>>,
     /// Replaced at every connection/identity boundary; queued playback must retain this token.
     trade_sound_epochs: HashMap<CoreId, std::sync::Arc<()>>,
     /// Trade edges awaiting one UI drain; bounded independently from retained order history.

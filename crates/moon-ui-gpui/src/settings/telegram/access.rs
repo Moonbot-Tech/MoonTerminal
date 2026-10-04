@@ -42,6 +42,9 @@ pub(in crate::settings) struct ChatEd {
     pub(super) pending_owner: Option<i64>,
     name: Entity<MoonInputState>,
     search: Entity<MoonInputState>,
+    /// The notifications of the chat picked in the bot box's Notifications column; independent of
+    /// the chat opened here.
+    pub(super) notify: super::chat_notify::NotifyEd,
 }
 
 impl ChatEd {
@@ -60,6 +63,7 @@ impl ChatEd {
             pending_owner: None,
             name,
             search,
+            notify: super::chat_notify::NotifyEd::new(window, cx),
         }
     }
 
@@ -97,15 +101,27 @@ impl ChatEd {
     }
 }
 
+/// A chat's caption: its name in the terminal, or `Chat <id>` without one.
+pub(super) fn chat_title(telegram: &TelegramConfig, chat: i64) -> String {
+    telegram
+        .chat_access
+        .iter()
+        .find(|a| a.chat_id == chat)
+        .map(|a| a.name.trim())
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| t!("telegram.access_chat", id = chat).to_string())
+}
+
 impl SettingsView {
-    fn chat_ed(&self, side: ChatsOf) -> &ChatEd {
+    pub(super) fn chat_ed(&self, side: ChatsOf) -> &ChatEd {
         match side {
             ChatsOf::Terminal => &self.telegram.chats,
             ChatsOf::Station => &self.telegram.server.chats,
         }
     }
 
-    fn chat_ed_mut(&mut self, side: ChatsOf) -> &mut ChatEd {
+    pub(super) fn chat_ed_mut(&mut self, side: ChatsOf) -> &mut ChatEd {
         match side {
             ChatsOf::Terminal => &mut self.telegram.chats,
             ChatsOf::Station => &mut self.telegram.server.chats,
@@ -113,7 +129,7 @@ impl SettingsView {
     }
 
     /// `side`'s chats as edited; `None` while the station's are not read yet.
-    fn chats<'a>(&'a self, side: ChatsOf, cx: &'a App) -> Option<&'a TelegramConfig> {
+    pub(super) fn chats<'a>(&'a self, side: ChatsOf, cx: &'a App) -> Option<&'a TelegramConfig> {
         match side {
             ChatsOf::Terminal => {
                 let b = self.backend.read(cx);
@@ -137,7 +153,7 @@ impl SettingsView {
     }
 
     /// Change `side`'s draft; `edit` says whether it changed anything.
-    fn chats_edit(
+    pub(super) fn chats_edit(
         &mut self,
         side: ChatsOf,
         cx: &mut Context<Self>,
@@ -248,12 +264,7 @@ impl SettingsView {
         let mut section = section;
         for &chat in &telegram.authorized_chat_ids {
             let owner = telegram.owner() == Some(chat);
-            let profile = telegram.chat_access.iter().find(|a| a.chat_id == chat);
-            let title = profile
-                .map(|a| a.name.trim())
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| t!("telegram.access_chat", id = chat).to_string());
+            let title = chat_title(telegram, chat);
             let summary = if owner {
                 t!("telegram.access_owner_summary").to_string()
             } else {

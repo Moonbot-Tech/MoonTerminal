@@ -1,36 +1,58 @@
 //! Owner-thread notification tick.
 //!
-//! `decide`, `due`, and `DownTracker::step` stay pure. This module reads the
+//! `decide` and `DownTracker::step` stay pure. This module reads the
 //! report replica and writes the durable outbox.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::config::telegram_access::TelegramReportAccess;
 use moon_core::db::CoreNames;
 use moon_core::telegram::TelegramService;
-use moon_core::telegram::notify::{ChatNotify, DownRule, NotifyFile, NotifyLedger, NotifySettings};
-use moon_core::telegram::runtime::{NotifyStore, cores_kept, purge_outbox_where, push_outbox};
+use moon_core::telegram::notify::{
+    CardKey, CardWait, ChatNotify, DownRule, NotifyFile, NotifyLedger, NotifySettings,
+};
+use moon_core::telegram::runtime::{
+    NotifyStore, cores_kept, purge_outbox_where, push_edit, push_outbox, push_trade_card,
+};
 
-use crate::notify::daily::{due, summarize};
 use crate::notify::down::{DownEvent, Link, link_of};
-use crate::notify::render::{back_line, daily_summary, down_line, trade_card};
-use crate::notify::trades::{ClosedTrade, decide, read_from_utc};
+use crate::notify::render::{back_line, down_line, shows_dollars, trade_card};
+use crate::notify::trades::{Announced, ClosedTrade, decide, hold_until, read_from_utc};
 use crate::{Finish, Job, ReportRevision, TelegramState, TgHost};
 
-/// Minimum gap between notification reads. Down and back notices are not gated by it.
-const NOTIFY_INTERVAL: Duration = Duration::from_secs(15);
+/// Minimum gap between notification reads. Down and back notices are not gated by it. A read
+/// still waits for the report replica to move, so a quiet replica costs nothing; a trade card
+/// leaves within this of its row landing. Measured 03.10 on a 565 MB replica: one read of the
+/// 72-hour window costs ~100 ms warm, ~80 ms of it fixed, so 2 s keeps a replica that moves all
+/// the time at ~5 % of one thread. 5 s made a card arrive seconds after the core's own bot
+/// (LinKvo, 04.10).
+const NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
+
+/// How often a card waiting for its dollar value forces a read while the replica stands still:
+/// the valuation may have landed before Telegram accepted the card.
+const CARD_RECHECK: Duration = Duration::from_secs(60);
+
+/// How long a card waits for its dollar value, in seconds.
+const CARD_WAIT_SECS: i64 = 24 * 3600;
+
+/// One row a read queues for a chat.
+enum Outgoing {
+    /// A plain notification.
+    Plain(String, Option<Vec<u64>>),
+    /// A trade card; the trade is named when the chat waits to fill its dollars in.
+    Card(String, Option<Vec<u64>>, Option<CardKey>),
+    /// New text for a card already in the chat.
+    Edit(i64, String, Option<Vec<u64>>),
+}
 
 /// Closed trades a test supplies so the job does not open the report database.
 #[derive(Clone, Debug)]
 pub(crate) struct InjectedReads {
     /// Rows `decide` may announce. Ignored when no chat has a trade read floor.
     pub(crate) trades: Vec<ClosedTrade>,
-    /// Rows for one local day, keyed by that day. A missing key is an empty day.
-    pub(crate) days: BTreeMap<NaiveDate, Vec<ClosedTrade>>,
 }
 
 /// One chat captured when a read is spawned.
@@ -38,7 +60,6 @@ struct ChatShot {
     chat: i64,
     revision: u64,
     access: TelegramReportAccess,
-    daily: Option<NaiveDate>,
     read_from: Option<i64>,
 }
 
@@ -54,7 +75,6 @@ struct ChatSnap {
 struct ChatApply {
     chat: i64,
     revision: u64,
-    daily: Option<NaiveDate>,
     visible: Vec<u64>,
 }
 
@@ -63,15 +83,13 @@ struct ReadPlan {
     names: CoreNames,
     zone: Tz,
     from_utc: Option<i64>,
-    days: Vec<NaiveDate>,
     shots: Vec<ChatShot>,
     now_utc: i64,
 }
 
-/// Trades and day rows a finished read hands back to the owner thread.
+/// Trades a finished read hands back to the owner thread.
 struct Loaded {
     trades: Vec<ClosedTrade>,
-    days: BTreeMap<NaiveDate, Vec<ClosedTrade>>,
 }
 
 /// The report replica could not be read. The job does not log this; the owner does.
@@ -80,7 +98,8 @@ struct ReadMiss;
 /// The notifications file could not be saved.
 struct SaveMiss;
 
-/// Run down/back notices, then at most one closed-trade and daily read.
+/// Run down/back notices, then at most one closed-trade read, then at most one automatic-report
+/// read.
 ///
 /// Args:
 ///     host: The process that owns the bot. Down links come from its session.
@@ -95,10 +114,17 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
     };
     purge_revoked_rows(host, &store);
     if !anything_on(&store) {
+        // The core events' cursors and what waited for a batch go with the last switch: one
+        // turned on later starts at what happens from then on.
+        let state = host.state_mut();
+        state.events_cursor.clear();
+        state.events_waiting.clear();
         return;
     }
     step_down(host, &store, now_utc);
+    crate::notify::events::run(host, &store, now_utc);
     maybe_spawn(host, &store, now_utc);
+    crate::notify::reports::run(host, &store, now_utc);
 }
 
 /// Drop queued rows that name a core the chat can no longer see.
@@ -198,7 +224,7 @@ fn outbox_chats(store: &Mutex<NotifyStore>) -> Vec<i64> {
 ///
 /// Returns:
 ///     The store the tick edits, or `None` when this process has no file.
-fn current_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
+pub(crate) fn current_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
     service_store(host).or_else(|| test_store(host))
 }
 
@@ -223,7 +249,7 @@ fn service_store(host: &dyn TgHost) -> Option<Arc<Mutex<NotifyStore>>> {
 ///
 /// Returns:
 ///     The guard. A poisoned lock still yields the inner store.
-fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
+pub(crate) fn lock_store(store: &Mutex<NotifyStore>) -> MutexGuard<'_, NotifyStore> {
     store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -240,15 +266,19 @@ fn anything_on(store: &Mutex<NotifyStore>) -> bool {
     lock_store(store).file.chats.values().any(chat_enabled)
 }
 
-/// `true` when this chat asked for trades, down/back, or a daily summary.
+/// `true` when this chat asked for trades, down/back, an automatic report or the cores' own
+/// events.
 ///
 /// Args:
 ///     chat: One stored chat.
 ///
 /// Returns:
-///     Whether any of its three switches is on.
+///     Whether any of its switches is on.
 fn chat_enabled(chat: &ChatNotify) -> bool {
-    chat.settings.trades.on || chat.settings.down.on || chat.settings.daily.on
+    chat.settings.trades.on
+        || chat.settings.down.on
+        || chat.settings.reports.any()
+        || chat.settings.events.any()
 }
 
 /// Step every authorized chat whose down rule is on.
@@ -445,7 +475,7 @@ fn chat_down_snapshot(store: &Mutex<NotifyStore>, chat: i64) -> Option<(DownRule
 
 /// Write `down_announced` from the stepped ledger and any notices in one save.
 ///
-/// `seen` and `daily_last` on the stored chat stay as they are. The step only
+/// `seen` and the rest of the stored ledger stay as they are. The step only
 /// edits `down_announced`, so copying that field loses nothing the step wrote.
 ///
 /// Args:
@@ -475,7 +505,11 @@ fn write_down(
                 return false;
             };
             entry.ledger.down_announced = ledger.down_announced;
-            enqueue_all(file, chat, messages, now_utc);
+            let rows = messages
+                .into_iter()
+                .map(|(html, cores)| Outgoing::Plain(html, cores))
+                .collect();
+            enqueue_all(file, chat, rows, now_utc);
             true
         })
         .map_err(|_| SaveMiss)
@@ -543,7 +577,7 @@ fn link_name(links: &[(u64, String, Link)], core: u64) -> &str {
         .unwrap_or("")
 }
 
-/// Spawn one read when the interval is open and a chat needs trades or a daily summary.
+/// Spawn one read when the interval is open and a chat needs trades.
 ///
 /// Args:
 ///     host: Admission, zone, and the busy flag.
@@ -557,23 +591,23 @@ fn maybe_spawn(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_utc: 
     if shots.is_empty() {
         return;
     }
-    let daily_due = shots.iter().any(|shot| shot.daily.is_some());
-    if !reads_are_due(host, daily_due) {
+    let forced = waits_are_due(host, store, now_utc);
+    if !reads_are_due(host, forced) {
         return;
     }
     let plan = read_plan(host, shots, now_utc);
     arm_and_spawn(host, store, plan);
 }
 
-/// Chats that need a trade read or a daily summary on this tick.
+/// Chats that need a trade read on this tick.
 ///
 /// Args:
-///     host: Pairing and report zone. Admission is checked after the store lock drops.
+///     host: Pairing. Admission is checked after the store lock drops.
 ///     store: Notifications file.
 ///     now_utc: Current UTC Unix seconds.
 ///
 /// Returns:
-///     One shot per paired chat that has trades on or a due daily rule.
+///     One shot per paired chat that has trades on.
 ///     Unpaired chats and `report_access` of `None` are left out.
 fn notification_shots(
     host: &dyn TgHost,
@@ -581,11 +615,10 @@ fn notification_shots(
     now_utc: i64,
 ) -> Vec<ChatShot> {
     let snaps = paired_snapshots(host, store);
-    let zone = host.report_zone();
-    shots_from(host, snaps, zone, now_utc)
+    shots_from(host, snaps, now_utc)
 }
 
-/// Copy paired chats that have trades or daily switched on.
+/// Copy paired chats that have trades switched on.
 ///
 /// Args:
 ///     host: Saved `authorized_chat_ids`.
@@ -603,7 +636,7 @@ fn paired_snapshots(host: &dyn TgHost, store: &Mutex<NotifyStore>) -> Vec<ChatSn
         .collect()
 }
 
-/// Snapshot `entry` when it is paired and reads trades or a daily summary.
+/// Snapshot `entry` when it is paired and reads trades.
 ///
 /// Args:
 ///     authorized: Paired chat ids.
@@ -611,10 +644,10 @@ fn paired_snapshots(host: &dyn TgHost, store: &Mutex<NotifyStore>) -> Vec<ChatSn
 ///     entry: Stored settings and ledger.
 ///
 /// Returns:
-///     `None` when the chat is unpaired, or both the trade rule and the daily
-///     rule are off. Down-only chats are not read from the replica.
+///     `None` when the chat is unpaired or the trade rule is off. Chats without trade cards are
+///     not read from the replica.
 fn snap_if_reading(authorized: &[i64], chat: i64, entry: &ChatNotify) -> Option<ChatSnap> {
-    if !authorized.contains(&chat) || !reads_trades_or_daily(entry) {
+    if !authorized.contains(&chat) || !entry.settings.trades.on {
         return None;
     }
     Some(ChatSnap {
@@ -625,40 +658,23 @@ fn snap_if_reading(authorized: &[i64], chat: i64, entry: &ChatNotify) -> Option<
     })
 }
 
-/// `true` when this chat wants trade cards or a daily summary.
-///
-/// Args:
-///     entry: Stored settings. The daily clock is not consulted here.
-///
-/// Returns:
-///     Whether a later shot might need a replica read.
-fn reads_trades_or_daily(entry: &ChatNotify) -> bool {
-    entry.settings.trades.on || entry.settings.daily.on
-}
-
 /// Turn snapshots into shots, dropping chats that are no longer admitted.
 ///
 /// Args:
 ///     host: Current pairing and grants.
-///     snaps: Chats copied under the lock.
-///     zone: Host report zone, for [`due`].
+///     snaps: Chats copied under the lock, each with trades on.
 ///     now_utc: Current UTC Unix seconds.
 ///
 /// Returns:
-///     Shots for chats `report_access` still admits, and only when trades are
-///     on or today's summary is due. `read_from` stays `None` when the trade
+///     Shots for chats `report_access` still admits. `read_from` stays `None` when the trade
 ///     rule has never been enabled.
-fn shots_from(host: &dyn TgHost, snaps: Vec<ChatSnap>, zone: Tz, now_utc: i64) -> Vec<ChatShot> {
+fn shots_from(host: &dyn TgHost, snaps: Vec<ChatSnap>, now_utc: i64) -> Vec<ChatShot> {
     let mut shots = Vec::new();
     for snap in snaps {
         let Some(access) = host.config().telegram.report_access(snap.chat) else {
             continue;
         };
-        let daily = due(now_utc, zone, &snap.settings.daily, snap.ledger.daily_last);
-        if !snap.settings.trades.on && daily.is_none() {
-            continue;
-        }
-        shots.push(shot_for(snap, access, daily, now_utc));
+        shots.push(shot_for(snap, access, now_utc));
     }
     shots
 }
@@ -668,17 +684,11 @@ fn shots_from(host: &dyn TgHost, snaps: Vec<ChatSnap>, zone: Tz, now_utc: i64) -
 /// Args:
 ///     snap: Settings captured under the lock.
 ///     access: Grant at spawn. Finish compares it again.
-///     daily: Local date whose summary is due, if any.
 ///     now_utc: Current UTC Unix seconds.
 ///
 /// Returns:
 ///     The shot. `read_from` is `None` when trades are off or were never enabled.
-fn shot_for(
-    snap: ChatSnap,
-    access: TelegramReportAccess,
-    daily: Option<NaiveDate>,
-    now_utc: i64,
-) -> ChatShot {
+fn shot_for(snap: ChatSnap, access: TelegramReportAccess, now_utc: i64) -> ChatShot {
     let read_from = snap
         .settings
         .trades
@@ -689,7 +699,6 @@ fn shot_for(
         chat: snap.chat,
         revision: snap.revision,
         access,
-        daily,
         read_from,
     }
 }
@@ -698,35 +707,66 @@ fn shot_for(
 ///
 /// Args:
 ///     host: Busy flag, last run, and report revision.
-///     daily_due: A captured shot has a summary due today.
+///     forced: Something is due without the replica moving: a held trade whose wait ran out,
+///         or a card waiting for its dollar value.
 ///
 /// Returns:
 ///     `false` while a read is in flight, before the interval, or when neither
-///     the revision nor a due daily rule asks for another read.
-fn reads_are_due(host: &dyn TgHost, daily_due: bool) -> bool {
+///     the revision nor `forced` asks for another read.
+fn reads_are_due(host: &dyn TgHost, forced: bool) -> bool {
     let revision = host.report_revision();
-    interval_open(host.state(), revision, daily_due)
+    interval_open(host.state(), revision, forced)
 }
 
-/// The 15-second gate.
+/// Whether a held trade or a waiting card needs a read even though the replica did not move.
+///
+/// A held trade does once its wait has run out: it then goes unchecked. A card that Telegram
+/// accepted does every [`CARD_RECHECK`]: its valuation may have landed before the card's message
+/// id did, and nothing else would read the row again.
+///
+/// Args:
+///     host: The previous spawn's stamp.
+///     store: Notifications file; every chat's ledger is read under one lock.
+///     now_utc: Current UTC Unix seconds.
+fn waits_are_due(host: &dyn TgHost, store: &Mutex<NotifyStore>, now_utc: i64) -> bool {
+    let recheck = host
+        .state()
+        .last_notify_run
+        .is_none_or(|at| at.elapsed() >= CARD_RECHECK);
+    lock_store(store).file.chats.values().any(|entry| {
+        if !entry.settings.trades.on {
+            return false;
+        }
+        let ledger = &entry.ledger;
+        hold_until(ledger).is_some_and(|until| now_utc >= until)
+            || (recheck
+                && ledger
+                    .cards
+                    .values()
+                    .flat_map(|rows| rows.values())
+                    .any(|card| card.message.is_some()))
+    })
+}
+
+/// The read gate.
 ///
 /// Args:
 ///     state: Busy flag and the previous spawn's stamp and revision.
 ///     revision: Host revision now. `None` matches a previous `None`.
-///     daily_due: A daily rule is due, which opens the gate after the interval
-///         even when the revision did not move.
+///     forced: A read is due without the revision moving, which opens the gate after the
+///         interval.
 ///
 /// Returns:
 ///     `true` for the first run (`last_notify_run` is `None`). Afterwards, only
-///     when the interval has elapsed and the revision changed or `daily_due`.
-fn interval_open(state: &TelegramState, revision: Option<ReportRevision>, daily_due: bool) -> bool {
+///     when the interval has elapsed and the revision changed or `forced`.
+fn interval_open(state: &TelegramState, revision: Option<ReportRevision>, forced: bool) -> bool {
     if state.notify_busy {
         return false;
     }
     match state.last_notify_run {
         None => true,
         Some(at) => {
-            at.elapsed() >= NOTIFY_INTERVAL && (state.last_report_revision != revision || daily_due)
+            at.elapsed() >= NOTIFY_INTERVAL && (state.last_report_revision != revision || forced)
         }
     }
 }
@@ -740,17 +780,13 @@ fn interval_open(state: &TelegramState, revision: Option<ReportRevision>, daily_
 ///
 /// Returns:
 ///     The plan. `from_utc` is the earliest trade floor, or `None` when no
-///     shot has one. Days are sorted and deduplicated.
+///     shot has one.
 fn read_plan(host: &dyn TgHost, shots: Vec<ChatShot>, now_utc: i64) -> ReadPlan {
     let from_utc = shots.iter().filter_map(|shot| shot.read_from).min();
-    let mut days: Vec<NaiveDate> = shots.iter().filter_map(|shot| shot.daily).collect();
-    days.sort();
-    days.dedup();
     ReadPlan {
         names: CoreNames::from_servers(&host.config().servers),
         zone: host.report_zone(),
         from_utc,
-        days,
         shots,
         now_utc,
     }
@@ -797,14 +833,14 @@ fn finish_job(
     Box::new(move |host| apply_finish(host, store_ptr, loaded, &shots, now_utc, revision))
 }
 
-/// Load trades and due days, or fail the whole read.
+/// Load trades, or fail the whole read.
 ///
 /// Args:
-///     plan: Window and days. `from_utc` of `None` skips the trade read.
+///     plan: Window. `from_utc` of `None` skips the trade read.
 ///     injected: Test rows. `Some` never opens the replica.
 ///
 /// Returns:
-///     Every requested row. A missing injected day is an empty vector.
+///     Every requested row.
 ///
 /// Errors:
 ///     [`ReadMiss`] when any replica read fails. Partial rows are discarded
@@ -819,39 +855,33 @@ fn load_reads(plan: &ReadPlan, injected: Option<&InjectedReads>) -> Result<Loade
 /// Take the injected rows the plan actually asked for.
 ///
 /// Args:
-///     plan: `from_utc` of `None` yields no trades. Days absent from the map
-///         are empty, not an error.
+///     plan: `from_utc` of `None` yields no trades.
 ///     injected: Rows the test installed.
 ///
 /// Returns:
-///     Trades and day rows. Trade filtering is left to `decide`.
+///     Trades. Trade filtering is left to `decide`.
 fn from_injection(plan: &ReadPlan, injected: &InjectedReads) -> Loaded {
     let trades = if plan.from_utc.is_some() {
         injected.trades.clone()
     } else {
         Vec::new()
     };
-    let mut days = BTreeMap::new();
-    for date in &plan.days {
-        days.insert(*date, injected.days.get(date).cloned().unwrap_or_default());
-    }
-    Loaded { trades, days }
+    Loaded { trades }
 }
 
-/// Read the report replica. Any failure aborts the whole load.
+/// Read the report replica.
 ///
 /// Args:
-///     plan: Names, zone, trade floor, and due days.
+///     plan: Names, zone, and trade floor.
 ///
 /// Returns:
-///     Trades with `close_utc >= from_utc`, and one vector per due day.
+///     Trades with `close_utc >= from_utc`.
 ///
 /// Errors:
-///     [`ReadMiss`] from the first failed read. Nothing is logged here.
+///     [`ReadMiss`] when the read failed. Nothing is logged here.
 fn from_replica(plan: &ReadPlan) -> Result<Loaded, ReadMiss> {
     Ok(Loaded {
         trades: read_trades(plan)?,
-        days: read_days(plan)?,
     })
 }
 
@@ -872,26 +902,6 @@ fn read_trades(plan: &ReadPlan) -> Result<Vec<ClosedTrade>, ReadMiss> {
     crate::report::read_closed_since(plan.zone, plan.names.clone(), from_utc).map_err(|_| ReadMiss)
 }
 
-/// One replica read per due day.
-///
-/// Args:
-///     plan: Days, zone, and core names.
-///
-/// Returns:
-///     Rows keyed by the local date.
-///
-/// Errors:
-///     [`ReadMiss`] when any day fails. Earlier days are dropped with it.
-fn read_days(plan: &ReadPlan) -> Result<BTreeMap<NaiveDate, Vec<ClosedTrade>>, ReadMiss> {
-    let mut days = BTreeMap::new();
-    for date in &plan.days {
-        let rows =
-            crate::report::read_day(plan.zone, plan.names.clone(), *date).map_err(|_| ReadMiss)?;
-        days.insert(*date, rows);
-    }
-    Ok(days)
-}
-
 /// Apply a finished read on the owner thread and always clear the busy flag.
 ///
 /// A save stamps `last_report_revision` with the revision captured at spawn.
@@ -904,7 +914,7 @@ fn read_days(plan: &ReadPlan) -> Result<BTreeMap<NaiveDate, Vec<ClosedTrade>>, R
 ///     loaded: Rows, or [`ReadMiss`] when the replica read failed.
 ///     shots: Chats and grants captured at spawn.
 ///     now_utc: UTC Unix seconds captured at spawn, stored on outbox rows and
-///         passed to `decide`. Today's date is read again at finish.
+///         passed to `decide`.
 ///     revision: Host revision captured at spawn. Stamped only after a save.
 fn apply_finish(
     host: &mut dyn TgHost,
@@ -932,8 +942,7 @@ fn apply_finish(
         reject_finish(host);
         return;
     }
-    let today = finish_today(host, now_utc);
-    match save_applies(&store, &applies, &loaded, today, now_utc) {
+    match save_applies(&store, &applies, &loaded, now_utc) {
         Ok(skipped) => {
             log_skips(&skipped);
             host.state_mut().last_report_revision = revision;
@@ -944,38 +953,6 @@ fn apply_finish(
             reject_finish(host);
         }
     }
-}
-
-/// UTC seconds used to name today's local date at finish.
-///
-/// A frozen notify clock wins, so a test that passes unix 2000 still lands on
-/// 1970-01-01. Otherwise the wall clock is read now. A value that does not fit
-/// in `i64` falls back to the spawn instant.
-///
-/// Args:
-///     host: Optional frozen clock.
-///     spawned_utc: UTC Unix seconds captured when the read was spawned.
-///
-/// Returns:
-///     Seconds passed to the zone conversion.
-fn finish_clock(host: &dyn TgHost, spawned_utc: i64) -> i64 {
-    if let Some(frozen) = host.state().notify_clock_override {
-        return frozen;
-    }
-    i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(spawned_utc)
-}
-
-/// Local calendar date at finish, in the host report zone.
-///
-/// Args:
-///     host: Report zone and the optional frozen clock.
-///     spawned_utc: Fallback when the wall clock does not fit in `i64`.
-///
-/// Returns:
-///     Today's date, or `None` when the instant cannot be shown in the zone.
-fn finish_today(host: &dyn TgHost, spawned_utc: i64) -> Option<NaiveDate> {
-    let now = finish_clock(host, spawned_utc);
-    moon_core::util::display_time::at(now, host.report_zone()).map(|local| local.date_naive())
 }
 
 /// Record that this read did not save, and allow the next one.
@@ -1023,7 +1000,6 @@ fn prepare_applies(host: &dyn TgHost, shots: &[ChatShot]) -> Vec<ChatApply> {
         applies.push(ChatApply {
             chat: shot.chat,
             revision: shot.revision,
-            daily: shot.daily,
             visible: visible_ids(host, &shot.access),
         });
     }
@@ -1053,7 +1029,7 @@ fn grant_matches(host: &dyn TgHost, shot: &ChatShot) -> bool {
 ///
 /// Returns:
 ///     Core ids. A test override replaces both arms.
-fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<u64> {
+pub(crate) fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<u64> {
     if let Some(ids) = visible_override(host) {
         return ids;
     }
@@ -1068,9 +1044,7 @@ fn visible_ids(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<u64> {
 /// Args:
 ///     store: Notifications file.
 ///     applies: Chats whose grant matched.
-///     loaded: Trades and day rows.
-///     today: Local date at finish. A daily summary whose captured date differs
-///         is dropped and does not stamp `daily_last`.
+///     loaded: Trades.
 ///     now_utc: UTC Unix seconds stored on outbox rows.
 ///
 /// Returns:
@@ -1083,11 +1057,10 @@ fn save_applies(
     store: &Mutex<NotifyStore>,
     applies: &[ChatApply],
     loaded: &Loaded,
-    today: Option<NaiveDate>,
     now_utc: i64,
 ) -> Result<Vec<i64>, SaveMiss> {
     lock_store(store)
-        .update(|file| apply_messages(file, applies, loaded, today, now_utc))
+        .update(|file| apply_messages(file, applies, loaded, now_utc))
         .map_err(|_| SaveMiss)
 }
 
@@ -1096,8 +1069,7 @@ fn save_applies(
 /// Args:
 ///     file: Document clone `update` will save.
 ///     applies: Chats whose grant matched.
-///     loaded: Trades and day rows.
-///     today: Local date at finish. Compared with each captured daily date.
+///     loaded: Trades.
 ///     now_utc: UTC Unix seconds for `decide` and the outbox.
 ///
 /// Returns:
@@ -1106,12 +1078,11 @@ fn apply_messages(
     file: &mut NotifyFile,
     applies: &[ChatApply],
     loaded: &Loaded,
-    today: Option<NaiveDate>,
     now_utc: i64,
 ) -> Vec<i64> {
     let mut skipped = Vec::new();
     for apply in applies {
-        match messages_for(file, apply, loaded, today, now_utc) {
+        match messages_for(file, apply, loaded, now_utc) {
             Some(messages) => enqueue_all(file, apply.chat, messages, now_utc),
             None => skipped.push(apply.chat),
         }
@@ -1124,63 +1095,56 @@ fn apply_messages(
 /// Args:
 ///     file: Document being edited.
 ///     apply: Chat, captured revision, and the cores it may see now.
-///     loaded: Trades and day rows.
-///     today: Local date at finish.
+///     loaded: Trades.
 ///     now_utc: UTC Unix seconds passed to `decide`.
 ///
 /// Returns:
-///     Rendered messages and the cores each one discloses. Empty is still a
+///     Rendered rows, each with the cores it discloses. Empty is still a
 ///     successful apply: the ledger may have changed. `None` means skip this chat.
 fn messages_for(
     file: &mut NotifyFile,
     apply: &ChatApply,
     loaded: &Loaded,
-    today: Option<NaiveDate>,
     now_utc: i64,
-) -> Option<Vec<(String, Option<Vec<u64>>)>> {
+) -> Option<Vec<Outgoing>> {
     let entry = file.chats.get_mut(&apply.chat)?;
     if entry.revision != apply.revision {
         return None;
     }
-    Some(render_chat(entry, apply, loaded, today, now_utc))
+    Some(render_chat(entry, apply, loaded, now_utc))
 }
 
-/// Trade cards and, when the captured day is still today, one daily summary.
+/// Dollar fills for waiting cards, then trade cards.
 ///
 /// `decide` runs even when the trade rule is off, which clears `seen`.
-/// A matching day sets `daily_last` even when the day has no visible row.
-/// A stale day leaves `daily_last` unchanged and omits the summary; trade cards still apply.
 ///
 /// Args:
 ///     entry: Chat settings and ledger, edited in place.
-///     apply: Captured revision, due date, and visible cores.
-///     loaded: Trades and day rows.
-///     today: Local date at finish.
+///     apply: Captured revision and visible cores.
+///     loaded: Trades.
 ///     now_utc: UTC Unix seconds passed to `decide`.
 ///
 /// Returns:
-///     Messages in send order, each with the cores it discloses. May be empty.
-///     The cores are `Some`, and `Some([])` when a summary names no core.
+///     Rows in send order, each with the cores it discloses. May be empty.
 fn render_chat(
     entry: &mut ChatNotify,
     apply: &ChatApply,
     loaded: &Loaded,
-    today: Option<NaiveDate>,
     now_utc: i64,
-) -> Vec<(String, Option<Vec<u64>>)> {
-    let mut messages = trade_html(entry, apply, loaded, now_utc);
-    if let Some(date) = apply.daily
-        && let Some(summary) = one_daily(entry, date, loaded, &apply.visible, today)
-    {
-        messages.push(summary);
-    }
+) -> Vec<Outgoing> {
+    let mut messages = card_fills(entry, apply, loaded, now_utc);
+    messages.extend(trade_html(entry, apply, loaded, now_utc));
     messages
 }
 
 /// Cards for the trades `decide` announces.
 ///
+/// A card printed before its trade's dollar value was known, outside a USD stablecoin, is
+/// recorded in `ledger.cards` when the chat asks for the dollars to follow; the sender then
+/// records its message against it.
+///
 /// Args:
-///     entry: Trade rule and ledger. `seen` is updated in place.
+///     entry: Trade rule and ledger. `seen`, `held` and `cards` are updated in place.
 ///     apply: Visible cores.
 ///     loaded: Closed trades from the read. `decide` applies the floor.
 ///     now_utc: UTC Unix seconds.
@@ -1193,106 +1157,117 @@ fn trade_html(
     apply: &ChatApply,
     loaded: &Loaded,
     now_utc: i64,
-) -> Vec<(String, Option<Vec<u64>>)> {
-    decide(
+) -> Vec<Outgoing> {
+    let followup = entry.settings.trades.usd_followup;
+    let announced = decide(
         &entry.settings.trades,
         &mut entry.ledger,
         &apply.visible,
         &loaded.trades,
         now_utc,
-    )
-    .iter()
-    .map(|trade| (trade_card(trade), Some(vec![trade.core])))
-    .collect()
-}
-
-/// One daily summary when `date` is still today.
-///
-/// `daily_last` is stamped only when the finish-time local date equals `date`.
-/// A mismatch, or a date that cannot be computed, drops the summary and leaves
-/// the ledger alone. An empty visible day still stamps when the dates match.
-///
-/// Args:
-///     entry: Ledger. `daily_last` becomes `date` only on a match.
-///     date: Local day chosen at spawn.
-///     loaded: Day rows. A missing key is an empty day.
-///     visible: Cores this chat may see. Other cores are left out of the totals.
-///     today: Local date at finish. `None` drops the summary.
-///
-/// Returns:
-///     The summary HTML and `Some` of the cores the counted rows disclose,
-///     including `Some([])` when the day has no visible row. `None` when the
-///     captured day is no longer today.
-fn one_daily(
-    entry: &mut ChatNotify,
-    date: NaiveDate,
-    loaded: &Loaded,
-    visible: &[u64],
-    today: Option<NaiveDate>,
-) -> Option<(String, Option<Vec<u64>>)> {
-    if today != Some(date) {
-        return None;
-    }
-    let rows = day_rows(loaded, date, visible);
-    let summary = summarize(&rows);
-    entry.ledger.daily_last = Some(date);
-    Some((daily_summary(date, &summary), Some(disclosed_cores(&rows))))
-}
-
-/// Unique cores in the order the rows first mention them.
-///
-/// Args:
-///     rows: Visible rows the summary counted.
-///
-/// Returns:
-///     Core ids. Empty when the day has no visible row.
-fn disclosed_cores(rows: &[ClosedTrade]) -> Vec<u64> {
-    let mut cores = Vec::new();
-    for trade in rows {
-        if !cores.contains(&trade.core) {
-            cores.push(trade.core);
-        }
-    }
-    cores
-}
-
-/// Visible rows for one local day.
-///
-/// Args:
-///     loaded: Day rows from the read.
-///     date: Local day.
-///     visible: Cores this chat may see.
-///
-/// Returns:
-///     Matching rows. A day the read did not contain is empty.
-fn day_rows(loaded: &Loaded, date: NaiveDate, visible: &[u64]) -> Vec<ClosedTrade> {
-    loaded
-        .days
-        .get(&date)
-        .map(|rows| {
-            rows.iter()
-                .filter(|trade| visible.contains(&trade.core))
-                .cloned()
-                .collect()
+    );
+    announced
+        .into_iter()
+        .map(|Announced { trade, unchecked }| {
+            let waits = followup && trade.profit_usd.is_none() && shows_dollars(&trade);
+            let key = waits.then(|| trade.key());
+            if let Some(key) = key {
+                entry.ledger.cards.entry(key.core).or_default().insert(
+                    key.rec_id,
+                    CardWait {
+                        queued_utc: now_utc,
+                        message: None,
+                        unchecked,
+                    },
+                );
+            }
+            Outgoing::Card(trade_card(&trade, unchecked), Some(vec![trade.core]), key)
         })
-        .unwrap_or_default()
+        .collect()
 }
 
-/// Append every message. An empty list writes nothing.
+/// New text for every waiting card whose trade now has its dollar value.
+///
+/// A card is filled once Telegram has accepted it and the read finds its trade valued; a card
+/// whose trade left the chat's visible cores is dropped unfilled. A card older than
+/// [`CARD_WAIT_SECS`] stops waiting.
+///
+/// Args:
+///     entry: Ledger; `cards` loses every filled or expired card.
+///     apply: Cores the chat may see now.
+///     loaded: Closed trades from the read.
+///     now_utc: UTC Unix seconds.
+///
+/// Returns:
+///     One edit per filled card.
+fn card_fills(
+    entry: &mut ChatNotify,
+    apply: &ChatApply,
+    loaded: &Loaded,
+    now_utc: i64,
+) -> Vec<Outgoing> {
+    entry
+        .ledger
+        .prune_cards(now_utc.saturating_sub(CARD_WAIT_SECS));
+    if entry.ledger.cards.is_empty() {
+        return Vec::new();
+    }
+    let mut edits = Vec::new();
+    for trade in &loaded.trades {
+        let key = trade.key();
+        let Some(card) = entry
+            .ledger
+            .cards
+            .get(&key.core)
+            .and_then(|rows| rows.get(&key.rec_id))
+            .copied()
+        else {
+            continue;
+        };
+        if !apply.visible.contains(&key.core) {
+            entry.ledger.drop_card(key);
+            continue;
+        }
+        let (Some(message), Some(_)) = (card.message, trade.profit_usd) else {
+            continue;
+        };
+        entry.ledger.drop_card(key);
+        edits.push(Outgoing::Edit(
+            message,
+            trade_card(trade, card.unchecked),
+            Some(vec![key.core]),
+        ));
+    }
+    edits
+}
+
+/// Append every row. An empty list writes nothing.
+///
+/// A card the outbox refuses is not waited for: no message will ever be recorded against it.
 ///
 /// Args:
 ///     file: Document to append to. `next_id` advances once per accepted message.
 ///     chat: Destination chat.
-///     messages: Rendered bodies and the cores each one discloses, in send order.
+///     messages: Rendered rows and the cores each one discloses, in send order.
 ///     now_utc: UTC Unix seconds stored on each row.
-fn enqueue_all(
-    file: &mut NotifyFile,
-    chat: i64,
-    messages: Vec<(String, Option<Vec<u64>>)>,
-    now_utc: i64,
-) {
-    for (html, cores) in messages {
-        push_outbox(file, chat, html, cores, now_utc);
+fn enqueue_all(file: &mut NotifyFile, chat: i64, messages: Vec<Outgoing>, now_utc: i64) {
+    for message in messages {
+        match message {
+            Outgoing::Plain(html, cores) => {
+                push_outbox(file, chat, html, cores, now_utc);
+            }
+            Outgoing::Card(html, cores, key) => {
+                if !push_trade_card(file, chat, html, cores, key, now_utc)
+                    && let Some(key) = key
+                    && let Some(entry) = file.chats.get_mut(&chat)
+                {
+                    entry.ledger.drop_card(key);
+                }
+            }
+            Outgoing::Edit(message, html, cores) => {
+                push_edit(file, chat, message, html, cores, now_utc);
+            }
+        }
     }
 }
 

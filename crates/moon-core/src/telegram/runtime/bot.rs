@@ -5,6 +5,7 @@ use crate::telegram::{
     TelegramStatus,
     api::{BotApi, ReplyMarkup},
     commands::{ParsedCommand, parse_reply_button, parse_update},
+    menu_action::{MenuAction, SettingsAction},
     reply::segment_pages,
 };
 use std::sync::{
@@ -40,6 +41,7 @@ pub(super) fn run(
     let _ = tx.try_send(Work::Status(TelegramStatus::Starting));
     let mut username = None;
     let mut history = super::history::History::default();
+    let mut commands = Commands::default();
     let mut history_path = None;
     while alive.upgrade().is_some() {
         if username.is_none() {
@@ -68,6 +70,7 @@ pub(super) fn run(
                 }
             }
         }
+        commands.sync(&mut api, &labels, Instant::now());
         let menu_intent = menu.lock().map(|intent| intent.clone());
         if let Ok(intent) = menu_intent {
             if let Err(error) = menu_sync.sync(&intent, Instant::now(), |chat, button| {
@@ -120,6 +123,19 @@ pub(super) fn run(
                         inbound.command = parse_reply_button(text, &labels);
                         reply_button = inbound.command != ParsedCommand::Unknown;
                     }
+                    // Neither a command nor a button: an answer the owner thread may be waiting
+                    // for, or an unknown command if it is not.
+                    let text = text.trim();
+                    if inbound.command == ParsedCommand::Unknown
+                        && !text.is_empty()
+                        && !text.starts_with('/')
+                    {
+                        inbound.command = ParsedCommand::Text(
+                            text.chars()
+                                .take(crate::telegram::commands::TEXT_KEEP)
+                                .collect(),
+                        );
+                    }
                 }
             }
             let chat_id = inbound.chat_id;
@@ -137,12 +153,26 @@ pub(super) fn run(
                 .is_some_and(|chat| chat.id == chat_id && chat.kind == "private");
             let (reply, rx) = mpsc::sync_channel(1);
             let is_start = matches!(inbound.command, ParsedCommand::Start);
+            // A preset from the custom-period screen answers with its report.
             let is_report = matches!(
                 inbound.command,
-                ParsedCommand::Report(_) | ParsedCommand::Start
+                ParsedCommand::Report(_)
+                    | ParsedCommand::Start
+                    | ParsedCommand::Menu(MenuAction::Preset(_))
             );
             // The station's status looks for a newer release before it answers.
-            let slow = is_report || inbound.command == ParsedCommand::StationStatus;
+            let slow = is_report
+                || matches!(
+                    inbound.command,
+                    ParsedCommand::StationStatus
+                        | ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
+                );
+            // The message under which the pressed button sits; a typed command has none.
+            let pressed = update
+                .callback_query
+                .as_ref()
+                .and_then(|callback| callback.message.as_ref())
+                .map(|message| message.message_id);
             let work = {
                 let Ok(mut ledger) = auth.lock() else {
                     return;
@@ -153,6 +183,7 @@ pub(super) fn run(
                         command: ParsedCommand::Pair {
                             code: String::new(),
                         },
+                        message: None,
                         reply,
                     },
                     ParsedCommand::Pair { ref code }
@@ -166,11 +197,13 @@ pub(super) fn run(
                         command: ParsedCommand::Pair {
                             code: String::new(),
                         },
+                        message: None,
                         reply,
                     },
                     command => Work::Command {
                         chat_id,
                         command,
+                        message: pressed,
                         reply,
                     },
                 }
@@ -193,24 +226,33 @@ pub(super) fn run(
             {
                 continue;
             }
-            match result {
+            let answered = match result {
                 Response::Rich {
                     html,
                     keyboard,
                     navigation,
                 } => {
-                    // Keyboard owners are permanent and never enter answer cleanup tracking.
+                    // A keyboard owner stays until a new one replaces it; it never enters answer
+                    // cleanup tracking.
                     if history.needs_navigation(chat_id, &navigation.1, is_start) {
                         match api.send_message(chat_id, &navigation.0, Some(&navigation.1)) {
                             Ok(sent) => {
-                                history.navigation.insert(chat_id, sent.message_id);
-                                history.navigation_markup.insert(chat_id, navigation.1);
+                                let previous = history.replace_navigation(
+                                    chat_id,
+                                    sent.message_id,
+                                    navigation.1,
+                                );
                                 if let Some(path) = &history_path {
                                     if let Err(error) = history.save(path) {
                                         log::warn!(
                                             "telegram navigation persistence failed: {error}"
                                         );
                                     }
+                                }
+                                // The new message owns the keyboard now; the old one only
+                                // repeats the same hint above it.
+                                if let Some(previous) = previous {
+                                    tidy(&mut api, chat_id, previous, "keyboard");
                                 }
                             }
                             Err(error) => publish_error(&tx, error),
@@ -243,33 +285,132 @@ pub(super) fn run(
                                 if let Some(previous) = previous.filter(|answer| {
                                     answer.deletable(crate::util::time::now_unix_ms_i64() / 1000)
                                 }) {
-                                    if let Err(error) = api.delete_message(chat_id, previous.id) {
-                                        if !crate::telegram::api::is_unavailable_delete(
-                                            "deleteMessage",
-                                            &error,
-                                        ) {
-                                            log::warn!(
-                                                "telegram previous answer cleanup failed: {error}"
-                                            );
-                                        }
-                                    }
+                                    tidy(&mut api, chat_id, previous.id, "previous answer");
                                 }
                             }
+                            true
                         }
-                        Ok(_) => {}
+                        Ok(_) => true,
                         Err(error) => {
-                            if !crate::telegram::api::is_unchanged_edit("editMessageText", &error) {
+                            if crate::telegram::api::is_unchanged_edit("editMessageText", &error) {
+                                true
+                            } else {
                                 publish_error(&tx, error);
                                 report_failure(&mut api, &tx, &labels, chat_id);
+                                false
                             }
                         }
                     }
                 }
                 Response::Text { text, keyboard } | Response::PairSaved { text, keyboard, .. } => {
                     let keyboard = keyboard.as_ref().filter(|_| private_chat);
-                    send_text(&mut api, &tx, chat_id, &text, keyboard);
+                    send_text(&mut api, &tx, chat_id, &text, keyboard)
                 }
+            };
+            // An answered press has done its job: the button's text would only pile up in the
+            // chat. One left unanswered stays, beside whatever said why.
+            if let Some(pressed) = pressed_button(&update, answered && reply_button && private_chat)
+            {
+                tidy(&mut api, chat_id, pressed, "button press");
             }
+        }
+    }
+}
+
+/// The command list Telegram holds for the bot, kept in step with the host's labels: published
+/// when it differs from what was last published (the first poll, a language switch), retried
+/// after [`COMMANDS_RETRY`] when publishing failed. Without a list Telegram hides the chat's menu
+/// button whenever it is not the Mini App's.
+#[derive(Default)]
+struct Commands {
+    published: Option<Vec<(String, String)>>,
+    retry_at: Option<Instant>,
+}
+
+/// How long a failed publication waits before the next attempt.
+const COMMANDS_RETRY: Duration = Duration::from_secs(60);
+
+impl Commands {
+    /// Publish the list the labels describe now, when it is not the one published.
+    fn sync(
+        &mut self,
+        api: &mut BotApi,
+        labels: &std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+        now: Instant,
+    ) {
+        let wanted = labels
+            .lock()
+            .map(|labels| bot_commands(&labels))
+            .unwrap_or_default();
+        if wanted.is_empty()
+            || self.published.as_ref() == Some(&wanted)
+            || self.retry_at.is_some_and(|at| now < at)
+        {
+            return;
+        }
+        match api.set_my_commands(&wanted) {
+            Ok(Some(true)) => {
+                self.published = Some(wanted);
+                self.retry_at = None;
+            }
+            // Skipped for a pending rate limit: the next pass tries again.
+            Ok(None) => {}
+            Ok(Some(false)) => {
+                log::info!("telegram command list not accepted");
+                self.retry_at = Some(now + COMMANDS_RETRY);
+            }
+            Err(error) => {
+                log::info!("telegram command list not published: {error}");
+                self.retry_at = Some(now + COMMANDS_RETRY);
+            }
+        }
+    }
+}
+
+/// The command list from the host's labels, in menu order.
+fn bot_commands(labels: &std::collections::BTreeMap<String, String>) -> Vec<(String, String)> {
+    COMMANDS
+        .iter()
+        .filter_map(|name| {
+            labels
+                .get(&format!("command_{name}"))
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| ((*name).to_owned(), text.chars().take(256).collect()))
+        })
+        .collect()
+}
+
+/// The commands every paired chat may use, in menu order. The owner's Settings and Status are on
+/// the owner's own keyboard; the Mini App has its own menu button while it runs.
+const COMMANDS: [&str; 7] = [
+    "today",
+    "yesterday",
+    "month",
+    "lastmonth",
+    "daily",
+    "hour",
+    "help",
+];
+
+/// The message of a reply-keyboard press to remove once answered: a private chat's own message,
+/// young enough for Telegram to delete (48 hours).
+fn pressed_button(update: &crate::telegram::api::Update, reply_button: bool) -> Option<i64> {
+    let message = update.message.as_ref().filter(|_| reply_button)?;
+    let now = crate::util::time::now_unix_ms_i64() / 1000;
+    super::history::Answer {
+        id: message.message_id,
+        sent_at: message.date,
+    }
+    .deletable(now)
+    .then_some(message.message_id)
+}
+
+/// Delete a message the chat no longer needs ([`BotApi::tidy_message`]); one already gone or too
+/// old is not worth a line, and any other failure is only logged.
+fn tidy(api: &mut BotApi, chat: i64, message: i64, what: &str) {
+    if let Err(error) = api.tidy_message(chat, message) {
+        if !crate::telegram::api::is_unavailable_delete("deleteMessage", &error) {
+            log::info!("telegram {what} cleanup skipped: {error}");
         }
     }
 }
@@ -295,13 +436,14 @@ fn send_text(
     chat: i64,
     text: &str,
     keyboard: Option<&ReplyMarkup>,
-) {
+) -> bool {
     for page in segment_pages(text) {
         if let Err(error) = api.send_message(chat, &page, keyboard) {
             publish_error(tx, error);
-            break;
+            return false;
         }
     }
+    true
 }
 /// Publish typed failure and avoid hot retries for invalid credentials.
 fn publish_error(tx: &SyncSender<Work>, error: crate::telegram::api::ApiError) {
@@ -345,3 +487,6 @@ fn wait_while_alive(alive: &Weak<()>, total: Duration) {
         std::thread::sleep((total - start.elapsed().min(total)).min(Duration::from_millis(100)));
     }
 }
+
+#[cfg(test)]
+mod tests;

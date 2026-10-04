@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Elige el período en el menú inferior. Pulsa 
 telegram.report_all_cores: "Todos los núcleos"
 
 telegram.report_by_days: "Por día"
+telegram.report_by_groups: "Por grupo"
+telegram.report_groups: "Grupos"
+telegram.report_no_group: "Sin grupo"
 
 telegram.report_days_scope: "Días del grupo"
 
@@ -45,7 +48,6 @@ telegram.report_exchanges_menu: "Exchanges"
 
 telegram.report_exchanges_back: "Atrás"
 
-telegram.report_exchange: "Exchange"
 
 telegram.report_scope_unavailable: "Exchange no disponible"
 
@@ -74,7 +76,6 @@ telegram.report_trades: "Operaciones"
 
 telegram.report_date: "Fecha"
 
-telegram.report_bot: "Bot"
 
 telegram.report_details: "Divisas y orden media"
 
@@ -103,22 +104,16 @@ telegram.report_help: "Elige un período. Cada informe permite cambiar bot/día.
 
 telegram.report_help_station: "Elige un período. Cada informe permite cambiar bot/día. Pulsa de nuevo un período para actualizar.\n\n/hour — esta hora\n/today — hoy\n/daily — resultados diarios del mes\n/report 2026-09-01 2026-09-10 — período personalizado\n/daily 2026-09-01 2026-09-10 — resultados diarios personalizados\n/status — estado de la estación\nFechas inclusive, máximo 366 días; zona de los ajustes de la estación. Los informes se actualizan las 24 horas."
 
-telegram.notify_profit: "Beneficio"
-
 telegram.notify_manual: "Manual"
 
 telegram.notify_unvalued: "Sin valoración"
 
+telegram.notify_unchecked: "Umbrales sin comprobar: sin valor en dólares"
+
+telegram.notify_opened: "Operación abierta"
+telegram.notify_emulator: "emulador"
+telegram.notify_events_more: "…y %{n} más"
+
 telegram.notify_down: "sin conexión desde"
 
 telegram.notify_back: "conexión restablecida"
-
-telegram.notify_daily_title: "Resumen del día"
-
-telegram.notify_trades: "Operaciones"
-
-telegram.notify_unvalued_trades: "Sin valoración"
-
-telegram.notify_best: "Mejor"
-
-telegram.notify_worst: "Peor"

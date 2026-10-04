@@ -20,7 +20,8 @@ pub(crate) enum BotPlan {
     /// Hand the terminal's bot over: its token and its paired chats.
     Transfer {
         token: Secret,
-        pairing: Access,
+        /// Boxed: the bot's settings make it the largest part of a plan.
+        pairing: Box<Access>,
         change: BotChange,
     },
 }
@@ -81,10 +82,22 @@ pub(crate) enum Job {
         target: Target,
         base: Access,
         access: Access,
+        /// The user's edits of the chats or the bot's menu, applied by "Apply on the server" —
+        /// not a reset of the pairing: its end is shown beside those buttons.
+        edits: bool,
     },
     /// Switch the station's Mini App on or off: `[telegram] mini_app`, then a restart — the
     /// station picks its profile at start.
     MiniApp { target: Target, on: bool },
+    /// Make the terminal's header-clock zone the one the station's reports are cut in, live.
+    Zone { target: Target, zone: String },
+    /// Send the terminal's saved core groups to the station, for the bot's report by groups —
+    /// only on the user's word: another terminal's groups are not overwritten by one that has
+    /// none.
+    Groups {
+        target: Target,
+        groups: Vec<moon_core::config::CoreGroup>,
+    },
     /// Read the station's state.
     Status { target: Target },
     /// Read the tail of the station's journal.
@@ -354,6 +367,7 @@ fn run(
             target,
             base,
             access,
+            ..
         } => {
             let saved = station::api::set_access(&target, &base, &access)?;
             say(Progress::Text(
@@ -364,11 +378,43 @@ fn run(
                 .to_string(),
             ));
             // Changed permissions restart the bot's transport: its state once it polls again. The
-            // change is saved either way, so a bot slow to come back is a line, not a failure.
-            let state = settled(&target, bot::wait_bot(&target, say), say)?;
+            // change is saved either way, so a bot slow to come back — or a read of it that fails
+            // too — is a line, not a failure; the read after the job brings the new state.
+            let state = settled(&target, bot::wait_bot(&target, say), say);
+            if let Err(error) = &state {
+                say(Progress::Text(super::text::error(error)));
+            }
             Ok(Done::Ok {
                 transferred: false,
-                bot: Some(state),
+                bot: state.ok(),
+                bot_off: false,
+            })
+        }
+        Job::Zone { target, zone } => {
+            let saved = station::api::set_zone(&target, &zone)?;
+            say(Progress::Text(match saved {
+                Some(_) => rust_i18n::t!("telegram.server.zone_pushed", zone = zone).to_string(),
+                None => rust_i18n::t!("telegram.server.zone_unsupported").to_string(),
+            }));
+            // The push has landed: a read that fails after it does not make it a failure.
+            Ok(Done::Ok {
+                transferred: false,
+                bot: bot::bot_state(&target).ok(),
+                bot_off: false,
+            })
+        }
+        Job::Groups { target, groups } => {
+            let saved = station::api::set_groups(&target, &groups)?;
+            say(Progress::Text(match saved {
+                Some(_) => {
+                    rust_i18n::t!("telegram.server.groups_pushed", n = groups.len()).to_string()
+                }
+                None => rust_i18n::t!("telegram.server.groups_unsupported").to_string(),
+            }));
+            // The push has landed: a read that fails after it does not make it a failure.
+            Ok(Done::Ok {
+                transferred: false,
+                bot: bot::bot_state(&target).ok(),
                 bot_off: false,
             })
         }

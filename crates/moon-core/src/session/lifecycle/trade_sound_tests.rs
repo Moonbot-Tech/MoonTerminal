@@ -16,6 +16,7 @@ pub(super) fn fixture() -> (SessionManager, FeedTx) {
     let mut store = CoreStore::default();
     store.ensure(1);
     let session = SessionManager {
+        blacklists_sent: std::sync::Mutex::new(HashMap::new()),
         trade_sounds: Vec::new(),
         trade_sound_epochs: HashMap::new(),
         sessions: vec![CoreSession {

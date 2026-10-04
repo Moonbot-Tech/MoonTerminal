@@ -79,7 +79,14 @@ const FILE_NAME_CHARS: usize = 48;
 /// The chat's answer to "Status": the station's status as a rich message, a line on the latest
 /// release, and — only while a newer release carries the station's binary — the "Update" button
 /// under it. The dispatcher admits only the owner before the host produces this response.
-pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response {
+///
+/// `navigation` is the owner's reply keyboard ([`crate::station_owner_navigation`]).
+pub fn station_status_reply(
+    status: &Status,
+    release: &ReleaseCheck,
+    navigation: ReplyMarkup,
+    from_settings: bool,
+) -> Response {
     let facts = StatusFacts::of(status);
     let release_line = match release {
         ReleaseCheck::Newer(version) => {
@@ -98,7 +105,17 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
         )]],
         _ => Vec::new(),
     };
-    let navigation = crate::labels::navigation_keyboard(crate::HostKind::Station, true);
+    // Asked from the Settings section, the status edits that message in place: the way back.
+    let mut inline = update;
+    if from_settings {
+        inline.push(vec![InlineKeyboardButton::callback(
+            format!("\u{2b05}\u{fe0f} {}", t!("telegram.menu.back")),
+            moon_core::telegram::menu_action::MenuAction::Settings(
+                moon_core::telegram::menu_action::SettingsAction::Root,
+            )
+            .callback(),
+        )]);
+    }
     let html = facts.html(release_line.as_deref());
     if !crate::report::rich_message_fits(&html) {
         // Not expected with a bounded file list; plain text still answers the press.
@@ -107,9 +124,9 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
             text.push_str("\n\n");
             text.push_str(&line);
         }
-        let keyboard = match update.is_empty() {
+        let keyboard = match inline.is_empty() {
             true => navigation,
-            false => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(update)),
+            false => ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(inline)),
         };
         return Response::Text {
             text,
@@ -118,7 +135,7 @@ pub fn station_status_reply(status: &Status, release: &ReleaseCheck) -> Response
     }
     Response::Rich {
         html,
-        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(update)),
+        keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(inline)),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
             navigation,

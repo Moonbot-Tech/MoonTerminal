@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use super::news::{NEWS_RING_CAP, NewsItem, NewsSnapshot};
 use super::{
-    ConnStatus, CoreCmd, DetectRow, ExchangeId, FeedMsg, FeedTx, Level, MarketDirty,
-    MarketDirtyFlags, OrderBook, Side, Tick,
+    ConnStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, Level, MarketDirty, MarketDirtyFlags,
+    OrderBook, Side, Tick,
 };
 use crate::config::ServerConfig;
 use crate::market::SharedMarketStore;
@@ -76,10 +76,10 @@ impl Lcg {
 }
 
 /// Runs with the `feed::spawn` signature, like live::run but without network access or reports.
-pub fn run(
+pub(crate) fn run(
     server: &ServerConfig,
     tx: &FeedTx,
-    cmd_rx: &Receiver<CoreCmd>,
+    cmd_rx: &Receiver<crate::feed::QueuedCmd>,
     market_store: Option<&SharedMarketStore>,
 ) -> anyhow::Result<()> {
     let windows = env_usize("MOON_STRESS_WINDOWS", 10).max(1);

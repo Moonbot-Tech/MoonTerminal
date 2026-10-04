@@ -21,7 +21,7 @@ use crate::labels::section_label;
 use crate::report::{MiniReport, MiniTrade};
 
 /// How long a strategy toggle stays `Pending` before it is reported as `TimedOut`.
-const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
+pub(crate) const STRATEGY_CONFIRM_WINDOW: Duration = Duration::from_secs(45);
 
 /// Map a stored order into the Mini App row.
 ///
@@ -36,6 +36,9 @@ pub(super) fn order_dto(
     order: &OrderRow,
 ) -> OrderDto {
     let pnl = order_pnl(order).filter(|value| value.is_finite());
+    let quote = order_quote(&order.quote, &order.market);
+    let quote = quote.as_str();
+    let market_source = host.session().market_source();
     let change = order_pnl_pct(order).filter(|value| value.is_finite());
     let to_entry = order_to_entry_pct(order);
     OrderDto {
@@ -50,8 +53,14 @@ pub(super) fn order_dto(
         entry_text: price_text(order.buy_price),
         mark_text: price_text(f64::from(order.price)),
         pnl,
-        pnl_text: pnl
-            .and_then(|value| fmt::signed_fixed(value, MONEY_DECIMALS).map(|(text, _)| text)),
+        pnl_text: pnl.and_then(|value| pnl_text(value, quote)),
+        pnl_sign: pnl.map_or(0, |value| pnl_sign(value, quote)),
+        pnl_usd: pnl.and_then(|value| {
+            pnl_usd(value, quote, |currency| {
+                market_source.currency_usd_rate(id, currency)
+            })
+        }),
+        emulator: order.emulator,
         change_pct: change,
         change_text: change
             .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS).map(|(text, _)| text)),
@@ -60,6 +69,78 @@ pub(super) fn order_dto(
         panic_armed: host.is_panic_armed(id, &order.market),
     }
 }
+
+/// The currency an order's PnL is counted in: the catalog quote, else the quote the market name
+/// spells, else USDC.
+///
+/// The last step is the terminal's own rule (`MarketDataSource::quote_usd_rate`): a market with no
+/// quote anywhere is a Hyperliquid one — a linear perp named after its coin (`BTC`) or a HIP-3
+/// perp (`xyz:BIRD`) — and both settle in USDC. This is the ONE source for both the unit printed
+/// beside the PnL and the rate that converts it, so the two never describe different currencies.
+pub(super) fn order_quote(quote: &str, market: &str) -> String {
+    if !quote.is_empty() {
+        return quote.to_string();
+    }
+    let named = moon_core::symbol::resolve_quote(market);
+    if named.is_empty() {
+        "USDC".to_string()
+    } else {
+        named
+    }
+}
+
+/// Decimals of `quote`: cents for a USD stablecoin or an unknown quote, a coin's precision
+/// otherwise — two decimals would round a BTC PnL to zero.
+fn pnl_decimals(quote: &str) -> usize {
+    if quote.is_empty() || moon_core::symbol::is_usd_stable(quote) {
+        MONEY_DECIMALS
+    } else {
+        COIN_DECIMALS
+    }
+}
+
+/// Signed open PnL with its unit, in [`order_quote`]'s currency: `$` for a USD stablecoin, the
+/// ticker for a coin, a bare number when the quote is unknown.
+pub(super) fn pnl_text(value: f64, quote: &str) -> Option<String> {
+    let (text, _) = fmt::signed_fixed(value, pnl_decimals(quote))?;
+    Some(if quote.is_empty() {
+        text
+    } else if moon_core::symbol::is_usd_stable(quote) {
+        format!("{text}$")
+    } else {
+        format!("{text} {quote}")
+    })
+}
+
+/// Sign of [`pnl_text`] as printed: -1, 0 or 1, zero when the value rounds to zero.
+pub(super) fn pnl_sign(value: f64, quote: &str) -> i8 {
+    match fmt::signed_fixed(value, pnl_decimals(quote)) {
+        Some((_, fmt::DeltaSign::Positive)) => 1,
+        Some((_, fmt::DeltaSign::Negative)) => -1,
+        _ => 0,
+    }
+}
+
+/// Open PnL in dollars: as is for a USD stablecoin, through `rate` for any other quote, `None`
+/// for an unknown quote or rate.
+pub(super) fn pnl_usd(
+    value: f64,
+    quote: &str,
+    rate: impl FnOnce(&str) -> Option<f64>,
+) -> Option<f64> {
+    if quote.is_empty() {
+        return None;
+    }
+    let usd = if moon_core::symbol::is_usd_stable(quote) {
+        value
+    } else {
+        value * rate(quote)?
+    };
+    usd.is_finite().then_some(usd)
+}
+
+/// Decimals of a PnL quoted in a coin such as BTC: a cent-style two would round it to zero.
+const COIN_DECIMALS: usize = 8;
 
 /// Unsigned text of a distance to entry: a "+" beside a resting order reads as profit, and which
 /// way the mark has to travel is the side's business, not the figure's.
@@ -222,7 +303,7 @@ pub(super) fn trade_strategy(
 ///
 /// Returns:
 ///     `Pending`, `TimedOut`, or `None` when the entry should be dropped.
-pub(super) fn strategy_pending(
+pub(crate) fn strategy_pending(
     entry: (bool, Instant, u64, u64),
     ack_now: u64,
     rev_now: u64,

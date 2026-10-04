@@ -27,6 +27,10 @@ impl Render for SettingsView {
         crate::diag::bump(&crate::diag::SETTINGS_RENDER);
         // A finished station job clears the secrets typed for it: its inputs need the window.
         self.server_bot_sync(window, cx);
+        // The bot menu trees take a new button order before they render.
+        self.bot_menu_sync(cx);
+        // The picked chats' notification editors take their stored rows.
+        self.chat_notify_sync(window, cx);
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 

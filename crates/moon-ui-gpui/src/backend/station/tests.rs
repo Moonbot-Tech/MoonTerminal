@@ -44,6 +44,7 @@ fn telegram_handover_erases_bot_identity_and_preserves_mini_app_choice() {
             core_uids: vec![9],
         }],
         mini_app_enabled: true,
+        ..TelegramConfig::default()
     };
     super::forget_bot(&mut config);
     assert!(config.token.is_empty());
@@ -81,6 +82,7 @@ fn restored_configs_keep_mini_app_and_all_access() {
                 name: "Observer".into(),
                 core_uids: vec![9, 12],
             }],
+            ..Access::default()
         },
     };
     let mut saved = TelegramConfig::default();
@@ -134,6 +136,7 @@ fn committed_return_updates_both_configs_after_save() {
             authorized_chat_ids: vec![42],
             owner_chat_id: Some(42),
             chat_access: Vec::new(),
+            ..Access::default()
         },
     };
     let committed = std::cell::Cell::new(false);
@@ -340,4 +343,23 @@ fn queued_access_changes_and_forgetting_recheck_recovery_state() {
         }
         .changes_access()
     );
+}
+
+/// The zone is pushed while a station that knows the bot's settings reports another zone; never
+/// to one that predates them or has not been read.
+#[test]
+fn the_zone_is_pushed_to_a_station_that_takes_it() {
+    let current = Access {
+        bot: Some(Default::default()),
+        zone: Some("UTC".into()),
+        ..Access::default()
+    };
+    assert!(super::zone_push_due(Some(&current), "Europe/Moscow"));
+    assert!(!super::zone_push_due(Some(&current), "UTC"));
+    let old = Access {
+        bot: None,
+        ..current.clone()
+    };
+    assert!(!super::zone_push_due(Some(&old), "Europe/Moscow"));
+    assert!(!super::zone_push_due(None, "Europe/Moscow"));
 }

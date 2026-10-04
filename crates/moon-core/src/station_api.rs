@@ -14,11 +14,14 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::TelegramConfig;
 use crate::config::telegram_access::TelegramChatAccess;
+use crate::config::telegram_menu::BotSettings;
+use crate::config::{CoreGroup, TelegramConfig};
 use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
 use crate::telegram::TelegramStatus;
+use crate::telegram::notify::NotifySettings;
 use crate::telegram::runtime::mini_app::MiniAppStatus;
+use std::collections::BTreeMap;
 
 /// Bumped on any change a peer of the previous version would misread — every type here, and the
 /// ones it carries (`TelegramStatus`, `MiniAppStatus`, `TelegramChatAccess`): they have no
@@ -57,7 +60,7 @@ pub struct CtlOutput {
 }
 
 /// What a client asks.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "cmd")]
 pub enum Request {
     /// The station's cores and its bot.
@@ -71,9 +74,16 @@ pub enum Request {
     AccessGet,
     /// Replace the paired chats with `access`, only while they are still `base` — as the client
     /// read them: a chat paired on the station after that read is not dropped by an edit made
-    /// before it.
+    /// before it. The bot's settings and zone ride along: an absent one keeps the station's, and
+    /// a `base` that carries the bot's settings is refused when they moved since (see
+    /// [`Access::base_holds`]).
     #[serde(rename = "access.set")]
-    AccessSet { base: Access, access: Access },
+    // Boxed: the bot's settings make an access the largest thing a request carries. The wire
+    // form is the same.
+    AccessSet {
+        base: Box<Access>,
+        access: Box<Access>,
+    },
     /// What the station's recording holds inside these stretches of these markets — the tape of
     /// closed trades the terminal lacks. Answered from the file alone, off the main loop.
     #[serde(rename = "tape.fetch")]
@@ -331,12 +341,15 @@ pub struct PairingCode {
     pub expires_in_s: u64,
 }
 
-/// Who may talk to the bot: the paired chats, the owner, the viewers' grants. Also the station's
-/// own `telegram.json`.
+/// Who may talk to the bot: the paired chats, the owner, the viewers' grants — and the bot's own
+/// settings and the zone its reports are cut in. Also the station's own `telegram.json`.
 ///
 /// Unknown fields are ignored, not refused: a station binary rolled back after a newer one wrote
-/// the file must still start its bot. Nothing secret is here — the token is a credential.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// the file must still start its bot. The bot's settings, the zone and the chats' notifications
+/// are optional both ways: a station or terminal that predates them leaves them out, which keeps
+/// the other side's — so [`PROTO_VERSION`] did not move for them. The notifications are never
+/// part of the file. Nothing secret is here — the token is a credential.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Access {
     #[serde(default)]
     pub authorized_chat_ids: Vec<i64>,
@@ -344,23 +357,101 @@ pub struct Access {
     pub owner_chat_id: Option<i64>,
     #[serde(default)]
     pub chat_access: Vec<TelegramChatAccess>,
+    /// The bot's menu and report settings. A station always answers with them; absent from a
+    /// station that predates them, and in a change it means "keep the station's".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot: Option<BotSettings>,
+    /// The IANA zone the station's reports are cut in: the terminal's header clock, pushed when it
+    /// changes. Absent keeps the station's (and on disk, `station.toml`'s `[telegram] zone`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    /// Each chat's notifications with the revision they were read at: answered by the station
+    /// from its notifications file; in a change, the chats whose settings to replace — each only
+    /// while its stored revision is still the one given. Never written to `telegram.json`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "chat_keyed"
+    )]
+    pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
+    /// The terminal's saved core groups, for the bot's report by groups: answered by a station
+    /// that knows them, sent only when the user sends them (another terminal's set is not
+    /// overwritten by a terminal that has none). Absent keeps the station's. Core uids are the
+    /// terminal's, which the station shares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<CoreGroup>>,
+}
+
+/// Read a map keyed by chat id. The ids are a JSON object's keys, strings on the wire; inside an
+/// internally tagged [`Request`] serde has buffered them first and no longer turns a string key
+/// into an `i64` — so they are read as strings and parsed here.
+fn chat_keyed<'de, D>(d: D) -> Result<Option<BTreeMap<i64, ChatNotifyRow>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let Some(rows) = Option::<BTreeMap<String, ChatNotifyRow>>::deserialize(d)? else {
+        return Ok(None);
+    };
+    rows.into_iter()
+        .map(|(chat, row)| {
+            chat.parse()
+                .map(|chat| (chat, row))
+                .map_err(|_| serde::de::Error::custom(format!("chat id {chat:?}")))
+        })
+        .collect::<Result<_, _>>()
+        .map(Some)
+}
+
+/// One chat's notification settings and the revision of the stored row they come from (`0` for a
+/// chat with none stored yet).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChatNotifyRow {
+    pub settings: NotifySettings,
+    pub revision: u64,
 }
 
 impl Access {
-    /// The access part of a Telegram configuration.
+    /// The chats and the bot's settings of a Telegram configuration; no zone.
     pub fn of(telegram: &TelegramConfig) -> Self {
         Self {
             authorized_chat_ids: telegram.authorized_chat_ids.clone(),
             owner_chat_id: telegram.owner_chat_id,
             chat_access: telegram.chat_access.clone(),
+            bot: Some(telegram.bot.clone()),
+            zone: None,
+            notify: None,
+            groups: None,
         }
     }
 
-    /// Put this access into `telegram`, leaving its token and switches as they are.
+    /// Put this access into `telegram`, leaving its token and switches as they are; the bot's
+    /// settings only when they are here.
     pub fn apply_to(&self, telegram: &mut TelegramConfig) {
         telegram.authorized_chat_ids = self.authorized_chat_ids.clone();
         telegram.owner_chat_id = self.owner_chat_id;
         telegram.chat_access = self.chat_access.clone();
+        if let Some(bot) = &self.bot {
+            telegram.bot = bot.clone();
+        }
+    }
+
+    /// Whether the chats are the same: who is paired, the owner, the grants.
+    pub fn same_chats(&self, other: &Self) -> bool {
+        self.authorized_chat_ids == other.authorized_chat_ids
+            && self.owner_chat_id == other.owner_chat_id
+            && self.chat_access == other.chat_access
+    }
+
+    /// Whether a change edited from `self` (as the client read it) still applies to `current`:
+    /// the same chats, and — when the client read the bot's settings — the same settings. The zone
+    /// is never compared: it is pushed on its own and an edit of the chats does not carry it. Nor
+    /// are the notifications: each chat's row carries its own revision.
+    pub fn base_holds(&self, current: &Self) -> bool {
+        self.same_chats(current)
+            && self
+                .bot
+                .as_ref()
+                .is_none_or(|bot| current.bot.as_ref() == Some(bot))
     }
 
     /// Upgrade a saved pairing that predates the owner: its first chat becomes the explicit owner.

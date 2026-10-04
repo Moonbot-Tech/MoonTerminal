@@ -42,8 +42,6 @@ fn assert_all_off(settings: &NotifySettings) {
     assert_eq!(settings.trades.loss_at_least_usd, None);
     assert!(!settings.down.on);
     assert_eq!(settings.down.after_minutes, 5);
-    assert!(!settings.daily.on);
-    assert_eq!((settings.daily.hour, settings.daily.minute), (21, 0));
 }
 
 /// Switching the struct defaults on would announce into every paired chat before anyone opts in.
@@ -58,7 +56,7 @@ fn default_settings_leave_every_notification_off() {
     assert_eq!(file.next_id, 0);
     let ledger_json = serde_json::to_string(&NotifyLedger::default()).unwrap();
     let ledger: NotifyLedger = serde_json::from_str(&ledger_json).unwrap();
-    assert_eq!(ledger.daily_last, None);
+    assert_eq!(ledger, NotifyLedger::default());
     assert!(ledger.seen.is_empty());
 }
 
@@ -83,18 +81,16 @@ fn empty_json_object_loads_all_off() {
     assert!(chat.settings.validate().is_ok());
 }
 
-/// An object that sets only `on` must keep the 5 minute and 21:00 defaults, not zero.
+/// An object that sets only `on` must keep the 5 minute default, not zero.
 #[test]
 fn partial_rules_keep_clock_defaults() {
     let settings: NotifySettings =
-        serde_json::from_str(r#"{"trades":{"on":true},"down":{"on":true},"daily":{"on":true}}"#)
+        serde_json::from_str(r#"{"trades":{"on":true},"down":{"on":true}}"#)
             .expect("partial settings");
     assert!(settings.trades.on);
     assert_eq!(settings.trades.cores, CoreScope::All);
     assert!(settings.down.on);
     assert_eq!(settings.down.after_minutes, 5);
-    assert!(settings.daily.on);
-    assert_eq!((settings.daily.hour, settings.daily.minute), (21, 0));
     assert!(settings.validate().is_ok());
 }
 
@@ -134,19 +130,6 @@ fn corrupt_file_is_an_error_and_is_left_in_place() {
     assert!(NotifyFile::load(&directory).is_err());
 }
 
-/// A bad calendar date is corrupt. Skipping it would move the daily summary to "never sent".
-#[test]
-fn invalid_daily_date_is_corrupt() {
-    let root = TempRoot::new("date");
-    let path = root.path("notifications.json");
-    std::fs::write(
-        &path,
-        r#"{"chats":{"1":{"ledger":{"daily_last":"2026-13-40"}}}}"#,
-    )
-    .unwrap();
-    assert!(NotifyFile::load(&path).is_err());
-}
-
 fn sample_file() -> NotifyFile {
     let mut seen = BTreeMap::new();
     seen.insert(
@@ -163,22 +146,34 @@ fn sample_file() -> NotifyFile {
                 min_volume_usd: Some(100.0),
                 profit_at_least_usd: Some(1.5),
                 loss_at_least_usd: None,
+                usd_followup: true,
             },
             down: DownRule {
                 on: true,
                 after_minutes: 12,
             },
-            daily: DailyRule {
-                on: false,
-                hour: 9,
-                minute: 30,
+            reports: AutoReports {
+                hourly: true,
+                today: false,
+                month: true,
+            },
+            events: EventRule {
+                opened: true,
+                detects: false,
             },
         },
         ledger: NotifyLedger {
             trades_enabled_utc: Some(1_700_000_000),
             seen,
             down_announced,
-            daily_last: NaiveDate::from_ymd_opt(2026, 3, 1),
+            reports: AutoLedger {
+                hourly: AutoSlot {
+                    slot_utc: Some(1_700_003_600),
+                    message: Some(42),
+                },
+                ..AutoLedger::default()
+            },
+            ..NotifyLedger::default()
         },
         revision: 3,
     };
@@ -192,6 +187,8 @@ fn sample_file() -> NotifyFile {
             html: "<b>closed</b>".to_string(),
             created_utc: 1_700_000_200,
             cores: None,
+            auto: None,
+            ..Pending::default()
         }],
         next_id: 2,
     }
@@ -218,10 +215,6 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
     assert!(rows.contains_key("-5"));
     assert_eq!(rows["99"], serde_json::json!(1_700_000_100));
     assert_eq!(
-        value["chats"]["-10042"]["ledger"]["daily_last"],
-        serde_json::json!("2026-03-01")
-    );
-    assert_eq!(
         value["outbox"][0]["html"],
         serde_json::json!("<b>closed</b>")
     );
@@ -238,16 +231,18 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
                         "on": true,
                         "cores": {"kind": "only", "ids": [7]},
                         "min_volume_usd": 100.0,
-                        "profit_at_least_usd": 1.5
+                        "profit_at_least_usd": 1.5,
+                        "usd_followup": true
                     },
                     "down": {"on": true, "after_minutes": 12},
-                    "daily": {"on": false, "hour": 9, "minute": 30}
+                    "reports": {"hourly": true, "month": true},
+                    "events": {"opened": true}
                 },
                 "ledger": {
                     "trades_enabled_utc": 1700000000,
                     "seen": {"7": {"-5": 1700000050, "99": 1700000100}},
                     "down_announced": [7],
-                    "daily_last": "2026-03-01"
+                    "reports": {"hourly": {"slot_utc": 1700003600, "message": 42}}
                 },
                 "revision": 3
             }
@@ -286,6 +281,8 @@ fn missing_cores_field_is_none_and_an_array_is_some() {
         html: "quiet".into(),
         created_utc: 3,
         cores: Some(Vec::new()),
+        auto: None,
+        ..Pending::default()
     });
     file.next_id = 2;
     file.save(&path).expect("save empty disclosure");
@@ -372,46 +369,9 @@ fn validate_rejects_after_minutes_outside_one_day() {
     }
 }
 
-/// Hour 24 and minute 60 are not a civil time. The adjacent in-range values stay valid.
+/// An explicit core list must name a core; one core is enough.
 #[test]
-fn validate_rejects_hour_24_minute_60_and_an_empty_core_list() {
-    let hour = NotifySettings {
-        daily: DailyRule {
-            on: true,
-            hour: 24,
-            minute: 0,
-        },
-        ..NotifySettings::default()
-    };
-    assert_eq!(hour.validate(), Err(NotifyError::Hour { value: 24 }));
-    let minute = NotifySettings {
-        daily: DailyRule {
-            on: true,
-            hour: 23,
-            minute: 60,
-        },
-        ..NotifySettings::default()
-    };
-    assert_eq!(minute.validate(), Err(NotifyError::Minute { value: 60 }));
-    let edges = NotifySettings {
-        daily: DailyRule {
-            on: true,
-            hour: 23,
-            minute: 59,
-        },
-        ..NotifySettings::default()
-    };
-    assert!(edges.validate().is_ok());
-    let midnight = NotifySettings {
-        daily: DailyRule {
-            on: true,
-            hour: 0,
-            minute: 0,
-        },
-        ..NotifySettings::default()
-    };
-    assert!(midnight.validate().is_ok());
-
+fn validate_rejects_an_empty_core_list() {
     let empty = NotifySettings {
         trades: TradeRule {
             on: true,
@@ -448,4 +408,98 @@ fn prune_seen_keeps_newer_and_drops_older_and_empty_cores() {
     expected.insert(1, BTreeMap::from([(11, 200), (14, 150)]));
     assert_eq!(ledger.seen, expected);
     assert!(ledger.down_announced.contains(&1));
+}
+
+/// A file from before automatic reports loads with them off and no slot recorded.
+#[test]
+fn a_file_without_auto_reports_loads_them_off() {
+    let json = r#"{
+        "chats": {"7": {"settings": {"down": {"on": true}}, "ledger": {}, "revision": 2}},
+        "outbox": [{"id": 1, "chat": 7, "html": "x", "created_utc": 3}],
+        "next_id": 2
+    }"#;
+    let file: NotifyFile = serde_json::from_str(json).expect("old file");
+    let chat = &file.chats[&7];
+    assert!(chat.settings.down.on);
+    assert!(!chat.settings.reports.any());
+    assert_eq!(chat.ledger.reports, AutoLedger::default());
+    assert_eq!(file.outbox[0].auto, None);
+}
+
+/// A queued automatic report of a kind this build does not know keeps the file readable.
+#[test]
+fn an_unknown_auto_report_kind_does_not_fail_the_file() {
+    let json = r#"{
+        "outbox": [{"id": 1, "chat": 7, "html": "x", "created_utc": 3,
+                    "auto": {"kind": "weekly", "keyboard": {"inline_keyboard": []}}},
+                   {"id": 2, "chat": 7, "html": "y", "created_utc": 4,
+                    "auto": {"kind": "hourly", "keyboard": {"inline_keyboard": []}}}],
+        "next_id": 3
+    }"#;
+    let file: NotifyFile = serde_json::from_str(json).expect("newer file");
+    assert_eq!(file.outbox[0].auto, None);
+    assert_eq!(
+        file.outbox[1].auto.as_ref().map(|auto| auto.kind),
+        Some(AutoReport::Hourly)
+    );
+}
+
+/// The daily summary was removed (03.10): a notifications file, and a station's `access` answer,
+/// written before that still carry `"daily"` in a chat's settings and `daily_last` in its ledger.
+/// Both must keep loading with every other switch intact — a refusal here would wipe a chat's
+/// settings on the station — and the next save must not write the retired keys back.
+#[test]
+fn settings_and_ledger_from_before_the_daily_summary_removal_still_load() {
+    let root = TempRoot::new("retired-daily");
+    let path = root.path("telegram_notify.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "chats": {"-10042": {
+                "settings": {
+                    "trades": {"on": true},
+                    "down": {"on": true, "after_minutes": 7},
+                    "daily": {"on": true, "hour": 0, "minute": 0},
+                    "reports": {"today": true}
+                },
+                "ledger": {"down_announced": [3], "daily_last": "2026-10-02"},
+                "revision": 5
+            }},
+            "outbox": [],
+            "next_id": 1
+        }"#,
+    )
+    .unwrap();
+    let file = NotifyFile::load(&path).expect("a file with the retired daily keys");
+    let chat = &file.chats[&-10042];
+    assert!(chat.settings.trades.on);
+    assert!(chat.settings.down.on);
+    assert_eq!(chat.settings.down.after_minutes, 7);
+    assert!(chat.settings.reports.today);
+    assert!(chat.settings.validate().is_ok());
+    assert_eq!(chat.ledger.down_announced, BTreeSet::from([3]));
+    assert_eq!(chat.revision, 5);
+
+    file.save(&path).expect("save");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !raw.contains("\"daily"),
+        "a retired key was written back: {raw}"
+    );
+
+    // The station wire: an `access.set` (internally tagged, so serde buffers it first) and a bare
+    // `access` answer, from a terminal or station that still sends the summary's switch.
+    let row =
+        r#"{"settings":{"down":{"on":true},"daily":{"on":true,"hour":0,"minute":0}},"revision":2}"#;
+    let access = format!(r#"{{"authorized_chat_ids":[7],"notify":{{"7":{row}}}}}"#);
+    let read: crate::station_api::Access = serde_json::from_str(&access).expect("old access");
+    let notify = read.notify.expect("notify rows");
+    assert!(notify[&7].settings.down.on);
+    assert_eq!(notify[&7].revision, 2);
+    let request = format!(r#"{{"cmd":"access.set","base":{access},"access":{access}}}"#);
+    let set: crate::station_api::Request = serde_json::from_str(&request).expect("old access.set");
+    let crate::station_api::Request::AccessSet { access, .. } = set else {
+        panic!("expected access.set");
+    };
+    assert!(access.notify.expect("notify rows")[&7].settings.down.on);
 }

@@ -12,9 +12,10 @@
 //!   of it not recorded twice. The file keeps everything while the disk has room; short of the
 //!   reserve, the oldest tape goes — and only the tape (`storage.rs`).
 //!
-//! With `[telegram]` in `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with
-//! the Mini App on, the account the Mini App shows: orders, balances, strategies, the cores'
-//! health, and the USDT valuation of its reports (`feed::station::Profile::Account`).
+//! It values every report in USDT (`db::valuation`), whatever its profile. With `[telegram]` in
+//! `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with the Mini App on, the
+//! account the Mini App shows: orders, balances, strategies and the cores' health
+//! (`feed::station::Profile::Account`).
 //!
 //! It never elects a market provider — the terminal does that from its open charts — so no core
 //! is asked to keep every market's trades; only the pairs of trades in progress are selected.
@@ -58,7 +59,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use moon_core::session::SessionManager;
-use moon_core::station_api::{Access, Answer, BotStatus, Reply, Request, Status};
+use moon_core::station_api::{Answer, BotStatus, Reply, Request, Status};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -117,11 +118,15 @@ fn main() -> anyhow::Result<()> {
     let station = cores::load(&config_path)?;
     // The station's window around a trade (`[tape]`), before the recorder builds its first one.
     apply_tape(&station.tape);
-    let profile = station.profile();
+    // The bot's menu, as the terminal last delivered it, says whether Control is shown: that
+    // needs the account's orders, strategies and run state, as the Mini App does.
+    let profile = station.profile(tg::control_shown(&data_root));
     let telegram = station.telegram;
     let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
     let mut cfg = station.config;
+    // `load` gave the cores the feed of `station.toml` alone; the menu may ask for more.
+    cores::set_feed(&mut cfg, profile);
     log_cores(&cfg);
     log::info!("profile: {profile:?}");
 
@@ -135,12 +140,9 @@ fn main() -> anyhow::Result<()> {
     };
     let reports = moon_core::db::spawn_writer(permit)
         .ok_or_else(|| anyhow::anyhow!("report writer did not start"))?;
-    // The USDT valuation of reports whose quote is not USDT, for the Mini App's report. The light
-    // station stages no outbox for it, so it runs none.
-    let valuation = profile
-        .runs_account()
-        .then(|| moon_core::db::valuation::spawn_worker(reports.tx.clone()))
-        .flatten();
+    // The USDT valuation of reports whose quote is not USDT, on either profile: the bot's trade
+    // cards and reports read it as much as the Mini App does.
+    let valuation = moon_core::db::valuation::spawn_worker(reports.tx.clone());
     let epoch = moon_core::util::now_unix_ms_i64() as f64;
     let mut session =
         moon_core::session::SessionManager::start(&cfg, epoch, Some(&reports.tx), None);
@@ -364,11 +366,11 @@ fn answer(
         },
         Request::AccessGet => match bot {
             None => Err(NO_BOT.to_owned()),
-            Some(_) => Ok(Answer::Access(Access::of(&cfg.telegram))),
+            Some(bot) => Ok(Answer::Access(bot.access(cfg))),
         },
         Request::AccessSet { base, access } => match bot {
             None => Err(NO_BOT.to_owned()),
-            Some(bot) => bot.set_access(cfg, &base, access).map(Answer::Access),
+            Some(bot) => bot.set_access(cfg, &base, *access).map(Answer::Access),
         },
         // Answered on the API's thread (`pull::answer_directly`); never sent here.
         Request::TapeFetch { .. } | Request::TracesFetch { .. } => {

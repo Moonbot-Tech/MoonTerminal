@@ -169,6 +169,8 @@ fn forget_unpaired_removes_the_chat_and_keeps_its_outbox_row() {
                 html: "keep".into(),
                 created_utc: 10,
                 cores: None,
+                auto: None,
+                ..Pending::default()
             });
             file.next_id = 2;
         })

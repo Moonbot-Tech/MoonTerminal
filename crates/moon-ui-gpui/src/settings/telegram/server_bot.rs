@@ -84,9 +84,16 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) access_draft: Option<TelegramConfig>,
     /// The station's window around a trade, as read and as edited.
     pub(super) tape: super::server_tape::TapeEd,
+    /// The station bot's menu tree, over `access_draft`.
+    pub(super) menu: super::bot_menu::BotMenuEd,
 }
 
 impl ServerBotEd {
+    /// The server's chats, bot settings and chats' notifications as last read.
+    pub(super) fn access_seen(&self) -> Option<&Access> {
+        self.access_seen.as_ref()
+    }
+
     /// The server the station runs on, when this terminal set one up.
     pub(in crate::settings) fn known(&self) -> Option<&Target> {
         self.known.as_ref()
@@ -138,6 +145,7 @@ pub(in crate::settings) fn build<T: 'static>(
         access_base: None,
         access_draft: None,
         tape: Default::default(),
+        menu: super::bot_menu::BotMenuEd::new(cx),
     }
 }
 
@@ -225,11 +233,41 @@ pub(super) fn service_version(
     }
 }
 
-/// A Telegram configuration holding only `access`: what the chat editor works on.
+/// A Telegram configuration holding only `access`: what the chat and menu editors work on.
 fn draft_of(access: &Access) -> TelegramConfig {
     let mut telegram = TelegramConfig::default();
     access.apply_to(&mut telegram);
     telegram
+}
+
+/// The change `draft` asks of a station whose access read `base`: the chats, and the bot's
+/// settings only when the station knows them. Never the zone — it is pushed on its own, and an
+/// edit begun before a push must not take the station's zone back.
+pub(super) fn draft_access(draft: &TelegramConfig, base: &Access) -> Access {
+    let mut access = Access::of(draft);
+    if base.bot.is_none() {
+        access.bot = None;
+    }
+    access
+}
+
+/// Whether the station's draft differs from what it was taken from — the zone and the chats'
+/// notifications aside: those are saved on their own.
+pub(super) fn access_edited(draft: Option<&TelegramConfig>, base: Option<&Access>) -> bool {
+    match (draft, base) {
+        (Some(draft), Some(base)) => {
+            draft_access(draft, base)
+                != Access {
+                    zone: None,
+                    notify: None,
+                    // Groups are sent on their own (`station_groups`), never with an edit.
+                    groups: None,
+                    ..base.clone()
+                }
+        }
+        (None, None) => false,
+        _ => true,
+    }
 }
 
 impl SettingsView {
@@ -261,13 +299,10 @@ impl SettingsView {
         // chats moved meanwhile — a chat paired since is never dropped. A read without chats (the
         // station restarting) keeps the edit; only a station known to run no bot clears it.
         if let Some(access) = new_access {
-            let edited = ed.access_draft.as_ref().map(Access::of) != ed.access_base;
+            let edited = access_edited(ed.access_draft.as_ref(), ed.access_base.as_ref());
             match &access {
                 // Untouched, or just applied (the station now holds exactly the draft).
-                Some(read)
-                    if !edited
-                        || ed.access_draft.as_ref().map(Access::of).as_ref() == Some(read) =>
-                {
+                Some(read) if !edited || !access_edited(ed.access_draft.as_ref(), Some(read)) => {
                     ed.access_draft = Some(draft_of(read));
                     ed.access_base = Some(read.clone());
                 }
@@ -364,10 +399,19 @@ impl SettingsView {
         if saved.token.is_empty() {
             return None;
         }
+        let change = self.server_bot_change(Some(self.server_mini_choice(cx)), cx);
         Some(BotPlan::Transfer {
             token: saved.token.clone(),
-            pairing: Access::of(saved),
-            change: self.server_bot_change(Some(self.server_mini_choice(cx)), cx),
+            // The bot's menu goes with its chats, and its zone is the header clock's.
+            // The bot moves with this terminal's core groups, as it moves with its menu; a
+            // terminal with none sends none.
+            pairing: Box::new(Access {
+                zone: change.zone.clone(),
+                groups: Some(self.backend.read(cx).config.core_groups.clone())
+                    .filter(|groups| !groups.is_empty()),
+                ..Access::of(saved)
+            }),
+            change,
         })
     }
 
@@ -663,9 +707,7 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         let busy = b.station.busy();
-        let ed = &self.telegram.server;
         let seen = state.access.clone().unwrap_or_default();
-        let edited = ed.access_draft.as_ref().map(Access::of) != ed.access_base;
         let paired = match seen.authorized_chat_ids.len() {
             0 => t!("telegram.paired_none").to_string(),
             count => t!("telegram.paired_count", count = count).to_string(),
@@ -708,6 +750,7 @@ impl SettingsView {
                                                 target,
                                                 base,
                                                 access: Access::default(),
+                                                edits: false,
                                             }),
                                             cx,
                                         );
@@ -752,53 +795,7 @@ impl SettingsView {
                     )
                 });
 
-        let apply_row = v_flex()
-            .gap(design::ui_px(cx, 8.0))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        MoonButton::new("server-access-apply")
-                            .primary()
-                            .padding_x(12.0)
-                            .label(t!("telegram.server.access_apply").to_string())
-                            .disabled(busy || !edited)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let ed = &this.telegram.server;
-                                let edit = ed.access_base.clone().zip(ed.access_draft.as_ref());
-                                if let (Some(target), Some((base, draft))) = (known_server(), edit)
-                                {
-                                    let access = Access::of(draft);
-                                    this.server_bot_run(
-                                        Ok(Job::Access {
-                                            target,
-                                            base,
-                                            access,
-                                        }),
-                                        cx,
-                                    );
-                                }
-                            }))
-                            .render(),
-                    )
-                    .child(
-                        MoonButton::new("server-access-revert")
-                            .ghost()
-                            .padding_x(12.0)
-                            .label(t!("telegram.server.access_revert").to_string())
-                            .disabled(!edited)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let ed = &mut this.telegram.server;
-                                ed.access_draft = ed.access_seen.as_ref().map(draft_of);
-                                ed.access_base = ed.access_seen.clone();
-                                ed.chats.close();
-                                cx.notify();
-                            }))
-                            .render(),
-                    ),
-            )
-            .into_any_element();
+        let apply_row = self.server_access_actions("server-access", cx);
 
         let mini_words = match &bot.mini_app {
             _ if !bot.mini_app_on => t!("telegram.mini_disabled"),
@@ -856,8 +853,82 @@ impl SettingsView {
                 cx,
             )
             .into_any_element(),
+            self.bot_menu_box(ChatsOf::Station, cx),
             mini.into_any_element(),
         ]
+    }
+
+    /// "Apply on the server" and "Revert" for the station's draft — chats and bot menu alike;
+    /// shown under each box that edits it, `id` keeping each pair's elements apart.
+    pub(super) fn server_access_actions(&self, id: &str, cx: &Context<Self>) -> AnyElement {
+        let station = &self.backend.read(cx).station;
+        let busy = station.busy();
+        let p = MoonPalette::active(cx);
+        // How the last "Apply on the server" came out, here beside its buttons.
+        let outcome = match (&station.applied, station.applying) {
+            (_, true) => Some((t!("telegram.server.applying").to_string(), p.text_muted)),
+            (Some(Ok(text)), false) => Some((text.clone(), p.text_muted)),
+            (Some(Err(reason)), false) => Some((reason.clone(), p.red_text)),
+            (None, false) => None,
+        };
+        let ed = &self.telegram.server;
+        let edited = access_edited(ed.access_draft.as_ref(), ed.access_base.as_ref());
+        v_flex()
+            .gap(design::ui_px(cx, 8.0))
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .gap(design::ui_px(cx, 8.0))
+                    .child(
+                        MoonButton::new(SharedString::from(format!("{id}-apply")))
+                            .primary()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.access_apply").to_string())
+                            .disabled(busy || !edited)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let ed = &this.telegram.server;
+                                let edit = ed.access_base.clone().zip(ed.access_draft.as_ref());
+                                if let (Some(target), Some((base, draft))) = (known_server(), edit)
+                                {
+                                    let access = draft_access(draft, &base);
+                                    this.server_bot_run(
+                                        Ok(Job::Access {
+                                            target,
+                                            base,
+                                            access,
+                                            edits: true,
+                                        }),
+                                        cx,
+                                    );
+                                }
+                            }))
+                            .render(),
+                    )
+                    .child(
+                        MoonButton::new(SharedString::from(format!("{id}-revert")))
+                            .ghost()
+                            .padding_x(12.0)
+                            .label(t!("telegram.server.access_revert").to_string())
+                            .disabled(!edited)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let ed = &mut this.telegram.server;
+                                ed.access_draft = ed.access_seen.as_ref().map(draft_of);
+                                ed.access_base = ed.access_seen.clone();
+                                ed.chats.close();
+                                this.backend.update(cx, |b, bcx| {
+                                    b.station.applied = None;
+                                    b.station.revision = b.station.revision.wrapping_add(1);
+                                    bcx.notify();
+                                });
+                                cx.notify();
+                            }))
+                            .render(),
+                    ),
+            )
+            .when_some(outcome, |s, (text, color)| {
+                s.child(div().text_color(rgba_from(color, 1.0)).child(text))
+            })
+            .into_any_element()
     }
 
     /// The station section: the install form, or the station's own actions, and the last job.

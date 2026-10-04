@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Chọn kỳ ở menu dưới. Nhấn lại đ�
 telegram.report_all_cores: "Mọi core"
 
 telegram.report_by_days: "Theo ngày"
+telegram.report_by_groups: "Theo nhóm"
+telegram.report_groups: "Nhóm"
+telegram.report_no_group: "Không nhóm"
 
 telegram.report_days_scope: "Ngày của nhóm"
 
@@ -44,8 +47,6 @@ telegram.report_exchanges: "Sàn"
 telegram.report_exchanges_menu: "Sàn"
 
 telegram.report_exchanges_back: "Quay lại"
-
-telegram.report_exchange: "Sàn"
 
 telegram.report_scope_unavailable: "Sàn không dùng được"
 
@@ -74,8 +75,6 @@ telegram.report_trades: "Giao dịch"
 
 telegram.report_date: "Ngày"
 
-telegram.report_bot: "Bot"
-
 telegram.report_details: "Tiền tệ và lệnh trung bình"
 
 telegram.report_average: "Lệnh trung bình"
@@ -103,22 +102,16 @@ telegram.report_help: "Chọn kỳ bên dưới. Báo cáo có chế độ xem t
 
 telegram.report_help_station: "Chọn kỳ bên dưới. Báo cáo có chế độ xem theo bot/ngày. Nhấn lại một kỳ để lấy dữ liệu mới.\n\n/hour — giờ này\n/today — hôm nay\n/daily — kết quả theo ngày trong tháng này\n/report 2026-09-01 2026-09-10 — kỳ tùy chọn\n/daily 2026-09-01 2026-09-10 — kết quả theo ngày tùy chọn\n/status — trạng thái trạm\nNgày tính cả hai đầu, tối đa 366 ngày; múi giờ theo cài đặt trạm. Báo cáo cập nhật suốt ngày đêm."
 
-telegram.notify_profit: "Lãi"
-
 telegram.notify_manual: "Thủ công"
 
 telegram.notify_unvalued: "Chưa định giá"
 
+telegram.notify_unchecked: "Chưa kiểm ngưỡng: chưa có giá trị đô la"
+
+telegram.notify_opened: "Đã mở giao dịch"
+telegram.notify_emulator: "giả lập"
+telegram.notify_events_more: "…và %{n} mục nữa"
+
 telegram.notify_down: "mất kết nối từ"
 
 telegram.notify_back: "đã kết nối lại"
-
-telegram.notify_daily_title: "Tổng kết ngày"
-
-telegram.notify_trades: "Giao dịch"
-
-telegram.notify_unvalued_trades: "Chưa định giá"
-
-telegram.notify_best: "Tốt nhất"
-
-telegram.notify_worst: "Tệ nhất"

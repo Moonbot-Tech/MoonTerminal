@@ -4,6 +4,7 @@
 
 use crate::error::StationError;
 use anyhow::Context;
+use moon_core::config::CoreGroup;
 use moon_core::station_api::{Access, Answer, Hello, PROTO_VERSION, PairingCode, Reply, Request};
 
 use super::{admin_conn, current_helper_status};
@@ -52,11 +53,81 @@ pub fn set_access(target: &Target, base: &Access, access: &Access) -> anyhow::Re
     let conn = admin_conn(target)?;
     current_helper_status(&conn)?;
     let request = Request::AccessSet {
-        base: base.clone(),
-        access: access.clone(),
+        base: Box::new(base.clone()),
+        access: Box::new(access.clone()),
     };
     match call(&conn, &request)? {
         Answer::Access(saved) => Ok(saved),
         other => anyhow::bail!("the station answered a change of chats with {other:?}"),
+    }
+}
+
+/// Make `zone` the zone the station's reports are cut in, live: the chats as read now go back
+/// unchanged with it.
+///
+/// Returns:
+///     The station's access after the change; `Ok(None)` from a station that predates the bot's
+///     settings, which keeps the zone of its `station.toml` and is not changed.
+pub fn set_zone(target: &Target, zone: &str) -> anyhow::Result<Option<Access>> {
+    let conn = admin_conn(target)?;
+    current_helper_status(&conn)?;
+    let read = match call(&conn, &Request::AccessGet)? {
+        Answer::Access(access) => access,
+        other => anyhow::bail!("the station answered a read of chats with {other:?}"),
+    };
+    if read.bot.is_none() {
+        return Ok(None);
+    }
+    // The zone alone: the chats and the menu go back as read, the chats' notifications not at
+    // all — sent back they would be saved again over any change made since the read.
+    let read = Access {
+        notify: None,
+        ..read
+    };
+    let request = Request::AccessSet {
+        access: Box::new(Access {
+            zone: Some(zone.to_owned()),
+            ..read.clone()
+        }),
+        base: Box::new(read),
+    };
+    match call(&conn, &request)? {
+        Answer::Access(saved) => Ok(Some(saved)),
+        other => anyhow::bail!("the station answered a change of zone with {other:?}"),
+    }
+}
+
+/// Send the terminal's saved core groups to the station, for the bot's report by groups: the
+/// station's set is replaced whole. Only on the user's word — another terminal's groups are not
+/// overwritten by one that has none.
+///
+/// Returns:
+///     The station's access after the change, or `None` for a station that predates the groups
+///     (its read carries none) — nothing is sent to it.
+pub fn set_groups(target: &Target, groups: &[CoreGroup]) -> anyhow::Result<Option<Access>> {
+    let conn = admin_conn(target)?;
+    current_helper_status(&conn)?;
+    let read = match call(&conn, &Request::AccessGet)? {
+        Answer::Access(access) => access,
+        other => anyhow::bail!("the station answered a read of chats with {other:?}"),
+    };
+    if read.groups.is_none() {
+        return Ok(None);
+    }
+    // The groups alone, as `set_zone` sends the zone alone.
+    let read = Access {
+        notify: None,
+        ..read
+    };
+    let request = Request::AccessSet {
+        access: Box::new(Access {
+            groups: Some(groups.to_vec()),
+            ..read.clone()
+        }),
+        base: Box::new(read),
+    };
+    match call(&conn, &request)? {
+        Answer::Access(saved) => Ok(Some(saved)),
+        other => anyhow::bail!("the station answered a change of groups with {other:?}"),
     }
 }

@@ -206,26 +206,37 @@ fn the_station_calls_only_its_share_of_the_session() {
 }
 
 /// What the bot and the Mini App read from the sessions, anywhere in `moon-tg`.
-const TG_READ_CALLS: [&str; 3] = ["core_venues", "sessions", "store"];
+/// `market_source` converts an open order's quote-currency PnL into dollars for the Mini App.
+const TG_READ_CALLS: [&str; 6] = [
+    "core_run_state",
+    "core_venues",
+    "market_source",
+    "sessions",
+    "store",
+    "strategy_has_blacklist",
+];
 
-/// The Mini App's owner commands (STATION.md §1 item 9, §4.2: the Mini App as it is, what
-/// the key allows): the terminal's own session calls, from `mini_app/commands.rs` alone.
-const TG_TRADE_CALLS: [&str; 7] = [
+/// The owner's commands (STATION.md §1 item 9, §4.2: what the key allows), from the Mini App and
+/// the chat's Control section alike: the terminal's own session calls, from the shared command
+/// module `control.rs` alone. Trading and AutoDetect go through `dispatch_run`, which keeps them
+/// away from a core that is not connected; the raw senders are crate-private.
+const TG_TRADE_CALLS: [&str; 8] = [
     "apply_strategies",
-    "cancel_all_orders",
+    "cancel_market_buys",
     "cancel_order",
-    "set_auto_detect",
-    "set_auto_detect_many",
-    "set_trading",
-    "set_trading_many",
+    "dispatch_run",
+    "set_temp_ban",
+    "turn_order_panic_sell",
+    "write_core_blacklist",
+    "write_strategy_blacklist",
 ];
 
 /// Breakage guarded: a command to a core reaching the station from anywhere in the bot but the
-/// Mini App's owner commands — a chat report that trades, a read that switches a core off — or a
+/// shared owner commands — a chat report that trades, a read that switches a core off — or a
 /// call the station's mode was never measured with.
 #[test]
-fn the_bot_trades_only_from_the_mini_app_commands() {
-    let commands = workspace().join("crates/moon-tg/src/mini_app/commands.rs");
+fn the_bot_trades_only_from_the_owner_commands() {
+    let commands = workspace().join("crates/moon-tg/src/control.rs");
     let reads: BTreeSet<String> = TG_READ_CALLS.iter().map(|s| s.to_string()).collect();
     let trades: BTreeSet<String> = TG_TRADE_CALLS.iter().map(|s| s.to_string()).collect();
     let mut traded = BTreeSet::new();
@@ -240,13 +251,13 @@ fn the_bot_trades_only_from_the_mini_app_commands() {
             }
             assert!(
                 trades.contains(call),
-                "{} calls `{call}` on the session: not a read the bot makes nor a Mini App \
+                "{} calls `{call}` on the session: not a read the bot makes nor an owner \
                  command — a deliberate change of the station's mode",
                 path.display()
             );
             assert!(
                 path == commands,
-                "{} calls `{call}`: owner commands live in mini_app/commands.rs alone",
+                "{} calls `{call}`: owner commands live in control.rs alone",
                 path.display()
             );
             traded.insert(call.clone());
@@ -254,7 +265,7 @@ fn the_bot_trades_only_from_the_mini_app_commands() {
     }
     assert_eq!(
         traded, trades,
-        "the scanner lost sight of the Mini App's commands"
+        "the scanner lost sight of the owner commands"
     );
 }
 
@@ -399,9 +410,9 @@ fn each_station_profile_keeps_its_own_events_alone() {
     let (light, _) = kept_by(&code, "keeps_reports");
     assert_eq!(
         light,
-        BTreeSet::from(["MarketHistory", "Report", "ServerLog"].map(String::from)),
-        "the light station keeps reports, archive answers and the log (for the clock offset) — \
-         nothing else"
+        BTreeSet::from(["Detect", "MarketHistory", "Report", "ServerLog"].map(String::from)),
+        "the light station keeps reports, archive answers, the log (for the clock offset) and \
+         detects (judged for the bot's Telegram events, never stored) — nothing else"
     );
     let (account, body) = kept_by(&code, "keeps_account");
     assert!(

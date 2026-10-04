@@ -49,6 +49,9 @@ enum Kind {
     Quiet,
     /// The core keys after a Save: appends its lines, keeps the outcome unless it fails.
     Auto,
+    /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
+    /// like a quiet read does not hold the buttons.
+    Zone,
     /// A startup read that resolves durable bot ownership.
     Recovery,
 }
@@ -92,13 +95,28 @@ pub(crate) struct StationJobs {
     kind: Kind,
     /// The running job hands the terminal's bot over.
     handing_over: bool,
-    /// A user's job pressed while a quiet read ran: it starts right after.
+    /// A user's job pressed while a quiet read or a zone push ran: it starts right after.
     waiting: Option<(job::Job, bool)>,
     /// The terminal's cores changed while a job ran: their keys go to the station after it.
     pending_cores: bool,
     /// The last user job said nothing about the bot: its state is read again after it.
     pending_refresh: bool,
+    /// The running job is an "Apply on the server" of the chats and the bot's menu.
+    pub(crate) applying: bool,
+    /// How the last "Apply on the server" ended, shown beside its buttons; cleared by a revert.
+    pub(crate) applied: Option<Result<String, String>>,
+    /// The zone the last zone push carried: after it ends the zone is pushed again only when the
+    /// header clock moved meanwhile, so a station that refuses it is not asked again at once.
+    zone_pushed: Option<String>,
     task: Option<Task<()>>,
+}
+
+impl Kind {
+    /// Work the user did not ask for and need not wait on: a user's job pressed meanwhile starts
+    /// right after it.
+    fn is_background(self) -> bool {
+        matches!(self, Self::Quiet | Self::Zone)
+    }
 }
 
 impl StationJobs {
@@ -118,9 +136,10 @@ impl StationJobs {
         }
     }
 
-    /// A job the user sees as work in progress: buttons wait for it. A quiet read does not count.
+    /// A job the user sees as work in progress: buttons wait for it. A quiet read or a zone push
+    /// does not count.
     pub(crate) fn busy(&self) -> bool {
-        self.running && self.kind != Kind::Quiet
+        self.running && !self.kind.is_background()
     }
 
     /// Load station presence and durable ownership before saved Telegram can start transport.
@@ -170,6 +189,9 @@ impl StationJobs {
         st.needs_old_admin = false;
         st.pending_cores = false;
         st.pending_refresh = false;
+        st.zone_pushed = None;
+        st.applying = false;
+        st.applied = None;
         st.waiting = None;
         st.lines.clear();
         st.status = None;
@@ -191,10 +213,11 @@ pub(crate) fn known_target() -> Option<moon_remote::ssh::Target> {
 
 impl Backend {
     /// Start the user's `job`; `hand_over` journals ownership and suspends the terminal's bot. During a
-    /// quiet read it waits for that read; during another job it is not started (the buttons wait).
+    /// quiet read or a zone push it waits for that; during another job it is not started (the
+    /// buttons wait).
     pub(crate) fn station_start(&mut self, job: job::Job, hand_over: bool, cx: &mut Context<Self>) {
         if self.station.running {
-            if self.station.kind == Kind::Quiet {
+            if self.station.kind.is_background() {
                 self.station.waiting = Some((job, hand_over));
             }
             return;
@@ -234,6 +257,37 @@ impl Backend {
             return;
         }
         self.station_send_cores(cx);
+    }
+
+    /// Push the header clock's zone to the station when the station's bot reports another one;
+    /// a job that runs pushes it after. Nothing for a station without a bot or one that predates
+    /// the bot's settings (its access carries none). A push that failed is tried again after the
+    /// next job or read, never straight from its own end (see [`Self::station_next`]).
+    pub(crate) fn station_zone_sync(&mut self, cx: &mut Context<Self>) {
+        let wanted = moon_core::util::display_time::zone_or_utc(self.header_clock_zone())
+            .name()
+            .to_owned();
+        let access = self
+            .station
+            .bot
+            .as_ref()
+            .and_then(|bot| bot.access.as_ref());
+        if self.station.running || !zone_push_due(access, &wanted) {
+            return;
+        }
+        let Some(target) = known_target() else {
+            return;
+        };
+        self.station.zone_pushed = Some(wanted.clone());
+        self.station_begin(
+            job::Job::Zone {
+                target,
+                zone: wanted,
+            },
+            false,
+            Kind::Zone,
+            cx,
+        );
     }
 
     /// Drop cached state and queued work after a confirmed forget, removal or address change.
@@ -346,8 +400,13 @@ impl Backend {
             self.station.pending = pending;
             self.telegram.suspend();
         }
+        let applying = matches!(job, job::Job::Access { edits: true, .. });
         let st = &mut self.station;
         st.running = true;
+        st.applying = applying;
+        if applying {
+            st.applied = None;
+        }
         st.kind = kind;
         st.handing_over = hand_over;
         match kind {
@@ -359,7 +418,7 @@ impl Backend {
                 st.status = None;
             }
             Kind::Auto => st.push_line(t!("telegram.server.auto_cores").to_string()),
-            Kind::Quiet | Kind::Recovery => {}
+            Kind::Quiet | Kind::Zone | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
         let rx = job::start(job);
@@ -420,6 +479,13 @@ impl Backend {
         if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
             self.station_refresh_bot(cx);
         }
+        // Last: with the bot's state as now read, its zone may lag the header clock's. After a push
+        // itself only when the header clock moved during it: the same zone refused would be sent
+        // again at once, in a loop.
+        let wanted = moon_core::util::display_time::zone_or_utc(self.header_clock_zone()).name();
+        if self.station.kind != Kind::Zone || self.station.zone_pushed.as_deref() != Some(wanted) {
+            self.station_zone_sync(cx);
+        }
     }
 
     /// Apply one job event; `true` once the job has ended.
@@ -446,6 +512,30 @@ impl Backend {
         self.station.running = false;
         if kind == Kind::Recovery {
             self.station_apply_recovery(done);
+            return true;
+        }
+        if kind == Kind::Zone {
+            // A zone push changes only the bot's state; its line says what happened.
+            match done {
+                job::Done::Ok { bot, .. } => {
+                    if let Some(bot) = bot {
+                        self.station.bot = Some(bot);
+                        self.station.bot_error = None;
+                    }
+                }
+                job::Done::NeedsAdminPassword => {
+                    // The Station tab then asks for the old administrator password.
+                    self.station.needs_old_admin = true;
+                    self.station
+                        .push_line(t!("telegram.server.needs_old_admin").to_string());
+                }
+                job::Done::Failed { reason, .. } => self.station.push_line(reason),
+                job::Done::BotOff { .. }
+                | job::Done::AddressProbed(_)
+                | job::Done::InstallProbed(_)
+                | job::Done::AddressChanged
+                | job::Done::Removed { .. } => {}
+            }
             return true;
         }
         if kind == Kind::Quiet {
@@ -548,6 +638,14 @@ impl Backend {
                     reason
                 }));
             }
+        }
+        // An "Apply on the server" keeps its own end beside its buttons, and in the log.
+        if std::mem::take(&mut self.station.applying) {
+            match &self.station.outcome {
+                Some(Err(reason)) => log::warn!("station: apply on the server failed: {reason}"),
+                _ => log::info!("station: applied on the server"),
+            }
+            self.station.applied = self.station.outcome.clone();
         }
         // A job that ended without the bot's state may have changed it: read it again.
         self.station.pending_refresh |= !said_bot;
@@ -691,6 +789,13 @@ fn forget_bot(telegram: &mut moon_core::config::TelegramConfig) {
     telegram.authorized_chat_ids.clear();
     telegram.owner_chat_id = None;
     telegram.chat_access.clear();
+}
+
+/// Whether the station's bot needs the header clock's `wanted` zone: its access was read, it
+/// knows the bot's settings (a station that predates them has no live zone), and it reports
+/// another zone — after a failed push, a rollback, or a terminal that set its own.
+fn zone_push_due(access: Option<&moon_core::station_api::Access>, wanted: &str) -> bool {
+    access.is_some_and(|access| access.bot.is_some() && access.zone.as_deref() != Some(wanted))
 }
 
 /// Preserve both saved local bots and unsaved Settings tokens; never merge their chats.

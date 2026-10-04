@@ -4,301 +4,18 @@
 //! missing override panics before it can touch a live session.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use chrono::NaiveDate;
-use moon_core::config::{AppConfig, TelegramConfig};
 use moon_core::telegram::notify::{ChatNotify, NotifyFile, Pending};
 use moon_core::telegram::runtime::NotifyStore;
 
 use super::InjectedReads;
 use crate::notify::down::Link;
+use crate::notify::test_host::{CHAT, DuringJob, TempRoot, TickHost};
 use crate::notify::trades::ClosedTrade;
-use crate::{HostKind, Job, TelegramState, TgHost};
-
-/// Chat every fixture pairs as the owner.
-const CHAT: i64 = 42;
-
-/// What the test host does after the job reads and before finish runs.
-enum DuringJob {
-    /// Leave pairing, revision, and the store pointer alone.
-    None,
-    /// Settings save bumped this chat's revision while the read was in flight.
-    BumpRevision(i64),
-    /// The chat was unpaired while the read was in flight.
-    Unpair,
-    /// A new store was opened on the same path while the read was in flight.
-    ReplaceStore,
-}
-
-/// Temp directory removed when the test drops it, including after a panic.
-struct TempRoot(PathBuf);
-
-impl TempRoot {
-    /// Create a private directory under the process temp dir.
-    ///
-    /// Args:
-    ///     tag: Short name mixed into the directory so failures name the test.
-    ///
-    /// Returns:
-    ///     The root. Its drop deletes the directory.
-    fn new(tag: &str) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "moon-tg-notify-tick-{}-{tag}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("temp root");
-        Self(root)
-    }
-
-    /// Path of the notifications file inside this root.
-    ///
-    /// Returns:
-    ///     `notifications.json`. The parent already exists, so the first save can create it.
-    fn notifications(&self) -> PathBuf {
-        self.0.join("notifications.json")
-    }
-}
-
-impl Drop for TempRoot {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Station-shaped host whose session methods panic.
-struct TickHost {
-    config: AppConfig,
-    state: TelegramState,
-    jobs: u32,
-    during: DuringJob,
-    store_path: PathBuf,
-}
-
-impl TickHost {
-    /// Open an empty notifications file and a service-less state.
-    ///
-    /// Args:
-    ///     path: Notifications file. Its parent must already exist.
-    ///
-    /// Returns:
-    ///     A host whose service is `None` and whose store override points at `path`.
-    fn open(path: PathBuf) -> Self {
-        let config = AppConfig::headless(Vec::new());
-        let store = NotifyStore::open(path.clone()).expect("open notifications");
-        let mut state = TelegramState::new(&TelegramConfig::default(), HostKind::Station);
-        assert!(
-            state.service.is_none(),
-            "an empty token must not start transport"
-        );
-        state.notify_store_override = Some(Arc::new(Mutex::new(store)));
-        Self {
-            config,
-            state,
-            jobs: 0,
-            during: DuringJob::None,
-            store_path: path,
-        }
-    }
-
-    /// Pair `chat` as the sole owner.
-    ///
-    /// Args:
-    ///     chat: Chat id stored in both the authorized list and `owner_chat_id`.
-    fn admit(&mut self, chat: i64) {
-        self.config.telegram.authorized_chat_ids = vec![chat];
-        self.config.telegram.owner_chat_id = Some(chat);
-    }
-
-    /// Save one edit and keep it only when the write succeeds.
-    ///
-    /// Args:
-    ///     edit: Mutation applied to a clone of the document.
-    fn edit(&self, edit: impl FnOnce(&mut NotifyFile)) {
-        let store = self
-            .state
-            .notify_store_override
-            .clone()
-            .expect("notifications store");
-        let mut guard = store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.update(edit).expect("save notifications");
-    }
-
-    /// Clone the document the override currently holds.
-    ///
-    /// Returns:
-    ///     Settings, ledger, and outbox after the last successful save.
-    fn file(&self) -> NotifyFile {
-        let store = self
-            .state
-            .notify_store_override
-            .clone()
-            .expect("notifications store");
-        let guard = store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        guard.file.clone()
-    }
-
-    /// Outbox rows in send order.
-    ///
-    /// Returns:
-    ///     The pending rows stored for every chat.
-    fn outbox(&self) -> Vec<Pending> {
-        self.file().outbox
-    }
-
-    /// HTML bodies in send order.
-    ///
-    /// Returns:
-    ///     One string per outbox row.
-    fn htmls(&self) -> Vec<String> {
-        self.outbox().into_iter().map(|row| row.html).collect()
-    }
-
-    /// Record ids stored in this chat's seen ledger.
-    ///
-    /// Returns:
-    ///     Every rec id, across cores. Empty when the chat is missing.
-    fn seen_ids(&self) -> BTreeSet<i64> {
-        self.file()
-            .chats
-            .get(&CHAT)
-            .map(|chat| {
-                chat.ledger
-                    .seen
-                    .values()
-                    .flat_map(|rows| rows.keys().copied())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Run one owner tick at `now_utc`.
-    ///
-    /// Args:
-    ///     now_utc: UTC Unix seconds passed into the tick. Outbox rows store this value.
-    fn tick(&mut self, now_utc: i64) {
-        self.state.notify_clock_override = Some(now_utc);
-        super::run(self, now_utc);
-    }
-
-    /// Apply the in-flight mutation once, then forget it.
-    fn prepare_finish(&mut self) {
-        match std::mem::replace(&mut self.during, DuringJob::None) {
-            DuringJob::None => {}
-            DuringJob::BumpRevision(chat) => {
-                self.edit(|file| {
-                    if let Some(entry) = file.chats.get_mut(&chat) {
-                        entry.revision = entry.revision.saturating_add(1);
-                    }
-                });
-            }
-            DuringJob::Unpair => {
-                self.config.telegram.authorized_chat_ids.clear();
-                self.config.telegram.owner_chat_id = None;
-            }
-            DuringJob::ReplaceStore => {
-                let opened =
-                    NotifyStore::open(self.store_path.clone()).expect("reopen notifications");
-                self.state.notify_store_override = Some(Arc::new(Mutex::new(opened)));
-            }
-        }
-    }
-}
-
-impl TgHost for TickHost {
-    /// This fixture stands in for the station.
-    fn kind(&self) -> HostKind {
-        HostKind::Station
-    }
-
-    /// Saved pairing and grants.
-    fn config(&self) -> &AppConfig {
-        &self.config
-    }
-
-    /// The tick tests inject links and never read a live session.
-    fn session(&self) -> &moon_core::session::SessionManager {
-        panic!("notify tick test must not call session()")
-    }
-
-    /// The tick tests inject links and never mutate a live session.
-    fn session_mut(&mut self) -> &mut moon_core::session::SessionManager {
-        panic!("notify tick test must not call session()")
-    }
-
-    /// Process-only state, including the store override.
-    fn state(&self) -> &TelegramState {
-        &self.state
-    }
-
-    /// Process-only state, for the busy flag and the overrides.
-    fn state_mut(&mut self) -> &mut TelegramState {
-        &mut self.state
-    }
-
-    /// Report times are UTC, so unix 2000 is 1970-01-01 00:33:20.
-    fn report_zone(&self) -> chrono_tz::Tz {
-        chrono_tz::UTC
-    }
-
-    /// The temp notifications file. Constructing the path does not create it.
-    fn notifications_path(&self) -> PathBuf {
-        self.store_path.clone()
-    }
-
-    /// Pairing changes in these tests are applied directly, not through a save.
-    fn save_paired_chat(&mut self, _chat: i64) -> bool {
-        panic!("notify tick test must not save pairing")
-    }
-
-    /// Pairing changes in these tests are applied directly, not through a save.
-    fn save_cleared_pairing(&mut self) -> bool {
-        panic!("notify tick test must not clear pairing")
-    }
-
-    /// Money commands are outside this fixture.
-    fn is_panic_armed(&self, _core: u64, _market: &str) -> bool {
-        panic!("notify tick test must not read panic state")
-    }
-
-    /// Money commands are outside this fixture.
-    fn toggle_panic_sell(&mut self, _core: u64, _market: String) -> bool {
-        panic!("notify tick test must not toggle panic")
-    }
-
-    /// Reconnects are outside this fixture.
-    fn request_reconnect(&mut self, _core: u64) {
-        panic!("notify tick test must not reconnect")
-    }
-
-    /// Run the job and its finish on this thread, after the in-flight mutation.
-    fn spawn(&mut self, job: Job) {
-        self.jobs += 1;
-        let finish = job();
-        self.prepare_finish();
-        finish(self);
-    }
-
-    /// No window exists in this fixture.
-    fn repaint(&mut self) {}
-}
-
 /// No rows. Installed so a mistaken job does not open the report database.
 fn empty_reads() -> InjectedReads {
-    InjectedReads {
-        trades: Vec::new(),
-        days: BTreeMap::new(),
-    }
+    InjectedReads { trades: Vec::new() }
 }
 
 /// One closed trade on core 7.
@@ -323,20 +40,20 @@ fn closed_trade(rec_id: i64, close_utc: i64, coin: &str, profit_usd: Option<f64>
         profit_usd,
         profit_pct: None,
         open_utc: close_utc - 10,
+        ..ClosedTrade::default()
     }
 }
 
 /// The two closes the trade tests inject: one after enable, one before it.
 ///
 /// Returns:
-///     Rec 11 closed at 1500, and rec 12 closed at 900. No day rows.
+///     Rec 11 closed at 1500, and rec 12 closed at 900.
 fn closes_around_enable() -> InjectedReads {
     InjectedReads {
         trades: vec![
             closed_trade(11, 1_500, "NEWCOIN", None),
             closed_trade(12, 900, "OLDCOIN", None),
         ],
-        days: BTreeMap::new(),
     }
 }
 
@@ -580,57 +297,6 @@ fn replaced_store_skips_every_chat() {
     assert!(!host.state.notify_busy);
 }
 
-/// The summary for 1970-01-01 is sent once, from the injected day rather than the trade list.
-#[test]
-fn daily_summary_is_sent_once_on_the_due_day() {
-    let _locale = crate::test_locale::force("en");
-    let root = TempRoot::new("daily");
-    let date = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date");
-    let mut days = BTreeMap::new();
-    days.insert(date, vec![closed_trade(21, 1_500, "DAYCOIN", Some(1.5))]);
-    let mut host = TickHost::open(root.notifications());
-    host.admit(CHAT);
-    host.edit(|file| {
-        let mut chat = ChatNotify {
-            revision: 1,
-            ..ChatNotify::default()
-        };
-        chat.settings.daily.on = true;
-        chat.settings.daily.hour = 0;
-        chat.settings.daily.minute = 0;
-        file.chats.insert(CHAT, chat);
-    });
-    host.state.visible_override = Some(vec![7]);
-    host.state.injected_reads = Some(InjectedReads {
-        trades: Vec::new(),
-        days,
-    });
-    host.tick(2_000);
-    let rows = host.outbox();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].chat, CHAT);
-    assert_eq!(rows[0].created_utc, 2_000);
-    assert_eq!(rows[0].cores, Some(vec![7]));
-    assert!(
-        rows[0].html.contains("Daily summary 1970-01-01"),
-        "{}",
-        rows[0].html
-    );
-    assert!(rows[0].html.contains("DAYCOIN"), "{}", rows[0].html);
-    assert_eq!(
-        host.file()
-            .chats
-            .get(&CHAT)
-            .and_then(|chat| chat.ledger.daily_last),
-        Some(date)
-    );
-    assert_eq!(host.jobs, 1);
-    host.state.last_notify_run = None;
-    host.tick(2_000);
-    assert_eq!(host.jobs, 1, "today's summary is already recorded");
-    assert_eq!(host.outbox().len(), 1);
-}
-
 /// One queued row for a viewer fixture.
 ///
 /// Args:
@@ -647,6 +313,8 @@ fn queued(id: u64, cores: Option<Vec<u64>>) -> Pending {
         html: format!("row {id}"),
         created_utc: 1,
         cores,
+        auto: None,
+        ..Pending::default()
     }
 }
 
@@ -695,61 +363,11 @@ fn owner_outbox_keeps_unknown_rows_and_drops_a_hidden_core() {
     assert_eq!(host.jobs, 0, "an all-off chat must not send");
 }
 
-/// A viewer's empty-day summary discloses no core and survives the next purge.
+/// `seen` and `trades_enabled_utc` written after the down snapshot must survive the write.
 #[test]
-fn viewer_empty_day_summary_survives_the_tick_purge() {
-    let _locale = crate::test_locale::force("en");
-    let root = TempRoot::new("empty-day");
-    let date = NaiveDate::from_ymd_opt(1970, 1, 1).expect("epoch date");
-    let mut host = TickHost::open(root.notifications());
-    host.config.telegram.authorized_chat_ids = vec![CHAT];
-    host.config.telegram.owner_chat_id = None;
-    host.config.telegram.chat_profile_mut(CHAT).core_uids = vec![8];
-    host.edit(|file| {
-        let mut chat = ChatNotify {
-            revision: 1,
-            ..ChatNotify::default()
-        };
-        chat.settings.daily.on = true;
-        chat.settings.daily.hour = 0;
-        chat.settings.daily.minute = 0;
-        file.chats.insert(CHAT, chat);
-    });
-    host.state.visible_override = Some(vec![8]);
-    host.state.injected_reads = Some(InjectedReads {
-        trades: Vec::new(),
-        days: BTreeMap::new(),
-    });
-    host.tick(2_000);
-    let rows = host.outbox();
-    assert_eq!(rows.len(), 1, "an empty day still sends the summary");
-    assert_eq!(rows[0].cores, Some(Vec::new()));
-    assert!(
-        rows[0].html.contains("Daily summary 1970-01-01"),
-        "{}",
-        rows[0].html
-    );
-    assert_eq!(
-        host.file()
-            .chats
-            .get(&CHAT)
-            .and_then(|chat| chat.ledger.daily_last),
-        Some(date)
-    );
-    let queued_id = rows[0].id;
-    host.tick(2_000);
-    let kept = host.outbox();
-    assert_eq!(kept.len(), 1, "a quiet-day summary must survive the purge");
-    assert_eq!(kept[0].cores, Some(Vec::new()));
-    assert_eq!(kept[0].id, queued_id);
-}
-
-/// `seen` and `daily_last` written after the down snapshot must survive the write.
-#[test]
-fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
+fn write_down_keeps_seen_and_the_trade_floor_set_after_the_snapshot() {
     let root = TempRoot::new("down-partial");
     let store = Mutex::new(NotifyStore::open(root.notifications()).expect("open"));
-    let date = NaiveDate::from_ymd_opt(2026, 3, 1).expect("date");
     {
         let mut guard = store
             .lock()
@@ -776,7 +394,7 @@ fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
             .update(|file| {
                 let entry = file.chats.get_mut(&CHAT).expect("chat");
                 entry.ledger.seen.insert(9, BTreeMap::from([(3, 50)]));
-                entry.ledger.daily_last = Some(date);
+                entry.ledger.trades_enabled_utc = Some(40);
             })
             .expect("live edit");
     }
@@ -791,9 +409,72 @@ fn write_down_keeps_seen_and_daily_last_set_after_the_snapshot() {
         .ledger
         .clone();
     assert_eq!(ledger.down_announced, stepped.down_announced);
-    assert_eq!(ledger.daily_last, Some(date));
+    assert_eq!(ledger.trades_enabled_utc, Some(40));
     assert_eq!(
         ledger.seen.get(&9).and_then(|rows| rows.get(&3)).copied(),
         Some(50)
     );
+}
+
+/// A BTC card sent before its valuation waits for it when the chat asks for the dollars: the
+/// sender records its message, and the read that finds the trade valued queues an edit of that
+/// message and stops waiting. A USDT card never waits — its amount already is dollars.
+#[test]
+fn a_waiting_card_gets_its_dollars_written_in() {
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("followup");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    host.edit(|file| {
+        enable_trades(file);
+        file.chats
+            .get_mut(&CHAT)
+            .unwrap()
+            .settings
+            .trades
+            .usd_followup = true;
+    });
+    host.state.visible_override = Some(vec![7]);
+    let mut btc = closed_trade(11, 1_500, "ETHBTC", None);
+    btc.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    btc.profit_native = Some(0.00012);
+    let mut usdt = closed_trade(12, 1_501, "ACEUSDT", Some(1.0));
+    usdt.quote = moon_core::db::QuoteCurrency::from_report_ordinal(1);
+    usdt.profit_native = Some(1.0);
+    host.state.injected_reads = Some(InjectedReads {
+        trades: vec![btc.clone(), usdt],
+    });
+    host.tick(2_000);
+    let rows = host.outbox();
+    assert_eq!(rows.len(), 2);
+    let key = moon_core::telegram::notify::CardKey {
+        core: 7,
+        rec_id: 11,
+    };
+    assert_eq!(rows[0].card, Some(key));
+    assert!(rows[0].html.contains("+0.00012 BTC"), "{}", rows[0].html);
+    assert!(!rows[0].html.contains('\u{2248}'));
+    assert_eq!(rows[1].card, None, "a USDT card has nothing to wait for");
+    // The sender's ack: the rows leave the outbox and the card's message is recorded.
+    host.edit(|file| {
+        file.outbox.clear();
+        let wait = file
+            .chats
+            .get_mut(&CHAT)
+            .unwrap()
+            .ledger
+            .cards
+            .get_mut(&7)
+            .unwrap();
+        wait.get_mut(&11).unwrap().message = Some(555);
+    });
+    btc.profit_usd = Some(7.5);
+    host.state.injected_reads = Some(InjectedReads { trades: vec![btc] });
+    host.state.last_notify_run = None;
+    host.tick(2_100);
+    let rows = host.outbox();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].edit, Some(555));
+    assert!(rows[0].html.contains("\u{2248} +7.50$"), "{}", rows[0].html);
+    assert!(host.file().chats[&CHAT].ledger.cards.is_empty());
 }

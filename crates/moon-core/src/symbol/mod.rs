@@ -13,6 +13,7 @@
 //! is not — a log line, a report row read before any core connected — [`Exchange::Unknown`]
 //! recognizes the shape instead.
 
+pub mod coin_list;
 mod exchange;
 pub mod parse;
 

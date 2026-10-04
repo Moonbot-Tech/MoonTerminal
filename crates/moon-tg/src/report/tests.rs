@@ -1,6 +1,7 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
 use super::Page;
 use super::render::{profit, render};
+use moon_core::config::telegram_menu::ReportBasis;
 
 /// A viewer never receives another client's rows or money, including daily and exchange totals.
 #[test]
@@ -21,6 +22,7 @@ fn viewer_membership_filters_every_report_view_and_total() {
             100,
             200,
             chrono_tz::UTC,
+            ReportBasis::Close,
             &Default::default(),
             |_| (venues.clone(), super::TelegramReportAccess::Viewer(vec![1])),
         )
@@ -29,7 +31,11 @@ fn viewer_membership_filters_every_report_view_and_total() {
         assert_eq!(page.total.totals[0].profit, 7.0);
         assert_eq!(page.rows.len(), 1);
         assert_eq!(page.rows[0].1.totals[0].profit, 7.0);
-        let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+        let Response::Rich { html, .. } = render(
+            &page,
+            crate::HostKind::Terminal,
+            nav(crate::HostKind::Terminal, true),
+        ) else {
             panic!("expected report");
         };
         assert!(!html.contains("other client"));
@@ -58,6 +64,7 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
             100,
             200,
             chrono_tz::UTC,
+            ReportBasis::Close,
             &Default::default(),
             |_| {
                 (
@@ -90,9 +97,10 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
     }
 }
 
-/// A paged report shows the whole-scope total after its rows, never as a headline or page sum.
+/// A paged report shows the whole-scope total as its table's top row, never as a paragraph above
+/// the table or as the page's own sum.
 #[test]
-fn full_total_is_the_final_summary_row() {
+fn full_total_is_the_tables_top_row() {
     let total = QuoteBreakdown {
         orders: 12,
         valuation: Some(ValuationCoverage {
@@ -119,16 +127,24 @@ fn full_total_is_the_final_summary_row() {
         pages: 2,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected report")
     };
     let table_start = html.find("<table").unwrap();
     let table_end = html.find("</table>").unwrap();
     let total_at = html.find("+123.45").unwrap();
-    assert!(total_at > html.find("Visible row").unwrap() && total_at < table_end);
+    assert!(total_at > table_start && total_at < html.find("Visible row").unwrap());
     assert!(!html[..table_start].contains("+123.45"));
-    assert!(html[table_start..table_end].contains("<b>12</b>"));
+    assert!(html[table_start..table_end].contains("<th align=\"right\">12</th>"));
     assert_eq!(
         html.matches("<details>").count(),
         1,
@@ -151,6 +167,10 @@ fn inline_buttons_keep_the_current_period() {
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -188,8 +208,16 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected report")
     };
     let coverage = rust_i18n::t!(
@@ -226,7 +254,8 @@ fn detail_money_uses_readable_currency_precision() {
     assert_eq!(super::render::native(&btc), "+0.00001234 BTC");
 }
 
-/// Idle rows interleaved with zero-profit activity must neither consume page slots nor disappear from totals.
+/// Idle rows interleaved with zero-profit activity neither take a row nor disappear from totals, and
+/// a core list that fits the message is one page, not six-row pages.
 #[test]
 fn inactive_cores_do_not_consume_page_slots() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -240,29 +269,13 @@ fn inactive_cores_do_not_consume_page_slots() {
     }
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
-    let first = super::read_page_on(
-        &conn,
-        request.clone(),
-        100,
-        200,
-        chrono_tz::UTC,
-        &Default::default(),
-        |rows| {
-            rows.sort_by_key(|(id, _)| *id);
-            (Default::default(), super::TelegramReportAccess::Owner)
-        },
-    )
-    .unwrap();
-    assert_eq!(first.total.orders, 9);
-    assert_eq!(first.rows.len(), 6);
-    assert_eq!(first.pages, 2);
-    request.page = 1;
-    let last = super::read_page_on(
+    let page = super::read_page_on(
         &conn,
         request,
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |rows| {
             rows.sort_by_key(|(id, _)| *id);
@@ -270,14 +283,15 @@ fn inactive_cores_do_not_consume_page_slots() {
         },
     )
     .unwrap();
+    assert_eq!(page.total.orders, 9);
+    assert_eq!(page.pages, 1);
     assert_eq!(
-        last.rows
+        page.rows
             .iter()
             .map(|(name, _)| name.as_str())
             .collect::<Vec<_>>(),
-        vec!["13", "15", "17"]
+        vec!["1", "3", "5", "7", "9", "11", "13", "15", "17"]
     );
-    assert_eq!(last.total.orders, 9);
 }
 
 /// Exchange aggregation keeps zero-profit activity, drops idle groups, and never broadens a missing scope.
@@ -299,6 +313,7 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |_| (venues.clone(), super::TelegramReportAccess::Owner),
     )
@@ -321,6 +336,7 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |_| (venues, super::TelegramReportAccess::Owner),
     )
@@ -349,6 +365,7 @@ fn daily_pages_include_partial_day_after_zone_change() {
         from,
         to,
         chrono_tz::Europe::Warsaw,
+        ReportBasis::Close,
         &Default::default(),
         |_| (Default::default(), super::TelegramReportAccess::Owner),
     )
@@ -359,7 +376,7 @@ fn daily_pages_include_partial_day_after_zone_change() {
     assert_eq!(page.rows.last().unwrap().1.orders, 1);
 }
 
-/// A month of daily rows and a handful of exchanges fit one message; cores still page at six.
+/// A month of daily rows and a handful of exchanges fit one message.
 #[test]
 fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -382,14 +399,18 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         from,
         to,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |_| (Default::default(), super::TelegramReportAccess::Owner),
     )
     .unwrap();
     assert_eq!(page.rows.len(), 31);
     assert_eq!(page.pages, 1);
-    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal, true)
-    else {
+    let Response::Rich { html, keyboard, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
     assert!(
@@ -428,14 +449,18 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |_| (venues.clone(), super::TelegramReportAccess::Owner),
     )
     .unwrap();
     assert_eq!(page.rows.len(), 6);
     assert_eq!(page.pages, 1);
-    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal, true)
-    else {
+    let Response::Rich { html, keyboard, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
     assert!(
@@ -457,7 +482,8 @@ fn breakdown_views_render_every_row_until_the_rich_message_limit() {
     }));
 }
 
-/// A year of daily rows exceeds Telegram's 500-block cap, so the six-row page size remains.
+/// Half a year of daily rows exceeds Telegram's 500-block cap, so the report pages — with the
+/// largest page that fits, not six rows.
 #[test]
 fn oversized_daily_report_still_pages() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -481,6 +507,7 @@ fn oversized_daily_report_still_pages() {
         from,
         to,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |_| (Default::default(), super::TelegramReportAccess::Owner),
     )
@@ -492,9 +519,13 @@ fn oversized_daily_report_still_pages() {
         page.pages,
         page.rows.len()
     );
-    assert_eq!(page.rows.len(), 6);
-    let Response::Rich { html, keyboard, .. } = render(&page, crate::HostKind::Terminal, true)
-    else {
+    assert!(page.rows.len() > 6, "got {} rows per page", page.rows.len());
+    assert!(super::rich_message_fits(&super::report_html(&page)));
+    let Response::Rich { html, keyboard, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
     assert!(html.contains(&rust_i18n::t!("telegram.report_page").to_string()));
@@ -507,6 +538,58 @@ fn oversized_daily_report_still_pages() {
             .page
             == 1
     }));
+}
+
+/// A core roster too long for one message pages with pages far larger than six rows, and every
+/// page it makes fits the rich-message caps.
+///
+/// Mutation: restore the fixed six-row page for cores. The roster then needs 50 pages.
+#[test]
+fn an_oversized_core_list_pages_with_large_fitting_pages() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);").unwrap();
+    for id in 1..=300 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,1,100,0)",
+            rusqlite::params![
+                id,
+                format!("Desk {id:03} / a long account name of this core")
+            ],
+        )
+        .unwrap();
+    }
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    let mut seen = 0;
+    let mut page_index = 0;
+    loop {
+        request.page = page_index;
+        let page = super::read_page_on(
+            &conn,
+            request.clone(),
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            &Default::default(),
+            |rows| {
+                rows.sort_by_key(|(id, _)| *id);
+                (Default::default(), super::TelegramReportAccess::Owner)
+            },
+        )
+        .unwrap();
+        assert!(page.pages > 1 && page.pages < 50, "{} pages", page.pages);
+        assert!(super::rich_message_fits(&super::report_html(&page)));
+        seen += page.rows.len();
+        page_index += 1;
+        if page_index == page.pages {
+            break;
+        }
+    }
+    assert_eq!(
+        seen, 300,
+        "every core appears exactly once across the pages"
+    );
 }
 
 /// Small native averages must retain significant digits and exclude uncounted entries.
@@ -533,15 +616,24 @@ fn native_average_keeps_small_btc_amount_visible() {
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
     assert!(html.replace("&#160;", " ").contains("0.001 BTC"));
     assert!(!html.replace("&#160;", " ").contains("0.00 BTC"));
 }
 
-/// The production reader excludes open/emulator/deleted rows and keeps page totals global.
+/// The production reader excludes open/emulator/deleted rows, keeps the total global, and clamps a
+/// stale page index to the pages that exist.
 #[test]
 fn report_reader_preserves_filters_and_full_total_across_pages() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -573,6 +665,7 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |rows| {
             rows.sort_by_key(|(id, _)| *id);
@@ -582,7 +675,8 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     .unwrap();
     assert_eq!(first.total.orders, 13);
     assert_eq!(first.total.totals[0].profit, 18.0);
-    assert_eq!(first.rows.len(), 6);
+    assert_eq!(first.rows.len(), 12);
+    assert_eq!(first.pages, 1);
     assert_eq!(first.rows[0].1.orders, 2);
     assert_eq!(first.rows[0].1.totals[0].profit, 7.0);
     request.page = 1;
@@ -592,6 +686,7 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
         100,
         200,
         chrono_tz::UTC,
+        ReportBasis::Close,
         &Default::default(),
         |rows| {
             rows.sort_by_key(|(id, _)| *id);
@@ -599,9 +694,10 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
         },
     )
     .unwrap();
+    assert_eq!(second.request.page, 0);
     assert_eq!(second.total.orders, 13);
     assert_eq!(second.total.totals[0].profit, 18.0);
-    assert_eq!(second.rows.len(), 6);
+    assert_eq!(second.rows.len(), 12);
 }
 use moon_core::{
     db::{QuoteBreakdown, UsdtTotal, ValuationCoverage},
@@ -624,20 +720,33 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
         let labels = crate::labels::telegram_labels(crate::HostKind::Station);
         for owner in [false, true] {
             for response in [
-                render(&page, crate::HostKind::Station, owner),
-                super::help("UTC", crate::HostKind::Station, owner),
+                render(
+                    &page,
+                    crate::HostKind::Station,
+                    nav(crate::HostKind::Station, owner),
+                ),
+                super::help(
+                    "UTC",
+                    crate::HostKind::Station,
+                    owner,
+                    nav(crate::HostKind::Station, owner),
+                ),
             ] {
                 let Response::Rich { navigation, .. } = response else {
                     panic!("expected rich response")
                 };
                 let moon_core::telegram::api::ReplyMarkup::Reply(markup) = navigation.1 else {
-                    panic!("expected persistent navigation")
+                    panic!("expected the reply keyboard")
                 };
                 assert_eq!(
                     markup.keyboard.iter().flatten().any(|button| {
@@ -647,8 +756,12 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
                     owner
                 );
             }
-            let Response::Rich { html, .. } = super::help("UTC", crate::HostKind::Station, owner)
-            else {
+            let Response::Rich { html, .. } = super::help(
+                "UTC",
+                crate::HostKind::Station,
+                owner,
+                nav(crate::HostKind::Station, owner),
+            ) else {
                 panic!("expected help")
             };
             assert_eq!(html.contains("<code>/status</code>"), owner);
@@ -689,8 +802,16 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
     assert!(html.contains("&lt;b&gt;&amp;"));
@@ -718,6 +839,10 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         pages: 1,
         drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -806,6 +931,10 @@ fn today_omits_daily_navigation() {
             pages: 1,
             drilldowns: Vec::new(),
             scope_label: None,
+            basis: ReportBasis::Close,
+            cores: Vec::new(),
+            caption: None,
+            has_groups: false,
         };
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
@@ -823,9 +952,12 @@ fn today_omits_daily_navigation() {
     }
 }
 
-/// Long core identities get the full table width rather than an ambiguous middle truncation.
+/// A core is one table row: its name keeps both ends, and the full name stays in the details.
+///
+/// Mutation: restore the full-width name row. The main table then has two rows per core, the
+/// "every other line" layout.
 #[test]
-fn core_names_span_the_money_columns() {
+fn a_core_is_one_row_with_its_full_name_in_details() {
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
     let name = "Sample Desk / ACCOUNT No 11 with a long server name";
@@ -835,26 +967,47 @@ fn core_names_span_the_money_columns() {
         to: 1,
         zone: chrono_tz::UTC,
         total: QuoteBreakdown::default(),
-        rows: vec![(name.into(), QuoteBreakdown::default())],
+        rows: vec![
+            (name.into(), QuoteBreakdown::default()),
+            ("Short".into(), QuoteBreakdown::default()),
+        ],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+        has_groups: false,
     };
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected rich report")
     };
-    assert!(html.contains(&format!("<td colspan=\"3\"><b>{name}</b>")));
+    let main = &html[..html.find("<details>").unwrap()];
+    // The totals on top, then one row per core.
+    assert_eq!(main.matches("<tr>").count(), 3);
+    assert!(!main.contains("colspan"));
+    assert!(main.contains("<tr><td>Sample D…ong server name</td>"));
+    assert!(main.contains("<tr><td>Short</td>"));
     assert!(html.contains(&format!("<td colspan=\"2\"><b>{name}</b>")));
 }
 
-/// Deletable Help must not own the persistent keyboard; accounting stays collapsed and escaped.
+/// Deletable Help must not own the reply keyboard; accounting stays collapsed and escaped.
 #[test]
-fn help_keeps_persistent_navigation_on_a_separate_message() {
+fn help_keeps_the_reply_keyboard_on_a_separate_message() {
     let Response::Rich {
         html,
         keyboard,
         navigation,
-    } = super::help("<UTC>", crate::HostKind::Terminal, true)
+    } = super::help(
+        "<UTC>",
+        crate::HostKind::Terminal,
+        true,
+        nav(crate::HostKind::Terminal, true),
+    )
     else {
         panic!("expected rich help")
     };
@@ -878,7 +1031,7 @@ fn help_keeps_persistent_navigation_on_a_separate_message() {
 fn station_help_does_not_ask_for_a_running_terminal() {
     let _locale = crate::test_locale::force("en");
     let text = |host| {
-        let Response::Rich { html, .. } = super::help("UTC", host, true) else {
+        let Response::Rich { html, .. } = super::help("UTC", host, true, nav(host, true)) else {
             panic!("expected rich help")
         };
         html
@@ -906,14 +1059,27 @@ fn chat_report_names_a_renamed_core_by_its_configured_name() {
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
     let names = moon_core::db::CoreNames::from_pairs([(1, "core-a-renamed")]);
-    let page = super::read_page_on(&conn, request, 100, 200, chrono_tz::UTC, &names, |rows| {
-        rows.sort_by_key(|(id, _)| *id);
-        (Default::default(), super::TelegramReportAccess::Owner)
-    })
+    let page = super::read_page_on(
+        &conn,
+        request,
+        100,
+        200,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        &names,
+        |rows| {
+            rows.sort_by_key(|(id, _)| *id);
+            (Default::default(), super::TelegramReportAccess::Owner)
+        },
+    )
     .unwrap();
     let labels: Vec<&str> = page.rows.iter().map(|(name, _)| name.as_str()).collect();
     assert_eq!(labels, ["core-a-renamed", "core-b-gone"]);
-    let Response::Rich { html, .. } = render(&page, crate::HostKind::Terminal, true) else {
+    let Response::Rich { html, .. } = render(
+        &page,
+        crate::HostKind::Terminal,
+        nav(crate::HostKind::Terminal, true),
+    ) else {
         panic!("expected report");
     };
     assert!(html.contains("core-a-renamed"));
@@ -1128,19 +1294,293 @@ fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
         990,
         "a missing core offset leaves the stored buy time unchanged"
     );
+}
 
-    let day = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-    let next = chrono::NaiveDate::from_ymd_opt(1970, 1, 2).unwrap();
-    let first = super::read_day_on(&conn, chrono_tz::UTC, &names, day).unwrap();
-    let second = super::read_day_on(&conn, chrono_tz::UTC, &names, next).unwrap();
-    let first_ids: std::collections::BTreeSet<i64> =
-        first.iter().map(|trade| trade.rec_id).collect();
-    let second_ids: std::collections::BTreeSet<i64> =
-        second.iter().map(|trade| trade.rec_id).collect();
-    let mut expected_day = expected_since.clone();
-    expected_day.remove(&90000);
-    expected_day.insert(500);
-    assert_eq!(first_ids, expected_day);
-    assert_eq!(first.len(), expected_day.len());
-    assert_eq!(second_ids, std::collections::BTreeSet::from([90000]));
+/// The keyboard a chat of `owner` gets from a bot with the default menu.
+fn nav(host: crate::HostKind, owner: bool) -> moon_core::telegram::api::ReplyMarkup {
+    crate::labels::navigation_keyboard(host, owner, &moon_core::config::TelegramConfig::default())
+}
+
+/// The bot's period basis reaches the query: by open time a trade counts in the period it opened
+/// in, and the report says so.
+#[test]
+fn the_open_basis_counts_trades_by_when_they_opened() {
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,buydate INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'Core',1,50,150,7,100,0),(1,'Core',2,120,300,5,100,0);").unwrap();
+    let read = |basis| {
+        super::read_page_on(
+            &conn,
+            ReportRequest::new(Period::Today, false),
+            100,
+            200,
+            chrono_tz::UTC,
+            basis,
+            &Default::default(),
+            |_| (Default::default(), super::TelegramReportAccess::Owner),
+        )
+        .unwrap()
+    };
+    let close = read(ReportBasis::Close);
+    assert_eq!(close.total.orders, 1);
+    assert_eq!(close.total.totals[0].profit, 7.0);
+    let open = read(ReportBasis::Open);
+    assert_eq!(
+        open.request.basis,
+        Some(ReportBasis::Open),
+        "its buttons keep the basis"
+    );
+    assert_eq!(open.total.orders, 1);
+    assert_eq!(open.total.totals[0].profit, 5.0);
+    let caption = rust_i18n::t!("report.period_basis.open").to_string();
+    let html = |page: &Page| super::render::report_html(page);
+    assert!(html(&open).contains(&caption));
+    assert!(!html(&close).contains(&caption));
+}
+
+/// An automatic report is the button's report over the slot's frozen period: its caption on top,
+/// its buttons carrying the window, the cores it may disclose; a viewer with no cores gets none.
+#[test]
+fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
+    use moon_core::config::AppConfig;
+    use moon_core::telegram::report::AutoWindow;
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,buydate INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'Core',1,50,150,7,100,0),(1,'Core',2,120,3700,5,100,0);").unwrap();
+    let window = AutoWindow {
+        at: 3600,
+        from: 0,
+        to: 3599,
+        period: Period::Hour,
+    };
+    let inputs = super::AutoInputs {
+        zone: chrono_tz::UTC,
+        basis: ReportBasis::Close,
+        view: moon_core::config::telegram_menu::ReportView::Cores,
+        order: moon_core::session::core_order::CoreOrder::new(&AppConfig::headless(Vec::new())),
+        names: Default::default(),
+        venues: Default::default(),
+        groups: Vec::new(),
+    };
+    let page = super::read_auto_report(
+        &conn,
+        &window,
+        "Hourly report".into(),
+        &inputs,
+        &super::TelegramReportAccess::Owner,
+    )
+    .unwrap()
+    .expect("an owner always gets a report");
+    assert!(
+        page.html.starts_with("<p><b>Hourly report</b></p>"),
+        "{}",
+        page.html
+    );
+    assert_eq!(page.cores, None, "an owner's report names no core");
+    let moon_core::telegram::api::ReplyMarkup::Inline(markup) = &page.keyboard else {
+        panic!("inline buttons")
+    };
+    let callbacks: Vec<&str> = markup
+        .inline_keyboard
+        .iter()
+        .flatten()
+        .filter_map(|button| button.callback_data.as_deref())
+        .collect();
+    assert!(!callbacks.is_empty());
+    for data in callbacks {
+        let request = ReportRequest::parse_callback(data).expect(data);
+        assert_eq!(request.window, Some((0, 3599)), "{data}");
+    }
+    let none = super::read_auto_report(
+        &conn,
+        &window,
+        String::new(),
+        &inputs,
+        &super::TelegramReportAccess::Viewer(Vec::new()),
+    )
+    .unwrap();
+    assert!(none.is_none());
+}
+
+/// A card prints the trade's own money the moment its row lands, so the read must hand back the
+/// settled profit, the entry notional and their currency without any valuation; a row the
+/// Report's volume gates cannot prove (no close reason) keeps its profit and loses its volume.
+#[test]
+fn closed_trades_carry_their_own_money() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, fname TEXT,
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER, boughtq REAL, buyprice REAL,
+            sellprice REAL, sellreason TEXT
+        );
+        INSERT INTO orders_rep VALUES
+            (1, 'CoreA', 1, 'ACE', 'ACEUSDC', 990, 1000, '', 0, 3.3, 150.0, 8, 10.0, 15.0, 15.33,
+             'TakeProfit'),
+            (1, 'CoreA', 2, 'ETH', 'ETHBTC', 990, 1001, '', 0, 0.00012, 0.01, 0, 0.5, 0.02, 0.0202,
+             'TakeProfit'),
+            (1, 'CoreA', 3, 'ACE', 'ACEUSDC', 990, 1002, '', 0, -1.0, 150.0, 8, 10.0, 15.0, 14.9,
+             NULL);",
+    )
+    .unwrap();
+    let names = moon_core::db::CoreNames::default();
+    let rows = super::read_closed_since_on(&conn, chrono_tz::UTC, &names, 0).unwrap();
+    assert_eq!(rows.len(), 3);
+    let usdc = &rows[0];
+    assert_eq!(usdc.quote.map(|q| q.ticker()), Some("USDC"));
+    assert_eq!(usdc.profit_native, Some(3.3));
+    assert_eq!(usdc.volume_native, Some(150.0));
+    let btc = &rows[1];
+    assert_eq!(btc.quote.map(|q| q.ticker()), Some("BTC"));
+    assert_eq!(btc.profit_native, Some(0.00012));
+    assert!((btc.volume_native.unwrap() - 0.01).abs() < 1e-12);
+    let unproven = &rows[2];
+    assert_eq!(unproven.profit_native, Some(-1.0));
+    assert_eq!(unproven.volume_native, None);
+}
+
+/// A report fits a phone screen: the view and its period are the table's caption, a single day
+/// names its date once, and its buttons are one row in either view.
+#[test]
+fn a_days_report_is_compact() {
+    let _locale = crate::test_locale::force("en");
+    for by_exchange in [false, true] {
+        let mut request = ReportRequest::new(Period::Today, false);
+        request.by_exchange = by_exchange;
+        let page = Page {
+            request,
+            from: 0,
+            to: 8 * 3600 + 59 * 60,
+            zone: chrono_tz::UTC,
+            total: QuoteBreakdown::default(),
+            rows: vec![("Core".into(), QuoteBreakdown::default())],
+            pages: 1,
+            drilldowns: Vec::new(),
+            scope_label: None,
+            basis: ReportBasis::Close,
+            cores: Vec::new(),
+            caption: None,
+            has_groups: false,
+        };
+        let html = super::render::report_html(&page);
+        let table = html.find("<table").unwrap();
+        assert!(
+            html[table..].contains("01.01.1970 00:00 — 08:59</caption>"),
+            "{html}"
+        );
+        assert!(!html[..table].contains("01.01.1970"), "{html}");
+        let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+        else {
+            panic!("expected inline navigation")
+        };
+        assert_eq!(
+            markup.inline_keyboard.len(),
+            1,
+            "{:?}",
+            markup.inline_keyboard
+        );
+    }
+}
+
+/// A funding payment is a closed report row, not a trade: the chat gets no card for it.
+#[test]
+fn funding_is_not_a_trade_card() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, fname TEXT,
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER, boughtq REAL, buyprice REAL,
+            sellprice REAL, sellreason TEXT
+        );
+        INSERT INTO orders_rep VALUES
+            (1, 'CoreA', 1, 'ACE', 'ACEUSDT', 990, 1000, '', 0, -0.02, 0.0, 1, 0.0, 0.0, 0.0,
+             'Funding'),
+            (1, 'CoreA', 2, 'ACE', 'ACEUSDT', 990, 1001, '', 0, 3.3, 150.0, 1, 10.0, 15.0, 15.33,
+             'TakeProfit');",
+    )
+    .unwrap();
+    let names = moon_core::db::CoreNames::default();
+    let rows = super::read_closed_since_on(&conn, chrono_tz::UTC, &names, 0).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.rec_id).collect::<Vec<_>>(),
+        vec![2],
+        "only the trade becomes a card"
+    );
+}
+
+/// The view by groups: one row per saved group over its own cores — a core in two groups counts in
+/// each — then the cores in none; the headline counts every core once. A group's drill-down reads
+/// its cores alone, and a group gone from the list reads as nothing, never as every core.
+#[test]
+fn groups_are_rows_of_their_cores_and_the_total_counts_each_core_once() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'A',1,150,10,100,0),(2,'B',1,150,20,100,0),(3,'C',1,150,40,100,0);").unwrap();
+    let groups = vec![
+        moon_core::config::CoreGroup {
+            name: "main".into(),
+            cores: vec![1, 2],
+        },
+        moon_core::config::CoreGroup {
+            name: "margo".into(),
+            cores: vec![2],
+        },
+    ];
+    let read = |request: ReportRequest| {
+        super::read_page_with(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            &Default::default(),
+            &groups,
+            |_| (Default::default(), super::TelegramReportAccess::Owner),
+        )
+        .unwrap()
+    };
+    let _locale = crate::test_locale::force("en");
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    request.by_group = true;
+    let page = read(request.clone());
+    let rows: Vec<(String, f64)> = page
+        .rows
+        .iter()
+        .map(|(name, total)| (name.clone(), total.totals[0].profit))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("main".to_string(), 30.0),
+            ("margo".to_string(), 20.0),
+            ("No group".to_string(), 40.0),
+        ]
+    );
+    assert_eq!(page.total.totals[0].profit, 70.0, "each core counted once");
+    assert!(page.has_groups);
+    assert_eq!(
+        page.drilldowns
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main", "margo"]
+    );
+    let mut margo = request.clone();
+    margo.by_group = false;
+    margo.scope = moon_core::telegram::report::ReportScope::Group(
+        moon_core::telegram::report::group_key("margo"),
+    );
+    let page = read(margo.clone());
+    assert_eq!(page.total.totals[0].profit, 20.0);
+    assert_eq!(page.scope_label.as_deref(), Some("margo"));
+    margo.scope = moon_core::telegram::report::ReportScope::Group(
+        moon_core::telegram::report::group_key("gone"),
+    );
+    assert_eq!(read(margo).total.orders, 0, "a group gone reads as nothing");
 }

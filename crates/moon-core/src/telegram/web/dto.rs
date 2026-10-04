@@ -206,8 +206,20 @@ pub struct OrderDto {
     pub volume_text: Option<String>,
     pub entry_text: Option<String>,
     pub mark_text: Option<String>,
+    /// Open PnL in the market's own quote currency.
     pub pnl: Option<f64>,
+    /// [`Self::pnl`] with its unit: `$` for a USD-stable quote, otherwise the quote ticker; a bare
+    /// number when the quote is unknown.
     pub pnl_text: Option<String>,
+    /// Sign of [`Self::pnl_text`] as printed (-1, 0, 1): the row's tone follows the rounded text,
+    /// so a loss that rounds to zero is not painted red.
+    pub pnl_sign: i8,
+    /// [`Self::pnl`] in dollars through the USD rate of the same quote [`Self::pnl_text`] names;
+    /// absent while that quote or its rate is unknown.
+    /// Order sums add this, never `pnl`, which is in a different currency per market.
+    pub pnl_usd: Option<f64>,
+    /// An emulated order: marked, and kept out of every order sum, as the desktop keeps it apart.
+    pub emulator: bool,
     pub change_pct: Option<f64>,
     pub change_text: Option<String>,
     pub to_entry_pct: Option<f64>,
@@ -318,12 +330,19 @@ pub struct CommandResultDto {
     pub error: Option<CommandErrorDto>,
 }
 
-/// Result of a Mini App command over several cores: `sent` of `requested` were accepted.
+/// Result of a Mini App command over several cores.
+///
+/// Of `requested` known cores, `sent` accepted the command now, `already` were in the asked state
+/// and needed nothing, and `offline` were skipped because they are not connected (a command queued
+/// for them would fire whenever they come back). `ok` only when every core ended up sent or
+/// already there.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ScopeResultDto {
     pub ok: bool,
     pub sent: u32,
     pub requested: u32,
+    pub already: u32,
+    pub offline: u32,
     pub error: Option<CommandErrorDto>,
 }
 
@@ -335,6 +354,8 @@ pub enum CommandErrorDto {
     Unavailable,
     Rejected,
     Forbidden,
+    /// The core is not connected, so nothing was sent.
+    Offline,
 }
 
 /// One core the chat may include in a notification rule.
@@ -358,8 +379,6 @@ pub struct NotifyDto {
     pub settings: crate::telegram::notify::NotifySettings,
     /// Cores this chat is allowed to see, in Mini App order.
     pub cores: Vec<NotifyCoreDto>,
-    /// IANA zone reports use. Daily time is shown in this zone.
-    pub zone: String,
     /// Stored chat revision. `0` when this chat has no row yet.
     pub revision: u64,
     /// Localized save problem, or `null` when nothing went wrong.

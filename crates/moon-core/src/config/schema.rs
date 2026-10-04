@@ -236,6 +236,10 @@ pub struct TelegramConfig {
     /// Whether the Mini App / tunnel path is requested. The process itself starts in a later phase.
     #[serde(default)]
     pub mini_app_enabled: bool,
+    /// The bot's menu and report preferences. Kept last: TOML writes a table after the plain
+    /// values.
+    #[serde(default)]
+    pub bot: super::telegram_menu::BotSettings,
 }
 
 #[derive(Default, Serialize, Deserialize)]

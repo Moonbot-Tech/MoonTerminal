@@ -7,7 +7,8 @@ use std::borrow::Cow;
 use std::sync::mpsc::SyncSender;
 
 use crate::t;
-use moon_core::config::Language;
+use moon_core::config::telegram_menu::MenuItem;
+use moon_core::config::{Language, TelegramConfig};
 use moon_core::telegram::TelegramStatus;
 use moon_core::telegram::api::{KeyboardButton, ReplyKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::runtime::Response;
@@ -57,47 +58,80 @@ pub fn status_text(status: &TelegramStatus) -> String {
     .to_string()
 }
 
-/// Global navigation owns periods and help — and on a station its status; report actions remain
-/// inline.
-pub(crate) fn navigation_keyboard(host: crate::HostKind, owner: bool) -> ReplyMarkup {
+/// The reply keyboard under the chat: the bot's configured menu (`TelegramConfig::bot`) limited to
+/// what this chat may use. Status is a station owner's only; a menu with nothing left to show
+/// keeps the Report section, so a chat is never left without a way in.
+pub(crate) fn navigation_keyboard(
+    host: crate::HostKind,
+    owner: bool,
+    telegram: &TelegramConfig,
+) -> ReplyMarkup {
     let locale = rust_i18n::locale();
-    let button = |(name, icon): (&str, &str)| {
-        let key = format!("telegram.button_{name}");
-        KeyboardButton {
-            text: format!("{icon} {}", t!(&key, locale = locale.as_ref())),
-            style: None,
-        }
-    };
-    let [today, yesterday, month, lastmonth, help] = navigation_buttons().map(button);
-    // The station owner gets three rows of two so the month labels are never cut on a phone.
-    let keyboard = if host == crate::HostKind::Station && owner {
-        vec![
-            vec![today, yesterday],
-            vec![month, lastmonth],
-            vec![button(STATION_STATUS_BUTTON), help],
-        ]
-    } else {
-        vec![vec![today, yesterday, help], vec![month, lastmonth]]
-    };
+    let mut rows = telegram
+        .bot
+        .menu
+        .visible(|item| keyboard_admits(item, host, owner));
+    if rows.is_empty() {
+        rows = vec![vec![MenuItem::Report]];
+    }
+    let keyboard = rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|item| KeyboardButton {
+                    text: button_text(item, locale.as_ref()),
+                    style: None,
+                })
+                .collect()
+        })
+        .collect();
+    // Not persistent: a chat can fold the keyboard away and open it with the keyboard icon, and
+    // Android's Back closes it and then leaves the chat instead of being swallowed by it.
     ReplyMarkup::Reply(ReplyKeyboardMarkup {
         keyboard,
         resize_keyboard: true,
-        is_persistent: true,
+        is_persistent: false,
     })
 }
 
-/// The station's own navigation button: its status in the chat.
-const STATION_STATUS_BUTTON: (&str, &str) = ("status", "\u{1f4e1}");
+/// The keyboard of a station's owner, whom the station's status answers: built on the station's
+/// loop, where its configuration is, for the reply sent from a thread
+/// ([`crate::station_status_reply`]).
+pub fn station_owner_navigation(telegram: &TelegramConfig) -> ReplyMarkup {
+    navigation_keyboard(crate::HostKind::Station, true, telegram)
+}
+
+/// Whether a chat's reply keyboard may carry `item`: Status only for a station's owner,
+/// Settings and Control only for the owner.
+pub(crate) fn keyboard_admits(item: MenuItem, host: crate::HostKind, owner: bool) -> bool {
+    match item {
+        MenuItem::Status => host == crate::HostKind::Station && owner,
+        MenuItem::Settings | MenuItem::Control => owner,
+        _ => true,
+    }
+}
+
+/// A menu item's caption with its glyph, as a button shows it in `locale`.
+pub(crate) fn button_text(item: MenuItem, locale: &str) -> String {
+    let key = format!("telegram.button_{}", item.id());
+    format!("{} {}", item_icon(item), t!(&key, locale = locale))
+}
 
 /// Stable glyphs are kept outside localization dictionaries and shared by rendering and aliases.
-fn navigation_buttons() -> [(&'static str, &'static str); 5] {
-    [
-        ("today", "\u{1f4c5}"),
-        ("yesterday", "\u{23ee}"),
-        ("month", "\u{1f5d3}"),
-        ("lastmonth", "\u{1f4c6}"),
-        ("help", "\u{2139}\u{fe0f}"),
-    ]
+fn item_icon(item: MenuItem) -> &'static str {
+    match item {
+        MenuItem::Today => "\u{1f4c5}",
+        MenuItem::Yesterday => "\u{23ee}",
+        MenuItem::Month => "\u{1f5d3}",
+        MenuItem::LastMonth => "\u{1f4c6}",
+        MenuItem::Daily => "\u{1f5d2}",
+        MenuItem::Custom => "\u{1f50e}",
+        MenuItem::Help => "\u{2139}\u{fe0f}",
+        MenuItem::Status => "\u{1f4e1}",
+        MenuItem::Report => "\u{1f4ca}",
+        MenuItem::Settings => "\u{2699}\u{fe0f}",
+        MenuItem::Control => "\u{1f39b}\u{fe0f}",
+    }
 }
 
 /// Page and transport keys whose text names what the bot depends on: a station has its own
@@ -152,18 +186,23 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
     );
     // Keep old keyboard labels usable after the desktop locale changes.
     for locale in Language::ALL.map(Language::code) {
-        for (name, icon) in [("home", "\u{1f4ca}"), ("help", "\u{2753}")] {
+        // The keyboard's Mini App button is gone; one still installed opens the app.
+        for (name, icon) in [
+            ("home", "\u{1f4ca}"),
+            ("help", "\u{2753}"),
+            ("miniapp", "\u{1f4f1}"),
+        ] {
             let key = format!("telegram.button_{name}");
             labels.insert(
                 format!("button_{name}_legacy_emoji_{locale}"),
                 format!("{icon} {}", t!(&key, locale = locale)),
             );
         }
-        for (name, icon) in navigation_buttons() {
-            let key = format!("telegram.button_{name}");
+        // Status is a station's own: only its labels carry it (below).
+        for item in MenuItem::ALL.into_iter().filter(|&i| i != MenuItem::Status) {
             labels.insert(
-                format!("button_{name}_emoji_{locale}"),
-                format!("{icon} {}", t!(&key, locale = locale)),
+                format!("button_{}_emoji_{locale}", item.id()),
+                button_text(item, locale),
             );
         }
         for name in ["today", "yesterday", "month", "lastmonth", "daily", "home"] {
@@ -182,6 +221,18 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
             t!("telegram.button_help", locale = locale).to_string(),
         );
     }
+    // The command list the chat's menu button shows (`setMyCommands`): what every chat may use.
+    for (command, key) in [
+        ("today", "telegram.button_today"),
+        ("yesterday", "telegram.button_yesterday"),
+        ("month", "telegram.button_month"),
+        ("lastmonth", "telegram.button_lastmonth"),
+        ("daily", "telegram.help_daily"),
+        ("hour", "telegram.help_hour"),
+        ("help", "telegram.button_help"),
+    ] {
+        labels.insert(format!("command_{command}"), t!(key).to_string());
+    }
     for key in MINI_LABEL_KEYS {
         let path = format!("telegram.{key}");
         labels.insert((*key).to_string(), t!(&path).to_string());
@@ -196,14 +247,15 @@ pub(crate) fn telegram_labels(host: crate::HostKind) -> std::collections::BTreeM
             labels.insert((*key).to_string(), t!(&path).to_string());
         }
         // Only a station's bot knows its status button: a terminal's never parses it.
-        let (name, icon) = STATION_STATUS_BUTTON;
         for locale in Language::ALL.map(Language::code) {
-            let text = t!("telegram.button_status", locale = locale).to_string();
             labels.insert(
-                format!("button_{name}_emoji_{locale}"),
-                format!("{icon} {text}"),
+                format!("button_status_emoji_{locale}"),
+                button_text(MenuItem::Status, locale),
             );
-            labels.insert(format!("button_{name}_{locale}"), text);
+            labels.insert(
+                format!("button_status_{locale}"),
+                t!("telegram.button_status", locale = locale).to_string(),
+            );
         }
     }
     labels
@@ -221,22 +273,18 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_settings_err_stale",
     "mini_settings_trades",
     "mini_settings_down",
-    "mini_settings_daily",
     "mini_settings_all_cores",
     "mini_settings_min_volume",
     "mini_settings_profit_at_least",
     "mini_settings_loss_at_least",
     "mini_settings_trades_hint",
     "mini_settings_after_minutes",
-    "mini_settings_time",
-    "mini_settings_zone",
     "mini_settings_save",
     "mini_settings_saved",
     "mini_settings_notifications",
     "mini_settings_chat_note",
     "mini_settings_summary_trades",
     "mini_settings_summary_cores",
-    "mini_settings_summary_daily",
     "mini_settings_summary_off",
     "mini_settings_search_cores",
     "mini_settings_selected",
@@ -315,6 +363,9 @@ const MINI_LABEL_KEYS: &[&str] = &[
     "mini_cores_auto_on_confirm",
     "mini_cores_auto_off_confirm",
     "mini_cmd_partial",
+    "mini_cmd_partial_offline",
+    "mini_cmd_offline",
+    "mini_cancel_all_confirm",
     "mini_cmd_core_not_found",
     "mini_tab_trades",
     "mini_deals_open",

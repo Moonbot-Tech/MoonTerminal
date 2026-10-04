@@ -20,12 +20,15 @@ use crate::{Backend, design};
 use moon_core::config::Secret;
 
 mod access;
+mod bot_menu;
+mod chat_notify;
 mod core_section;
 mod qr;
 mod server_auto_update;
 mod server_bot;
 mod server_tape;
 mod station_access;
+mod station_groups;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
@@ -51,6 +54,8 @@ pub(super) struct TelegramEd {
     history_failed: bool,
     core: core_section::CoreTelegramEd,
     server: server_bot::ServerBotEd,
+    /// The terminal bot's menu tree.
+    menu: bot_menu::BotMenuEd,
 }
 
 impl TelegramEd {
@@ -109,6 +114,7 @@ pub(super) fn build(
         history_failed: false,
         core: core_section::build(window, cx),
         server: server_bot::build(window, cx, server_bot::known_server()),
+        menu: bot_menu::BotMenuEd::new(cx),
     };
     ed.chats.wire(access::ChatsOf::Terminal, cx);
     ed.server.chats.wire(access::ChatsOf::Station, cx);
@@ -376,6 +382,7 @@ impl SettingsView {
                     }),
             )
             .child(self.telegram_chat_access(access::ChatsOf::Terminal, pairing_actions, None, cx))
+            .child(self.bot_menu_box(access::ChatsOf::Terminal, cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
                     .title(t!("telegram.section_mini_app").to_string())

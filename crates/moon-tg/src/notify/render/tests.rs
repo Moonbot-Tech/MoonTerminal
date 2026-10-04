@@ -1,10 +1,8 @@
 //! Pins for notification HTML. Each test names the edit that would break it.
 
-use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::telegram::reply::TELEGRAM_MESSAGE_UTF16_LIMIT;
 
-use super::super::daily::DaySummary;
 use super::super::trades::ClosedTrade;
 use super::*;
 
@@ -20,6 +18,7 @@ fn trade() -> ClosedTrade {
         profit_usd: Some(12.5),
         profit_pct: Some(1.25),
         open_utc: 0,
+        ..ClosedTrade::default()
     }
 }
 
@@ -66,7 +65,7 @@ fn names_are_escaped_before_they_enter_html() {
     row.coin = "BTC<&>\"USDT".to_string();
     row.core_name = "core<&>\"".to_string();
     row.strategy = "strat<&>\"".to_string();
-    let html = trade_card(&row);
+    let html = trade_card(&row, false);
     assert!(html.contains("<b>BTC&lt;&amp;&gt;&quot;USDT</b>"));
     assert!(html.contains("core&lt;&amp;&gt;&quot;"));
     assert!(html.contains("<i>strat&lt;&amp;&gt;&quot;</i>"));
@@ -86,7 +85,7 @@ fn long_strategy_is_cut_to_64_chars_before_escape() {
     strategy.push_str(&"B".repeat(236));
     assert_eq!(strategy.chars().count(), 300);
     row.strategy = strategy;
-    let html = trade_card(&row);
+    let html = trade_card(&row, false);
     let kept: String = "A".repeat(63).chars().chain(['\u{044f}']).collect();
     let lines: Vec<&str> = html.lines().collect();
     assert_eq!(lines[2], format!("<i>{kept}</i>"));
@@ -106,7 +105,7 @@ fn unvalued_profit_is_a_word_and_missing_volume_is_omitted() {
     row.profit_usd = None;
     row.profit_pct = None;
     row.volume_usd = None;
-    let html = trade_card(&row);
+    let html = trade_card(&row, false);
     assert_eq!(
         html,
         "\
@@ -116,31 +115,6 @@ alpha
     );
     assert!(!html.contains("0.00"));
     assert!(!html.contains('$'));
-    assert_only_allowed_tags(&html);
-}
-
-/// A day with only unvalued rows has no best or worst. Inventing either from
-/// the zero sum would name a coin the day did not value.
-#[test]
-fn daily_summary_omits_extremes_when_nothing_is_valued() {
-    let _locale = crate::test_locale::force("en");
-    let summary = DaySummary {
-        profit_usd: 0.0,
-        count: 3,
-        unvalued: 3,
-        best: None,
-        worst: None,
-    };
-    let date = NaiveDate::from_ymd_opt(2026, 10, 2).expect("civil date");
-    let html = daily_summary(date, &summary);
-    let expected = "\
-<b>Daily summary 2026-10-02</b>
-Profit: 0.00$
-Trades: 3
-Unvalued: 3";
-    assert_eq!(html, expected);
-    assert!(!html.contains("Best:"));
-    assert!(!html.contains("Worst:"));
     assert_only_allowed_tags(&html);
 }
 
@@ -154,38 +128,38 @@ fn duration_and_sign_follow_the_rounded_figure() {
     let mut row = trade();
     row.volume_usd = None;
     assert_eq!(
-        trade_card(&row).lines().next(),
+        trade_card(&row, false).lines().next(),
         Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
     );
     row.profit_usd = Some(-4.0);
     row.profit_pct = Some(-0.5);
     assert_eq!(
-        trade_card(&row).lines().next(),
+        trade_card(&row, false).lines().next(),
         Some("\u{1f534} <b>BTC</b> \u{00b7} <b>-4.00$</b> (-0.50%) \u{00b7} 2m")
     );
     row.profit_usd = Some(0.0);
     row.profit_pct = Some(0.0);
     assert_eq!(
-        trade_card(&row).lines().next(),
+        trade_card(&row, false).lines().next(),
         Some("\u{26aa} <b>BTC</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 2m")
     );
-    assert!(!trade_card(&row).contains("+0.00$"));
+    assert!(!trade_card(&row, false).contains("+0.00$"));
     row.profit_usd = Some(0.001);
     row.profit_pct = Some(0.0);
-    assert!(trade_card(&row).starts_with('\u{26aa}'));
-    assert!(trade_card(&row).contains("<b>0.00$</b>"));
+    assert!(trade_card(&row, false).starts_with('\u{26aa}'));
+    assert!(trade_card(&row, false).contains("<b>0.00$</b>"));
     row.profit_usd = Some(12.5);
     row.profit_pct = Some(1.25);
     row.open_utc = 0;
     row.close_utc = 3 * 86_400 + 4 * 3_600;
-    assert!(trade_card(&row).contains(" \u{00b7} 3d 4h"));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 3d 4h"));
     row.close_utc = 2 * 3_600 + 5 * 60;
-    assert!(trade_card(&row).contains(" \u{00b7} 2h 5m"));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 2h 5m"));
     row.close_utc = 90;
-    assert!(trade_card(&row).contains(" \u{00b7} 1m"));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 1m"));
     row.close_utc = 45;
-    assert!(trade_card(&row).contains(" \u{00b7} 0m"));
-    assert!(!trade_card(&row).contains("Duration"));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 0m"));
+    assert!(!trade_card(&row, false).contains("Duration"));
     assert_eq!(
         back_line("alpha", 3 * 86_400 + 4 * 3_600),
         "\u{1f7e2} alpha \u{2014} connection restored (3d 4h)"
@@ -222,7 +196,7 @@ fn empty_strategy_uses_the_manual_word() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
     row.strategy.clear();
-    let html = trade_card(&row);
+    let html = trade_card(&row, false);
     let lines: Vec<&str> = html.lines().collect();
     assert_eq!(lines[2], "<i>Manual</i>");
 }
@@ -238,7 +212,7 @@ fn long_parsed_name_is_cut_without_breaking_the_strategy_line() {
     strategy_name.push('\u{044f}');
     strategy_name.push_str(&"B".repeat(20));
     row.strategy = format!("Desk: (strategy <{strategy_name}>)");
-    let html = trade_card(&row);
+    let html = trade_card(&row, false);
     let kept: String = "N".repeat(63).chars().chain(['\u{044f}']).collect();
     let lines: Vec<&str> = html.lines().collect();
     assert_eq!(lines.len(), 3);
@@ -246,7 +220,7 @@ fn long_parsed_name_is_cut_without_breaking_the_strategy_line() {
     assert!(!html.contains("strategy"));
     let source = "S".repeat(80);
     row.strategy = format!("{source}: (strategy <GRID>)");
-    assert!(trade_card(&row).ends_with(&format!("<i>{} \u{00b7} GRID</i>", "S".repeat(64))));
+    assert!(trade_card(&row, false).ends_with(&format!("<i>{} \u{00b7} GRID</i>", "S".repeat(64))));
     assert_only_allowed_tags(&html);
 }
 
@@ -258,18 +232,18 @@ fn strategy_channel_parses_source_and_name_or_stays_whole() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
     row.strategy = "Desk: (strategy <GRID_A / SAMPLE>)".to_string();
-    assert!(trade_card(&row).ends_with("<i>Desk \u{00b7} GRID_A / SAMPLE</i>"));
+    assert!(trade_card(&row, false).ends_with("<i>Desk \u{00b7} GRID_A / SAMPLE</i>"));
     row.strategy = "(strategy <GRID_A>)".to_string();
-    assert!(trade_card(&row).ends_with("<i>GRID_A</i>"));
+    assert!(trade_card(&row, false).ends_with("<i>GRID_A</i>"));
     row.strategy = "  Desk:  (strategy <GRID (long)>)".to_string();
-    assert!(trade_card(&row).ends_with("<i>Desk \u{00b7} GRID (long)</i>"));
+    assert!(trade_card(&row, false).ends_with("<i>Desk \u{00b7} GRID (long)</i>"));
     row.strategy = "plain grid".to_string();
-    assert!(trade_card(&row).ends_with("<i>plain grid</i>"));
+    assert!(trade_card(&row, false).ends_with("<i>plain grid</i>"));
     row.strategy = "Desk: (strategy <GRID>) extra".to_string();
-    assert!(trade_card(&row).ends_with("<i>Desk: (strategy &lt;GRID&gt;) extra</i>"));
+    assert!(trade_card(&row, false).ends_with("<i>Desk: (strategy &lt;GRID&gt;) extra</i>"));
     row.strategy = "Desk: (strategy <A&B>)".to_string();
-    assert!(trade_card(&row).ends_with("<i>Desk \u{00b7} A&amp;B</i>"));
-    assert_only_allowed_tags(&trade_card(&row));
+    assert!(trade_card(&row, false).ends_with("<i>Desk \u{00b7} A&amp;B</i>"));
+    assert_only_allowed_tags(&trade_card(&row, false));
 }
 
 /// Keeping cents on the entry volume, or gluing the thousands together, would
@@ -279,16 +253,16 @@ fn entry_volume_is_grouped_whole_dollars() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
     row.volume_usd = Some(5992.4);
-    assert!(trade_card(&row).contains(" \u{00b7} 5 992$ \u{00b7} "));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 5 992$ \u{00b7} "));
     row.volume_usd = Some(5992.5);
-    assert!(trade_card(&row).contains(" \u{00b7} 5 993$ \u{00b7} "));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 5 993$ \u{00b7} "));
     row.volume_usd = Some(10_000.0);
-    assert!(trade_card(&row).contains(" \u{00b7} 10 000$ \u{00b7} "));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 10 000$ \u{00b7} "));
     row.volume_usd = Some(0.0);
-    assert!(trade_card(&row).contains(" \u{00b7} 0$ \u{00b7} "));
+    assert!(trade_card(&row, false).contains(" \u{00b7} 0$ \u{00b7} "));
     row.volume_usd = Some(f64::NAN);
     assert_eq!(
-        trade_card(&row).lines().next(),
+        trade_card(&row, false).lines().next(),
         Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
     );
 }
@@ -301,5 +275,62 @@ fn missing_percent_keeps_the_unvalued_word_beside_the_dollars() {
     let mut row = trade();
     row.profit_pct = None;
     row.volume_usd = None;
-    assert!(trade_card(&row).contains("<b>+12.50$</b> (Unvalued)"));
+    assert!(trade_card(&row, false).contains("<b>+12.50$</b> (Unvalued)"));
+}
+
+/// A card in the trade's own currency: waiting for a valuation would delay it, converting would
+/// print a figure the trade never had. Outside a USD stablecoin the dollars follow once known; a
+/// stablecoin's amount already is them. An unchecked card says so on its own line.
+#[test]
+fn a_card_prints_the_trade_in_its_own_currency() {
+    let _locale = crate::test_locale::force("en");
+    let mut row = trade();
+    row.coin = "ETHBTC".to_string();
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(0);
+    row.profit_native = Some(0.00012);
+    row.volume_native = Some(0.0105);
+    row.profit_usd = None;
+    row.volume_usd = None;
+    assert_eq!(
+        trade_card(&row, false).lines().next(),
+        Some(
+            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
+        )
+    );
+    row.profit_usd = Some(7.5);
+    assert_eq!(
+        trade_card(&row, false).lines().next(),
+        Some(
+            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> \u{2248} +7.50$ (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
+        )
+    );
+    row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(8);
+    row.profit_native = Some(-3.3);
+    row.profit_usd = Some(-3.29);
+    row.volume_native = Some(1234.4);
+    row.profit_pct = Some(-0.5);
+    let card = trade_card(&row, true);
+    assert_eq!(
+        card.lines().next(),
+        Some(
+            "\u{1f534} <b>ETHBTC</b> \u{00b7} <b>-3.3 USDC</b> (-0.50%) \u{00b7} 1 234 USDC \u{00b7} 2m"
+        )
+    );
+    assert_eq!(
+        card.lines().nth(3),
+        Some("Thresholds not checked: no dollar value")
+    );
+    assert_only_allowed_tags(&card);
+    row.profit_native = Some(0.0);
+    row.volume_native = Some(0.4);
+    let flat = trade_card(&row, false);
+    assert!(flat.starts_with('\u{26aa}'), "{flat}");
+    assert!(
+        flat.contains("<b>0 USDC</b>"),
+        "a flat trade claims no gain: {flat}"
+    );
+    assert!(
+        flat.contains(" 0.4 USDC "),
+        "a notional under one keeps its cents: {flat}"
+    );
 }

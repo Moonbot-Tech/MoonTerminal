@@ -123,6 +123,25 @@ pub trait TgHost {
     ///     `false` when the save failed; the configuration is then unchanged.
     fn save_paired_chat(&mut self, chat_id: i64) -> bool;
 
+    /// Persist the bot's menu and report settings changed from the chat, and adopt them.
+    ///
+    /// A host with an editor open on them (the terminal's Settings draft) keeps the user's
+    /// unsaved edits: the change reaches the draft only where it had not been edited.
+    ///
+    /// Returns:
+    ///     `false` when the save failed; the configuration is then unchanged.
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool;
+
+    /// Switch the Mini App on or off from the chat, saved and applied.
+    ///
+    /// Returns:
+    ///     `None` from a host whose Mini App is switched elsewhere — the station, by its
+    ///     administrator in the terminal's Settings; `Some(false)` when the save failed.
+    fn save_mini_app(&mut self, on: bool) -> Option<bool> {
+        let _ = on;
+        None
+    }
+
     /// Persist an empty pairing — no chats, no owner, no grants — and adopt it.
     ///
     /// Returns:
@@ -154,11 +173,15 @@ pub trait TgHost {
     /// Answer the station's status through `reply` (the chat's "Status"): the station reads it on
     /// its loop and looks for a newer release off it ([`crate::station_status_reply`]).
     ///
+    /// Args:
+    ///     from_settings: Asked from the Settings section, so the answer leads back to it; from
+    ///         the keyboard or `/status` it does not.
+    ///
     /// Returns:
     ///     `false` from a host with no station behind its bot — the terminal —, which then
     ///     answers it as a request it cannot run.
-    fn station_status(&mut self, reply: SyncSender<Response>) -> bool {
-        let _ = reply;
+    fn station_status(&mut self, reply: SyncSender<Response>, from_settings: bool) -> bool {
+        let _ = (reply, from_settings);
         false
     }
 

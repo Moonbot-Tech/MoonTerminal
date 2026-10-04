@@ -41,6 +41,7 @@ pub mod servers;
 pub mod storage;
 pub mod tab_badges;
 pub mod telegram_access;
+pub mod telegram_menu;
 pub mod theme;
 pub mod theme_legacy;
 pub mod trade_sounds;

@@ -2,10 +2,11 @@
 
 use crate::t;
 use moon_core::{
+    config::telegram_menu::ReportBasis,
     db::QuoteBreakdown,
     telegram::{
         api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup},
-        report::{Period, ReportRequest, ReportScope},
+        report::{ReportRequest, ReportScope},
         runtime::Response,
     },
     util::{display_time, fmt},
@@ -13,7 +14,6 @@ use moon_core::{
 
 use super::Page;
 use crate::HostKind;
-use crate::labels::navigation_keyboard;
 
 /// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
 const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
@@ -58,18 +58,23 @@ pub(crate) fn rich_message_fits(html: &str) -> bool {
         && rich_message_blocks(html) <= RICH_MESSAGE_BLOCK_LIMIT
 }
 
-/// Table rows, paragraphs, details and tables are the blocks this report actually emits.
+/// Table rows, paragraphs, captions, details and tables are the blocks this report emits.
 pub(super) fn rich_message_blocks(html: &str) -> usize {
     html.matches("<tr").count()
         + html.matches("<p>").count()
+        + html.matches("<caption>").count()
         + html.matches("<details").count()
         + html.matches("<table").count()
 }
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
-/// `host` words delivery failures; `owner` limits the persistent station navigation.
-pub(super) fn render(page: &Page, host: HostKind, owner: bool) -> Response {
+/// Made to fit a phone screen (LinKvo, 04.10): the view and its period are the table's caption
+/// rather than two paragraphs, the totals are its top row rather than a heading row and a total
+/// row, and a single day's period names its date once.
+///
+/// `host` words delivery failures; `navigation` is the chat's reply keyboard.
+pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Response {
     let html = report_html(page);
     if !rich_message_fits(&html) {
         return Response::Text {
@@ -82,8 +87,28 @@ pub(super) fn render(page: &Page, host: HostKind, owner: bool) -> Response {
         keyboard: keyboard(page),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host, owner),
+            navigation,
         ),
+    }
+}
+
+/// The page's period: `04.10.2026 00:00 — 08:59` inside one day, both dates otherwise.
+fn period(page: &Page) -> String {
+    let at = |value| display_time::at(value, page.zone);
+    match (at(page.from), at(page.to)) {
+        (Some(from), Some(to)) if from.date_naive() == to.date_naive() => {
+            format!("{} — {}", from.format("%d.%m.%Y %H:%M"), to.format("%H:%M"))
+        }
+        (from, to) => {
+            let stamp = |value: Option<_>| {
+                value
+                    .map(|v: chrono::DateTime<chrono_tz::Tz>| {
+                        v.format("%d.%m.%Y %H:%M").to_string()
+                    })
+                    .unwrap_or_default()
+            };
+            format!("{} — {}", stamp(from), stamp(to))
+        }
     }
 }
 
@@ -93,52 +118,47 @@ pub(super) fn report_html(page: &Page) -> String {
         t!("telegram.report_days")
     } else if page.request.by_exchange {
         t!("telegram.report_exchanges")
+    } else if page.request.by_group {
+        t!("telegram.report_groups")
     } else {
         t!("telegram.report_cores")
     };
-    let stamp = |value| {
-        display_time::at(value, page.zone)
-            .map(|v| v.format("%d.%m.%Y %H:%M").to_string())
-            .unwrap_or_default()
-    };
     let title = page.scope_label.as_deref().unwrap_or(&heading);
-    let mut html = if page.request.by_exchange && page.scope_label.is_none() {
-        format!("<p>{} — {}</p>", stamp(page.from), stamp(page.to))
-    } else {
-        format!(
-            "<p><b>{}</b></p><p>{} — {}</p>",
-            escape(title),
-            stamp(page.from),
-            stamp(page.to)
-        )
-    };
+    let mut html = page
+        .caption
+        .as_deref()
+        .map(|caption| format!("<p><b>{}</b></p>", escape(caption)))
+        .unwrap_or_default();
     if page.total.orders == 0 {
         html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
     }
+    let mut table_caption = if page.request.by_exchange && page.scope_label.is_none() {
+        escape(&period(page))
+    } else {
+        format!("<b>{}</b> · {}", escape(title), escape(&period(page)))
+    };
+    // The terminal's Report wording: the period counts trades by when they opened.
+    if page.basis == ReportBasis::Open {
+        table_caption.push_str(&format!(
+            " · <i>{}</i>",
+            escape(&t!("report.period_basis.open"))
+        ));
+    }
     html.push_str(&format!(
-        "<table compact striped><tr><th>{}</th><th align=\"right\">USDT</th><th align=\"right\">{}</th></tr>",
-        escape(&if page.request.daily {
-            t!("telegram.report_date")
-        } else if page.request.by_exchange {
-            t!("telegram.report_exchange")
-        } else {
-            t!("telegram.report_bot")
-        }),
-        escape(&t!("telegram.report_trades"))
+        "<table compact striped><caption>{table_caption}</caption><tr><th>{}</th><th align=\"right\">{}</th><th align=\"right\">{}</th></tr>",
+        escape(&t!("telegram.report_total")),
+        escape(&profit(&page.total)),
+        page.total.orders
     ));
+    let by_core = !page.request.by_exchange && !page.request.daily && !page.request.by_group;
     for (name, total) in &page.rows {
-        // Long user-controlled names cannot exhaust the rich-message budget.
-        let label: String = name.chars().filter(|c| !c.is_control()).take(200).collect();
-        if !page.request.by_exchange && !page.request.daily {
-            html.push_str(&format!(
-                "<tr><td colspan=\"3\"><b>{}</b></td></tr>",
-                escape(&label)
-            ));
-        }
-        let label = if !page.request.by_exchange && !page.request.daily {
-            String::new()
+        // Long user-controlled names cannot exhaust the rich-message budget. A core is one row:
+        // its name keeps both ends (where the account number usually is), and the full name stays
+        // in the details below.
+        let label: String = if by_core {
+            compact_label(name)
         } else {
-            label
+            name.chars().filter(|c| !c.is_control()).take(200).collect()
         };
         html.push_str(&format!(
             "<tr><td>{}</td><td align=\"right\">{}</td><td align=\"right\">{}</td></tr>",
@@ -147,8 +167,7 @@ pub(super) fn report_html(page: &Page) -> String {
             total.orders
         ));
     }
-    html.push_str(&format!("<tr><td><b>{}</b></td><td align=\"right\"><b>{}</b></td><td align=\"right\"><b>{}</b></td></tr></table>",
-        escape(&t!("telegram.report_total")),escape(&profit(&page.total)),page.total.orders));
+    html.push_str("</table>");
     html.push_str(&format!(
         "<details><summary>{}</summary><table compact><tr><th>PnL</th><th>{}</th></tr>",
         escape(&t!("telegram.report_details")),
@@ -214,11 +233,12 @@ pub(super) fn report_html(page: &Page) -> String {
     html
 }
 
-/// Help is disposable rich content; a separate permanent message owns persistent navigation.
+/// Help is disposable rich content; a separate message owns the reply keyboard.
 ///
 /// `host` picks the lines that say what the bot depends on: a terminal must keep running, a
-/// station reports around the clock. `owner` controls station command help and navigation.
-pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
+/// station reports around the clock. `owner` controls station command help; `navigation` is the
+/// chat's reply keyboard.
+pub(crate) fn help(zone: &str, host: HostKind, owner: bool, navigation: ReplyMarkup) -> Response {
     let (limits, mini) = match host {
         HostKind::Terminal => ("telegram.help_limits", "telegram.help_mini"),
         HostKind::Station => ("telegram.help_limits_station", "telegram.help_mini_station"),
@@ -247,6 +267,16 @@ pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
             escape(&t!("telegram.help_status_station"))
         ));
     }
+    if owner {
+        html.push_str(&format!(
+            "<p><code>/settings</code> &#183; {}</p>",
+            escape(&t!("telegram.settings.help"))
+        ));
+        html.push_str(&format!(
+            "<p><code>/control</code> &#183; {}</p>",
+            escape(&t!("telegram.control.help"))
+        ));
+    }
     html.push_str(&format!("<p><b>{}</b></p><pre>/report 2026-09-01 2026-09-10</pre><pre>/daily 2026-09-01 2026-09-10</pre><p>{}</p></details>",
         escape(&t!("telegram.help_custom")), escape(&t!(limits, zone = zone))));
     html.push_str(&format!(
@@ -273,7 +303,7 @@ pub(crate) fn help(zone: &str, host: HostKind, owner: bool) -> Response {
         keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
-            navigation_keyboard(host, owner),
+            navigation,
         ),
     }
 }
@@ -296,6 +326,7 @@ fn exchange_icon(scope: ReportScope) -> &'static str {
     use moon_core::venue::{Brand, venue};
     let brand = match scope {
         ReportScope::Venue(id) => venue(id.code).map(|v| v.brand),
+        ReportScope::Group(_) => return "\u{1f465}",
         _ => None,
     };
     match brand {
@@ -318,6 +349,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             "telegram.report_next" => "\u{27a1}\u{fe0f}",
             "telegram.report_all_cores" | "telegram.report_cores_scope" => "\u{1f9e9}",
             "telegram.report_exchanges_back" => "\u{2190}",
+            "telegram.report_by_groups" => "\u{1f465}",
             _ => "\u{1f4c5}",
         };
         InlineKeyboardButton::callback(format!("{icon} {}", t!(key)), request.callback())
@@ -332,6 +364,7 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
                         let mut next = request.clone();
                         next.scope = *scope;
                         next.by_exchange = false;
+                        next.by_group = false;
                         next.daily = false;
                         next.page = 0;
                         next.exchanges_open = true;
@@ -351,19 +384,23 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
         open.exchanges_open = true;
         let mut cores = request.clone();
         cores.by_exchange = false;
+        cores.by_group = false;
         cores.daily = false;
         cores.page = 0;
+        // The view by groups lists its groups under this menu; every other view, the exchanges.
+        let menu = if request.by_group {
+            t!("telegram.report_groups")
+        } else {
+            t!("telegram.report_exchanges_menu")
+        };
         rows.push(vec![
-            InlineKeyboardButton::callback(
-                format!("{} \u{25be}", t!("telegram.report_exchanges_menu")),
-                open.callback(),
-            ),
+            InlineKeyboardButton::callback(format!("{menu} \u{25be}"), open.callback()),
             button("telegram.report_all_cores", cores),
         ]);
     }
     let mut views = Vec::new();
-    for (key, exchanges, daily) in [
-        ("telegram.report_back", true, false),
+    for (key, exchanges, daily, groups) in [
+        ("telegram.report_back", true, false, false),
         (
             if request.scope == ReportScope::All {
                 "telegram.report_all_cores"
@@ -372,7 +409,9 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             },
             false,
             false,
+            false,
         ),
+        ("telegram.report_by_groups", false, false, true),
         (
             if request.scope == ReportScope::All {
                 "telegram.report_by_days"
@@ -381,26 +420,36 @@ pub(super) fn keyboard(page: &Page) -> ReplyMarkup {
             },
             false,
             true,
+            false,
         ),
     ] {
-        if (daily && request.period == Period::Today)
-            || (request.by_exchange == exchanges && request.daily == daily)
+        // A single day has nothing to split by days (`ReportRequest::in_view` agrees), and a chat
+        // none of whose cores is in a saved group has no view by groups.
+        if (daily && !request.period.spans_days())
+            || (groups && !page.has_groups)
+            || (request.by_exchange == exchanges
+                && request.daily == daily
+                && request.by_group == groups)
             // The collapsed top row already carries All cores; do not repeat it below.
-            || (!request.exchanges_open && !exchanges && !daily)
+            || (!request.exchanges_open && !exchanges && !daily && !groups)
         {
             continue;
         }
         let mut next = request.clone();
         next.by_exchange = exchanges;
+        next.by_group = groups;
         next.daily = daily;
         next.page = 0;
-        if exchanges {
+        if exchanges || groups {
             next.scope = ReportScope::All;
         }
         views.push(button(key, next));
     }
-    if !views.is_empty() {
-        rows.push(views);
+    // One row while it holds them: every row of buttons is a line the report no longer fits in.
+    match rows.last_mut() {
+        Some(top) if !request.exchanges_open && top.len() + views.len() <= 3 => top.extend(views),
+        _ if !views.is_empty() => rows.push(views),
+        _ => {}
     }
     let mut nav = Vec::new();
     if request.page > 0 {

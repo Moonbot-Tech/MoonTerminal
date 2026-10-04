@@ -207,6 +207,32 @@ impl ClientSettingsSequence {
         self.pending_confirmation = None;
     }
 
+    /// Drop the manual orders still queued when a connection was lost. Settings, temporary bans
+    /// included, are desired state and keep their place and their retry budget.
+    ///
+    /// Called whenever the connection stops being operational, a moonproto reconnect inside one
+    /// run as well as a new run. An order waiting from before was priced off a chart that may be
+    /// minutes old: the late live action `live::stale` refuses at the command queue.
+    ///
+    /// Removing an order invalidates a confirmation in flight: it pops a COUNT of leading
+    /// mutations, and an order removed from between two runs of mutations would let it pop into
+    /// the second. So that confirmation is forgotten; mutations the core already reflects still
+    /// leave the queue by the snapshot comparison. `waiting_for_echo` is deliberately kept: clearing
+    /// it while the link is down would rebuild a packet from settings retained before the outage
+    /// and could revert what the core already applied.
+    pub(in crate::feed) fn drop_orders_of_lost_connection(&mut self, server_id: u64) {
+        let before = self.queue.len();
+        self.queue.retain(|op| !matches!(op, SequenceOp::Order(_)));
+        let dropped = before - self.queue.len();
+        if dropped > 0 {
+            self.pending_confirmation = None;
+            log::warn!(
+                "core {} lost its connection: dropping {dropped} queued manual order(s)",
+                crate::feed::core_label(server_id),
+            );
+        }
+    }
+
     /// Drop everything queued for a core process that is going away.
     ///
     /// The mirror of the rule the shared-config sequence states beside it: a queued packet

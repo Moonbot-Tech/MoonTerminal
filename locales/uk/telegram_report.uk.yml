@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Період обирайте в нижньо�
 telegram.report_all_cores: "Усі ядра"
 
 telegram.report_by_days: "По днях"
+telegram.report_by_groups: "За групами"
+telegram.report_groups: "Групи"
+telegram.report_no_group: "Без групи"
 
 telegram.report_days_scope: "Група по днях"
 
@@ -45,7 +48,6 @@ telegram.report_exchanges_menu: "Біржі"
 
 telegram.report_exchanges_back: "Назад"
 
-telegram.report_exchange: "Біржа"
 
 telegram.report_scope_unavailable: "Біржа недоступна"
 
@@ -74,7 +76,6 @@ telegram.report_trades: "Угоди"
 
 telegram.report_date: "Дата"
 
-telegram.report_bot: "Бот"
 
 telegram.report_details: "Валюти і середній ордер"
 
@@ -103,22 +104,16 @@ telegram.report_help: "Оберіть період нижче. У звітах �
 
 telegram.report_help_station: "Оберіть період нижче. У звітах є вигляд за ботами і днями. Натисніть період ще раз, щоб отримати свіжі дані.\n\n/hour — ця година\n/today — сьогодні\n/daily — по днях за цей місяць\n/report 2026-09-01 2026-09-10 — власний період\n/daily 2026-09-01 2026-09-10 — власні результати по днях\n/status — статус станції\nДати включно, до 366 днів; часовий пояс — з налаштувань станції. Звіти оновлюються цілодобово."
 
-telegram.notify_profit: "Прибуток"
-
 telegram.notify_manual: "Вручну"
 
 telegram.notify_unvalued: "Без оцінки"
 
+telegram.notify_unchecked: "Пороги не перевірено: оцінки в $ немає"
+
+telegram.notify_opened: "Угоду відкрито"
+telegram.notify_emulator: "емулятор"
+telegram.notify_events_more: "…і ще %{n}"
+
 telegram.notify_down: "немає зв'язку з"
 
 telegram.notify_back: "зв'язок відновлено"
-
-telegram.notify_daily_title: "Підсумок дня"
-
-telegram.notify_trades: "Угоди"
-
-telegram.notify_unvalued_trades: "Без оцінки"
-
-telegram.notify_best: "Найкраща"
-
-telegram.notify_worst: "Найгірша"

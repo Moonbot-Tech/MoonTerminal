@@ -796,8 +796,8 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   The host talks only through typed `Work` / `Response` channels: `moon_tg::tick` drains them on
   the host's owner loop — in the terminal the Backend's 100 ms loop (`Backend::tick_telegram`).
   A third thread, `telegram-notify`, drains the notification outbox; see below.
-- **Notification sender.** `moon-tg`'s notify tick appends closed-trade, core-down, and
-  daily-summary HTML to the `NotifyStore` outbox in the same atomic save as the announce-once
+- **Notification sender.** `moon-tg`'s notify tick appends closed-trade and core-down HTML to
+  the `NotifyStore` outbox in the same atomic save as the announce-once
   ledger. `moon-core`'s `telegram-notify` thread owns its own Bot API client and deletes a row
   only after Telegram accepts it, pacing each chat at one message per second. A timeout is
   retried, so a rare duplicate is possible. A body over the 4096 UTF-16 limit is not queued.
@@ -825,7 +825,7 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   inline launcher remains available and uses the current `MiniAppStatus::Tunneling` URL.
   Pairing reset retains cleanup-only chat IDs across same-token service restarts for the lifetime
   of the desktop process; token changes discard them. Those IDs never grant app authorization.
-- **Bot navigation.** Pairing and `/help` install the persistent reply keyboard; `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
+- **Bot navigation.** Pairing and `/help` install the reply keyboard (foldable, not persistent); `/start` sends a localized welcome carrying that keyboard, followed by an inline report.
   Reply buttons own global period selection and Help. Inline report buttons own exchange
   drill-down, core/day views, back and paging; periods are not duplicated. A repeated reply-keyboard
   period request fetches fresh data. The complete-scope Total row follows the main table rows;
@@ -845,7 +845,9 @@ returns `None` before a channel, thread, path, listener, or helper process.**
   `/report YYYY-MM-DD YYYY-MM-DD` and `/daily` ranges include both dates and allow at most 366
   days. `moon-tg/src/report/` reads on the host's background worker, a pinned SQLite snapshot,
   `ReportAxis::load`, `query_totals`, and historical valuation; read failures never become zero.
-  Core groups use `CoreOrder`, six active groups per page, with the complete-scope total on every page.
+  Core groups use `CoreOrder`. Every view lists all active groups in one message while it fits the
+  rich-message caps; an oversized one pages with the largest fitting rung of a fixed ladder
+  (`report/paging.rs`), with the complete-scope total on every page.
   Exchange groups use canonical venue identity and support scoped drill-down; empty scoped membership
   uses the no-match sentinel. Groups without trades are removed before paging; zero-profit trades stay.
   Native subtotals remain available when USDT conversion is incomplete. Rich HTML reports use

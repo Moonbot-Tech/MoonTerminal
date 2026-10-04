@@ -178,7 +178,7 @@ const ASK_EVERY: Duration = Duration::from_secs(3);
 const STOPPED_LOOKS: u32 = 5;
 
 /// How the station's bot is doing, read at one moment.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BotState {
     /// The station is not running.
     pub stopped: bool,

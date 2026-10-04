@@ -1,52 +1,114 @@
-//! Telegram HTML for one notification: a closed-trade card, a down or back
-//! line, and the daily summary.
+//! Telegram HTML for one notification: a closed-trade card, or a down or back
+//! line.
 //!
 //! Names are cut to 64 chars before [`crate::html::escape`]. The outbox refuses
 //! oversized bodies rather than cutting HTML inside a tag or entity.
 
 use crate::t;
-use chrono::NaiveDate;
 use chrono_tz::Tz;
 use moon_core::feed::order_math::MONEY_DECIMALS;
 use moon_core::util::{display_time, fmt};
 
-use super::daily::DaySummary;
 use super::trades::ClosedTrade;
 use crate::html::escape;
 
 /// Longest coin, core, or strategy kept on a card, in Unicode scalars.
 const NAME_CHARS: usize = 64;
 
-/// One closed trade as a three-line HTML card.
+/// One closed trade as a three-line HTML card, in the trade's own currency.
 ///
-/// Line 1 is a sign mark, the coin, the signed profit, an optional whole-dollar
-/// entry volume, and the duration. Line 2 is the core name. Line 3 is the
-/// strategy, in italics.
+/// Line 1 is a sign mark, the coin, the signed profit, an optional entry
+/// volume, and the duration. Line 2 is the core name. Line 3 is the strategy,
+/// in italics. An unchecked card adds a fourth line saying its thresholds were
+/// not checked.
+///
+/// The profit and the volume print in the trade's own currency (`+0.00012 BTC`,
+/// `+3.30 USDC`) the moment the row lands, without a valuation. Outside a USD
+/// stablecoin the dollar value follows once the valuation has it
+/// (`≈ +7.50$`). A row without its own amount falls back to the dollars alone.
 ///
 /// Args:
-///     t: The trade to announce. `profit_usd: None` is unvalued and draws the
-///         white mark plus the unvalued word. `volume_usd: None`, or a
-///         non-finite volume, drops the volume segment.
+///     t: The trade to announce. No amount at all is unvalued and draws the
+///         white mark plus the unvalued word. No volume drops its segment.
+///     unchecked: The rule's thresholds could not be checked.
 ///
 /// Returns:
 ///     HTML using only `<b>` and `<i>`. Under a thousand chars for ordinary
 ///     names, and far under Telegram's 4096 UTF-16 limit even when every name
 ///     is 64 escaped characters.
-pub(crate) fn trade_card(t: &ClosedTrade) -> String {
+pub(crate) fn trade_card(t: &ClosedTrade, unchecked: bool) -> String {
+    let native = native_profit(t);
+    let mark = match native {
+        Some((_, sign)) => sign.pick("\u{1f7e2}", "\u{1f534}", "\u{26aa}"),
+        None => sign_mark(t.profit_usd),
+    };
     let mut parts = vec![
-        format!("{} <b>{}</b>", sign_mark(t.profit_usd), name(&t.coin)),
-        profit_text(t.profit_usd, t.profit_pct),
+        format!("{mark} <b>{}</b>", name(&t.coin)),
+        profit_text(t, native.map(|(text, _)| text)),
     ];
-    if let Some(volume) = whole_dollar_volume(t.volume_usd) {
+    if let Some(volume) = volume_text(t) {
         parts.push(volume);
     }
     parts.push(human_duration(t.close_utc.saturating_sub(t.open_utc)));
-    format!(
+    let mut card = format!(
         "{}\n{}\n{}",
         parts.join(" \u{00b7} "),
         name(&t.core_name),
         strategy_line(&t.strategy)
-    )
+    );
+    if unchecked {
+        card.push('\n');
+        card.push_str(&escape(&t!("telegram.notify_unchecked")));
+    }
+    card
+}
+
+/// Whether a card for `t` shows a dollar value beside its own currency: not for a USD
+/// stablecoin, whose amount already is one.
+pub(crate) fn shows_dollars(t: &ClosedTrade) -> bool {
+    !t.stable_quote()
+}
+
+/// The trade's own signed profit with its ticker, and the sign that text shows. A profit that
+/// rounds to zero prints unsigned, as the dollar figure does: a `+` there would claim a gain.
+fn native_profit(t: &ClosedTrade) -> Option<(String, fmt::DeltaSign)> {
+    let total = moon_core::db::QuoteTotal {
+        currency: t.quote?,
+        profit: t.profit_native?,
+        orders: 1,
+    };
+    let (text, sign) = total.signed_display();
+    let text = match sign {
+        fmt::DeltaSign::Zero => text.trim_start_matches('+').to_string(),
+        _ => text,
+    };
+    Some((text, sign))
+}
+
+/// Entry volume: in the trade's own currency, grouped whole units for a stablecoin (cents under
+/// one unit) and the currency's places otherwise; else the valued whole dollars; else nothing.
+fn volume_text(t: &ClosedTrade) -> Option<String> {
+    match (t.quote, t.volume_native) {
+        // Whole units read best for a stablecoin; a notional under one keeps its cents.
+        (Some(quote), Some(volume)) if t.stable_quote() && volume < 1.0 => {
+            Some(format!("{} {}", fmt::compact(volume, 2), quote.ticker()))
+        }
+        (Some(quote), Some(volume)) if t.stable_quote() => {
+            let rounded = fmt::round_to(volume, 0)?;
+            let digits = format!("{rounded:.0}");
+            Some(format!(
+                "{} {}",
+                fmt::group_thousands(&digits),
+                quote.ticker()
+            ))
+        }
+        (Some(quote), Some(volume)) => Some(format!(
+            "{} {}",
+            fmt::compact(volume, quote.display_decimals()),
+            quote.ticker()
+        )),
+        _ => whole_dollar_volume(t.volume_usd),
+    }
 }
 
 /// One line: the core lost its link, and the local time that outage started.
@@ -85,45 +147,6 @@ pub(crate) fn back_line(core_name: &str, down_for_secs: i64) -> String {
         escape(&t!("telegram.notify_back")),
         human_duration(down_for_secs)
     )
-}
-
-/// The day's profit, trade count, and valued extremes.
-///
-/// Args:
-///     date: Local calendar date the summary covers.
-///     s: Totals from [`super::daily::summarize`]. `best` and `worst` of
-///         `None` are omitted. `unvalued` is omitted when it is zero.
-///
-/// Returns:
-///     HTML whose only tag is `<b>` around the title and the date.
-pub(crate) fn daily_summary(date: NaiveDate, s: &DaySummary) -> String {
-    let mut lines = vec![
-        format!(
-            "<b>{} {}</b>",
-            escape(&t!("telegram.notify_daily_title")),
-            date.format("%Y-%m-%d")
-        ),
-        format!(
-            "{}: {}",
-            escape(&t!("telegram.notify_profit")),
-            signed_money(s.profit_usd)
-        ),
-        format!("{}: {}", escape(&t!("telegram.notify_trades")), s.count),
-    ];
-    if s.unvalued > 0 {
-        lines.push(format!(
-            "{}: {}",
-            escape(&t!("telegram.notify_unvalued_trades")),
-            s.unvalued
-        ));
-    }
-    if let Some(trade) = &s.best {
-        lines.push(extreme_line(&t!("telegram.notify_best"), trade));
-    }
-    if let Some(trade) = &s.worst {
-        lines.push(extreme_line(&t!("telegram.notify_worst"), trade));
-    }
-    lines.join("\n")
 }
 
 /// Strategy line: `<i>source · name</i>`, or the manual word when the row stored none.
@@ -205,36 +228,34 @@ fn whole_dollar_volume(value: Option<f64>) -> Option<String> {
     Some(format!("{}$", fmt::group_thousands(&digits)))
 }
 
-/// `label: coin money` for one extreme. The coin is a name; the money is the
-/// row's profit, or the unvalued word when that profit is absent.
-fn extreme_line(label: &str, trade: &ClosedTrade) -> String {
-    let profit = match trade.profit_usd {
-        Some(value) => signed_money(value),
-        None => escape(&t!("telegram.notify_unvalued")),
-    };
-    format!("{}: {} {profit}", escape(label), name(&trade.coin))
-}
-
-/// Profit in dollars and percent. `None` dollars is the unvalued word alone,
-/// never a zero. A missing percent keeps the bold dollars and marks the
-/// percent unvalued. The dollar figure is bold; the percent is not.
+/// Profit and percent. The trade's own amount is bold, with the dollars after it once known
+/// outside a USD stablecoin; a row without its own amount shows the dollars bold; neither is
+/// the unvalued word alone, never a zero. A missing percent is marked unvalued.
 ///
 /// Args:
-///     usd: Closed profit in USDT. `None` is unvalued.
-///     pct: Profit percent already scaled by 100, when the row has one.
+///     t: The trade: dollars, percent and quote.
+///     native: The trade's own signed profit with its ticker, when the row has it.
 ///
 /// Returns:
-///     Either the escaped unvalued word, or `<b>+1.25$</b> (+0.40%)`.
-fn profit_text(usd: Option<f64>, pct: Option<f64>) -> String {
-    let Some(usd) = usd else {
-        return escape(&t!("telegram.notify_unvalued"));
+///     The escaped unvalued word, `<b>+0.00012 BTC</b> ≈ +7.50$ (+0.40%)`,
+///     `<b>+3.30 USDC</b> (+0.40%)` or `<b>+1.25$</b> (+0.40%)`.
+fn profit_text(t: &ClosedTrade, native: Option<String>) -> String {
+    let money = match (native, t.profit_usd) {
+        (Some(native), Some(usd)) if shows_dollars(t) => {
+            format!("<b>{native}</b> \u{2248} {}", signed_money(usd))
+        }
+        (Some(native), _) => format!("<b>{native}</b>"),
+        (None, Some(usd)) => format!("<b>{}</b>", signed_money(usd)),
+        (None, None) => return escape(&t!("telegram.notify_unvalued")),
     };
-    let money = signed_money(usd);
-    let pct_text = match pct.and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS)) {
+    let pct_text = match t
+        .profit_pct
+        .and_then(|value| fmt::signed_pct(value, MONEY_DECIMALS))
+    {
         Some((pct, _)) => pct,
         None => escape(&t!("telegram.notify_unvalued")),
     };
-    format!("<b>{money}</b> ({pct_text})")
+    format!("{money} ({pct_text})")
 }
 
 /// `🟢` for a gain, `🔴` for a loss, `⚪` for zero or an unvalued profit.

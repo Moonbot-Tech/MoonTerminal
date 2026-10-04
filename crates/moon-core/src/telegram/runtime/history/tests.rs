@@ -113,3 +113,19 @@ fn bot_identity_scopes_persistence() {
         crate::config::paths::telegram_chat_history(2)
     );
 }
+
+/// A new keyboard owner retires the previous one, never itself, and an upgrade's unknown id
+/// (none recorded) retires nothing.
+#[test]
+fn a_new_keyboard_owner_retires_the_previous_one() {
+    let markup = crate::telegram::api::ReplyMarkup::Inline(
+        crate::telegram::api::InlineKeyboardMarkup::from_rows(Vec::new()),
+    );
+    let mut history = History::default();
+    assert_eq!(history.replace_navigation(7, 10, markup.clone()), None);
+    assert_eq!(history.replace_navigation(7, 12, markup.clone()), Some(10));
+    assert_eq!(history.replace_navigation(7, 12, markup.clone()), None);
+    assert_eq!(history.replace_navigation(8, 3, markup.clone()), None);
+    assert_eq!(history.navigation.get(&7), Some(&12));
+    assert!(!history.needs_navigation(7, &markup, false));
+}

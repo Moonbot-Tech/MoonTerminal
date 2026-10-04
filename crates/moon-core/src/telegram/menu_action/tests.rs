@@ -1,0 +1,252 @@
+use super::*;
+use crate::telegram::report::ReportRequest;
+
+fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, d).unwrap()
+}
+
+/// Every action survives its callback and stays inside Telegram's 64 bytes.
+#[test]
+fn actions_round_trip_through_their_callbacks() {
+    let actions = [
+        MenuAction::Report,
+        MenuAction::Noop,
+        MenuAction::Preset(Preset::Days7),
+        MenuAction::Preset(Preset::Days30),
+        MenuAction::Preset(Preset::LastWeek),
+        MenuAction::Custom {
+            month: None,
+            from: None,
+        },
+        MenuAction::Custom {
+            month: Some(day(2026, 9, 1)),
+            from: None,
+        },
+        MenuAction::Custom {
+            month: Some(day(2026, 10, 1)),
+            from: Some(day(2026, 9, 28)),
+        },
+    ];
+    for action in actions {
+        let data = action.callback();
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(MenuAction::parse_callback(&data), Some(action), "{data}");
+    }
+}
+
+/// A picked first day with no month opens on that day's month.
+#[test]
+fn a_first_day_alone_names_its_month() {
+    let data = MenuAction::Custom {
+        month: None,
+        from: Some(day(2026, 2, 14)),
+    }
+    .callback();
+    assert_eq!(data, "m:c:2026-02:2026-02-14");
+}
+
+/// Malformed data and the other namespaces are not menu actions.
+#[test]
+fn foreign_and_malformed_data_is_refused() {
+    for data in [
+        "r:e:t:0",
+        "station:update",
+        "m:",
+        "m:x",
+        "m:p:14",
+        "m:c:2026-13",
+        "m:c:26-09",
+        "m:c:2026-9",
+        "m:c:1969-12",
+        "m:c:2026-09:2026-02-30",
+        "m:c:2026-09:2026-09-01:x",
+        "m:r:extra",
+    ] {
+        assert_eq!(MenuAction::parse_callback(data), None, "{data}");
+    }
+}
+
+/// Presets count back from today; last week is the Monday-to-Sunday before this one.
+#[test]
+fn presets_count_back_from_today() {
+    // 2026-10-03 is a Saturday.
+    let today = day(2026, 10, 3);
+    assert_eq!(Preset::Days7.dates(today), Some((day(2026, 9, 27), today)));
+    assert_eq!(Preset::Days30.dates(today), Some((day(2026, 9, 4), today)));
+    assert_eq!(
+        Preset::LastWeek.dates(today),
+        Some((day(2026, 9, 21), day(2026, 9, 27)))
+    );
+    // On a Monday, last week still ends yesterday.
+    assert_eq!(
+        Preset::LastWeek.dates(day(2026, 9, 28)),
+        Some((day(2026, 9, 21), day(2026, 9, 27)))
+    );
+    for preset in Preset::ALL {
+        let (from, to) = preset.dates(today).unwrap();
+        assert!(ReportRequest::span(from, to).is_some());
+    }
+}
+
+/// Every Settings screen and switch survives its callback, inside Telegram's 64 bytes; a button
+/// of the retired Report-section level or of the removed daily summary, or a value out of range,
+/// is refused.
+#[test]
+fn settings_actions_round_trip() {
+    use crate::config::telegram_menu::{MenuItem, ReportBasis, ReportView};
+    let mut actions = vec![
+        SettingsAction::Root,
+        SettingsAction::Buttons,
+        SettingsAction::View,
+        SettingsAction::Basis,
+        SettingsAction::MiniApp(true),
+        SettingsAction::MiniApp(false),
+        SettingsAction::Notify,
+        SettingsAction::Trades(true),
+        SettingsAction::Down(false),
+        SettingsAction::DownAfter(1),
+        SettingsAction::DownAfter(1440),
+        SettingsAction::Opened(true),
+        SettingsAction::Opened(false),
+        SettingsAction::Detects(true),
+        SettingsAction::Detects(false),
+        SettingsAction::StationStatus,
+    ];
+    actions.extend(
+        crate::telegram::notify::AutoReport::ALL
+            .into_iter()
+            .flat_map(|kind| [true, false].map(|on| SettingsAction::Auto(kind, on))),
+    );
+    actions.extend(ReportView::ALL.map(SettingsAction::SetView));
+    actions.extend(ReportBasis::ALL.map(SettingsAction::SetBasis));
+    actions.extend(
+        MenuItem::ALL
+            .iter()
+            .flat_map(|&item| [true, false].map(|show| SettingsAction::ShowButton(item, show))),
+    );
+    for action in actions {
+        let data = MenuAction::Settings(action).callback();
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(
+            MenuAction::parse_callback(&data),
+            Some(MenuAction::Settings(action)),
+            "{data}"
+        );
+    }
+    assert_eq!(MenuAction::Settings(SettingsAction::Root).callback(), "m:s");
+    for data in [
+        "m:s:b:r:help:1",
+        "m:s:b:r:today:1",
+        "m:s:b:k:miniapp:1",
+        "m:s:b:x:today:1",
+        "m:s:b:k:today",
+        "m:s:b:k:today:2",
+        "m:s:m",
+        "m:s:n:t",
+        "m:s:v:weekly",
+        "m:s:n:d:0",
+        "m:s:n:d:1441",
+        "m:s:n:y:1",
+        "m:s:n:h",
+        "m:s:n:h:7",
+        "m:s:n:a:w:1",
+        "m:s:n:a:h:2",
+        "m:s:zzz",
+    ] {
+        assert_eq!(MenuAction::parse_callback(data), None, "{data}");
+    }
+}
+
+/// Every Control action must come back from its callback as itself, within Telegram's 64 bytes —
+/// a core id is a full `u64` — and a malformed one must not decode into some other command.
+#[test]
+fn control_actions_round_trip() {
+    let targets = [ControlTarget::Core(u64::MAX), ControlTarget::All];
+    let mut actions = vec![
+        ControlAction::Cores(0),
+        ControlAction::Cores(u16::MAX),
+        ControlAction::Core(u64::MAX),
+        ControlAction::All,
+        ControlAction::Reconnect(42),
+    ];
+    for target in targets {
+        for confirmed in [false, true] {
+            actions.push(ControlAction::PanicAll { target, confirmed });
+            for switch in [ControlSwitch::Trading, ControlSwitch::AutoDetect] {
+                for on in [false, true] {
+                    actions.push(ControlAction::Run {
+                        target,
+                        switch,
+                        on,
+                        confirmed,
+                    });
+                }
+            }
+        }
+    }
+    actions.push(ControlAction::CancelAll {
+        core: u64::MAX,
+        confirmed: true,
+    });
+    actions.push(ControlAction::Orders {
+        core: u64::MAX,
+        page: u16::MAX,
+    });
+    actions.push(ControlAction::Order {
+        core: u64::MAX,
+        uid: u64::MAX,
+    });
+    actions.push(ControlAction::OrderPanic {
+        core: u64::MAX,
+        uid: u64::MAX,
+        confirmed: true,
+    });
+    actions.push(ControlAction::Strategies {
+        core: u64::MAX,
+        page: u16::MAX,
+    });
+    for lift in [false, true] {
+        actions.push(ControlAction::AskCoin {
+            core: u64::MAX,
+            lift,
+        });
+    }
+    for on in [false, true] {
+        actions.push(ControlAction::StrategyToggle {
+            core: u64::MAX,
+            id: u64::MAX,
+            on,
+            page: u16::MAX,
+        });
+    }
+    let bans = [OrderBan::Core, OrderBan::Strategy]
+        .into_iter()
+        .chain(crate::config::TempBanSpan::ALL.map(OrderBan::Temp));
+    for ban in bans {
+        actions.push(ControlAction::OrderBan {
+            core: u64::MAX,
+            uid: u64::MAX,
+            ban,
+        });
+    }
+    for action in actions {
+        let data = MenuAction::Control(action).callback();
+        assert!(data.len() <= 64, "{data}");
+        assert_eq!(
+            MenuAction::parse_callback(&data),
+            Some(MenuAction::Control(action)),
+            "{data}"
+        );
+    }
+    for bad in [
+        "m:k:r:a:t:1",
+        "m:k:r:x:t:1:0",
+        "m:k:x:7:2",
+        "m:k:c:-1",
+        "m:k:zz",
+        "m:k:b:1:2:t5",
+        "m:k:b:1:2:x",
+    ] {
+        assert_eq!(MenuAction::parse_callback(bad), None, "{bad}");
+    }
+}

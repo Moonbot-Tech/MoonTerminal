@@ -741,12 +741,9 @@ fn stage_outbox(
     row_id: i64,
     action: OutboxAction,
 ) -> rusqlite::Result<()> {
-    // No valuation worker runs on the light station to drain the outbox, so every row would only
-    // grow the replica. The Mini App's station runs one; the rows a light station replicated
-    // before it are staged nowhere, and the worker's startup reconciliation walk values them.
-    if !crate::feed::station::runs_account() {
-        return Ok(());
-    }
+    // Every process that writes reports runs the worker that drains this: the terminal and both
+    // station profiles. Rows a light station replicated before it valued reports were staged
+    // nowhere; the worker's startup reconciliation walk values those.
     conn.execute(
         &format!(
             "INSERT INTO {OUTBOX_TABLE}(source_kind, core_uid, row_id, action)

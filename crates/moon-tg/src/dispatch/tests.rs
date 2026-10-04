@@ -5,6 +5,8 @@ struct StationHost {
     config: moon_core::config::AppConfig,
     state: crate::TelegramState,
     status_calls: usize,
+    /// Whether the last status was asked from the Settings section.
+    status_from_settings: Option<bool>,
     update_calls: usize,
 }
 
@@ -21,6 +23,7 @@ impl StationHost {
             config,
             state,
             status_calls: 0,
+            status_from_settings: None,
             update_calls: 0,
         }
     }
@@ -28,7 +31,7 @@ impl StationHost {
     /// Run the production dispatcher and receive its synchronous fixture answer.
     fn command(&mut self, chat: i64, command: super::ParsedCommand) -> super::Response {
         let (reply, receiver) = std::sync::mpsc::sync_channel(1);
-        super::run_command(self, chat, command, reply);
+        super::run_command(self, chat, command, None, reply);
         receiver.try_recv().expect("fixture command must answer")
     }
 }
@@ -76,6 +79,11 @@ impl crate::TgHost for StationHost {
         self.config.telegram.clear_pairing();
         true
     }
+    /// Adopt the chat's change in memory.
+    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
+        self.config.telegram.bot = bot;
+        true
+    }
     /// Reject money-command reads outside the fixture scope.
     fn is_panic_armed(&self, _: u64, _: &str) -> bool {
         panic!("no money commands")
@@ -95,8 +103,13 @@ impl crate::TgHost for StationHost {
     /// No display exists in this fixture.
     fn repaint(&mut self) {}
     /// Count a station status call and return a synthetic answer.
-    fn station_status(&mut self, reply: std::sync::mpsc::SyncSender<super::Response>) -> bool {
+    fn station_status(
+        &mut self,
+        reply: std::sync::mpsc::SyncSender<super::Response>,
+        from_settings: bool,
+    ) -> bool {
         self.status_calls += 1;
+        self.status_from_settings = Some(from_settings);
         super::answer(&reply, "fixture status".into());
         true
     }
@@ -185,7 +198,7 @@ fn viewer_dispatch_navigation_never_offers_station_commands() {
 /// Parse rendered buttons through transport aliases rather than assuming row positions.
 fn assert_status_button(markup: moon_core::telegram::api::ReplyMarkup, expected: bool) {
     let moon_core::telegram::api::ReplyMarkup::Reply(markup) = markup else {
-        panic!("expected persistent keyboard")
+        panic!("expected a reply keyboard")
     };
     let labels = super::telegram_labels(crate::HostKind::Station);
     let commands: Vec<_> = markup
@@ -219,5 +232,73 @@ fn mini_app_session_guard_rechecks_both_live_authorization_conditions() {
     assert!(
         http.contains("Ok(Err(_)) => status_response(StatusCode::FORBIDDEN, \"rejected\")"),
         "a host rejection must become a 403 response rather than the old timeout class"
+    );
+}
+
+/// The Settings section is the owner's: a viewer is refused, the owner's switch is saved and its
+/// screen comes back.
+#[test]
+fn the_settings_section_is_the_owners() {
+    use moon_core::config::telegram_menu::{MenuItem, ReportView};
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    let _locale = crate::test_locale::force("en");
+    let mut host = StationHost::new();
+    let settings = |action| super::ParsedCommand::Menu(MenuAction::Settings(action));
+    let refused = host.command(20, settings(SettingsAction::SetView(ReportView::Days)));
+    assert!(matches!(refused, super::Response::Text { .. }));
+    assert_eq!(host.config.telegram.bot.report_view, ReportView::Exchanges);
+    let shown = host.command(10, settings(SettingsAction::SetView(ReportView::Days)));
+    assert!(matches!(shown, super::Response::Rich { .. }));
+    assert_eq!(host.config.telegram.bot.report_view, ReportView::Days);
+    let shown = |host: &StationHost, item| {
+        host.config
+            .telegram
+            .bot
+            .menu
+            .keyboard
+            .iter()
+            .flatten()
+            .any(|e| e.item == item && e.show)
+    };
+    assert!(!shown(&host, MenuItem::Report));
+    let show_report = settings(SettingsAction::ShowButton(MenuItem::Report, true));
+    host.command(10, show_report.clone());
+    assert!(shown(&host, MenuItem::Report));
+    // A second press of the same (now stale) button does not undo it.
+    host.command(10, show_report);
+    assert!(shown(&host, MenuItem::Report));
+    // Settings itself stays on: the chat would lose its way back here.
+    host.command(
+        10,
+        settings(SettingsAction::ShowButton(MenuItem::Settings, false)),
+    );
+    assert!(shown(&host, MenuItem::Settings));
+    // The station's Mini App is switched by its administrator, not from the chat.
+    assert!(matches!(
+        host.command(10, settings(SettingsAction::MiniApp(true))),
+        super::Response::Text { .. }
+    ));
+}
+
+/// The station's status asked from the Settings section is told so (its answer leads back
+/// there); asked from the keyboard it is not; a viewer gets neither.
+#[test]
+fn the_status_knows_where_it_was_asked_from() {
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    let mut host = StationHost::new();
+    host.command(
+        10,
+        super::ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus)),
+    );
+    assert_eq!(host.status_from_settings, Some(true));
+    host.command(10, super::ParsedCommand::StationStatus);
+    assert_eq!(host.status_from_settings, Some(false));
+    host.command(
+        20,
+        super::ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus)),
+    );
+    assert_eq!(
+        host.status_calls, 2,
+        "a viewer is refused before the station is asked"
     );
 }

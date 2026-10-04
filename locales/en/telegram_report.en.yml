@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap agai
 telegram.report_all_cores: "All cores"
 
 telegram.report_by_days: "By day"
+telegram.report_by_groups: "By group"
+telegram.report_groups: "Groups"
+telegram.report_no_group: "No group"
 
 telegram.report_days_scope: "Group by day"
 
@@ -45,7 +48,6 @@ telegram.report_exchanges_menu: "Exchanges"
 
 telegram.report_exchanges_back: "Back"
 
-telegram.report_exchange: "Exchange"
 
 telegram.report_scope_unavailable: "Exchange unavailable"
 
@@ -74,7 +76,6 @@ telegram.report_trades: "Trades"
 
 telegram.report_date: "Date"
 
-telegram.report_bot: "Bot"
 
 telegram.report_details: "Currencies and average order"
 
@@ -103,22 +104,16 @@ telegram.report_help: "Choose a period below. Reports have bot/day views. Tap a 
 
 telegram.report_help_station: "Choose a period below. Reports have bot/day views. Tap a period again for fresh data.\n\n/hour — this hour\n/today — today\n/daily — daily results this month\n/report 2026-09-01 2026-09-10 — custom period\n/daily 2026-09-01 2026-09-10 — custom daily results\n/status — the station's status\nDates are inclusive, up to 366 days; time zone follows the station settings. Reports update around the clock."
 
-telegram.notify_profit: "Profit"
-
 telegram.notify_manual: "Manual"
 
 telegram.notify_unvalued: "Unvalued"
 
+telegram.notify_unchecked: "Thresholds not checked: no dollar value"
+
+telegram.notify_opened: "Trade opened"
+telegram.notify_emulator: "emulator"
+telegram.notify_events_more: "…and %{n} more"
+
 telegram.notify_down: "lost connection since"
 
 telegram.notify_back: "connection restored"
-
-telegram.notify_daily_title: "Daily summary"
-
-telegram.notify_trades: "Trades"
-
-telegram.notify_unvalued_trades: "Unvalued"
-
-telegram.notify_best: "Best"
-
-telegram.notify_worst: "Worst"

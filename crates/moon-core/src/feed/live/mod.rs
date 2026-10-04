@@ -19,6 +19,7 @@ mod identity_refresh;
 mod market_role;
 mod report_sync;
 mod shared_config;
+mod stale;
 mod startup_watchdog;
 mod telegram;
 mod temp_blacklist;
@@ -43,13 +44,13 @@ use self::trace_backfill::TracePacer;
 use super::assets::{build_assets, build_transfer_assets};
 use super::strategies::{
     alert_params, build_schema_model, detect_strat_name, fmt_field, schema_default_fields,
-    strat_db_dump, strat_display_name, strat_kind_name,
+    strat_db_dump, strat_display_name, strat_field_bool, strat_kind_name, tg_detect,
 };
 use super::{
-    ChartTextRows, ConnStatus, CoreCmd, CoreConfigEditEvent, CoreEndpoint, CoreLogLine,
-    CoreStartupStatus, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx,
-    LatestMarketRole, SharedMoonClient, StrategyEditPhase, StrategyEditResolution,
-    StrategyEditResult, StrategyEditRow, StrategyEditSnapshot, StrategyRow,
+    ChartTextRows, ConnStatus, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
+    CoreTgEvent, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    SharedMoonClient, StrategyEditPhase, StrategyEditResolution, StrategyEditResult,
+    StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::order_traces::{AskSink, TraceDbMsg};
@@ -483,7 +484,7 @@ pub(super) fn run(
     server: &ServerConfig,
     chart_memory_percent: u16,
     tx: &FeedTx,
-    cmd_rx: &Receiver<CoreCmd>,
+    cmd_rx: &Receiver<crate::feed::QueuedCmd>,
     wake_tx: &Sender<()>,
     wake_rx: &Receiver<()>,
     reports: Option<&ReportTx>,
@@ -748,6 +749,9 @@ pub(super) fn run(
     // MoonBot never answers that method, and a warn per retry for the life of the session would be
     // noise. The first failure is worth seeing; the rest are not.
     let mut is_ready = false;
+    // When the connection last became operational, `None` while it is not: the gate a live action
+    // in the command queue must pass (`stale`) so one that waited out an outage is not delivered.
+    let mut ready_since: Option<Instant> = None;
     let mut api_expiry_failed_before = false;
     // Per-connection clock-offset estimator, fed every `Event::ServerLog` this connection
     // receives regardless of `feed.log`; see the sampling loop below and `note_ready` at Ready.
@@ -806,6 +810,7 @@ pub(super) fn run(
             &mut core_config_events,
             chart_text,
             &mut trace_asks,
+            ready_since,
         );
         if command_drain == CommandDrain::Disconnected {
             return Ok(());
@@ -1079,7 +1084,17 @@ pub(super) fn run(
             // Ready buys nothing but a pending timeout. Reaching Ready is also the moment to ask —
             // the key may have been replaced while this core was away — subject to the poll's own
             // cooldown, which is what keeps a flapping core from asking on every reconnect.
-            is_ready = st == ConnStatus::Ready;
+            let ready = st == ConnStatus::Ready;
+            if ready && !is_ready {
+                ready_since = Some(Instant::now());
+            } else if !ready {
+                // Lost, including a moonproto reconnect inside this run: what still waits in the
+                // settings sequence would otherwise go out on the next Ready (`stale`).
+                if ready_since.take().is_some() {
+                    client_settings_sequence.drop_orders_of_lost_connection(server.id);
+                }
+            }
+            is_ready = ready;
             if is_ready {
                 account_reconciliation.poll_api_expiry_on_ready(Instant::now());
             }
@@ -2134,11 +2149,17 @@ pub(super) fn run(
         // Alert fires (`DETECT_KIND_ALERT`) arrive as Event::Detect. Also enter this path when
         // feed.alerts is enabled so alerts work without the general detect stream.
         let want_detects = server.feed.detects || server.feed.alerts;
-        if want_detects || (server.feed.reports && reports.is_some()) || want_log {
+        // A detect may be one its strategy reports to Telegram whatever this feed's flags say —
+        // on a station, where `detects` is off, too.
+        let has_detect = events.iter().any(|ev| matches!(ev, Event::Detect(_)));
+        if want_detects || has_detect || (server.feed.reports && reports.is_some()) || want_log {
             let mut detects: Vec<DetectRow> = Vec::new();
             let mut logs: Vec<CoreLogLine> = Vec::new();
+            let mut tg_events: Vec<CoreTgEvent> = Vec::new();
             // Snapshot for fields of the strategy that produced the detect (SoundAlert/KeepAlert/sound).
-            let detect_snap = want_detects.then(|| client.snapshot()).flatten();
+            let detect_snap = (want_detects || has_detect)
+                .then(|| client.snapshot())
+                .flatten();
             // Strategy schema for fallback to default_value: the server omits fields equal to the
             // schema default, including sound/SoundAlert.
             let detect_schema = detect_snap
@@ -2165,6 +2186,7 @@ pub(super) fn run(
                     Event::Detect(d)
                         if server.feed.detects || (server.feed.alerts && d.is_alert_fire()) =>
                     {
+                        tg_events.extend(tg_detect(detect_snap.as_deref(), d));
                         let strat = detect_snap
                             .as_ref()
                             .and_then(|s| s.strats().snapshot(d.strategy_id));
@@ -2212,6 +2234,10 @@ pub(super) fn run(
                                 .collect(),
                             strat_name,
                         });
+                    }
+                    // Not wanted for the detects feed, but still one its strategy may report.
+                    Event::Detect(d) => {
+                        tg_events.extend(tg_detect(detect_snap.as_deref(), d));
                     }
                     // The core committed a checkbox delta. Published as its own message because the
                     // strategy SNAPSHOT cannot carry this fact: the protocol library applies a
@@ -2275,8 +2301,20 @@ pub(super) fn run(
                         match rev {
                             ReportEvent::Schema(schema) => {
                                 trace_fields = trace_field_indices(schema);
-                                capture = capture::CaptureFields::from_schema(schema)
-                                    .map(capture::CaptureTracker::new);
+                                // A revision keeps the rows: what was remembered of them stays.
+                                capture = match (
+                                    capture.take(),
+                                    capture::CaptureFields::from_schema(schema),
+                                ) {
+                                    (Some(mut tracker), Some(fields)) => {
+                                        tracker.refield(fields);
+                                        Some(tracker)
+                                    }
+                                    (None, Some(fields)) => {
+                                        Some(capture::CaptureTracker::new(fields))
+                                    }
+                                    (_, None) => None,
+                                };
                             }
                             ReportEvent::RowUpsert(row) => {
                                 if let (Some(fields), Some(sink)) = (trace_fields, &trace_sink) {
@@ -2289,7 +2327,21 @@ pub(super) fn run(
                                     }
                                 }
                                 match capture.as_mut().and_then(|tracker| tracker.on_row(row)) {
-                                    Some(capture::RowEdge::Opened { rec_id, coin, buy }) => {
+                                    Some(capture::RowEdge::Opened {
+                                        rec_id,
+                                        coin,
+                                        buy,
+                                        strategy,
+                                        emulator,
+                                    }) => {
+                                        tg_events.extend(tg_opened(
+                                            client.snapshot().as_deref(),
+                                            strategy,
+                                            emulator,
+                                            rec_id,
+                                            &coin,
+                                            buy,
+                                        ));
                                         let _ = tx.send(FeedMsg::TradeOpened {
                                             rec_id,
                                             coin,
@@ -2310,7 +2362,8 @@ pub(super) fn run(
                                 }
                             }
                             // A page row carries the core's whole column set: the open rows on
-                            // it are what a later partial close completes itself from.
+                            // it are what a later partial close completes itself from, and its
+                            // waiting buys what a later partial fill is announced from.
                             ReportEvent::SyncPage(page) => {
                                 if let Some(tracker) = capture.as_mut() {
                                     for row in page.rows.iter() {
@@ -2528,6 +2581,9 @@ pub(super) fn run(
                 ));
             }
             if !detects.is_empty() && tx.send(FeedMsg::Detects(detects)).is_err() {
+                break;
+            }
+            if !tg_events.is_empty() && tx.send(FeedMsg::TelegramEvents(tg_events)).is_err() {
                 break;
             }
         }
@@ -2917,6 +2973,49 @@ pub(super) fn run(
 
     let _ = client.disconnect();
     Ok(())
+}
+
+/// The Telegram event of a trade's entry whose strategy has `ReportTradesToTelegram`, else
+/// `None` — a manual trade (no strategy), a row that never carried its strategy, or no strategy
+/// snapshot yet.
+///
+/// Args:
+///     snap: The client's state, for the strategy's flag and name.
+///     strategy: The entry's `StrategyID`, from whichever upsert of the row carried it — a limit
+///         buy files it with the order, and the fill's own upsert does not repeat it.
+///     emulator: Its `Emulator` flag, carried the same way.
+///     rec_id: The trade's report row.
+///     coin: Its coin token.
+///     buy: Its entry stamp, core-local.
+fn tg_opened(
+    snap: Option<&MoonStateSnapshot>,
+    strategy: Option<i64>,
+    emulator: Option<bool>,
+    rec_id: i64,
+    coin: &str,
+    buy: crate::db::ReportStamp,
+) -> Option<CoreTgEvent> {
+    let strat_id = match strategy {
+        Some(id) if id > 0 => id as u64,
+        Some(_) => return None,
+        None => {
+            // Not announced, and this is the only trace of it.
+            log::debug!("telegram: entry of {coin} (row {rec_id}) carries no StrategyID");
+            return None;
+        }
+    };
+    let snap = snap?;
+    if !strat_field_bool(snap, strat_id, "ReportTradesToTelegram") {
+        return None;
+    }
+    let emulator = emulator.unwrap_or(false);
+    Some(CoreTgEvent::Opened {
+        rec_id,
+        coin: coin.to_string(),
+        strat_name: detect_strat_name(snap.strats().snapshot(strat_id)),
+        emulator,
+        buy,
+    })
 }
 
 /// Field indices of `ReportUID` and `CloseDate` in one schema revision, or `None` when the core

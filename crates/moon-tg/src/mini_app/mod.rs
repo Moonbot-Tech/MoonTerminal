@@ -18,9 +18,12 @@ use crate::labels::section_label;
 
 pub(crate) mod cache;
 mod commands;
-mod dto;
+pub(crate) mod dto;
 mod reads;
 mod settings;
+
+pub(crate) use settings::{chat_notify, save_chat_notify};
+pub use settings::{check_notify_rows, notify_rows, save_notify_rows};
 
 /// Answer one Mini App request. The live session check is handled by the caller.
 pub(crate) fn dispatch(host: &mut dyn TgHost, request: MiniAppApiRequest) {
@@ -160,7 +163,10 @@ fn mini_owner(host: &dyn TgHost, chat_id: i64) -> Result<(), MiniAppApiError> {
 /// Sessions this grant may see, in Mini App order. An empty viewer list keeps none.
 ///
 /// Returns `(id, name, exchange section caption)` ordered by [`by_section`].
-fn visible_cores(host: &dyn TgHost, access: &TelegramReportAccess) -> Vec<(u64, String, String)> {
+pub(crate) fn visible_cores(
+    host: &dyn TgHost,
+    access: &TelegramReportAccess,
+) -> Vec<(u64, String, String)> {
     let order = CoreOrder::new(host.config());
     let cores: Vec<(u64, String)> = order
         .from_sessions(host.session().sessions(), |session| match access {
@@ -281,7 +287,7 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 ///
 /// Returns:
 ///     The ids to send; unknown ids never appear.
-fn scope_targets(requested: &[u64], visible: &[CoreId]) -> Vec<CoreId> {
+pub(crate) fn scope_targets(requested: &[u64], visible: &[CoreId]) -> Vec<CoreId> {
     let mut targets: Vec<CoreId> = Vec::new();
     for id in visible {
         if requested.contains(id) && !targets.contains(id) {

@@ -20,12 +20,12 @@ fn requests_carry_the_documented_command_names() {
     assert_eq!(
         set,
         Request::AccessSet {
-            base: Access::default(),
-            access: Access {
+            base: Box::default(),
+            access: Box::new(Access {
                 authorized_chat_ids: vec![7],
                 owner_chat_id: Some(7),
-                chat_access: Vec::new(),
-            },
+                ..Access::default()
+            }),
         }
     );
 }
@@ -102,6 +102,7 @@ fn a_pairing_a_bot_can_run_passes() {
         authorized_chat_ids: vec![7, 9],
         owner_chat_id: Some(7),
         chat_access: vec![chat(9, &[3])],
+        ..Access::default()
     };
     assert_eq!(access.check(), Ok(()));
     assert_eq!(
@@ -128,6 +129,7 @@ fn a_pairing_a_bot_cannot_run_is_refused() {
         authorized_chat_ids: vec![7],
         owner_chat_id: Some(7),
         chat_access: vec![chat(9, &[1])],
+        ..Access::default()
     };
     assert!(stray_profile.check().is_err());
     let no_owner = Access {
@@ -165,9 +167,12 @@ fn access_moves_in_and_out_of_a_configuration() {
         authorized_chat_ids: vec![7],
         owner_chat_id: Some(7),
         chat_access: vec![chat(7, &[])],
+        ..Access::default()
     };
     access.apply_to(&mut telegram);
-    assert_eq!(Access::of(&telegram), access);
+    assert!(Access::of(&telegram).same_chats(&access));
+    // Without the bot's settings the configuration keeps its own; `of` always carries them.
+    assert_eq!(Access::of(&telegram).bot, Some(telegram.bot.clone()));
     assert_eq!(telegram.token.expose(), "t");
     assert!(telegram.mini_app_enabled);
 }
@@ -208,4 +213,118 @@ fn pull_requests_and_trace_lines_round_trip() {
             .unwrap()
             .into();
     assert_eq!(back, archived);
+}
+
+/// A change still holds when only the zone moved; it does not when the chats or — read by the
+/// client — the bot's settings moved. A client that never read the settings is not held to them.
+#[test]
+fn a_base_holds_on_chats_and_the_settings_it_read() {
+    use crate::config::telegram_menu::{BotSettings, ReportView};
+    let current = Access {
+        authorized_chat_ids: vec![7],
+        owner_chat_id: Some(7),
+        bot: Some(BotSettings::default()),
+        zone: Some("UTC".into()),
+        ..Access::default()
+    };
+    let other_zone = Access {
+        zone: Some("Asia/Tokyo".into()),
+        ..current.clone()
+    };
+    assert!(other_zone.base_holds(&current));
+    let unread_settings = Access {
+        bot: None,
+        ..current.clone()
+    };
+    assert!(unread_settings.base_holds(&Access {
+        bot: Some(BotSettings {
+            report_view: ReportView::Days,
+            ..BotSettings::default()
+        }),
+        ..current.clone()
+    }));
+    let moved_settings = Access {
+        bot: Some(BotSettings {
+            report_view: ReportView::Cores,
+            ..BotSettings::default()
+        }),
+        ..current.clone()
+    };
+    assert!(!moved_settings.base_holds(&current));
+    let moved_chats = Access {
+        chat_access: vec![chat(7, &[1])],
+        ..current.clone()
+    };
+    assert!(!moved_chats.base_holds(&current));
+}
+
+/// On the wire and on disk an access without the bot's settings and zone is exactly the old form,
+/// and the old form reads back without them.
+#[test]
+fn the_new_parts_are_optional_on_the_wire() {
+    let old_json = r#"{"authorized_chat_ids":[7],"owner_chat_id":7,"chat_access":[]}"#;
+    let old: Access = serde_json::from_str(old_json).unwrap();
+    assert_eq!(old.bot, None);
+    assert_eq!(old.zone, None);
+    assert_eq!(serde_json::to_string(&old).unwrap(), old_json);
+    let full = Access {
+        bot: Some(Default::default()),
+        zone: Some("UTC".into()),
+        ..old.clone()
+    };
+    let back: Access = serde_json::from_str(&serde_json::to_string(&full).unwrap()).unwrap();
+    assert_eq!(back, full);
+    let request = Request::AccessSet {
+        base: Box::new(old.clone()),
+        access: Box::new(full),
+    };
+    let back: Request = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+    assert_eq!(back, request);
+}
+
+/// Chats' notifications are optional on the wire and survive the trip with their revisions; a
+/// change of them alone still holds against its base.
+#[test]
+fn chats_notifications_ride_the_access() {
+    let mut row = ChatNotifyRow::default();
+    row.settings.down.on = true;
+    row.revision = 4;
+    let access = Access {
+        authorized_chat_ids: vec![7],
+        owner_chat_id: Some(7),
+        notify: Some(std::collections::BTreeMap::from([(7, row)])),
+        ..Access::default()
+    };
+    let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
+    assert_eq!(back, access);
+    let read = Access {
+        notify: None,
+        ..access.clone()
+    };
+    assert!(read.base_holds(&access));
+    assert!(!serde_json::to_string(&read).unwrap().contains("notify"));
+}
+
+/// A change of chats' notifications reaches the station: the chat ids are a JSON object's keys —
+/// strings on the wire — and an `access.set` is an internally tagged request, which serde buffers
+/// before it reads the fields. A group's id is negative.
+#[test]
+fn chats_notifications_ride_an_access_set() {
+    let access = Access {
+        authorized_chat_ids: vec![230057918, -1001234567890],
+        owner_chat_id: Some(230057918),
+        notify: Some(std::collections::BTreeMap::from([
+            (230057918, ChatNotifyRow::default()),
+            (-1001234567890, ChatNotifyRow::default()),
+        ])),
+        ..Access::default()
+    };
+    let request = Request::AccessSet {
+        base: Box::new(access.clone()),
+        access: Box::new(access),
+    };
+    let wire = serde_json::to_string(&request).unwrap();
+    assert!(wire.contains(r#""230057918":"#), "{wire}");
+    let back: Request = serde_json::from_str(&wire).unwrap();
+    assert_eq!(back, request);
 }

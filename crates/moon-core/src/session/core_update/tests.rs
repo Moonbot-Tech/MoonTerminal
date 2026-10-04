@@ -14,6 +14,7 @@ fn manager() -> SessionManager {
     let market = MarketStore::shared(0.0);
     let market_source = MarketDataSource::new(market.clone());
     SessionManager {
+        blacklists_sent: std::sync::Mutex::new(HashMap::new()),
         trade_sounds: Vec::new(),
         trade_sound_epochs: HashMap::new(),
         sessions: Vec::new(),

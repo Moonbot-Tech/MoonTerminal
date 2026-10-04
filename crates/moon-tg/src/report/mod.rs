@@ -1,13 +1,13 @@
 //! Localized rich reports over the same snapshot, time axis, and money reader as Report.
 use crate::t;
-use chrono::{Days, NaiveDate};
+use chrono::Days;
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
 use moon_core::{
-    config::telegram_access::TelegramReportAccess,
+    config::{CoreGroup, telegram_access::TelegramReportAccess, telegram_menu::ReportBasis},
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
     telegram::{
-        report::{ReportRequest, ReportScope},
+        report::{ReportRequest, ReportScope, group_key},
         runtime::Response,
     },
     util::display_time,
@@ -19,14 +19,13 @@ use crate::notify::trades::ClosedTrade;
 
 use crate::TgHost;
 use crate::labels::{answer, navigation_keyboard, section_label};
+use moon_core::telegram::api::ReplyMarkup;
 
+mod paging;
 mod render;
 
 pub(crate) use render::{escape, help, rich_message_fits};
 use render::{render, report_html};
-
-/// Core lists are unbounded, so they still page; breakdown views try to show every row first.
-const PAGE_SIZE: usize = 6;
 
 /// A complete page plus a full-period total, all read in one SQLite snapshot.
 struct Page {
@@ -39,9 +38,21 @@ struct Page {
     pages: usize,
     drilldowns: Vec<(String, ReportScope)>,
     scope_label: Option<String>,
+    /// Whether a saved core group holds a core this chat may see: the other views then offer the
+    /// one by groups.
+    has_groups: bool,
+    /// Which timestamp the period was read on.
+    basis: ReportBasis,
+    /// Cores the chat may see, whose trades the totals can include.
+    cores: Vec<u64>,
+    /// A line above the report: an automatic report names itself, its zone and its basis.
+    caption: Option<String>,
 }
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
+///
+/// A request whose view the chat did not pick opens in the bot's `report_view`; a request that does
+/// not carry its basis yet is read on the bot's `period_basis`.
 pub(crate) fn telegram_report(
     host: &mut dyn TgHost,
     chat: i64,
@@ -53,68 +64,73 @@ pub(crate) fn telegram_report(
         return;
     };
     let owner = access == TelegramReportAccess::Owner;
+    let bot = &host.config().telegram.bot;
+    let request = request.resolve_view(bot.report_view);
+    // A page's own buttons carry the basis it was read on; a fresh request takes the bot's.
+    let basis = request.basis.unwrap_or(bot.period_basis);
+    let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
     if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         report_notice(
             &reply,
             t!("telegram.access_no_cores").to_string(),
-            host.kind(),
-            owner,
+            navigation,
         );
         return;
     }
     if host.state().report_pending {
-        report_notice(
-            &reply,
-            t!("telegram.report_busy").to_string(),
-            host.kind(),
-            owner,
-        );
+        report_notice(&reply, t!("telegram.report_busy").to_string(), navigation);
         return;
     }
     let zone = host.report_zone();
     let now = moon_core::util::time::now_unix_secs() as i64;
     let Some((from, to)) = request.bounds(now, zone) else {
-        report_notice(
-            &reply,
-            crate::labels::report_help(host.kind()),
-            host.kind(),
-            owner,
-        );
+        report_notice(&reply, crate::labels::report_help(host.kind()), navigation);
         return;
     };
     let order = CoreOrder::new(host.config());
     let names = db::CoreNames::from_servers(&host.config().servers);
     let venues = host.session().core_venues().clone();
+    let groups = host.config().core_groups.clone();
     let read_access = access.clone();
     host.state_mut().report_pending = true;
     host.spawn(Box::new(move || {
-        let result = read_page(request, from, to, zone, order, names, venues, read_access);
+        let result = read_page(
+            request,
+            from,
+            to,
+            zone,
+            basis,
+            order,
+            names,
+            venues,
+            read_access,
+            groups,
+        );
         Box::new(move |host: &mut dyn TgHost| {
             host.state_mut().report_pending = false;
             if host.config().telegram.report_access(chat).as_ref() != Some(&access) {
                 answer(&reply, t!("telegram.refusal").to_string());
                 return;
             }
+            // The navigation as it is now: the menu may have changed during the read.
+            let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
             match result {
                 Ok(page) => {
-                    let _ = reply.try_send(render(&page, host.kind(), owner));
+                    let _ = reply.try_send(render(&page, host.kind(), navigation));
                 }
-                Err(_) => report_notice(
-                    &reply,
-                    t!("telegram.report_failed").to_string(),
-                    host.kind(),
-                    owner,
-                ),
+                Err(_) => {
+                    report_notice(&reply, t!("telegram.report_failed").to_string(), navigation)
+                }
             }
         })
     }));
 }
 
 /// A report notice exposes navigation limited to the admission grant, including on /start.
-fn report_notice(reply: &SyncSender<Response>, text: String, host: crate::HostKind, owner: bool) {
+fn report_notice(reply: &SyncSender<Response>, text: String, navigation: ReplyMarkup) {
     let _ = reply.try_send(Response::Text {
         text,
-        keyboard: Some(navigation_keyboard(host, owner)),
+        keyboard: Some(navigation),
     });
 }
 
@@ -125,25 +141,40 @@ fn read_page(
     from: i64,
     to: i64,
     zone: Tz,
+    basis: ReportBasis,
     order: CoreOrder,
     names: db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     access: TelegramReportAccess,
+    groups: Vec<CoreGroup>,
 ) -> db::ReadResult<Page> {
     let conn = db::open_reader()?;
-    read_page_on(&conn, request, from, to, zone, &names, |cores| {
-        order.sort_by(cores, |(id, _)| *id);
-        (venues, access)
-    })
+    read_page_with(
+        &conn,
+        request,
+        from,
+        to,
+        zone,
+        basis,
+        &names,
+        &groups,
+        |cores| {
+            order.sort_by(cores, |(id, _)| *id);
+            (venues, access)
+        },
+    )
 }
 
-/// Connection-injected reader lets fixtures exercise the exact production query contract.
+/// [`read_page_with`] for a bot with no saved core groups.
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn read_page_on(
     conn: &rusqlite::Connection,
-    mut request: ReportRequest,
+    request: ReportRequest,
     from: i64,
     to: i64,
     zone: Tz,
+    basis: ReportBasis,
     names: &db::CoreNames,
     order: impl FnOnce(
         &mut [(u64, String)],
@@ -152,7 +183,33 @@ fn read_page_on(
         TelegramReportAccess,
     ),
 ) -> db::ReadResult<Page> {
+    read_page_with(conn, request, from, to, zone, basis, names, &[], order)
+}
+
+/// Connection-injected reader lets fixtures exercise the exact production query contract.
+///
+/// `groups` are the bot's saved core groups: the rows of the view by groups, then the cores in
+/// none, and what [`ReportScope::Group`] names. A group's row is the database's own total over its
+/// cores, so a core in two groups counts in each, while the headline counts every core once.
+#[allow(clippy::too_many_arguments)]
+fn read_page_with(
+    conn: &rusqlite::Connection,
+    mut request: ReportRequest,
+    from: i64,
+    to: i64,
+    zone: Tz,
+    basis: ReportBasis,
+    names: &db::CoreNames,
+    groups: &[CoreGroup],
+    order: impl FnOnce(
+        &mut [(u64, String)],
+    ) -> (
+        std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+        TelegramReportAccess,
+    ),
+) -> db::ReadResult<Page> {
     request.window = Some((from, to));
+    request.basis = Some(basis);
     let snap = db::read_snapshot(conn)?;
     let mut cores = db::distinct_cores(&snap)?;
     relabel(&mut cores, names);
@@ -161,16 +218,28 @@ fn read_page_on(
         cores.retain(|(id, _)| allowed.contains(id));
     }
     let accessible = cores.clone();
-    let scope_label = (request.scope != ReportScope::All).then(|| {
-        cores
-            .iter()
-            .find(|(id, _)| scope_of(venues.get(id)) == request.scope)
-            .map(|(id, _)| section_label(venues.get(id)))
-            .unwrap_or_else(|| t!("telegram.report_scope_unavailable").to_string())
-    });
-    if request.scope != ReportScope::All {
-        cores.retain(|(id, _)| scope_of(venues.get(id)) == request.scope);
-    }
+    let scoped_group = |key: u32| groups.iter().find(|group| group_key(&group.name) == key);
+    let in_scope = |id: u64| match request.scope {
+        ReportScope::All => true,
+        ReportScope::Group(key) => scoped_group(key).is_some_and(|group| group.cores.contains(&id)),
+        scope => scope_of(venues.get(&id)) == scope,
+    };
+    let scope_label = match request.scope {
+        ReportScope::All => None,
+        ReportScope::Group(key) => Some(
+            scoped_group(key)
+                .map(|group| group.name.clone())
+                .unwrap_or_else(|| t!("telegram.report_scope_unavailable").to_string()),
+        ),
+        _ => Some(
+            cores
+                .iter()
+                .find(|(id, _)| in_scope(*id))
+                .map(|(id, _)| section_label(venues.get(id)))
+                .unwrap_or_else(|| t!("telegram.report_scope_unavailable").to_string()),
+        ),
+    };
+    cores.retain(|(id, _)| in_scope(*id));
     let scoped_ids = if request.scope == ReportScope::All && access == TelegramReportAccess::Owner {
         Vec::new()
     } else if cores.is_empty() {
@@ -184,12 +253,12 @@ fn read_page_on(
         date_to: Some(to),
         emulator: Some(false),
         rows: RowScope::Closed,
+        period_basis: basis.period_basis(),
         axis: db::ReportAxis::load(&snap, zone)?,
         ..Default::default()
     };
     let total = db::query_totals(&snap, &filter)?.quotes;
-    let mut groups = Vec::new();
-    let mut group_scopes = Vec::new();
+    let mut rows_by = Vec::new();
     if request.daily {
         if let (Some(mut date), Some(end)) =
             (display_time::date(from, zone), display_time::date(to, zone))
@@ -217,11 +286,33 @@ fn read_page_on(
                     let mut day = filter.clone();
                     day.date_from = Some(start.max(from));
                     day.date_to = Some((stop - 1).min(to));
-                    groups.push((date.to_string(), day));
-                    group_scopes.push(None);
+                    rows_by.push((date.to_string(), day));
                 }
                 date = next;
             }
+        }
+    } else if request.by_group {
+        for group in groups {
+            let members: Vec<u64> = cores
+                .iter()
+                .map(|(id, _)| *id)
+                .filter(|id| group.cores.contains(id))
+                .collect();
+            if !members.is_empty() {
+                let mut row = filter.clone();
+                row.core_uids = members;
+                rows_by.push((group.name.clone(), row));
+            }
+        }
+        let loose: Vec<u64> = cores
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| !groups.iter().any(|group| group.cores.contains(id)))
+            .collect();
+        if !loose.is_empty() {
+            let mut row = filter.clone();
+            row.core_uids = loose;
+            rows_by.push((t!("telegram.report_no_group").to_string(), row));
         }
     } else if request.by_exchange {
         for (venue, members) in core_order::exchange_sections(
@@ -232,62 +323,67 @@ fn read_page_on(
         ) {
             let mut group = filter.clone();
             group.core_uids = members.iter().map(|&index| cores[index].0).collect();
-            groups.push((section_label(venue), group));
-            group_scopes.push(Some(scope_of(venue)));
+            rows_by.push((section_label(venue), group));
         }
     } else {
         for (id, name) in cores {
             let mut core = filter.clone();
             core.core_uids = vec![id];
-            groups.push((name, core));
-            group_scopes.push(None);
+            rows_by.push((name, core));
         }
     }
     // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
     let mut active = Vec::new();
-    for ((name, filter), scope) in groups.into_iter().zip(group_scopes) {
+    for (name, filter) in rows_by {
         let total = db::query_totals(&snap, &filter)?.quotes;
         if total.orders > 0 {
-            active.push((name, total, scope));
+            active.push((name, total));
         }
     }
-    let drilldowns = exchange_drilldowns(&snap, &accessible, &venues, &filter)?;
-    let breakdown = request.daily || request.by_exchange;
-    let take =
-        |active: &[(String, QuoteBreakdown, Option<ReportScope>)], page: usize, size: usize| {
-            active
-                .iter()
-                .skip(page * size)
-                .take(size)
-                .map(|(name, total, _)| (name.clone(), total.clone()))
-                .collect::<Vec<_>>()
-        };
-    let (rows, pages) = if breakdown {
-        let all = take(&active, 0, active.len().max(1));
-        let probe = Page {
-            request: request.clone(),
+    let drilldowns = if request.by_group {
+        group_drilldowns(&snap, &accessible, groups, &filter)?
+    } else {
+        exchange_drilldowns(&snap, &accessible, &venues, &filter)?
+    };
+    // A viewer is offered the view by groups only when one of them holds a core it may see.
+    let has_groups = groups.iter().any(|group| {
+        group
+            .cores
+            .iter()
+            .any(|id| accessible.iter().any(|(core, _)| core == id))
+    });
+    // Every view shows all its rows while the message fits; an oversized one pages with the
+    // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
+    // label it can show, so the page actually rendered is never longer than the one measured.
+    let fits = |rows: &[(String, QuoteBreakdown)]| {
+        let partial = rows.len() < active.len();
+        let mut probe = request.clone();
+        probe.page = if partial { 9_999 } else { 0 };
+        rich_message_fits(&report_html(&Page {
+            request: probe,
             from,
             to,
             zone,
             total: total.clone(),
-            rows: all.clone(),
-            pages: 1,
+            rows: rows.to_vec(),
+            pages: if partial { 10_000 } else { 1 },
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
-        };
-        if rich_message_fits(&report_html(&probe)) {
-            request.page = 0;
-            (all, 1)
-        } else {
-            let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-            request.page = request.page.min(pages - 1);
-            (take(&active, request.page, PAGE_SIZE), pages)
-        }
-    } else {
-        let pages = active.len().div_ceil(PAGE_SIZE).max(1);
-        request.page = request.page.min(pages - 1);
-        (take(&active, request.page, PAGE_SIZE), pages)
+            has_groups,
+            basis,
+            cores: Vec::new(),
+            caption: None,
+        }))
     };
+    let size = paging::fitting_page_size(&active, fits);
+    let pages = active.len().div_ceil(size).max(1);
+    request.page = request.page.min(pages - 1);
+    let rows: Vec<_> = active
+        .iter()
+        .skip(request.page * size)
+        .take(size)
+        .cloned()
+        .collect();
     Ok(Page {
         request,
         from,
@@ -298,7 +394,87 @@ fn read_page_on(
         pages,
         drilldowns,
         scope_label,
+        has_groups,
+        basis,
+        cores: accessible.iter().map(|(id, _)| *id).collect(),
+        caption: None,
     })
+}
+
+/// An automatic report ready to queue: the rich HTML, its buttons, the cores it discloses.
+pub(crate) struct AutoPage {
+    pub(crate) html: String,
+    pub(crate) keyboard: ReplyMarkup,
+    /// A viewer's report discloses its granted cores. An owner's covers every core the report
+    /// database holds, retired ones included, so it names none: `None` is kept while the chat is
+    /// the owner and dropped if it becomes a viewer.
+    pub(crate) cores: Option<Vec<u64>>,
+}
+
+/// What every automatic report of one read shares.
+#[derive(Clone)]
+pub(crate) struct AutoInputs {
+    pub(crate) zone: Tz,
+    pub(crate) basis: ReportBasis,
+    pub(crate) view: moon_core::config::telegram_menu::ReportView,
+    pub(crate) order: CoreOrder,
+    pub(crate) names: db::CoreNames,
+    pub(crate) venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    /// The bot's saved core groups, for a report in the view by groups.
+    pub(crate) groups: Vec<CoreGroup>,
+}
+
+/// Read one automatic report: the report a button opens, over the slot's frozen period, in the
+/// bot's view and basis, with `caption` above it.
+///
+/// Returns:
+///     `None` for a viewer with no cores, which has nothing to see, and for a report that does
+///     not fit a rich message even without its caption (logged). The caller spends the slot.
+pub(crate) fn read_auto_report(
+    conn: &rusqlite::Connection,
+    window: &moon_core::telegram::report::AutoWindow,
+    caption: String,
+    inputs: &AutoInputs,
+    access: &TelegramReportAccess,
+) -> db::ReadResult<Option<AutoPage>> {
+    if matches!(access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
+        return Ok(None);
+    }
+    let request = ReportRequest::new(window.period.clone(), false).in_view(inputs.view);
+    let mut page = read_page_with(
+        conn,
+        request,
+        window.from,
+        window.to,
+        inputs.zone,
+        inputs.basis,
+        &inputs.names,
+        &inputs.groups,
+        |cores| {
+            inputs.order.sort_by(cores, |(id, _)| *id);
+            (inputs.venues.clone(), access.clone())
+        },
+    )?;
+    page.caption = Some(caption);
+    let mut html = report_html(&page);
+    // The page was sized without the caption; a report it tips over goes without it.
+    if !rich_message_fits(&html) {
+        page.caption = None;
+        html = report_html(&page);
+    }
+    if !rich_message_fits(&html) {
+        log::warn!("telegram auto report does not fit a rich message; not sent");
+        return Ok(None);
+    }
+    let cores = match access {
+        TelegramReportAccess::Owner => None,
+        TelegramReportAccess::Viewer(_) => Some(page.cores.clone()),
+    };
+    Ok(Some(AutoPage {
+        html,
+        keyboard: render::keyboard(&page),
+        cores,
+    }))
 }
 
 /// One Mini App report: the period total plus every exchange, core, and day on that snapshot.
@@ -674,7 +850,8 @@ const NOTIFY_READ_PAGE_CAP: usize = 1_048_576;
 ///     from_utc: Inclusive lower bound, true UTC seconds.
 ///
 /// Returns:
-///     The trades, oldest close first, or the database error. No rows is an empty `Ok`.
+///     The trades, oldest close first, or the database error. No rows is an empty `Ok`. A funding
+///     payment (`SellReason` `Funding`) is a closed row but no trade, and is left out.
 ///
 /// Errors:
 ///     The report replica could not be opened or read.
@@ -688,77 +865,21 @@ pub(crate) fn read_closed_since(
 }
 
 /// [`read_closed_since`] on an already open connection.
+///
+/// Each core is paged on its own: one cross-core `(close_utc, rec_id)` cursor is unsafe, because
+/// `LIMIT` can drop a later close on another core.
 fn read_closed_since_on(
     conn: &rusqlite::Connection,
     zone: Tz,
     names: &db::CoreNames,
     from_utc: i64,
 ) -> db::ReadResult<Vec<ClosedTrade>> {
-    read_closed_window_on(conn, zone, names, from_utc, None)
-}
-
-/// Closed trades whose close falls on `date` in `zone`.
-///
-/// Args:
-///     zone: Display zone. The day is that zone's calendar day.
-///     names: Current configured core names.
-///     date: Local calendar date.
-///
-/// Returns:
-///     The day's trades, oldest close first. A date chrono cannot bound is an empty `Ok`.
-///
-/// Errors:
-///     The report replica could not be opened or read.
-pub(crate) fn read_day(
-    zone: Tz,
-    names: db::CoreNames,
-    date: NaiveDate,
-) -> db::ReadResult<Vec<ClosedTrade>> {
-    let conn = db::open_reader()?;
-    read_day_on(&conn, zone, &names, date)
-}
-
-/// [`read_day`] on an already open connection.
-fn read_day_on(
-    conn: &rusqlite::Connection,
-    zone: Tz,
-    names: &db::CoreNames,
-    date: NaiveDate,
-) -> db::ReadResult<Vec<ClosedTrade>> {
-    let Some((from, to)) = local_day_bounds(date, zone) else {
-        return Ok(Vec::new());
-    };
-    read_closed_window_on(conn, zone, names, from, Some(to))
-}
-
-/// Inclusive UTC bounds of one local calendar day, or `None` at chrono's limits.
-fn local_day_bounds(date: NaiveDate, zone: Tz) -> Option<(i64, i64)> {
-    let from = display_time::day_start(date, zone)?;
-    let next = date.succ_opt()?;
-    let next_start = display_time::day_start(next, zone)?;
-    let to = next_start.saturating_sub(1);
-    (from <= to).then_some((from, to))
-}
-
-/// Closed trades in `[from_utc, to_utc]`, paging each core on its own.
-///
-/// One cross-core `(close_utc, rec_id)` cursor is unsafe: `LIMIT` can drop a later close on
-/// another core. `to_utc` of `None` reads through the newest row.
-fn read_closed_window_on(
-    conn: &rusqlite::Connection,
-    zone: Tz,
-    names: &db::CoreNames,
-    from_utc: i64,
-    to_utc: Option<i64>,
-) -> db::ReadResult<Vec<ClosedTrade>> {
     let snap = db::read_snapshot(conn)?;
     let cores = db::distinct_cores(&snap)?;
     let axis = db::ReportAxis::load(&snap, zone)?;
     let mut trades = Vec::new();
     for (core, _) in cores {
-        trades.extend(page_closed_core(
-            &snap, &axis, names, core, from_utc, to_utc,
-        )?);
+        trades.extend(page_closed_core(&snap, &axis, names, core, from_utc)?);
     }
     trades.sort_by(|left, right| {
         left.close_utc
@@ -775,10 +896,10 @@ struct PageCursor {
 }
 
 impl PageCursor {
-    /// Start at `to_utc` (inclusive) with the small page size.
-    fn start(to_utc: Option<i64>) -> Self {
+    /// Start at the newest row with the small page size.
+    fn start() -> Self {
         Self {
-            window_to: to_utc,
+            window_to: None,
             limit: NOTIFY_READ_PAGE,
         }
     }
@@ -829,14 +950,13 @@ fn page_closed_core(
     names: &db::CoreNames,
     core: u64,
     from_utc: i64,
-    to_utc: Option<i64>,
 ) -> db::ReadResult<Vec<ClosedTrade>> {
-    let mut cursor = PageCursor::start(to_utc);
+    let mut cursor = PageCursor::start();
     let mut seen = BTreeSet::new();
     let mut trades = Vec::new();
     while !cursor.exhausted(from_utc) {
         let filter = closed_filter(axis, names, core, from_utc, cursor.window_to);
-        let table = db::query_mini_trades(snap, &filter, cursor.limit)?;
+        let table = db::query_notify_trades(snap, &filter, cursor.limit)?;
         let cols = ClosedCols::from_table(&table);
         let mut boundary: Option<i64> = None;
         let mut added = 0usize;
@@ -844,13 +964,16 @@ fn page_closed_core(
             let Some(trade) = map_closed_row(&table, row, row_index, &cols, axis) else {
                 continue;
             };
-            if !in_read_window(trade.close_utc, from_utc, to_utc) {
+            if trade.close_utc < from_utc {
                 continue;
             }
             boundary = Some(boundary.map_or(trade.close_utc, |low| low.min(trade.close_utc)));
             if seen.insert((trade.core, trade.rec_id)) {
                 added += 1;
-                trades.push(trade);
+                // A funding payment is a closed row, not a trade: it pages on, and is no card.
+                if !is_funding(row, &cols) {
+                    trades.push(trade);
+                }
             }
         }
         if !cursor.advance(table.rows.len(), boundary, added) {
@@ -880,11 +1003,6 @@ fn closed_filter(
     }
 }
 
-/// `true` when `close_utc` is inside the original read window, inclusive.
-fn in_read_window(close_utc: i64, from_utc: i64, to_utc: Option<i64>) -> bool {
-    close_utc >= from_utc && to_utc.is_none_or(|to| close_utc <= to)
-}
-
 /// Column indexes used to map one notification row.
 struct ClosedCols {
     coin: Option<usize>,
@@ -898,6 +1016,10 @@ struct ClosedCols {
     rate: Option<usize>,
     profit: Option<usize>,
     pct: Option<usize>,
+    profit_native: Option<usize>,
+    volume_native: Option<usize>,
+    quote: Option<usize>,
+    reason: Option<usize>,
 }
 
 impl ClosedCols {
@@ -916,8 +1038,21 @@ impl ClosedCols {
             rate: index(db::MINI_ENTRY_VOLUME_RATE_COLUMN),
             profit: index(db::VALUATION_PROFIT_COLUMN),
             pct: index(db::PROFIT_PERCENT_COLUMN),
+            profit_native: index(db::NOTIFY_PROFIT_NATIVE_COLUMN),
+            volume_native: index(db::NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN),
+            quote: index(db::NOTIFY_QUOTE_COLUMN),
+            reason: index("sellreason"),
         }
     }
+}
+
+/// Whether a closed row is a funding payment (`SellReason` `Funding`), as the Report's volume and
+/// average-order gates tell it.
+fn is_funding(row: &[rusqlite::types::Value], cols: &ClosedCols) -> bool {
+    matches!(
+        cols.reason.and_then(|ix| row.get(ix)),
+        Some(rusqlite::types::Value::Text(reason)) if reason == "Funding"
+    )
 }
 
 /// Map one report row. A missing buy time uses the close time, so the duration is zero.
@@ -960,6 +1095,12 @@ fn map_closed_row(
         ),
         profit_usd: finite_number(cell(cols.profit).and_then(value_f64)),
         profit_pct: finite_number(cell(cols.pct).and_then(value_f64)),
+        quote: cell(cols.quote)
+            .and_then(value_i64)
+            .and_then(db::QuoteCurrency::from_report_ordinal),
+        profit_native: finite_number(cell(cols.profit_native).and_then(value_f64)),
+        volume_native: finite_number(cell(cols.volume_native).and_then(value_f64))
+            .filter(|volume| *volume > 0.0),
         open_utc: buy_utc.unwrap_or(close_utc),
     })
 }
@@ -1025,7 +1166,8 @@ fn exchange_key(venue: Option<&moon_core::venue::CoreVenue>) -> String {
             format!("{:x}.{:x}", id.code, id.dex)
         }
         moon_core::telegram::report::ReportScope::Unidentified
-        | moon_core::telegram::report::ReportScope::All => "unidentified".to_string(),
+        | moon_core::telegram::report::ReportScope::All
+        | moon_core::telegram::report::ReportScope::Group(_) => "unidentified".to_string(),
     }
 }
 
@@ -1048,6 +1190,35 @@ fn exchange_drilldowns(
         let total = db::query_totals(snap, &group)?.quotes;
         if total.orders > 0 {
             drilldowns.push((section_label(venue), scope_of(venue)));
+        }
+    }
+    Ok(drilldowns)
+}
+
+/// One button per saved group with trades in the period, in the groups' own order.
+fn group_drilldowns(
+    snap: &rusqlite::Transaction<'_>,
+    cores: &[(u64, String)],
+    groups: &[CoreGroup],
+    filter: &ReportFilter,
+) -> db::ReadResult<Vec<(String, ReportScope)>> {
+    let mut drilldowns = Vec::new();
+    for group in groups {
+        let members: Vec<u64> = cores
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| group.cores.contains(id))
+            .collect();
+        if members.is_empty() {
+            continue;
+        }
+        let mut row = filter.clone();
+        row.core_uids = members;
+        if db::query_totals(snap, &row)?.quotes.orders > 0 {
+            drilldowns.push((
+                group.name.clone(),
+                ReportScope::Group(group_key(&group.name)),
+            ));
         }
     }
     Ok(drilldowns)

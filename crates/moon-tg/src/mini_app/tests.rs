@@ -10,7 +10,10 @@ use moon_core::telegram::notify::{
 use moon_core::telegram::runtime::NotifyStore;
 use moon_core::venue::CoreVenue;
 
-use super::settings::{SaveFault, SaveResult, prepare_settings, save_fault_text, store_settings};
+use super::settings::{
+    SaveFault, SaveResult, keep_stored_bot_fields, prepare_settings, save_fault_text,
+    store_settings,
+};
 
 use std::time::{Duration, Instant};
 
@@ -24,8 +27,8 @@ use moon_core::session::balances::BalanceFigures;
 use moon_core::telegram::web::dto::BalanceStateDto;
 
 use super::dto::{
-    balance_state_dto, distance_text, entry_volume_text, order_to_entry_pct, strategy_pending,
-    trade_strategy, trade_volume_text,
+    balance_state_dto, distance_text, entry_volume_text, order_quote, order_to_entry_pct, pnl_sign,
+    pnl_text, pnl_usd, strategy_pending, trade_strategy, trade_volume_text,
 };
 use super::reads::coin_rows;
 use super::{by_section, natural_cmp, scope_targets};
@@ -914,7 +917,7 @@ fn prepare_settings_keeps_visible_only_ids_and_leaves_all() {
     );
 
     let mut invalid = NotifySettings::default();
-    invalid.daily.hour = 24;
+    invalid.down.after_minutes = 0;
     assert_eq!(prepare_settings(invalid, &[]), Err(SaveFault::Invalid));
 }
 
@@ -998,7 +1001,7 @@ fn store_settings_refuses_before_it_writes() {
         SaveResult::Refused(SaveFault::Cores)
     );
     let mut invalid = NotifySettings::default();
-    invalid.daily.hour = 24;
+    invalid.down.after_minutes = 0;
     assert_eq!(
         save_known(&mut store, 8, invalid, &[1], 50),
         SaveResult::Refused(SaveFault::Invalid)
@@ -1167,7 +1170,7 @@ fn store_settings_failed_save_keeps_the_previous_document() {
 
     let mut next = NotifySettings::default();
     next.trades.on = false;
-    next.daily.hour = 9;
+    next.down.on = true;
     let failed = save_known(&mut store, 7, next, &[], 90);
     assert!(
         matches!(failed, SaveResult::Failed(ref text) if !text.is_empty()),
@@ -1178,86 +1181,6 @@ fn store_settings_failed_save_keeps_the_previous_document() {
     assert!(store.file.chats[&7].settings.trades.on);
     assert_eq!(NotifyFile::load(&path).expect("seed file"), seeded);
     assert!(!seeded.chats.contains_key(&8));
-}
-
-/// Enabling daily after today's clock, or moving that clock to a time that has already passed,
-/// records today so the summary is not sent again. A clock that has not passed leaves the ledger.
-///
-/// Mutation: stamp `daily_last` on every save, or skip the off-to-on edge. Turning the summary
-/// on at 22:00 for a 21:00 rule then sends today's summary immediately, or moving 21:00 to 18:00
-/// after 18:00 does the same. Oracle: 2024-06-15 20:00 UTC is before 21:00 and after 18:00;
-/// 22:00 UTC is after 21:00. Those instants are built here and are not read from `due`.
-#[test]
-fn store_settings_marks_today_when_daily_becomes_due() {
-    use chrono::{NaiveDate, TimeZone};
-
-    let day = NaiveDate::from_ymd_opt(2024, 6, 15).expect("civil day");
-    let at = |hour: u32, minute: u32| {
-        chrono_tz::UTC
-            .from_local_datetime(&day.and_hms_opt(hour, minute, 0).expect("civil time"))
-            .single()
-            .expect("utc instant")
-            .timestamp()
-    };
-    let at_20 = at(20, 0);
-    let at_21 = at(21, 0);
-    let at_22 = at(22, 0);
-    assert!(
-        at_20 < at_21 && at_21 <= at_22,
-        "20:00 is before the 21:00 rule and 22:00 is not"
-    );
-
-    let root = NotifyTemp::new("daily");
-    let mut store = empty_store(root.path("notifications.json"));
-    let mut rule = NotifySettings::default();
-    rule.daily.on = true;
-    rule.daily.hour = 21;
-
-    assert_eq!(
-        store_settings(&mut store, 1, rule.clone(), &[], at_22, chrono_tz::UTC, 0),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&1].ledger.daily_last, Some(day));
-    assert_eq!(store.file.chats[&1].revision, 1);
-
-    assert_eq!(
-        store_settings(&mut store, 2, rule.clone(), &[], at_20, chrono_tz::UTC, 0),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&2].ledger.daily_last, None);
-    assert_eq!(store.file.chats[&2].revision, 1);
-
-    assert_eq!(
-        store_settings(&mut store, 2, rule.clone(), &[], at_22, chrono_tz::UTC, 1),
-        SaveResult::Saved
-    );
-    assert_eq!(
-        store.file.chats[&2].ledger.daily_last, None,
-        "an ordinary re-save after the clock has passed must not stamp today"
-    );
-    assert_eq!(store.file.chats[&2].revision, 2);
-
-    let mut earlier = rule.clone();
-    earlier.daily.hour = 18;
-    assert_eq!(
-        store_settings(&mut store, 2, earlier, &[], at_20, chrono_tz::UTC, 2),
-        SaveResult::Saved
-    );
-    assert_eq!(store.file.chats[&2].ledger.daily_last, Some(day));
-    assert_eq!(store.file.chats[&2].revision, 3);
-
-    let mut later = rule;
-    later.daily.hour = 23;
-    assert_eq!(
-        store_settings(&mut store, 2, later, &[], at_22, chrono_tz::UTC, 3),
-        SaveResult::Saved
-    );
-    assert_eq!(
-        store.file.chats[&2].ledger.daily_last,
-        Some(day),
-        "moving the clock to a time that has not passed must not clear today"
-    );
-    assert_eq!(store.file.chats[&2].settings.daily.hour, 23);
 }
 
 /// A revision the page did not load is refused before validation and before the file is written.
@@ -1294,7 +1217,7 @@ fn store_settings_refuses_a_stale_revision_and_stores_a_match() {
     store.path = dir;
 
     let mut stale_invalid = NotifySettings::default();
-    stale_invalid.daily.hour = 24;
+    stale_invalid.down.after_minutes = 0;
     stale_invalid.trades.on = true;
     assert_eq!(
         store_settings(&mut store, 9, stale_invalid, &[1], 50, chrono_tz::UTC, 1,),
@@ -1399,4 +1322,152 @@ fn save_fault_text_follows_the_chat_locale() {
             "No se pudo guardar"
         );
     }
+}
+
+/// An order's PnL text names its unit: dollars only for a USD-stable quote, nothing when unknown.
+///
+/// Mutation: always append "$". A BTC-quoted order's 0.00012345 BTC then reads as "+0.00$".
+#[test]
+fn pnl_text_carries_the_quote_unit() {
+    assert_eq!(pnl_text(1.234, "USDT").as_deref(), Some("+1.23$"));
+    assert_eq!(pnl_text(-2.5, "").as_deref(), Some("-2.50"));
+    assert_eq!(
+        pnl_text(0.00012345, "BTC").as_deref(),
+        Some("+0.00012345 BTC")
+    );
+}
+
+/// The unit and the conversion share one quote: the catalog's, else the name's, else USDC.
+///
+/// Mutation: leave an empty catalog quote unknown. Every Hyperliquid perp (`BTC`, `xyz:BIRD`, no
+/// quote in the catalog) then prints a bare number and drops out of the dollar sums.
+#[test]
+fn order_quote_is_the_catalog_then_the_name_then_usdc() {
+    assert_eq!(order_quote("BTC", "ETHBTC"), "BTC");
+    assert_eq!(order_quote("", "BTCUSDT"), "USDT");
+    assert_eq!(order_quote("", "BTC"), "USDC");
+    assert_eq!(order_quote("", "xyz:BIRD"), "USDC");
+}
+
+/// Dollars: a stablecoin as is, a coin through its rate, nothing without a quote or a rate.
+///
+/// Mutation: return the quote-currency value when the rate is missing. A BTC PnL then joins the
+/// dollar sum as if one BTC were one dollar.
+#[test]
+fn pnl_usd_converts_through_the_same_quote() {
+    assert_eq!(pnl_usd(2.0, "USDT", |_| None), Some(2.0));
+    assert_eq!(
+        pnl_usd(0.001, "BTC", |q| (q == "BTC").then_some(60_000.0)),
+        Some(60.0)
+    );
+    assert_eq!(pnl_usd(0.001, "BTC", |_| None), None);
+    assert_eq!(pnl_usd(1.0, "", |_| Some(1.0)), None);
+    assert_eq!(pnl_usd(1.0, "BTC", |_| Some(f64::INFINITY)), None);
+}
+
+/// The tone follows the printed text: a loss that rounds to zero is neutral.
+#[test]
+fn pnl_sign_follows_the_rounded_text() {
+    assert_eq!(pnl_sign(-0.001, "USDT"), 0);
+    assert_eq!(pnl_sign(-0.01, "USDT"), -1);
+    assert_eq!(pnl_sign(0.00000002, "BTC"), 1);
+}
+
+/// A row from the settings window is refused on a stale revision or an unpaired chat, and taken
+/// on the stored one — checked without writing.
+#[test]
+fn settings_window_rows_are_checked_before_any_write() {
+    use moon_core::station_api::ChatNotifyRow;
+    let mut telegram = moon_core::config::TelegramConfig::default();
+    telegram.pair_chat(7);
+    let mut file = moon_core::telegram::notify::NotifyFile::default();
+    file.chats.insert(
+        7,
+        moon_core::telegram::notify::ChatNotify {
+            revision: 3,
+            ..Default::default()
+        },
+    );
+    let row = |revision| {
+        std::collections::BTreeMap::from([(
+            7,
+            ChatNotifyRow {
+                settings: Default::default(),
+                revision,
+            },
+        )])
+    };
+    assert!(super::settings::check_rows(&file, &telegram, &row(3)).is_ok());
+    assert!(super::settings::check_rows(&file, &telegram, &row(2)).is_err());
+    let unpaired = std::collections::BTreeMap::from([(9, ChatNotifyRow::default())]);
+    assert!(super::settings::check_rows(&file, &telegram, &unpaired).is_err());
+}
+
+/// An automatic report that turns on records its current slot as done, so the first report
+/// comes at the next slot; a re-save while it stays on, and another report turning on, leave it.
+#[test]
+fn store_settings_marks_the_current_slot_when_an_auto_report_turns_on() {
+    use chrono::TimeZone;
+    use moon_core::telegram::notify::AutoReport;
+    let at = |hour, minute| {
+        chrono_tz::UTC
+            .with_ymd_and_hms(2026, 10, 3, hour, minute, 0)
+            .single()
+            .expect("utc instant")
+            .timestamp()
+    };
+    let root = NotifyTemp::new("auto-slot");
+    let mut store = empty_store(root.path("notifications.json"));
+    let mut rule = NotifySettings::default();
+    rule.reports.set(AutoReport::Hourly, true);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(14, 37)),
+        SaveResult::Saved
+    );
+    let slots = store.file.chats[&1].ledger.reports;
+    assert_eq!(slots.hourly.slot_utc, Some(at(14, 0)));
+    assert_eq!(slots.today.slot_utc, None);
+    rule.reports.set(AutoReport::Month, true);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(16, 5)),
+        SaveResult::Saved
+    );
+    let slots = store.file.chats[&1].ledger.reports;
+    assert_eq!(slots.hourly.slot_utc, Some(at(14, 0)), "hourly stayed on");
+    assert_eq!(slots.month.slot_utc, Some(at(0, 0)));
+    // Off forgets the last message: a later run must not delete a report of this one.
+    store
+        .file
+        .chats
+        .get_mut(&1)
+        .unwrap()
+        .ledger
+        .reports
+        .month
+        .message = Some(77);
+    rule.reports.set(AutoReport::Month, false);
+    assert_eq!(
+        save_known(&mut store, 1, rule.clone(), &[], at(17, 0)),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&1].ledger.reports.month.message, None);
+}
+
+/// The Mini App's save keeps the chat's automatic reports: the page never sends them.
+#[test]
+fn a_mini_app_save_keeps_the_stored_auto_reports() {
+    use moon_core::telegram::notify::{AutoReport, ChatNotify};
+    let mut file = NotifyFile::default();
+    let mut stored = ChatNotify::default();
+    stored.settings.reports.set(AutoReport::Today, true);
+    file.chats.insert(5, stored);
+    let mut from_page = NotifySettings::default();
+    from_page.down.on = true;
+    keep_stored_bot_fields(&file, 5, &mut from_page);
+    assert!(from_page.down.on);
+    assert!(from_page.reports.on(AutoReport::Today));
+    let mut fresh = NotifySettings::default();
+    fresh.reports.set(AutoReport::Hourly, true);
+    keep_stored_bot_fields(&file, 6, &mut fresh);
+    assert!(!fresh.reports.any(), "a chat with no row has none");
 }

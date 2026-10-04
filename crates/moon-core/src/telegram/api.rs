@@ -389,6 +389,44 @@ impl BotApi {
         self.post("getMe", &EmptyBody {}, false)
     }
 
+    /// Publish the bot's command list (`setMyCommands`), which the chat's menu button shows when
+    /// it is not the Mini App. One quiet attempt like [`Self::tidy_message`]: a failure is the
+    /// caller's to log and retry, never the bot's health; a rate limit it meets is kept for the
+    /// next request.
+    ///
+    /// Args:
+    ///     commands: `(command, description)` pairs; the command without its slash.
+    ///
+    /// Returns:
+    ///     `Ok(None)` when skipped for a pending rate limit or shutdown; Telegram's answer
+    ///     otherwise.
+    pub fn set_my_commands(
+        &mut self,
+        commands: &[(String, String)],
+    ) -> Result<Option<bool>, ApiError> {
+        if !self.running() || self.retry.pending.is_some() {
+            return Ok(None);
+        }
+        let commands: Vec<_> = commands
+            .iter()
+            .map(|(command, description)| {
+                serde_json::json!({"command": command, "description": description})
+            })
+            .collect();
+        self.post_once(
+            "setMyCommands",
+            &serde_json::json!({"commands": commands}),
+            false,
+        )
+        .map(Some)
+        .map_err(|failure| {
+            if let Some(secs) = retry_after_of(&failure.error) {
+                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+            }
+            failure.error
+        })
+    }
+
     /// Replace a private chat's menu using the same redacted, cancellable transport as replies.
     pub fn set_chat_menu_button(
         &mut self,
@@ -477,6 +515,35 @@ impl BotApi {
         self.post("sendMessage", &send_html_request(chat_id, html), false)
     }
 
+    /// Replace the text of a message [`BotApi::send_html`] sent, keeping its form.
+    ///
+    /// Args:
+    ///     chat_id: Chat the message is in.
+    ///     message: The message to edit.
+    ///     html: The new Telegram HTML, bounded like [`BotApi::send_html`]'s.
+    ///
+    /// Returns:
+    ///     The edited message on success.
+    ///
+    /// Errors:
+    ///     The same classified failures as [`BotApi::send_html`]. An edit that changes nothing is
+    ///     a `Telegram` error `post` keeps out of the service health.
+    pub fn edit_html(
+        &mut self,
+        chat_id: i64,
+        message: i64,
+        html: &str,
+    ) -> Result<Message, ApiError> {
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message,
+            "text": html,
+            "parse_mode": "HTML",
+            "link_preview_options": {"is_disabled": true},
+        });
+        self.post("editMessageText", &body, false)
+    }
+
     /// Send editable reports with their inline keyboard in the initial request.
     pub fn rich_message(
         &mut self,
@@ -489,13 +556,28 @@ impl BotApi {
         self.post(method, &body, false)
     }
 
-    /// Delete only a known outgoing answer after its replacement was successfully delivered.
-    pub fn delete_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
-        self.post(
+    /// Delete a message the chat no longer needs: one attempt with the ordinary request timeout,
+    /// never retried and never reported to the error observer, so tidying a chat cannot change
+    /// the bot's health. Skipped while a rate limit is pending. A rate limit it meets itself is
+    /// kept for the next real request, which would otherwise walk straight into it.
+    ///
+    /// Returns:
+    ///     `Ok(false)` when skipped; Telegram's answer otherwise.
+    pub fn tidy_message(&mut self, chat: i64, message: i64) -> Result<bool, ApiError> {
+        if !self.running() || self.retry.pending.is_some() {
+            return Ok(false);
+        }
+        self.post_once(
             "deleteMessage",
             &serde_json::json!({"chat_id": chat, "message_id": message}),
             false,
         )
+        .map_err(|failure| {
+            if let Some(secs) = retry_after_of(&failure.error) {
+                self.retry.pending = Some(Duration::from_secs(u64::from(secs)));
+            }
+            failure.error
+        })
     }
 
     /// Dismiss Telegram's callback spinner before waiting for report computation.

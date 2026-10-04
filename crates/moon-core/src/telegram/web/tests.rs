@@ -174,6 +174,8 @@ fn accept(event: MiniAppApiRequest) {
                 ok: true,
                 sent: n,
                 requested: n,
+                already: 0,
+                offline: 0,
                 error: None,
             }));
         }
@@ -192,7 +194,6 @@ fn notify_ok() -> super::dto::NotifyDto {
             name: "A".into(),
             exchange: "Binance".into(),
         }],
-        zone: "UTC".into(),
         revision: 0,
         error: None,
         fault: None,
@@ -786,7 +787,7 @@ fn notify_dto_default_json_is_the_compact_document() {
     let settings = NotifySettings::default();
     assert_eq!(
         serde_json::to_string(&settings).expect("settings"),
-        r#"{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5},"daily":{"on":false,"hour":21,"minute":0}}"#
+        r#"{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5}}"#
     );
     assert_eq!(
         serde_json::to_string(&CoreScope::Only(vec![1, 2])).expect("only"),
@@ -800,13 +801,12 @@ fn notify_dto_default_json_is_the_compact_document() {
             name: "A".into(),
             exchange: "Binance".into(),
         }],
-        zone: "UTC".into(),
         revision: 0,
         error: None,
         fault: None,
     };
     assert_eq!(
         serde_json::to_string(&dto).expect("dto"),
-        r#"{"settings":{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5},"daily":{"on":false,"hour":21,"minute":0}},"cores":[{"id":1,"name":"A","exchange":"Binance"}],"zone":"UTC","revision":0,"error":null,"fault":null}"#
+        r#"{"settings":{"trades":{"on":false,"cores":{"kind":"all"},"min_volume_usd":null,"profit_at_least_usd":null,"loss_at_least_usd":null},"down":{"on":false,"after_minutes":5}},"cores":[{"id":1,"name":"A","exchange":"Binance"}],"revision":0,"error":null,"fault":null}"#
     );
 }

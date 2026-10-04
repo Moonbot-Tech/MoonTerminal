@@ -9,13 +9,14 @@
 //! Only REACHABLE cores are commanded. The per-core command channel outlives a disconnect — a feed
 //! thread retries in place — so a command queued for a core that is down is not dropped but
 //! replayed whenever it comes back, which for a trading action can be an hour later and nothing
-//! like what the press meant.
+//! like what the press meant. The trading and AutoDetect gate is `SessionManager::dispatch_run`,
+//! shared with the Telegram Mini App; restart keeps its own one-core check below.
 
 use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::{App, Entity};
-use moon_core::session::CoreId;
+use moon_core::session::{CoreId, RunSwitch};
 
 use super::RunKey;
 use super::pending::{PENDING_TIMEOUT, RunAsk};
@@ -70,33 +71,26 @@ pub(crate) fn set_trading(
 ) {
     let cores = cores.clone();
     backend.update(app, |backend, cx| {
-        // Reachable cores only — see the module note on queued commands outliving a disconnect —
-        // and only cores that are NOT already in the asked-for state. A core told to start what it
-        // is already running answers nothing (the store suppresses an unchanged repeat), so the
-        // control would sit in the waiting face for the whole timeout for no reason.
-        let targets: Vec<CoreId> = cores
-            .iter()
-            .copied()
-            .filter(|core| {
-                let state = backend.session.core_run_state(*core);
-                state.online && !(state.trading == Some(on) && state.trading_confirmed)
-            })
-            .collect();
-        if targets.is_empty() {
+        // `dispatch_run` commands reachable cores only — see the module note on queued commands
+        // outliving a disconnect — and only cores that are NOT already in the asked-for state. A
+        // core told to start what it is already running answers nothing (the store suppresses an
+        // unchanged repeat), so the control would sit in the waiting face for the whole timeout.
+        let outcome = backend.session.dispatch_run(&cores, RunSwitch::Trading, on);
+        if outcome.needed == 0 {
             log::info!(
-                "trading {} skipped: none of the {} core(s) in scope needs it",
+                "trading {} skipped: none of the {} core(s) in scope needs it ({} offline, {} already)",
                 if on { "start" } else { "stop" },
-                cores.len()
+                cores.len(),
+                outcome.offline,
+                outcome.already
             );
             return;
         }
-        // Armed for the cores that ACCEPTED the command. Arming the rest would leave a control
-        // waiting on an answer to something nobody sent.
-        let sent = backend.session.set_trading_many(&targets, on);
         let now = Instant::now();
-        // Which control pressed this, so the waiting face appears on that control and not on its
-        // neighbour commanding the same cores.
-        for core in &sent {
+        // Armed for the cores that ACCEPTED the command. Arming the rest would leave a control
+        // waiting on an answer to something nobody sent. Which control pressed this, so the
+        // waiting face appears on that control and not on its neighbour commanding the same cores.
+        for core in &outcome.sent {
             backend
                 .run_pending
                 .arm(*core, RunAsk::Trading(on), from, now);
@@ -104,13 +98,13 @@ pub(crate) fn set_trading(
         log::info!(
             "trading {} requested for {}/{} core(s) that needed it, {} in scope",
             if on { "start" } else { "stop" },
-            sent.len(),
-            targets.len(),
+            outcome.sent.len(),
+            outcome.needed,
             cores.len()
         );
         // Only when something was actually armed: an expiry timer owed to nothing would block the
         // next real press from getting one.
-        if !sent.is_empty() {
+        if !outcome.sent.is_empty() {
             expire_later(backend, cx);
         }
         cx.notify();
@@ -120,9 +114,8 @@ pub(crate) fn set_trading(
 /// Turn AutoDetect on or off across a whole scope.
 ///
 /// The same shape as [`set_trading`] — reachable cores only, skip the ones already in the asked-for
-/// state, arm only what was accepted — because the failure modes are the same. What differs is the
-/// confirmation it reads: AutoDetect travels inside the runtime-state command, so `started_confirmed`
-/// is what says the value came from this connection.
+/// state, arm only what was accepted — because the failure modes are the same. The rule, including
+/// the `started_confirmed` it reads for AutoDetect, is `moon_core::session::RunSwitch::target`.
 ///
 /// Args:
 ///     backend: Shared terminal state.
@@ -139,25 +132,21 @@ pub(crate) fn set_auto_detect(
 ) {
     let cores = cores.clone();
     backend.update(app, |backend, cx| {
-        let targets: Vec<CoreId> = cores
-            .iter()
-            .copied()
-            .filter(|core| {
-                let state = backend.session.core_run_state(*core);
-                state.online && !(state.auto_detect == Some(on) && state.started_confirmed)
-            })
-            .collect();
-        if targets.is_empty() {
+        let outcome = backend
+            .session
+            .dispatch_run(&cores, RunSwitch::AutoDetect, on);
+        if outcome.needed == 0 {
             log::info!(
-                "auto detect {} skipped: none of the {} core(s) in scope needs it",
+                "auto detect {} skipped: none of the {} core(s) in scope needs it ({} offline, {} already)",
                 if on { "on" } else { "off" },
-                cores.len()
+                cores.len(),
+                outcome.offline,
+                outcome.already
             );
             return;
         }
-        let sent = backend.session.set_auto_detect_many(&targets, on);
         let now = Instant::now();
-        for core in &sent {
+        for core in &outcome.sent {
             backend
                 .run_pending
                 .arm(*core, RunAsk::AutoDetect(on), from, now);
@@ -165,11 +154,11 @@ pub(crate) fn set_auto_detect(
         log::info!(
             "auto detect {} requested for {}/{} core(s) that needed it, {} in scope",
             if on { "on" } else { "off" },
-            sent.len(),
-            targets.len(),
+            outcome.sent.len(),
+            outcome.needed,
             cores.len()
         );
-        if !sent.is_empty() {
+        if !outcome.sent.is_empty() {
             expire_later(backend, cx);
         }
         cx.notify();

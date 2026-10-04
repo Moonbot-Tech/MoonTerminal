@@ -175,7 +175,7 @@
         return "";
     }
 
-    // Group PnL is a client sum of order.pnl. Match signed_fixed's visible
+    // Group PnL is a client sum of order.pnl_usd. Match signed_fixed's visible
     // contract: half away from zero, two decimals, a sign only when non-zero.
     function signedFixed(value) {
         if (typeof value !== "number" || value !== value || value === Infinity || value === -Infinity) {
@@ -630,35 +630,45 @@
         return text == null ? null : text + "$";
     }
 
-    // Finite order.pnl figures of a set of orders: their sum and how many there were. An order
-    // with no position yet has no pnl (order_pnl returns nothing) and adds nothing; the chart
-    // position caption skips the same rows.
+    function finiteNumber(value) {
+        return typeof value === "number" && value === value && value !== Infinity && value !== -Infinity;
+    }
+
+    // Dollar PnL of a set of orders: the sum of the server's dollar figures (order.pnl_usd) of
+    // REAL orders, how many there were, and how many real orders with a PnL had no dollar value.
+    // order.pnl is in each market's own quote and is never added. Emulator orders stay out, as the
+    // desktop keeps them apart. An order with no position yet has no pnl and adds nothing; the
+    // chart position caption skips the same rows. A sum missing a real order is not shown.
     function knownPnl(orders) {
         var sum = 0;
         var known = 0;
+        var unvalued = 0;
         var i;
         for (i = 0; i < orders.length; i++) {
-            var pnl = orders[i] && orders[i].pnl;
-            if (typeof pnl !== "number" || pnl !== pnl || pnl === Infinity || pnl === -Infinity) {
+            var order = orders[i];
+            if (!order || order.emulator || !finiteNumber(order.pnl)) continue;
+            if (!finiteNumber(order.pnl_usd)) {
+                unvalued += 1;
                 continue;
             }
             known += 1;
-            sum += pnl;
+            sum += order.pnl_usd;
         }
-        return { sum: sum, known: known };
+        return { sum: sum, known: known, unvalued: unvalued };
     }
 
-    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no
-    // valued order shows the count alone.
+    // Core header: "<N> orders", plus the core's open PnL in signed dollars. A core with no real
+    // order holding a position shows the count alone; one whose real orders cannot all be valued
+    // in dollars shows "No value" beside it.
     function orderGroupSummary(items) {
         var wrap = el("span", "group-meta");
         var n = items.length;
         wrap.appendChild(el("span", "num hint", trf("mini_orders_n_" + pluralForm(n), { n: n })));
         var pnl = knownPnl(items);
-        var text = pnl.known ? signedDollars(pnl.sum) : null;
-        if (text != null) {
+        // A sum missing a real order is not shown; "No value" says why instead of an empty slot.
+        if (pnl.known || pnl.unvalued) {
             var fig = el("span", "num");
-            applyMoney(fig, "num", text, pnl.sum);
+            applyMoney(fig, "num", pnl.unvalued ? null : signedDollars(pnl.sum), pnl.sum);
             wrap.appendChild(fig);
         }
         return wrap;
@@ -905,8 +915,9 @@
     function orderResult(order) {
         if (!order.pnl_text) return null;
         var node = el("span", "num order-pnl");
-        // Dollars like the core header and the summary above it.
-        applyMoney(node, "num order-pnl", order.pnl_text + "$", order.pnl);
+        // The server's text carries the unit: dollars for a USD-stable quote, else the quote. The
+        // tone follows the sign of that rounded text, not the raw value.
+        applyMoney(node, "num order-pnl", order.pnl_text, order.pnl_sign);
         return node;
     }
 
@@ -965,7 +976,8 @@
         var row = el("div", "row order-row");
         var main = el("div", "order-main");
         var top = el("div", "order-top");
-        var coin = el("span", "name order-coin", order.coin || "");
+        // (E) marks an emulated order, as the desktop orders table does.
+        var coin = el("span", "name order-coin", (order.coin || "") + (order.emulator ? " (E)" : ""));
         coin.title = order.coin || "";
         top.appendChild(coin);
         top.appendChild(el("span", "badge order-side " + sideClass(order.side), sideLabel(order.side)));
@@ -1187,15 +1199,14 @@
         return typeof n === "number" ? tr("mini_report_core_orders").replace("{n}", String(n)) : "";
     }
 
-    // Order count plus the client sum of every known PnL, same rounding as the group heads.
+    // Order count plus the dollar sum of real orders (knownPnl), same rounding as the group heads.
     function ordersSummary(orders) {
         var line = el("p", "summary spread");
         line.appendChild(el("span", "", tr("mini_orders_summary").replace("{n}", String(orders.length))));
         var pnl = knownPnl(orders);
-        var text = pnl.known ? signedDollars(pnl.sum) : null;
-        if (text != null) {
+        if (pnl.known || pnl.unvalued) {
             var fig = el("span", "");
-            applyMoney(fig, "num money-col", text, pnl.sum);
+            applyMoney(fig, "num money-col", pnl.unvalued ? null : signedDollars(pnl.sum), pnl.sum);
             line.appendChild(fig);
         }
         return line;
@@ -1543,7 +1554,8 @@
         var line = el("div", "detail-actions");
         var cancel = button("cmd action-btn cmd-danger", tr("mini_cancel_all"), function () {
             if (commandBusy) return;
-            runCommand(null, "/api/core/cancel_all", { core: core.id });
+            // The desktop asks a second click for the same action; the page asks one confirm.
+            runCommand(tr("mini_cancel_all_confirm"), "/api/core/cancel_all", { core: core.id });
         });
         cancel.disabled = commandBusy;
         line.appendChild(cancel);
@@ -1932,7 +1944,6 @@
     var settingsError = "";
     var settingsSavedTimer = null;
     var settingsCores = [];
-    var settingsZone = "";
     // Category and search are popup-local navigation, like the other tabs' detail views.
     var settingsCategoryId = null;
     var settingsCoreSearch = "";
@@ -1946,7 +1957,6 @@
         var active = [];
         if (settingsForm.tradesOn) active.push(tr("mini_settings_summary_trades"));
         if (settingsForm.downOn) active.push(tr("mini_settings_summary_cores"));
-        if (settingsForm.dailyOn) active.push(tr("mini_settings_summary_daily"));
         return active.length ? active.join(" · ") : tr("mini_settings_summary_off");
     }
 
@@ -1965,7 +1975,6 @@
         host.appendChild(settingsNote());
         host.appendChild(settingsTradesCard());
         host.appendChild(settingsDownCard());
-        host.appendChild(settingsDailyCard());
         host.appendChild(settingsSaveBlock());
     }
 
@@ -2017,26 +2026,6 @@
         return String(Number(String(text).trim()));
     }
 
-    // Parse HH:MM or HH:MM:00 into hour and minute; return null for any other clock text.
-    function settingsParseTime(text) {
-        var raw = String(text == null ? "" : text).trim();
-        var parts = raw.split(":");
-        if (parts.length < 2 || parts.length > 3) return null;
-        if (parts.length === 3 && parts[2] !== "00") return null;
-        if (!/^\d{1,2}$/.test(parts[0]) || !/^\d{2}$/.test(parts[1])) return null;
-        var hour = Number(parts[0]);
-        var minute = Number(parts[1]);
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-        return { hour: hour, minute: minute };
-    }
-
-    /** Normalize valid time `text` to HH:MM, retaining invalid text trimmed. */
-    function settingsTimeCanon(text) {
-        var parsed = settingsParseTime(text);
-        if (!parsed) return String(text == null ? "" : text).trim();
-        return twoDigits(parsed.hour) + ":" + twoDigits(parsed.minute);
-    }
-
     /** Serialize `form`'s normalized rules for comparison, ignoring disabled threshold text. */
     function settingsSnap(form) {
         var ids = form.scopeKind === "only" ? settingsSortedIds(form.scopeIds) : [];
@@ -2048,27 +2037,23 @@
             p: form.profitOn === true ? settingsAmountCanon(form.profitText) : "",
             l: form.lossOn === true ? settingsAmountCanon(form.lossText) : "",
             d: form.downOn === true,
-            m: settingsMinutesCanon(form.minutesText),
-            y: form.dailyOn === true,
-            h: settingsTimeCanon(form.timeText)
+            m: settingsMinutesCanon(form.minutesText)
         });
     }
 
-    /** Validate `form`'s enabled thresholds, scope, delay, and clock before allowing Save. */
+    /** Validate `form`'s enabled thresholds, scope, and delay before allowing Save. */
     function settingsFormValid(form) {
         if (!form) return false;
         if (form.volumeOn && !settingsAmountOk(form.volumeText)) return false;
         if (form.profitOn && !settingsAmountOk(form.profitText)) return false;
         if (form.lossOn && !settingsAmountOk(form.lossText)) return false;
         if (!settingsMinutesOk(form.minutesText)) return false;
-        if (!settingsParseTime(form.timeText)) return false;
         if (form.scopeKind === "only" && !form.scopeIds.length) return false;
         return true;
     }
 
     /** Return the wire rules for a valid `form`; disabled thresholds become null. */
     function settingsPayload(form) {
-        var time = settingsParseTime(form.timeText);
         var cores = form.scopeKind === "only"
             ? { kind: "only", ids: settingsSortedIds(form.scopeIds) }
             : { kind: "all" };
@@ -2083,11 +2068,6 @@
             down: {
                 on: form.downOn === true,
                 after_minutes: Number(String(form.minutesText).trim())
-            },
-            daily: {
-                on: form.dailyOn === true,
-                hour: time.hour,
-                minute: time.minute
             }
         };
     }
@@ -2099,13 +2079,12 @@
         return value;
     }
 
-    // Adopt server settings, cores, zone and revision as the draft baseline; false leaves it unchanged.
+    // Adopt server settings, cores and revision as the draft baseline; false leaves it unchanged.
     function settingsAdopt(data) {
         var settings = data && data.settings;
         var trades = settings && settings.trades;
         var down = settings && settings.down;
-        var daily = settings && settings.daily;
-        if (!trades || !down || !daily) return false;
+        if (!trades || !down) return false;
         var scope = trades.cores || {};
         var ids = [];
         if (scope.kind === "only" && Array.isArray(scope.ids)) {
@@ -2114,12 +2093,6 @@
                 var id = scope.ids[i];
                 if (typeof id === "number" && id === id && id !== Infinity && id !== -Infinity) ids.push(id);
             }
-        }
-        var hour = daily.hour;
-        var minute = daily.minute;
-        var timeText = "21:00";
-        if (typeof hour === "number" && typeof minute === "number" && hour === hour && minute === minute) {
-            timeText = twoDigits(hour) + ":" + twoDigits(minute);
         }
         var minutes = down.after_minutes;
         var form = {
@@ -2133,13 +2106,10 @@
             lossOn: typeof trades.loss_at_least_usd === "number",
             lossText: typeof trades.loss_at_least_usd === "number" ? String(trades.loss_at_least_usd) : "",
             downOn: down.on === true,
-            minutesText: typeof minutes === "number" ? String(minutes) : "5",
-            dailyOn: daily.on === true,
-            timeText: timeText
+            minutesText: typeof minutes === "number" ? String(minutes) : "5"
         };
         settingsForm = form;
         settingsCores = Array.isArray(data.cores) ? data.cores : [];
-        settingsZone = typeof data.zone === "string" ? data.zone : "";
         settingsRevision = settingsRevisionOf(data);
         settingsBaseSnap = settingsSnap(form);
         return true;
@@ -2282,29 +2252,6 @@
         return input;
     }
 
-    /** Return a minute-resolution time input initialized from `value` and bound to the draft. */
-    function settingsTimeInput(value, disabled, invalid) {
-        var input = document.createElement("input");
-        input.type = "time";
-        input.step = "60";
-        input.className = "settings-input" + (invalid ? " invalid" : "");
-        input.value = value;
-        input.disabled = !!disabled;
-        input.setAttribute("aria-label", tr("mini_settings_time"));
-        input.setAttribute("aria-invalid", invalid ? "true" : "false");
-        input.setAttribute("data-settings", "time");
-        /** Copy this input's clock into the draft unless a save is in flight. */
-        function apply() {
-            if (settingsSaving || !settingsForm) return;
-            settingsForm.timeText = input.value;
-            settingsTouch();
-            settingsSyncChrome();
-        }
-        input.addEventListener("input", apply);
-        input.addEventListener("change", apply);
-        return input;
-    }
-
     /** Update `node`'s visual and accessible invalid state, ignoring an absent node. */
     function settingsMarkField(node, invalid) {
         if (!node) return;
@@ -2322,7 +2269,6 @@
         settingsMarkField(host.querySelector('[data-settings="profit"]'), form.profitOn && !settingsAmountOk(form.profitText));
         settingsMarkField(host.querySelector('[data-settings="loss"]'), form.lossOn && !settingsAmountOk(form.lossText));
         settingsMarkField(host.querySelector('[data-settings="minutes"]'), !settingsMinutesOk(form.minutesText));
-        settingsMarkField(host.querySelector('[data-settings="time"]'), !settingsParseTime(form.timeText));
         var save = host.querySelector("[data-settings-save]");
         if (save) save.disabled = settingsSaving || !settingsFormValid(form) || !settingsIsDirty();
         var status = host.querySelector("[data-settings-status]");
@@ -2524,20 +2470,6 @@
             function (value) { settingsForm.minutesText = value; }
         ));
         options.appendChild(row);
-        card.appendChild(options);
-        return card;
-    }
-
-    /** Return the daily card with a minute-resolution clock and the host's report zone. */
-    function settingsDailyCard() {
-        var card = settingsCard("daily", "mini_settings_daily", "dailyOn");
-        var options = settingsOptions(settingsForm.dailyOn);
-        var locked = !settingsForm.dailyOn || settingsSaving;
-        var row = el("div", "settings-field");
-        row.appendChild(el("span", "settings-label", tr("mini_settings_time")));
-        row.appendChild(settingsTimeInput(settingsForm.timeText, locked, !settingsParseTime(settingsForm.timeText)));
-        options.appendChild(row);
-        options.appendChild(el("p", "settings-caption", tr("mini_settings_zone") + " " + settingsZone));
         card.appendChild(options);
         return card;
     }
@@ -3150,8 +3082,14 @@
             return;
         }
         var data = res.data || {};
-        var partial = typeof data.sent === "number" && typeof data.requested === "number"
-            && data.sent !== data.requested;
+        // A scope result: cores already in the asked state count as done; cores that are not
+        // connected were skipped, never queued.
+        var done = typeof data.sent === "number" ? data.sent + (data.already || 0) : null;
+        var offline = data.offline || 0;
+        // Partial when part of the scope was done, or part of it (not all) was offline: the
+        // offline count is shown even when the rest was refused.
+        var partial = done != null && typeof data.requested === "number"
+            && done !== data.requested && (done > 0 || (offline > 0 && offline < data.requested));
         // A reconnect only starts one; the next cores poll shows whether it came back.
         if (data.ok === true && path === "/api/core/reconnect") {
             showCmdLine("");
@@ -3166,12 +3104,16 @@
         }
         haptic("error");
         if (partial) {
-            showCmdLine(trf("mini_cmd_partial", { sent: data.sent, n: data.requested }));
+            showCmdLine(offline
+                ? trf("mini_cmd_partial_offline", { sent: done, n: data.requested, offline: offline })
+                : trf("mini_cmd_partial", { sent: done, n: data.requested }));
             reloadAfterCommand(true);
             return;
         }
         var failed = tr("mini_cmd_failed");
-        if (data.error === "not_found") {
+        if (data.error === "offline") {
+            failed = tr("mini_cmd_offline");
+        } else if (data.error === "not_found") {
             failed = path.indexOf("/api/core") === 0 ? tr("mini_cmd_core_not_found") : tr("mini_cmd_not_found");
         }
         showCmdLine(failed);

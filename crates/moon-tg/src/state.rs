@@ -32,16 +32,37 @@ pub struct TelegramState {
     pub(crate) mini_report_last: Option<CachedReport>,
     /// At most one Mini App trades read is computed at a time, including timed-out requests.
     pub(crate) mini_trades_pending: bool,
-    /// At most one closed-trade and daily notification read is in flight.
+    /// At most one closed-trade notification read is in flight.
     pub(crate) notify_busy: bool,
     /// Report revision captured at spawn and retained after that notification read saved.
     ///
     /// `None` is a host that cannot name a revision, the value after a service restart, and the
     /// value after a read that did not save. A later tick spawns again only when this differs
-    /// from the host's revision or a daily rule is due, and only after the interval.
+    /// from the host's revision, and only after the interval.
     pub(crate) last_report_revision: Option<crate::ReportRevision>,
     /// When the last notification read was spawned. `None` allows the first run.
     pub(crate) last_notify_run: Option<Instant>,
+    /// Each core's newest Telegram event already relayed or passed over
+    /// (`notify::events`); a core missing here starts at its newest.
+    pub(crate) events_cursor: HashMap<CoreId, u64>,
+    /// Core events handed to each chat and not queued yet, with how many the rings dropped
+    /// unread for it (`notify::events`).
+    pub(crate) events_waiting: HashMap<i64, (Vec<crate::notify::events::Fresh>, u64)>,
+    /// When each chat's last batch of core events was queued; a chat missing here gets its next
+    /// event at once.
+    pub(crate) events_sent: HashMap<i64, Instant>,
+    /// Chats asked for a coin for a core's blacklist (`menu::control`): the core, whether to take
+    /// the coin off, and until when the question stands.
+    pub(crate) awaiting_coin: HashMap<i64, (CoreId, bool, Instant)>,
+    /// The confirmed press each chat was asked for (`menu::control`), and until when it counts.
+    pub(crate) awaiting_confirm:
+        HashMap<i64, (moon_core::telegram::menu_action::ControlAction, Instant)>,
+    /// At most one automatic-report read is in flight.
+    pub(crate) auto_busy: bool,
+    /// When the last automatic-report read was spawned. `None` allows the first run.
+    pub(crate) last_auto_run: Option<Instant>,
+    /// Injected automatic-report pages. `None` in production, which reads the report database.
+    pub(crate) injected_auto: Option<crate::notify::reports::InjectedAuto>,
     /// In-memory down timers, one per chat. Empty after a restart on purpose: the ledger on disk
     /// is what stops a second down notice.
     pub(crate) down_trackers: BTreeMap<i64, crate::notify::down::DownTracker>,
@@ -52,8 +73,7 @@ pub struct TelegramState {
     pub(crate) last_down_step: Option<Instant>,
     /// Frozen UTC Unix seconds for notification tests. `None` in production.
     ///
-    /// When set, finish names today's date from this instant instead of the wall clock, and the
-    /// one-second down gate does not apply.
+    /// When set, the one-second down gate does not apply.
     pub(crate) notify_clock_override: Option<i64>,
     /// Store used when no service is running. Production leaves this `None` and reads the service.
     pub(crate) notify_store_override: Option<Arc<Mutex<moon_core::telegram::runtime::NotifyStore>>>,
@@ -73,6 +93,12 @@ pub struct TelegramState {
     /// Value: `(wanted, sent_at, strategies_ack_rev before, strategies_rev before)`. Cleared on
     /// service restart.
     pub(crate) mini_strategy_wanted: HashMap<(CoreId, u64), (bool, Instant, u64, u64)>,
+    /// Run switches the chat's Control section sent and the core has not reported yet, by
+    /// `(core, switch)`: the asked state and when. Cleared on service restart.
+    pub(crate) run_wanted: HashMap<(CoreId, moon_core::session::RunSwitch), (bool, Instant)>,
+    /// Control messages to redraw once the core answers their press, by `(chat, message)`.
+    /// Cleared on service restart.
+    pub(crate) control_redraws: crate::menu::ControlRedraws,
     pub service: Option<TelegramService>,
     pub status: TelegramStatus,
     pub mini_status: MiniAppStatus,
@@ -156,6 +182,14 @@ impl TelegramState {
             notify_busy: false,
             last_report_revision: None,
             last_notify_run: None,
+            events_cursor: HashMap::new(),
+            events_waiting: HashMap::new(),
+            events_sent: HashMap::new(),
+            awaiting_coin: HashMap::new(),
+            awaiting_confirm: HashMap::new(),
+            auto_busy: false,
+            last_auto_run: None,
+            injected_auto: None,
             down_trackers: BTreeMap::new(),
             last_down_step: None,
             notify_clock_override: None,
@@ -165,6 +199,8 @@ impl TelegramState {
             injected_reads: None,
             mini_trades_last: None,
             mini_strategy_wanted: HashMap::new(),
+            run_wanted: HashMap::new(),
+            control_redraws: HashMap::new(),
             service,
             status,
             mini_status: MiniAppStatus::Stopped,
@@ -195,12 +231,14 @@ impl TelegramState {
         let mini_report_pending = self.mini_report_pending;
         let mini_trades_pending = self.mini_trades_pending;
         let notify_busy = self.notify_busy;
+        let auto_busy = self.auto_busy;
         let notifications_path = self.notifications_path.clone();
         *self = Self::new_with_menu_cleanup(config, self.kind, retired, notifications_path);
         self.report_pending = report_pending;
         self.mini_report_pending = mini_report_pending;
         self.mini_trades_pending = mini_trades_pending;
         self.notify_busy = notify_busy;
+        self.auto_busy = auto_busy;
         // `mini_report_last` and `mini_trades_last` stay clear: a restarted service must not
         // replay the previous grant. Down timers and the read gate stay clear on purpose; the
         // ledger on disk stops a restart from replaying announcements.
@@ -316,6 +354,8 @@ impl TelegramState {
         self.mini_report_last = None;
         self.mini_trades_last = None;
         self.mini_strategy_wanted.clear();
+        self.run_wanted.clear();
+        self.control_redraws.clear();
         self.pairing = None;
         self.status = TelegramStatus::Stopping;
         self.mini_status = MiniAppStatus::Stopped;

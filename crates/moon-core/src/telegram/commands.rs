@@ -4,7 +4,9 @@
 //! Command suffixes are accepted only for the configured bot username from `getMe`.
 
 use super::api::{Message, Update};
+use super::menu_action::{ControlAction, MenuAction, SettingsAction};
 use super::report::{Period, ReportRequest};
+use crate::config::telegram_menu::MenuItem;
 
 /// Parsed inbound command, localization-free.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -29,11 +31,24 @@ pub enum ParsedCommand {
     Unknown,
     /// Known command with an unusable argument (`/pair` with no code).
     InvalidArgument,
+    /// A section menu or one of its screens (`m:` callbacks, the Report and Custom buttons).
+    Menu(MenuAction),
+    /// Plain text that is neither a command nor a keyboard button: the answer to a question the
+    /// bot asked the chat (a coin for a blacklist), bounded to [`TEXT_KEEP`] characters. Without
+    /// a question waiting it is answered as an unknown command.
+    Text(String),
 }
+
+/// Longest plain text kept as a [`ParsedCommand::Text`], in Unicode scalars.
+pub const TEXT_KEEP: usize = 64;
 
 /// Callback data of the "Update" button under the station's status; outside the report
 /// callbacks' `r:` namespace.
 pub const STATION_UPDATE_CALLBACK: &str = "station:update";
+
+/// The Settings section's station-status button as earlier builds encoded it; a message carrying
+/// it still answers, as the section's status (with its way back).
+const SETTINGS_STATUS_BEFORE: &str = "station:status";
 
 /// Chat-scoped parse result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,9 +77,15 @@ pub fn parse_update(update: &Update, bot_username: Option<&str>) -> Option<Inbou
             chat_id: message.chat.id,
             command: match data {
                 Some(STATION_UPDATE_CALLBACK) => ParsedCommand::StationUpdate,
+                Some(SETTINGS_STATUS_BEFORE) => {
+                    ParsedCommand::Menu(MenuAction::Settings(SettingsAction::StationStatus))
+                }
                 _ => data
-                    .and_then(ReportRequest::parse_callback)
-                    .map(ParsedCommand::Report)
+                    .and_then(|data| {
+                        ReportRequest::parse_callback(data)
+                            .map(ParsedCommand::Report)
+                            .or_else(|| MenuAction::parse_callback(data).map(ParsedCommand::Menu))
+                    })
                     .unwrap_or(ParsedCommand::Unknown),
             },
         });
@@ -121,23 +142,23 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
     let name = name.to_ascii_lowercase();
     match name.as_str() {
         "today" | "day" | "report" if args.is_empty() => {
-            ParsedCommand::Report(ReportRequest::new(Period::Today, false))
+            ParsedCommand::Report(ReportRequest::preset(Period::Today))
         }
         "hour" => require_no_args(
             args,
-            ParsedCommand::Report(ReportRequest::new(Period::Hour, false)),
+            ParsedCommand::Report(ReportRequest::preset(Period::Hour)),
         ),
         "yesterday" => require_no_args(
             args,
-            ParsedCommand::Report(ReportRequest::new(Period::Yesterday, false)),
+            ParsedCommand::Report(ReportRequest::preset(Period::Yesterday)),
         ),
         "month" => require_no_args(
             args,
-            ParsedCommand::Report(ReportRequest::new(Period::Month, false)),
+            ParsedCommand::Report(ReportRequest::preset(Period::Month)),
         ),
         "lastmonth" => require_no_args(
             args,
-            ParsedCommand::Report(ReportRequest::new(Period::LastMonth, false)),
+            ParsedCommand::Report(ReportRequest::preset(Period::LastMonth)),
         ),
         "daily" if args.is_empty() => {
             ParsedCommand::Report(ReportRequest::new(Period::Month, true))
@@ -148,11 +169,14 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
                 return ParsedCommand::InvalidArgument;
             }
             match ReportRequest::dates(dates[0], dates[1]) {
-                Some(mut request) => {
-                    request.daily = name == "daily";
-                    request.by_exchange = !request.daily;
-                    ParsedCommand::Report(request)
-                }
+                Some(request) if name == "daily" => ParsedCommand::Report(ReportRequest {
+                    daily: true,
+                    by_exchange: false,
+                    by_group: false,
+                    follow_view: false,
+                    ..request
+                }),
+                Some(request) => ParsedCommand::Report(request),
                 None => ParsedCommand::InvalidArgument,
             }
         }
@@ -160,6 +184,14 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
         "help" => require_no_args(args, ParsedCommand::Help),
         "miniapp" => require_no_args(args, ParsedCommand::MiniApp),
         "status" => require_no_args(args, ParsedCommand::StationStatus),
+        "settings" => require_no_args(
+            args,
+            ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
+        ),
+        "control" => require_no_args(
+            args,
+            ParsedCommand::Menu(MenuAction::Control(ControlAction::Cores(0))),
+        ),
         "pair" => parse_pair(args),
         _ => ParsedCommand::Unknown,
     }
@@ -167,8 +199,11 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
 
 /// Resolve exact application-localized reply labels in every supported language.
 ///
-/// This is parsing only: the runtime still checks private-chat identity and authorization.
-/// Slash commands never become button clicks, even if a supplied label resembles a command.
+/// Labels are keyed by menu item id (`button_{id}_{locale}`, with `_emoji_` and `_legacy_emoji_`
+/// variants), so a keyboard installed before the menu changed — or in another language — still
+/// resolves. This is parsing only: the runtime still checks private-chat identity and
+/// authorization. Slash commands never become button clicks, even if a supplied label resembles
+/// a command.
 ///
 /// Args:
 ///     text: Incoming text, trimmed before matching.
@@ -184,34 +219,15 @@ pub fn parse_reply_button(
     if text.is_empty() || text.starts_with('/') {
         return ParsedCommand::Unknown;
     }
-    for locale in crate::config::Language::ALL.map(crate::config::Language::code) {
-        for (name, command) in [
-            ("miniapp", ParsedCommand::MiniApp),
-            ("help", ParsedCommand::Help),
-            ("home", ParsedCommand::Start),
-            (
-                "today",
-                ParsedCommand::Report(ReportRequest::new(Period::Today, false)),
-            ),
-            (
-                "yesterday",
-                ParsedCommand::Report(ReportRequest::new(Period::Yesterday, false)),
-            ),
-            (
-                "month",
-                ParsedCommand::Report(ReportRequest::new(Period::Month, false)),
-            ),
-            (
-                "lastmonth",
-                ParsedCommand::Report(ReportRequest::new(Period::LastMonth, false)),
-            ),
-            (
-                "daily",
-                ParsedCommand::Report(ReportRequest::new(Period::Month, true)),
-            ),
-            // Only a station's labels carry this button; a terminal's never match it.
-            ("status", ParsedCommand::StationStatus),
-        ] {
+    let buttons = MenuItem::ALL
+        .into_iter()
+        .map(|item| (item.id(), button_command(item)))
+        // The old "Home" button opened today's report through /start.
+        .chain(std::iter::once(("home", ParsedCommand::Start)))
+        // The keyboard's former Mini App button: the chat's menu button opens the app now.
+        .chain(std::iter::once(("miniapp", ParsedCommand::MiniApp)));
+    for (name, command) in buttons {
+        for locale in crate::config::Language::ALL.map(crate::config::Language::code) {
             if [
                 format!("button_{name}_{locale}"),
                 format!("button_{name}_emoji_{locale}"),
@@ -225,6 +241,27 @@ pub fn parse_reply_button(
         }
     }
     ParsedCommand::Unknown
+}
+
+/// What a reply-keyboard button of `item` asks for. Only a station's labels carry Status; a
+/// terminal's never match it.
+pub fn button_command(item: MenuItem) -> ParsedCommand {
+    match item {
+        MenuItem::Today => ParsedCommand::Report(ReportRequest::preset(Period::Today)),
+        MenuItem::Yesterday => ParsedCommand::Report(ReportRequest::preset(Period::Yesterday)),
+        MenuItem::Month => ParsedCommand::Report(ReportRequest::preset(Period::Month)),
+        MenuItem::LastMonth => ParsedCommand::Report(ReportRequest::preset(Period::LastMonth)),
+        MenuItem::Daily => ParsedCommand::Report(ReportRequest::new(Period::Month, true)),
+        MenuItem::Custom => ParsedCommand::Menu(MenuAction::Custom {
+            month: None,
+            from: None,
+        }),
+        MenuItem::Help => ParsedCommand::Help,
+        MenuItem::Status => ParsedCommand::StationStatus,
+        MenuItem::Report => ParsedCommand::Menu(MenuAction::Report),
+        MenuItem::Settings => ParsedCommand::Menu(MenuAction::Settings(SettingsAction::Root)),
+        MenuItem::Control => ParsedCommand::Menu(MenuAction::Control(ControlAction::Cores(0))),
+    }
 }
 
 #[cfg(test)]

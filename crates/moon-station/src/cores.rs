@@ -35,12 +35,14 @@
 //! to its account profile (`feed::station::Profile::Account`): orders, balances, strategies and
 //! the core's health reach it, as the Mini App's tabs need. Without `[telegram]`, or with the Mini
 //! App off, the station stays light. The zone and the language are the bot's; the chats paired
-//! with it are the station's own state (`telegram.json` in the data root), not this file's.
+//! with it, its menu and the zone the terminal pushes from its header clock are the station's own
+//! state (`telegram.json` in the data root), not this file's. Once the terminal has pushed a zone
+//! it wins over the one here, which stays the zone of a station no terminal pushed to.
 //!
 //! ```toml
 //! [telegram]
 //! mini_app = true
-//! zone = "Europe/Moscow"   # the reports' time zone; UTC when absent
+//! zone = "Europe/Moscow"   # the reports' time zone until a pushed one; UTC when absent
 //! language = "ru"          # ru | en | es | uk | tr | pt | vi; en when absent
 //! ```
 //!
@@ -141,11 +143,14 @@ pub struct Station {
 }
 
 impl Station {
-    /// The profile this configuration asks for: the account one with the Mini App open — and a
-    /// bot to open it, since without its token nobody reads that account.
-    pub fn profile(&self) -> Profile {
+    /// The profile this configuration asks for: the account one with the Mini App open, or with
+    /// the bot's Control section shown (`control`) — and a bot to read it, since without its
+    /// token nobody reads that account. Chosen once, at the start.
+    pub fn profile(&self, control: bool) -> Profile {
         match &self.telegram {
-            Some(telegram) if telegram.mini_app && telegram.token.is_some() => Profile::Account,
+            Some(telegram) if (telegram.mini_app || control) && telegram.token.is_some() => {
+                Profile::Account
+            }
             _ => Profile::Reports,
         }
     }
@@ -274,7 +279,8 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         auto_update: file.update.auto.unwrap_or(true),
         skipped_cores,
     };
-    let profile = station.profile();
+    // What `station.toml` alone asks for; the station's start adds the bot's menu (`profile`).
+    let profile = station.profile(false);
     set_feed(&mut station.config, profile);
     Ok(station)
 }

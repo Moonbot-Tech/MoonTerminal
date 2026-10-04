@@ -2,6 +2,20 @@
 //! channel, plus read-only manager accessors (`store`, `sessions`, `market_source`, etc.).
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// How long a blacklist this process sent may stand in for the core's echo of it; well past the
+/// round trip. Past it the store is trusted even if the echo never came.
+const BLACKLIST_ECHO_WAIT: Duration = Duration::from_secs(15);
+
+/// One coin blacklist this process sent: the switch and text it wrote, the switch and text the
+/// store held when it did, and when. For a strategy's list the switch is always `true`.
+#[derive(Clone, Debug)]
+pub(super) struct SentBlacklist {
+    before: (bool, String),
+    sent: (bool, String),
+    at: Instant,
+}
 
 use anyhow::{Result, anyhow};
 
@@ -84,7 +98,7 @@ impl SessionManager {
     ///
     /// Returns:
     ///     Whether the command reached the core's channel.
-    pub fn set_trading(&self, core: CoreId, on: bool) -> Result<()> {
+    pub(crate) fn set_trading(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(
             core,
             CoreCmd::StrategiesAction {
@@ -110,9 +124,12 @@ impl SessionManager {
     ///     cores: Cores to command.
     ///     on: Whether to start (`true`) or stop (`false`) trading.
     ///
+    /// Crate-private: every caller outside `session` goes through [`Self::dispatch_run`], which
+    /// keeps a command away from a core that is not connected.
+    ///
     /// Returns:
     ///     The cores whose command channel accepted the intent, in the order given.
-    pub fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+    pub(crate) fn set_trading_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
         self.send_many(cores, &format!("set trading {on}"), |core| {
             self.set_trading(core, on)
         })
@@ -1106,7 +1123,7 @@ impl SessionManager {
     ///
     /// Returns:
     ///     Whether the command reached the core's channel.
-    pub fn set_auto_detect(&self, core: CoreId, on: bool) -> Result<()> {
+    pub(crate) fn set_auto_detect(&self, core: CoreId, on: bool) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetAutoDetect(on), "set auto detect")
     }
 
@@ -1120,9 +1137,11 @@ impl SessionManager {
     ///     cores: Cores to command.
     ///     on: Whether detection should be active.
     ///
+    /// Crate-private, like [`Self::set_trading_many`]: callers use [`Self::dispatch_run`].
+    ///
     /// Returns:
     ///     The cores whose command channel accepted the intent, in the order given.
-    pub fn set_auto_detect_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
+    pub(crate) fn set_auto_detect_many(&self, cores: &[CoreId], on: bool) -> Vec<CoreId> {
         self.send_many(cores, &format!("set auto detect {on}"), |core| {
             self.set_auto_detect(core, on)
         })
@@ -1134,13 +1153,201 @@ impl SessionManager {
     }
 
     /// Cancel every order for the core. This is a live exchange action.
+    ///
+    /// Refused for a core that is not connected, for the reason the run switches are gated
+    /// (`run_dispatch`): the command channel outlives a disconnect, so a queued cancel would fire
+    /// whenever the core comes back and wipe the orders it holds by then.
     pub fn cancel_all_orders(&self, core: CoreId) -> Result<()> {
+        if !self.core_run_state(core).online {
+            return Err(anyhow!(
+                "core {core} is not connected: cancel all orders not sent"
+            ));
+        }
         self.send_core_cmd(core, CoreCmd::CancelAllOrders, "cancel all orders")
     }
 
     /// Set the core's coin-blacklist state and text.
     pub fn set_blacklist(&self, core: CoreId, on: bool, text: String) -> Result<()> {
         self.send_core_cmd(core, CoreCmd::SetBlacklist { on, text }, "set blacklist")
+    }
+
+    /// Put one coin on the core's own blacklist, or with `lift` take it off.
+    ///
+    /// Adding switches the list on, so the entry affects trading: the command carries the flag and
+    /// the text together. Lifting drops only that token and leaves the switch as it is — turning
+    /// the whole feature off is a bigger statement than un-listing one coin. A lift that changes
+    /// nothing sends nothing.
+    ///
+    /// Args:
+    ///     core: Core whose list is rewritten: from the settings it last sent, or from what this
+    ///         process sent while the core has not echoed it ([`Self::blacklist_base`]).
+    ///     coin: The core's spelling of the coin ([`crate::symbol::coin_list`]).
+    ///     lift: Take the coin off instead of putting it on.
+    ///
+    /// Returns:
+    ///     Whether a command was sent.
+    ///
+    /// Errors:
+    ///     An empty coin; a core that has not sent its settings yet; the core's command channel
+    ///     refused it.
+    pub fn write_core_blacklist(&self, core: CoreId, coin: &str, lift: bool) -> Result<bool> {
+        if coin.trim().is_empty() {
+            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        }
+        // Without the core's own settings there is no list to edit: rewriting it from nothing
+        // would replace every coin already on it with this one.
+        let Some((enabled, stored)) = self
+            .store()
+            .core(core)
+            .and_then(|data| data.client_settings.as_ref())
+            .map(|cs| (cs.use_blacklist, cs.blacklist_text.clone()))
+        else {
+            return Err(anyhow!(
+                "core {core} has not sent its settings yet: blacklist not written"
+            ));
+        };
+        let key = (core, None);
+        let in_store = (enabled, stored);
+        let (enabled, base) = self.blacklist_base(key, &in_store);
+        let new = crate::symbol::coin_list::edit(&base, coin, lift);
+        // Nothing to change — a lift of an unlisted coin, an add of a listed one on a list
+        // already on.
+        if new == base && (lift || enabled) {
+            return Ok(false);
+        }
+        let on = if lift { enabled } else { true };
+        self.set_blacklist(core, on, new.clone())?;
+        self.note_blacklist_sent(key, in_store, (on, new));
+        Ok(true)
+    }
+
+    /// The switch and list a one-coin edit of `key` starts from: what this process sent last,
+    /// while the store still holds what it held then (the echo is not in yet) and within
+    /// [`BLACKLIST_ECHO_WAIT`]; otherwise what the store holds — the echo, or a change made
+    /// elsewhere, which an edit from the sent list would revert.
+    fn blacklist_base(
+        &self,
+        key: (CoreId, Option<u64>),
+        in_store: &(bool, String),
+    ) -> (bool, String) {
+        let sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match sent.get(&key) {
+            Some(entry)
+                if entry.at.elapsed() < BLACKLIST_ECHO_WAIT && entry.before == *in_store =>
+            {
+                entry.sent.clone()
+            }
+            _ => in_store.clone(),
+        }
+    }
+
+    /// Remember what was just sent for `key` and what the store held when it was, for
+    /// [`Self::blacklist_base`]. A pending entry keeps its `before`: the store has not moved
+    /// since that first send.
+    fn note_blacklist_sent(
+        &self,
+        key: (CoreId, Option<u64>),
+        in_store: (bool, String),
+        sent_now: (bool, String),
+    ) {
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sent.retain(|_, entry| entry.at.elapsed() < BLACKLIST_ECHO_WAIT);
+        sent.insert(
+            key,
+            SentBlacklist {
+                before: in_store,
+                sent: sent_now,
+                at: Instant::now(),
+            },
+        );
+    }
+
+    /// Put one coin on a strategy's `CoinsBlackList`, or with `lift` take it off, through the
+    /// shared field editor.
+    ///
+    /// The core omits a field equal to its schema default, so a strategy that sends no list has
+    /// an empty one and the first token starts it. An edit that changes nothing sends nothing.
+    ///
+    /// Args:
+    ///     core: Core that holds the strategy.
+    ///     strategy: Its id.
+    ///     coin: The core's spelling of the coin.
+    ///     lift: Take the coin off instead of putting it on.
+    ///
+    /// Returns:
+    ///     Whether an edit was sent.
+    ///
+    /// Errors:
+    ///     An empty coin; the core's command channel refused it.
+    pub fn write_strategy_blacklist(
+        &self,
+        core: CoreId,
+        strategy: u64,
+        coin: &str,
+        lift: bool,
+    ) -> Result<bool> {
+        let current = self
+            .store()
+            .core(core)
+            .and_then(|data| data.strategies.iter().find(|s| s.id == strategy))
+            .and_then(|s| {
+                s.fields
+                    .iter()
+                    .find(|(name, _)| name == crate::feed::FIELD_COINS_BLACK_LIST)
+                    .map(|(_, value)| value.clone())
+            })
+            .unwrap_or_default();
+        if coin.trim().is_empty() {
+            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        }
+        let key = (core, Some(strategy));
+        let in_store = (true, current);
+        let (_, base) = self.blacklist_base(key, &in_store);
+        let new = crate::symbol::coin_list::edit(&base, coin, lift);
+        if new == base {
+            return Ok(false);
+        }
+        self.edit_strategies(
+            core,
+            vec![(
+                strategy,
+                vec![(crate::feed::FIELD_COINS_BLACK_LIST.to_string(), new.clone())],
+            )],
+        )?;
+        self.note_blacklist_sent(key, in_store, (true, new));
+        Ok(true)
+    }
+
+    /// Whether a strategy's kind has a `CoinsBlackList` at all, by the core's schema: an edit of a
+    /// field its kind lacks is silently ignored by the core, so no surface offers one.
+    pub fn strategy_has_blacklist(&self, core: CoreId, strategy: u64) -> bool {
+        let Some(data) = self.store().core(core) else {
+            return false;
+        };
+        let Some(row) = data.strategies.iter().find(|s| s.id == strategy) else {
+            return false;
+        };
+        let Some(schema) = data.schema.as_ref() else {
+            return false;
+        };
+        schema
+            .kinds
+            .iter()
+            .find(|kind| kind.ordinal == row.kind_ordinal)
+            .is_some_and(|kind| {
+                kind.sections.iter().any(|section| {
+                    section
+                        .fields
+                        .iter()
+                        .any(|field| field.name == crate::feed::FIELD_COINS_BLACK_LIST)
+                })
+            })
     }
 
     /// Ban ONE market temporarily, or lift the ban it is under.
