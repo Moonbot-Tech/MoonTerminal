@@ -11,6 +11,19 @@ pub enum ReportScope {
     All,
     Unidentified,
     Venue(crate::feed::ExchangeId),
+    /// One saved core group, by its [`group_key`]: a button keeps naming the same group however
+    /// the list is reordered, and a key no group has — renamed or deleted since — reads as no
+    /// group: an empty report, never all cores. A group re-created under the same name is the
+    /// same group to an old button.
+    Group(u32),
+}
+
+/// A saved core group's key in a button: its name hashed (FNV-1a, 32 bits). Names are unique per
+/// list, case-insensitively (`config::sanitize_core_groups`), and a list holds at most 32.
+pub fn group_key(name: &str) -> u32 {
+    name.bytes().fold(0x811c_9dc5_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    })
 }
 
 /// The widest custom period, in days from its first to its last: one year and a day less.
@@ -75,6 +88,8 @@ pub struct ReportRequest {
     pub period: Period,
     pub daily: bool,
     pub by_exchange: bool,
+    /// One row per saved core group, then the cores in none ([`ReportScope::Group`] drills in).
+    pub by_group: bool,
     pub scope: ReportScope,
     pub page: usize,
     /// Frozen UTC bounds for paging; explicit refresh clears these before resolving a preset.
@@ -96,6 +111,7 @@ impl ReportRequest {
             period,
             daily,
             by_exchange: !daily,
+            by_group: false,
             scope: ReportScope::All,
             page: 0,
             window: None,
@@ -123,6 +139,7 @@ impl ReportRequest {
         };
         self.daily = view == ReportView::Days;
         self.by_exchange = view == ReportView::Exchanges;
+        self.by_group = view == ReportView::Groups;
         self.follow_view = false;
         self
     }
@@ -150,6 +167,8 @@ impl ReportRequest {
             "d"
         } else if self.by_exchange {
             "e"
+        } else if self.by_group {
+            "g"
         } else {
             "c"
         };
@@ -157,6 +176,7 @@ impl ReportRequest {
             ReportScope::All => String::new(),
             ReportScope::Unidentified => "u".into(),
             ReportScope::Venue(id) => format!("{:x}.{:x}", id.code, id.dex),
+            ReportScope::Group(key) => format!("q{key:x}"),
         };
         let open = if self.exchanges_open { "k" } else { "" };
         let basis = match self.basis {
@@ -183,7 +203,7 @@ impl ReportRequest {
         let (view, rest) = parts[1].split_at_checked(1)?;
         let daily = match view {
             "d" => true,
-            "c" | "e" => false,
+            "c" | "e" | "g" => false,
             _ => return None,
         };
         // A trailing `o`/`z` is the basis the report was read on (none: the bot's basis now).
@@ -200,6 +220,9 @@ impl ReportRequest {
         let scope = match scope_src {
             "" => ReportScope::All,
             "u" => ReportScope::Unidentified,
+            value if value.starts_with('q') => {
+                ReportScope::Group(u32::from_str_radix(&value[1..], 16).ok()?)
+            }
             value => {
                 let (code, dex) = value.split_once('.')?;
                 ReportScope::Venue(crate::feed::ExchangeId {
@@ -243,6 +266,7 @@ impl ReportRequest {
             period,
             daily,
             by_exchange: view == "e",
+            by_group: view == "g",
             scope,
             page,
             window,

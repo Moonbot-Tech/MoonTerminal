@@ -45,8 +45,12 @@ pub struct TelegramState {
     /// Each core's newest Telegram event already relayed or passed over
     /// (`notify::events`); a core missing here starts at its newest.
     pub(crate) events_cursor: HashMap<CoreId, u64>,
-    /// When the last batch of core events went. `None` allows the first.
-    pub(crate) events_flush: Option<Instant>,
+    /// Core events handed to each chat and not queued yet, with how many the rings dropped
+    /// unread for it (`notify::events`).
+    pub(crate) events_waiting: HashMap<i64, (Vec<crate::notify::events::Fresh>, u64)>,
+    /// When each chat's last batch of core events was queued; a chat missing here gets its next
+    /// event at once.
+    pub(crate) events_sent: HashMap<i64, Instant>,
     /// Chats asked for a coin for a core's blacklist (`menu::control`): the core, whether to take
     /// the coin off, and until when the question stands.
     pub(crate) awaiting_coin: HashMap<i64, (CoreId, bool, Instant)>,
@@ -179,7 +183,8 @@ impl TelegramState {
             last_report_revision: None,
             last_notify_run: None,
             events_cursor: HashMap::new(),
-            events_flush: None,
+            events_waiting: HashMap::new(),
+            events_sent: HashMap::new(),
             awaiting_coin: HashMap::new(),
             awaiting_confirm: HashMap::new(),
             auto_busy: false,

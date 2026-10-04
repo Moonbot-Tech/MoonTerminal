@@ -260,6 +260,8 @@ pub(super) fn access_edited(draft: Option<&TelegramConfig>, base: Option<&Access
                 != Access {
                     zone: None,
                     notify: None,
+                    // Groups are sent on their own (`station_groups`), never with an edit.
+                    groups: None,
                     ..base.clone()
                 }
         }
@@ -401,8 +403,12 @@ impl SettingsView {
         Some(BotPlan::Transfer {
             token: saved.token.clone(),
             // The bot's menu goes with its chats, and its zone is the header clock's.
+            // The bot moves with this terminal's core groups, as it moves with its menu; a
+            // terminal with none sends none.
             pairing: Box::new(Access {
                 zone: change.zone.clone(),
+                groups: Some(self.backend.read(cx).config.core_groups.clone())
+                    .filter(|groups| !groups.is_empty()),
                 ..Access::of(saved)
             }),
             change,

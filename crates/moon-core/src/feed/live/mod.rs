@@ -734,9 +734,6 @@ pub(super) fn run(
     // Per-feed memory of open report rows, so a partial closing upsert can be completed into
     // a print capture — see `capture::CaptureTracker`.
     let mut capture: Option<capture::CaptureTracker> = None;
-    // Field indices of a report row's `StrategyID` and `Emulator`, for the Telegram event of a
-    // trade's entry — see `tg_opened`.
-    let mut tg_fields: Option<(u16, Option<u16>)> = None;
     // File writer for this core's server log (logs/<date>_<core>.log), with daily rotation. Write
     // on the FEED THREAD rather than the UI thread because log volume is high and the UI must not
     // wait for disk. Only an in-memory copy reaches the UI for live viewing and search.
@@ -2304,9 +2301,20 @@ pub(super) fn run(
                         match rev {
                             ReportEvent::Schema(schema) => {
                                 trace_fields = trace_field_indices(schema);
-                                tg_fields = tg_field_indices(schema);
-                                capture = capture::CaptureFields::from_schema(schema)
-                                    .map(capture::CaptureTracker::new);
+                                // A revision keeps the rows: what was remembered of them stays.
+                                capture = match (
+                                    capture.take(),
+                                    capture::CaptureFields::from_schema(schema),
+                                ) {
+                                    (Some(mut tracker), Some(fields)) => {
+                                        tracker.refield(fields);
+                                        Some(tracker)
+                                    }
+                                    (None, Some(fields)) => {
+                                        Some(capture::CaptureTracker::new(fields))
+                                    }
+                                    (_, None) => None,
+                                };
                             }
                             ReportEvent::RowUpsert(row) => {
                                 if let (Some(fields), Some(sink)) = (trace_fields, &trace_sink) {
@@ -2319,11 +2327,17 @@ pub(super) fn run(
                                     }
                                 }
                                 match capture.as_mut().and_then(|tracker| tracker.on_row(row)) {
-                                    Some(capture::RowEdge::Opened { rec_id, coin, buy }) => {
+                                    Some(capture::RowEdge::Opened {
+                                        rec_id,
+                                        coin,
+                                        buy,
+                                        strategy,
+                                        emulator,
+                                    }) => {
                                         tg_events.extend(tg_opened(
                                             client.snapshot().as_deref(),
-                                            row,
-                                            tg_fields,
+                                            strategy,
+                                            emulator,
                                             rec_id,
                                             &coin,
                                             buy,
@@ -2348,7 +2362,8 @@ pub(super) fn run(
                                 }
                             }
                             // A page row carries the core's whole column set: the open rows on
-                            // it are what a later partial close completes itself from.
+                            // it are what a later partial close completes itself from, and its
+                            // waiting buys what a later partial fill is announced from.
                             ReportEvent::SyncPage(page) => {
                                 if let Some(tracker) = capture.as_mut() {
                                     for row in page.rows.iter() {
@@ -2960,48 +2975,31 @@ pub(super) fn run(
     Ok(())
 }
 
-/// Field indices of a report row's `StrategyID` and, when the schema has it, `Emulator`.
-///
-/// Matched without case, as the capture tracker matches its own: the replica files the columns
-/// lowercased while the wire spells them in mixed case.
-fn tg_field_indices(schema: &moonproto::ReportSchema) -> Option<(u16, Option<u16>)> {
-    let integer = |name: &str| {
-        schema
-            .fields()
-            .iter()
-            .find(|f| {
-                f.name.eq_ignore_ascii_case(name) && f.kind == moonproto::ReportFieldKind::Integer
-            })
-            .map(|f| f.index)
-    };
-    Some((integer("StrategyID")?, integer("Emulator")))
-}
-
 /// The Telegram event of a trade's entry whose strategy has `ReportTradesToTelegram`, else
-/// `None` — a manual trade (no strategy), a row without the fields, or no strategy snapshot yet.
+/// `None` — a manual trade (no strategy), a row that never carried its strategy, or no strategy
+/// snapshot yet.
 ///
 /// Args:
 ///     snap: The client's state, for the strategy's flag and name.
-///     row: The upsert that opened the trade; the opening one carries the whole row.
-///     fields: [`tg_field_indices`] of the current schema.
+///     strategy: The entry's `StrategyID`, from whichever upsert of the row carried it — a limit
+///         buy files it with the order, and the fill's own upsert does not repeat it.
+///     emulator: Its `Emulator` flag, carried the same way.
 ///     rec_id: The trade's report row.
 ///     coin: Its coin token.
 ///     buy: Its entry stamp, core-local.
 fn tg_opened(
     snap: Option<&MoonStateSnapshot>,
-    row: &moonproto::ReportRow,
-    fields: Option<(u16, Option<u16>)>,
+    strategy: Option<i64>,
+    emulator: Option<bool>,
     rec_id: i64,
     coin: &str,
     buy: crate::db::ReportStamp,
 ) -> Option<CoreTgEvent> {
-    let (strategy_ix, emulator_ix) = fields?;
-    let strat_id = match row.value(strategy_ix) {
-        Some(moonproto::ReportValue::Integer(id)) if *id > 0 => *id as u64,
-        Some(moonproto::ReportValue::Integer(_)) => return None,
-        _ => {
-            // The opening upsert normally carries the whole row; one without its strategy is not
-            // announced, and this is the only trace of it.
+    let strat_id = match strategy {
+        Some(id) if id > 0 => id as u64,
+        Some(_) => return None,
+        None => {
+            // Not announced, and this is the only trace of it.
             log::debug!("telegram: entry of {coin} (row {rec_id}) carries no StrategyID");
             return None;
         }
@@ -3010,12 +3008,7 @@ fn tg_opened(
     if !strat_field_bool(snap, strat_id, "ReportTradesToTelegram") {
         return None;
     }
-    let emulator = emulator_ix
-        .and_then(|ix| match row.value(ix) {
-            Some(moonproto::ReportValue::Integer(v)) => Some(*v != 0),
-            _ => None,
-        })
-        .unwrap_or(false);
+    let emulator = emulator.unwrap_or(false);
     Some(CoreTgEvent::Opened {
         rec_id,
         coin: coin.to_string(),

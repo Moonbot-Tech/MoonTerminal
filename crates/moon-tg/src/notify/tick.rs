@@ -26,9 +26,10 @@ use crate::{Finish, Job, ReportRevision, TelegramState, TgHost};
 /// Minimum gap between notification reads. Down and back notices are not gated by it. A read
 /// still waits for the report replica to move, so a quiet replica costs nothing; a trade card
 /// leaves within this of its row landing. Measured 03.10 on a 565 MB replica: one read of the
-/// 72-hour window costs ~100 ms warm, ~80 ms of it fixed, so 5 s keeps a busy replica at ~2 % of
-/// one thread where 15 s made a card wait up to 15 s.
-const NOTIFY_INTERVAL: Duration = Duration::from_secs(5);
+/// 72-hour window costs ~100 ms warm, ~80 ms of it fixed, so 2 s keeps a replica that moves all
+/// the time at ~5 % of one thread. 5 s made a card arrive seconds after the core's own bot
+/// (LinKvo, 04.10).
+const NOTIFY_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How often a card waiting for its dollar value forces a read while the replica stands still:
 /// the valuation may have landed before Telegram accepted the card.
@@ -113,9 +114,11 @@ pub(crate) fn run(host: &mut dyn TgHost, now_utc: i64) {
     };
     purge_revoked_rows(host, &store);
     if !anything_on(&store) {
-        // The core events' cursors go with the last switch: one turned on later starts at what
-        // happens from then on.
-        host.state_mut().events_cursor.clear();
+        // The core events' cursors and what waited for a batch go with the last switch: one
+        // turned on later starts at what happens from then on.
+        let state = host.state_mut();
+        state.events_cursor.clear();
+        state.events_waiting.clear();
         return;
     }
     step_down(host, &store, now_utc);

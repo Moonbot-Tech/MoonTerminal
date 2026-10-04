@@ -347,11 +347,13 @@ pub enum ReportView {
     Exchanges,
     Cores,
     Days,
+    /// The terminal's saved core groups, as the station holds them (`station_api::Access::groups`).
+    Groups,
 }
 
 impl ReportView {
     /// Every view, in picker order.
-    pub const ALL: [Self; 3] = [Self::Exchanges, Self::Cores, Self::Days];
+    pub const ALL: [Self; 4] = [Self::Exchanges, Self::Cores, Self::Groups, Self::Days];
 
     /// Stable saved id.
     pub fn id(self) -> &'static str {
@@ -359,6 +361,7 @@ impl ReportView {
             Self::Exchanges => "exchanges",
             Self::Cores => "cores",
             Self::Days => "days",
+            Self::Groups => "groups",
         }
     }
 }

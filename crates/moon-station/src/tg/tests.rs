@@ -181,3 +181,54 @@ fn notifications_stay_out_of_the_pairing_file() {
     let saved = super::plan_access(&current, None, &current, change).unwrap();
     assert_eq!(saved.notify, None);
 }
+
+/// Core groups ride a change on their own: sent, they replace the station's whole and are kept in
+/// the terminal's shape; left out — any change that is not the groups' — they stay. They never
+/// count against the base, so sending them does not clash with an edit of the menu.
+#[test]
+fn groups_replace_the_stations_whole_or_stay() {
+    use moon_core::config::CoreGroup;
+    let group = |name: &str, cores: &[u64]| CoreGroup {
+        name: name.into(),
+        cores: cores.to_vec(),
+    };
+    let current = Access {
+        authorized_chat_ids: vec![7],
+        owner_chat_id: Some(7),
+        groups: Some(vec![group("main", &[1, 2])]),
+        ..Access::default()
+    };
+    let base = Access {
+        groups: Some(vec![group("other", &[3])]),
+        ..current.clone()
+    };
+    let kept = super::plan_access(
+        &current,
+        None,
+        &base,
+        Access {
+            groups: None,
+            ..current.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        kept.groups, current.groups,
+        "a change without groups keeps them"
+    );
+    let sent = super::plan_access(
+        &current,
+        None,
+        &base,
+        Access {
+            groups: Some(vec![group("  AAA ", &[4, 4]), group("margo", &[])]),
+            ..current.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        sent.groups,
+        Some(vec![group("AAA", &[4])]),
+        "sent groups replace the set, trimmed, deduplicated, empty ones dropped"
+    );
+}

@@ -20,7 +20,7 @@ use crate::labels::{button_text, navigation_keyboard};
 use crate::{HostKind, TgHost};
 
 /// Minutes a core may stay down before the notice, offered as presets.
-const DOWN_PRESETS: [u16; 5] = [1, 5, 15, 30, 60];
+const DOWN_PRESETS: [u16; 2] = [1, 5];
 
 /// Answer a Settings button: apply its switch, if any, then show its screen.
 pub(super) fn run(
@@ -207,6 +207,7 @@ fn view_words(view: ReportView) -> String {
         ReportView::Exchanges => t!("telegram.menu_editor.view_exchanges"),
         ReportView::Cores => t!("telegram.menu_editor.view_cores"),
         ReportView::Days => t!("telegram.menu_editor.view_days"),
+        ReportView::Groups => t!("telegram.menu_editor.view_groups"),
     }
     .to_string()
 }
@@ -468,18 +469,21 @@ fn notify_screen(notify: &NotifySettings) -> Rendered {
             })
             .collect(),
     ];
-    rows.push(
-        AutoReport::ALL
-            .into_iter()
-            .map(|kind| {
-                let on = notify.reports.on(kind);
-                button(
-                    format!("{} {}", tick(on), auto_title(kind)),
-                    SettingsAction::Auto(kind, !on),
-                )
-            })
-            .collect(),
-    );
+    // Two a row: three to a row cut their names to a word.
+    for kinds in AutoReport::ALL.chunks(2) {
+        rows.push(
+            kinds
+                .iter()
+                .map(|&kind| {
+                    let on = notify.reports.on(kind);
+                    button(
+                        format!("{} {}", tick(on), auto_title(kind)),
+                        SettingsAction::Auto(kind, !on),
+                    )
+                })
+                .collect(),
+        );
+    }
     rows.push(vec![
         button(
             format!(

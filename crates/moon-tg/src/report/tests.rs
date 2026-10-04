@@ -97,9 +97,10 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
     }
 }
 
-/// A paged report shows the whole-scope total after its rows, never as a headline or page sum.
+/// A paged report shows the whole-scope total as its table's top row, never as a paragraph above
+/// the table or as the page's own sum.
 #[test]
-fn full_total_is_the_final_summary_row() {
+fn full_total_is_the_tables_top_row() {
     let total = QuoteBreakdown {
         orders: 12,
         valuation: Some(ValuationCoverage {
@@ -129,6 +130,7 @@ fn full_total_is_the_final_summary_row() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -140,9 +142,9 @@ fn full_total_is_the_final_summary_row() {
     let table_start = html.find("<table").unwrap();
     let table_end = html.find("</table>").unwrap();
     let total_at = html.find("+123.45").unwrap();
-    assert!(total_at > html.find("Visible row").unwrap() && total_at < table_end);
+    assert!(total_at > table_start && total_at < html.find("Visible row").unwrap());
     assert!(!html[..table_start].contains("+123.45"));
-    assert!(html[table_start..table_end].contains("<b>12</b>"));
+    assert!(html[table_start..table_end].contains("<th align=\"right\">12</th>"));
     assert_eq!(
         html.matches("<details>").count(),
         1,
@@ -168,6 +170,7 @@ fn inline_buttons_keep_the_current_period() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -208,6 +211,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -615,6 +619,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -718,6 +723,7 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     for locale in ["ru", "en", "es"] {
         let _locale = crate::test_locale::force(locale);
@@ -799,6 +805,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -835,6 +842,7 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
     else {
@@ -926,6 +934,7 @@ fn today_omits_daily_navigation() {
             basis: ReportBasis::Close,
             cores: Vec::new(),
             caption: None,
+            has_groups: false,
         };
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
@@ -968,6 +977,7 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         basis: ReportBasis::Close,
         cores: Vec::new(),
         caption: None,
+        has_groups: false,
     };
     let Response::Rich { html, .. } = render(
         &page,
@@ -977,8 +987,8 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         panic!("expected rich report")
     };
     let main = &html[..html.find("<details>").unwrap()];
-    // Header, one row per core, the total.
-    assert_eq!(main.matches("<tr>").count(), 4);
+    // The totals on top, then one row per core.
+    assert_eq!(main.matches("<tr>").count(), 3);
     assert!(!main.contains("colspan"));
     assert!(main.contains("<tr><td>Sample D…ong server name</td>"));
     assert!(main.contains("<tr><td>Short</td>"));
@@ -1352,6 +1362,7 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
         order: moon_core::session::core_order::CoreOrder::new(&AppConfig::headless(Vec::new())),
         names: Default::default(),
         venues: Default::default(),
+        groups: Vec::new(),
     };
     let page = super::read_auto_report(
         &conn,
@@ -1429,4 +1440,147 @@ fn closed_trades_carry_their_own_money() {
     let unproven = &rows[2];
     assert_eq!(unproven.profit_native, Some(-1.0));
     assert_eq!(unproven.volume_native, None);
+}
+
+/// A report fits a phone screen: the view and its period are the table's caption, a single day
+/// names its date once, and its buttons are one row in either view.
+#[test]
+fn a_days_report_is_compact() {
+    let _locale = crate::test_locale::force("en");
+    for by_exchange in [false, true] {
+        let mut request = ReportRequest::new(Period::Today, false);
+        request.by_exchange = by_exchange;
+        let page = Page {
+            request,
+            from: 0,
+            to: 8 * 3600 + 59 * 60,
+            zone: chrono_tz::UTC,
+            total: QuoteBreakdown::default(),
+            rows: vec![("Core".into(), QuoteBreakdown::default())],
+            pages: 1,
+            drilldowns: Vec::new(),
+            scope_label: None,
+            basis: ReportBasis::Close,
+            cores: Vec::new(),
+            caption: None,
+            has_groups: false,
+        };
+        let html = super::render::report_html(&page);
+        let table = html.find("<table").unwrap();
+        assert!(
+            html[table..].contains("01.01.1970 00:00 — 08:59</caption>"),
+            "{html}"
+        );
+        assert!(!html[..table].contains("01.01.1970"), "{html}");
+        let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
+        else {
+            panic!("expected inline navigation")
+        };
+        assert_eq!(
+            markup.inline_keyboard.len(),
+            1,
+            "{:?}",
+            markup.inline_keyboard
+        );
+    }
+}
+
+/// A funding payment is a closed report row, not a trade: the chat gets no card for it.
+#[test]
+fn funding_is_not_a_trade_card() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE orders_rep (
+            core_uid INTEGER, core_name TEXT, newrecid INTEGER, coin TEXT, fname TEXT,
+            buydate INTEGER, closedate INTEGER, channelname TEXT, emulator INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER, boughtq REAL, buyprice REAL,
+            sellprice REAL, sellreason TEXT
+        );
+        INSERT INTO orders_rep VALUES
+            (1, 'CoreA', 1, 'ACE', 'ACEUSDT', 990, 1000, '', 0, -0.02, 0.0, 1, 0.0, 0.0, 0.0,
+             'Funding'),
+            (1, 'CoreA', 2, 'ACE', 'ACEUSDT', 990, 1001, '', 0, 3.3, 150.0, 1, 10.0, 15.0, 15.33,
+             'TakeProfit');",
+    )
+    .unwrap();
+    let names = moon_core::db::CoreNames::default();
+    let rows = super::read_closed_since_on(&conn, chrono_tz::UTC, &names, 0).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.rec_id).collect::<Vec<_>>(),
+        vec![2],
+        "only the trade becomes a card"
+    );
+}
+
+/// The view by groups: one row per saved group over its own cores — a core in two groups counts in
+/// each — then the cores in none; the headline counts every core once. A group's drill-down reads
+/// its cores alone, and a group gone from the list reads as nothing, never as every core.
+#[test]
+fn groups_are_rows_of_their_cores_and_the_total_counts_each_core_once() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);
+        INSERT INTO orders_rep VALUES (1,'A',1,150,10,100,0),(2,'B',1,150,20,100,0),(3,'C',1,150,40,100,0);").unwrap();
+    let groups = vec![
+        moon_core::config::CoreGroup {
+            name: "main".into(),
+            cores: vec![1, 2],
+        },
+        moon_core::config::CoreGroup {
+            name: "margo".into(),
+            cores: vec![2],
+        },
+    ];
+    let read = |request: ReportRequest| {
+        super::read_page_with(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            &Default::default(),
+            &groups,
+            |_| (Default::default(), super::TelegramReportAccess::Owner),
+        )
+        .unwrap()
+    };
+    let _locale = crate::test_locale::force("en");
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    request.by_group = true;
+    let page = read(request.clone());
+    let rows: Vec<(String, f64)> = page
+        .rows
+        .iter()
+        .map(|(name, total)| (name.clone(), total.totals[0].profit))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("main".to_string(), 30.0),
+            ("margo".to_string(), 20.0),
+            ("No group".to_string(), 40.0),
+        ]
+    );
+    assert_eq!(page.total.totals[0].profit, 70.0, "each core counted once");
+    assert!(page.has_groups);
+    assert_eq!(
+        page.drilldowns
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main", "margo"]
+    );
+    let mut margo = request.clone();
+    margo.by_group = false;
+    margo.scope = moon_core::telegram::report::ReportScope::Group(
+        moon_core::telegram::report::group_key("margo"),
+    );
+    let page = read(margo.clone());
+    assert_eq!(page.total.totals[0].profit, 20.0);
+    assert_eq!(page.scope_label.as_deref(), Some("margo"));
+    margo.scope = moon_core::telegram::report::ReportScope::Group(
+        moon_core::telegram::report::group_key("gone"),
+    );
+    assert_eq!(read(margo).total.orders, 0, "a group gone reads as nothing");
 }

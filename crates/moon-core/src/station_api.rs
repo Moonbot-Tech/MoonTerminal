@@ -14,9 +14,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::TelegramConfig;
 use crate::config::telegram_access::TelegramChatAccess;
 use crate::config::telegram_menu::BotSettings;
+use crate::config::{CoreGroup, TelegramConfig};
 use crate::feed::report_traces::{ArchivedLineKind, ArchivedOrderTrace};
 use crate::telegram::TelegramStatus;
 use crate::telegram::notify::NotifySettings;
@@ -374,6 +374,12 @@ pub struct Access {
         deserialize_with = "chat_keyed"
     )]
     pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
+    /// The terminal's saved core groups, for the bot's report by groups: answered by a station
+    /// that knows them, sent only when the user sends them (another terminal's set is not
+    /// overwritten by a terminal that has none). Absent keeps the station's. Core uids are the
+    /// terminal's, which the station shares.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<CoreGroup>>,
 }
 
 /// Read a map keyed by chat id. The ids are a JSON object's keys, strings on the wire; inside an
@@ -414,6 +420,7 @@ impl Access {
             bot: Some(telegram.bot.clone()),
             zone: None,
             notify: None,
+            groups: None,
         }
     }
 

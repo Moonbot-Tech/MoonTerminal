@@ -352,6 +352,7 @@ impl SettingsView {
                             .text_color(muted)
                             .child(t!("telegram.menu_editor.station_control_note").to_string()),
                     )
+                    .children(self.station_groups_row(cx))
                     .child(self.server_access_actions("server-menu", cx))
             })
             .into_any_element()
@@ -364,6 +365,7 @@ fn view_caption(view: ReportView) -> String {
         ReportView::Exchanges => t!("telegram.menu_editor.view_exchanges"),
         ReportView::Cores => t!("telegram.menu_editor.view_cores"),
         ReportView::Days => t!("telegram.menu_editor.view_days"),
+        ReportView::Groups => t!("telegram.menu_editor.view_groups"),
     }
     .to_string()
 }

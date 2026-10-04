@@ -102,3 +102,13 @@ fn a_storm_is_cut_and_counted() {
     assert!(last.contains("more"), "{last}");
     assert_eq!(cores, vec![1], "only printed lines disclose their core");
 }
+
+/// A group, which Telegram takes a message every three seconds, waits longer between batches
+/// than a private chat, so a storm never queues faster than the chat is sent to.
+#[test]
+fn a_group_waits_longer_between_batches_than_a_private_chat() {
+    assert_eq!(super::glue(42), super::BATCH);
+    assert_eq!(super::glue(-1_001_234), super::GROUP_BATCH);
+    assert!(super::GROUP_BATCH > std::time::Duration::from_secs(3));
+    assert!(super::BATCH > std::time::Duration::from_secs(1));
+}

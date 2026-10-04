@@ -172,6 +172,7 @@ pub fn parse_text(text: &str, bot_username: Option<&str>) -> ParsedCommand {
                 Some(request) if name == "daily" => ParsedCommand::Report(ReportRequest {
                     daily: true,
                     by_exchange: false,
+                    by_group: false,
                     follow_view: false,
                     ..request
                 }),

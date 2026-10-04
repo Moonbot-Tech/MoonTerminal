@@ -119,6 +119,9 @@ impl StationTg {
         }
         let pushed = pushed_zone(&pairing);
         let zone = pushed.as_ref().map_or(telegram.zone, |(_, zone)| *zone);
+        // The core groups a terminal sent, for the report by groups; uids are the terminal's.
+        config.core_groups = pairing.groups.clone().unwrap_or_default();
+        moon_core::config::sanitize_core_groups(&mut config.core_groups);
         let bot = &mut config.telegram;
         bot.token = token;
         bot.mini_app_enabled = telegram.mini_app;
@@ -259,6 +262,7 @@ impl StationTg {
         Access {
             zone: Some(self.zone.name().to_owned()),
             notify: moon_tg::notify_rows(&self.state, &config.telegram),
+            groups: Some(config.core_groups.clone()),
             ..Access::of(&config.telegram)
         }
     }
@@ -296,6 +300,9 @@ impl StationTg {
         write_pairing(&self.pairing_path, &saved).map_err(|e| format!("{e:#}"))?;
         let before = config.telegram.clone();
         saved.apply_to(&mut config.telegram);
+        if let Some(groups) = &saved.groups {
+            config.core_groups = groups.clone();
+        }
         if let Some((name, zone)) = pushed_zone(&saved) {
             if zone != self.zone {
                 log::info!("telegram: report zone now {name}");
@@ -419,6 +426,8 @@ impl StationHost<'_> {
         change(&mut candidate);
         let pairing = Access {
             zone: self.tg.zone_pushed.clone(),
+            // A pairing saved from the chat keeps the groups the terminal sent.
+            groups: Some(self.config.core_groups.clone()),
             ..Access::of(&candidate)
         };
         if let Err(e) = write_pairing(&self.tg.pairing_path, &pairing) {
@@ -598,9 +607,16 @@ fn plan_access(
     if let Some(name) = access.zone.as_deref().filter(|n| n.parse::<Tz>().is_err()) {
         return Err(format!("zone {name:?} is not an IANA time zone"));
     }
+    // Groups go on their own and are not part of the base: a terminal's set replaces the
+    // station's whole, kept in the shape the terminal's own are.
+    let groups = access.groups.clone().map(|mut groups| {
+        moon_core::config::sanitize_core_groups(&mut groups);
+        groups
+    });
     Ok(Access {
         bot: access.bot.or_else(|| current.bot.clone()),
         zone: access.zone.or_else(|| pushed.map(str::to_owned)),
+        groups: groups.or_else(|| current.groups.clone()),
         // Notifications have a file of their own, never `telegram.json`.
         notify: None,
         ..access

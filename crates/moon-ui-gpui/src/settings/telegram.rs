@@ -28,6 +28,7 @@ mod server_auto_update;
 mod server_bot;
 mod server_tape;
 mod station_access;
+mod station_groups;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;

@@ -2,9 +2,12 @@
 //! (`ReportToTelegram`, `ReportTradesToTelegram`), relayed to the chats that switched them on.
 //!
 //! The feed produces only flagged events and the session keeps the last few per core
-//! (`CoreData::tg_events`). At most every [`BATCH`] this reads what arrived since its cursor and
-//! queues ONE message per chat: a detect storm becomes a list, Telegram's per-chat pace holds,
-//! and the outbox file is rewritten once per batch, not once per detect.
+//! (`CoreData::tg_events`). Every owner tick reads what arrived since its cursor and hands each
+//! chat what it hears. A chat's first event after a quiet spell is queued at once — an entry or a
+//! detect is news only while it is new, as the core's own bot sends it. After that the chat waits
+//! out its glue ([`glue`]) and gets everything that arrived meanwhile as ONE message: a detect
+//! storm becomes a list, the chat's queue never grows faster than Telegram takes it, and the
+//! outbox file is rewritten once per batch, not once per detect.
 //!
 //! A relay of what happens now, not a history: the cursor starts at the newest event the first
 //! time a core is seen, and an event older than [`MAX_AGE_MS`] when the batch goes is dropped —
@@ -25,12 +28,16 @@ use rust_i18n::t;
 use crate::TgHost;
 use crate::html::escape;
 
-/// Shortest gap between two batches.
-const BATCH: Duration = Duration::from_secs(10);
+/// Shortest gap between two batches to a private chat. Telegram takes its message a second
+/// (`CHAT_GAP_PRIVATE`), so a storm's lists stay ahead of the sender, not behind it.
+const BATCH: Duration = Duration::from_secs(2);
 
-/// Oldest event a batch still relays: the session's own window for an entry
-/// (`tg_open_is_fresh`, 120 s) plus a batch and a second of rounding, so an entry it filed at the
-/// edge is not dropped here.
+/// Shortest gap between two batches to a group, which Telegram takes a message every three
+/// seconds (`CHAT_GAP_GROUP`): a storm's lists leave room for the trade cards beside them.
+const GROUP_BATCH: Duration = Duration::from_secs(5);
+
+/// Oldest event the relay still reads: the session's own window for an entry
+/// (`tg_open_is_fresh`, 120 s) plus slack, so an entry it filed at the edge is not dropped here.
 const MAX_AGE_MS: i64 = 135_000;
 
 /// A chat whose oldest queued row waits longer than this is not given more: Telegram is not
@@ -54,10 +61,16 @@ pub(crate) struct Fresh {
     pub row: TgEventRow,
 }
 
-/// Queue this batch's messages. Called on every owner tick; returns at once inside [`BATCH`].
+/// Shortest gap between two batches to `chat`: a group's pace is slower than a private chat's.
+fn glue(chat: i64) -> Duration {
+    if chat < 0 { GROUP_BATCH } else { BATCH }
+}
+
+/// Hand each chat what it hears and queue the chats whose glue has run out. Called on every owner
+/// tick.
 ///
 /// Args:
-///     host: Session (the event rings), pairing, grants and the cursors.
+///     host: Session (the event rings), pairing, grants, the cursors and each chat's waiting events.
 ///     store: Notifications file.
 ///     now_utc: Current UTC Unix seconds.
 pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_utc: i64) {
@@ -69,47 +82,74 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
         .values()
         .any(|entry| entry.settings.events.any());
     if !listening {
-        host.state_mut().events_cursor.clear();
+        let state = host.state_mut();
+        state.events_cursor.clear();
+        state.events_waiting.clear();
         return;
     }
-    if host
-        .state()
-        .events_flush
-        .is_some_and(|at| at.elapsed() < BATCH)
-    {
-        return;
-    }
-    host.state_mut().events_flush = Some(Instant::now());
     let (fresh, missed) = drain(host, now_utc.saturating_mul(1_000));
-    if fresh.is_empty() && missed.is_empty() {
+    if fresh.is_empty() && missed.is_empty() && host.state().events_waiting.is_empty() {
+        return;
+    }
+    let targets = targets(host, store);
+    let state = host.state_mut();
+    // A chat no longer listening, paired or admitted keeps nothing it was handed.
+    state
+        .events_waiting
+        .retain(|chat, _| targets.iter().any(|(target, ..)| target == chat));
+    for (chat, rule, visible) in &targets {
+        let picked = fresh
+            .iter()
+            .filter(|event| visible.contains(&event.core) && wanted(*rule, &event.row.event))
+            .cloned();
+        // Only a detect storm overflows a ring; a chat that hears no detects is not told.
+        let lost: u64 = if rule.detects {
+            missed
+                .iter()
+                .filter(|(core, _)| visible.contains(core))
+                .map(|(_, count)| *count)
+                .sum()
+        } else {
+            0
+        };
+        let waiting = state.events_waiting.entry(*chat).or_default();
+        waiting.0.extend(picked);
+        waiting.1 = waiting.1.saturating_add(lost);
+        if waiting.0.is_empty() && waiting.1 == 0 {
+            state.events_waiting.remove(chat);
+        }
+    }
+    let due: Vec<i64> = state
+        .events_waiting
+        .keys()
+        .copied()
+        .filter(|chat| {
+            state
+                .events_sent
+                .get(chat)
+                .is_none_or(|at| at.elapsed() >= glue(*chat))
+        })
+        .collect();
+    if due.is_empty() {
         return;
     }
     let names = CoreNames::from_servers(&host.config().servers);
-    let targets = targets(host, store);
-    if targets.is_empty() {
-        return;
+    let mut messages: Vec<(i64, String, Vec<u64>)> = Vec::new();
+    for chat in due {
+        let Some((events, lost)) = host.state_mut().events_waiting.remove(&chat) else {
+            continue;
+        };
+        // An event that waited past the relay's window is history by now.
+        let now_ms = now_utc.saturating_mul(1_000);
+        let refs: Vec<&Fresh> = events
+            .iter()
+            .filter(|event| now_ms.saturating_sub(event.row.at_utc_ms) <= MAX_AGE_MS)
+            .collect();
+        if let Some((html, cores)) = render(&refs, &names, lost) {
+            messages.push((chat, html, cores));
+        }
+        host.state_mut().events_sent.insert(chat, Instant::now());
     }
-    let messages: Vec<(i64, String, Vec<u64>)> = targets
-        .into_iter()
-        .filter_map(|(chat, rule, visible)| {
-            let picked: Vec<&Fresh> = fresh
-                .iter()
-                .filter(|event| visible.contains(&event.core) && wanted(rule, &event.row.event))
-                .collect();
-            // Only a detect storm overflows a ring; a chat that hears no detects is not told.
-            let lost: u64 = if rule.detects {
-                missed
-                    .iter()
-                    .filter(|(core, _)| visible.contains(core))
-                    .map(|(_, count)| *count)
-                    .sum()
-            } else {
-                0
-            };
-            let (html, cores) = render(&picked, &names, lost)?;
-            Some((chat, html, cores))
-        })
-        .collect();
     if messages.is_empty() {
         return;
     }

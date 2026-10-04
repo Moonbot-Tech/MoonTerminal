@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Период выбирайте в нижне�
 telegram.report_all_cores: "Все ядра"
 
 telegram.report_by_days: "По дням"
+telegram.report_by_groups: "По группам"
+telegram.report_groups: "Группы"
+telegram.report_no_group: "Без группы"
 
 telegram.report_days_scope: "Дни группы"
 
@@ -45,7 +48,6 @@ telegram.report_exchanges_menu: "Биржи"
 
 telegram.report_exchanges_back: "Назад"
 
-telegram.report_exchange: "Биржа"
 
 telegram.report_scope_unavailable: "Биржа недоступна"
 
@@ -74,7 +76,6 @@ telegram.report_trades: "Сделки"
 
 telegram.report_date: "Дата"
 
-telegram.report_bot: "Бот"
 
 telegram.report_details: "Валюта и средний ордер"
 

@@ -263,3 +263,23 @@ fn the_month_slot_reports_up_to_the_day_just_ended() {
         super::auto_window(AutoReport::Month, local(zone, 2027, 1, 1, 3, 0), zone).unwrap();
     assert_eq!(window.from, local(zone, 2026, 12, 1, 0, 0));
 }
+
+/// The view by groups and a group's drill-down survive the callback, inside Telegram's limit.
+#[test]
+fn group_view_and_scope_round_trip() {
+    let mut request = ReportRequest::new(Period::Today, false)
+        .in_view(crate::config::telegram_menu::ReportView::Groups);
+    assert!(request.by_group && !request.by_exchange && !request.daily);
+    request.exchanges_open = true;
+    request.basis = Some(crate::config::telegram_menu::ReportBasis::Close);
+    assert_eq!(
+        ReportRequest::parse_callback(&request.callback()),
+        Some(request.clone())
+    );
+    request.by_group = false;
+    request.scope = super::ReportScope::Group(super::group_key("margo"));
+    assert_ne!(super::group_key("margo"), super::group_key("main"));
+    let encoded = request.callback();
+    assert!(encoded.len() <= 64, "{encoded}");
+    assert_eq!(ReportRequest::parse_callback(&encoded), Some(request));
+}

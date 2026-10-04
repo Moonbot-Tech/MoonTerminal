@@ -399,9 +399,12 @@ impl SettingsView {
                 else {
                     return;
                 };
+                // Nor the groups: sent back as read, they would take back a set another
+                // terminal sent since.
                 let access = Access {
                     zone: None,
                     notify: Some(rows),
+                    groups: None,
                     ..seen.clone()
                 };
                 let base = Access {

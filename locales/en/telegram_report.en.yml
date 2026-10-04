@@ -30,6 +30,9 @@ telegram.report_navigation_hint: "Choose the period in the bottom menu. Tap agai
 telegram.report_all_cores: "All cores"
 
 telegram.report_by_days: "By day"
+telegram.report_by_groups: "By group"
+telegram.report_groups: "Groups"
+telegram.report_no_group: "No group"
 
 telegram.report_days_scope: "Group by day"
 
@@ -45,7 +48,6 @@ telegram.report_exchanges_menu: "Exchanges"
 
 telegram.report_exchanges_back: "Back"
 
-telegram.report_exchange: "Exchange"
 
 telegram.report_scope_unavailable: "Exchange unavailable"
 
@@ -74,7 +76,6 @@ telegram.report_trades: "Trades"
 
 telegram.report_date: "Date"
 
-telegram.report_bot: "Bot"
 
 telegram.report_details: "Currencies and average order"
 

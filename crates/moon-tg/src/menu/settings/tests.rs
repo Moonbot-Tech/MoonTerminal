@@ -100,3 +100,32 @@ fn the_notify_screens_switch_and_pick() {
         vec![MenuAction::Settings(SettingsAction::DownAfter(5))]
     );
 }
+
+/// The automatic reports stand two a row, so their names fit; the down delay offers 1 and 5
+/// minutes, side by side.
+#[test]
+fn the_notify_screen_keeps_its_buttons_readable() {
+    let _locale = crate::test_locale::force("ru");
+    let (_, _, rows) = super::notify_screen(&NotifySettings::default());
+    let auto: Vec<usize> = rows
+        .iter()
+        .filter(|row| {
+            row.iter().any(|b| {
+                matches!(
+                    action(b),
+                    Some(MenuAction::Settings(SettingsAction::Auto(..)))
+                )
+            })
+        })
+        .map(Vec::len)
+        .collect();
+    assert_eq!(auto, vec![2, 1]);
+    let delays: Vec<SettingsAction> = actions(&rows)
+        .into_iter()
+        .filter(|action| matches!(action, SettingsAction::DownAfter(_)))
+        .collect();
+    assert_eq!(
+        delays,
+        vec![SettingsAction::DownAfter(1), SettingsAction::DownAfter(5)]
+    );
+}

@@ -49,11 +49,18 @@ daily grouping on the next request; a station-hosted bot receives the new zone w
 Settings -> Telegram -> Bot menu lays out the reply keyboard as rows of buttons: a tick shows a
 button, "new row" starts a row, the arrows change the order. The Report section always shows all
 its periods; the Mini App opens from the chat's menu button, not from the keyboard. The same box
-sets the view reports open in (by exchange, by core, by day) and whether periods count trades by
-close time (the default, as the terminal's Report) or by open time; a report read by open time
-says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot takes
-them with "Apply on the server", without a restart. Chats get a changed keyboard with the bot's
-next message; a button already on an older keyboard keeps working within the chat's role.
+sets the view reports open in (by exchange, by core, by group, by day) and whether periods count
+trades by close time (the default, as the terminal's Report) or by open time; a report read by open
+time says so under its period. A terminal-hosted bot saves these with Save; a station-hosted bot
+takes them with "Apply on the server", without a restart. Chats get a changed keyboard with the
+bot's next message; a button already on an older keyboard keeps working within the chat's role.
+
+The view by group uses the terminal's saved core groups: one row per group over its own cores (a
+core in two groups counts in each, the total counts it once), then "No group" for the rest; "Groups"
+opens a group's cores. A terminal-hosted bot reads the terminal's groups; a station keeps the set it
+was last sent. The station's bot menu shows whether its groups are this terminal's and offers "Send
+groups to the station" when they are not — never on its own, so a terminal without groups cannot
+wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
 
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
@@ -171,8 +178,9 @@ rich):
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
   terminal's Settings and the bot's Settings -> Notifications; emulator trades are included, and
-  the chat adds no filters of its own. What arrived is merged into one message at most every
-  10 seconds, so a burst of detects is one list; a long list is cut and counted. Only what happens
+  the chat adds no filters of its own. The first event after a quiet spell goes at once; what
+  follows within 2 seconds (5 in a group, which Telegram takes slower) is merged into one message,
+  so a burst of detects is one list; a long list is cut and counted. Only what happens
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
   a chat whose queue Telegram has not drained for five minutes.
 
