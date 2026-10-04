@@ -1,9 +1,11 @@
 //! Which closed trades a chat should hear about.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use moon_core::db::QuoteCurrency;
-use moon_core::telegram::notify::{CoreScope, NotifyLedger, TradeRule};
+use moon_core::telegram::notify::{
+    ChartLedger, ChartRule, CoreScope, NotifyLedger, TradeRule, prune_closes,
+};
 
 /// How long an announced close stays in the ledger, in seconds.
 pub(crate) const SEEN_WINDOW_SECS: i64 = 72 * 3600;
@@ -43,6 +45,10 @@ pub(crate) struct ClosedTrade {
     pub buy_price: Option<f64>,
     /// Exit price, as the row stored it.
     pub sell_price: Option<f64>,
+    /// A short position.
+    pub short: bool,
+    /// The row's `ReportUID`, which its order traces are filed under; absent on a row without it.
+    pub report_uid: Option<i64>,
 }
 
 impl ClosedTrade {
@@ -104,8 +110,12 @@ enum Verdict {
 ///     of the enable moment and the 72-hour window edge. The subtraction
 ///     saturates at `i64::MIN`.
 pub(crate) fn read_from_utc(ledger: &NotifyLedger, now_utc: i64) -> Option<i64> {
-    let enabled = ledger.trades_enabled_utc?;
-    Some(enabled.max(now_utc.saturating_sub(SEEN_WINDOW_SECS)))
+    floor_from(ledger.trades_enabled_utc, now_utc)
+}
+
+/// [`read_from_utc`] for any rule's enable moment.
+pub(crate) fn floor_from(enabled_utc: Option<i64>, now_utc: i64) -> Option<i64> {
+    Some(enabled_utc?.max(now_utc.saturating_sub(SEEN_WINDOW_SECS)))
 }
 
 /// When the earliest held close stops waiting for its dollar value, if any close is held.
@@ -116,9 +126,12 @@ pub(crate) fn read_from_utc(ledger: &NotifyLedger, now_utc: i64) -> Option<i64> 
 /// Returns:
 ///     UTC seconds; a read at or after it sends that close unchecked.
 pub(crate) fn hold_until(ledger: &NotifyLedger) -> Option<i64> {
-    ledger
-        .held
-        .values()
+    held_until(&ledger.held)
+}
+
+/// [`hold_until`] over any rule's held closes.
+pub(crate) fn held_until(held: &BTreeMap<u64, BTreeMap<i64, i64>>) -> Option<i64> {
+    held.values()
         .flat_map(|rows| rows.values())
         .min()
         .map(|first| first.saturating_add(HOLD_SECS))
@@ -152,13 +165,86 @@ pub(crate) fn decide(
     trades: &[ClosedTrade],
     now_utc: i64,
 ) -> Vec<Announced> {
+    let gate = Gate {
+        on: rule.on,
+        cores: &rule.cores,
+        min_volume_usd: rule.min_volume_usd,
+        profit_at_least_usd: rule.profit_at_least_usd,
+        loss_at_least_usd: rule.loss_at_least_usd,
+        needs_usd: false,
+    };
+    let book = Book {
+        enabled_utc: ledger.trades_enabled_utc,
+        seen: &mut ledger.seen,
+        held: &mut ledger.held,
+    };
+    decide_gate(&gate, book, visible, trades, now_utc)
+}
+
+/// The deal chart rule's [`decide`]: the trades whose picture is due, with their dollar value.
+///
+/// The picture waits for the dollar value whatever the thresholds are — its caption is in dollars
+/// (LinKvo 04.10) — and a trade still unvalued after [`HOLD_SECS`] gets none.
+pub(crate) fn decide_charts(
+    rule: &ChartRule,
+    ledger: &mut ChartLedger,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<ClosedTrade> {
+    let gate = Gate {
+        on: rule.on,
+        cores: &CoreScope::All,
+        min_volume_usd: None,
+        profit_at_least_usd: rule.profit_at_least_usd,
+        loss_at_least_usd: rule.loss_at_least_usd,
+        needs_usd: true,
+    };
+    let book = Book {
+        enabled_utc: ledger.enabled_utc,
+        seen: &mut ledger.seen,
+        held: &mut ledger.held,
+    };
+    decide_gate(&gate, book, visible, trades, now_utc)
+        .into_iter()
+        .filter(|announced| !announced.unchecked)
+        .map(|announced| announced.trade)
+        .collect()
+}
+
+/// What a rule asks of a closed trade.
+struct Gate<'a> {
+    on: bool,
+    cores: &'a CoreScope,
+    min_volume_usd: Option<f64>,
+    profit_at_least_usd: Option<f64>,
+    loss_at_least_usd: Option<f64>,
+    /// The trade's dollar profit is needed even with no profit threshold set.
+    needs_usd: bool,
+}
+
+/// A rule's part of the ledger.
+struct Book<'a> {
+    enabled_utc: Option<i64>,
+    seen: &'a mut BTreeMap<u64, BTreeMap<i64, i64>>,
+    held: &'a mut BTreeMap<u64, BTreeMap<i64, i64>>,
+}
+
+/// [`decide`] for any rule and its part of the ledger.
+fn decide_gate(
+    rule: &Gate<'_>,
+    ledger: Book<'_>,
+    visible: &[u64],
+    trades: &[ClosedTrade],
+    now_utc: i64,
+) -> Vec<Announced> {
     if !rule.on {
         ledger.seen.clear();
         ledger.held.clear();
         return Vec::new();
     }
-    let Some(read_from) = read_from_utc(ledger, now_utc) else {
-        ledger.prune_seen(now_utc.saturating_sub(SEEN_WINDOW_SECS));
+    let Some(read_from) = floor_from(ledger.enabled_utc, now_utc) else {
+        prune_closes(ledger.seen, now_utc.saturating_sub(SEEN_WINDOW_SECS));
         return Vec::new();
     };
     let mut announced = Vec::new();
@@ -189,7 +275,7 @@ pub(crate) fn decide(
                 continue;
             }
         }
-        unhold(ledger, trade);
+        unhold(ledger.held, trade);
         ledger
             .seen
             .entry(trade.core)
@@ -209,7 +295,7 @@ pub(crate) fn decide(
             .then(left.trade.rec_id.cmp(&right.trade.rec_id))
     });
     let window_edge = now_utc.saturating_sub(SEEN_WINDOW_SECS);
-    ledger.prune_seen(window_edge);
+    prune_closes(ledger.seen, window_edge);
     ledger.held.retain(|core, rows| {
         rows.retain(|rec_id, _| offered.contains(&(*core, *rec_id)));
         !rows.is_empty()
@@ -217,22 +303,22 @@ pub(crate) fn decide(
     announced
 }
 
-/// Drop `trade` from `ledger.held`, and its core when that empties it.
-fn unhold(ledger: &mut NotifyLedger, trade: &ClosedTrade) {
-    if let Some(rows) = ledger.held.get_mut(&trade.core) {
+/// Drop `trade` from `held`, and its core when that empties it.
+fn unhold(held: &mut BTreeMap<u64, BTreeMap<i64, i64>>, trade: &ClosedTrade) {
+    if let Some(rows) = held.get_mut(&trade.core) {
         rows.remove(&trade.rec_id);
         if rows.is_empty() {
-            ledger.held.remove(&trade.core);
+            held.remove(&trade.core);
         }
     }
 }
 
 /// `true` when `core` is both visible to the chat and selected by the rule.
-fn core_selected(rule: &TradeRule, visible: &[u64], core: u64) -> bool {
+fn core_selected(rule: &Gate<'_>, visible: &[u64], core: u64) -> bool {
     if !visible.contains(&core) {
         return false;
     }
-    match &rule.cores {
+    match rule.cores {
         CoreScope::All => true,
         CoreScope::Only(ids) => ids.contains(&core),
     }
@@ -245,7 +331,10 @@ fn core_selected(rule: &TradeRule, visible: &[u64], core: u64) -> bool {
 /// exists and is just not in dollars yet. A figure the row cannot evidence in any currency — a
 /// volume the Report's gates cannot prove, a profit the row does not carry — fails a set
 /// threshold at once, as it always did.
-fn verdict(rule: &TradeRule, trade: &ClosedTrade) -> Verdict {
+///
+/// A rule that needs the dollar profit itself waits for it like for a threshold, and fails a row
+/// that carries no profit at all.
+fn verdict(rule: &Gate<'_>, trade: &ClosedTrade) -> Verdict {
     let volume = volume_passes(
         rule.min_volume_usd,
         trade.rule_volume_usd(),
@@ -257,9 +346,14 @@ fn verdict(rule: &TradeRule, trade: &ClosedTrade) -> Verdict {
         trade.rule_profit_usd(),
         trade.profit_native.is_some(),
     );
-    match (volume, profit) {
-        (Some(false), _) | (_, Some(false)) => Verdict::Fail,
-        (Some(true), Some(true)) => Verdict::Pass,
+    let dollars = if rule.needs_usd && trade.rule_profit_usd().is_none() {
+        trade.profit_native.is_none().then_some(false)
+    } else {
+        Some(true)
+    };
+    match (volume, profit, dollars) {
+        (Some(false), _, _) | (_, Some(false), _) | (_, _, Some(false)) => Verdict::Fail,
+        (Some(true), Some(true), Some(true)) => Verdict::Pass,
         _ => Verdict::Unknown,
     }
 }

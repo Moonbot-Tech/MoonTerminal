@@ -1082,6 +1082,8 @@ struct ClosedCols {
     volume_native: Option<usize>,
     quote: Option<usize>,
     reason: Option<usize>,
+    short: Option<usize>,
+    report_uid: Option<usize>,
 }
 
 impl ClosedCols {
@@ -1104,6 +1106,8 @@ impl ClosedCols {
             volume_native: index(db::NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN),
             quote: index(db::NOTIFY_QUOTE_COLUMN),
             reason: index("sellreason"),
+            short: index("isshort"),
+            report_uid: index("reportuid"),
         }
     }
 }
@@ -1161,6 +1165,10 @@ fn map_closed_row(
             .filter(|volume| *volume > 0.0),
         buy_price: finite_number(cell(cols.buy_price).and_then(value_f64)),
         sell_price: finite_number(cell(cols.sell_price).and_then(value_f64)),
+        short: cell(cols.short).and_then(value_i64).is_some_and(|v| v != 0),
+        report_uid: cell(cols.report_uid)
+            .and_then(value_i64)
+            .filter(|uid| *uid != 0),
     })
 }
 

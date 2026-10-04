@@ -77,6 +77,8 @@ telegram.notify_editor.events: "Do próprio núcleo — o que uma estratégia ma
 telegram.notify_editor.opened: "Operação aberta"
 telegram.notify_editor.detects: "Detecção"
 telegram.notify_editor.events_hint: "Enviadas só quando a estratégia tem \"Relatar operações no Telegram\" ou \"Relatar no Telegram\" ligado; o emulador também. A primeira vai na hora; o que chega nos 2 s seguintes (5 s num grupo) é juntado numa só mensagem."
+telegram.notify_editor.charts: "Gráfico da operação — a fita em torno da operação como imagem"
+telegram.notify_editor.charts_hint: "Chega separado dos cartões, com o cartão da operação como legenda. Enviado quando a operação está em $ (uma stablecoin conta 1:1, outra moeda espera até %{minutes} min pela avaliação; sem avaliação, sem imagem). Limites: lucro a partir de ou prejuízo a partir de; vazio — toda operação. A fita é gravada pela estação."
 telegram.auto.title: "Relatórios automáticos"
 telegram.auto.hourly: "Relatório por hora"
 telegram.auto.today: "Relatório de hoje"

@@ -17,8 +17,8 @@ mod menu;
 pub mod mini_app;
 mod notify;
 pub use notify::{
-    NotifyStore, cores_kept, drop_redraws, purge_outbox, purge_outbox_where, push_auto_report,
-    push_edit, push_outbox, push_redraw, push_trade_card,
+    NotifyStore, chart_spool_dir, cores_kept, drop_redraws, purge_outbox, purge_outbox_where,
+    push_auto_report, push_edit, push_outbox, push_photo, push_redraw, push_trade_card,
 };
 /// Authenticated work drained by the application's coordination loop.
 // `MiniApp` carries the settings document, so this variant is the large one.

@@ -77,6 +77,8 @@ telegram.notify_editor.events: "От самого ядра — то, что ст
 telegram.notify_editor.opened: "Сделка открыта"
 telegram.notify_editor.detects: "Детект"
 telegram.notify_editor.events_hint: "Шлются, только если в стратегии включено «Сделки в Telegram» или «Отчёт в Telegram»; эмулятор тоже. Первое уходит сразу; пришедшее за следующие 2 с (в группе 5 с) склеивается в одно сообщение."
+telegram.notify_editor.charts: "Картинка сделки — график ленты вокруг сделки"
+telegram.notify_editor.charts_hint: "Приходит отдельно от карточек, подпись — карточка сделки. Шлётся после пересчёта в $ (стейблкоин 1:1, другая валюта ждёт оценку до %{minutes} мин; не оценилась — картинки нет). Пороги: прибыль от или убыток от; пусто — по каждой сделке. Ленту пишет станция."
 telegram.auto.title: "Автоотчёты"
 telegram.auto.hourly: "Часовой отчёт"
 telegram.auto.today: "Отчёт за сегодня"

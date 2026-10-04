@@ -47,6 +47,29 @@ pub struct TradeRule {
     pub usd_followup: bool,
 }
 
+/// Deal chart rule: a picture of a closed trade's tape, sent on its own, whatever the card rule
+/// says (LinKvo 04.10: cards may be off while pictures are on). Off by default. The thresholds are
+/// the card's, in dollars, and the picture waits for the trade's dollar value before it is
+/// judged: a trade whose value never comes gets no picture.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct ChartRule {
+    /// Send a picture for a closed trade that passes the thresholds.
+    pub on: bool,
+    /// Send when profit is at least this many USD. `None` applies no profit floor.
+    pub profit_at_least_usd: Option<f64>,
+    /// Send when the loss is at least this many USD (a positive magnitude). `None` applies no loss
+    /// floor.
+    pub loss_at_least_usd: Option<f64>,
+}
+
+impl ChartRule {
+    /// Whether the rule is in its default, all-off state, which is not written.
+    pub fn is_off(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 /// Minutes the core must stay disconnected before a down notice. Default delay is 5.
 const fn default_after_minutes() -> u16 {
     5
@@ -156,6 +179,10 @@ pub struct NotifySettings {
     /// off, so the Mini App's document stays as it was.
     #[serde(skip_serializing_if = "EventRule::is_off")]
     pub events: EventRule,
+    /// Deal charts. Not written while off, so the Mini App's document stays as it was; its save
+    /// keeps the stored value.
+    #[serde(skip_serializing_if = "ChartRule::is_off")]
+    pub charts: ChartRule,
 }
 
 /// The cores' own Telegram reports a chat relays: what a strategy marks for Telegram
@@ -198,6 +225,11 @@ impl NotifySettings {
         reject_threshold("min_volume_usd", self.trades.min_volume_usd)?;
         reject_threshold("profit_at_least_usd", self.trades.profit_at_least_usd)?;
         reject_threshold("loss_at_least_usd", self.trades.loss_at_least_usd)?;
+        reject_threshold(
+            "charts.profit_at_least_usd",
+            self.charts.profit_at_least_usd,
+        )?;
+        reject_threshold("charts.loss_at_least_usd", self.charts.loss_at_least_usd)?;
         if !(1..=1440).contains(&self.down.after_minutes) {
             return Err(NotifyError::AfterMinutes {
                 value: self.down.after_minutes,
@@ -212,7 +244,8 @@ impl NotifySettings {
 pub enum NotifyError {
     /// A volume, profit, or loss threshold is NaN, infinite, or negative.
     Threshold {
-        /// `min_volume_usd`, `profit_at_least_usd`, or `loss_at_least_usd`.
+        /// `min_volume_usd`, `profit_at_least_usd`, `loss_at_least_usd`, or one of the chart
+        /// rule's two, prefixed `charts.`.
         field: &'static str,
         /// The rejected number, which may be NaN.
         value: f64,
@@ -317,6 +350,11 @@ pub struct Pending {
     /// edits the text alone, which drops the buttons.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redraw: Option<crate::telegram::api::ReplyMarkup>,
+    /// A deal chart: the name of its PNG in the charts folder beside the notifications file
+    /// ([`crate::telegram::runtime::chart_spool_dir`]); [`Self::html`] is then its caption. The
+    /// file goes with the row. A build that predates the field sends the caption alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
 }
 
 /// One closed trade: its core and report record id.
@@ -391,6 +429,41 @@ pub struct NotifyLedger {
     /// core, record id, then the card. Empty unless [`TradeRule::usd_followup`] is on.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub cards: BTreeMap<u64, BTreeMap<i64, CardWait>>,
+    /// The deal chart rule's own announce-once state, kept apart from the cards': either rule may
+    /// be on without the other.
+    #[serde(skip_serializing_if = "ChartLedger::is_empty")]
+    pub charts: ChartLedger,
+}
+
+/// Drop closes older than `older_than_utc` from a rule's seen closes, then the cores left empty —
+/// [`NotifyLedger::prune_seen`] for any rule's part of the ledger.
+pub fn prune_closes(seen: &mut BTreeMap<u64, BTreeMap<i64, i64>>, older_than_utc: i64) {
+    seen.retain(|_core, rows| {
+        rows.retain(|_rec_id, close_utc| *close_utc >= older_than_utc);
+        !rows.is_empty()
+    });
+}
+
+/// [`ChartRule`]'s announce-once state, the shape of the card rule's part of [`NotifyLedger`].
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(default)]
+pub struct ChartLedger {
+    /// Unix seconds when the chart rule was switched on. Absent while it is off.
+    pub enabled_utc: Option<i64>,
+    /// Considered closes, including the ones the thresholds turned down: core, record id, then
+    /// UTC seconds of the close.
+    pub seen: BTreeMap<u64, BTreeMap<i64, i64>>,
+    /// Closes waiting for their dollar value: core, record id, then the UTC seconds the trade was
+    /// first held.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub held: BTreeMap<u64, BTreeMap<i64, i64>>,
+}
+
+impl ChartLedger {
+    /// Whether nothing is recorded, which is not written.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// One automatic report's state in a chat.
@@ -439,10 +512,7 @@ impl NotifyLedger {
     /// A close time equal to the bound stays. The caller picks the bound (the enable time or the
     /// window edge); this method does not know the window length.
     pub fn prune_seen(&mut self, older_than_utc: i64) {
-        self.seen.retain(|_core, rows| {
-            rows.retain(|_rec_id, close_utc| *close_utc >= older_than_utc);
-            !rows.is_empty()
-        });
+        prune_closes(&mut self.seen, older_than_utc);
     }
 
     /// Stop waiting for cards queued before `older_than_utc`, then drop cores with none left.

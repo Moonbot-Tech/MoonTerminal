@@ -2573,6 +2573,9 @@ pub fn query_notify_trades(
             NOTIFY_PROFIT_NATIVE_COLUMN,
             NOTIFY_ENTRY_VOLUME_NATIVE_COLUMN,
             NOTIFY_QUOTE_COLUMN,
+            // The row's `ReportUID`, which its order traces are filed under: the deal chart draws
+            // its lines. NULL from a source that predates the column.
+            "reportuid",
         ],
     )
 }

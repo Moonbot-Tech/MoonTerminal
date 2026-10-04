@@ -77,6 +77,8 @@ telegram.notify_editor.events: "Từ chính core — những gì chiến lược
 telegram.notify_editor.opened: "Đã mở giao dịch"
 telegram.notify_editor.detects: "Tín hiệu"
 telegram.notify_editor.events_hint: "Chỉ gửi khi chiến lược bật \"Gửi giao dịch lên Telegram\" hoặc \"Báo cáo lên Telegram\"; cả giả lập. Tin đầu đi ngay; những gì tới trong 2 giây sau đó (5 giây trong nhóm) được gộp thành một tin nhắn."
+telegram.notify_editor.charts: "Biểu đồ giao dịch — dòng lệnh quanh giao dịch dưới dạng hình ảnh"
+telegram.notify_editor.charts_hint: "Gửi riêng với thẻ, chú thích là thẻ giao dịch. Gửi khi giao dịch đã quy ra $ (stablecoin tính 1:1, đồng tiền khác chờ định giá tới %{minutes} phút; không định giá được thì không có hình). Ngưỡng: lãi từ hoặc lỗ từ; để trống — mọi giao dịch. Trạm ghi dòng lệnh."
 telegram.auto.title: "Báo cáo tự động"
 telegram.auto.hourly: "Báo cáo mỗi giờ"
 telegram.auto.today: "Báo cáo hôm nay"

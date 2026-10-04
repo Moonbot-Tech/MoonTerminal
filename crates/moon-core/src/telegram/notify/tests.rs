@@ -161,9 +161,19 @@ fn sample_file() -> NotifyFile {
                 opened: true,
                 detects: false,
             },
+            charts: ChartRule {
+                on: true,
+                profit_at_least_usd: Some(100.0),
+                loss_at_least_usd: Some(12.0),
+            },
         },
         ledger: NotifyLedger {
             trades_enabled_utc: Some(1_700_000_000),
+            charts: ChartLedger {
+                enabled_utc: Some(1_700_000_001),
+                seen: BTreeMap::from([(7, BTreeMap::from([(98, 1_700_000_090)]))]),
+                held: BTreeMap::from([(7, BTreeMap::from([(97, 1_700_000_095)]))]),
+            },
             seen,
             down_announced,
             reports: AutoLedger {
@@ -181,16 +191,27 @@ fn sample_file() -> NotifyFile {
     chats.insert(-10042, chat);
     NotifyFile {
         chats,
-        outbox: vec![Pending {
-            id: 1,
-            chat: -10042,
-            html: "<b>closed</b>".to_string(),
-            created_utc: 1_700_000_200,
-            cores: None,
-            auto: None,
-            ..Pending::default()
-        }],
-        next_id: 2,
+        outbox: vec![
+            Pending {
+                id: 1,
+                chat: -10042,
+                html: "<b>closed</b>".to_string(),
+                created_utc: 1_700_000_200,
+                cores: None,
+                auto: None,
+                ..Pending::default()
+            },
+            Pending {
+                id: 2,
+                chat: -10042,
+                html: "<b>chart</b>".to_string(),
+                created_utc: 1_700_000_201,
+                cores: Some(vec![7]),
+                photo: Some("7-98.png".to_string()),
+                ..Pending::default()
+            },
+        ],
+        next_id: 3,
     }
 }
 
@@ -218,7 +239,14 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
         value["outbox"][0]["html"],
         serde_json::json!("<b>closed</b>")
     );
-    assert_eq!(value["next_id"], serde_json::json!(2));
+    assert_eq!(value["next_id"], serde_json::json!(3));
+    assert_eq!(value["outbox"][1]["photo"], serde_json::json!("7-98.png"));
+    let charts = &value["chats"]["-10042"]["ledger"]["charts"];
+    assert_eq!(charts["seen"]["7"]["98"], serde_json::json!(1_700_000_090));
+    assert_eq!(
+        value["chats"]["-10042"]["settings"]["charts"]["loss_at_least_usd"],
+        serde_json::json!(12.0)
+    );
 
     let loaded = NotifyFile::load(&path).expect("load");
     assert_eq!(loaded, original);
@@ -251,7 +279,14 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
         "next_id": 2
     }"#;
     let from_disk: NotifyFile = serde_json::from_str(hand).expect("hand-written file");
-    assert_eq!(from_disk, original);
+    // The hand-written file predates deal charts: it is the sample without them.
+    let mut before_charts = original.clone();
+    let chat = before_charts.chats.get_mut(&-10042).unwrap();
+    chat.settings.charts = ChartRule::default();
+    chat.ledger.charts = ChartLedger::default();
+    before_charts.outbox.truncate(1);
+    before_charts.next_id = 2;
+    assert_eq!(from_disk, before_charts);
     assert_eq!(from_disk.outbox[0].cores, None);
 }
 

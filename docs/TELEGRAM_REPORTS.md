@@ -192,6 +192,20 @@ rich):
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
   a chat whose queue Telegram has not drained for five minutes.
 
+Deal charts are a picture of a closed trade, sent apart from the trade cards — a chat may have the
+cards off and the pictures on. They are switched per chat in the terminal's Settings -> Telegram,
+in the station's bot box (the Mini App does not show them, and its save leaves them as they are),
+with two thresholds of their own: a profit of at least some USD, a loss of at least some USD; with
+neither set every trade gets one. A picture waits for the trade's dollar value (a USD stablecoin
+taken 1:1, another currency up to five minutes for its valuation) and is not sent without it. It
+shows the trade's own window — at least 10 seconds before the entry (a third of a longer trade, as
+far as the station's tape recorder keeps) and 3 seconds after the exit — with every print of the
+tape as a cross in the colour of its side, the volume, the entry and exit orders as the steps the
+core archived for them, the stop, both fills with their prices, the result, the position size and
+the core's day so far. Its caption is the trade card. The picture is drawn by the station from its
+own recorded tape, without a graphics library; a terminal-hosted bot draws one only while the
+terminal records tape. A picture decided but not yet drawn when the process stops is not sent.
+
 Automatic reports are the rich report a menu button opens, sent by the bot on its own. They are
 switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->
 Bot menu and notifications (the Mini App does not show them, and its save leaves them as they are):

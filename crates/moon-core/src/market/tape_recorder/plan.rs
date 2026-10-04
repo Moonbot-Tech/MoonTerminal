@@ -261,6 +261,17 @@ impl KeyTask {
         self.live.map(|live| live.epoch)
     }
 
+    /// The drained prints not filed yet inside `[from_ms, to_ms]`, in drain order. Together with
+    /// what the file holds they are everything the recording has of the stretch: the buffer only
+    /// ever holds prints past what was filed.
+    pub(super) fn unfiled(&self, from_ms: i64, to_ms: i64) -> Vec<Tick> {
+        self.buffer
+            .iter()
+            .filter(|t| (from_ms..=to_ms).contains(&(t.time_ms as i64)))
+            .copied()
+            .collect()
+    }
+
     /// The archive was asked for at `asked_ms`, on the donor's stream epoch `epoch`.
     pub(super) fn seed_asked(&mut self, asked_ms: i64, epoch: u64) {
         self.seed = Some(Seed { asked_ms, epoch });
