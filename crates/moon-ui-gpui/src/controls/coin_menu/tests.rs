@@ -124,7 +124,7 @@ fn strategy_blacklist_row_revalidates_live_identity_and_schema() {
         .expect("strategy blacklist row must exist")
         .1;
     let schema_guard = row
-        .find("strategy_has_blacklist_field(b, core, sid)")
+        .find("b.session.strategy_has_blacklist(core, sid)")
         .expect("the write must revalidate the exact strategy schema");
     let effect = row
         .find("write_strategy_blacklist(b, core, sid")

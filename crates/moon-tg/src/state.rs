@@ -50,6 +50,9 @@ pub struct TelegramState {
     /// Chats asked for a coin for a core's blacklist (`menu::control`): the core, whether to take
     /// the coin off, and until when the question stands.
     pub(crate) awaiting_coin: HashMap<i64, (CoreId, bool, Instant)>,
+    /// The confirmed press each chat was asked for (`menu::control`), and until when it counts.
+    pub(crate) awaiting_confirm:
+        HashMap<i64, (moon_core::telegram::menu_action::ControlAction, Instant)>,
     /// At most one automatic-report read is in flight.
     pub(crate) auto_busy: bool,
     /// When the last automatic-report read was spawned. `None` allows the first run.
@@ -173,6 +176,7 @@ impl TelegramState {
             events_cursor: HashMap::new(),
             events_flush: None,
             awaiting_coin: HashMap::new(),
+            awaiting_confirm: HashMap::new(),
             auto_busy: false,
             last_auto_run: None,
             injected_auto: None,

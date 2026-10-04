@@ -27,6 +27,11 @@ pub(crate) enum Refusal {
     Offline,
     /// The core's command channel refused the send.
     Unavailable,
+    /// The core has not sent its settings yet, so its blacklist cannot be edited.
+    NotReady,
+    /// The order has no strategy coin list to put its coin on: a manual order, or a strategy kind
+    /// without one.
+    NoList,
 }
 
 /// Whether `chat` is the owner: the one check every command passes first.
@@ -59,15 +64,15 @@ fn known(host: &dyn TgHost, core: CoreId) -> bool {
 /// Set one run switch on one core: sent only when the core is connected and not already there.
 ///
 /// Returns:
-///     `Ok` once sent, or when the core already is in the asked state. A core the owner does not
-///     see is `NotFound`; one not connected, `Offline`; a refused send, `Unavailable`.
+///     Whether it was sent; `false` when the core already is in the asked state. A core the owner
+///     does not see is `NotFound`; one not connected, `Offline`; a refused send, `Unavailable`.
 pub(crate) fn run_one(
     host: &dyn TgHost,
     chat: i64,
     core: CoreId,
     switch: RunSwitch,
     on: bool,
-) -> Result<(), Refusal> {
+) -> Result<bool, Refusal> {
     owner(host, chat)?;
     if !known(host, core) {
         return Err(Refusal::NotFound);
@@ -79,7 +84,7 @@ pub(crate) fn run_one(
     if outcome.refused() > 0 {
         return Err(Refusal::Unavailable);
     }
-    Ok(())
+    Ok(!outcome.sent.is_empty())
 }
 
 /// Set one run switch on several cores in one gated call.
@@ -211,7 +216,9 @@ pub(crate) fn panic_all(
             done.offline += 1;
             continue;
         }
-        for market in open_position_markets(host, core) {
+        // Real positions only: Panic Sell arms the whole market, and one armed for an emulator
+        // position would hit the next real order there.
+        for market in open_position_markets(host, core, true) {
             if host.is_panic_armed(core, &market) {
                 done.already += 1;
             } else if host.toggle_panic_sell(core, market) {
@@ -224,12 +231,18 @@ pub(crate) fn panic_all(
     Ok(done)
 }
 
-/// Markets where `core` holds an open position — an entry filled and not yet closed — each once.
-pub(crate) fn open_position_markets(host: &dyn TgHost, core: CoreId) -> Vec<String> {
+/// Markets where `core` holds an open position — an entry filled and not yet closed — each once;
+/// with `real_only`, only positions on the exchange, not the core's emulator.
+pub(crate) fn open_position_markets(
+    host: &dyn TgHost,
+    core: CoreId,
+    real_only: bool,
+) -> Vec<String> {
     let mut markets: Vec<String> = Vec::new();
     if let Some(data) = host.session().store().core(core) {
         for order in &data.orders {
-            if order.filled && !order.job_is_done && !markets.contains(&order.market) {
+            let open = order.filled && !order.job_is_done && !(real_only && order.emulator);
+            if open && !markets.contains(&order.market) {
                 markets.push(order.market.clone());
             }
         }
@@ -322,7 +335,8 @@ pub(crate) fn strategy_waiting(host: &dyn TgHost, core: CoreId, id: u64) -> bool
 /// Put one coin on the core's own blacklist, or with `lift` take it off.
 ///
 /// Returns:
-///     Whether a command was sent; `false` when the list already said so.
+///     Whether a command was sent; `false` when the list already said so. A core that has not
+///     sent its settings yet is `NotReady`: there is no list to edit.
 pub(crate) fn core_blacklist(
     host: &dyn TgHost,
     chat: i64,
@@ -336,6 +350,19 @@ pub(crate) fn core_blacklist(
     }
     if !host.session().core_run_state(core).online {
         return Err(Refusal::Offline);
+    }
+    write_core_list(host, core, coin, lift)
+}
+
+/// The session's core-blacklist write, with a core whose settings are not in yet named as such.
+fn write_core_list(
+    host: &dyn TgHost,
+    core: CoreId,
+    coin: &str,
+    lift: bool,
+) -> Result<bool, Refusal> {
+    if core_blacklist_state(host, core).is_none() {
+        return Err(Refusal::NotReady);
     }
     host.session()
         .write_core_blacklist(core, coin, lift)
@@ -421,7 +448,7 @@ pub(crate) fn order_panic(
 ///
 /// Returns:
 ///     Whether anything was sent; `false` when the coin already was listed. A manual order, or a
-///     strategy whose kind has no coin list, is `NotFound` for the strategy's list.
+///     strategy whose kind has no coin list, is `NoList` for the strategy's list.
 pub(crate) fn order_ban(
     host: &mut dyn TgHost,
     chat: i64,
@@ -431,14 +458,12 @@ pub(crate) fn order_ban(
 ) -> Result<bool, Refusal> {
     let order = order_for_command(host, chat, core, uid)?;
     let sent = match ban {
-        OrderBan::Core => host
-            .session()
-            .write_core_blacklist(core, &order.coin, false),
+        OrderBan::Core => return write_core_list(host, core, &order.coin, false),
         OrderBan::Strategy => {
             let listed =
                 order.strat_id != 0 && host.session().strategy_has_blacklist(core, order.strat_id);
             if !listed {
-                return Err(Refusal::NotFound);
+                return Err(Refusal::NoList);
             }
             host.session()
                 .write_strategy_blacklist(core, order.strat_id, &order.coin, false)

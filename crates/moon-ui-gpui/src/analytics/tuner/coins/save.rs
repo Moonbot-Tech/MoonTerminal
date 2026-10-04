@@ -44,7 +44,7 @@ use super::super::shared::SaveTarget;
 
 /// The strategy parameters this axis edits. Also the fields' on-screen labels — the names the
 /// user knows from Moonbot — so a label and the written key cannot drift apart.
-pub(super) const FIELD: &str = "CoinsBlackList";
+pub(super) const FIELD: &str = moon_core::feed::FIELD_COINS_BLACK_LIST;
 pub(super) const WHITE_FIELD: &str = "CoinsWhiteList";
 
 /// How many dropped coins the warning names before it stops counting them out. Enough to

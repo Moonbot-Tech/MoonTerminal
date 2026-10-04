@@ -2,6 +2,20 @@
 //! channel, plus read-only manager accessors (`store`, `sessions`, `market_source`, etc.).
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// How long a blacklist this process sent may stand in for the core's echo of it; well past the
+/// round trip. Past it the store is trusted even if the echo never came.
+const BLACKLIST_ECHO_WAIT: Duration = Duration::from_secs(15);
+
+/// One coin blacklist this process sent: the switch and text it wrote, the switch and text the
+/// store held when it did, and when. For a strategy's list the switch is always `true`.
+#[derive(Clone, Debug)]
+pub(super) struct SentBlacklist {
+    before: (bool, String),
+    sent: (bool, String),
+    at: Instant,
+}
 
 use anyhow::{Result, anyhow};
 
@@ -1165,7 +1179,8 @@ impl SessionManager {
     /// nothing sends nothing.
     ///
     /// Args:
-    ///     core: Core whose list is rewritten, from the settings it last sent.
+    ///     core: Core whose list is rewritten: from the settings it last sent, or from what this
+    ///         process sent while the core has not echoed it ([`Self::blacklist_base`]).
     ///     coin: The core's spelling of the coin ([`crate::symbol::coin_list`]).
     ///     lift: Take the coin off instead of putting it on.
     ///
@@ -1173,21 +1188,84 @@ impl SessionManager {
     ///     Whether a command was sent.
     ///
     /// Errors:
-    ///     The core's command channel refused it.
+    ///     An empty coin; a core that has not sent its settings yet; the core's command channel
+    ///     refused it.
     pub fn write_core_blacklist(&self, core: CoreId, coin: &str, lift: bool) -> Result<bool> {
-        let (enabled, text) = self
+        if coin.trim().is_empty() {
+            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        }
+        // Without the core's own settings there is no list to edit: rewriting it from nothing
+        // would replace every coin already on it with this one.
+        let Some((enabled, stored)) = self
             .store()
             .core(core)
             .and_then(|data| data.client_settings.as_ref())
             .map(|cs| (cs.use_blacklist, cs.blacklist_text.clone()))
-            .unwrap_or((false, String::new()));
-        let new = crate::symbol::coin_list::edit(&text, coin, lift);
-        if lift && new == text {
+        else {
+            return Err(anyhow!(
+                "core {core} has not sent its settings yet: blacklist not written"
+            ));
+        };
+        let key = (core, None);
+        let in_store = (enabled, stored);
+        let (enabled, base) = self.blacklist_base(key, &in_store);
+        let new = crate::symbol::coin_list::edit(&base, coin, lift);
+        // Nothing to change — a lift of an unlisted coin, an add of a listed one on a list
+        // already on.
+        if new == base && (lift || enabled) {
             return Ok(false);
         }
         let on = if lift { enabled } else { true };
-        self.set_blacklist(core, on, new)?;
+        self.set_blacklist(core, on, new.clone())?;
+        self.note_blacklist_sent(key, in_store, (on, new));
         Ok(true)
+    }
+
+    /// The switch and list a one-coin edit of `key` starts from: what this process sent last,
+    /// while the store still holds what it held then (the echo is not in yet) and within
+    /// [`BLACKLIST_ECHO_WAIT`]; otherwise what the store holds — the echo, or a change made
+    /// elsewhere, which an edit from the sent list would revert.
+    fn blacklist_base(
+        &self,
+        key: (CoreId, Option<u64>),
+        in_store: &(bool, String),
+    ) -> (bool, String) {
+        let sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match sent.get(&key) {
+            Some(entry)
+                if entry.at.elapsed() < BLACKLIST_ECHO_WAIT && entry.before == *in_store =>
+            {
+                entry.sent.clone()
+            }
+            _ => in_store.clone(),
+        }
+    }
+
+    /// Remember what was just sent for `key` and what the store held when it was, for
+    /// [`Self::blacklist_base`]. A pending entry keeps its `before`: the store has not moved
+    /// since that first send.
+    fn note_blacklist_sent(
+        &self,
+        key: (CoreId, Option<u64>),
+        in_store: (bool, String),
+        sent_now: (bool, String),
+    ) {
+        let mut sent = self
+            .blacklists_sent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sent.retain(|_, entry| entry.at.elapsed() < BLACKLIST_ECHO_WAIT);
+        sent.insert(
+            key,
+            SentBlacklist {
+                before: in_store,
+                sent: sent_now,
+                at: Instant::now(),
+            },
+        );
     }
 
     /// Put one coin on a strategy's `CoinsBlackList`, or with `lift` take it off, through the
@@ -1206,7 +1284,7 @@ impl SessionManager {
     ///     Whether an edit was sent.
     ///
     /// Errors:
-    ///     The core's command channel refused it.
+    ///     An empty coin; the core's command channel refused it.
     pub fn write_strategy_blacklist(
         &self,
         core: CoreId,
@@ -1225,17 +1303,24 @@ impl SessionManager {
                     .map(|(_, value)| value.clone())
             })
             .unwrap_or_default();
-        let new = crate::symbol::coin_list::edit(&current, coin, lift);
-        if new == current {
+        if coin.trim().is_empty() {
+            return Err(anyhow!("an empty coin is not a blacklist entry"));
+        }
+        let key = (core, Some(strategy));
+        let in_store = (true, current);
+        let (_, base) = self.blacklist_base(key, &in_store);
+        let new = crate::symbol::coin_list::edit(&base, coin, lift);
+        if new == base {
             return Ok(false);
         }
         self.edit_strategies(
             core,
             vec![(
                 strategy,
-                vec![(crate::feed::FIELD_COINS_BLACK_LIST.to_string(), new)],
+                vec![(crate::feed::FIELD_COINS_BLACK_LIST.to_string(), new.clone())],
             )],
         )?;
+        self.note_blacklist_sent(key, in_store, (true, new));
         Ok(true)
     }
 

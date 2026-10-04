@@ -50,8 +50,10 @@ pub enum ControlSwitch {
 }
 
 /// What a button of the bot's Control section asks for. A command that can lose money or stop
-/// trading carries `confirmed`: the first press shows a confirmation, whose button sends the same
-/// action confirmed. A command names the state it sets, as a Settings switch does.
+/// trading everywhere carries `confirmed` — panic sells, cancel all, and starting or stopping all
+/// cores (one core's run switch carries the field but does not ask): the first press shows a
+/// confirmation, whose button sends the same action confirmed. A command names the state it
+/// sets, as a Settings switch does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlAction {
     /// The cores, one page of them, with "all cores".
@@ -107,7 +109,7 @@ pub enum ControlAction {
 pub enum OrderBan {
     /// The core's own list.
     Core,
-    /// The `CoinsBlackList` of the strategy that placed the order.
+    /// The `CoinsBlackList` of the strategy that placed the order; a manual order has none.
     Strategy,
     /// The core's temporary list, keyed by the order's market, for this span.
     Temp(crate::config::TempBanSpan),

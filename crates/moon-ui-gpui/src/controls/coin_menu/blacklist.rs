@@ -21,8 +21,7 @@ use moon_core::session::CoreId;
 
 use super::{
     CoinMenuCtx, blacklist_contains, core_blacklist, strategy_blacklist,
-    strategy_has_blacklist_field, workspace_action_allows_cores, write_core_blacklist,
-    write_strategy_blacklist,
+    workspace_action_allows_cores, write_core_blacklist, write_strategy_blacklist,
 };
 use crate::Backend;
 use crate::display_text::fmt_ban_left;
@@ -67,7 +66,7 @@ pub(super) fn permanent_blacklist_item(
     // Only when the strategy's own schema carries the field: without it the edit is discarded by
     // the view editor without a word, so the row would promise something that cannot happen.
     if let Some(sid) = ctx.strat_id
-        && strategy_has_blacklist_field(b, core, sid)
+        && b.session.strategy_has_blacklist(core, sid)
     {
         let label = match ctx.strat_name.as_deref().filter(|name| !name.is_empty()) {
             Some(name) => t!("coin_menu.target_strategy", name = name.to_string()).to_string(),
@@ -87,7 +86,7 @@ pub(super) fn permanent_blacklist_item(
                     for &core in cores {
                         // Re-checked inside the click for the same reason the workspace is:
                         // the schema can change between the menu opening and the press.
-                        if strategy_has_blacklist_field(b, core, sid) {
+                        if b.session.strategy_has_blacklist(core, sid) {
                             let lift = blacklist_contains(&strategy_blacklist(b, core, sid), &coin);
                             write_strategy_blacklist(b, core, sid, &coin, lift);
                         }

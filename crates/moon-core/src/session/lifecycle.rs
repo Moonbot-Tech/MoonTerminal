@@ -125,6 +125,7 @@ impl SessionManager {
             market_source.init_kline_cache(crate::config::paths::klines_db_path());
         }
         let mut mgr = Self {
+            blacklists_sent: std::sync::Mutex::new(HashMap::new()),
             trade_sounds: Vec::new(),
             trade_sound_epochs: HashMap::new(),
             sessions: Vec::new(),

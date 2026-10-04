@@ -120,42 +120,52 @@ fn mini_owner_rejects_viewer_and_absent_grant() {
     );
 }
 
-/// `moon-tg mini_app/commands.rs:mini_cancel_order` must return NotFound
-/// for an unlisted uid before `session.cancel_order`.
+/// `moon-tg control.rs:cancel_order` — the Mini App's cancel and the chat's alike — must refuse
+/// an unlisted uid before `session.cancel_order`.
 ///
 /// Mutation: delete the `order.uid == uid` miss. The uid is then sent to the
 /// core even though the open-order list the page showed did not contain it.
 #[test]
 fn mini_cancel_unlisted_uid_is_not_sent() {
-    let source = read_tg_src("mini_app/commands.rs");
-    let body = braced_body(&source, "fn mini_cancel_order(");
+    let commands = read_tg_src("mini_app/commands.rs");
+    assert!(
+        braced_body(&commands, "fn mini_cancel_order(").contains("control::cancel_order("),
+        "the Mini App's cancel must go through the shared owner command"
+    );
+    let source = read_tg_src("control.rs");
+    let body = braced_body(&source, "fn cancel_order(");
     let listed = body
         .find("order.uid == uid")
         .expect("cancel must decide from the open-order uid");
     let miss = body[listed..]
-        .find("return Ok(command_miss(CommandErrorDto::NotFound))")
+        .find("return Err(Refusal::NotFound)")
         .map(|offset| listed + offset);
-    let send = body.find("host.session_mut().cancel_order(");
+    let send = body.find(".cancel_order(core, uid)");
     assert!(
         miss.is_some() && send.is_some() && miss.unwrap() < send.unwrap(),
         "an unlisted uid must return NotFound before session.cancel_order, so nothing is sent"
     );
 }
 
-/// `moon-tg mini_app/commands.rs:mini_panic_sell` must return NotFound
-/// when the market is not on that core's open orders, before any toggle.
+/// `moon-tg control.rs:panic_market`, behind the Mini App's Panic Sell, must refuse a market
+/// that is not on that core's open orders, before any toggle.
 ///
 /// Mutation: delete the `order.market == market` miss. Panic Sell is then
 /// toggled for a market the page did not list.
 #[test]
 fn mini_panic_unlisted_market_is_not_sent() {
-    let source = read_tg_src("mini_app/commands.rs");
-    let body = braced_body(&source, "fn mini_panic_sell(");
+    let commands = read_tg_src("mini_app/commands.rs");
+    assert!(
+        braced_body(&commands, "fn mini_panic_sell(").contains("control::panic_market("),
+        "the Mini App's Panic Sell must go through the shared owner command"
+    );
+    let source = read_tg_src("control.rs");
+    let body = braced_body(&source, "fn panic_market(");
     let listed = body
         .find("order.market == market")
         .expect("panic must decide from the open-order market");
     let miss = body[listed..]
-        .find("return Ok(command_miss(CommandErrorDto::NotFound))")
+        .find("return Err(Refusal::NotFound)")
         .map(|offset| listed + offset);
     let toggle = body.find("host.toggle_panic_sell(");
     assert!(
@@ -164,21 +174,21 @@ fn mini_panic_unlisted_market_is_not_sent() {
     );
 }
 
-/// `moon-tg mini_app/commands.rs:mini_panic_sell` must return success
-/// without toggling when the market is already in the asked state.
+/// `moon-tg control.rs:panic_market` must return success without toggling when the market is
+/// already in the asked state.
 ///
-/// Mutation: delete the `is_panic_armed(core, &market) == on` return. A second
+/// Mutation: delete the `is_panic_armed(core, market) == on` return. A second
 /// tap sends another toggle and flips Panic Sell back off, or on, against the
 /// state the page just showed.
 #[test]
 fn mini_panic_already_armed_does_not_toggle() {
-    let source = read_tg_src("mini_app/commands.rs");
-    let body = braced_body(&source, "fn mini_panic_sell(");
+    let source = read_tg_src("control.rs");
+    let body = braced_body(&source, "fn panic_market(");
     let already = body
-        .find("host.is_panic_armed(core, &market) == on")
+        .find("host.is_panic_armed(core, market) == on")
         .expect("panic must compare the asked state with the armed state");
     let hit = body[already..]
-        .find("return Ok(command_hit(Some(on)))")
+        .find("return Ok(on)")
         .map(|offset| already + offset);
     let toggle = body.find("host.toggle_panic_sell(");
     assert!(
@@ -238,30 +248,28 @@ fn visible_cores_empty_viewer_grant_matches_nothing() {
     );
 }
 
-/// `moon-tg mini_app/commands.rs:mini_cancel_order` must send through
-/// `session.cancel_order`.
+/// `moon-tg control.rs:cancel_order` must send through `session.cancel_order`.
 ///
-/// Mutation: replace `host.session_mut().cancel_order(core, uid)` with `Ok(())`. The
+/// Mutation: replace the `cancel_order(core, uid)` call with `Ok(())`. The
 /// page reports the order cancelled and the core never receives the cancel.
 #[test]
 fn mini_cancel_goes_through_session_cancel_order() {
-    let source = read_tg_src("mini_app/commands.rs");
-    let body = braced_body(&source, "fn mini_cancel_order(");
+    let source = read_tg_src("control.rs");
+    let body = braced_body(&source, "fn cancel_order(");
     assert!(
-        body.contains("host.session_mut().cancel_order("),
-        "Mini App cancel must call session.cancel_order"
+        body.contains("host.session_mut()") && body.contains(".cancel_order(core, uid)"),
+        "the owner's cancel must call session.cancel_order"
     );
 }
 
-/// `moon-tg mini_app/commands.rs:mini_panic_sell` must send through
-/// `toggle_panic_sell`.
+/// `moon-tg control.rs:panic_market` must send through `toggle_panic_sell`.
 ///
-/// Mutation: replace `host.toggle_panic_sell(core, market.clone())` with `true`.
+/// Mutation: replace the `host.toggle_panic_sell(..)` call with `true`.
 /// The page reports Panic Sell changed and the market's armed state does not.
 #[test]
 fn mini_panic_goes_through_toggle_panic_sell() {
-    let source = read_tg_src("mini_app/commands.rs");
-    let body = braced_body(&source, "fn mini_panic_sell(");
+    let source = read_tg_src("control.rs");
+    let body = braced_body(&source, "fn panic_market(");
     assert!(
         body.contains("host.toggle_panic_sell("),
         "Mini App panic must call toggle_panic_sell"

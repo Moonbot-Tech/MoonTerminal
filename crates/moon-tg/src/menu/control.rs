@@ -5,12 +5,17 @@
 //! through the shared command module ([`crate::control`]) — the same owner check, choice of cores
 //! and session calls as the Mini App's — and its card comes back with what happened on top. What
 //! can lose money or stop trading everywhere asks first: the press shows a confirmation whose
-//! button sends the same action confirmed.
+//! button sends the same action confirmed — taken once, from this chat, within two minutes of the
+//! question, so a stale or second press asks again rather than acting.
+//!
+//! The section is the owner's and exists only while shown in the bot's menu: hidden, `/control`
+//! and its buttons answer that it is off. Every command is logged with the chat that sent it.
 
 use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 use moon_core::config::TempBanSpan;
+use moon_core::config::telegram_menu::MenuItem;
 use moon_core::session::{CoreId, RunSwitch};
 use moon_core::telegram::api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup};
 use moon_core::telegram::menu_action::{
@@ -34,7 +39,7 @@ const STRATEGY_PAGE: usize = 12;
 /// A screen: its title, its lines, its buttons.
 type Rendered = (String, Vec<String>, Vec<Vec<InlineKeyboardButton>>);
 
-/// How long a question for a coin stands.
+/// How long a question — a coin to type, a command to confirm — stands.
 const ASK_FOR: Duration = Duration::from_secs(120);
 
 /// Longest coin a blacklist answer may name, in characters.
@@ -51,8 +56,44 @@ pub(super) fn run(
     if !matches!(action, ControlAction::AskCoin { .. }) {
         host.state_mut().awaiting_coin.remove(&chat);
     }
+    if !shown(host) {
+        send(host, hidden(), reply);
+        return;
+    }
+    if is_command(action) {
+        log::info!("telegram control: chat {chat} {action:?}");
+    }
     let rendered = screen(host, chat, action);
     send(host, rendered, reply);
+}
+
+/// Whether the bot's menu shows the section: hidden, nothing in it runs.
+fn shown(host: &dyn TgHost) -> bool {
+    host.config().telegram.bot.menu.shows(MenuItem::Control)
+}
+
+/// The answer while the section is hidden.
+fn hidden() -> Rendered {
+    (
+        t!("telegram.button_control").to_string(),
+        vec![t!("telegram.control.hidden").to_string()],
+        Vec::new(),
+    )
+}
+
+/// Whether `action` changes something on a core, as opposed to showing a screen.
+fn is_command(action: ControlAction) -> bool {
+    use ControlAction as A;
+    !matches!(
+        action,
+        A::Cores(_)
+            | A::Core(_)
+            | A::All
+            | A::Orders { .. }
+            | A::Order { .. }
+            | A::Strategies { .. }
+            | A::AskCoin { .. }
+    )
 }
 
 /// Take a chat's plain text as the coin a question asked for, and put it on (or take it off) the
@@ -66,26 +107,116 @@ pub(super) fn answer_text(
     text: &str,
     reply: &SyncSender<Response>,
 ) -> bool {
-    let Some((core, lift, until)) = host.state_mut().awaiting_coin.remove(&chat) else {
+    let Some(&(core, lift, until)) = host.state().awaiting_coin.get(&chat) else {
         return false;
     };
-    if Instant::now() >= until {
+    // A question outlived, or asked of a chat that is no longer the owner, or of a section since
+    // hidden, takes nothing: the text is answered as any unknown one.
+    if Instant::now() >= until || !control::is_owner(host, chat) || !shown(host) {
+        host.state_mut().awaiting_coin.remove(&chat);
         return false;
     }
+    // Answered, well or not: a question left open would take the next word typed — "cancel",
+    // say — as a coin, and an add switches a disabled list on.
+    host.state_mut().awaiting_coin.remove(&chat);
     let coin = text.trim();
-    let said = if !valid_coin(coin) {
-        t!("telegram.control.bad_coin").to_string()
-    } else {
-        match control::core_blacklist(host, chat, core, coin, lift) {
-            Ok(true) if lift => t!("telegram.control.coin_lifted", coin = coin).to_string(),
-            Ok(true) => t!("telegram.control.coin_banned", coin = coin).to_string(),
-            Ok(false) if lift => t!("telegram.control.coin_not_listed", coin = coin).to_string(),
-            Ok(false) => t!("telegram.control.already_banned").to_string(),
-            Err(refusal) => refusal_text(refusal),
-        }
+    if !valid_coin(coin) {
+        let rendered = core_card(
+            host,
+            core,
+            Some(t!("telegram.control.bad_coin").to_string()),
+        );
+        send(host, rendered, reply);
+        return true;
+    }
+    let result = control::core_blacklist(host, chat, core, coin, lift);
+    log::info!(
+        "telegram control: chat {chat} core {core} blacklist {coin} lift={lift} -> {result:?}"
+    );
+    let said = match result {
+        Ok(true) if lift => t!("telegram.control.coin_lifted", coin = coin).to_string(),
+        Ok(true) => t!("telegram.control.coin_banned", coin = coin).to_string(),
+        Ok(false) if lift => t!("telegram.control.coin_not_listed", coin = coin).to_string(),
+        Ok(false) => t!("telegram.control.already_banned").to_string(),
+        Err(refusal) => refusal_text(refusal),
     };
     send(host, core_card(host, core, Some(said)), reply);
     true
+}
+
+/// The question for a coin: which one, how to spell it, and the way back.
+fn ask_coin(host: &dyn TgHost, core: CoreId, lift: bool, said: Option<String>) -> Rendered {
+    let question = match lift {
+        true => t!("telegram.control.ask_coin_lift", core = name(host, core)),
+        false => t!("telegram.control.ask_coin_ban", core = name(host, core)),
+    };
+    let mut lines: Vec<String> = said.into_iter().collect();
+    lines.push(question.to_string());
+    lines.push(t!("telegram.control.ask_coin_hint").to_string());
+    (
+        t!("telegram.control.blacklist").to_string(),
+        lines,
+        vec![vec![button(
+            format!("\u{274c} {}", t!("telegram.control.cancel")),
+            ControlAction::Core(core),
+        )]],
+    )
+}
+
+/// Whether `action` is a confirmed press this chat was asked for, within [`ASK_FOR`]: taken once.
+/// An unconfirmed press, a stale one, or one this chat was not asked for is not.
+fn take_confirmation(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> bool {
+    if confirmed_form(action, false) == action {
+        return false;
+    }
+    match host.state_mut().awaiting_confirm.remove(&chat) {
+        Some((asked, until)) => asked == action && Instant::now() < until,
+        None => false,
+    }
+}
+
+/// Ask this chat to confirm `action`: remember the confirmed press it may send, and show the
+/// question.
+fn ask(
+    host: &mut dyn TgHost,
+    chat: i64,
+    question: String,
+    action: ControlAction,
+    back: ControlAction,
+) -> Rendered {
+    let confirmed = confirmed_form(action, true);
+    host.state_mut()
+        .awaiting_confirm
+        .insert(chat, (confirmed, Instant::now() + ASK_FOR));
+    confirm(question, confirmed, back)
+}
+
+/// `action` with its `confirmed` flag set to `value`; an action without one, unchanged.
+fn confirmed_form(action: ControlAction, value: bool) -> ControlAction {
+    match action {
+        ControlAction::Run {
+            target, switch, on, ..
+        } => ControlAction::Run {
+            target,
+            switch,
+            on,
+            confirmed: value,
+        },
+        ControlAction::CancelAll { core, .. } => ControlAction::CancelAll {
+            core,
+            confirmed: value,
+        },
+        ControlAction::PanicAll { target, .. } => ControlAction::PanicAll {
+            target,
+            confirmed: value,
+        },
+        ControlAction::OrderPanic { core, uid, .. } => ControlAction::OrderPanic {
+            core,
+            uid,
+            confirmed: value,
+        },
+        other => other,
+    }
 }
 
 /// Whether `coin` can be a coin token: one word of letters, digits, `_`, `-` or `.`, at most
@@ -124,18 +255,15 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
         A::Core(core) => core_card(host, core, None),
         A::All => all_card(host, None),
         A::Run {
-            target,
-            switch,
-            on,
-            confirmed,
+            target, switch, on, ..
         } => {
-            if target == ControlTarget::All && !confirmed {
+            if target == ControlTarget::All && !take_confirmation(host, chat, action) {
                 let count = control::owner_cores(host).len();
                 let question = match on {
                     true => t!("telegram.control.confirm_start_all", n = count),
                     false => t!("telegram.control.confirm_stop_all", n = count),
                 };
-                return confirm(question.to_string(), action, ControlAction::All);
+                return ask(host, chat, question.to_string(), action, ControlAction::All);
             }
             let run_switch = match switch {
                 ControlSwitch::Trading => RunSwitch::Trading,
@@ -143,7 +271,11 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
             };
             match target {
                 ControlTarget::Core(core) => {
-                    let said = said(control::run_one(host, chat, core, run_switch, on));
+                    let said = match control::run_one(host, chat, core, run_switch, on) {
+                        Ok(true) => t!("telegram.control.sent").to_string(),
+                        Ok(false) => t!("telegram.control.already").to_string(),
+                        Err(refusal) => refusal_text(refusal),
+                    };
                     core_card(host, core, Some(said))
                 }
                 ControlTarget::All => {
@@ -166,19 +298,25 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                 }
             }
         }
-        A::CancelAll { core, confirmed } => {
-            if !confirmed {
+        A::CancelAll { core, .. } => {
+            if !take_confirmation(host, chat, action) {
                 let question = t!(
                     "telegram.control.confirm_cancel_all",
                     core = name(host, core)
                 );
-                return confirm(question.to_string(), action, ControlAction::Core(core));
+                return ask(
+                    host,
+                    chat,
+                    question.to_string(),
+                    action,
+                    ControlAction::Core(core),
+                );
             }
             let said = said(control::cancel_all(host, chat, core));
             core_card(host, core, Some(said))
         }
-        A::PanicAll { target, confirmed } => {
-            if !confirmed {
+        A::PanicAll { target, .. } => {
+            if !take_confirmation(host, chat, action) {
                 let (question, back) = match target {
                     ControlTarget::Core(core) => (
                         t!("telegram.control.confirm_panic", core = name(host, core)),
@@ -188,7 +326,7 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
                         (t!("telegram.control.confirm_panic_all"), ControlAction::All)
                     }
                 };
-                return confirm(question.to_string(), action, back);
+                return ask(host, chat, question.to_string(), action, back);
             }
             let cores: Vec<CoreId> = match target {
                 ControlTarget::Core(core) => vec![core],
@@ -227,43 +365,33 @@ fn screen(host: &mut dyn TgHost, chat: i64, action: ControlAction) -> Rendered {
             host.state_mut()
                 .awaiting_coin
                 .insert(chat, (core, lift, Instant::now() + ASK_FOR));
-            let question = match lift {
-                true => t!("telegram.control.ask_coin_lift", core = name(host, core)),
-                false => t!("telegram.control.ask_coin_ban", core = name(host, core)),
-            };
-            (
-                t!("telegram.control.blacklist").to_string(),
-                vec![
-                    question.to_string(),
-                    t!("telegram.control.ask_coin_hint").to_string(),
-                ],
-                vec![vec![button(
-                    format!("\u{274c} {}", t!("telegram.control.cancel")),
-                    ControlAction::Core(core),
-                )]],
-            )
+            ask_coin(host, core, lift, None)
         }
         A::Strategies { core, page } => strategies(host, core, usize::from(page), None),
         A::StrategyToggle { core, id, on, page } => {
-            let said = match control::strategy_toggle(host, chat, core, id, on) {
-                Ok(()) => None,
-                Err(refusal) => Some(refusal_text(refusal)),
+            // The Mini App sends to a core however it is; the chat says plainly that it is not
+            // connected rather than showing a mark that later reverts.
+            let said = if !host.session().core_run_state(core).online {
+                Some(refusal_text(Refusal::Offline))
+            } else {
+                match control::strategy_toggle(host, chat, core, id, on) {
+                    Ok(()) => None,
+                    Err(refusal) => Some(refusal_text(refusal)),
+                }
             };
             strategies(host, core, usize::from(page), said)
         }
         A::Orders { core, page } => orders(host, core, usize::from(page), None),
         A::Order { core, uid } => order_card(host, core, uid, None),
-        A::OrderPanic {
-            core,
-            uid,
-            confirmed,
-        } => {
-            if !confirmed {
+        A::OrderPanic { core, uid, .. } => {
+            if !take_confirmation(host, chat, action) {
                 let coin = control::open_order(host, core, uid)
                     .map(|order| order.coin)
                     .unwrap_or_default();
                 let question = t!("telegram.control.confirm_order_panic", coin = coin);
-                return confirm(
+                return ask(
+                    host,
+                    chat,
                     question.to_string(),
                     action,
                     ControlAction::Order { core, uid },
@@ -307,8 +435,16 @@ fn refusal_text(refusal: Refusal) -> String {
         Refusal::NotFound => t!("telegram.mini_cmd_core_not_found"),
         Refusal::Offline => t!("telegram.mini_cmd_offline"),
         Refusal::Unavailable => t!("telegram.control.not_sent"),
+        Refusal::NotReady => t!("telegram.control.not_ready"),
+        Refusal::NoList => t!("telegram.control.no_list"),
     }
     .to_string()
+}
+
+/// On a light station, why the cards are empty: it keeps no orders, strategies or run state.
+fn light_station() -> Option<String> {
+    (moon_core::feed::station::profile() == Some(moon_core::feed::station::Profile::Reports))
+        .then(|| t!("telegram.control.light_station").to_string())
 }
 
 /// A core's name as the owner sees it, or its id.
@@ -327,30 +463,7 @@ fn button(text: String, action: ControlAction) -> InlineKeyboardButton {
 
 /// The confirmation of `action`: the question, and the buttons that send it confirmed or go back.
 fn confirm(question: String, action: ControlAction, back: ControlAction) -> Rendered {
-    let confirmed = match action {
-        ControlAction::Run {
-            target, switch, on, ..
-        } => ControlAction::Run {
-            target,
-            switch,
-            on,
-            confirmed: true,
-        },
-        ControlAction::CancelAll { core, .. } => ControlAction::CancelAll {
-            core,
-            confirmed: true,
-        },
-        ControlAction::PanicAll { target, .. } => ControlAction::PanicAll {
-            target,
-            confirmed: true,
-        },
-        ControlAction::OrderPanic { core, uid, .. } => ControlAction::OrderPanic {
-            core,
-            uid,
-            confirmed: true,
-        },
-        other => other,
-    };
+    let confirmed = confirmed_form(action, true);
     (
         t!("telegram.control.confirm_title").to_string(),
         vec![question],
@@ -379,10 +492,7 @@ fn cores(host: &dyn TgHost, page: usize, said: Option<String>) -> Rendered {
     } else {
         lines.push(t!("telegram.control.pick").to_string());
     }
-    // A light station keeps no orders, strategies or run state: say why the cards are empty.
-    if moon_core::feed::station::profile() == Some(moon_core::feed::station::Profile::Reports) {
-        lines.push(t!("telegram.control.light_station").to_string());
-    }
+    lines.extend(light_station());
     for (core, core_name) in all.iter().skip(page * PAGE).take(PAGE) {
         let state = host.session().core_run_state(*core);
         rows.push(vec![button(
@@ -436,8 +546,9 @@ fn on_off(value: Option<bool>) -> String {
 /// One core's card: its link, switches and open positions, and its commands.
 fn core_card(host: &dyn TgHost, core: CoreId, said: Option<String>) -> Rendered {
     let state = host.session().core_run_state(core);
-    let positions = control::open_position_markets(host, core).len();
+    let positions = control::open_position_markets(host, core, false).len();
     let mut lines: Vec<String> = said.into_iter().collect();
+    lines.extend(light_station());
     lines.push(match state.online {
         true => format!("\u{1f7e2} {}", t!("telegram.control.online")),
         false => format!("\u{1f534} {}", t!("telegram.control.offline")),
@@ -782,6 +893,7 @@ fn all_card(host: &dyn TgHost, said: Option<String>) -> Rendered {
         .filter(|state| state.trading == Some(true))
         .count();
     let mut lines: Vec<String> = said.into_iter().collect();
+    lines.extend(light_station());
     lines.push(
         t!(
             "telegram.control.cores_count",

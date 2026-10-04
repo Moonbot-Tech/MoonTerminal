@@ -19,7 +19,9 @@ fn miss(refusal: Refusal) -> CommandResultDto {
     command_miss(match refusal {
         Refusal::NotFound => CommandErrorDto::NotFound,
         Refusal::Offline => CommandErrorDto::Offline,
-        Refusal::Unavailable | Refusal::NotOwner => CommandErrorDto::Unavailable,
+        Refusal::Unavailable | Refusal::NotOwner | Refusal::NotReady | Refusal::NoList => {
+            CommandErrorDto::Unavailable
+        }
     })
 }
 
@@ -97,7 +99,7 @@ pub(super) fn mini_core_switch(
     mini_owner(host, chat_id)?;
     Ok(
         match control::run_one(host, chat_id, core, run_switch(switch), on) {
-            Ok(()) => command_hit(None),
+            Ok(_) => command_hit(None),
             Err(refusal) => miss(refusal),
         },
     )

@@ -38,7 +38,7 @@ mod tests;
 /// Strategy field holding the coins a strategy is limited to; empty means "every coin".
 pub(super) const WHITE_FIELD: &str = "CoinsWhiteList";
 /// Strategy field holding the coins a strategy never trades.
-pub(super) const BLACK_FIELD: &str = "CoinsBlackList";
+pub(super) const BLACK_FIELD: &str = moon_core::feed::FIELD_COINS_BLACK_LIST;
 
 /// One selected strategy, reduced to what the distribution reads.
 #[derive(Clone, Debug)]

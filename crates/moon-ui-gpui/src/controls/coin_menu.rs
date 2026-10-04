@@ -421,12 +421,6 @@ fn strategy_blacklist(b: &Backend, core: CoreId, sid: u64) -> String {
         .unwrap_or_default()
 }
 
-/// Returns whether the strategy-kind schema identified by `kind_ordinal` contains
-/// `CoinsBlackList`. Without it, the field edit would be silently ignored, so the entry is hidden.
-fn strategy_has_blacklist_field(b: &Backend, core: CoreId, sid: u64) -> bool {
-    b.session.strategy_has_blacklist(core, sid)
-}
-
 /// Writes one token onto or off the strategy's `CoinsBlackList` through the shared field editor.
 ///
 /// The coin menu has no window of its own, so it cannot report a non-clean outcome directly: a
