@@ -2,6 +2,97 @@ use moon_core::config::telegram_access::TelegramChatAccess;
 
 use super::*;
 
+/// Decode the actual tagged API request so serde buffering cannot hide omitted bot fields.
+fn wire_edit(base: serde_json::Value, access: serde_json::Value) -> (Access, Access) {
+    let request: moon_core::station_api::Request = serde_json::from_value(serde_json::json!({
+        "cmd": "access.set", "base": base, "access": access
+    }))
+    .unwrap();
+    match request {
+        moon_core::station_api::Request::AccessSet { base, access } => (*base, *access),
+        _ => panic!("expected access.set"),
+    }
+}
+
+/// Whole-value replacement or comparing defaulted base fields would erase/refuse an old client's edit.
+#[test]
+fn an_old_terminal_save_keeps_layout_and_unknown_station_settings() {
+    let current: Access = serde_json::from_value(serde_json::json!({
+        "bot": {"report_view": "cores", "period_basis": "open",
+            "message_layout": {"card": {"coin_hashtag": false}}, "future_option": {"value": 42}}
+    }))
+    .unwrap();
+    let (base, change) = wire_edit(
+        serde_json::json!({"bot": {"report_view": "cores"}}),
+        serde_json::json!({"bot": {"report_view": "exchanges"}}),
+    );
+    let saved = plan_access(&current, None, &base, change).unwrap();
+    let path = scratch("old-bot-fields");
+    write_pairing(&path, &saved).unwrap();
+    let back = load_pairing(&path).unwrap();
+    let bot = back.bot.unwrap();
+    assert!(!bot.message_layout.card.coin_hashtag);
+    assert_eq!(
+        bot.period_basis,
+        moon_core::config::telegram_menu::ReportBasis::Open
+    );
+    assert_eq!(
+        bot.report_view,
+        moon_core::config::telegram_menu::ReportView::Exchanges
+    );
+    assert_eq!(
+        bot.extensions.extra["future_option"],
+        serde_json::json!({"value": 42})
+    );
+    let mut config = moon_core::config::TelegramConfig::default();
+    saved.apply_to(&mut config);
+    assert!(!config.bot.message_layout.card.coin_hashtag);
+}
+
+/// Preserving everything unconditionally would ignore explicit layout resets and unknown-key updates.
+#[test]
+fn supplied_layout_and_unknown_keys_replace_and_round_trip() {
+    let current: Access = serde_json::from_value(serde_json::json!({
+        "bot": {"message_layout": {"card": {"coin_hashtag": false}}, "future_option": 42}
+    }))
+    .unwrap();
+    let (base, change) = wire_edit(
+        serde_json::json!({"bot": {"report_view": "exchanges"}}),
+        serde_json::json!({"bot": {"message_layout": {}, "future_option": null,
+            "another_future_key": [1, 2, 3]}}),
+    );
+    let saved = plan_access(&current, None, &base, change).unwrap();
+    let path = scratch("explicit-bot-fields");
+    write_pairing(&path, &saved).unwrap();
+    let back = load_pairing(&path).unwrap();
+    let json = serde_json::to_value(back).unwrap();
+    assert_eq!(json["bot"]["message_layout"]["card"]["coin_hashtag"], true);
+    assert!(json["bot"]["future_option"].is_null());
+    assert_eq!(
+        json["bot"]["another_future_key"],
+        serde_json::json!([1, 2, 3])
+    );
+}
+
+/// Ignoring the complete base would accept concurrent edits to fields the old terminal did read.
+#[test]
+fn partial_bot_base_still_rejects_changes_to_known_fields() {
+    let current: Access = serde_json::from_value(serde_json::json!({
+        "bot": {"report_view": "cores", "future_option": 2}
+    }))
+    .unwrap();
+    for old_bot in [
+        serde_json::json!({"report_view": "exchanges"}),
+        serde_json::json!({"future_option": 1}),
+    ] {
+        let (base, change) = wire_edit(
+            serde_json::json!({"bot": old_bot}),
+            serde_json::json!({"bot": {}}),
+        );
+        assert!(plan_access(&current, None, &base, change).is_err());
+    }
+}
+
 fn scratch(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("moon-station-tg-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

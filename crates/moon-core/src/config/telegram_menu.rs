@@ -12,6 +12,8 @@
 
 use super::telegram_layout::MessageLayout;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::{BTreeMap, BTreeSet};
+use std::hash::{Hash, Hasher};
 
 /// One button the bot's menu can hold: an action or a section with its own inline menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -439,8 +441,9 @@ id_serde!(ReportView);
 id_serde!(ReportBasis);
 
 /// The bot's own settings: its menu and how its reports read. Every field defaults, so a
-/// configuration saved before they existed loads with the bot as it was.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// configuration saved before they existed loads with the bot as it was. Unknown keys survive
+/// storage, and incoming field presence lets the station preserve settings an older sender lacks.
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct BotSettings {
     /// The view a report opens in.
     #[serde(default)]
@@ -452,9 +455,123 @@ pub struct BotSettings {
     /// Boxed to keep station reply variants small as appearance preferences grow.
     #[serde(default)]
     pub message_layout: Box<MessageLayout>,
-    /// The menu. Kept last: TOML writes a table after the plain values.
+    /// The menu follows the layout tables in TOML storage.
     #[serde(default)]
     pub menu: BotMenu,
+    /// Opaque preferences and transport metadata, boxed together to keep station replies small.
+    #[serde(flatten)]
+    pub extensions: Box<BotSettingsExtensions>,
+}
+
+/// Settings this build does not interpret, paired with their incoming key inventory.
+/// The inventory is process-only; only the opaque preferences are flattened into storage.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct BotSettingsExtensions {
+    /// Settings from a newer build, retained without interpreting their values.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
+    /// Keys present on input; `None` denotes a complete, locally constructed settings value.
+    /// Transport metadata does not participate in settings equality or hashing.
+    #[serde(skip)]
+    pub received_fields: Option<BTreeSet<String>>,
+}
+
+/// Read the typed settings through serde without losing the original object's key inventory.
+#[derive(Deserialize)]
+#[serde(remote = "BotSettings")]
+struct BotSettingsWire {
+    #[serde(default)]
+    report_view: ReportView,
+    #[serde(default)]
+    period_basis: ReportBasis,
+    #[serde(default)]
+    message_layout: Box<MessageLayout>,
+    #[serde(default)]
+    menu: BotMenu,
+    #[serde(flatten)]
+    extensions: Box<BotSettingsExtensions>,
+}
+
+impl<'de> Deserialize<'de> for BotSettings {
+    /// Decode known fields and retain unknown keys and presence before defaults are applied.
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(d)?;
+        let fields = value
+            .as_object()
+            .map(|object| object.keys().cloned().collect());
+        let mut bot = BotSettingsWire::deserialize(value).map_err(serde::de::Error::custom)?;
+        bot.extensions.received_fields = fields;
+        Ok(bot)
+    }
+}
+
+impl PartialEq for BotSettings {
+    /// Compare preferences rather than the payload inventory they arrived with.
+    fn eq(&self, other: &Self) -> bool {
+        self.report_view == other.report_view
+            && self.period_basis == other.period_basis
+            && self.message_layout == other.message_layout
+            && self.menu == other.menu
+            && self.extensions.extra == other.extensions.extra
+    }
+}
+
+impl Eq for BotSettings {}
+
+impl Hash for BotSettings {
+    /// Hash the same preference fields used by equality, excluding transport metadata.
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.report_view.hash(state);
+        self.period_basis.hash(state);
+        self.message_layout.hash(state);
+        self.menu.hash(state);
+        self.extensions.extra.hash(state);
+    }
+}
+
+impl BotSettings {
+    /// Whether the sender supplied this top-level preference rather than defaulting it locally.
+    fn received(&self, key: &str) -> bool {
+        self.extensions
+            .received_fields
+            .as_ref()
+            .is_none_or(|fields| fields.contains(key))
+    }
+
+    /// Apply only supplied fields on the station; each supplied layout or menu replaces its whole.
+    /// Unknown keys absent from the sender are retained, while supplied values overwrite.
+    pub fn merge_from(&mut self, incoming: &Self) {
+        if incoming.received("report_view") {
+            self.report_view = incoming.report_view;
+        }
+        if incoming.received("period_basis") {
+            self.period_basis = incoming.period_basis;
+        }
+        if incoming.received("message_layout") {
+            self.message_layout = incoming.message_layout.clone();
+        }
+        if incoming.received("menu") {
+            self.menu = incoming.menu.clone();
+        }
+        self.extensions
+            .extra
+            .extend(incoming.extensions.extra.clone());
+        self.extensions.received_fields = None;
+    }
+
+    /// Check only settings the client's base actually carried; newer station fields cannot
+    /// make an older client's edit stale, but changes to fields it read still refuse that edit.
+    pub fn base_holds(&self, current: &Self) -> bool {
+        (!self.received("report_view") || self.report_view == current.report_view)
+            && (!self.received("period_basis") || self.period_basis == current.period_basis)
+            && (!self.received("message_layout") || self.message_layout == current.message_layout)
+            && (!self.received("menu") || self.menu == current.menu)
+            && self
+                .extensions
+                .extra
+                .iter()
+                .all(|(key, value)| current.extensions.extra.get(key) == Some(value))
+    }
 }
 
 #[cfg(test)]

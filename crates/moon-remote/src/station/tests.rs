@@ -613,6 +613,7 @@ fn helper_refresh_requires_the_removal_capability() {
 bot_return=yes
 remove_station=yes
 removal_guard=yes
+bot_settings_merge=yes
 "
     ));
     assert!(!helper_is_current(

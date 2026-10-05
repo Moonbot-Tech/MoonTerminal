@@ -298,7 +298,8 @@ pub fn set_token(
 }
 
 /// Move the terminal's bot to the station: its token, its paired chats with their access, and
-/// `[telegram]`; then restart the station and wait until its bot polls — paired when chats came
+/// `[telegram]`; the station's helper preserves bot fields absent from this payload, then
+/// restarts the station and waits until its bot polls — paired when chats came
 /// with it, offering a pairing code when none did.
 ///
 /// The caller suspends its own bot BEFORE this — one token, one poller — and erases its token only
@@ -350,7 +351,7 @@ pub fn transfer_bot(
             Step::TokenWritten,
             "bot token: credential written",
         ));
-        // Stops the station: it owns the file and would overwrite it on a /pair.
+        // Stops the station and merges bot fields there before writing its owned pairing file.
         run(script::helper("put-pairing", &[]), &pairing_json).context("telegram.json")?;
         say(Progress::step(
             Step::ChatsTransferred,

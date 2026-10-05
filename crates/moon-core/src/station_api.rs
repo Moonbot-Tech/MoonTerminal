@@ -483,7 +483,8 @@ impl Access {
     }
 
     /// Whether a change edited from `self` (as the client read it) still applies to `current`:
-    /// the same chats, and — when the client read the bot's settings — the same settings. The zone
+    /// the same chats, and — when the client read the bot's settings — the same supplied fields.
+    /// Fields absent from an older client's payload do not count against its base. The zone
     /// is never compared: it is pushed on its own and an edit of the chats does not carry it. Nor
     /// are the notifications: each chat's row carries its own revision.
     pub fn base_holds(&self, current: &Self) -> bool {
@@ -491,7 +492,7 @@ impl Access {
             && self
                 .bot
                 .as_ref()
-                .is_none_or(|bot| current.bot.as_ref() == Some(bot))
+                .is_none_or(|bot| current.bot.as_ref().is_some_and(|now| bot.base_holds(now)))
     }
 
     /// Upgrade a saved pairing that predates the owner: its first chat becomes the explicit owner.

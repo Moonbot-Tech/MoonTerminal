@@ -392,22 +392,75 @@ cmd_status() {
     echo "bot_return=yes"
     echo "remove_station=yes"
     echo "removal_guard=yes"
+    echo "bot_settings_merge=yes"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }
 
 # put-pairing; stdin: telegram.json — the chats, owner and access a terminal hands over with its
 # bot. The station owns the file and rewrites it on every /pair, so it is written with the station
-# stopped; the caller starts it again.
+# stopped; the caller starts it again. Merge bot preferences here, on the station, so a terminal
+# that predates a field cannot erase it during transfer. Python is installed by bootstrap.
 cmd_put_pairing() {
     tmp=$(mktemp)
     cat >"$tmp"
-    head -c 1 "$tmp" | grep -q '{' || {
+    if ! python3 - "$tmp" <<'PY'
+"""Reject invalid incoming pairing data before stopping the station."""
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    incoming = json.load(stream)
+if not isinstance(incoming, dict):
+    raise TypeError("telegram.json is not a JSON object")
+if incoming.get("bot") is not None and not isinstance(incoming["bot"], dict):
+    raise TypeError("bot settings are not a JSON object")
+PY
+    then
         rm -f "$tmp"
-        die "telegram.json is not a JSON object"
-    }
+        die "invalid incoming bot settings"
+    fi
     systemctl stop "$UNIT"
-    install -m 600 -o moon-station -g moon-station "$tmp" "$PAIRING"
+    merged=$(mktemp)
+    if ! python3 - "$PAIRING" "$tmp" "$merged" <<'PY'
+"""Merge supplied top-level bot keys into stopped-station state before writing the new pairing."""
+import json
+import os
+import sys
+
+current_path, incoming_path, output_path = sys.argv[1:]
+with open(incoming_path, encoding="utf-8") as stream:
+    incoming = json.load(stream)
+if not isinstance(incoming, dict):
+    raise TypeError("telegram.json is not a JSON object")
+current = {}
+if os.path.exists(current_path):
+    with open(current_path, encoding="utf-8") as stream:
+        current = json.load(stream)
+    if not isinstance(current, dict):
+        raise TypeError("stored telegram.json is not a JSON object")
+bot = current.get("bot")
+if bot is None:
+    bot = {}
+update = incoming.get("bot")
+if not isinstance(bot, dict) or (update is not None and not isinstance(update, dict)):
+    raise TypeError("bot settings are not a JSON object")
+if update is not None:
+    bot.update(update)
+if bot or update is not None or "bot" in current:
+    incoming["bot"] = bot
+with open(output_path, "w", encoding="utf-8") as stream:
+    json.dump(incoming, stream)
+    stream.flush()
+    os.fsync(stream.fileno())
+PY
+    then
+        rm -f "$tmp" "$merged"
+        die "could not merge bot settings"
+    fi
+    install -m 600 -o moon-station -g moon-station "$merged" "$PAIRING.new"
+    mv -f "$PAIRING.new" "$PAIRING"
+    rm -f "$merged"
     rm -f "$tmp"
     echo "pairing=written"
 }

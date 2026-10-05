@@ -2,6 +2,48 @@ use super::*;
 use crate::config::schema::ServersFile;
 use MenuItem::*;
 
+/// Dropping flattened fields would make any later save erase settings introduced by newer builds.
+#[test]
+fn unknown_bot_keys_survive_json_and_toml() {
+    let bot: BotSettings = serde_json::from_value(serde_json::json!({
+        "future_scalar": 17,
+        "received_fields": "opaque future preference",
+        "future_table": {"enabled": true, "columns": ["a", "b"]}
+    }))
+    .unwrap();
+    let json = serde_json::to_value(&bot).unwrap();
+    assert_eq!(json["future_scalar"], 17);
+    assert_eq!(json["received_fields"], "opaque future preference");
+    assert_eq!(
+        json["future_table"],
+        serde_json::json!({"enabled": true, "columns": ["a", "b"]})
+    );
+    let stored = toml::to_string(&bot).unwrap();
+    let back: BotSettings = toml::from_str(&stored).unwrap();
+    assert_eq!(back.extensions.extra, bot.extensions.extra);
+}
+
+/// Transport presence cannot change configuration signatures or equality after persistence.
+#[test]
+fn field_presence_is_not_a_preference() {
+    use std::collections::hash_map::DefaultHasher;
+    let partial: BotSettings = serde_json::from_str("{}").unwrap();
+    let complete = BotSettings::default();
+    assert_eq!(partial, complete);
+    let signature = |bot: &BotSettings| {
+        let mut hash = DefaultHasher::new();
+        bot.hash(&mut hash);
+        hash.finish()
+    };
+    assert_eq!(signature(&partial), signature(&complete));
+    assert!(
+        serde_json::to_value(partial)
+            .unwrap()
+            .get("received_fields")
+            .is_none()
+    );
+}
+
 /// Adding layout preferences must preserve bot TOML saved before the layout field existed.
 #[test]
 fn bot_without_message_layout_loads_default() {
@@ -84,6 +126,7 @@ fn settings_survive_the_servers_file_round_trip() {
             ],
         }
         .normalized(),
+        ..BotSettings::default()
     };
     let text = toml::to_string(&file).unwrap();
     let back: ServersFile = toml::from_str(&text).unwrap();

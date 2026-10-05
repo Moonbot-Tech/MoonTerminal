@@ -4,6 +4,170 @@ use moon_core::telegram::runtime::mini_app::MiniAppStatus;
 
 use super::*;
 
+/// Keeping a pre-merge helper would leave transfer's direct file write destructive after upgrade.
+#[test]
+fn transfer_refreshes_helpers_that_cannot_preserve_bot_settings() {
+    let old = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\n";
+    assert!(!super::super::helper_is_current(old));
+    assert!(!super::super::helper_is_current(&format!(
+        "{old}bot_settings_merge=no\n"
+    )));
+    assert!(super::super::helper_is_current(&format!(
+        "{old}bot_settings_merge=yes\n"
+    )));
+}
+
+/// Execute the real transfer writer against synthetic files, with service/ownership commands
+/// replaced locally; this exercises station-side merging without opening an SSH connection.
+fn transfer_pairing_fixture(
+    name: &str,
+    current: &str,
+    incoming: &str,
+) -> (std::process::Output, String, bool) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let dir = std::env::temp_dir().join(format!(
+        "moon-remote-transfer-{name}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("telegram.json");
+    std::fs::write(&path, current).unwrap();
+    let input = dir.join("incoming.json");
+    let stopped_path = dir.join("stopped");
+    std::fs::write(&input, incoming).unwrap();
+    let writer = crate::script::HELPER
+        .split("cmd_put_pairing() {")
+        .nth(1)
+        .unwrap()
+        .split("\n# ctl;")
+        .next()
+        .unwrap();
+    let code = format!(
+        r#"
+set -eu
+PAIRING={pairing}
+UNIT=synthetic-unit
+die() {{ echo "$*" >&2; exit 1; }}
+systemctl() {{ test "$*" = 'stop synthetic-unit'; touch {stopped}; }}
+install() {{
+    test "$1 $2 $3 $4 $5 $6" = '-m 600 -o moon-station -g moon-station'
+    cp "$7" "$8"
+}}
+cmd_put_pairing() {{{writer}
+cmd_put_pairing <{incoming}
+"#,
+        pairing = crate::script::sh_quote(&path.to_string_lossy().replace('\\', "/")),
+        incoming = crate::script::sh_quote(&input.to_string_lossy().replace('\\', "/")),
+        stopped = crate::script::sh_quote(&stopped_path.to_string_lossy().replace('\\', "/")),
+    );
+    let mut child = Command::new("sh")
+        // The MSVC build wrapper disables conversion for cmd.exe, but the fixture's Windows
+        // Python must receive Windows paths for shell-created temporary files.
+        .env_remove("MSYS_NO_PATHCONV")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("POSIX sh is required for transfer fixtures");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(code.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    let stopped = stopped_path.exists();
+    std::fs::remove_dir_all(&dir).unwrap();
+    (output, saved, stopped)
+}
+
+/// A raw transfer from an older terminal must retain layout/opaque keys while changing sent fields.
+#[test]
+fn transfer_keeps_station_bot_fields_absent_from_older_payloads() {
+    let (ok, text, stopped) = transfer_pairing_fixture(
+        "old-fields",
+        r#"{"authorized_chat_ids":[7],"bot":{"report_view":"cores","message_layout":{"card":{"coin_hashtag":false}},"future_option":42}}"#,
+        r#"{"authorized_chat_ids":[9],"owner_chat_id":9,"bot":{"report_view":"exchanges","another_future_key":{"on":true}}}"#,
+    );
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(stopped, "a successful transfer must stop the station");
+    assert_eq!(saved["authorized_chat_ids"], serde_json::json!([9]));
+    assert_eq!(saved["bot"]["report_view"], "exchanges");
+    assert_eq!(
+        saved["bot"]["message_layout"]["card"]["coin_hashtag"],
+        false
+    );
+    assert_eq!(saved["bot"]["future_option"], 42);
+    assert_eq!(
+        saved["bot"]["another_future_key"],
+        serde_json::json!({"on": true})
+    );
+}
+
+/// Treating an explicit layout as absent would prevent replacement; omitting bot keeps its whole.
+#[test]
+fn transfer_replaces_supplied_layout_but_keeps_an_omitted_bot() {
+    let current = r#"{"bot":{"message_layout":{"custom":true},"future_option":42}}"#;
+    let (ok, text, _) = transfer_pairing_fixture(
+        "layout-reset",
+        current,
+        r#"{"bot":{"message_layout":{},"future_option":null}}"#,
+    );
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(saved["bot"]["message_layout"], serde_json::json!({}));
+    assert!(saved["bot"]["future_option"].is_null());
+    let (ok, text, _) = transfer_pairing_fixture("no-bot", current, "{}");
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()["bot"],
+        serde_json::json!({"message_layout": {"custom": true}, "future_option": 42})
+    );
+}
+
+/// Replacing before decoding JSON would destroy settings; stopping before incoming validation
+/// would leave the station down for a malformed request.
+#[test]
+fn transfer_refuses_corrupt_settings_without_overwriting() {
+    for (name, current, incoming, expect_stop) in [
+        ("bad-current", "{ broken", "{}", true),
+        (
+            "bad-incoming",
+            r#"{"bot":{"future_option":42}}"#,
+            "{ broken",
+            false,
+        ),
+        (
+            "bad-bot",
+            r#"{"bot":{"future_option":42}}"#,
+            r#"{"bot":7}"#,
+            false,
+        ),
+        ("empty", r#"{"bot":{"future_option":42}}"#, "", false),
+        ("array", r#"{"bot":{"future_option":42}}"#, "[]", false),
+    ] {
+        let (ok, saved, stopped) = transfer_pairing_fixture(name, current, incoming);
+        assert!(!ok.status.success(), "{name}");
+        assert_eq!(saved, current, "{name}");
+        assert_eq!(stopped, expect_stop, "{name}");
+    }
+}
+
 /// Removing before reading destroys the only bot; a failed read must run no removal.
 #[test]
 fn return_read_failure_never_removes_the_bot() {

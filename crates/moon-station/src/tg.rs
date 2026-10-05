@@ -129,6 +129,8 @@ impl StationTg {
         bot.owner_chat_id = pairing.owner_chat_id;
         bot.chat_access = pairing.chat_access;
         bot.bot = pairing.bot.unwrap_or_default();
+        // Disk state is a complete local snapshot: subsequent chat edits may change any field.
+        bot.bot.extensions.received_fields = None;
         log::info!(
             "telegram: bot starting, {} chat(s) paired, Mini App {}, zone {zone}",
             bot.authorized_chat_ids.len(),
@@ -269,9 +271,9 @@ impl StationTg {
 
     /// Replace the paired chats with `access`, only while they are still `base` — what the
     /// terminal read before its user edited them; a chat paired here since is not dropped, nor
-    /// bot settings changed here since. The bot's settings and the zone `access` leaves out stay
-    /// as they are. Saved before it is adopted, then applied to the running bot as a terminal's
-    /// Save applies it: a revoked or changed grant restarts the transport; captions, added chats,
+    /// bot settings changed here since. Bot fields and unknown keys absent from `access` stay
+    /// as they are, as does an absent zone. Saved before it is adopted, then applied to the running
+    /// bot as a terminal's Save applies it: a revoked or changed grant restarts the transport; captions, added chats,
     /// the menu and the zone reach it in place.
     pub fn set_access(
         &mut self,
@@ -495,8 +497,13 @@ impl TgHost for StationHost<'_> {
         self.save_pairing(|telegram| telegram.clear_pairing())
     }
 
-    fn save_bot_settings(&mut self, bot: moon_core::config::telegram_menu::BotSettings) -> bool {
-        let saved = self.save_pairing(|telegram| telegram.bot = bot);
+    /// Save a complete in-chat edit while retaining opaque settings from newer builds.
+    fn save_bot_settings(
+        &mut self,
+        mut bot: moon_core::config::telegram_menu::BotSettings,
+    ) -> bool {
+        bot.extensions.received_fields = None;
+        let saved = self.save_pairing(|telegram| telegram.bot.merge_from(&bot));
         if saved {
             log::info!("telegram: the bot's settings changed from the chat");
         }
@@ -614,7 +621,14 @@ fn plan_access(
         groups
     });
     Ok(Access {
-        bot: access.bot.or_else(|| current.bot.clone()),
+        bot: match &access.bot {
+            Some(incoming) => {
+                let mut bot = current.bot.clone().unwrap_or_default();
+                bot.merge_from(incoming);
+                Some(bot)
+            }
+            None => current.bot.clone(),
+        },
         zone: access.zone.or_else(|| pushed.map(str::to_owned)),
         groups: groups.or_else(|| current.groups.clone()),
         // Notifications have a file of their own, never `telegram.json`.
