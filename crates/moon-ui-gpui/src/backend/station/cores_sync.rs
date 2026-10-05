@@ -181,9 +181,8 @@ pub(crate) fn reconcile(
         }
     }
     for (remote, index) in station.into_iter().zip(matches) {
-        let local = index.map(|index| (index, here[index]));
-        if let Some((index, local)) = local {
-            matched[index] = true;
+        let local = index.map(|index| here[index]);
+        if let Some(local) = local {
             rows.push(Row {
                 state: if remote.key_fp.as_ref() != Some(&local.key_fp)
                     || remote
