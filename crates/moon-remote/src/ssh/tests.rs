@@ -3,6 +3,22 @@
 use super::{HashAlg, signing_key};
 use russh::keys::Algorithm;
 
+/// Treating channel refusals as a dead login would repeat commands after an explicit server reply.
+#[test]
+fn reconnect_classification_excludes_server_refusals() {
+    for error in [
+        russh::Error::SendError,
+        russh::Error::Disconnect,
+        russh::Error::HUP,
+    ] {
+        assert!(super::transport_lost(&error));
+    }
+    assert!(!super::transport_lost(&russh::Error::ChannelOpenFailure(
+        russh::ChannelOpenFailure::AdministrativelyProhibited,
+    )));
+    assert!(!super::transport_lost(&russh::Error::WrongChannel));
+}
+
 /// Passing `None` to the RSA signer selects SHA-1 and makes modern sshd refuse provider login.
 #[test]
 fn rsa_authentication_offers_sha2_even_without_server_extensions() {

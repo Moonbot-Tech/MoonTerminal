@@ -109,6 +109,27 @@ pub struct SecretOutput {
     pub stderr: Zeroizing<Vec<u8>>,
 }
 
+/// A reusable transport ended before any command reply; application failures never carry it.
+#[derive(Debug)]
+pub(crate) struct TransportLost;
+
+impl std::fmt::Display for TransportLost {
+    /// Keep the reconnect marker free of remote output or credentials.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the SSH transport ended before a command reply")
+    }
+}
+
+impl std::error::Error for TransportLost {}
+
+/// A refused channel is a server reply, even if the transport happens to close immediately after.
+fn transport_lost(error: &russh::Error) -> bool {
+    matches!(
+        error,
+        russh::Error::SendError | russh::Error::Disconnect | russh::Error::HUP
+    )
+}
+
 impl Output {
     pub fn ok(&self) -> bool {
         self.status == Some(0)
@@ -277,8 +298,29 @@ impl Conn {
         stdin: &[u8],
         timeout: Duration,
     ) -> anyhow::Result<SecretOutput> {
+        self.run_secret_inner(command, stdin, timeout, false)
+    }
+
+    /// Mark transport-only failures for station reuse without changing setup/probe semantics.
+    pub(crate) fn run_secret_reusable(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+    ) -> anyhow::Result<SecretOutput> {
+        self.run_secret_inner(command, stdin, timeout, true)
+    }
+
+    /// Apply one shared deadline and retain typed timeout errors in both connection paths.
+    fn run_secret_inner(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        timeout: Duration,
+        reusable: bool,
+    ) -> anyhow::Result<SecretOutput> {
         self.rt.block_on(async {
-            tokio::time::timeout(timeout, self.run_async(command, stdin))
+            tokio::time::timeout(timeout, self.run_async(command, stdin, reusable))
                 .await
                 .map_err(|_| {
                     anyhow::anyhow!(crate::error::StationError::Timeout)
@@ -287,10 +329,28 @@ impl Conn {
         })
     }
 
-    /// Receive into zeroizing buffers so a cancelled read cannot leave a partial credential.
-    async fn run_async(&self, command: &str, stdin: &[u8]) -> anyhow::Result<SecretOutput> {
-        let channel = self.handle.channel_open_session().await?;
-        channel.exec(true, command).await?;
+    /// Receive into zeroizing buffers; only reusable sessions classify losses before any reply.
+    async fn run_async(
+        &self,
+        command: &str,
+        stdin: &[u8],
+        reusable: bool,
+    ) -> anyhow::Result<SecretOutput> {
+        let transport_error = |e: russh::Error| {
+            let lost = transport_lost(&e);
+            let e = anyhow::Error::new(e);
+            if reusable && lost {
+                e.context(TransportLost)
+            } else {
+                e
+            }
+        };
+        let channel = self
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(transport_error)?;
+        channel.exec(true, command).await.map_err(transport_error)?;
         // Written and read at once: a command that answers while it still reads a large stdin
         // would otherwise fill the channel's inbound queue, and the connection's one read loop —
         // which also carries the window adjusts the writer waits for — would stall on it.
@@ -307,15 +367,26 @@ impl Conn {
                 stdout: Zeroizing::new(Vec::new()),
                 stderr: Zeroizing::new(Vec::new()),
             };
+            let mut replied = false;
             while let Some(msg) = read.wait().await {
                 match msg {
-                    ChannelMsg::Data { data } => out.stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, .. } => out.stderr.extend_from_slice(&data),
-                    ChannelMsg::ExitStatus { exit_status } => out.status = Some(exit_status),
+                    ChannelMsg::Data { data } => {
+                        replied = true;
+                        out.stdout.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        replied = true;
+                        out.stderr.extend_from_slice(&data);
+                    }
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        replied = true;
+                        out.status = Some(exit_status);
+                    }
+                    ChannelMsg::ExitSignal { .. } | ChannelMsg::Failure => replied = true,
                     _ => {}
                 }
             }
-            out
+            (out, replied)
         };
         tokio::pin!(send, receive);
         // The output decides when the command is over. russh never wakes a writer waiting for
@@ -323,14 +394,21 @@ impl Conn {
         // its stdin would leave the writer — and a join on it — hanging until the timeout; the
         // unfinished write is dropped instead, and the exit status is the answer.
         let mut sent = None;
-        let out = loop {
+        let (out, replied) = loop {
             tokio::select! {
                 result = &mut send, if sent.is_none() => sent = Some(result),
                 out = &mut receive => break out,
             }
         };
+        if reusable && !replied && self.handle.is_closed() {
+            return Err(TransportLost.into());
+        }
         if let (None, Some(Err(e))) = (out.status, sent) {
-            return Err(e.into());
+            return Err(if reusable && !replied {
+                transport_error(e)
+            } else {
+                e.into()
+            });
         }
         Ok(out)
     }

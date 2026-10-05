@@ -7,15 +7,15 @@ use anyhow::Context;
 use moon_core::config::CoreGroup;
 use moon_core::station_api::{Access, Answer, Hello, PROTO_VERSION, PairingCode, Reply, Request};
 
-use super::{admin_conn, current_helper_status};
+use super::{AdminConn, admin_conn, current_helper_status};
 use crate::script::{self, STEP_TIMEOUT};
-use crate::ssh::{Conn, Target};
+use crate::ssh::Target;
 
 /// One request on an open administrator connection whose helper is current.
 ///
 /// The station's hello is judged before its reply is read: a station of another API version is
 /// refused by name — update whichever side is older — never misread.
-pub(crate) fn call(conn: &Conn, request: &Request) -> anyhow::Result<Answer> {
+pub(crate) fn call(conn: &AdminConn, request: &Request) -> anyhow::Result<Answer> {
     let body = serde_json::to_vec(request)?;
     let out = script::checked(conn.run(&script::helper("ctl", &[]), &body, STEP_TIMEOUT)?)?;
     let output: serde_json::Value =
