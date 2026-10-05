@@ -239,10 +239,15 @@ pub struct ListedCore {
     pub key_fp: Option<String>,
 }
 
-/// SocketAddr display of endpoint_from_key (`198.51.100.11:4510`, `[::1]:4510`). None if undecodable.
+/// SocketAddr display of the key's own endpoint, no hand-typed override (`198.51.100.11:4510`,
+/// `[::1]:4510`). None if undecodable.
 pub fn core_address(key: &str) -> Option<String> {
-    let endpoint = crate::config::endpoint_from_key(key)?;
-    Some(std::net::SocketAddr::new(endpoint.address, endpoint.port).to_string())
+    let target = crate::config::target_from_key(key, None)?;
+    // Without an override the host is always the key's address or the localhost fallback.
+    let crate::config::CoreHost::Ip(address) = target.host else {
+        return None;
+    };
+    Some(std::net::SocketAddr::new(address, target.port).to_string())
 }
 
 /// First 16 hex digits of SHA-256(b"moon-station core key v1\n" ++ key.trim()).
