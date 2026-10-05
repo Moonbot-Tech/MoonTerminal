@@ -1066,6 +1066,7 @@ struct ClosedCols {
     core_name: Option<usize>,
     buy_price: Option<usize>,
     sell_price: Option<usize>,
+    buy_date: Option<usize>,
     close_date: Option<usize>,
     rec_id: Option<usize>,
     channel: Option<usize>,
@@ -1090,6 +1091,7 @@ impl ClosedCols {
             core_name: index("core_name"),
             buy_price: index("buyprice"),
             sell_price: index("sellprice"),
+            buy_date: index("buydate"),
             close_date: index("closedate"),
             rec_id: index("id"),
             channel: index("channelname"),
@@ -1116,7 +1118,7 @@ fn is_funding(row: &[rusqlite::types::Value], cols: &ClosedCols) -> bool {
     )
 }
 
-/// Map one report row.
+/// Map one report row. A missing buy time uses the close time, so the duration is zero.
 ///
 /// `rec_id` is the replica `newrecid`. A legacy `0` falls back to the display `id` column.
 fn map_closed_row(
@@ -1132,6 +1134,10 @@ fn map_closed_row(
         .and_then(value_i64)
         .filter(|secs| *secs > 0)?;
     let close_utc = axis.to_utc(close_local, core);
+    let buy_utc = cell(cols.buy_date)
+        .and_then(value_i64)
+        .filter(|secs| *secs > 0)
+        .map(|secs| axis.to_utc(secs, core));
     let replica = table.rec_ids.get(row_index).copied().unwrap_or(0);
     let rec_id = if replica != 0 {
         replica
@@ -1158,6 +1164,7 @@ fn map_closed_row(
         profit_native: finite_number(cell(cols.profit_native).and_then(value_f64)),
         volume_native: finite_number(cell(cols.volume_native).and_then(value_f64))
             .filter(|volume| *volume > 0.0),
+        open_utc: buy_utc.unwrap_or(close_utc),
         buy_price: finite_number(cell(cols.buy_price).and_then(value_f64)),
         sell_price: finite_number(cell(cols.sell_price).and_then(value_f64)),
         short: cell(cols.short).and_then(value_i64).is_some_and(|v| v != 0),

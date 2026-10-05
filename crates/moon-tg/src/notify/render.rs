@@ -10,29 +10,26 @@ use moon_core::feed::order_math::MONEY_DECIMALS;
 use moon_core::util::{display_time, fmt};
 
 use super::trades::ClosedTrade;
-use crate::html::{coin_tag, escape};
+use crate::html::escape;
 
 /// Longest coin, core, or strategy kept on a card, in Unicode scalars.
 const NAME_CHARS: usize = 64;
 
-/// One closed trade as an HTML card, in the trade's own currency, laid out as
-/// the cores' own bot writes it (LinKvo, 04.10): the core first.
+/// One closed trade as a three-line HTML card, in the trade's own currency.
 ///
-/// Line 1 is the core name and a colon. Line 2 is a sign mark, the coin as a
-/// hashtag, and the signed profit. Line 3 is the entry and exit price, so the
-/// card stands on its own when the entry was never announced. The last line is
-/// the strategy, in italics. An unchecked card adds a line saying its
-/// thresholds were not checked.
+/// Line 1 is a sign mark, the coin, the signed profit, an optional entry
+/// volume, and the duration. Line 2 is the core name. Line 3 is the strategy,
+/// in italics. An unchecked card adds a fourth line saying its thresholds were
+/// not checked.
 ///
-/// The profit prints in the trade's own currency (`+0.00012 BTC`,
+/// The profit and the volume print in the trade's own currency (`+0.00012 BTC`,
 /// `+3.30 USDC`) the moment the row lands, without a valuation. Outside a USD
 /// stablecoin the dollar value follows once the valuation has it
 /// (`≈ +7.50$`). A row without its own amount falls back to the dollars alone.
 ///
 /// Args:
 ///     t: The trade to announce. No amount at all is unvalued and draws the
-///         white mark plus the unvalued word. A row without both prices drops
-///         their line.
+///         white mark plus the unvalued word. No volume drops its segment.
 ///     unchecked: The rule's thresholds could not be checked.
 ///
 /// Returns:
@@ -45,18 +42,20 @@ pub(crate) fn trade_card(t: &ClosedTrade, unchecked: bool) -> String {
         Some((_, sign)) => sign.pick("\u{1f7e2}", "\u{1f534}", "\u{26aa}"),
         None => sign_mark(t.profit_usd),
     };
-    let mut card = format!(
-        "{}:\n{mark} {} {}",
-        name(&t.core_name),
-        coin_tag(&t.coin, NAME_CHARS),
+    let mut parts = vec![
+        format!("{mark} <b>{}</b>", name(&t.coin)),
         profit_text(t, native.map(|(text, _)| text)),
-    );
-    if let Some(prices) = prices_text(t.buy_price, t.sell_price) {
-        card.push('\n');
-        card.push_str(&prices);
+    ];
+    if let Some(volume) = volume_text(t) {
+        parts.push(volume);
     }
-    card.push('\n');
-    card.push_str(&strategy_line(&t.strategy));
+    parts.push(human_duration(t.close_utc.saturating_sub(t.open_utc)));
+    let mut card = format!(
+        "{}\n{}\n{}",
+        parts.join(" \u{00b7} "),
+        name(&t.core_name),
+        strategy_line(&t.strategy)
+    );
     if unchecked {
         card.push('\n');
         card.push_str(&escape(&t!("telegram.notify_unchecked")));
@@ -86,37 +85,30 @@ fn native_profit(t: &ClosedTrade) -> Option<(String, fmt::DeltaSign)> {
     Some((text, sign))
 }
 
-/// Significant digits a card's prices keep: one more than the terminal's
-/// [`fmt::adaptive`], since an exit a tick away from its entry has to read as a
-/// different price.
-const PRICE_DIGITS: i32 = 6;
-
-/// Most decimals a card's price prints: a satoshi-quoted coin at `0.00000001` still keeps six
-/// significant digits.
-const MAX_PRICE_DECIMALS: i32 = 16;
-
-/// `entry → exit`, both at the same decimals: enough for [`PRICE_DIGITS`]
-/// significant digits of the larger, and more while two different prices would
-/// still print alike. `None` unless both are finite and positive.
-///
-/// The row carries no exchange tick, so the decimals follow the magnitude, and
-/// trailing zeros are trimmed.
-fn prices_text(buy: Option<f64>, sell: Option<f64>) -> Option<String> {
-    let valid = |value: Option<f64>| value.filter(|v| v.is_finite() && *v > 0.0);
-    let (buy, sell) = (valid(buy)?, valid(sell)?);
-    let exp = buy.max(sell).log10().floor() as i32;
-    let mut decimals = (PRICE_DIGITS - 1 - exp).clamp(0, MAX_PRICE_DECIMALS) as usize;
-    while decimals < MAX_PRICE_DECIMALS as usize
-        && buy != sell
-        && fmt::compact(buy, decimals) == fmt::compact(sell, decimals)
-    {
-        decimals += 1;
+/// Entry volume: in the trade's own currency, grouped whole units for a stablecoin (cents under
+/// one unit) and the currency's places otherwise; else the valued whole dollars; else nothing.
+fn volume_text(t: &ClosedTrade) -> Option<String> {
+    match (t.quote, t.volume_native) {
+        // Whole units read best for a stablecoin; a notional under one keeps its cents.
+        (Some(quote), Some(volume)) if t.stable_quote() && volume < 1.0 => {
+            Some(format!("{} {}", fmt::compact(volume, 2), quote.ticker()))
+        }
+        (Some(quote), Some(volume)) if t.stable_quote() => {
+            let rounded = fmt::round_to(volume, 0)?;
+            let digits = format!("{rounded:.0}");
+            Some(format!(
+                "{} {}",
+                fmt::group_thousands(&digits),
+                quote.ticker()
+            ))
+        }
+        (Some(quote), Some(volume)) => Some(format!(
+            "{} {}",
+            fmt::compact(volume, quote.display_decimals()),
+            quote.ticker()
+        )),
+        _ => whole_dollar_volume(t.volume_usd),
     }
-    Some(format!(
-        "{} \u{2192} {}",
-        fmt::compact(buy, decimals),
-        fmt::compact(sell, decimals)
-    ))
 }
 
 /// One line: the core lost its link, and the local time that outage started.
@@ -217,6 +209,23 @@ fn parse_stored_strategy(raw: &str) -> Option<(String, String)> {
     }
     let source = raw[..at].trim().trim_end_matches(':').trim().to_string();
     Some((source, strategy_name.to_string()))
+}
+
+/// Entry notional as grouped whole dollars with a `$` suffix.
+///
+/// Cents round to the nearest dollar, half away from zero, through
+/// [`fmt::round_to`]. A non-finite amount is omitted, the same as a missing
+/// volume: the card must not print `0$` for a figure the row could not value.
+///
+/// Args:
+///     value: Entry notional in USDT, when the row has one.
+///
+/// Returns:
+///     Text such as `5 992$`, or `None` when there is nothing to print.
+fn whole_dollar_volume(value: Option<f64>) -> Option<String> {
+    let rounded = fmt::round_to(value?, 0)?;
+    let digits = format!("{rounded:.0}");
+    Some(format!("{}$", fmt::group_thousands(&digits)))
 }
 
 /// Profit and percent. The trade's own amount is bold, with the dollars after it once known

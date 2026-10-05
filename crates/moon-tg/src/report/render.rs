@@ -72,7 +72,7 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
 /// Made to fit a phone screen (LinKvo, 04.10 and 05.10): the view, or an automatic report's own
-/// title, and the period are the table's one-line caption; the totals are its top row; a group is
+/// title, and the period are the table's one-line caption; the bold total is its last row; a group is
 /// one header row carrying its own total rather than a caption row and a subtotal row.
 ///
 /// `host` words delivery failures; `navigation` is the chat's reply keyboard.
@@ -136,7 +136,8 @@ pub(super) fn period(page: &Page, year: i32) -> String {
     format!("{} — {}", bound(from, starts_day), bound(to, ends_day))
 }
 
-/// HTML for one report page; the caller decides whether it fits Telegram's rich-message caps.
+/// HTML for one report page, with column titles first and the bold whole-scope total last.
+/// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
     let heading = if page.request.daily {
         t!("telegram.report_days")
@@ -173,15 +174,24 @@ pub(super) fn report_html(page: &Page) -> String {
     }
     html.push_str(&format!(
         "<table compact><caption>{table_caption}</caption><tr><th align=\"left\">{}</th><th align=\"right\">{}</th><th align=\"right\">{}</th></tr>",
-        escape(&t!("telegram.report_total")),
-        escape(&profit(&page.total)),
-        page.total.orders
+        escape(&if page.request.daily {
+            t!("telegram.report_date")
+        } else {
+            heading
+        }),
+        escape(&t!("telegram.report_profit")),
+        escape(&t!("telegram.report_trades"))
     ));
     let by_core = !page.request.by_exchange && !page.request.daily;
     for row in &page.rows {
         html.push_str(&row_html(row, by_core));
     }
-    html.push_str("</table>");
+    html.push_str(&format!(
+        "<tr><td><b>{}</b></td><td align=\"right\"><b>{}</b></td><td align=\"right\"><b>{}</b></td></tr></table>",
+        escape(&t!("telegram.report_total")),
+        escape(&profit(&page.total)),
+        page.total.orders
+    ));
     // The details name each core of the page once, however many groups list it: a repeat counts
     // only when its first listing is on another page.
     let mut lines: Vec<(&String, &QuoteBreakdown)> = page

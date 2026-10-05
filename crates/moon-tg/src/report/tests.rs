@@ -97,10 +97,11 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
     }
 }
 
-/// A paged report shows the whole-scope total as its table's top row, never as a paragraph above
-/// the table or as the page's own sum.
+/// Putting the total first or summing only visible rows would break the report's footer.
+/// All views, including empty tables, keep translated column titles and bold footer cells.
 #[test]
-fn full_total_is_the_tables_top_row() {
+fn full_total_is_the_tables_last_row_under_column_titles() {
+    let _locale = crate::test_locale::force("en");
     let total = QuoteBreakdown {
         orders: 12,
         valuation: Some(ValuationCoverage {
@@ -114,12 +115,12 @@ fn full_total_is_the_tables_top_row() {
         }),
         ..Default::default()
     };
-    let page = Page {
+    let page = || Page {
         request: ReportRequest::new(Period::Today, false),
         from: 0,
         to: 1,
         zone: chrono_tz::UTC,
-        total,
+        total: total.clone(),
         rows: vec![super::Row::Line(
             "Visible row".into(),
             QuoteBreakdown::from_groups([(Some(0), 1.0, 1)]),
@@ -131,24 +132,56 @@ fn full_total_is_the_tables_top_row() {
         cores: Vec::new(),
         caption: None,
     };
-    let Response::Rich { html, .. } = render(
-        &page,
-        crate::HostKind::Terminal,
-        nav(crate::HostKind::Terminal, true),
-    ) else {
-        panic!("expected report")
-    };
-    let table_start = html.find("<table").unwrap();
-    let table_end = html.find("</table>").unwrap();
-    let total_at = html.find("+123.45").unwrap();
-    assert!(total_at > table_start && total_at < html.find("Visible row").unwrap());
-    assert!(!html[..table_start].contains("+123.45"));
-    assert!(html[table_start..table_end].contains("<th align=\"right\">12</th>"));
-    assert_eq!(
-        html.matches("<details>").count(),
-        1,
-        "calculation explanation belongs in Help"
-    );
+    for (daily, by_exchange, title) in [
+        (false, false, "Cores"),
+        (false, true, "Exchanges"),
+        (true, false, "Date"),
+    ] {
+        for empty in [false, true] {
+            let mut shown = page();
+            shown.request.daily = daily;
+            shown.request.by_exchange = by_exchange;
+            if empty {
+                shown.rows.clear();
+                shown.total = QuoteBreakdown::default();
+            }
+            let Response::Rich { html, .. } = render(
+                &shown,
+                crate::HostKind::Terminal,
+                nav(crate::HostKind::Terminal, true),
+            ) else {
+                panic!("expected report")
+            };
+            let table_start = html.find("<table").unwrap();
+            let table_end = html.find("</table>").unwrap();
+            let table = &html[table_start..table_end];
+            let header = &table[table.find("<tr>").unwrap()..];
+            assert!(header.starts_with(&format!(
+                "<tr><th align=\"left\">{title}</th><th align=\"right\">Profit / loss</th><th align=\"right\">Trades</th></tr>"
+            )), "{table}");
+            let footer = &table[table.rfind("<tr>").unwrap()..];
+            let (profit, trades) = if empty {
+                ("0.00$", 0)
+            } else {
+                ("+123.45$", 12)
+            };
+            assert_eq!(
+                footer,
+                format!(
+                    "<tr><td><b>Total</b></td><td align=\"right\"><b>{profit}</b></td><td align=\"right\"><b>{trades}</b></td></tr>"
+                )
+            );
+            if !empty {
+                assert!(table.find("Visible row").unwrap() < table.find("+123.45").unwrap());
+            }
+            assert!(!html[..table_start].contains("+123.45"));
+            assert_eq!(
+                html.matches("<details>").count(),
+                1,
+                "calculation explanation belongs in Help"
+            );
+        }
+    }
 }
 
 /// Inline navigation changes the current report, never duplicates global period selection.
@@ -978,8 +1011,8 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         panic!("expected rich report")
     };
     let main = &html[..html.find("<details>").unwrap()];
-    // The totals on top, then one row per core.
-    assert_eq!(main.matches("<tr>").count(), 3);
+    // Column titles, one row per core, then the total.
+    assert_eq!(main.matches("<tr>").count(), 4, "titles, two cores, total");
     assert!(!main.contains("colspan"));
     assert!(main.contains("<tr><td>Sample D…ong server name</td>"));
     assert!(main.contains("<tr><td>Short</td>"));
@@ -1220,7 +1253,8 @@ fn a_window_ending_now_learns_whether_rows_lie_past_its_end() {
     assert_eq!(read(160, false), None, "a fixed window does not ask");
 }
 
-/// Notification reads page past the Mini App cap and keep both rows that share a close time.
+/// Notification reads page past the Mini App cap, keep equal close times, and map the entry
+/// timestamp as well as chart prices so the card's duration survives the database read.
 #[test]
 fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1284,9 +1318,13 @@ fn closed_reads_page_past_the_ui_limit_and_keep_equal_close_times() {
         "a missing core offset leaves the stored close time unchanged"
     );
     assert_eq!(
+        first.open_utc, 990,
+        "the duration starts at the stored entry"
+    );
+    assert_eq!(
         (first.buy_price, first.sell_price),
         (Some(0.10739), Some(0.10844)),
-        "the card's prices come off the row"
+        "chart prices come off the row"
     );
 }
 
@@ -1588,7 +1626,11 @@ fn cores_are_listed_under_their_groups() {
         panic!("expected report");
     };
     assert!(html.contains("<tr><th align=\"right\">main</th>"), "{html}");
-    assert!(html.contains("<tr><th align=\"left\">Total</th>"), "{html}");
+    let table = &html[..html.find("</table>").unwrap()];
+    assert!(
+        table[table.rfind("<tr>").unwrap()..].starts_with("<tr><td><b>Total</b></td>"),
+        "{html}"
+    );
     assert!(html.contains("<tr><td>A</td>"), "{html}");
     assert!(!html.contains("total</i>"), "no subtotal row: {html}");
     // Stripes would run across the group headers out of step with them.
