@@ -22,7 +22,10 @@ use sha2::{Digest, Sha256};
 use crate::app_key;
 use crate::hosts::Hosts;
 use crate::script::{self, STEP_TIMEOUT};
-use crate::ssh::{Auth, Conn, Target};
+use crate::ssh::Target;
+
+mod session;
+pub use session::AdminConn;
 
 /// One station credential with its transport and hand-typed endpoint settings.
 pub struct CoreKey {
@@ -50,8 +53,8 @@ pub fn terminal_tape() -> Option<TapeWindow> {
     })
 }
 
-/// The administrator's connection to a server `setup` closed.
-pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
+/// Reuse the administrator's pinned login for a short idle window after station use.
+pub fn admin_conn(target: &Target) -> anyhow::Result<AdminConn> {
     let hosts = Hosts::load(&Hosts::path())?;
     let host = hosts
         .get(&target.addr())
@@ -61,14 +64,7 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("{}: the setup did not finish", target.addr()))?;
     let app = app_key::load_or_create()?;
-    Ok(Conn::open(
-        target,
-        &Auth::Key {
-            user: admin,
-            key: &app,
-        },
-        &host.fingerprint,
-    )?)
+    AdminConn::open(target, admin, app, &host.fingerprint)
 }
 
 /// Add or update `upsert` by uid, preserving other cores, their unknown fields and all sections.
@@ -329,7 +325,7 @@ pub fn push_tape(
 }
 
 /// The window the running station reports; `None` from a service older than the report.
-fn reported_tape(conn: &Conn) -> anyhow::Result<Option<TapeWindow>> {
+fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<TapeWindow>> {
     match api::call(conn, &Request::Status)? {
         Answer::Status(status) => Ok(status.tape),
         other => anyhow::bail!("the station answered a status request with {other:?}"),
@@ -344,7 +340,7 @@ const TAPE_APPLIED_WITHIN: std::time::Duration = std::time::Duration::from_secs(
 /// re-read failed (its log says why) keeps the old window: that is an error here, not a success.
 /// A failed look is only one look until the deadline.
 fn confirm_tape(
-    conn: &Conn,
+    conn: &AdminConn,
     tape: TapeWindow,
     window: &str,
     say: &mut dyn FnMut(Progress),
@@ -484,7 +480,7 @@ fn on_off(on: bool) -> &'static str {
 }
 
 /// The switch the running station reports; `None` from a service older than it.
-fn reported_auto_update(conn: &Conn) -> anyhow::Result<Option<bool>> {
+fn reported_auto_update(conn: &AdminConn) -> anyhow::Result<Option<bool>> {
     match api::call(conn, &Request::Status)? {
         Answer::Status(status) => Ok(status.auto_update),
         other => anyhow::bail!("the station answered a status request with {other:?}"),
@@ -504,7 +500,7 @@ const CONFIG_TRIES: usize = 3;
 ///     exists: Whether the server has the file, as its helper's `status` said.
 ///     build: The new file from the current one.
 fn edit_config(
-    conn: &Conn,
+    conn: &AdminConn,
     mut exists: bool,
     mut build: impl FnMut(Option<&str>) -> anyhow::Result<Option<String>>,
 ) -> anyhow::Result<bool> {
@@ -560,8 +556,8 @@ fn helper_is_current(status: &str) -> bool {
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
 /// before anything else is written. The administrator's sudo needs no password (`setup`), so the
 /// terminal updates the helper itself; a server set up before that is refused with the way out.
-fn current_helper_status(conn: &crate::ssh::Conn) -> anyhow::Result<String> {
-    let status = |conn: &crate::ssh::Conn| -> anyhow::Result<String> {
+fn current_helper_status(conn: &AdminConn) -> anyhow::Result<String> {
+    let status = |conn: &AdminConn| -> anyhow::Result<String> {
         Ok(
             script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
                 .stdout_text(),
@@ -920,7 +916,7 @@ fn finish_cores_cleanup(
 }
 
 /// Start after a core edit and publish the helper status through the same progress tail.
-fn restart_and_report(conn: &Conn, say: &mut dyn FnMut(Progress)) -> anyhow::Result<()> {
+fn restart_and_report(conn: &AdminConn, say: &mut dyn FnMut(Progress)) -> anyhow::Result<()> {
     script::checked(conn.run(&script::helper("start", &[]), &[], STEP_TIMEOUT)?)?;
     let status = script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
         .stdout_text();

@@ -1,6 +1,6 @@
 //! The terminal's pull from its station (STATION.md §4.9): the tape around closed trades and their
-//! order traces, what the station holds of what the terminal lacks. One administrator connection
-//! for a whole pull; each request is one `ctl` on it.
+//! order traces, what the station holds of what the terminal lacks. Each request is one `ctl`
+//! on the shared administrator session; an idle pull does not keep its login open.
 
 use moon_core::feed::types::Tick;
 use moon_core::market::trade_replay::trade_cache::decode_prints;
@@ -10,12 +10,12 @@ use moon_core::station_api::{
 };
 
 use super::api::call;
-use super::{admin_conn, current_helper_status};
-use crate::ssh::{Conn, Target};
+use super::{AdminConn, admin_conn, current_helper_status};
+use crate::ssh::Target;
 
-/// An open pull: the connection and its checked helper.
+/// A pull's administrator identity and its initially checked helper.
 pub struct Pull {
-    conn: Conn,
+    conn: AdminConn,
 }
 
 /// What a tape pull brought.
