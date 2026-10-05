@@ -735,3 +735,22 @@ fn a_short_percentage_take_uses_the_cores_division() {
     assert_eq!(percentage_take_price(0.0, 2.0, false), None);
     assert_eq!(percentage_take_price(entry, f64::NAN, true), None);
 }
+
+/// The core sends the hours-window pair first and the last-N-trades pair second (#863): a trade
+/// count above the N the trades stop is capped at can only belong to the hours window. Distinct
+/// hand-chosen values per wire field can land only in the counter they belong to.
+#[test]
+#[allow(clippy::field_reassign_with_default)] // a literal cannot name moonproto's feature-gated `uid`
+fn profit_state_puts_the_first_wire_pair_on_the_hours_stop() {
+    let mut proto = moonproto::ProfitStateCommand::default();
+    proto.rep_total_profit = -177.24;
+    proto.rep_total_trades = 103;
+    proto.rep_trades_total = 4.5;
+    proto.rep_count_trades = 7;
+    let state = profit_state_from_proto(&proto);
+
+    assert_eq!(state.hourly_profit, -177.24);
+    assert_eq!(state.hourly_trades, 103);
+    assert_eq!(state.total_profit, 4.5);
+    assert_eq!(state.total_trades, 7);
+}

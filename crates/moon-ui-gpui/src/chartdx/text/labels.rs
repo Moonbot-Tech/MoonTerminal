@@ -602,7 +602,7 @@ fn resolve(part: &ChartLabelPart, inputs: &LabelInputs) -> Option<(String, Optio
             .and_then(|trade| non_empty(&trade.sell_reason))
             .map(|t| (cut(&t), None)),
         ChartLabelField::ScaleBadge => inputs.scale_badge.map(|pct| {
-            // A range below a whole percent in a quiet Auto market reads as "<1%", never as zero:
+            // A range that rounds below a whole percent reads as "<1%", never as zero:
             // zero would claim the chart has no vertical span at all.
             let text = if pct == 0 {
                 "<1%".to_string()

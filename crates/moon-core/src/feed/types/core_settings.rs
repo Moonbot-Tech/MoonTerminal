@@ -1715,10 +1715,11 @@ pub enum CoreConfigEditEvent {
 /// These come from the core's report database, not from balances or an order stream, so they can
 /// disagree with the header's session P&L by design.
 ///
-/// PAIRING UNVERIFIED: the wire carries four scalars (`rep_total_profit`/`rep_total_trades` and
-/// `rep_trades_total`/`rep_count_trades`) and names neither pair, so which one backs the trade
-/// window and which the hourly one is read from their position in the Moonbot page, not from the
-/// protocol. Only the two "now" captions and their Reset buttons depend on it.
+/// The wire carries four scalars and names neither pair: `rep_total_profit`/`rep_total_trades`
+/// back the hourly counter and `rep_trades_total`/`rep_count_trades` the trade window. That
+/// pairing was settled on a live core (#863), where the first pair counted more trades than the
+/// trades stop's cap allows; the earlier reading had the two crossed. Only the two "now" captions
+/// depend on it.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ProfitState {
     /// Accumulated profit over the trade-window counter, in quote currency.

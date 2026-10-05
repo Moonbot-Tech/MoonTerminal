@@ -1162,9 +1162,9 @@ impl ChartPanel {
             delta_3h: delta(moon_core::config::LabelWindow::H3),
             delta_1h: delta(moon_core::config::LabelWindow::H1),
             delta_15m: delta(moon_core::config::LabelWindow::M15),
-            // The chart's own badge, read from the renderer rather than derived here: hiding it is
-            // a decision `chartdx::scale_badge_pct` makes, and a second copy of that decision would
-            // be free to disagree with the badge inside the picture.
+            // The chart's own badge, read from the renderer rather than derived here: the figure
+            // and whether it is shown are decided in `chartdx`, and a second copy of that decision
+            // would be free to disagree with the badge inside the picture.
             scale_pct: self.chart.scale_badge(),
             time_scale_s: self.chart.time_scale_secs(),
         }

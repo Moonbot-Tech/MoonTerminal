@@ -385,9 +385,7 @@ impl ChartEngine {
     /// Returns the first active pane's Y-scale badge, as a whole percentage of the visible range.
     ///
     /// Read rather than recomputed, for the same reason [`Self::pane_ticker`] is: the value is
-    /// decided by `scale_badge_pct` and cached during `sync_from_market_source`, and that decision
-    /// is more than a division — an untouched fixed percentage that already matches the selected
-    /// step is deliberately HIDDEN, and manual and auto price modes answer differently. A second
+    /// decided by `scale_badge_pct` and cached during `sync_from_market_source`. A second
     /// derivation elsewhere would be free to disagree, and the surface that reads this is the chart
     /// SHOT, where the symptom would be a burnt-in figure contradicting the badge visible in the
     /// very same picture.

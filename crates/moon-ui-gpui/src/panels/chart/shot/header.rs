@@ -130,8 +130,8 @@ pub(super) struct HeaderInputs {
     pub(super) tf_min: u32,
     /// The chart's own Y-scale badge: the visible price range as a whole percentage.
     ///
-    /// `None` means the badge is HIDDEN, not zero — the chart hides it whenever an untouched fixed
-    /// percentage already matches the selected step. See [`scale_field`] for the `0` convention.
+    /// `None` means the badge is HIDDEN, not zero — its caption is switched off, or the chart has no
+    /// price to measure against. See [`scale_field`] for the `0` convention.
     pub(super) scale_pct: Option<i32>,
     /// The chart's own time-scale badge: the whole seconds the plot spans. `None` when the chart
     /// shows no such badge; see [`time_field`].
@@ -333,7 +333,7 @@ pub(super) fn lead_width(lead_gap: LeadGap, gaps: Gaps) -> i32 {
 ///
 /// **The convention is copied VERBATIM from the badge the chart itself draws**
 /// (`chartdx/text/labels.rs`, `ChartLabelField::ScaleBadge`): a range that rounds below a whole
-/// percent in a quiet Auto market reads `<1%` and never `0%`, because a zero would claim the chart
+/// percent reads `<1%` and never `0%`, because a zero would claim the chart
 /// has no vertical span at all. Copied rather than shared because the chart's own resolver is
 /// reached through a `ChartLabelPart` and a `LabelInputs` snapshot, neither of which exists on this
 /// side of the capture — but the two spellings must stay identical, and a static contract pins
