@@ -174,6 +174,7 @@ fn complete_only_when_every_core_is_current() {
 /// it never states.
 #[test]
 fn facts_always_name_the_core_count() {
+    let _locale = crate::test_locale::force("en");
     let aggs = vec![agg(1, 10.0, 20.0, BalanceState::Live)];
     let t = scope_totals(&aggs, &HashSet::new());
     assert_eq!(facts(&t).len(), 1);
@@ -183,6 +184,7 @@ fn facts_always_name_the_core_count() {
 /// position, never on translated text, so the test holds in any locale.
 #[test]
 fn facts_list_every_reason_in_priority_order() {
+    let _locale = crate::test_locale::force("en");
     let aggs = vec![
         agg(1, 10.0, 20.0, BalanceState::Live),
         agg(2, 5.0, 5.0, BalanceState::Stale),
@@ -207,6 +209,7 @@ fn facts_list_every_reason_in_priority_order() {
 /// being partial must not lose its explanation when the trailing facts are clipped.
 #[test]
 fn tooltip_carries_every_fact_that_can_clip() {
+    let _locale = crate::test_locale::force("en");
     let aggs = vec![
         agg(1, 10.0, 20.0, BalanceState::Live),
         agg(2, 5.0, 5.0, BalanceState::Stale),
@@ -224,6 +227,7 @@ fn tooltip_carries_every_fact_that_can_clip() {
 /// The tooltip obeys the same "no data is not zero" rule as the row it explains.
 #[test]
 fn tooltip_shows_dash_when_nothing_reported() {
+    let _locale = crate::test_locale::force("en");
     let aggs = vec![agg(1, 0.0, 0.0, BalanceState::Awaiting)];
     let t = scope_totals(&aggs, &HashSet::new());
     assert_eq!(scope_amount_text(&t, t.total), DASH);
@@ -260,6 +264,7 @@ fn on_account(
 /// reach the facts and the tooltip must name which core was folded into which.
 #[test]
 fn two_cores_on_one_account_are_one_account_in_the_footer() {
+    let _locale = crate::test_locale::force("en");
     use moon_core::config::TotalMode;
     use moon_core::venue::Brand;
     let aggs = vec![
@@ -291,6 +296,7 @@ fn two_cores_on_one_account_are_one_account_in_the_footer() {
 /// the user left out of the total would vanish from it without a word.
 #[test]
 fn an_excluded_core_is_named_in_facts_and_tooltip() {
+    let _locale = crate::test_locale::force("en");
     use moon_core::config::TotalMode;
     use moon_core::venue::Brand;
     let aggs = vec![
@@ -314,6 +320,7 @@ fn an_excluded_core_is_named_in_facts_and_tooltip() {
 /// would read as exact when its cores report the shared wallet differently.
 #[test]
 fn a_hyperliquid_fold_carries_its_caveat() {
+    let _locale = crate::test_locale::force("en");
     use moon_core::config::TotalMode;
     use moon_core::venue::Brand;
     let aggs = vec![

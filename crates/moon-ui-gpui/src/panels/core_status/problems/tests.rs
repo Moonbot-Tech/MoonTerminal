@@ -59,6 +59,7 @@ fn an_empty_list_reads_as_clean_only_when_every_core_answered() {
 /// would erase the only signal that says the TERMINAL is behind, not the core.
 #[test]
 fn an_unknown_category_is_shown_as_its_raw_byte() {
+    let _locale = crate::test_locale::force("en");
     assert_eq!(category_label(CoreProblemCategory::Unknown(7)), "#7");
     assert_ne!(
         category_label(CoreProblemCategory::Unknown(7)),
@@ -98,6 +99,7 @@ fn the_silent_core_notice_does_not_depend_on_an_empty_table() {
 /// to prevent.
 #[test]
 fn a_truncated_list_is_stated_even_when_every_core_answered() {
+    let _locale = crate::test_locale::force("en");
     let full = ProblemsScope {
         cores: 4,
         silent: Vec::new(),
@@ -177,6 +179,7 @@ fn the_silent_core_hover_names_them_without_outgrowing_the_window() {
 /// names them in its confirm, so nothing about it is decided by which core happened to be left.
 #[test]
 fn the_channel_test_opens_only_for_one_connected_core() {
+    let _locale = crate::test_locale::force("en");
     assert_eq!(ActionGate::Ready(7).core(), Some(7));
     assert_eq!(ActionGate::NoSingleChoice.core(), None);
     assert_eq!(

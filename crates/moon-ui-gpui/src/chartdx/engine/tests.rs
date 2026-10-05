@@ -175,6 +175,7 @@ fn park_camera(engine: &mut ChartEngine, right_time_ms: f64, center_price: f32, 
 /// chart comes back on the old book center after the book has moved.
 #[test]
 fn reveal_after_a_hidden_book_update_refreshes_center_and_live_edge() {
+    let _locale = crate::test_locale::force("en");
     use std::collections::HashMap;
 
     use moon_core::market::{MarketDataSource, MarketStore};
@@ -258,6 +259,7 @@ fn reveal_after_a_hidden_book_update_refreshes_center_and_live_edge() {
 /// not on a stale row past the tail, which would draw the column empty.
 #[test]
 fn a_stale_label_offset_is_reclamped_before_the_wheel_moves_it() {
+    let _locale = crate::test_locale::force("en");
     use std::rc::Rc;
 
     let epoch = 1_700_000_000_000.0;

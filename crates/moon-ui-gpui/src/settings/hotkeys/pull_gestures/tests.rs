@@ -50,6 +50,7 @@ fn row(rows: &[GesturePullRow], target: GestureTarget) -> &GesturePullRow {
 /// Plausible breakage: replacing `move_gesture(row, true)` with `g.short_buy_move_click`.
 #[test]
 fn a_mirrored_short_row_takes_the_long_gesture_not_the_stale_short_field() {
+    let _locale = crate::test_locale::force("en");
     let mut core = empty_core();
     core.same_hotkeys_for_move = true;
     core.buy_move_click = ordinal(MouseGestureBinding::MiddleCtrl);
@@ -74,6 +75,7 @@ fn a_mirrored_short_row_takes_the_long_gesture_not_the_stale_short_field() {
 /// Plausible breakage: `apply_core_gestures` calling the editor's `set_gesture_mirrored`.
 #[test]
 fn applying_a_long_gesture_leaves_the_short_row_the_core_did_not_change() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig {
         same_hotkeys_for_move: true,
         buy_move_click: MouseGestureBinding::LeftDouble,
@@ -104,6 +106,7 @@ fn applying_a_long_gesture_leaves_the_short_row_the_core_did_not_change() {
 /// window — or a `unwrap_or_default()` that silently disarms the row.
 #[test]
 fn an_unknown_ordinal_is_refused_rather_than_guessed() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig {
         buy_set_click: MouseGestureBinding::LeftDouble,
         ..Default::default()
@@ -141,6 +144,7 @@ fn an_unknown_ordinal_is_refused_rather_than_guessed() {
 /// make a stock core silently leave the secondary move rows on whatever the terminal had.
 #[test]
 fn a_core_value_of_none_arrives_as_none() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig {
         buy_set_click: MouseGestureBinding::LeftDouble,
         buy_move_kind: MoveKind::ParallelShift,
@@ -172,6 +176,7 @@ fn a_core_value_of_none_arrives_as_none() {
 /// Plausible breakage: repairing the short rows only when the flag turns ON.
 #[test]
 fn turning_the_mirror_off_re_aims_the_short_rows_it_makes_live() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig {
         same_hotkeys_for_move: true,
         buy_move_click: MouseGestureBinding::LeftDouble,
@@ -203,6 +208,7 @@ fn turning_the_mirror_off_re_aims_the_short_rows_it_makes_live() {
 /// that makes the short field unreachable.
 #[test]
 fn turning_the_mirror_on_re_aims_the_short_rows_it_hides() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig {
         same_hotkeys_for_move: false,
         short_buy_move_click: MouseGestureBinding::RightAlt,
@@ -229,6 +235,7 @@ fn turning_the_mirror_on_re_aims_the_short_rows_it_hides() {
 /// show "will apply" and then quietly do nothing.
 #[test]
 fn every_row_the_preview_offers_is_one_the_apply_writes() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = HotkeysConfig::default();
     let mut core = empty_core();
     // Something different from the shipped defaults in every field.

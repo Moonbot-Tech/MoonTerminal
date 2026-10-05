@@ -167,6 +167,7 @@ fn break_even_profit_factor_is_a_dash_and_all_winners_stay_99() {
 /// count in brackets, coloured by the closed profit alone — the estimate never joins the total.
 #[test]
 fn an_open_tail_follows_the_closed_profit_in_brackets() {
+    let _locale = crate::test_locale::force("en");
     set_pnl_unit(None);
     let stats = VarStats {
         n: 3,

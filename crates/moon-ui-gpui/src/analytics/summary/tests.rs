@@ -44,6 +44,7 @@ fn non_finite_stays_a_bare_em_dash() {
 /// every locale, so the assertions hold whatever language is active.
 #[test]
 fn insight_sentence_unit_follows_the_metric() {
+    let _locale = crate::test_locale::force("en");
     let render = || {
         t!(
             "analytics.ins.best_strategy",

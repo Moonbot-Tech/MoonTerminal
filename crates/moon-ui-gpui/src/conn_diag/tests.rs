@@ -35,6 +35,7 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
 /// the Copy Key route rather than the undetermined-support route.
 #[test]
 fn key_unparsable_wording_distinguishes_blank_from_pasted_garbage() {
+    let _locale = crate::test_locale::force("en");
     let empty = FailureClass::KeyUnparsable { empty: true };
     let garbage = FailureClass::KeyUnparsable { empty: false };
 
@@ -51,6 +52,7 @@ fn key_unparsable_wording_distinguishes_blank_from_pasted_garbage() {
 /// after the socket has already proved that packets reached the terminal.
 #[test]
 fn unparsed_datagrams_do_not_use_the_silent_wording() {
+    let _locale = crate::test_locale::force("en");
     let silent = FailureClass::NoResponse {
         packets_sent: 9,
         packets_received: 0,
@@ -101,6 +103,7 @@ fn fleet_mode_suggestion_requires_the_failing_cores_effective_mode() {
 /// Breakage: widening its `(FailureClass::NoResponse, Some(_))` match to every class tells users to change transport mode after a handshake that already proved transport worked.
 #[test]
 fn only_no_response_verdicts_receive_a_mode_suggestion() {
+    let _locale = crate::test_locale::force("en");
     let silent = FailureClass::NoResponse {
         packets_sent: 3,
         packets_received: 0,

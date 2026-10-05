@@ -90,6 +90,7 @@ fn a_bare_letter_is_warned_about_without_a_rival() {
 /// build can see.
 #[test]
 fn a_builtin_beats_the_slots_below_it_and_loses_to_the_eight_above() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     hotkeys.set_key(KeySlot::PanicSell, "escape".into());
     hotkeys.set_key(KeySlot::FigAlert, "ctrl-shift-f10".into());
@@ -119,6 +120,7 @@ fn a_builtin_beats_the_slots_below_it_and_loses_to_the_eight_above() {
 /// selected, which is why that is the shipped default. The exemption is for THAT pair only.
 #[test]
 fn the_documented_delete_fallback_is_exempt_and_nothing_else_is() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     hotkeys.set_key(KeySlot::FigDelete, "delete".into());
     assert!(
@@ -183,6 +185,7 @@ fn the_button_decides_which_gesture_row_loses() {
 /// broken is the failure `Clashes::key` already names beside its own directional verdict.
 #[test]
 fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftAlt);
     hotkeys.set_gesture(GestureSlot::PendingLong, MouseGestureBinding::LeftAlt);
@@ -213,6 +216,7 @@ fn a_shared_placement_gesture_names_a_winner_and_a_loser() {
 /// `SellMove2` the winner over `ShortBuyMove`, which is the reverse of what the dispatcher does.
 #[test]
 fn move_rows_rank_by_the_dispatchers_pairs_not_by_row_order() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     hotkeys.set_gesture(GestureSlot::SellMove2, MouseGestureBinding::MiddleAlt);
     hotkeys.set_gesture(GestureSlot::ShortBuyMove, MouseGestureBinding::MiddleAlt);
@@ -256,6 +260,7 @@ fn an_inert_move_row_shadows_nothing() {
 /// A chart layer that answers only in a mode is shared; one that answers every press is not.
 #[test]
 fn a_conditional_chart_layer_shares() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     // Drawing answers Ctrl+Left only while a tool is armed, and it is asked FIRST.
     hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftCtrl);
@@ -293,6 +298,7 @@ fn the_two_halves_of_one_move_row_are_not_a_clash() {
 /// The shipped defaults must leave no row dead.
 #[test]
 fn the_shipped_defaults_leave_nothing_dead() {
+    let _locale = crate::test_locale::force("en");
     let hotkeys = HotkeysConfig::default();
     let clashes = Clashes::build(&hotkeys);
 
@@ -355,6 +361,7 @@ fn an_inert_move_row_carries_no_caption_of_its_own() {
 /// the menu on the right button — so the layer walk reports "both work" about a dead gesture.
 #[test]
 fn the_dead_figure_delete_gestures_are_reported_dead() {
+    let _locale = crate::test_locale::force("en");
     for gesture in [
         MouseGestureBinding::LeftCtrl,
         MouseGestureBinding::RightDouble,
@@ -401,6 +408,7 @@ fn the_dead_figure_delete_gestures_are_reported_dead() {
 /// alone stays green through exactly the regression this test is named after.
 #[test]
 fn a_lower_layer_is_told_it_loses_and_the_upper_one_that_it_takes() {
+    let _locale = crate::test_locale::force("en");
     let mut hotkeys = quiet();
     hotkeys.set_gesture(GestureSlot::BuySet, MouseGestureBinding::LeftShift);
     hotkeys.set_gesture(GestureSlot::BuyMove, MouseGestureBinding::LeftShift);

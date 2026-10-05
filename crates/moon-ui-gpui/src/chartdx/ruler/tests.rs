@@ -1,4 +1,8 @@
+//! Ruler readout invariants and cold-start coverage for terminal locale lookups.
+
 use super::*;
+
+mod cold;
 
 fn span(t0_ms: f64, p0: f64, t1_ms: f64, p1: f64) -> RulerSpan {
     RulerSpan {
@@ -18,6 +22,7 @@ fn unit(key: &str) -> String {
 /// the direction the user dragged, not which price is larger.
 #[test]
 fn the_move_line_is_signed_by_the_drag_direction() {
+    let _locale = crate::test_locale::force("en");
     let (m, s) = (
         unit("chart_labels.unit_minute"),
         unit("chart_labels.unit_second"),
@@ -38,6 +43,7 @@ fn the_move_line_is_signed_by_the_drag_direction() {
 /// Two units at most, the larger first, rounded down — a measurement states what elapsed.
 #[test]
 fn a_duration_reads_in_its_two_largest_units() {
+    let _locale = crate::test_locale::force("en");
     let (d, h, m, s) = (
         unit("chart_labels.unit_day"),
         unit("chart_labels.unit_hour"),
@@ -72,6 +78,7 @@ fn readout(buy: f64, sell: f64, complete: bool) -> VolumeSpanReadout {
 /// candles covering only the period's tail are the last resort.
 #[test]
 fn the_volume_line_prefers_a_whole_split_then_the_candles() {
+    let _locale = crate::test_locale::force("en");
     let (bv, sv, vol) = (
         unit("chart_labels.short.window_buy_volume"),
         unit("chart_labels.short.window_sell_volume"),

@@ -210,6 +210,7 @@ fn mutation_targets_exclude_legacy_rows_without_new_rec_id() {
 /// newline characters inside a cell must split the pasted selection into extra cells or rows.
 #[test]
 fn clipboard_tsv_uses_visual_column_and_row_order_without_embedded_delimiters() {
+    let _locale = crate::test_locale::force("en");
     let (cols, mut data) = fixture();
     data.rows[0][2] = Value::Text("left\tright\r\nnext".into());
     let mut selection = ReportSelection::default();

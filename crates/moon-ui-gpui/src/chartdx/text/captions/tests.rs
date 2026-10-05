@@ -15,6 +15,7 @@ use super::{CaptionGeomInput, MAX_CAPTION_LINE_H, ZONE_PAD, group_lines, zone_st
 /// above them; retaining hidden texts prevents the following module from reclaiming height.
 #[test]
 fn filter_header_and_lines_share_one_stack() {
+    let _locale = crate::test_locale::force("en");
     use super::super::labels::{LabelInputs, LabelState};
     use std::rc::Rc;
     let mut cfg = ChartLabelsCfg::empty();
@@ -467,6 +468,7 @@ fn wrap_item(part: usize, wraps: bool) -> super::Item {
 /// The exact-height and one-pixel-short cases also protect the last complete visible entry.
 #[test]
 fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
+    let _locale = crate::test_locale::force("en");
     use super::super::labels::{LabelInputs, LabelState};
     use std::rc::Rc;
     let mut cfg = ChartLabelsCfg::empty();
@@ -526,6 +528,7 @@ fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
 /// disabling the bottom-band trim and pushing the only collapse target above a short pane.
 #[test]
 fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
+    let _locale = crate::test_locale::force("en");
     use super::super::labels::{LabelAction, LabelInputs, LabelState};
     use std::rc::Rc;
     for zone in [LabelZone::ChartBottom, LabelZone::ZoneBottom] {

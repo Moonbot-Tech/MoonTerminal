@@ -269,6 +269,7 @@ fn the_moonbot_mark_names_exactly_the_slots_the_pull_writes() {
 /// paste will overwrite it, or the reverse.
 #[test]
 fn the_gesture_marks_name_exactly_the_gestures_the_pull_writes() {
+    let _locale = crate::test_locale::force("en");
     let written: Vec<GestureTarget> = preview_core_gestures(&HotkeysConfig::default(), &CORE_ZERO)
         .iter()
         .map(|row| row.target)

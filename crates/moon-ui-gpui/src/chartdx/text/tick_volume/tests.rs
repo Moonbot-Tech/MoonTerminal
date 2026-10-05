@@ -94,6 +94,7 @@ fn overlapping_ranges() -> [Option<TickVolumeRange>; 2] {
 /// A wide pane must retain the original decimal/count/range/unit presentation.
 #[test]
 fn wide_readout_keeps_original_lines() {
+    let _locale = crate::test_locale::force("en");
     let readout = fit_tick_readout(
         overlapping_ranges(),
         None,
@@ -121,6 +122,7 @@ fn wide_readout_keeps_original_lines() {
 /// Both overlapping sides stay readable in useful narrow docks in every supported language.
 #[test]
 fn narrow_dock_stacks_both_counts_and_exact_ranges() {
+    let _locale = crate::test_locale::force("en");
     for locale in ["en", "ru", "es"] {
         let readout = fit_tick_readout(
             overlapping_ranges(),
@@ -153,6 +155,7 @@ fn narrow_dock_stacks_both_counts_and_exact_ranges() {
 /// Very large/small f32 amounts remain exact and never collapse to the same rounded suffix.
 #[test]
 fn scientific_fallback_round_trips_extremes_and_adjacent_values() {
+    let _locale = crate::test_locale::force("en");
     for value in [
         f32::MAX,
         f32::MIN_POSITIVE,
@@ -194,6 +197,7 @@ fn scientific_fallback_round_trips_extremes_and_adjacent_values() {
 /// Equal-size prints still retain their count, and a missing BUY never relabels SELL.
 #[test]
 fn equal_sell_prints_keep_count_value_and_quote() {
+    let _locale = crate::test_locale::force("en");
     let ranges = [
         None,
         Some(TickVolumeRange {
@@ -221,6 +225,7 @@ fn equal_sell_prints_keep_count_value_and_quote() {
 /// Device scaling and pane offsets must not let the last line or rightmost digit cross its pane.
 #[test]
 fn narrow_backdrops_stay_inside_offset_panes_at_multiple_dpis() {
+    let _locale = crate::test_locale::force("en");
     for sf in [1.0, 1.25, 1.5, 2.0] {
         let bounds = [83.0 * sf, 41.0 * sf, 200.0 * sf, 180.0 * sf];
         let readout = fit_tick_readout(
@@ -248,6 +253,7 @@ fn narrow_backdrops_stay_inside_offset_panes_at_multiple_dpis() {
 /// The real measurement callback controls fit; font changes cannot sneak past a character guess.
 #[test]
 fn fit_honors_measured_width_height_and_exact_boundary() {
+    let _locale = crate::test_locale::force("en");
     let ranges = overlapping_ranges();
     let wide = tick_lines(ranges, None, "USDT", "en", false, false);
     let measured = |text: &str| {
@@ -297,6 +303,7 @@ fn sides_bucket() -> Option<BandFigure> {
 /// stacked, and is never folded into the tick rows.
 #[test]
 fn sides_bucket_prints_both_sides_under_its_period() {
+    let _locale = crate::test_locale::force("en");
     assert_eq!(
         tick_lines([None, None], sides_bucket(), "USDT", "en", false, false),
         ["Last 15s: Bv 1 500 · Sv 250.5 USDT"]
@@ -356,6 +363,7 @@ fn a_sides_bucket_needs_one_real_side() {
 /// say. The period token beside it is what separates a minute's total from a day's.
 #[test]
 fn candle_volume_is_a_separate_labelled_aggregate() {
+    let _locale = crate::test_locale::force("en");
     let readout = fit_tick_readout(
         overlapping_ranges(),
         minute_candle(),
@@ -394,6 +402,7 @@ fn candle_volume_is_a_separate_labelled_aggregate() {
 /// over a block that holds no ticks.
 #[test]
 fn candle_alone_draws_without_the_tick_heading() {
+    let _locale = crate::test_locale::force("en");
     for locale in ["en", "ru", "es"] {
         let readout = fit_tick_readout(
             [None, None],
@@ -437,6 +446,7 @@ fn t_nearby(locale: &str) -> String {
 /// stacked readout would take if it inherited a heading it does not have.
 #[test]
 fn stacked_candle_keeps_its_unit_reachable() {
+    let _locale = crate::test_locale::force("en");
     // With ticks: the stacked heading carries the unit, so the candle prints head + amount.
     let with_ticks = tick_lines(
         overlapping_ranges(),
@@ -462,6 +472,7 @@ fn stacked_candle_keeps_its_unit_reachable() {
 /// heading and amount comfortably.
 #[test]
 fn a_candle_only_readout_stacks_into_a_narrow_pane() {
+    let _locale = crate::test_locale::force("en");
     for locale in ["en", "ru", "es"] {
         // Too narrow for the inline `Candle 1m: 12 345 678 USDT` at this fixture's advance.
         let readout = fit_tick_readout(
@@ -484,6 +495,7 @@ fn a_candle_only_readout_stacks_into_a_narrow_pane() {
 /// Both tick ranges and the candle total remain complete at the enlarged default size.
 #[test]
 fn combined_default_readout_fits_narrow_panes_at_multiple_dpis() {
+    let _locale = crate::test_locale::force("en");
     for locale in ["en", "ru", "es"] {
         for sf in [1.0, 1.25, 1.5, 2.0] {
             let bounds = [83.0 * sf, 41.0 * sf, 200.0 * sf, 180.0 * sf];
@@ -512,6 +524,7 @@ fn combined_default_readout_fits_narrow_panes_at_multiple_dpis() {
 /// A four-pixel label increase must affect fitting, including the final candle line.
 #[test]
 fn increased_font_respects_the_combined_readout_height_boundary() {
+    let _locale = crate::test_locale::force("en");
     // The same bundled 0.6em glyph advance at 17px, with four pixels of leading.
     let measure = |text: &str| [text.chars().count() as f32 * 10.2, 21.0];
     for locale in ["en", "ru", "es"] {
@@ -560,6 +573,7 @@ fn a_non_finite_or_empty_bucket_contributes_no_candle_line() {
 /// A bucket whose width cannot be named prints the amount without inventing a period.
 #[test]
 fn an_unnameable_bucket_width_drops_the_period_not_the_figure() {
+    let _locale = crate::test_locale::force("en");
     let candle = Some(BandFigure::Candle(CandleVolume {
         quote: 42.0,
         tf_ms: 0.5,

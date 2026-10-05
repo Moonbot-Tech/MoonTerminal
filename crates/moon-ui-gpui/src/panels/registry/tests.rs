@@ -3,8 +3,10 @@
 use crate::panels::registry::{DOCK_PANELS, home_ordered_names};
 use crate::persistence::panel_meta::tab_label;
 
+/// Removing a panel's translation key would expose its internal name on dock and window tabs.
 #[test]
 fn every_registry_panel_has_a_localized_label() {
+    let _locale = crate::test_locale::force("en");
     // Adding a panel to the registry but forgetting its label reddens here rather than shipping an
     // English tab caption. The oracle (panel_meta::tab_label) is an independent file.
     for kind in DOCK_PANELS {

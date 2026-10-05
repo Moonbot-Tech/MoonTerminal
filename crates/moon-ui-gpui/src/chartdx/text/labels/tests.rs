@@ -79,6 +79,7 @@ fn collapsed_filter_count_uses_the_column_limit_and_handles_empty_data() {
 /// scrolled. The collapsed header keeps counting the true total, never the drawn window.
 #[test]
 fn a_long_filter_column_shows_its_window_indicators_and_the_true_total() {
+    let _locale = crate::test_locale::force("en");
     let mut cfg = ChartLabelsCfg::empty();
     cfg.rows[0] = moon_core::config::strategy_filters_row();
     cfg.rows[0].name = "Filters".into();
@@ -304,6 +305,7 @@ fn one_field(field: ChartLabelField, inputs: LabelInputs) -> Option<String> {
 /// other.
 #[test]
 fn the_detect_strategy_names_itself() {
+    let _locale = crate::test_locale::force("en");
     let inputs = LabelInputs {
         detect_strategy: "BTC Sniper".into(),
         ..Default::default()
@@ -403,6 +405,7 @@ fn a_long_detect_line_is_cut() {
 /// into one string is what made "Фандинг: +3.90%" a block of green.
 #[test]
 fn a_caption_keeps_its_prefix_beside_its_value() {
+    let _locale = crate::test_locale::force("en");
     let cfg = cfg_of(&[ChartLabelField::Funding]);
     let mut state = LabelState::default();
     state.update(
@@ -428,6 +431,7 @@ fn a_caption_keeps_its_prefix_beside_its_value() {
 /// hundredths of a percent painted red and green is noise, and hiding the value would be worse.
 #[test]
 fn a_figure_below_the_colour_threshold_prints_without_a_sign() {
+    let _locale = crate::test_locale::force("en");
     let mut cfg = cfg_of(&[ChartLabelField::Delta1h]);
     cfg.rows[0].parts[0].style.color_min_pct = Some(1.0);
     let quiet = LabelInputs {
@@ -779,6 +783,7 @@ fn the_strategy_name_comes_from_the_newest_open_order() {
 /// captions cost no rows on an ordinary chart; the filters control remains available without data.
 #[test]
 fn an_unresolved_field_occupies_no_row() {
+    let _locale = crate::test_locale::force("en");
     let cfg = ChartLabelsCfg::default();
     let inputs = LabelInputs {
         ticker: "BTCUSDT".into(),
@@ -811,6 +816,7 @@ fn an_unresolved_field_occupies_no_row() {
 /// neighbour must not shift it, including the always-present filters header's reserved address.
 #[test]
 fn the_caption_address_survives_a_skipped_neighbour() {
+    let _locale = crate::test_locale::force("en");
     // The shipped roster, with only some of its figures answering: the venue has no name here, the
     // Y-scale badge is hidden, and the whole position block has nothing open to report.
     let cfg = ChartLabelsCfg::default();
@@ -843,8 +849,10 @@ fn the_caption_address_survives_a_skipped_neighbour() {
     );
 }
 
+/// Rebuilding unchanged captions must not request a redraw; the locale stays fixed between reads.
 #[test]
 fn re_running_with_identical_inputs_reports_no_change() {
+    let _locale = crate::test_locale::force("en");
     let cfg = ChartLabelsCfg::default();
     let inputs = LabelInputs {
         ticker: "BTCUSDT".into(),
@@ -868,6 +876,7 @@ fn re_running_with_identical_inputs_reports_no_change() {
 /// must not repaint the pane.
 #[test]
 fn a_tick_below_the_printed_precision_does_not_change_the_caption() {
+    let _locale = crate::test_locale::force("en");
     let cfg = cfg_of(&[ChartLabelField::Delta24h]);
     let mut state = LabelState::default();
     let mut inputs = LabelInputs {
@@ -884,8 +893,10 @@ fn a_tick_below_the_printed_precision_does_not_change_the_caption() {
     );
 }
 
+/// Dropping a figure's sign would prevent the renderer from choosing its gain or loss color.
 #[test]
 fn a_signed_figure_carries_its_sign_for_coloring() {
+    let _locale = crate::test_locale::force("en");
     let cfg = cfg_of(&[ChartLabelField::Delta1h]);
     let mut state = LabelState::default();
     let cfg_rc = Rc::new(cfg.clone());
@@ -936,6 +947,7 @@ fn the_scale_badge_states_a_sub_percent_range_rather_than_zero() {
 /// all while the pane has no plot to measure.
 #[test]
 fn the_time_scale_badge_prints_the_span_as_a_compact_duration() {
+    let _locale = crate::test_locale::force("en");
     let text = one_field(
         ChartLabelField::TimeScaleBadge,
         LabelInputs {
@@ -959,8 +971,10 @@ fn no_position_prints_no_pnl() {
     assert!(one_field(ChartLabelField::OpenOrders, inputs_with(&[])).is_none());
 }
 
+/// Averaging order percentages without their spent amounts would misstate the position's return.
 #[test]
 fn the_pnl_percentage_is_weighted_by_what_each_order_spent() {
+    let _locale = crate::test_locale::force("en");
     // 1 unit at 100 gaining 10, plus 1 unit at 300 gaining 30: 40 on 400 spent is exactly 10%.
     let mut second = order(300.0, 330.0);
     second.uid = 2;
@@ -978,6 +992,7 @@ fn the_pnl_percentage_is_weighted_by_what_each_order_spent() {
 /// The basis is per CAPTION, so two captions on one chart can report different sets of orders.
 #[test]
 fn two_captions_can_read_different_bases() {
+    let _locale = crate::test_locale::force("en");
     let live = order(100.0, 110.0);
     let mut emu = order(100.0, 130.0);
     emu.emulator = true;
@@ -996,6 +1011,7 @@ fn two_captions_can_read_different_bases() {
 /// The caption flag is what turns a bare number into a labelled one.
 #[test]
 fn the_caption_flag_prefixes_the_field_name() {
+    let _locale = crate::test_locale::force("en");
     let mut cfg = cfg_of(&[ChartLabelField::Delta1h]);
     cfg.rows[0].parts[0].style.caption = Some(false);
     let bare = texts_of(
@@ -1169,6 +1185,7 @@ fn a_market_without_a_quote_prints_nothing() {
 /// a real market still shows the reader what it would look like.
 #[test]
 fn the_preview_answers_for_every_field() {
+    let _locale = crate::test_locale::force("en");
     for field in ChartLabelField::ALL {
         let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
         row.push_part(field);
@@ -1217,6 +1234,7 @@ fn a_second_column_in_the_preview_is_ignored() {
 /// not "what is configured".
 #[test]
 fn the_preview_skips_a_hidden_caption_and_prints_the_name() {
+    let _locale = crate::test_locale::force("en");
     let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
     row.push_part(ChartLabelField::Delta1h);
     row.push_part(ChartLabelField::Delta24h);
@@ -1270,6 +1288,7 @@ fn a_hidden_module_prints_nothing_at_all() {
 /// ROUNDED value: a coin-margined core reports fractions of a BTC, which two decimals cannot show.
 #[test]
 fn a_zero_core_pnl_prints_nothing() {
+    let _locale = crate::test_locale::force("en");
     let figures_with = |core_pnl: Option<f64>| LabelInputs {
         figures: Some(moon_core::market::MarketFiguresReadout {
             core_pnl,
@@ -1300,6 +1319,7 @@ fn a_zero_core_pnl_prints_nothing() {
 /// all — leaves the caption unprinted. The two must not be collapsed into one rule.
 #[test]
 fn a_zero_session_still_prints_but_an_absent_one_does_not() {
+    let _locale = crate::test_locale::force("en");
     let figures_with = |session: Option<f64>| LabelInputs {
         figures: Some(moon_core::market::MarketFiguresReadout {
             session,
@@ -1362,6 +1382,7 @@ fn sample_readout() -> moon_core::market::VolumeSpanReadout {
 /// print `Bv 12k`, `Sv 4k` and a total that is neither their sum nor anybody's number.
 #[test]
 fn the_volume_total_is_the_sum_of_the_two_sides() {
+    let _locale = crate::test_locale::force("en");
     let inputs = volumes(sample_readout());
     let bought = one_field(ChartLabelField::WindowBuyVolume, inputs.clone()).expect("prints");
     let sold = one_field(ChartLabelField::WindowSellVolume, inputs.clone()).expect("prints");
@@ -1383,6 +1404,7 @@ fn the_volume_total_is_the_sum_of_the_two_sides() {
 /// the terminal does not have — and the reader has no way to see that from the caption.
 #[test]
 fn an_uncovered_period_is_marked() {
+    let _locale = crate::test_locale::force("en");
     let short = moon_core::market::VolumeSpanReadout {
         complete: false,
         ..sample_readout()
@@ -1399,6 +1421,7 @@ fn an_uncovered_period_is_marked() {
 /// no quantity, so the coin amount is short by exactly that stretch.
 #[test]
 fn a_coin_figure_is_marked_when_the_aggregates_answered() {
+    let _locale = crate::test_locale::force("en");
     let mut cfg = ChartLabelsCfg::empty();
     let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
     row.push_part(ChartLabelField::WindowBuyVolume);
@@ -1425,6 +1448,7 @@ fn a_coin_figure_is_marked_when_the_aggregates_answered() {
 /// that sets the period would be unreachable exactly while the period is unset.
 #[test]
 fn the_heading_names_the_period_without_any_reading() {
+    let _locale = crate::test_locale::force("en");
     let mut cfg = ChartLabelsCfg::empty();
     let mut row = ChartLabelRow::new(LabelZone::ChartTop, LabelAlign::Left);
     row.push_part(ChartLabelField::WindowSpanName);
@@ -1452,6 +1476,7 @@ fn the_heading_names_the_period_without_any_reading() {
 /// at different prices.
 #[test]
 fn the_bar_is_the_side_s_share_and_a_silent_market_has_none() {
+    let _locale = crate::test_locale::force("en");
     let cfg = cfg_of(&[ChartLabelField::WindowBuyVolume]);
     let cfg_rc = Rc::new(cfg);
     let mut state = LabelState::default();
@@ -1485,6 +1510,7 @@ fn the_bar_is_the_side_s_share_and_a_silent_market_has_none() {
 /// heading already states it.
 #[test]
 fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
+    let _locale = crate::test_locale::force("en");
     let mut part = ChartLabelPart::new(ChartLabelField::WindowBuyVolume);
     part.window = moon_core::config::LabelWindow::M5;
 
@@ -1512,6 +1538,7 @@ fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
 /// A caption that reads NO period keeps the old meaning: the switch prints its caption or nothing.
 #[test]
 fn the_prefix_switch_still_removes_a_plain_caption() {
+    let _locale = crate::test_locale::force("en");
     let part = ChartLabelPart::new(ChartLabelField::OpenOrders);
     assert!(!super::caption_prefix(&part, true, TF_5M).is_empty());
     assert!(super::caption_prefix(&part, false, TF_5M).is_empty());
@@ -1717,6 +1744,7 @@ fn the_trade_captions_print_nothing_without_a_trade() {
 /// can print the strategy that fired, the one holding an order and the one that owns this trade.
 #[test]
 fn a_handed_trade_states_its_strategy_line_and_exit() {
+    let _locale = crate::test_locale::force("en");
     let handed = |trade: crate::chartdx::TradeLabels| LabelInputs {
         trade: Some(Rc::new(trade)),
         ..Default::default()

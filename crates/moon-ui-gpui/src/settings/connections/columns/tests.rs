@@ -52,6 +52,7 @@ fn indent_parts_match_the_header_inset() {
 /// at non-default font scales.
 #[test]
 fn widths_follow_the_frozen_per_column_policy() {
+    let _locale = crate::test_locale::force("en");
     const MICRO_COLUMNS: [ConnColId; 4] = [
         ConnColId::Proto,
         ConnColId::Preset,
@@ -105,6 +106,7 @@ fn widths_follow_the_frozen_per_column_policy() {
 /// every visible header label also needs help text.
 #[test]
 fn growth_and_tooltips_match_the_text_column_contract() {
+    let _locale = crate::test_locale::force("en");
     let growing: Vec<_> = ConnColId::ALL
         .into_iter()
         .filter(|column| column.spec().grow)
@@ -135,6 +137,7 @@ fn growth_and_tooltips_match_the_text_column_contract() {
 /// its readable character count shrink when the user raises the Font setting.
 #[test]
 fn caps_match_the_text_column_contract_at_each_font_scale() {
+    let _locale = crate::test_locale::force("en");
     const MICRO_COLUMNS: [ConnColId; 4] = [
         ConnColId::Proto,
         ConnColId::Preset,
@@ -259,6 +262,7 @@ fn data_trigger_fits_every_count_at_each_zoom() {
 /// including its padding, so a longer translation must still fit without a locale switch.
 #[test]
 fn total_trigger_fits_every_localized_option_at_each_zoom() {
+    let _locale = crate::test_locale::force("en");
     use moon_core::config::UiThemeMode;
 
     let dictionaries = [
@@ -312,6 +316,7 @@ fn total_trigger_fits_every_localized_option_at_each_zoom() {
 /// for the user-entered name.
 #[test]
 fn name_is_the_only_uncapped_growing_column_with_the_widest_narrow_width() {
+    let _locale = crate::test_locale::force("en");
     let uncapped_growing: Vec<_> = ConnColId::ALL
         .into_iter()
         .filter(|column| column.spec().grow && column.spec().max.is_none())

@@ -105,6 +105,7 @@ fn server(group: &str) -> ServerConfig {
 /// populated exchange sections.
 #[test]
 fn flatten_entries_group_known_names_and_keep_unknown_first() {
+    let _locale = crate::test_locale::force("en");
     let servers: Vec<ServerRowMeta> = vec![
         (1, 11, true, "default".to_string(), Some(venue(7))),
         (2, 12, true, "default".to_string(), None),
@@ -155,6 +156,7 @@ fn flatten_entries_group_known_names_and_keep_unknown_first() {
 /// fields.
 #[test]
 fn pending_section_selects_only_unsaved_cores_and_excludes_them_from_groups() {
+    let _locale = crate::test_locale::force("en");
     let servers: Vec<ServerRowMeta> = vec![
         (1, 21, true, "default".to_string(), Some(venue(4))),
         (2, 0, true, "default".to_string(), None),
