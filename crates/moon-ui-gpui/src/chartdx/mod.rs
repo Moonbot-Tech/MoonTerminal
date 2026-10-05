@@ -123,24 +123,17 @@ fn union_range(a: Option<(f32, f32)>, b: Option<(f32, f32)>) -> Option<(f32, f32
 }
 
 /// Return the whole-number percentage of the current visible Y range relative to price for the
-/// scale badge beside the corner label, or `None` to hide it.
+/// scale badge beside the corner label, or `None` when there is no price to measure against.
 ///
-/// Auto always shows the badge. Manual Y from drag, right-click zoom, or comparison lock shows it
-/// only when the whole percentage differs from the selected step. An untouched fixed percentage
-/// matches the selected step by construction and stays hidden.
+/// The measured window in every price mode — Auto, a pinned step, and manual Y from drag,
+/// right-click zoom or comparison lock — including when it equals the pinned step (#867). The
+/// magnifier states what was PICKED, the badge what is ON SCREEN; repeating `20%` in both places is
+/// the point, and hiding it left a hole exactly at the step while its neighbours printed.
 fn scale_badge_pct(view: &moon_chart::view::ChartView) -> Option<i32> {
     // Measured against the instrument's price, not the centre of the viewport: dragging the chart
     // vertically moves that centre without touching the zoom, and reporting a changed scale for a
     // scale that did not change is what this badge is least allowed to do.
-    let cur = view.visible_scale_percent()?.round() as i32;
-    if view.auto_price {
-        return Some(cur);
-    }
-    if !view.manual_price {
-        return None;
-    }
-    let selected = (view.scale_percent * 100.0).round() as i32;
-    (cur != selected).then_some(cur)
+    Some(view.visible_scale_percent()?.round() as i32)
 }
 
 /// Return the whole seconds the plot spans horizontally, for the time-scale badge, or `None` when
@@ -455,7 +448,7 @@ struct PaneRender {
     /// no label resolves to one, and the pane would take the source lock again every sync.
     ticker_resolved: bool,
     /// Current Y-scale badge to the left of the corner label, as a whole percentage of visible range
-    /// relative to price. `None` hides it when fixed percentage matches the selected step. Computed
+    /// relative to price. `None` while there is no price to measure against. Computed
     /// by `sync_from_market_source` from the panel's logical `ChartView`.
     scale_badge: Option<i32>,
     /// Current X-scale badge: the whole seconds the plot spans, from [`time_scale_secs`]. Computed

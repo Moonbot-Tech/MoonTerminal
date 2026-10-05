@@ -1215,9 +1215,8 @@ impl ChartDataState {
             let use_reference = pane.view.follow || !pr.saw_window_data;
             let visible_price = moon_chart::view::fit_band(window_data, reference, use_reference);
             pane.view.update_y(now, plot_h, visible_price, last_price);
-            // Show the current Y-scale badge beside the corner label always in Auto mode. For manual
-            // drag, right-button zoom, or comparison lock, show it when the whole percentage differs
-            // from the selected step.
+            // The current Y-scale badge beside the corner label: the measured window in every price
+            // mode, a pinned step included.
             let next_badge = scale_badge_pct(&pane.view);
             if pr.scale_badge != next_badge {
                 pr.scale_badge = next_badge;

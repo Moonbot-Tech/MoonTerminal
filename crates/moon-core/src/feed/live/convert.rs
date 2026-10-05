@@ -353,14 +353,19 @@ pub(super) fn runtime_state_from_proto(s: &moonproto::RuntimeStateCommand) -> Ru
 
 /// Project the core's report profit counters shown beside the AutoStart loss caps.
 ///
-/// The two pairs are the core's own trade-window and hourly counters; they come from the report
+/// The two pairs are the core's own hourly and trade-window counters; they come from the report
 /// database rather than from balances, so they can legitimately disagree with the header P&L.
+///
+/// The FIRST wire pair is the hours window and the SECOND the last-N-trades window (#863): a live
+/// core showed 103 trades in the first pair beside a trades stop capped at 20, which only the hours
+/// window can hold. The Reset buttons already send the kind of the stop they sit under, so only
+/// this projection decides which digits each stop shows.
 pub(super) fn profit_state_from_proto(s: &moonproto::ProfitStateCommand) -> ProfitState {
     ProfitState {
-        total_profit: s.rep_total_profit,
-        total_trades: s.rep_total_trades,
-        hourly_profit: s.rep_trades_total,
-        hourly_trades: s.rep_count_trades,
+        total_profit: s.rep_trades_total,
+        total_trades: s.rep_count_trades,
+        hourly_profit: s.rep_total_profit,
+        hourly_trades: s.rep_total_trades,
     }
 }
 

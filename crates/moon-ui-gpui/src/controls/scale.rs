@@ -171,12 +171,9 @@ pub(crate) fn scale_dropdown_for_tabs(
 
 /// Builds the trade-detail window's own price-scale dropdown.
 ///
-/// The TRIGGER states what was PICKED, and it is the only thing that does while a percentage is
-/// pinned: `scale_badge_pct` shows the badge in Auto, and hides it under a clean pin on purpose —
-/// an untouched fixed scale reads back as the step that was chosen, so the plot would repeat the
-/// number already on this control. The window's shipped caption set carries that badge, so the
-/// two together always answer "what zoom is this": the badge while the pane fits itself, the
-/// trigger the moment the reader pins a step.
+/// The TRIGGER states what was PICKED; the badge from `scale_badge_pct`, which the window's shipped
+/// caption set carries, states the window on screen in every mode, a pinned step included. The
+/// two agree under a clean pin and part only while a manual zoom moves the window off the step.
 ///
 /// Shares [`scale_dropdown`]'s `MoonSize::Xs` trigger: this sits in a window header beside a
 /// title cluster, which is the tab strip's proportions and not a toolbar's.

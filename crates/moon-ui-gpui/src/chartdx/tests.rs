@@ -554,3 +554,31 @@ fn configured_book_width_preserves_automatic_layout_rules() {
         assert_eq!(a.glass.x + a.glass.w, PANE.x + pane_w);
     }
 }
+
+/// A chart pinned to `step` (a fraction of price) against a 100 price, as the magnifier leaves it.
+fn pinned_view(step: f32) -> moon_chart::view::ChartView {
+    let mut view = moon_chart::view::ChartView::new(0.0);
+    view.center_price = 100.0;
+    view.set_scale_percent(step);
+    view
+}
+
+/// A pinned step keeps its figure in the corner (#867): the measured window is printed even when
+/// it rounds to the step the magnifier already names.
+#[test]
+fn a_pinned_scale_keeps_its_badge() {
+    assert_eq!(scale_badge_pct(&pinned_view(0.20)), Some(20));
+    assert_eq!(scale_badge_pct(&pinned_view(0.10)), Some(10));
+}
+
+/// A right-button zoom that crosses the pinned step prints every figure it passes through, the
+/// step itself included (#867: 19 % and 21 % showed while 20 % went blank).
+#[test]
+fn a_manual_zoom_across_the_pinned_step_never_blanks() {
+    for (range, expected) in [(19.0, 19), (19.5, 20), (20.0, 20), (20.4, 20), (21.0, 21)] {
+        let mut view = pinned_view(0.20);
+        view.manual_price = true;
+        view.render_range = range;
+        assert_eq!(scale_badge_pct(&view), Some(expected), "range {range}");
+    }
+}
