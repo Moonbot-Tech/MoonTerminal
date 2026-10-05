@@ -13,6 +13,27 @@ use crate::backend::station::{
     job::Job,
 };
 use crate::design;
+use crate::panels::common::text_tooltip;
+
+/// Keep the full identity visible at any width, with natural multiline height and hover text.
+fn core_name_cell(index: usize, name: String) -> Stateful<Div> {
+    div()
+        .id(("station-core-name", index))
+        .w_full()
+        .min_w_0()
+        .whitespace_normal()
+        .tooltip(text_tooltip(name.clone()))
+        .child(name)
+}
+
+/// Reserve the address's intrinsic width so the name yields space instead of hiding the port.
+fn core_address_cell(address: Option<String>) -> Div {
+    div()
+        .flex_none()
+        .whitespace_nowrap()
+        .font_family(design::mono())
+        .child(address.unwrap_or_else(|| "\u{2014}".into()))
+}
 
 /// Return the state's localization key and semantic tone independently of row actions.
 fn state_label(state: RowState) -> (&'static str, MoonTone) {
@@ -99,7 +120,7 @@ impl SettingsView {
         };
     }
 
-    /// Show the last listing without requiring a station bot; old stations get an update notice.
+    /// Show full core identities in wrapping rows; old stations get an update notice.
     pub(super) fn station_cores_block(
         &self,
         target: &Target,
@@ -158,12 +179,30 @@ impl SettingsView {
         .into_iter()
         .map(|state| text_width(state_label(state).0) + button_padding)
         .fold(0.0_f32, f32::max);
+        let address_width = rows
+            .iter()
+            .map(|row| {
+                design::mono_body_text_width(
+                    cx,
+                    row.address.as_deref().unwrap_or("\u{2014}"),
+                    400.0,
+                )
+            })
+            .fold(
+                design::ui_body_text_width(
+                    cx,
+                    t!("telegram.server.cores_col_address").as_ref(),
+                    400.0,
+                ),
+                f32::max,
+            )
+            .ceil();
         let wide = table_fits(
             width - design::ui_value(cx, 24.0),
             action_width,
             state_width,
             design::ui_value(cx, 100.0),
-            design::ui_value(cx, 150.0),
+            address_width,
             design::ui_value(cx, 24.0),
         );
         section = MoonGroupBox::new("station-cores")
@@ -248,9 +287,8 @@ impl SettingsView {
                     )
                     .child(
                         div()
-                            .w(design::ui_px(cx, 150.0))
-                            .min_w_0()
-                            .truncate()
+                            .w(px(address_width))
+                            .flex_none()
                             .child(t!("telegram.server.cores_col_address").to_string()),
                     )
                     .child(
@@ -269,16 +307,19 @@ impl SettingsView {
                     .child(t!("telegram.server.cores_empty").to_string()),
             );
         }
-        for row in rows {
+        for (index, row) in rows.iter().enumerate() {
             let mut name = v_flex()
+                .w_full()
                 .min_w_0()
-                .child(div().truncate().child(row.name.clone()));
+                .child(core_name_cell(index, row.name.clone()));
             if row.state == RowState::NameDiffers {
                 name = name.child(
                     div()
                         .text_color(muted)
                         .font_family(design::mono())
-                        .truncate()
+                        .w_full()
+                        .min_w_0()
+                        .whitespace_normal()
                         .child(
                             t!(
                                 "telegram.server.cores_was",
@@ -294,12 +335,7 @@ impl SettingsView {
                         .child(t!("telegram.server.cores_missing_here").to_string()),
                 );
             }
-            let address = div()
-                .min_w_0()
-                .font_family(design::mono())
-                .text_color(muted)
-                .truncate()
-                .child(row.address.clone().unwrap_or_else(|| "\u{2014}".into()));
+            let address = core_address_cell(row.address.clone()).text_color(muted);
             let (key, tone) = state_label(row.state);
             let state = MoonTag::new()
                 .tone(tone)
@@ -313,7 +349,7 @@ impl SettingsView {
                     .items_center()
                     .gap(design::ui_px(cx, 8.0))
                     .child(div().flex_1().min_w_0().child(name))
-                    .child(div().w(design::ui_px(cx, 150.0)).min_w_0().child(address))
+                    .child(div().w(px(address_width)).flex_none().child(address))
                     .child(div().w(px(state_width)).flex_shrink_0().child(state))
                     .child(div().w(px(action_width)).flex_shrink_0().child(actions))
                     .into_any_element()

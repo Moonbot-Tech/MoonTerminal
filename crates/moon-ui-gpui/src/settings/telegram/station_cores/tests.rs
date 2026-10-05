@@ -1,8 +1,36 @@
 //! Confirmation and layout invariants from the approved station cores mockup.
-use super::{CoreCache, removable, retained_arm, state_label, table_fits};
+use super::{
+    CoreCache, core_address_cell, core_name_cell, removable, retained_arm, state_label, table_fits,
+};
 use crate::backend::station::cores_sync::{self, LocalCore, RowState};
+use gpui::{Styled, WhiteSpace};
 use moon_core::station_api::ListedCore;
 use moon_ui::MoonTone;
+
+/// Restoring truncate or a height/line cap would hide the suffix that distinguishes core names.
+#[test]
+fn core_names_wrap_with_unlimited_height() {
+    let mut cell = core_name_cell(0, "Demo Fund ~ F-BN / SUBACCOUNT (SUB 7)".into());
+    let style = cell.style();
+    assert_eq!(style.text.white_space, Some(WhiteSpace::Normal));
+    assert_eq!(style.text.text_overflow, None);
+    assert_eq!(style.text.line_clamp, None);
+    assert_eq!(style.size.height, None);
+    assert_eq!(style.max_size.height, None);
+}
+
+/// Allowing address shrink or ellipsis would hide the port beside a long common name prefix.
+#[test]
+fn core_addresses_keep_intrinsic_width_without_ellipsis() {
+    for address in [Some("203.0.113.60:50000".into()), None] {
+        let mut cell = core_address_cell(address);
+        let style = cell.style();
+        assert_eq!(style.flex_shrink, Some(0.0));
+        assert_eq!(style.size.width, None);
+        assert_eq!(style.text.white_space, Some(WhiteSpace::Nowrap));
+        assert_eq!(style.text.text_overflow, None);
+    }
+}
 
 /// A reused uid, changed identity or newly local match must discard destructive consent.
 #[test]
