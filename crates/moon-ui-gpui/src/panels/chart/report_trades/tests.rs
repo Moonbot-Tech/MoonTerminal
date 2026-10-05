@@ -107,11 +107,10 @@ fn trade_history_retry_is_offered_only_when_a_later_read_can_help() {
 /// `report_trades.rs:ReportTradesStatus::overlay_label` must name each Failed kind with the
 /// shared reports-replica copy. Collapsing them onto `chart.trade_history.failed` is the badge
 /// the user reported.
+/// Resolve the expected folder under the shared locale/data-dir guard so fixture installation
+/// cannot change it between capture and rendering.
 #[test]
 fn trade_history_failed_overlay_names_the_cause_in_english_and_russian() {
-    let data_dir = moon_core::config::paths::db_dir_path()
-        .display()
-        .to_string();
     for (locale, busy_needles, corrupt, other) in [
         (
             "en",
@@ -135,6 +134,9 @@ fn trade_history_failed_overlay_names_the_cause_in_english_and_russian() {
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
+        let data_dir = moon_core::config::paths::db_dir_path()
+            .display()
+            .to_string();
         let busy = ReportTradesStatus::Failed(FailKind::Busy)
             .overlay_label()
             .expect("Busy overlay must name the cause");
