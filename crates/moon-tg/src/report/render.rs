@@ -72,7 +72,7 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
         + html.matches("<table").count()
 }
 
-/// Compose a compact caption, configured table, and per-core accounting details.
+/// Compose a preview title paragraph, configured table, and per-core accounting details.
 /// The saved layout controls numeric columns, total placement and group emphasis.
 ///
 /// `host` words delivery failures; `navigation` is the chat's reply keyboard.
@@ -136,7 +136,8 @@ pub(super) fn period(page: &Page, year: i32) -> String {
     format!("{} — {}", bound(from, starts_day), bound(to, ends_day))
 }
 
-/// HTML for one report page with saved columns, group styles and whole-scope total placement.
+/// HTML beginning with the report title and period so Telegram can preview every report page.
+/// Saved columns, group styles and whole-scope total placement govern the following table.
 /// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
     let heading = if page.request.daily {
@@ -148,14 +149,11 @@ pub(super) fn report_html(page: &Page) -> String {
     };
     let title = page.scope_label.as_deref().unwrap_or(&heading);
     let mut html = String::new();
-    if page.total.orders == 0 {
-        html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
-    }
     // An unreadable clock names the year rather than guessing it.
     let now = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
     let year = display_time::at(now, page.zone).map_or(i32::MIN, |now| now.year());
     let period = period(page, year);
-    let mut table_caption = match &page.caption {
+    let mut preview_title = match &page.caption {
         Some(auto) => format!(
             "<b>{}</b> · {} {}",
             escape(&auto.title),
@@ -167,13 +165,17 @@ pub(super) fn report_html(page: &Page) -> String {
     };
     // The terminal's Report wording: the period counts trades by when they opened.
     if page.basis == ReportBasis::Open {
-        table_caption.push_str(&format!(
+        preview_title.push_str(&format!(
             " · <i>{}</i>",
             escape(&t!("report.period_basis.open"))
         ));
     }
+    html.push_str(&format!("<p>{preview_title}</p>"));
+    if page.total.orders == 0 {
+        html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
+    }
     html.push_str(&format!(
-        "<table compact><caption>{table_caption}</caption><tr><th align=\"left\">{}</th>",
+        "<table compact><tr><th align=\"left\">{}</th>",
         escape(&if page.request.daily {
             t!("telegram.report_date")
         } else {

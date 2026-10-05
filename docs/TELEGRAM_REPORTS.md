@@ -21,8 +21,9 @@ and then each page holds the largest of a fixed set of page sizes that still fit
 Previous keep their rows when a trade closes between two presses. A core is one table row: a long name keeps its
 first 8 and last 15 characters, and the full name is in the details. Native currency amounts and
 averages are in an expandable two-column table. The main table starts with column titles and
-ends with the whole-period Total row, with every total cell bold. Its caption keeps the view and
-period on one line; an automatic report uses its own title and zone. Dollar-denominated amounts
+ends with the whole-period Total row, with every total cell bold. A short paragraph before the
+table carries the view and period for the chat-list and push preview; an automatic report uses
+its own title and zone. The table does not repeat that text in a caption. Dollar-denominated amounts
 use two decimals; crypto-denominated amounts retain up to eight. Calculation guidance is in Help; average-coverage counts remain in the monetary details only
 when rows were excluded.
 Exchange membership uses reported venue identity, including market type and HIP-3 DEX.

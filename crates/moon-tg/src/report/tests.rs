@@ -44,6 +44,92 @@ fn layout_page(layout: ReportLayout) -> Page {
     }
 }
 
+/// Restoring a caption or placing an empty notice first would hide report identity in previews.
+/// Every view keeps its existing title/period, automatic override and open-basis note exactly once.
+#[test]
+fn report_preview_title_leads_every_kind() {
+    let _locale = crate::test_locale::force("en");
+    for period in [Period::Hour, Period::Today, Period::Month] {
+        for (by_exchange, daily, scope, title) in [
+            (true, false, None, "01.01.1970 00:00—00:59"),
+            (false, false, None, "<b>Cores</b> · 01.01.1970 00:00—00:59"),
+            (false, true, None, "<b>Days</b> · 01.01.1970 00:00—00:59"),
+            (
+                false,
+                false,
+                Some("Desk <A>"),
+                "<b>Desk &lt;A&gt;</b> · 01.01.1970 00:00—00:59",
+            ),
+        ] {
+            for auto in [
+                None,
+                Some("Hourly <report>"),
+                Some("Today report"),
+                Some("Month report"),
+            ] {
+                for basis in [ReportBasis::Close, ReportBasis::Open] {
+                    for empty in [false, true] {
+                        let mut page = layout_page(ReportLayout::default());
+                        page.request = ReportRequest::new(period.clone(), daily);
+                        page.request.by_exchange = by_exchange;
+                        page.scope_label = scope.map(str::to_owned);
+                        page.to = 3599;
+                        page.basis = basis;
+                        page.caption = auto.map(|title| super::AutoCaption {
+                            title: title.into(),
+                            zone: "UTC".into(),
+                        });
+                        if empty {
+                            page.total = QuoteBreakdown::default();
+                            page.rows.clear();
+                        }
+                        let mut expected = auto.map_or_else(
+                            || title.to_owned(),
+                            |title| {
+                                format!(
+                                    "<b>{}</b> · 01.01.1970 00:00—00:59 UTC",
+                                    title.replace('<', "&lt;").replace('>', "&gt;")
+                                )
+                            },
+                        );
+                        if basis == ReportBasis::Open {
+                            expected.push_str(" · <i>By open date</i>");
+                        }
+                        let html = super::report_html(&page);
+                        assert!(html.starts_with(&format!("<p>{expected}</p>")), "{html}");
+                        assert_eq!(html.matches("01.01.1970 00:00—00:59").count(), 1, "{html}");
+                        assert!(!html.contains("<caption>"), "{html}");
+                        let after_title = &html[html.find("</p>").unwrap() + 4..];
+                        assert!(
+                            after_title.starts_with(if empty {
+                                "<p>No closed real trades in this period.</p><table compact>"
+                            } else {
+                                "<table compact>"
+                            }),
+                            "{html}"
+                        );
+                        assert!(super::rich_message_fits(&html), "{html}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Ignoring the preview paragraph in fit accounting could send a page over Telegram's block cap.
+#[test]
+fn report_preview_paragraph_counts_toward_block_limit() {
+    let at_limit = format!(
+        "<p>Report title</p><table compact>{}</table>",
+        "<tr><td>row</td></tr>".repeat(498)
+    );
+    assert_eq!(super::render::rich_message_blocks(&at_limit), 500);
+    assert!(super::rich_message_fits(&at_limit));
+    assert!(!super::rich_message_fits(&format!(
+        "{at_limit}<p>Page 2/2</p>"
+    )));
+}
+
 /// Reordering or ignoring saved columns must change neither header nor numeric cell order.
 #[test]
 fn report_layout_columns_follow_saved_order_and_skip_future_ids() {
@@ -299,6 +385,8 @@ fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
         .unwrap();
         let html = super::report_html(&page);
         assert!(super::rich_message_fits(&html));
+        assert!(html.starts_with("<p><b>Cores</b> · "), "{html}");
+        assert!(!html.contains("<caption>"), "{html}");
         assert!(html.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th><th align=\"right\">Avg %</th><th align=\"right\">Profit / loss</th>"));
         assert!(html.contains("<tr><td colspan=\"5\">&#160;</td></tr>"));
         assert!(page.pages > 1);
@@ -344,6 +432,8 @@ fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
     .unwrap()
     .unwrap();
     assert!(super::rich_message_fits(&auto.html));
+    assert!(auto.html.starts_with("<p><b>Auto</b> · "), "{}", auto.html);
+    assert!(!auto.html.contains("<caption>"));
     assert!(auto.html.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th><th align=\"right\">Avg %</th><th align=\"right\">Profit / loss</th>"));
     assert!(auto.html.contains("<tr><td colspan=\"5\">&#160;</td></tr>"));
 }
@@ -1726,7 +1816,7 @@ fn the_open_basis_counts_trades_by_when_they_opened() {
 }
 
 /// An automatic report is the button's report over the slot's frozen period, its title and zone
-/// heading the table in one line, its buttons carrying the window, the cores it may disclose; a
+/// opening the message in one paragraph, its buttons carrying the window, the cores it may disclose; a
 /// viewer with no cores gets none.
 #[test]
 fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
@@ -1766,9 +1856,8 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     .unwrap()
     .expect("an owner always gets a report");
     assert!(
-        page.html.starts_with(
-            "<table compact><caption><b>Hourly report</b> · 01.01.1970 00:00—00:59 UTC</caption>"
-        ),
+        page.html
+            .starts_with("<p><b>Hourly report</b> · 01.01.1970 00:00—00:59 UTC</p><table compact>"),
         "{}",
         page.html
     );
@@ -1836,7 +1925,7 @@ fn closed_trades_carry_their_own_money() {
     assert_eq!(unproven.volume_native, None);
 }
 
-/// A report fits a phone screen: the view and its period are the table's caption, a single day
+/// Moving the period back into the table would hide it from the chat preview; a single day
 /// names its date once, and its buttons are one row in either view.
 #[test]
 fn a_days_report_is_compact() {
@@ -1862,10 +1951,12 @@ fn a_days_report_is_compact() {
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
         assert!(
-            html[table..].contains("01.01.1970 00:00—08:59</caption>"),
+            html[..table].contains("01.01.1970 00:00—08:59</p>"),
             "{html}"
         );
-        assert!(!html[..table].contains("01.01.1970"), "{html}");
+        assert!(html.starts_with("<p>"), "{html}");
+        assert!(!html[table..].contains("01.01.1970"), "{html}");
+        assert!(!html.contains("<caption>"), "{html}");
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
             panic!("expected inline navigation")
