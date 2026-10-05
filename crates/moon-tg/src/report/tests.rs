@@ -30,7 +30,7 @@ fn viewer_membership_filters_every_report_view_and_total() {
         assert_eq!(page.total.orders, 1);
         assert_eq!(page.total.totals[0].profit, 7.0);
         assert_eq!(page.rows.len(), 1);
-        assert_eq!(page.rows[0].total().unwrap().totals[0].profit, 7.0);
+        assert_eq!(page.rows[0].total().totals[0].profit, 7.0);
         let Response::Rich { html, .. } = render(
             &page,
             crate::HostKind::Terminal,
@@ -317,9 +317,9 @@ fn exchanges_group_real_identities_and_filter_idle_groups_before_paging() {
     let zero = page
         .rows
         .iter()
-        .find(|row| row.total().unwrap().orders == 2)
+        .find(|row| row.total().orders == 2)
         .unwrap();
-    assert_eq!(zero.total().unwrap().totals[0].profit, 0.0);
+    assert_eq!(zero.total().totals[0].profit, 0.0);
     assert_eq!(page.drilldowns.len(), 2);
     let mut scoped = request;
     scoped.scope = ReportScope::Venue(ExchangeId::new(13));
@@ -367,7 +367,7 @@ fn daily_pages_include_partial_day_after_zone_change() {
     assert_eq!(page.rows.last().unwrap().name(), "2025-01-01");
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.total.orders, 1);
-    assert_eq!(page.rows.last().unwrap().total().unwrap().orders, 1);
+    assert_eq!(page.rows.last().unwrap().total().orders, 1);
 }
 
 /// A month of daily rows and a handful of exchanges fit one message.
@@ -670,8 +670,8 @@ fn report_reader_preserves_filters_and_full_total_across_pages() {
     assert_eq!(first.total.totals[0].profit, 18.0);
     assert_eq!(first.rows.len(), 12);
     assert_eq!(first.pages, 1);
-    assert_eq!(first.rows[0].total().unwrap().orders, 2);
-    assert_eq!(first.rows[0].total().unwrap().totals[0].profit, 7.0);
+    assert_eq!(first.rows[0].total().orders, 2);
+    assert_eq!(first.rows[0].total().totals[0].profit, 7.0);
     request.page = 1;
     let second = super::read_page_on(
         &conn,
@@ -1333,8 +1333,9 @@ fn the_open_basis_counts_trades_by_when_they_opened() {
     assert!(!html(&close).contains(&caption));
 }
 
-/// An automatic report is the button's report over the slot's frozen period: its caption on top,
-/// its buttons carrying the window, the cores it may disclose; a viewer with no cores gets none.
+/// An automatic report is the button's report over the slot's frozen period, its title and zone
+/// heading the table in one line, its buttons carrying the window, the cores it may disclose; a
+/// viewer with no cores gets none.
 #[test]
 fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     use moon_core::config::AppConfig;
@@ -1358,17 +1359,23 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
         venues: Default::default(),
         groups: Vec::new(),
     };
+    let caption = |title: &str| super::AutoCaption {
+        title: title.into(),
+        zone: "UTC".into(),
+    };
     let page = super::read_auto_report(
         &conn,
         &window,
-        "Hourly report".into(),
+        caption("Hourly report"),
         &inputs,
         &super::TelegramReportAccess::Owner,
     )
     .unwrap()
     .expect("an owner always gets a report");
     assert!(
-        page.html.starts_with("<p><b>Hourly report</b></p>"),
+        page.html.starts_with(
+            "<table compact><caption><b>Hourly report</b> · 01.01.1970 00:00—00:59 UTC</caption>"
+        ),
         "{}",
         page.html
     );
@@ -1390,7 +1397,7 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     let none = super::read_auto_report(
         &conn,
         &window,
-        String::new(),
+        caption(""),
         &inputs,
         &super::TelegramReportAccess::Viewer(Vec::new()),
     )
@@ -1461,7 +1468,7 @@ fn a_days_report_is_compact() {
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
         assert!(
-            html[table..].contains("01.01.1970 00:00 — 08:59</caption>"),
+            html[table..].contains("01.01.1970 00:00—08:59</caption>"),
             "{html}"
         );
         assert!(!html[..table].contains("01.01.1970"), "{html}");
@@ -1506,9 +1513,9 @@ fn funding_is_not_a_trade_card() {
 }
 
 /// The view by cores lists its cores under the saved groups, as the Profit monitor does: groups by
-/// name, a core in two groups under both, the cores in none last; a group's subtotal is the
-/// database's sum over its cores, a group of one core has none, and the headline counts every core
-/// once. The details name each core once.
+/// name, a core in two groups under both, the cores in none last. A group is one header row
+/// carrying its total, the database's sum over its cores (a group of one core totals that core);
+/// the headline counts every core once. The details name each core once.
 #[test]
 fn cores_are_listed_under_their_groups() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
@@ -1545,33 +1552,31 @@ fn cores_are_listed_under_their_groups() {
     let mut request = ReportRequest::new(Period::Today, false);
     request.by_exchange = false;
     let page = read(request.clone());
-    let rows: Vec<(String, Option<f64>)> = page
+    let rows: Vec<(String, f64)> = page
         .rows
         .iter()
         .map(|row| {
             let kind = match row {
                 super::Row::Line(..) => "",
                 super::Row::Repeat(..) => "~ ",
-                super::Row::Group(_) => "# ",
-                super::Row::Subtotal(..) => "= ",
+                super::Row::Group(..) => "# ",
             };
             (
                 format!("{kind}{}", row.name()),
-                row.total().map(|total| total.totals[0].profit),
+                row.total().totals[0].profit,
             )
         })
         .collect();
     assert_eq!(
         rows,
         vec![
-            ("# main".to_string(), None),
-            ("A".to_string(), Some(10.0)),
-            ("B".to_string(), Some(20.0)),
-            ("= main: total".to_string(), Some(30.0)),
-            ("# margo".to_string(), None),
-            ("~ B".to_string(), Some(20.0)),
-            ("# Ungrouped".to_string(), None),
-            ("C".to_string(), Some(40.0)),
+            ("# main".to_string(), 30.0),
+            ("A".to_string(), 10.0),
+            ("B".to_string(), 20.0),
+            ("# margo".to_string(), 20.0),
+            ("~ B".to_string(), 20.0),
+            ("# Ungrouped".to_string(), 40.0),
+            ("C".to_string(), 40.0),
         ]
     );
     assert_eq!(page.total.totals[0].profit, 70.0, "each core counted once");
@@ -1582,11 +1587,12 @@ fn cores_are_listed_under_their_groups() {
     ) else {
         panic!("expected report");
     };
-    assert!(
-        html.contains("<tr><td colspan=\"3\"><b>main</b></td></tr>"),
-        "{html}"
-    );
-    assert!(html.contains("<td><i>main: total</i></td>"), "{html}");
+    assert!(html.contains("<tr><th align=\"right\">main</th>"), "{html}");
+    assert!(html.contains("<tr><th align=\"left\">Total</th>"), "{html}");
+    assert!(html.contains("<tr><td>A</td>"), "{html}");
+    assert!(!html.contains("total</i>"), "no subtotal row: {html}");
+    // Stripes would run across the group headers out of step with them.
+    assert!(html.contains("<table compact>"), "{html}");
     let details = &html[html.find("<details>").unwrap()..];
     assert_eq!(details.matches("<b>B</b>").count(), 1, "{details}");
     let moon_core::telegram::api::ReplyMarkup::Inline(markup) = keyboard else {
@@ -1637,18 +1643,17 @@ fn cores_are_listed_under_their_groups() {
     );
 }
 
-/// A page cut inside a group repeats the group's caption, and a caption that would end a page
+/// A page cut inside a group repeats the group's header, and a header that would end a page
 /// without its cores moves to the next one.
 #[test]
-fn a_page_cut_inside_a_group_keeps_its_caption() {
-    use super::Row::{Group, Line, Subtotal};
+fn a_page_cut_inside_a_group_keeps_its_header() {
+    use super::Row::{Group, Line};
     let total = QuoteBreakdown::default;
     let rows = vec![
-        Group("a".into()),
+        Group("a".into(), total()),
         Line("1".into(), total()),
         Line("2".into(), total()),
-        Subtotal("a: total".into(), total()),
-        Group("b".into()),
+        Group("b".into(), total()),
         Line("3".into(), total()),
     ];
     let names = |page: Vec<super::Row>| {
@@ -1657,12 +1662,12 @@ fn a_page_cut_inside_a_group_keeps_its_caption() {
             .collect::<Vec<_>>()
     };
     assert_eq!(names(super::page_rows(&rows, 0, 2)), ["a", "1"]);
-    assert_eq!(names(super::page_rows(&rows, 2, 2)), ["a", "2", "a: total"]);
-    // The page [a: total, b] would end on b's caption; b opens the next page instead.
-    assert_eq!(names(super::page_rows(&rows, 3, 2)), ["a", "a: total"]);
+    assert_eq!(names(super::page_rows(&rows, 1, 2)), ["a", "1", "2"]);
+    // The page [2, b] would end on b's header; b opens the next page instead.
+    assert_eq!(names(super::page_rows(&rows, 2, 2)), ["a", "2"]);
+    assert_eq!(names(super::page_rows(&rows, 3, 2)), ["b", "3"]);
     assert_eq!(names(super::page_rows(&rows, 4, 2)), ["b", "3"]);
-    assert_eq!(names(super::page_rows(&rows, 5, 2)), ["b", "3"]);
-    assert_eq!(names(super::page_rows(&rows, 0, 6)), names(rows.clone()));
+    assert_eq!(names(super::page_rows(&rows, 0, 5)), names(rows.clone()));
     let flat = vec![Line("x".into(), total()), Line("y".into(), total())];
     assert_eq!(names(super::page_rows(&flat, 1, 1)), ["y"]);
 }
@@ -1694,15 +1699,66 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
         html[html.find("<details>").unwrap()..].to_string()
     };
     let alone = details(vec![
-        Group("margo".into()),
+        Group("margo".into(), QuoteBreakdown::default()),
         Repeat("Bcore".into(), QuoteBreakdown::default()),
     ]);
     assert_eq!(alone.matches("<b>Bcore</b>").count(), 1, "{alone}");
     let both = details(vec![
-        Group("main".into()),
+        Group("main".into(), QuoteBreakdown::default()),
         Line("Bcore".into(), QuoteBreakdown::default()),
-        Group("margo".into()),
+        Group("margo".into(), QuoteBreakdown::default()),
         Repeat("Bcore".into(), QuoteBreakdown::default()),
     ]);
     assert_eq!(both.matches("<b>Bcore</b>").count(), 1, "{both}");
+}
+
+/// The period names as little as stays unambiguous: no year inside the current one, no clock on a
+/// bound that falls on a day's edge, a whole day as its date alone.
+#[test]
+fn the_period_is_short() {
+    let day = 86_400;
+    // 05.10.2026 00:00 UTC.
+    let midnight = 1_791_158_400;
+    let page = |from: i64, to: i64| Page {
+        request: ReportRequest::new(Period::Today, false),
+        from,
+        to,
+        zone: chrono_tz::UTC,
+        total: QuoteBreakdown::default(),
+        rows: Vec::new(),
+        pages: 1,
+        drilldowns: Vec::new(),
+        scope_label: None,
+        basis: ReportBasis::Close,
+        cores: Vec::new(),
+        caption: None,
+    };
+    let period = |from, to, year| super::render::period(&page(from, to), year);
+    assert_eq!(
+        period(midnight, midnight + 6 * 3600 - 1, 2026),
+        "05.10 00:00—05:59"
+    );
+    assert_eq!(period(midnight, midnight + day - 1, 2026), "05.10");
+    // Cut 30 s before the day ends, it is not the whole day.
+    assert_eq!(
+        period(midnight, midnight + day - 31, 2026),
+        "05.10 00:00—23:59"
+    );
+    assert_eq!(
+        period(midnight - 4 * day, midnight + 6 * 3600 - 1, 2026),
+        "01.10 — 05.10 05:59"
+    );
+    assert_eq!(
+        period(midnight - 4 * day, midnight - 1, 2026),
+        "01.10 — 04.10"
+    );
+    assert_eq!(
+        period(midnight + 3600, midnight + day + 3599, 2026),
+        "05.10 01:00 — 06.10 00:59"
+    );
+    // A period outside the current year keeps its year.
+    assert_eq!(
+        period(midnight, midnight + 6 * 3600 - 1, 2027),
+        "05.10.2026 00:00—05:59"
+    );
 }

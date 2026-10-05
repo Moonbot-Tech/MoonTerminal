@@ -35,29 +35,24 @@ pub(super) enum Row {
     Line(String, QuoteBreakdown),
     /// A core already listed under an earlier group: in the table again, not in the details.
     Repeat(String, QuoteBreakdown),
-    /// A saved core group's caption above its cores, or the caption of the cores in none.
-    Group(String),
-    /// A group's own total below its cores: the database's sum over them.
-    Subtotal(String, QuoteBreakdown),
+    /// A saved core group's header above its cores, or the header of the cores in none, with the
+    /// group's own total: the database's sum over its cores.
+    Group(String, QuoteBreakdown),
 }
 
-#[cfg(test)]
 impl Row {
-    /// The row's name or caption.
+    /// The row's name or group header.
+    #[cfg(test)]
     pub(super) fn name(&self) -> &str {
         match self {
-            Self::Line(name, _)
-            | Self::Repeat(name, _)
-            | Self::Group(name)
-            | Self::Subtotal(name, _) => name,
+            Self::Line(name, _) | Self::Repeat(name, _) | Self::Group(name, _) => name,
         }
     }
 
-    /// The row's money; a caption has none.
-    pub(super) fn total(&self) -> Option<&QuoteBreakdown> {
+    /// The row's money.
+    pub(super) fn total(&self) -> &QuoteBreakdown {
         match self {
-            Self::Line(_, total) | Self::Repeat(_, total) | Self::Subtotal(_, total) => Some(total),
-            Self::Group(_) => None,
+            Self::Line(_, total) | Self::Repeat(_, total) | Self::Group(_, total) => total,
         }
     }
 }
@@ -77,8 +72,15 @@ struct Page {
     basis: ReportBasis,
     /// Cores the chat may see, whose trades the totals can include.
     cores: Vec<u64>,
-    /// A line above the report: an automatic report names itself, its zone and its basis.
-    caption: Option<String>,
+    /// An automatic report's own title and zone, which head the table in place of the view.
+    caption: Option<AutoCaption>,
+}
+
+/// What an automatic report names itself by: `📊 Today` and the zone its period is in (`UTC+3`).
+#[derive(Clone, Debug)]
+pub(crate) struct AutoCaption {
+    pub(crate) title: String,
+    pub(crate) zone: String,
 }
 
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
@@ -221,7 +223,7 @@ fn read_page_on(
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
 ///
 /// `groups` are the bot's saved core groups: the view by cores lists its cores under them, as the
-/// Profit monitor does ([`sections`]). A group's subtotal is the database's own total over its
+/// Profit monitor does ([`sections`]). A group's header carries the database's own total over its
 /// cores, so a core in two groups counts in each, while the headline counts every core once.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
@@ -357,25 +359,21 @@ fn read_page_with(
                     || t!("profit_monitor.group.ungrouped").to_string(),
                     |group| group.name.clone(),
                 );
-                rows.push(Row::Group(name.clone()));
+                // A group of one core totals that core's own row; no second read.
+                let subtotal = match section.members.as_slice() {
+                    [only] => active[*only].total().clone(),
+                    members => {
+                        let mut read = filter.clone();
+                        read.core_uids = members.iter().map(|&index| active_cores[index]).collect();
+                        db::query_totals(&snap, &read)?.quotes
+                    }
+                };
+                rows.push(Row::Group(name, subtotal));
                 for &index in &section.members {
                     rows.push(match active[index].clone() {
                         Row::Line(name, total) if !listed.insert(index) => Row::Repeat(name, total),
                         row => row,
                     });
-                }
-                // One core's subtotal would restate its own row.
-                if section.members.len() > 1 {
-                    let mut members = filter.clone();
-                    members.core_uids = section
-                        .members
-                        .iter()
-                        .map(|&index| active_cores[index])
-                        .collect();
-                    rows.push(Row::Subtotal(
-                        t!("profit_monitor.group.subtotal", name = name).to_string(),
-                        db::query_totals(&snap, &members)?.quotes,
-                    ));
                 }
             }
             rows
@@ -386,21 +384,18 @@ fn read_page_with(
     // Every view shows all its rows while the message fits; an oversized one pages with the
     // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
     // label it can show, so the page actually rendered is never longer than the one measured.
-    // A partial page may open with its group's caption repeated: measured with the longest one.
-    let widest_caption = active
+    // A partial page may open with its group's header repeated: measured with the longest one.
+    let widest_header = active
         .iter()
-        .filter_map(|row| match row {
-            Row::Group(name) => Some(name),
-            _ => None,
-        })
+        .filter(|row| matches!(row, Row::Group(..)))
         // Telegram counts characters of the escaped text.
-        .max_by_key(|name| escape(name).chars().count())
+        .max_by_key(|row| render::row_html(row, true).chars().count())
         .cloned();
     let fits = |rows: &[Row]| {
         let partial = rows.len() < active.len();
         let mut probed = Vec::with_capacity(rows.len() + 1);
         if partial {
-            probed.extend(widest_caption.clone().map(Row::Group));
+            probed.extend(widest_header.clone());
         }
         probed.extend_from_slice(rows);
         let mut probe = request.clone();
@@ -441,22 +436,22 @@ fn read_page_with(
 }
 
 /// The rows of the page that starts at `start` and holds `size` of `rows`, kept readable when it
-/// cuts a group: a page that opens inside a group repeats the group's caption first, and a caption
+/// cuts a group: a page that opens inside a group repeats the group's header first, and a header
 /// that would close a page without its cores is left to the next page, which then opens with it.
 fn page_rows(rows: &[Row], start: usize, size: usize) -> Vec<Row> {
     let mut page: Vec<Row> = rows.iter().skip(start).take(size).cloned().collect();
     if page.len() > 1
         && start + page.len() < rows.len()
-        && matches!(page.last(), Some(Row::Group(_)))
+        && matches!(page.last(), Some(Row::Group(..)))
     {
         page.pop();
     }
-    let opens_inside = !matches!(rows.get(start), None | Some(Row::Group(_)));
+    let opens_inside = !matches!(rows.get(start), None | Some(Row::Group(..)));
     if opens_inside
         && let Some(caption) = rows[..start]
             .iter()
             .rev()
-            .find(|row| matches!(row, Row::Group(_)))
+            .find(|row| matches!(row, Row::Group(..)))
     {
         page.insert(0, caption.clone());
     }
@@ -487,7 +482,7 @@ pub(crate) struct AutoInputs {
 }
 
 /// Read one automatic report: the report a button opens, over the slot's frozen period, in the
-/// bot's view and basis, with `caption` above it.
+/// bot's view and basis, headed by `caption`.
 ///
 /// Returns:
 ///     `None` for a viewer with no cores, which has nothing to see, and for a report that does
@@ -495,7 +490,7 @@ pub(crate) struct AutoInputs {
 pub(crate) fn read_auto_report(
     conn: &rusqlite::Connection,
     window: &moon_core::telegram::report::AutoWindow,
-    caption: String,
+    caption: AutoCaption,
     inputs: &AutoInputs,
     access: &TelegramReportAccess,
 ) -> db::ReadResult<Option<AutoPage>> {

@@ -13,7 +13,6 @@ use crate::t;
 use chrono::Offset;
 use chrono_tz::Tz;
 use moon_core::config::telegram_access::TelegramReportAccess;
-use moon_core::config::telegram_menu::ReportBasis;
 use moon_core::db::{self, CoreNames};
 use moon_core::session::core_order::CoreOrder;
 use moon_core::telegram::notify::{AutoReport, AutoRow, NotifyFile};
@@ -22,7 +21,7 @@ use moon_core::telegram::runtime::{NotifyStore, push_auto_report};
 use moon_core::util::display_time;
 
 use crate::notify::tick::{current_store, lock_store};
-use crate::report::{AutoInputs, AutoPage, read_auto_report};
+use crate::report::{AutoCaption, AutoInputs, AutoPage, read_auto_report};
 use crate::{Finish, Job, TgHost};
 
 /// Least time between two automatic-report reads: a read that failed is retried after it.
@@ -161,7 +160,7 @@ fn read_all(due: &[Due], inputs: &AutoInputs, injected: Option<&InjectedAuto>) -
     };
     due.iter()
         .map(|item| {
-            let caption = caption(item.kind, &item.window, inputs.zone, inputs.basis);
+            let caption = caption(item.kind, &item.window, inputs.zone);
             read_auto_report(&conn, &item.window, caption, inputs, &item.access).map_err(|error| {
                 log::warn!(
                     "telegram auto report {:?} for chat {} not read: {error}",
@@ -173,21 +172,18 @@ fn read_all(due: &[Due], inputs: &AutoInputs, injected: Option<&InjectedAuto>) -
         .collect()
 }
 
-/// The line above an automatic report: what it is, the zone its period is in, the basis.
-fn caption(kind: AutoReport, window: &AutoWindow, zone: Tz, basis: ReportBasis) -> String {
+/// What heads an automatic report: what it is, in the reply keyboard's short words where they
+/// fit, and the zone its period is in. The table marks a period read by open time itself.
+fn caption(kind: AutoReport, window: &AutoWindow, zone: Tz) -> AutoCaption {
     let title = match kind {
         AutoReport::Hourly => t!("telegram.auto.hourly"),
-        AutoReport::Today => t!("telegram.auto.today"),
-        AutoReport::Month => t!("telegram.auto.month"),
+        AutoReport::Today => t!("telegram.button_today"),
+        AutoReport::Month => t!("telegram.button_month"),
     };
-    let basis = match basis {
-        ReportBasis::Close => t!("report.period_basis.close"),
-        ReportBasis::Open => t!("report.period_basis.open"),
-    };
-    format!(
-        "\u{1f4ca} {title} \u{b7} {} \u{b7} {basis}",
-        offset_label(window.at, zone)
-    )
+    AutoCaption {
+        title: format!("\u{1f4ca} {title}"),
+        zone: offset_label(window.at, zone),
+    }
 }
 
 /// `UTC+3`, `UTC−5`, `UTC+5:45`: the zone's offset at `at`.
