@@ -2,13 +2,14 @@
 //! whitelist trades, and its blacklist as coin chips; and the tab switch that swaps this pane for
 //! the parameter panes.
 //!
-//! The model is rebuilt only when its inputs move — the selected strategies' two lists, the saved
-//! order, and the rows' catalogs (by their own version, not the price-tick snapshot revision) —
+//! The model is rebuilt only when its inputs move — the covered strategies (`scope`) and their two
+//! lists, the saved order, and the rows' catalogs (by their own version, not the price-tick
+//! snapshot revision) —
 //! because this window repaints on hover, on strategy changes and on report commits, and the
 //! catalog walk behind the coverage count is a pass over every market of the exchange.
 
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -20,6 +21,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use moon_core::feed::SchemaField;
 use moon_core::session::CoreId;
 use moon_core::session::core_order::{OrderedCores, section_of};
 use moon_core::symbol::coin_match_key;
@@ -32,7 +34,9 @@ use crate::analytics::period::Period;
 use crate::design;
 use crate::design::moon;
 use crate::strategies::StrategiesView;
-use crate::strategies::logic::selected_keys;
+use crate::strategies::logic::{selected_keys, strategy_core_is_visible};
+
+use super::scope::board_scope;
 
 /// The tab's own state on the Strategies view.
 #[derive(Default)]
@@ -84,8 +88,27 @@ pub(super) fn effective(
     row: &moon_core::feed::StrategyRow,
     name: &str,
 ) -> String {
-    use crate::strategies::logic::{edited_field_value, schema_field_in_kind};
-    match schema_field_in_kind(store, core, row.kind_ordinal, name) {
+    let schema =
+        crate::strategies::logic::schema_field_in_kind(store, core, row.kind_ordinal, name);
+    effective_with(view, store, core, row, name, schema)
+}
+
+/// [`effective`] with the field's schema entry already resolved, for a caller walking many rows
+/// of one kind: the lookup is a linear scan of the kind's schema, and the distribution model runs
+/// it over every covered row on every repaint.
+///
+/// Args:
+///     schema: `name`'s entry in the row kind's schema, or `None` while the schema is unknown.
+fn effective_with(
+    view: &StrategiesView,
+    store: &moon_core::session::CoreStore,
+    core: CoreId,
+    row: &moon_core::feed::StrategyRow,
+    name: &str,
+    schema: Option<&SchemaField>,
+) -> String {
+    use crate::strategies::logic::edited_field_value;
+    match schema {
         Some(schema) => {
             let pending = store.core(core).and_then(|cd| cd.strategy_edit(row.id));
             edited_field_value(view, (core, row.id), row, schema, pending)
@@ -229,6 +252,7 @@ impl StrategiesView {
             Err(why) => {
                 let key = match why {
                     Unavailable::NoSelection => "strat.dist_no_selection",
+                    Unavailable::EmptyFolders => "strat.dist_empty_folders",
                     Unavailable::MixedVenues => "strat.dist_mixed_venues",
                     Unavailable::UnknownVenue => "strat.dist_unknown_venue",
                 };
@@ -240,13 +264,8 @@ impl StrategiesView {
                     .into_any_element()
             }
             Ok(board) => {
-                let names: BTreeSet<String> = board
-                    .slots
-                    .iter()
-                    .flat_map(|s| s.strategies.iter().cloned())
-                    .collect();
                 let row_cores: Vec<CoreId> = board.slots.iter().map(|s| s.core).collect();
-                self.ensure_distribution_stats(&row_cores, &names, cx);
+                self.ensure_distribution_stats(&row_cores, &board.names, cx);
                 self.board(board, cx)
             }
         };
@@ -271,15 +290,31 @@ impl StrategiesView {
         cores: &OrderedCores,
         cx: &mut Context<Self>,
     ) -> Rc<Result<Board, Unavailable>> {
-        // Selected ids per core, so the walk below visits only cores that hold a selection — it
-        // runs on every repaint, before the cache can answer.
-        let mut keys: HashMap<CoreId, HashSet<u64>> = HashMap::new();
-        for (core, id) in selected_keys(self) {
-            keys.entry(core).or_default().insert(id);
-        }
         let backend = self.backend.read(cx);
         let store = backend.session.store();
         let venues = backend.session.core_venues();
+        // Covered ids per core — the selected folders' strategies, else the strategy selection —
+        // so the walk below visits only cores that hold some. It runs on every repaint, before the
+        // cache can answer.
+        let folders: Vec<(CoreId, String)> = self
+            .folder_sel
+            .iter()
+            .filter(|(core, _)| strategy_core_is_visible(self.workspace_cores.as_deref(), *core))
+            .cloned()
+            .collect();
+        let keys = board_scope(
+            &folders,
+            || selected_keys(self),
+            |core| store.core(core).map(|cd| cd.strategies.as_slice()),
+            &self.filter.prepare(),
+            |core| self.filter.core_matches(venues.get(&core)),
+        );
+        if !folders.is_empty() && keys.is_empty() {
+            // The last board goes too: chip-menu actions read the cache as the board on screen, and
+            // a menu still open over a board that just emptied must not stage edits through it.
+            self.dist.cache = None;
+            return Rc::new(Err(Unavailable::EmptyFolders));
+        }
         let source = backend.session.market_source();
         let saved: &[CoreId] = backend
             .layout
@@ -303,6 +338,11 @@ impl StrategiesView {
             }
         }
 
+        // Each kind's two list fields resolved once rather than twice per row: the lookup scans
+        // the kind's schema, and this loop runs on every repaint over every covered row.
+        let mut schemas: HashMap<(CoreId, u8), [Option<&SchemaField>; 2]> = HashMap::new();
+        // The effective lists, kept for the build below so a miss does not resolve them twice.
+        let mut lists: Vec<Vec<(String, String)>> = Vec::with_capacity(rows.len());
         let mut h = DefaultHasher::new();
         saved.hash(&mut h);
         for (core, name, picked) in &rows {
@@ -315,6 +355,7 @@ impl StrategiesView {
             // core's OWN client rather than the catalog's provider.
             source.catalog_revision(*core).hash(&mut h);
             source.traded_quote(*core).hash(&mut h);
+            let mut slot_lists = Vec::with_capacity(picked.len());
             for r in picked {
                 // The id too: the board bakes it into its rows, and an edit writes to it.
                 r.id.hash(&mut h);
@@ -322,9 +363,24 @@ impl StrategiesView {
                 field(&r.fields, WHITE_FIELD).hash(&mut h);
                 field(&r.fields, BLACK_FIELD).hash(&mut h);
                 // Drafts and edits on their way change what the row will hold.
-                effective(self, store, *core, r, WHITE_FIELD).hash(&mut h);
-                effective(self, store, *core, r, BLACK_FIELD).hash(&mut h);
+                let [white_schema, black_schema] =
+                    *schemas.entry((*core, r.kind_ordinal)).or_insert_with(|| {
+                        [WHITE_FIELD, BLACK_FIELD].map(|name| {
+                            crate::strategies::logic::schema_field_in_kind(
+                                store,
+                                *core,
+                                r.kind_ordinal,
+                                name,
+                            )
+                        })
+                    });
+                let white = effective_with(self, store, *core, r, WHITE_FIELD, white_schema);
+                let black = effective_with(self, store, *core, r, BLACK_FIELD, black_schema);
+                white.hash(&mut h);
+                black.hash(&mut h);
+                slot_lists.push((white, black));
             }
+            lists.push(slot_lists);
         }
         let sig = h.finish();
         if let Some((cached, model)) = &self.dist.cache
@@ -337,7 +393,8 @@ impl StrategiesView {
         let mut catalogs = HashMap::new();
         let inputs: Vec<SlotInput> = rows
             .iter()
-            .map(|(core, name, picked)| {
+            .zip(lists)
+            .map(|((core, name, picked), slot_lists)| {
                 let catalog = source
                     .tradable_coins(*core)
                     .map(|coins| coins.iter().map(|c| coin_match_key(c)).collect());
@@ -348,11 +405,12 @@ impl StrategiesView {
                     section: section_of(venues.get(core)),
                     strategies: picked
                         .iter()
-                        .map(|r| StrategyInput {
+                        .zip(slot_lists)
+                        .map(|(r, (white, black))| StrategyInput {
                             id: r.id,
                             name: r.name.clone(),
-                            white: effective(self, store, *core, r, WHITE_FIELD),
-                            black: effective(self, store, *core, r, BLACK_FIELD),
+                            white,
+                            black,
                             live_white: field(&r.fields, WHITE_FIELD).to_string(),
                             live_black: field(&r.fields, BLACK_FIELD).to_string(),
                         })

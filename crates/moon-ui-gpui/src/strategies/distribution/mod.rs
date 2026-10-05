@@ -1,5 +1,7 @@
-//! The "WL distribution" tab of the Strategies window: how the strategies selected in the tree
-//! share one exchange's coins between their cores.
+//! The "WL distribution" tab of the Strategies window: how the strategies selected in the tree —
+//! one by one, or as everything under the selected folders and cores (`scope`) — share one
+//! exchange's coins between their cores. "Selected strategies" below, here and in the sibling
+//! modules, means that covered set, whichever way it was picked.
 //!
 //! One ROW per core (a "slot"): every selected strategy of that core belongs to it and is meant to
 //! carry the same `CoinsWhiteList` / `CoinsBlackList` — a long/short pair, typically. The rows
@@ -19,7 +21,7 @@
 //! editing in `edit` (pure) and `edit_view` (menu, Distribute, Reset); the report reads behind
 //! the chips' colours and the trades table in `stats`, the table itself in `trades`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use moon_core::session::CoreId;
 use moon_core::session::core_order::ExchangeSection;
@@ -28,6 +30,7 @@ use moon_core::symbol::{coin_match_key, split_coin_list};
 mod chips;
 pub(super) mod edit;
 mod edit_view;
+mod scope;
 mod stats;
 mod trades;
 pub(super) mod view;
@@ -68,8 +71,12 @@ pub(super) struct SlotInput {
 /// Why no distribution can be drawn for the current selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Unavailable {
-    /// Nothing is selected in the tree.
+    /// No strategy and no folder is selected in the tree.
     NoSelection,
+    /// Folders or cores are selected, but no live strategy under them passes the tree's filters
+    /// (or the selected folder is gone). Told apart from [`Self::NoSelection`] so the hint does
+    /// not ask for a selection the operator has already made.
+    EmptyFolders,
     /// The selected strategies sit on cores of different exchanges: one market cannot be split
     /// between them.
     MixedVenues,
@@ -199,6 +206,10 @@ pub(super) struct Board {
     /// The coins the rows' catalogs trade, sorted — what "Distribute" deals. `None` until EVERY
     /// row's catalog has arrived: a deal over some rows' markets would leave the rest's coins out.
     pub(super) universe: Option<Vec<String>>,
+    /// Every strategy name on the board, once — what the report reads trades by. Collected here,
+    /// once per build, because the pane asks for it on every repaint and a board covering whole
+    /// cores holds hundreds of names.
+    pub(super) names: BTreeSet<String>,
 }
 
 /// One row's lists as match-key sets, the form every rule reads.
@@ -283,7 +294,7 @@ pub(super) fn build(
             .count(),
     });
 
-    let drawn = slots
+    let drawn: Vec<Slot> = slots
         .into_iter()
         .zip(&lists)
         .map(|(slot, list)| {
@@ -370,11 +381,16 @@ pub(super) fn build(
         coins.sort_unstable();
         coins
     });
+    let names = drawn
+        .iter()
+        .flat_map(|slot| slot.strategies.iter().cloned())
+        .collect();
     Ok(Board {
         section,
         slots: drawn,
         coverage,
         universe,
+        names,
     })
 }
 
