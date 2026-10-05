@@ -2,7 +2,10 @@
 
 use crate::t;
 use moon_core::{
-    config::telegram_menu::ReportBasis,
+    config::{
+        GroupRowStyle, ReportColumn, ReportLayout, TotalPlace, TotalSeparation,
+        telegram_menu::ReportBasis,
+    },
     db::QuoteBreakdown,
     telegram::{
         api::{InlineKeyboardButton, InlineKeyboardMarkup, ReplyMarkup},
@@ -69,11 +72,8 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
         + html.matches("<table").count()
 }
 
-/// Compose a compact headline, three-column table, and optional per-bot accounting details.
-///
-/// Made to fit a phone screen (LinKvo, 04.10 and 05.10): the view, or an automatic report's own
-/// title, and the period are the table's one-line caption; the bold total is its last row; a group is
-/// one header row carrying its own total rather than a caption row and a subtotal row.
+/// Compose a compact caption, configured table, and per-core accounting details.
+/// The saved layout controls numeric columns, total placement and group emphasis.
 ///
 /// `host` words delivery failures; `navigation` is the chat's reply keyboard.
 pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Response {
@@ -136,7 +136,7 @@ pub(super) fn period(page: &Page, year: i32) -> String {
     format!("{} — {}", bound(from, starts_day), bound(to, ends_day))
 }
 
-/// HTML for one report page, with column titles first and the bold whole-scope total last.
+/// HTML for one report page with saved columns, group styles and whole-scope total placement.
 /// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
     let heading = if page.request.daily {
@@ -173,25 +173,29 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str(&format!(
-        "<table compact><caption>{table_caption}</caption><tr><th align=\"left\">{}</th><th align=\"right\">{}</th><th align=\"right\">{}</th></tr>",
+        "<table compact><caption>{table_caption}</caption><tr><th align=\"left\">{}</th>",
         escape(&if page.request.daily {
             t!("telegram.report_date")
         } else {
             heading
-        }),
-        escape(&t!("telegram.report_profit")),
-        escape(&t!("telegram.report_trades"))
+        })
     ));
-    let by_core = !page.request.by_exchange && !page.request.daily;
-    for row in &page.rows {
-        html.push_str(&row_html(row, by_core));
+    for label in column_headers(&page.layout) {
+        html.push_str(&format!("<th align=\"right\">{}</th>", escape(&label)));
     }
-    html.push_str(&format!(
-        "<tr><td><b>{}</b></td><td align=\"right\"><b>{}</b></td><td align=\"right\"><b>{}</b></td></tr></table>",
-        escape(&t!("telegram.report_total")),
-        escape(&profit(&page.total)),
-        page.total.orders
-    ));
+    html.push_str("</tr>");
+    let by_core = !page.request.by_exchange && !page.request.daily;
+    for row in ordered_rows(page) {
+        match row {
+            OrderedRow::Data(row) => html.push_str(&row_html(row, by_core, &page.layout)),
+            OrderedRow::Total => html.push_str(&total_html(&page.total, &page.layout)),
+            OrderedRow::Spacer => html.push_str(&format!(
+                "<tr><td colspan=\"{}\">&#160;</td></tr>",
+                1 + page.layout.drawable_columns().count()
+            )),
+        }
+    }
+    html.push_str("</table>");
     // The details name each core of the page once, however many groups list it: a repeat counts
     // only when its first listing is on another page.
     let mut lines: Vec<(&String, &QuoteBreakdown)> = page
@@ -274,27 +278,236 @@ pub(super) fn report_html(page: &Page) -> String {
     html
 }
 
-/// One table row. A core, an exchange or a day is plain cells; a group is a header row, shaded by
-/// Telegram, that carries the group's own total, its name against the right edge (LinKvo, 05.10),
-/// so it stands apart from its cores and from the headline in one row.
+/// One configured row: plain cells for cores, exchanges and days; a band or bold group row.
 ///
 /// Long user-controlled names cannot exhaust the rich-message budget. A core is one row: its name
 /// keeps both ends (where the account number usually is), and the full name stays in the details.
-pub(super) fn row_html(row: &Row, by_core: bool) -> String {
-    let (cell, lead, name, total) = match row {
-        Row::Line(name, total) | Row::Repeat(name, total) if by_core => {
-            ("td", "", compact_label(name), total)
-        }
-        Row::Line(name, total) | Row::Repeat(name, total) => ("td", "", plain_label(name), total),
-        // A header cell is centred unless told otherwise.
-        Row::Group(name, total) => ("th", " align=\"right\"", plain_label(name), total),
+pub(super) fn row_html(row: &Row, by_core: bool, layout: &ReportLayout) -> String {
+    let (name, total) = row_label(row, by_core);
+    let (cell, lead) = if matches!(row, Row::Group(..)) && layout.group_row == GroupRowStyle::Band {
+        ("th", " align=\"right\"")
+    } else {
+        ("td", "")
     };
+    let bold = matches!(row, Row::Group(..)) && layout.group_row == GroupRowStyle::BoldLeft;
+    let name = escape(&name);
+    let name = if bold { format!("<b>{name}</b>") } else { name };
+    let mut html = format!("<tr><{cell}{lead}>{name}</{cell}>");
+    html.push_str(&value_cells(total, layout, cell, bold));
+    html.push_str("</tr>");
+    html
+}
+
+/// Draw the full-period total as a shaded band distinct from group headers.
+fn total_html(total: &QuoteBreakdown, layout: &ReportLayout) -> String {
     format!(
-        "<tr><{cell}{lead}>{}</{cell}><{cell} align=\"right\">{}</{cell}><{cell} align=\"right\">{}</{cell}></tr>",
-        escape(&name),
-        escape(&profit(total)),
-        total.orders
+        "<tr><th align=\"left\"><b>{}</b></th>{}</tr>",
+        escape(&t!("telegram.report_total")),
+        value_cells(total, layout, "th", true)
     )
+}
+
+/// Emit shared typed column values as escaped HTML in their saved order.
+fn value_cells(total: &QuoteBreakdown, layout: &ReportLayout, cell: &str, bold: bool) -> String {
+    column_values(total, layout)
+        .into_iter()
+        .map(|mut span| {
+            span.bold = bold;
+            format!("<{cell} align=\"right\">{}</{cell}>", span.html())
+        })
+        .collect()
+}
+
+/// Share column formatting with previews; native volume requires a complete single-currency scope.
+fn column_values(total: &QuoteBreakdown, layout: &ReportLayout) -> Vec<crate::preview::Span> {
+    use crate::preview::{Span, Tone};
+    layout
+        .drawable_columns()
+        .filter_map(|column| {
+            let (text, sign) = match column {
+                ReportColumn::Profit => (
+                    profit(total),
+                    total
+                        .unified_usdt()
+                        .and_then(|value| fmt::signed_fixed(value.profit, 2))
+                        .map(|(_, sign)| sign),
+                ),
+                ReportColumn::Trades => (total.orders.to_string(), None),
+                ReportColumn::Average => {
+                    let value = total
+                        .average_order_return()
+                        .and_then(|value| fmt::signed_pct(value.pct, 1));
+                    (
+                        value.as_ref().map_or_else(
+                            || t!("telegram.report_unvalued").to_string(),
+                            |(text, _)| text.clone(),
+                        ),
+                        value.map(|(_, sign)| sign),
+                    )
+                }
+                ReportColumn::Volume => (
+                    crate::notify::render::whole_dollar_volume(total.traded_volume.usdt)
+                        .or_else(|| match total.traded_volume.totals.as_slice() {
+                            [bucket]
+                                if total.traded_volume.usdt.is_none()
+                                    && total.traded_volume.unknown_orders == 0
+                                    && total.traded_volume.reconstructed_orders
+                                        == total.traded_volume.eligible_orders
+                                    && total.traded_volume.eligible_orders > 0 =>
+                            {
+                                crate::notify::render::native_volume_text(
+                                    bucket.currency,
+                                    bucket.amount,
+                                )
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| t!("telegram.report_unvalued").to_string()),
+                    None,
+                ),
+                ReportColumn::Other(_) => return None,
+            };
+            Some(Span {
+                text,
+                tone: sign.map_or(Tone::Plain, |sign| {
+                    sign.pick(Tone::Gain, Tone::Loss, Tone::Plain)
+                }),
+                ..Span::plain("")
+            })
+        })
+        .collect()
+}
+
+/// Localized numeric headers in the same saved-column order as their cells.
+fn column_headers(layout: &ReportLayout) -> Vec<String> {
+    layout
+        .drawable_columns()
+        .filter_map(|column| {
+            let key = match column {
+                ReportColumn::Profit => "telegram.report_profit",
+                ReportColumn::Trades => "telegram.report_trades",
+                ReportColumn::Average => "telegram.report_average_col",
+                ReportColumn::Volume => "telegram.report_volume_col",
+                ReportColumn::Other(_) => return None,
+            };
+            Some(t!(key).to_string())
+        })
+        .collect()
+}
+
+/// A structural table row; HTML and native rendering consume this same placement walk.
+enum OrderedRow<'a> {
+    Data(&'a Row),
+    Total,
+    Spacer,
+}
+
+/// Place total and optional spacer around the real data/group rows without another layout walk.
+fn ordered_rows(page: &Page) -> Vec<OrderedRow<'_>> {
+    let mut rows = Vec::new();
+    if page.layout.total == TotalPlace::Top {
+        rows.push(OrderedRow::Total);
+        if page.layout.separation == TotalSeparation::GapBand {
+            rows.push(OrderedRow::Spacer);
+        }
+    }
+    rows.extend(page.rows.iter().map(OrderedRow::Data));
+    if page.layout.total == TotalPlace::Bottom {
+        if page.layout.separation == TotalSeparation::GapBand {
+            rows.push(OrderedRow::Spacer);
+        }
+        rows.push(OrderedRow::Total);
+    }
+    rows
+}
+
+/// Share core-name compaction and group labels with production cells.
+fn row_label(row: &Row, by_core: bool) -> (String, &QuoteBreakdown) {
+    match row {
+        Row::Line(name, total) | Row::Repeat(name, total) if by_core => {
+            (compact_label(name), total)
+        }
+        Row::Line(name, total) | Row::Repeat(name, total) | Row::Group(name, total) => {
+            (plain_label(name), total)
+        }
+    }
+}
+
+/// Resolve raw typed table cells and bands through the production row/column helpers.
+pub(super) fn preview_table(page: &Page) -> crate::preview::PreviewTable {
+    use crate::preview::{PreviewRow, PreviewRowKind, PreviewTable, Span};
+    let heading = if page.request.daily {
+        t!("telegram.report_days")
+    } else if page.request.by_exchange {
+        t!("telegram.report_exchanges")
+    } else {
+        t!("telegram.report_cores")
+    };
+    let title = page.scope_label.as_deref().unwrap_or(&heading).to_string();
+    let mut header = vec![if page.request.daily {
+        t!("telegram.report_date").to_string()
+    } else {
+        heading.to_string()
+    }];
+    header.extend(column_headers(&page.layout));
+    let by_core = !page.request.by_exchange && !page.request.daily;
+    let rows = ordered_rows(page)
+        .into_iter()
+        .map(|row| {
+            let (kind, name, total, band, first_right, bold) = match row {
+                OrderedRow::Spacer => {
+                    return PreviewRow {
+                        kind: PreviewRowKind::Spacer,
+                        cells: vec![],
+                        band: false,
+                        first_right: false,
+                    };
+                }
+                OrderedRow::Total => (
+                    PreviewRowKind::Total,
+                    t!("telegram.report_total").to_string(),
+                    &page.total,
+                    true,
+                    false,
+                    true,
+                ),
+                OrderedRow::Data(row) => {
+                    let (name, total) = row_label(row, by_core);
+                    let group = matches!(row, Row::Group(..));
+                    let band = group && page.layout.group_row == GroupRowStyle::Band;
+                    (
+                        if group {
+                            PreviewRowKind::Group
+                        } else {
+                            PreviewRowKind::Data
+                        },
+                        name,
+                        total,
+                        band,
+                        band,
+                        group,
+                    )
+                }
+            };
+            let mut cells = vec![Span::plain(name)];
+            cells.extend(column_values(total, &page.layout));
+            for cell in &mut cells {
+                cell.bold = bold;
+            }
+            PreviewRow {
+                kind,
+                cells,
+                band,
+                first_right,
+            }
+        })
+        .collect();
+    PreviewTable {
+        title,
+        caption: period(page, crate::preview::sample_clock().year()),
+        header,
+        rows,
+    }
 }
 
 /// Help is disposable rich content; a separate message owns the reply keyboard.

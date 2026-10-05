@@ -2,6 +2,32 @@ use super::*;
 use crate::config::schema::ServersFile;
 use MenuItem::*;
 
+/// Adding layout preferences must preserve bot TOML saved before the layout field existed.
+#[test]
+fn bot_without_message_layout_loads_default() {
+    let bot: BotSettings =
+        toml::from_str("report_view = 'cores'\nperiod_basis = 'open'\n").unwrap();
+    assert_eq!(*bot.message_layout, MessageLayout::default());
+    assert_eq!(bot.report_view, ReportView::Cores);
+}
+
+/// Nested layout tables must precede the menu and survive the terminal's TOML storage.
+#[test]
+fn nondefault_message_layout_survives_toml() {
+    let mut bot = BotSettings::default();
+    bot.message_layout.card = crate::config::CardLayout::moonbot_preset();
+    bot.message_layout.card.coin_hashtag = false;
+    bot.message_layout.report.total = crate::config::TotalPlace::Top;
+    bot.message_layout.report.separation = crate::config::TotalSeparation::GapBand;
+    bot.message_layout.report.columns = vec![
+        crate::config::ReportColumn::Volume,
+        crate::config::ReportColumn::Trades,
+    ];
+    let text = toml::to_string(&bot).unwrap();
+    assert!(text.find("[message_layout.").unwrap() < text.find("[menu]").unwrap());
+    assert_eq!(toml::from_str::<BotSettings>(&text).unwrap(), bot);
+}
+
 /// `servers.enc` exactly as a build before the menu wrote it.
 const OLD_SERVERS_TOML: &str = r#"
 [[servers]]
@@ -50,6 +76,7 @@ fn settings_survive_the_servers_file_round_trip() {
     file.telegram.bot = BotSettings {
         report_view: ReportView::Cores,
         period_basis: ReportBasis::Open,
+        message_layout: Default::default(),
         menu: BotMenu {
             keyboard: vec![
                 vec![MenuEntry::shown(Report), MenuEntry::shown(Help)],
@@ -117,7 +144,8 @@ fn a_menu_with_the_retired_report_level_and_mini_app_loads() {
         MenuItem::ALL.len()
     );
     let text = serde_json::to_string(&bot).unwrap();
-    assert!(!text.contains("\"report\":"), "{text}");
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(saved["menu"].get("report").is_none(), "{text}");
     assert!(!text.contains("miniapp"), "{text}");
 }
 

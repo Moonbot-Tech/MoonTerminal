@@ -10,6 +10,7 @@
 //! Items are addressed by stable ids ([`MenuItem::id`]); captions come from the locale. Renaming
 //! an id breaks the reply keyboards users already have installed.
 
+use super::telegram_layout::MessageLayout;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// One button the bot's menu can hold: an action or a section with its own inline menu.
@@ -409,24 +410,30 @@ impl ReportBasis {
     }
 }
 
-/// Serialize and read a small closed set through its stable id; an id this build does not know
-/// reads as the default.
+/// Share string-id serde for closed sets (unknown ids default) and open sets (custom reader).
 macro_rules! id_serde {
     ($ty:ty) => {
+        id_serde!($ty, |id: &str| Self::from_id(id).unwrap_or_default());
+    };
+    ($ty:ty, $read:expr) => {
         impl Serialize for $ty {
+            /// Write the stable string id.
             fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
                 s.serialize_str(self.id())
             }
         }
 
         impl<'de> Deserialize<'de> for $ty {
+            /// Read a string id through the set's unknown-id policy.
             fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
                 let id = String::deserialize(d)?;
-                Ok(Self::from_id(&id).unwrap_or_default())
+                Ok(($read)(&id))
             }
         }
     };
 }
+
+pub(crate) use id_serde;
 
 id_serde!(ReportView);
 id_serde!(ReportBasis);
@@ -441,6 +448,10 @@ pub struct BotSettings {
     /// Which timestamp report periods apply to.
     #[serde(default)]
     pub period_basis: ReportBasis,
+    /// How the bot's cards and reports look; absent preferences use today's look.
+    /// Boxed to keep station reply variants small as appearance preferences grow.
+    #[serde(default)]
+    pub message_layout: Box<MessageLayout>,
     /// The menu. Kept last: TOML writes a table after the plain values.
     #[serde(default)]
     pub menu: BotMenu,

@@ -1,5 +1,45 @@
 use super::*;
 
+/// Losing layout in Access storage or equality would discard station edits or accept stale ones.
+#[test]
+fn message_layout_rides_access_and_participates_in_base_holds() {
+    let access: Access = serde_json::from_value(serde_json::json!({"bot": {"message_layout": {"card": {"lines": [["core"], ["coin", "prices"]], "core_hashtag": false}, "report": {"columns": ["volume", "average"], "total": "top", "separation": "gap_band"}}}})).unwrap();
+    let wire = serde_json::to_string(&access).unwrap();
+    let back: Access = serde_json::from_str(&wire).unwrap();
+    let mut telegram = TelegramConfig::default();
+    back.apply_to(&mut telegram);
+    assert_eq!(
+        telegram.bot.message_layout.card.lines,
+        vec![
+            vec![crate::config::CardField::Core],
+            vec![
+                crate::config::CardField::Coin,
+                crate::config::CardField::Prices
+            ]
+        ]
+    );
+    assert!(!telegram.bot.message_layout.card.core_hashtag);
+    assert_eq!(
+        telegram.bot.message_layout.report.columns,
+        vec![
+            crate::config::ReportColumn::Volume,
+            crate::config::ReportColumn::Average
+        ]
+    );
+    assert_eq!(
+        telegram.bot.message_layout.report.total,
+        crate::config::TotalPlace::Top
+    );
+    assert_eq!(
+        telegram.bot.message_layout.report.separation,
+        crate::config::TotalSeparation::GapBand
+    );
+    let current = Access::of(&telegram);
+    assert!(back.base_holds(&current));
+    telegram.bot.message_layout.card.coin_hashtag = false;
+    assert!(!back.base_holds(&Access::of(&telegram)));
+}
+
 /// Frozen TESTKEY V1 export: master 0x11, MAC 0x22, endpoint 198.51.100.42:4321.
 const SYNTHETIC_KEY: &str = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
 

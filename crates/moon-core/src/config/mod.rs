@@ -42,6 +42,7 @@ pub mod servers;
 pub mod storage;
 pub mod tab_badges;
 pub mod telegram_access;
+pub mod telegram_layout;
 pub mod telegram_menu;
 pub mod theme;
 pub mod theme_legacy;
@@ -120,6 +121,10 @@ pub use servers::{
 };
 pub use store::{CoreKeyEntry, read_core_keys};
 pub use tab_badges::TabBadgeSettings;
+pub use telegram_layout::{
+    CardField, CardLayout, GroupRowStyle, MessageLayout, ReportColumn, ReportLayout, TotalPlace,
+    TotalSeparation,
+};
 pub use theme::{ChartTheme, ChartThemeSet};
 // Keep the counter private to `config` so external code cannot construct or replace it.
 use uid_counter::UidCounter;

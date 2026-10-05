@@ -52,7 +52,7 @@ type Read = Result<Option<AutoPage>, ()>;
 /// started less than [`AUTO_INTERVAL`] ago.
 ///
 /// Args:
-///     host: Pairing, grants, the bot's view and basis, the report zone.
+///     host: Pairing, grants, the bot's view, basis and sanitized layout, the report zone.
 ///     store: Notifications file of the running bot.
 ///     now_utc: Current UTC Unix seconds.
 pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_utc: i64) {
@@ -73,6 +73,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
     let inputs = AutoInputs {
         zone: host.report_zone(),
         basis: bot.period_basis,
+        layout: bot.message_layout.report.sanitized(),
         view: bot.report_view,
         order: CoreOrder::new(host.config()),
         names: CoreNames::from_servers(&host.config().servers),

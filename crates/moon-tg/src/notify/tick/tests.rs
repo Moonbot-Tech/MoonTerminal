@@ -119,6 +119,27 @@ fn enabled_chat_enqueues_closes_after_enable_once() {
     assert_eq!(host.seen_ids(), BTreeSet::from([11]));
 }
 
+/// Falling back to the default layout in the push path would ignore the station's saved card.
+#[test]
+fn stored_layout_reaches_the_notification_outbox() {
+    let _locale = crate::test_locale::force("en");
+    let root = TempRoot::new("card-layout");
+    let mut host = TickHost::open(root.notifications());
+    host.admit(CHAT);
+    host.edit(enable_trades);
+    host.config.telegram.bot.message_layout.card = moon_core::config::telegram_layout::CardLayout {
+        lines: vec![vec![moon_core::config::telegram_layout::CardField::Core]],
+        core_hashtag: false,
+        ..Default::default()
+    };
+    host.state.visible_override = Some(vec![7]);
+    host.state.injected_reads = Some(closes_around_enable());
+    host.tick(2_000);
+    let rows = host.outbox();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].html, "Name: CoreA");
+}
+
 /// A settings revision that moves while the job runs skips the chat.
 #[test]
 fn revision_changed_during_the_job_skips_the_chat() {

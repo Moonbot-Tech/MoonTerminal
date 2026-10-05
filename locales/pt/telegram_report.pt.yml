@@ -1,4 +1,6 @@
 _version: 1
+telegram.report_average_col: "Média %"
+telegram.report_volume_col: "Volume"
 
 telegram.help_hour: "Esta hora"
 
@@ -105,6 +107,7 @@ telegram.notify_manual: "Manual"
 telegram.notify_unvalued: "Sem avaliação"
 
 telegram.notify_unchecked: "Limites não verificados: sem valor em dólar"
+telegram.notify_core_named: "Name: %{name}"
 
 telegram.notify_opened: "Operação aberta"
 telegram.notify_emulator: "emulador"

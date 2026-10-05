@@ -163,6 +163,30 @@ Atomic persistence completes before deleting a replaced answer; a failed save re
 The history cache never grants authorization and contains no token or report content.
 Messages sent before this persistence feature cannot be recovered from Telegram history.
 
+## Message look
+
+Settings -> Telegram has a "Bot message builder" box under the bot menu, with Card and Report
+tabs and a preview made from synthetic examples. A station-hosted bot stores the layout with its
+bot settings **on the station**: every terminal edits the same set. Press "Save on the station"
+to apply it. A terminal-hosted bot stores it in its own config through the global Save button.
+
+The Card tab arranges fields into lines. Drag fields and lines to reorder them, hide fields in
+the tray, or restore them from it; the move and hide buttons and tray also work with the keyboard.
+"Coin first" is the default, matching the existing card. "Core first, as in MoonBot" starts with
+`Name: <core>`. The coin and core hashtag switches affect cards only: core down/back notices
+always keep their hashtags.
+
+The Report tab keeps the first column fixed and lets you reorder or hide Profit, Trades,
+Average % and Volume. At least one of these columns stays visible; all four may not fit a phone.
+Volume shows a native amount only for a complete single-currency scope.
+The total goes at the Bottom by default, or at the Top. Separation is Band by default, a shaded
+row with bold text and values; Spacer + band adds an empty row beside it. There is no line option
+because Telegram rich tables cannot draw a rule inside a table. Group rows use Band by default,
+or Bold left for bold cells with a left-aligned name.
+
+A layout saved by a newer terminal still renders the fields and columns this version knows.
+An older station or terminal may ignore or reset the layout when it saves the bot settings.
+
 ## Notifications
 
 The Mini App «Настройки» tab is where a paired chat turns on messages the bot sends on its own.

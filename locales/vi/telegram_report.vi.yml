@@ -1,4 +1,6 @@
 _version: 1
+telegram.report_average_col: "TB %"
+telegram.report_volume_col: "Khối lượng"
 
 telegram.help_hour: "Giờ này"
 
@@ -104,6 +106,7 @@ telegram.notify_manual: "Thủ công"
 telegram.notify_unvalued: "Chưa định giá"
 
 telegram.notify_unchecked: "Chưa kiểm ngưỡng: chưa có giá trị đô la"
+telegram.notify_core_named: "Name: %{name}"
 
 telegram.notify_opened: "Đã mở giao dịch"
 telegram.notify_emulator: "giả lập"

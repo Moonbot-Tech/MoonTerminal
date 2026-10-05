@@ -90,6 +90,8 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) tape: super::server_tape::TapeEd,
     /// The station bot's menu tree, over `access_draft`.
     pub(super) menu: super::bot_menu::BotMenuEd,
+    /// The station's session-only message editor and typed preview cache.
+    pub(super) message_layout: super::message_layout::MessageLayoutEd,
 }
 
 impl ServerBotEd {
@@ -152,6 +154,7 @@ pub(in crate::settings) fn build<T: 'static>(
         access_draft: None,
         tape: Default::default(),
         menu: super::bot_menu::BotMenuEd::new(cx),
+        message_layout: super::message_layout::MessageLayoutEd::default(),
     }
 }
 
@@ -862,6 +865,7 @@ impl SettingsView {
             )
             .into_any_element(),
             self.bot_menu_box(ChatsOf::Station, cx),
+            self.message_layout_box(ChatsOf::Station, cx),
             mini.into_any_element(),
         ]
     }

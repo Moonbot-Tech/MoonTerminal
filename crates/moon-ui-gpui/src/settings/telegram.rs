@@ -24,6 +24,7 @@ mod bot_menu;
 mod chat_notify;
 mod chat_notify_charts;
 mod core_section;
+mod message_layout;
 mod qr;
 mod server_auto_update;
 mod server_bot;
@@ -58,6 +59,8 @@ pub(super) struct TelegramEd {
     server: server_bot::ServerBotEd,
     /// The terminal bot's menu tree.
     menu: bot_menu::BotMenuEd,
+    /// The terminal's session-only message editor and typed preview cache.
+    message_layout: message_layout::MessageLayoutEd,
 }
 
 impl TelegramEd {
@@ -117,6 +120,7 @@ pub(super) fn build(
         core: core_section::build(window, cx),
         server: server_bot::build(window, cx, server_bot::known_server()),
         menu: bot_menu::BotMenuEd::new(cx),
+        message_layout: message_layout::MessageLayoutEd::default(),
     };
     ed.chats.wire(access::ChatsOf::Terminal, cx);
     ed.server.chats.wire(access::ChatsOf::Station, cx);
@@ -385,6 +389,7 @@ impl SettingsView {
             )
             .child(self.telegram_chat_access(access::ChatsOf::Terminal, pairing_actions, None, cx))
             .child(self.bot_menu_box(access::ChatsOf::Terminal, cx))
+            .child(self.message_layout_box(access::ChatsOf::Terminal, cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
                     .title(t!("telegram.section_mini_app").to_string())

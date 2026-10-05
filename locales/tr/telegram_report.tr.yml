@@ -1,4 +1,6 @@
 _version: 1
+telegram.report_average_col: "Ort. %"
+telegram.report_volume_col: "Hacim"
 
 telegram.help_hour: "Bu saat"
 
@@ -104,6 +106,7 @@ telegram.notify_manual: "Elle"
 telegram.notify_unvalued: "Değer yok"
 
 telegram.notify_unchecked: "Eşikler denetlenmedi: dolar değeri yok"
+telegram.notify_core_named: "Name: %{name}"
 
 telegram.notify_opened: "İşlem açıldı"
 telegram.notify_emulator: "emülatör"

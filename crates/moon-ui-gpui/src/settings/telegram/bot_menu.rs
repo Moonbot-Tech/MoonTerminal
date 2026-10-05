@@ -154,7 +154,7 @@ impl SettingsView {
     }
 
     /// Change `side`'s bot settings; `edit` says whether it changed anything.
-    fn bot_settings_edit(
+    pub(in crate::settings) fn bot_settings_edit(
         &mut self,
         side: ChatsOf,
         cx: &mut Context<Self>,

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use chrono_tz::Tz;
 use moon_core::config::telegram_access::TelegramReportAccess;
+use moon_core::config::telegram_layout::CardLayout;
 use moon_core::db::CoreNames;
 use moon_core::telegram::TelegramService;
 use moon_core::telegram::notify::{
@@ -75,11 +76,12 @@ struct ChatSnap {
     ledger: NotifyLedger,
 }
 
-/// A chat whose grant still matches, with the cores it may see at finish time.
+/// A chat whose grant still matches, with visible cores and the owner's captured card layout.
 struct ChatApply {
     chat: i64,
     revision: u64,
     visible: Vec<u64>,
+    layout: Arc<CardLayout>,
 }
 
 /// What one notification read is going to load.
@@ -1020,6 +1022,7 @@ fn clear_busy(host: &mut dyn TgHost) {
 /// Returns:
 ///     Chats finish may edit. A mismatch is logged and omitted.
 fn prepare_applies(host: &dyn TgHost, shots: &[ChatShot]) -> Vec<ChatApply> {
+    let layout = Arc::new(host.config().telegram.bot.message_layout.card.sanitized());
     let mut applies = Vec::new();
     for shot in shots {
         if !grant_matches(host, shot) {
@@ -1030,6 +1033,7 @@ fn prepare_applies(host: &dyn TgHost, shots: &[ChatShot]) -> Vec<ChatApply> {
             chat: shot.chat,
             revision: shot.revision,
             visible: visible_ids(host, &shot.access),
+            layout: layout.clone(),
         });
     }
     applies
@@ -1188,7 +1192,7 @@ fn render_chat(
 ///
 /// Args:
 ///     entry: Trade rule and ledger. `seen`, `held` and `cards` are updated in place.
-///     apply: Visible cores.
+///     apply: Visible cores and the captured card layout.
 ///     loaded: Closed trades from the read. `decide` applies the floor.
 ///     now_utc: UTC Unix seconds.
 ///
@@ -1224,7 +1228,11 @@ fn trade_html(
                     },
                 );
             }
-            Outgoing::Card(trade_card(&trade, unchecked), Some(vec![trade.core]), key)
+            Outgoing::Card(
+                trade_card(&trade, unchecked, &apply.layout),
+                Some(vec![trade.core]),
+                key,
+            )
         })
         .collect()
 }
@@ -1237,7 +1245,7 @@ fn trade_html(
 ///
 /// Args:
 ///     entry: Ledger; `cards` loses every filled or expired card.
-///     apply: Cores the chat may see now.
+///     apply: Cores the chat may see now and the captured card layout.
 ///     loaded: Closed trades from the read.
 ///     now_utc: UTC Unix seconds.
 ///
@@ -1277,7 +1285,7 @@ fn card_fills(
         entry.ledger.drop_card(key);
         edits.push(Outgoing::Edit(
             message,
-            trade_card(trade, card.unchecked),
+            trade_card(trade, card.unchecked, &apply.layout),
             Some(vec![key.core]),
         ));
     }
