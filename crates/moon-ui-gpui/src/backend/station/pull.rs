@@ -69,11 +69,13 @@ pub(crate) fn tick(backend: &mut Backend, cx: &mut Context<Backend>) {
                 st.phase = Phase::Done;
                 return;
             };
+            let here = super::cores_sync::trace_cores(&backend.config);
+            let listing = backend.station.cores_seen.clone();
             st.phase = Phase::Running(n);
             let spawned = std::thread::Builder::new()
                 .name("station-traces".into())
                 .spawn(move || {
-                    let (filed, outcome) = pull(&target);
+                    let (filed, outcome) = pull(&target, &here, listing);
                     if let Err(e) = &outcome {
                         log::warn!("station: order traces pull, attempt {n} of {ATTEMPTS}: {e:#}");
                     }
@@ -105,14 +107,38 @@ pub(crate) fn tick(backend: &mut Backend, cx: &mut Context<Backend>) {
 /// Returns:
 ///     What was filed — kept when a later core's request fails, the writer has it already — and
 ///     whether the pull went through to the end.
-fn pull(target: &moon_remote::ssh::Target) -> (Vec<Pulled>, anyhow::Result<()>) {
+fn pull(
+    target: &moon_remote::ssh::Target,
+    here: &[super::cores_sync::LocalCore],
+    seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
+) -> (Vec<Pulled>, anyhow::Result<()>) {
     let mut filed = Vec::new();
-    let outcome = pull_into(target, &mut filed);
+    let outcome = trace_listing(seen, || moon_remote::station::bot::bot_state(target))
+        .and_then(|listing| pull_into(target, &mut filed, here, listing.as_deref()));
     (filed, outcome)
 }
 
+/// Fetch unread identities off the UI thread; a missing status retries instead of guessing uids.
+fn trace_listing(
+    seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
+    fetch: impl FnOnce() -> anyhow::Result<moon_remote::station::bot::BotState>,
+) -> anyhow::Result<Option<Vec<moon_core::station_api::ListedCore>>> {
+    match seen {
+        Some(listing) => Ok(listing),
+        None => fetch()?
+            .station
+            .map(|status| status.cores)
+            .ok_or_else(|| anyhow::anyhow!("the station is not answering yet")),
+    }
+}
+
 /// [`pull`], filing into `filed` as it goes.
-fn pull_into(target: &moon_remote::ssh::Target, filed: &mut Vec<Pulled>) -> anyhow::Result<()> {
+fn pull_into(
+    target: &moon_remote::ssh::Target,
+    filed: &mut Vec<Pulled>,
+    here: &[super::cores_sync::LocalCore],
+    listing: Option<&[moon_core::station_api::ListedCore]>,
+) -> anyhow::Result<()> {
     let now_ms = moon_core::util::time::now_unix_ms_i64();
     let wanted = order_traces::lacking_lines(now_ms)
         .map_err(|e| anyhow::anyhow!("list the trades without traces: {e:?}"))?;
@@ -124,8 +150,14 @@ fn pull_into(target: &moon_remote::ssh::Target, filed: &mut Vec<Pulled>) -> anyh
         .ok_or_else(|| anyhow::anyhow!("the local trace archive is not open"))?;
     let pull = moon_remote::station::pull::Pull::open(target)?;
     for (core, uids) in wanted {
+        let Some(station_uid) = super::cores_sync::trace_uid(core, here, Some(listing)) else {
+            log::debug!(
+                "station: skipping trace pull for local core {core}: no unique station address"
+            );
+            continue;
+        };
         let mut writer_gone = false;
-        pull.traces(core, &uids, |trade| {
+        pull.traces(station_uid, &uids, |trade| {
             let lines: Arc<[ArchivedOrderTrace]> =
                 trade.lines.into_iter().map(Into::into).collect();
             if lines.is_empty() || writer_gone {
@@ -148,3 +180,6 @@ fn pull_into(target: &moon_remote::ssh::Target, filed: &mut Vec<Pulled>) -> anyh
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

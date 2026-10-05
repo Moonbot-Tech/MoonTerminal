@@ -485,6 +485,26 @@ fn wait_until(
     }
 }
 
+/// Wait at most sixty seconds for the restarted service API, without requiring a Telegram bot.
+/// Each retry reads fresh helper/API state; transient connection failures keep the wait alive.
+pub fn wait_status(target: &Target, say: &mut dyn FnMut(Progress)) -> anyhow::Result<BotState> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let last = match bot_state(target) {
+            Ok(state) if state.station.is_some() => {
+                say(Progress::step(Step::Status, "station API answering"));
+                return Ok(state);
+            }
+            Ok(state) => state.summary(),
+            Err(error) => format!("{error:#}"),
+        };
+        if Instant::now() >= deadline {
+            anyhow::bail!("station status did not settle: {last}");
+        }
+        std::thread::sleep(ASK_EVERY);
+    }
+}
+
 fn look(target: &Target) -> anyhow::Result<BotState> {
     // `bot_state`, not the API alone: the answer also says whether the station holds a token.
     bot_state(target)

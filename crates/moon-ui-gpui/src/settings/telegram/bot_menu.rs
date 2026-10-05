@@ -53,7 +53,7 @@ const ROOT: &str = "kb";
 const ROW_H: f32 = 30.0;
 
 /// Unscaled narrowest width of one column; below two of them the columns stack.
-const COLUMN_MIN_W: f32 = 320.0;
+pub(super) const COLUMN_MIN_W: f32 = 320.0;
 
 /// The button order and the language its labels are in: all the tree's items depend on.
 fn shape_sig(menu: &BotMenu) -> u64 {

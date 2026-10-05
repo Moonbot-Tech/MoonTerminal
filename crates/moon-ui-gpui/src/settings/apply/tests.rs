@@ -12,6 +12,28 @@ use super::{CoreEntry, core_delta, prune_orphaned_chart_specs};
 use crate::persistence::chart_persist::ChartTabSpec;
 use moon_core::config::ChartBucket;
 
+/// Regression tripwire: restoring the Save-triggered dispatch would change a shared station without an explicit action.
+#[test]
+fn saving_connections_never_dispatches_station_work() {
+    let source = include_str!("../apply.rs");
+    let save = source
+        .split("    pub(super) fn save(")
+        .nth(1)
+        .unwrap()
+        .split("    fn apply_settings(")
+        .next()
+        .unwrap();
+    for forbidden in [
+        "backend::station",
+        "station_start",
+        "station_begin",
+        "Job::",
+    ] {
+        assert!(!save.contains(forbidden), "Save contains {forbidden}");
+    }
+    assert!(!include_str!("../../backend/station.rs").contains("fn station_cores_changed"));
+}
+
 /// One core of the synthetic desk.
 fn core(uid: u64, group: &str, bundle: &str) -> CoreEntry {
     CoreEntry {

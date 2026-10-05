@@ -213,11 +213,6 @@ impl SettingsView {
                 moon_core::backups::update_daily_sources(&after);
                 self.status = Some((super::StatusMsg::Key("settings.saved"), false));
                 self.apply_settings(&before, cx);
-                // A station on a server gets every active core's key: a change here goes there.
-                if crate::backend::station::cores_differ(&before, &after) {
-                    self.backend
-                        .update(cx, |b, bcx| b.station_cores_changed(bcx));
-                }
             }
             Err(e) => self.status = Some((super::StatusMsg::Text(e.to_string()), true)),
         }

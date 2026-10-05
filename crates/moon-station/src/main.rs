@@ -59,7 +59,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use moon_core::session::SessionManager;
-use moon_core::station_api::{Answer, BotStatus, Reply, Request, Status};
+use moon_core::station_api::{Answer, BotStatus, ListedCore, Reply, Request, Status};
 
 /// How often the feeds' channels are drained — the terminal's own coordination cadence.
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
@@ -124,6 +124,7 @@ fn main() -> anyhow::Result<()> {
     let telegram = station.telegram;
     let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
+    let mut listed = station.listed;
     let mut cfg = station.config;
     // `load` gave the cores the feed of `station.toml` alone; the menu may ask for more.
     cores::set_feed(&mut cfg, profile);
@@ -203,6 +204,7 @@ fn main() -> anyhow::Result<()> {
             match reload(&config_path) {
                 Ok(reloaded) => {
                     skipped_cores = reloaded.skipped_cores;
+                    listed = reloaded.listed;
                     auto_update.set(reloaded.auto_update);
                     if !same_bot(reloaded.telegram.as_ref(), telegram.as_ref()) {
                         log::warn!(
@@ -243,6 +245,7 @@ fn main() -> anyhow::Result<()> {
             host: &host,
             data_root: &data_root,
             skipped_cores: &skipped_cores,
+            listed: &listed,
             auto_update: &auto_update,
         };
         if let Some(bot) = bot.as_mut() {
@@ -320,6 +323,7 @@ struct StationNow<'a> {
     data_root: &'a Path,
     /// Load failures remain in the total even though they have no connection session.
     skipped_cores: &'a [String],
+    listed: &'a [ListedCore],
     auto_update: &'a auto_update::AutoUpdate,
 }
 
@@ -341,6 +345,7 @@ impl StationNow<'_> {
             host: Some(Box::new(self.host.host())),
             last_update: release::last_update(self.data_root),
             auto_update: Some(self.auto_update.on()),
+            cores: Some(self.listed.to_vec()),
         }
     }
 }

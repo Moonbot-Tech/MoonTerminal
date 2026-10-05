@@ -19,8 +19,10 @@ fn the_shape_moves_with_the_order_only() {
 }
 
 /// Every keyboard button is a row under the one root, numbered by the row it sits in.
+/// The locale guard initializes translated tree labels before the default-stack test reads them.
 #[test]
 fn rows_number_buttons_by_their_row() {
+    let _locale = crate::test_locale::force("en");
     let menu = BotMenu::default();
     let rows = rows_by_id(&menu);
     assert_eq!(rows.len(), MenuItem::ALL.len());

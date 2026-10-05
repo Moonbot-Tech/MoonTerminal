@@ -192,12 +192,13 @@ fn bot_off_retries_never_publish_locally_before_dispatching_server_work() {
     assert!(!begin.contains("self.telegram.resume("));
 }
 
-/// Omitting queue reset on removal lets station_next re-upload core keys to a removed station;
-/// retaining a fingerprint candidate lets a confirmation from the old station survive.
+/// Retaining queued work, listings or confirmation state applies the old station to a new one.
 #[test]
 fn losing_a_known_station_cancels_queued_work_and_fingerprint_consent() {
     let mut jobs = StationJobs {
-        pending_cores: true,
+        cores_seen: Some(Some(Vec::new())),
+        cores_result: Some("old result".into()),
+        cores_job: true,
         pending_refresh: true,
         needs_old_admin: true,
         waiting: Some((
@@ -225,7 +226,9 @@ fn losing_a_known_station_cancels_queued_work_and_fingerprint_consent() {
         ..StationJobs::default()
     };
     jobs.clear_known(Ok("removed".into()));
-    assert!(!jobs.pending_cores && !jobs.pending_refresh);
+    assert!(!jobs.pending_refresh);
+    assert!(jobs.cores_seen.is_none() && jobs.cores_result.is_none());
+    assert!(!jobs.cores_job);
     assert!(jobs.waiting.is_none() && jobs.address_change.is_none());
     assert!(!jobs.needs_old_admin);
     assert_eq!(
@@ -234,21 +237,74 @@ fn losing_a_known_station_cancels_queued_work_and_fingerprint_consent() {
     );
 }
 
-/// Omitting the automatic job's preflight would recreate secrets after a completed remote
-/// removal whose local forget failed. Explicit installation still uses its own push path.
+/// Regression tripwire: omitting preflight recreates secrets after a completed removal whose local forget failed.
 #[test]
-fn automatic_core_writes_require_a_configured_station_before_pushing_keys() {
-    let jobs = include_str!("job.rs");
-    let sync = jobs
-        .split("Job::Cores { target, cores } => {")
-        .nth(1)
-        .unwrap()
-        .split("Job::Tape")
-        .next()
-        .unwrap();
-    let refusal = sync.find("RemovalError::NotConfigured").unwrap();
-    assert!(sync[..refusal].contains("script::value(&status, \"config\") != Some(\"yes\")"));
-    assert!(refusal < sync.find("station::push_cores(").unwrap());
+fn explicit_core_writes_and_removals_require_a_configured_station() {
+    let jobs = include_str!("job.rs").split("fn run(").nth(1).unwrap();
+    for (arm, next, operation) in [
+        (
+            "Job::Cores {",
+            "Job::CoresRemove",
+            "station::push_cores_with_add_flags(",
+        ),
+        (
+            "        Job::CoresRemove {",
+            "Job::Tape",
+            "station::remove_cores(",
+        ),
+    ] {
+        let sync = jobs.split(arm).nth(1).unwrap().split(next).next().unwrap();
+        let refusal = sync.find("RemovalError::NotConfigured").unwrap();
+        assert!(sync[..refusal].contains("script::value(&status, \"config\") != Some(\"yes\")"));
+        assert!(refusal < sync.find(operation).unwrap());
+    }
+}
+
+/// A restarting service reports no Status; discarding the listing would erase comparison state.
+#[test]
+fn bot_reads_without_station_status_preserve_the_last_core_listing() {
+    let mut jobs = StationJobs::default();
+    let mut bot = moon_remote::station::bot::BotState {
+        has_token: false,
+        stopped: false,
+        no_api: false,
+        bot: None,
+        pairing_until: None,
+        access: None,
+        tape: None,
+        station: None,
+    };
+    jobs.observe_bot(bot.clone());
+    assert!(jobs.cores_seen.is_none());
+    bot.station = Some(Box::new(moon_core::station_api::Status {
+        station_version: "synthetic".into(),
+        cores_total: 0,
+        cores_ready: 0,
+        cores: Some(Vec::new()),
+        bot: None,
+        tape: None,
+        host: None,
+        last_update: None,
+        auto_update: None,
+    }));
+    jobs.observe_bot(bot.clone());
+    assert_eq!(jobs.cores_seen, Some(Some(Vec::new())));
+    bot.station = None;
+    jobs.observe_bot(bot.clone());
+    assert_eq!(jobs.cores_seen, Some(Some(Vec::new())));
+    bot.station = Some(Box::new(moon_core::station_api::Status {
+        station_version: "old".into(),
+        cores_total: 0,
+        cores_ready: 0,
+        cores: None,
+        bot: None,
+        tape: None,
+        host: None,
+        last_update: None,
+        auto_update: None,
+    }));
+    jobs.observe_bot(bot);
+    assert_eq!(jobs.cores_seen, Some(None));
 }
 
 /// Dropping either ownership marker permits Forget/Remove to discard the only recovery route.

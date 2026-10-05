@@ -1,7 +1,11 @@
 //! Validation failures retain kinds until the presentation boundary.
 
-use super::{core_keys, first_access, picked_core_key, show_journal, show_status};
+use super::{
+    core_keys, first_access, picked_core_key, saved_local_cores, show_journal, show_status,
+};
+use crate::backend::station::cores_sync;
 use moon_core::config::{CoreKeyEntry, Secret};
+use moon_core::station_api::ListedCore;
 use moon_remote::error::StationError;
 use moon_remote::station::bot::BotState;
 
@@ -86,5 +90,81 @@ fn requested_journal_preserves_raw_lines_without_detail_prefixes() {
             "synthetic journal entry",
             "second entry"
         ]
+    );
+}
+
+/// An excluded synthetic uid must not participate in matching or inflate a fresh uid allocation.
+#[test]
+fn excluded_persisted_keys_do_not_raise_allocated_uids() {
+    let all = [3, 1000].map(|uid| CoreKeyEntry {
+        uid,
+        name: format!("Core {uid}"),
+        key: Secret::new("synthetic-fixture"),
+        transport: None,
+        active: true,
+    });
+    let here = saved_local_cores(&all, &[3]);
+    assert_eq!(here.iter().map(|core| core.uid).collect::<Vec<_>>(), [3]);
+    let listing = [ListedCore {
+        uid: 3,
+        name: "Other address".into(),
+        address: Some("198.51.100.9:4510".into()),
+        key_fp: None,
+    }];
+    let rows = cores_sync::reconcile(&here, &listing);
+    assert_eq!(cores_sync::bulk(&rows)[0].station_uid, 4);
+    assert!(saved_local_cores(&all, &[]).is_empty());
+}
+
+/// Treating reinstall picks as unconditional adds refuses an existing address or overwrites a uid.
+#[test]
+fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
+    // Frozen TESTKEY V1 export from the endpoint contract fixture.
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let keys = [3, 5].map(|uid| moon_remote::station::CoreKey {
+        uid,
+        name: format!("Local {uid}"),
+        transport: None,
+        key: Secret::new(key),
+    });
+    let address = moon_core::station_api::core_address(keys[0].key.expose());
+    assert!(address.is_some());
+    let listing = [
+        ListedCore {
+            uid: 9,
+            name: "Old name".into(),
+            address,
+            key_fp: None,
+        },
+        ListedCore {
+            uid: 5,
+            name: "Station only".into(),
+            address: Some("198.51.100.9:4510".into()),
+            key_fp: None,
+        },
+    ];
+    assert_eq!(
+        super::install_changes(&keys[..1], Some(&listing)).unwrap(),
+        [cores_sync::Upsert {
+            terminal_uid: 3,
+            station_uid: 9,
+            add: false,
+        }]
+    );
+    assert_eq!(
+        super::install_changes(&keys[1..], Some(&listing[1..])).unwrap(),
+        [cores_sync::Upsert {
+            terminal_uid: 5,
+            station_uid: 6,
+            add: true,
+        }]
+    );
+    assert_eq!(
+        super::install_changes(&keys[..1], None).unwrap(),
+        [cores_sync::Upsert {
+            terminal_uid: 3,
+            station_uid: 3,
+            add: true,
+        }]
     );
 }

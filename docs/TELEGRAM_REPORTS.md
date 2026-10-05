@@ -68,6 +68,14 @@ was last sent. The station's bot menu shows whether its groups are this terminal
 groups to the station" when they are not — never on its own, so a terminal without groups cannot
 wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
 
+Settings -> Station -> Cores on the station compares cores by address, using the station's own
+identities for Chats grants. Save in Connections never changes the station. The block shows
+matching cores, cores only here, cores only on the station, and changed names or keys; row buttons
+add a core or send its name or key. Send changes sends only additions and changes, leaving
+station-only cores untouched. Removing a station-only core requires two inline clicks and keeps
+its reports on the station; the final station core cannot be removed. An older station shows an
+update notice until it supports the listing. Installation sends only the picked cores.
+
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
 a station's is switched in the terminal's Settings), set this chat's notifications — trade

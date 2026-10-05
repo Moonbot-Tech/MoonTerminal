@@ -50,7 +50,7 @@ impl SettingsView {
             return;
         }
         if let Some(reason) = self.backend.read(cx).station.access_refusal() {
-            self.server_bot_run(Err(reason), cx);
+            self.server_bot_run(Err(t!(reason).to_string()), cx);
             return;
         }
         let Some(target) = self.telegram.server.known() else {
@@ -95,7 +95,7 @@ impl SettingsView {
             return;
         }
         if let Some(reason) = self.backend.read(cx).station.access_refusal() {
-            self.server_bot_run(Err(reason), cx);
+            self.server_bot_run(Err(t!(reason).to_string()), cx);
             return;
         }
         match self.station_access_source() {
@@ -166,7 +166,11 @@ impl SettingsView {
                         ),
                 );
         if let Some(reason) = refusal {
-            block = block.child(div().text_color(rgba_from(p.red_text, 1.0)).child(reason));
+            block = block.child(
+                div()
+                    .text_color(rgba_from(p.red_text, 1.0))
+                    .child(t!(reason).to_string()),
+            );
         }
         if ed.editing {
             block = block

@@ -7,9 +7,9 @@
 //! server, done at once (as the Storage tab does); the server's chats are edited in a draft of
 //! their own and sent by "Apply on the server". The terminal keeps nothing secret for it: the
 //! provider's login is used for the setup only, the administrator (`moon`) logs in by the
-//! terminal's own key (`moon_remote::app_key`), and the core keys — every active core's — are read
-//! from `servers.enc` inside the job; a Save that changes the cores sends them again
-//! (`backend::station::cores_differ`).
+//! terminal's own key (`moon_remote::app_key`). Core keys are read from `servers.enc` inside the
+//! job: install sends the picked cores, and later changes reach the station only through the
+//! Cores on the station block. Save in Connections never changes the station.
 //!
 //! The job itself, its progress and the bot's hand-over belong to the backend
 //! (`backend::station`): they outlive this window. This module builds jobs and shows the state.
@@ -77,6 +77,10 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) chats: ChatEd,
     /// The server's chats as last read.
     access_seen: Option<Access>,
+    /// The station-only core awaiting an explicit second removal click.
+    pub(super) cores_armed: Option<super::station_cores::RemovalArm>,
+    /// Rows retained between renders, invalidated by comparison inputs.
+    pub(super) cores_cache: super::station_cores::CoreCache,
     /// The server's chats the draft was taken from: what "Apply on the server" replaces, and the
     /// station refuses if its chats are no longer these.
     pub(super) access_base: Option<Access>,
@@ -142,6 +146,8 @@ pub(in crate::settings) fn build<T: 'static>(
         seen_restored: 0,
         chats: ChatEd::new(window, cx),
         access_seen: None,
+        cores_armed: None,
+        cores_cache: Default::default(),
         access_base: None,
         access_draft: None,
         tape: Default::default(),
@@ -321,6 +327,7 @@ impl SettingsView {
             ed.lines_scroll.scroll_to_bottom();
         }
         self.server_tape_sync(cx);
+        self.station_cores_sync(cx);
         let ed = &mut self.telegram.server;
         // A window opened straight on this tab never "activated" it: the first render asks.
         let ask = self.active == super::super::Tab::Telegram
@@ -431,6 +438,7 @@ impl SettingsView {
     pub(super) fn server_bot_run(&mut self, job: Result<Job, String>, cx: &mut Context<Self>) {
         match job {
             Ok(job) => {
+                self.telegram.server.cores_armed = None;
                 let hand_over = matches!(
                     job,
                     Job::Install {
@@ -518,7 +526,7 @@ impl SettingsView {
             return;
         }
         if let Some(reason) = self.backend.read(cx).station.access_refusal() {
-            self.server_bot_run(Err(reason), cx);
+            self.server_bot_run(Err(t!(reason).to_string()), cx);
             return;
         }
         let path = moon_remote::hosts::Hosts::path();
@@ -932,7 +940,11 @@ impl SettingsView {
     }
 
     /// The station section: the install form, or the station's own actions, and the last job.
-    pub(in crate::settings) fn server_bot_section(&self, cx: &Context<Self>) -> impl IntoElement {
+    pub(in crate::settings) fn server_bot_section(
+        &self,
+        width: f32,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let st = &self.backend.read(cx).station;
         let show_progress =
             st.outcome.is_some() || st.status.is_some() || !st.lines.is_empty() || st.busy();
@@ -942,7 +954,7 @@ impl SettingsView {
             .gap(10.0)
             .child(self.server_bot_hint("telegram.server.intro", cx));
         let section = match self.telegram.server.known.clone() {
-            Some(target) => self.server_bot_known(section, &target, cx),
+            Some(target) => self.server_bot_known(section, &target, width, cx),
             None => self.server_bot_new(section, cx),
         };
         section.when(show_progress, |s| {
@@ -1224,6 +1236,7 @@ impl SettingsView {
         &self,
         section: MoonGroupBox,
         target: &Target,
+        width: f32,
         cx: &Context<Self>,
     ) -> MoonGroupBox {
         let p = MoonPalette::active(cx);
@@ -1303,6 +1316,7 @@ impl SettingsView {
         self.server_bot_old_admin(section, cx)
             .child(actions)
             .child(maintenance)
+            .children(self.station_cores_block(target, width, cx))
             .child(self.station_access_block(target, cx))
             .child(self.server_auto_update_block(target, cx))
             .child(self.server_tape_block(target, cx))

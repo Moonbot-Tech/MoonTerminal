@@ -60,6 +60,7 @@ use anyhow::Context;
 use chrono_tz::Tz;
 use moon_core::config::{AppConfig, FeedFlags, Language, Secret, ServerConfig, TransportVersion};
 use moon_core::feed::station::Profile;
+use moon_core::station_api::{ListedCore, core_address, key_fingerprint};
 use serde::Deserialize;
 use zeroize::Zeroizing;
 
@@ -133,6 +134,8 @@ impl Telegram {
 
 /// What the station runs with: the cores, the tape window and the bot.
 pub struct Station {
+    /// Every configured core, including entries with unavailable credentials.
+    pub listed: Vec<ListedCore>,
     pub config: AppConfig,
     pub tape: Tape,
     pub telegram: Option<Telegram>,
@@ -225,7 +228,8 @@ pub fn load(path: &Path) -> anyhow::Result<Station> {
 }
 
 /// `creds` is the credentials directory; `None` when the process was not given one. Keep the
-/// station running when one credential cannot be read, while rejecting malformed configuration.
+/// station running and every core listed when one credential cannot be read, while rejecting
+/// malformed configuration. Listings never contain keys.
 fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station> {
     let file: StationFile = toml::from_str(text)?;
     anyhow::ensure!(!file.cores.is_empty(), "no [[core]] entries");
@@ -243,13 +247,22 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
     }
     let mut skipped_cores = Vec::new();
     let mut servers = Vec::new();
+    let mut listed = Vec::new();
     for entry in file.cores {
+        // Inactive cores read credentials only for the listing, never for a connection.
+        let key = core_key(creds, entry.uid);
+        listed.push(ListedCore {
+            uid: entry.uid,
+            name: entry.name.clone(),
+            address: key.as_ref().ok().and_then(|key| core_address(key.expose())),
+            key_fp: key.as_ref().ok().map(|key| key_fingerprint(key.expose())),
+        });
         // Every other field keeps the terminal's own default for a new server.
         // `id` alone has no serde default; it is set from the uid below.
         let mut server: ServerConfig = toml::from_str("id = 0")?;
         server.uid = entry.uid;
         if entry.active {
-            match core_key(creds, entry.uid) {
+            match key {
                 Ok(key) => server.key = key,
                 Err(e) => {
                     let skipped = format!(
@@ -273,6 +286,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         .transpose()
         .context("[telegram]")?;
     let mut station = Station {
+        listed,
         config: AppConfig::headless(servers),
         tape: file.tape,
         telegram,
@@ -334,10 +348,23 @@ fn credential(creds: Option<&Path>, name: &str) -> anyhow::Result<Secret> {
 }
 
 #[cfg(feature = "terminal-config")]
+/// Load the terminal-config probe and describe its cores without exposing their keys.
 fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
     log::info!("no station.toml: reading the terminal's configuration from the data root");
+    let config = AppConfig::load(None, false)?;
+    let listed = config
+        .servers
+        .iter()
+        .map(|server| ListedCore {
+            uid: server.uid,
+            name: server.name.clone(),
+            address: core_address(server.key.expose()),
+            key_fp: (!server.key.is_empty()).then(|| key_fingerprint(server.key.expose())),
+        })
+        .collect();
     Ok(Station {
-        config: AppConfig::load(None, false)?,
+        listed,
+        config,
         tape: Tape::default(),
         telegram: None,
         auto_update: true,

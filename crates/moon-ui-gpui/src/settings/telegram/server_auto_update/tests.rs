@@ -14,6 +14,7 @@ fn status(auto_update: Option<bool>) -> Status {
         host: None,
         last_update: None,
         auto_update,
+        cores: None,
     }
 }
 

@@ -7,7 +7,12 @@
 //!             [--host-key <SHA256:...>]
 //! moon-remote --data <dir> station-bin --host <h> [--port 22] --bin <file>
 //! moon-remote --data <dir> station-update --host <h> [--port 22]
+//! Core picks only add; rename/key updates use the terminal's Cores on the station block.
 //! moon-remote --data <dir> cores  --host <h> [--port 22] (--from-terminal --core <name|uid>… | --dummy <uid>:<name>…)
+//! moon-remote --data <dir> cores  --host <h> [--port 22] --remove <uid>…
+//! Core pushes only add; removal keeps report history and requires a remaining core.
+//! --remove of an absent uid is an idempotent credential cleanup and can race an add from
+//! another terminal; the terminal UI guards removal selections with removal_matches.
 //! moon-remote --data <dir> status --host <h> [--port 22] [--logs <n>]
 //! moon-remote --data <dir> telegram --host <h> [--port 22] (--off | --state | [--token]
 //!             [--mini-app on|off] [--zone <IANA zone>] [--language ru|en|es|uk|tr|pt|vi])
@@ -39,6 +44,7 @@ fn main() {
     }
 }
 
+/// Execute the selected setup or station operation, rejecting incompatible CLI options.
 fn run() -> anyhow::Result<()> {
     let mut args = Args(std::env::args().skip(1).collect());
     let data = args
@@ -169,14 +175,27 @@ fn run() -> anyhow::Result<()> {
             let from_terminal = args.flag("--from-terminal");
             let picks = args.values("--core")?;
             let dummies = args.values("--dummy")?;
+            let remove = args.values("--remove")?;
             args.done()?;
+            if !remove.is_empty() {
+                anyhow::ensure!(
+                    !from_terminal && picks.is_empty() && dummies.is_empty(),
+                    "--remove takes no push options"
+                );
+                let uids = remove
+                    .iter()
+                    .map(|uid| uid.parse::<u64>())
+                    .collect::<Result<Vec<_>, _>>()?;
+                station::remove_cores(&target, &uids, &mut say)?;
+                return Ok(());
+            }
             let cores = match (from_terminal, dummies.is_empty()) {
                 (true, true) => terminal_cores(&picks)?,
                 (false, false) => dummies
                     .iter()
                     .map(|d| dummy_core(d))
                     .collect::<anyhow::Result<_>>()?,
-                _ => anyhow::bail!("give either --from-terminal or --dummy <uid>:<name>"),
+                _ => anyhow::bail!("give --from-terminal, --dummy <uid>:<name>, or --remove <uid>"),
             };
             let tape = if from_terminal {
                 confirm_keys(&target, &cores)?;

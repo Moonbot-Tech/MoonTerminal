@@ -13,6 +13,32 @@ use moon_remote::station::bot::{self, BotState};
 use moon_remote::station::{self, BotChange, CoreKey, TapeWindow};
 use zeroize::Zeroizing;
 
+use super::cores_sync::{self, Upsert};
+
+/// A stale core selection requires the user to read the current listing again.
+#[derive(Debug)]
+pub(crate) struct CoresChanged;
+impl std::fmt::Display for CoresChanged {
+    /// Preserve a secret-free diagnostic while the UI supplies the localized headline.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the station changed, refresh")
+    }
+}
+impl std::error::Error for CoresChanged {}
+
+/// Intersect persisted keys with the UI eligibility snapshot, which excludes synthetic cores.
+fn saved_local_cores(
+    all: &[moon_core::config::CoreKeyEntry],
+    eligible: &[u64],
+) -> Vec<cores_sync::LocalCore> {
+    all.iter()
+        .filter(|core| {
+            eligible.contains(&core.uid) && cores_sync::eligible(core.active, false, &core.key)
+        })
+        .map(|core| cores_sync::local_core(core.uid, &core.name, &core.key))
+        .collect()
+}
+
 /// The bot the station should run after a job, if any.
 pub(crate) enum BotPlan {
     /// Leave the station's bot as it is.
@@ -53,8 +79,20 @@ pub(crate) enum Job {
     /// Update the station from the latest release (health-checked, rolled back when it does not
     /// stay up).
     Update { target: Target },
-    /// Make the picked cores the station's whole set.
-    Cores { target: Target, cores: Vec<u64> },
+    /// Add or update selected address-matched cores, preserving station-only entries.
+    Cores {
+        target: Target,
+        upsert: Vec<Upsert>,
+        eligible: Vec<u64>,
+    },
+    /// Explicitly remove selected station identities, preserving their report history.
+    CoresRemove {
+        target: Target,
+        uids: Vec<u64>,
+        names: Vec<String>,
+        addresses: Vec<Option<String>>,
+        eligible: Vec<u64>,
+    },
     /// Set the station's window around a trade.
     Tape { target: Target, tape: TapeWindow },
     /// Switch the station's own updates from the release: `[update] auto`, then a reload.
@@ -164,6 +202,8 @@ pub(crate) enum Event {
     /// Quarantined before removal; never starts a local poller until the successful end.
     Returned(bot::ReturnedBot),
     Line(String),
+    /// A core operation's Text result, independent of diagnostic lines.
+    CoresResult(String),
     /// Only an explicit Status action publishes these facts, never a quiet bot refresh.
     Status(moon_tg::StatusFacts),
     Done(Done),
@@ -176,8 +216,12 @@ pub(crate) fn start(job: Job) -> mpsc::Receiver<Event> {
         .name("station-setup".into())
         .spawn(move || {
             let status_requested = matches!(job, Job::Status { .. });
+            let cores_job = matches!(job, Job::Cores { .. } | Job::CoresRemove { .. });
             let lines = tx.clone();
             let mut say = move |event: Progress| {
+                if cores_job && let Progress::Text(line) = &event {
+                    let _ = lines.send(Event::CoresResult(line.clone()));
+                }
                 if let Some(line) = super::text::progress(event) {
                     let _ = lines.send(Event::Line(line));
                 }
@@ -273,8 +317,37 @@ fn run(
             setup::run(&setup, say)?;
             // Before the first start: the station opens the cache as its own.
             send_valuation(&target, say);
-            // The terminal's window only starts a station that has none.
-            station::push_cores(&target, &keys, station::terminal_tape(), say)?;
+            let listing = bot::bot_state(&target)
+                .ok()
+                .and_then(|state| state.station)
+                .and_then(|status| status.cores);
+            let changes = install_changes(&keys, listing.as_deref())?;
+            if !changes.is_empty() {
+                let keys: Vec<_> = changes
+                    .iter()
+                    .map(|change| {
+                        let key = keys
+                            .iter()
+                            .find(|key| key.uid == change.terminal_uid)
+                            .ok_or(CoresChanged)?;
+                        Ok(CoreKey {
+                            uid: change.station_uid,
+                            name: key.name.clone(),
+                            transport: key.transport,
+                            key: key.key.clone(),
+                        })
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                let adds: Vec<_> = changes.iter().map(|change| change.add).collect();
+                // The terminal's window only starts a station that has none.
+                station::push_cores_with_add_flags(
+                    &target,
+                    &keys,
+                    &adds,
+                    station::terminal_tape(),
+                    say,
+                )?;
+            }
             set_bot(&target, bot, say)
         }
         Job::Resetup { setup } => {
@@ -293,9 +366,12 @@ fn run(
                 bot_off: false,
             })
         }
-        Job::Cores { target, cores } => {
-            // A remote wipe may have succeeded even when forgetting the local record failed,
-            // or another terminal removed the station. A Save must not reinstall its secrets.
+        Job::Cores {
+            target,
+            upsert,
+            eligible,
+        } => {
+            // Do not reinstall credentials after a remote removal or failed local forget.
             let conn = station::admin_conn(&target)?;
             let status = moon_remote::script::checked(conn.run(
                 &moon_remote::script::helper("status", &[]),
@@ -306,11 +382,96 @@ fn run(
             if moon_remote::script::value(&status, "config") != Some("yes") {
                 return Err(station::access::RemovalError::NotConfigured.into());
             }
-            // The station's window is set by hand only: a change of cores brings none.
-            station::push_cores(&target, &core_keys(&cores)?, None, say)?;
+            let listing = bot::bot_state(&target)?
+                .station
+                .and_then(|status| status.cores)
+                .ok_or(CoresChanged)?;
+            let all = moon_core::config::read_core_keys()?;
+            let here = saved_local_cores(&all, &eligible);
+            let fresh = cores_sync::reconcile(&here, &listing);
+            let selected = cores_sync::selected_changes(&upsert, &fresh).ok_or(CoresChanged)?;
+            if !selected.is_empty() {
+                let keys = upsert_keys(&all, &selected)?;
+                let adds: Vec<_> = selected.iter().map(|change| change.add).collect();
+                station::push_cores_with_add_flags(&target, &keys, &adds, None, say)?;
+            }
+            let bot = bot::wait_status(&target, say)?;
+            let single = (upsert.len() == 1 && selected.len() == 1)
+                .then(|| {
+                    fresh
+                        .iter()
+                        .find(|row| row.terminal_uid == Some(selected[0].terminal_uid))
+                })
+                .flatten();
+            let result = match single {
+                Some(row) => match row.state {
+                    cores_sync::RowState::OnlyHere => {
+                        rust_i18n::t!("telegram.server.cores_added", name = &row.name).to_string()
+                    }
+                    cores_sync::RowState::NameDiffers => rust_i18n::t!(
+                        "telegram.server.cores_renamed",
+                        name = &row.name,
+                        was = row.station_name.as_deref().unwrap_or_default()
+                    )
+                    .to_string(),
+                    cores_sync::RowState::KeyDiffers => {
+                        rust_i18n::t!("telegram.server.cores_key_sent", name = &row.name)
+                            .to_string()
+                    }
+                    _ => rust_i18n::t!("telegram.server.cores_pushed", n = selected.len())
+                        .to_string(),
+                },
+                None => {
+                    rust_i18n::t!("telegram.server.cores_pushed", n = selected.len()).to_string()
+                }
+            };
+            say(Progress::Text(result));
             Ok(Done::Ok {
                 transferred: false,
-                bot: None,
+                bot: Some(bot),
+                bot_off: false,
+            })
+        }
+        Job::CoresRemove {
+            target,
+            uids,
+            names,
+            addresses,
+            eligible,
+        } => {
+            let conn = station::admin_conn(&target)?;
+            let status = moon_remote::script::checked(conn.run(
+                &moon_remote::script::helper("status", &[]),
+                &[],
+                moon_remote::script::STEP_TIMEOUT,
+            )?)?
+            .stdout_text();
+            if moon_remote::script::value(&status, "config") != Some("yes") {
+                return Err(station::access::RemovalError::NotConfigured.into());
+            }
+            let listing = bot::bot_state(&target)?
+                .station
+                .and_then(|status| status.cores)
+                .ok_or(CoresChanged)?;
+            let all = moon_core::config::read_core_keys()?;
+            let fresh = cores_sync::reconcile(&saved_local_cores(&all, &eligible), &listing);
+            anyhow::ensure!(
+                cores_sync::removal_matches(&uids, &names, &addresses, &fresh),
+                CoresChanged
+            );
+            station::remove_cores(&target, &uids, say)?;
+            let bot = bot::wait_status(&target, say)?;
+            say(Progress::Text(
+                rust_i18n::t!(
+                    "telegram.server.cores_removed",
+                    name = names.join(", "),
+                    n = uids.len()
+                )
+                .to_string(),
+            ));
+            Ok(Done::Ok {
+                transferred: false,
+                bot: Some(bot),
                 bot_off: false,
             })
         }
@@ -560,6 +721,50 @@ fn core_keys(picked: &[u64]) -> anyhow::Result<Vec<CoreKey>> {
     picked
         .iter()
         .map(|uid| picked_core_key(&all, *uid))
+        .collect()
+}
+
+/// Reinstallation updates address matches and adds unmatched picks without removing remote cores.
+fn install_changes(
+    keys: &[CoreKey],
+    listing: Option<&[moon_core::station_api::ListedCore]>,
+) -> anyhow::Result<Vec<Upsert>> {
+    let Some(listing) = listing else {
+        return Ok(keys
+            .iter()
+            .map(|key| Upsert {
+                terminal_uid: key.uid,
+                station_uid: key.uid,
+                add: true,
+            })
+            .collect());
+    };
+    let here: Vec<_> = keys
+        .iter()
+        .map(|key| cores_sync::local_core(key.uid, &key.name, &key.key))
+        .collect();
+    let fresh = cores_sync::reconcile(&here, listing);
+    anyhow::ensure!(
+        !fresh
+            .iter()
+            .any(|row| row.terminal_uid.is_some() && row.station_uid.is_none()),
+        CoresChanged
+    );
+    Ok(cores_sync::bulk(&fresh))
+}
+
+/// Read each selected local credential while writing only the freshly reconciled station uid.
+fn upsert_keys(
+    all: &[moon_core::config::CoreKeyEntry],
+    picked: &[Upsert],
+) -> anyhow::Result<Vec<CoreKey>> {
+    picked
+        .iter()
+        .map(|upsert| {
+            let mut key = picked_core_key(all, upsert.terminal_uid)?;
+            key.uid = upsert.station_uid;
+            Ok(key)
+        })
         .collect()
 }
 

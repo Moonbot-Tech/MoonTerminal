@@ -29,6 +29,7 @@ mod server_auto_update;
 mod server_bot;
 mod server_tape;
 mod station_access;
+mod station_cores;
 mod station_groups;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
@@ -186,7 +187,7 @@ impl SettingsView {
         v_flex()
             .w(px(column_w))
             .gap(design::ui_px(cx, 16.0))
-            .child(self.server_bot_section(cx))
+            .child(self.server_bot_section(column_w, cx))
     }
 
     /// Render exactly one bot: the station's when known, otherwise the terminal's.

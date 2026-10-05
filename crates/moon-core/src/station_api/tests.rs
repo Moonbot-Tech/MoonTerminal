@@ -1,5 +1,33 @@
 use super::*;
 
+/// Frozen TESTKEY V1 export: master 0x11, MAC 0x22, endpoint 198.51.100.42:4321.
+const SYNTHETIC_KEY: &str = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+
+/// Dropping the domain separator or trimming changes fingerprints across station and terminal.
+#[test]
+fn core_fingerprints_are_domain_separated_trimmed_and_secret_free() {
+    assert_eq!(key_fingerprint("synthetic-core-key"), "5e7efb7e11148007");
+    assert_eq!(
+        key_fingerprint(" \nsynthetic-core-key\t"),
+        "5e7efb7e11148007"
+    );
+    assert_ne!(
+        key_fingerprint("synthetic-core-key"),
+        key_fingerprint("other-synthetic-key")
+    );
+    assert!(!key_fingerprint("synthetic-core-key").contains("synthetic-core-key"));
+}
+
+/// Displaying fallback or losing the port would match station cores to the wrong endpoint.
+#[test]
+fn listed_core_addresses_decode_synthetic_keys() {
+    assert_eq!(
+        core_address(SYNTHETIC_KEY).as_deref(),
+        Some("198.51.100.42:4321")
+    );
+    assert_eq!(core_address("not-a-key"), None);
+}
+
 fn chat(chat_id: i64, core_uids: &[u64]) -> TelegramChatAccess {
     TelegramChatAccess {
         chat_id,
@@ -79,6 +107,12 @@ fn a_status_reads_back_whole() {
         })),
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
         auto_update: Some(false),
+        cores: Some(vec![ListedCore {
+            uid: 3,
+            name: "Core A".into(),
+            address: Some("198.51.100.42:4321".into()),
+            key_fp: Some("9f2c0123456789ab".into()),
+        }]),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
@@ -88,6 +122,7 @@ fn a_status_reads_back_whole() {
         panic!("not a status");
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
+    assert_eq!(old.cores, None);
     assert_eq!(
         old.auto_update, None,
         "a station older than the switch reads as unknown, not as on or off"

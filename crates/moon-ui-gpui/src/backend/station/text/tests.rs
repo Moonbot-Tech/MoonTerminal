@@ -201,8 +201,12 @@ fn every_access_error_preserves_its_specific_action_through_context() {
                 "telegram.server.remove_local_failed",
             ),
             (
+                anyhow::Error::new(crate::backend::station::job::CoresChanged),
+                "telegram.server.cores_changed",
+            ),
+            (
                 anyhow::Error::new(RemovalError::NotConfigured),
-                "telegram.server.core_sync_refused",
+                "telegram.server.cores_not_configured",
             ),
         ];
         for (failure, key) in cases {

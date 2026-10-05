@@ -13,6 +13,7 @@
 //! Nothing here deletes data.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::config::telegram_access::TelegramChatAccess;
 use crate::config::telegram_menu::BotSettings;
@@ -224,6 +225,37 @@ impl From<TraceLine> for ArchivedOrderTrace {
     }
 }
 
+/// One core in the station's `station.toml`, as the running station reports it — never its key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedCore {
+    /// The station's uid: names its credential `core-<uid>` and keys its report rows. Stable.
+    pub uid: u64,
+    pub name: String,
+    /// `core_address(key)`; `None` when the credential is unavailable or the key undecodable.
+    #[serde(default)]
+    pub address: Option<String>,
+    /// `key_fingerprint(key)`; `None` when the credential is unavailable.
+    #[serde(default)]
+    pub key_fp: Option<String>,
+}
+
+/// SocketAddr display of endpoint_from_key (`198.51.100.11:4510`, `[::1]:4510`). None if undecodable.
+pub fn core_address(key: &str) -> Option<String> {
+    let endpoint = crate::config::endpoint_from_key(key)?;
+    Some(std::net::SocketAddr::new(endpoint.address, endpoint.port).to_string())
+}
+
+/// First 16 hex digits of SHA-256(b"moon-station core key v1\n" ++ key.trim()).
+pub fn key_fingerprint(key: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"moon-station core key v1\n");
+    hash.update(key.trim().as_bytes());
+    hash.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// The station now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -251,6 +283,10 @@ pub struct Status {
     /// misreads the other.
     #[serde(default)]
     pub auto_update: Option<bool>,
+    /// The cores of `station.toml`, loaded or skipped. `None` from a station older than the
+    /// listing — an added field with a default, so neither end of version 2 misreads the other.
+    #[serde(default)]
+    pub cores: Option<Vec<ListedCore>>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

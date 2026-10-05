@@ -1,5 +1,55 @@
 use super::*;
 
+/// C1: legacy station files and credentials retain uids and addresses, including inactive entries.
+#[test]
+fn listing_includes_available_and_unavailable_credentials_without_keys() {
+    // Frozen TESTKEY V1 export with synthetic master/MAC bytes and endpoint 198.51.100.42:4321.
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let dir = creds("listing", &[(3, key), (9, key)]);
+    let station = from_station_file(
+        "[[core]]\nuid = 3\nname = 'Core A'\n[[core]]\nuid = 5\nname = 'Missing'\n[[core]]\nuid = 9\nname = 'Inactive'\nactive = false\n",
+        Some(&dir),
+    )
+    .unwrap();
+    assert_eq!(
+        station
+            .listed
+            .iter()
+            .map(|core| core.uid)
+            .collect::<Vec<_>>(),
+        [3, 5, 9]
+    );
+    assert_eq!(station.listed[0].name, "Core A");
+    assert_eq!(
+        station.listed[0].address.as_deref(),
+        Some("198.51.100.42:4321")
+    );
+    assert!(station.listed[0].key_fp.is_some());
+    assert_eq!(station.listed[1].name, "Missing");
+    assert_eq!(station.listed[1].address, None);
+    assert_eq!(station.listed[1].key_fp, None);
+    assert_eq!(station.listed[2].name, "Inactive");
+    assert_eq!(
+        station.listed[2].address.as_deref(),
+        Some("198.51.100.42:4321")
+    );
+    assert_eq!(
+        station
+            .config
+            .servers
+            .iter()
+            .map(|server| server.uid)
+            .collect::<Vec<_>>(),
+        [3, 9]
+    );
+    assert!(!station.config.servers[1].active);
+    assert!(
+        !serde_json::to_string(&station.listed)
+            .unwrap()
+            .contains(key)
+    );
+}
+
 /// A credentials directory holding `(uid, key)` pairs, as systemd would lay it out.
 fn creds(name: &str, keys: &[(u64, &str)]) -> std::path::PathBuf {
     let dir =
