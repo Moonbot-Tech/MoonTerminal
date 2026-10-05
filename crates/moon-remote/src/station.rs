@@ -83,7 +83,7 @@ pub fn merge_cores(
     merge_core_table(file, upsert, tape)
 }
 
-/// Apply named upserts and persist the largest allocated uid, retaining every other section.
+/// Return serialized config with named upserts and the allocation floor, retaining other sections.
 fn merge_core_table(
     mut file: toml::Table,
     upsert: &[CoreKey],
@@ -184,7 +184,7 @@ fn config_high_water(file: &toml::Table) -> anyhow::Result<u64> {
     Ok(persisted.max(configured))
 }
 
-/// Store a TOML-bounded monotonic floor in the same atomic config update as its cores.
+/// Insert the TOML-bounded allocation floor into the table the caller will persist with its cores.
 fn set_high_water(file: &mut toml::Table, high_water: u64) -> anyhow::Result<()> {
     let high_water =
         i64::try_from(high_water).context("station uid history exceeds TOML's integer range")?;

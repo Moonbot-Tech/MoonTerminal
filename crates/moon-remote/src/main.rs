@@ -1,5 +1,4 @@
-//! `moon-remote`: the station's server setup from a command line, until the terminal has its
-//! "Server" page.
+//! `moon-remote`: command-line server setup and station administration, alongside the terminal UI.
 //!
 //! ```text
 //! moon-remote --data <terminal data dir> setup  --host <h> [--port 22] --login <user>

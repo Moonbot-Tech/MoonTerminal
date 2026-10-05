@@ -287,7 +287,8 @@ pub struct Status {
     /// listing — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub cores: Option<Vec<ListedCore>>,
-    /// Largest uid ever allocated, including removed cores and pre-upgrade report rows.
+    /// Monotonic allocation floor, including removed cores and pre-upgrade report rows.
+    /// History read errors other than `ReadFail::NotReady` raise it to `u64::MAX`, disabling adds.
     /// Absent on older stations; allocation then starts above both currently listed sets.
     #[serde(default)]
     pub core_uid_high_water: Option<u64>,
@@ -416,8 +417,8 @@ pub struct Access {
     pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
     /// The terminal's saved core groups, for the bot's report by cores: answered by a station
     /// that knows them, sent only when the user sends them (another terminal's set is not
-    /// overwritten by a terminal that has none). Absent keeps the station's. Core uids are the
-    /// terminal's, which the station shares.
+    /// overwritten by a terminal that has none). Absent keeps the station's. Membership uids
+    /// are forwarded unchanged and interpreted in the station's own uid namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<CoreGroup>>,
 }

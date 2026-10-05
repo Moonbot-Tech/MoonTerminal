@@ -51,7 +51,7 @@ const MESSAGE_BUDGET: usize = 3_600;
 /// Longest detect line kept on a message, in Unicode scalars.
 const MSG_CHARS: usize = 120;
 
-/// Longest coin, core or strategy name kept, in Unicode scalars.
+/// Longest strategy name kept, in Unicode scalars; coins and cores use the shared hashtag cap.
 const NAME_CHARS: usize = 48;
 
 /// One event to relay, with its core.
@@ -256,9 +256,9 @@ fn wanted(rule: EventRule, event: &CoreTgEvent) -> bool {
 /// a ring before they could be read, are counted on a last line. `None` when there is nothing to
 /// tell.
 ///
-/// Laid out as the cores' own bot writes it (LinKvo, 04.10): the core's hashtag and a colon, then
-/// its events, each on its own line with the strategy in italics below. A run of one core's
-/// events shares its name.
+/// Laid out as the cores' own bot writes it (LinKvo, 04.10): the core's hashtag or escaped name
+/// and a colon, then its events, each on its own line with the strategy in italics below.
+/// A run of one core's events shares its name.
 ///
 /// Args:
 ///     events: What one chat is told, oldest first.

@@ -944,6 +944,7 @@ impl SettingsView {
     }
 
     /// The station section: the install form, or the station's own actions, and the last job.
+    /// `width` is the available settings-column width in pixels, used to fit the core comparison.
     pub(in crate::settings) fn server_bot_section(
         &self,
         width: f32,
@@ -1236,6 +1237,7 @@ impl SettingsView {
 
     /// Group a known station's everyday and maintenance actions into wrapping button rows.
     /// Destructive actions and their unchanged confirmations live in the separated access block.
+    /// Pass the available column `width` to the core comparison so its rows fit the same space.
     fn server_bot_known(
         &self,
         section: MoonGroupBox,

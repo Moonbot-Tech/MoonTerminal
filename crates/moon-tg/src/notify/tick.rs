@@ -1012,11 +1012,11 @@ fn clear_busy(host: &mut dyn TgHost) {
     host.state_mut().notify_busy = false;
 }
 
-/// Keep shots whose pairing and grant still match, and recompute visibility.
+/// Keep shots whose pairing and grant still match, recomputing visibility and capturing the layout.
 ///
 /// Args:
-///     host: Current pairing, grants, and session. Visibility is computed here,
-///         not at spawn and not while the store lock is held.
+///     host: Current pairing, grants, session and saved card layout. Visibility and the sanitized
+///         layout are captured at finish, not at spawn or while the store lock is held.
 ///     shots: Chats captured at spawn.
 ///
 /// Returns:

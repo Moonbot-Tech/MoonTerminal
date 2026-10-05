@@ -168,8 +168,8 @@ impl Station {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CoreEntry {
-    /// The terminal's uid for this core, so report rows and traces carry the same key in both.
-    /// Also names its credential, `core-<uid>`.
+    /// The station's stable identity for report rows, traces and the credential `core-<uid>`.
+    /// Terminal identities are independent; the terminal matches them by core address.
     uid: u64,
     name: String,
     /// Skip a core without deleting its entry.

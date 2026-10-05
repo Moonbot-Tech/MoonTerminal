@@ -298,9 +298,9 @@ pub fn set_token(
 }
 
 /// Move the terminal's bot to the station: its token, its paired chats with their access, and
-/// `[telegram]`; the station's helper preserves bot fields absent from this payload, then
-/// restarts the station and waits until its bot polls — paired when chats came
-/// with it, offering a pairing code when none did.
+/// `[telegram]`. The helper preserves bot fields absent from the pairing payload; this function
+/// then restarts the station and waits until its bot polls — paired when chats came with it,
+/// offering a pairing code when none did.
 ///
 /// The caller suspends its own bot BEFORE this — one token, one poller — and erases its token only
 /// when this returns `Ok`; on an error its own bot is what should run again, and the station's is
@@ -486,8 +486,9 @@ fn wait_until(
     }
 }
 
-/// Wait at most sixty seconds for the restarted service API, without requiring a Telegram bot.
-/// Each retry reads fresh helper/API state; transient connection failures keep the wait alive.
+/// Retry reads of the restarted service API without requiring a Telegram bot.
+/// Check the sixty-second deadline after each unsuccessful read; blocking reads may exceed it.
+/// Each retry reads fresh helper/API state, tolerating transient connection failures.
 pub fn wait_status(target: &Target, say: &mut dyn FnMut(Progress)) -> anyhow::Result<BotState> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {

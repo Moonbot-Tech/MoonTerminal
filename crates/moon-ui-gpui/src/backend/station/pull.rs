@@ -102,7 +102,8 @@ pub(crate) fn tick(backend: &mut Backend, cx: &mut Context<Backend>) {
     }
 }
 
-/// Ask the station for every recent closed trade without lines here and file what it holds.
+/// Pull recent closed trades' missing traces under local uids after resolving station identities.
+/// Skip missing or ambiguous address matches; confirmed older stations reuse local uids.
 ///
 /// Returns:
 ///     What was filed — kept when a later core's request fails, the writer has it already — and

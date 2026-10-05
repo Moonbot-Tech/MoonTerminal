@@ -280,8 +280,8 @@ pub(super) fn report_html(page: &Page) -> String {
 
 /// One configured row: plain cells for cores, exchanges and days; a band or bold group row.
 ///
-/// Long user-controlled names cannot exhaust the rich-message budget. A core is one row: its name
-/// keeps both ends (where the account number usually is), and the full name stays in the details.
+/// A core occupies one main-table row with both ends of its long name retained.
+/// Details retain up to 200 non-control characters; the caller checks the whole message budget.
 pub(super) fn row_html(row: &Row, by_core: bool, layout: &ReportLayout) -> String {
     let (name, total) = row_label(row, by_core);
     let (cell, lead) = if matches!(row, Row::Group(..)) && layout.group_row == GroupRowStyle::Band {

@@ -6,9 +6,9 @@
 //! here, and the Settings segment only starts jobs and shows this state.
 //!
 //! One job runs at a time: the user's (a button; it owns the progress lines and the
-//! outcome), a quiet read of the station's bot (on opening the tab; it touches only the bot's
-//! state). A user's job pressed during a quiet read waits for it. A recovery read resolves a
-//! persisted hand-over before local polling.
+//! outcome), a quiet read of the station's bot and core listing (on opening the tab; it preserves
+//! the user's outcome). A user's job pressed during a quiet read waits for it. A recovery read
+//! resolves a persisted hand-over before local polling.
 //!
 //! Handing the bot over: the terminal's transport is suspended first (`TelegramState::suspend`:
 //! one token, one poller) with the saved configuration untouched, so a Save meanwhile writes the
@@ -45,7 +45,7 @@ enum Kind {
     /// A button: owns the progress lines and the outcome.
     #[default]
     User,
-    /// A read of the bot's state: touches that state only.
+    /// A read of bot state and core identities that preserves the user's outcome.
     Quiet,
     /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
     /// like a quiet read does not hold the buttons.
@@ -500,7 +500,7 @@ impl Backend {
             return true;
         }
         if kind == Kind::Zone {
-            // A zone push changes only the bot's state; its line says what happened.
+            // A zone push refreshes bot state and core identities; its line says what happened.
             match done {
                 job::Done::Ok { bot, .. } => {
                     if let Some(bot) = bot {
@@ -524,7 +524,8 @@ impl Backend {
             return true;
         }
         if kind == Kind::Quiet {
-            // A quiet read changes only the bot's state, or says why it could not read it.
+            // A quiet read refreshes bot state and core identities while preserving the user's
+            // outcome; a failed read records its error instead.
             match done {
                 job::Done::Ok { bot: Some(bot), .. } => {
                     self.station.observe_bot(bot);

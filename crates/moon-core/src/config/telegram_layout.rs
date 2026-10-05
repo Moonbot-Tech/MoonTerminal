@@ -119,7 +119,7 @@ macro_rules! choices {
     };
 }
 choices!(TotalPlace, "Where the report's total row appears.", Bottom => "bottom", Top => "top");
-choices!(TotalSeparation, "Whether the total band has a spacer before it.", Band => "band", GapBand => "gap_band");
+choices!(TotalSeparation, "Whether a spacer separates the total band from the data rows.", Band => "band", GapBand => "gap_band");
 choices!(GroupRowStyle, "How report group headers are drawn.", Band => "band", BoldLeft => "bold_left");
 
 /// Ordered report columns and the appearance of totals and group headers.
@@ -153,9 +153,9 @@ impl Default for ReportLayout {
 }
 
 impl MessageLayout {
-    /// Remove repeated known card fields and columns while retaining unfamiliar ids.
-    /// Cards without known fields regain default lines so the renderer remains drawable.
-    /// Reports with no drawable column regain the default columns before unfamiliar ones.
+    /// Normalize card lines and report columns with their respective fallback rules.
+    /// Cards deduplicate known fields; without any known field, default lines replace all lines.
+    /// Reports deduplicate every column id and prepend defaults when no known column remains.
     pub fn sanitized(&self) -> Self {
         Self {
             card: self.card.sanitized(),
@@ -165,7 +165,8 @@ impl MessageLayout {
 }
 
 impl CardLayout {
-    /// Deduplicate known fields once at capture and restore a drawable default when necessary.
+    /// Deduplicate known fields across lines and remove empty lines, keeping unfamiliar fields.
+    /// If no known field remains, replace all lines, including unfamiliar fields, with defaults.
     pub fn sanitized(&self) -> Self {
         let mut out = self.clone();
         let mut seen = Vec::new();

@@ -111,7 +111,7 @@ pub(crate) enum Job {
         token: Secret,
         change: BotChange,
     },
-    /// Read the station's bot quietly: no lines, no outcome — its status, code and chats.
+    /// Read bot state and station core identities quietly: no progress lines or user outcome.
     BotState { target: Target },
     /// A pairing code from the station's bot, for one more chat.
     PairIssue { target: Target },

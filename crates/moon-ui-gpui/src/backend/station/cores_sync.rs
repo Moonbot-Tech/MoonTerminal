@@ -106,7 +106,8 @@ pub(crate) fn trace_cores(cfg: &AppConfig) -> Vec<LocalCore> {
 }
 
 /// Match duplicate addresses by ascending uid, consuming each local core at most once.
-/// Unmatched identities allocate above both sets and the station's durable retirement floor.
+/// Unmatched terminal cores receive proposed uids above both sets and the retirement floor.
+/// An exhausted TOML uid range leaves their station uid absent, so no add can be selected.
 pub(crate) fn reconcile(
     here: &[LocalCore],
     station: &[ListedCore],
@@ -231,7 +232,8 @@ pub(crate) fn trace_uid(
     }
 }
 
-/// Refuse a stale selection whose operation or existing destination changed since the click.
+/// Revalidate selected operations and existing destinations against a fresh comparison.
+/// Omit updates already applied, refresh proposed add uids, and return `None` for stale selections.
 pub(crate) fn selected_changes(wanted: &[Upsert], fresh: &[Row]) -> Option<Vec<Upsert>> {
     let changes = bulk(fresh);
     wanted

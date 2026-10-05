@@ -22,7 +22,7 @@ use crate::{HostKind, TgHost};
 /// Minutes a core may stay down before the notice, offered as presets.
 const DOWN_PRESETS: [u16; 2] = [1, 5];
 
-/// Answer a Settings button: apply its switch, then show its screen under its bot's host name.
+/// Answer a Settings button: apply any requested switch, then render its screen or request status.
 pub(super) fn run(
     host: &mut dyn TgHost,
     chat: i64,

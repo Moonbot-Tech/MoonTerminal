@@ -1,4 +1,4 @@
-//! Explicit address-based station core comparison and additive actions.
+//! Explicit address-based station core comparison, updates and confirmed removals.
 
 use gpui::*;
 use moon_remote::ssh::Target;
@@ -14,7 +14,7 @@ use crate::backend::station::{
 };
 use crate::design;
 
-/// Return the translated state and semantic tone independently of row actions.
+/// Return the state's localization key and semantic tone independently of row actions.
 fn state_label(state: RowState) -> (&'static str, MoonTone) {
     match state {
         RowState::Same => ("telegram.server.cores_state_same", MoonTone::Positive),
