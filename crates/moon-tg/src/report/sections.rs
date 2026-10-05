@@ -8,8 +8,8 @@
 //! - the list stays flat when sectioning would put ONE caption over everything — no saved group
 //!   holds a listed core, or a single group holds every one of them.
 //!
-//! A section of one core gets no subtotal there, since it would restate the core's own row; the
-//! caller applies that rule, as it is the one reading the totals.
+//! The Profit monitor gives a section of one core no subtotal. Here every section's header row
+//! carries its total, and the caller, which reads the totals, reuses that core's own for it.
 
 use std::collections::HashSet;
 

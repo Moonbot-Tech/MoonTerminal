@@ -14,6 +14,8 @@ use moon_core::{
 
 use super::{Page, Row};
 use crate::HostKind;
+use chrono::{DateTime, Datelike, Timelike};
+use chrono_tz::Tz;
 
 /// Telegram `sendRichMessage` cap: 32768 UTF-8 characters in the rich message text.
 const RICH_MESSAGE_CHAR_LIMIT: usize = 32_768;
@@ -69,9 +71,9 @@ pub(super) fn rich_message_blocks(html: &str) -> usize {
 
 /// Compose a compact headline, three-column table, and optional per-bot accounting details.
 ///
-/// Made to fit a phone screen (LinKvo, 04.10): the view and its period are the table's caption
-/// rather than two paragraphs, the totals are its top row rather than a heading row and a total
-/// row, and a single day's period names its date once.
+/// Made to fit a phone screen (LinKvo, 04.10 and 05.10): the view, or an automatic report's own
+/// title, and the period are the table's one-line caption; the totals are its top row; a group is
+/// one header row carrying its own total rather than a caption row and a subtotal row.
 ///
 /// `host` words delivery failures; `navigation` is the chat's reply keyboard.
 pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Response {
@@ -92,24 +94,46 @@ pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Re
     }
 }
 
-/// The page's period: `04.10.2026 00:00 — 08:59` inside one day, both dates otherwise.
-fn period(page: &Page) -> String {
+/// The page's period, as short as it stays unambiguous: `05.10 00:00—05:59` inside one day,
+/// `04.10` for a whole day, `01.10 — 05.10 05:59` across days, where a bound on midnight or on
+/// the day's last second names only its date. The year shows only for a period outside `year`.
+pub(super) fn period(page: &Page, year: i32) -> String {
     let at = |value| display_time::at(value, page.zone);
-    match (at(page.from), at(page.to)) {
-        (Some(from), Some(to)) if from.date_naive() == to.date_naive() => {
-            format!("{} — {}", from.format("%d.%m.%Y %H:%M"), to.format("%H:%M"))
+    let (Some(from), Some(to)) = (at(page.from), at(page.to)) else {
+        let stamp = |value: Option<DateTime<Tz>>| {
+            value
+                .map(|v| v.format("%d.%m.%Y %H:%M").to_string())
+                .unwrap_or_default()
+        };
+        return format!("{} — {}", stamp(at(page.from)), stamp(at(page.to)));
+    };
+    let date = if from.year() == year && to.year() == year {
+        "%d.%m"
+    } else {
+        "%d.%m.%Y"
+    };
+    let starts_day = from.num_seconds_from_midnight() == 0;
+    // The inclusive end of a whole day is its last second.
+    let ends_day = to.num_seconds_from_midnight() == 86_399;
+    if from.date_naive() == to.date_naive() {
+        if starts_day && ends_day {
+            return from.format(date).to_string();
         }
-        (from, to) => {
-            let stamp = |value: Option<_>| {
-                value
-                    .map(|v: chrono::DateTime<chrono_tz::Tz>| {
-                        v.format("%d.%m.%Y %H:%M").to_string()
-                    })
-                    .unwrap_or_default()
-            };
-            format!("{} — {}", stamp(from), stamp(to))
-        }
+        return format!(
+            "{} {}—{}",
+            from.format(date),
+            from.format("%H:%M"),
+            to.format("%H:%M")
+        );
     }
+    let bound = |value: DateTime<Tz>, whole: bool| {
+        if whole {
+            value.format(date).to_string()
+        } else {
+            format!("{} {}", value.format(date), value.format("%H:%M"))
+        }
+    };
+    format!("{} — {}", bound(from, starts_day), bound(to, ends_day))
 }
 
 /// HTML for one report page; the caller decides whether it fits Telegram's rich-message caps.
@@ -122,18 +146,23 @@ pub(super) fn report_html(page: &Page) -> String {
         t!("telegram.report_cores")
     };
     let title = page.scope_label.as_deref().unwrap_or(&heading);
-    let mut html = page
-        .caption
-        .as_deref()
-        .map(|caption| format!("<p><b>{}</b></p>", escape(caption)))
-        .unwrap_or_default();
+    let mut html = String::new();
     if page.total.orders == 0 {
         html.push_str(&format!("<p>{}</p>", escape(&t!("telegram.report_empty"))));
     }
-    let mut table_caption = if page.request.by_exchange && page.scope_label.is_none() {
-        escape(&period(page))
-    } else {
-        format!("<b>{}</b> · {}", escape(title), escape(&period(page)))
+    // An unreadable clock names the year rather than guessing it.
+    let now = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
+    let year = display_time::at(now, page.zone).map_or(i32::MIN, |now| now.year());
+    let period = period(page, year);
+    let mut table_caption = match &page.caption {
+        Some(auto) => format!(
+            "<b>{}</b> · {} {}",
+            escape(&auto.title),
+            escape(&period),
+            escape(&auto.zone)
+        ),
+        None if page.request.by_exchange && page.scope_label.is_none() => escape(&period),
+        None => format!("<b>{}</b> · {}", escape(title), escape(&period)),
     };
     // The terminal's Report wording: the period counts trades by when they opened.
     if page.basis == ReportBasis::Open {
@@ -143,41 +172,14 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str(&format!(
-        "<table compact striped><caption>{table_caption}</caption><tr><th>{}</th><th align=\"right\">{}</th><th align=\"right\">{}</th></tr>",
+        "<table compact><caption>{table_caption}</caption><tr><th align=\"left\">{}</th><th align=\"right\">{}</th><th align=\"right\">{}</th></tr>",
         escape(&t!("telegram.report_total")),
         escape(&profit(&page.total)),
         page.total.orders
     ));
     let by_core = !page.request.by_exchange && !page.request.daily;
     for row in &page.rows {
-        match row {
-            // Long user-controlled names cannot exhaust the rich-message budget. A core is one
-            // row: its name keeps both ends (where the account number usually is), and the full
-            // name stays in the details below.
-            Row::Line(name, total) | Row::Repeat(name, total) => {
-                let label: String = if by_core {
-                    compact_label(name)
-                } else {
-                    plain_label(name)
-                };
-                html.push_str(&format!(
-                    "<tr><td>{}</td><td align=\"right\">{}</td><td align=\"right\">{}</td></tr>",
-                    escape(&label),
-                    escape(&profit(total)),
-                    total.orders
-                ));
-            }
-            Row::Group(name) => html.push_str(&format!(
-                "<tr><td colspan=\"3\"><b>{}</b></td></tr>",
-                escape(&plain_label(name))
-            )),
-            Row::Subtotal(name, total) => html.push_str(&format!(
-                "<tr><td><i>{}</i></td><td align=\"right\"><b>{}</b></td><td align=\"right\">{}</td></tr>",
-                escape(&plain_label(name)),
-                escape(&profit(total)),
-                total.orders
-            )),
-        }
+        html.push_str(&row_html(row, by_core));
     }
     html.push_str("</table>");
     // The details name each core of the page once, however many groups list it: a repeat counts
@@ -187,7 +189,7 @@ pub(super) fn report_html(page: &Page) -> String {
         .iter()
         .filter_map(|row| match row {
             Row::Line(name, total) => Some((name, total)),
-            Row::Repeat(..) | Row::Group(_) | Row::Subtotal(..) => None,
+            Row::Repeat(..) | Row::Group(..) => None,
         })
         .collect();
     for row in &page.rows {
@@ -260,6 +262,29 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html
+}
+
+/// One table row. A core, an exchange or a day is plain cells; a group is a header row, shaded by
+/// Telegram, that carries the group's own total, its name against the right edge (LinKvo, 05.10),
+/// so it stands apart from its cores and from the headline in one row.
+///
+/// Long user-controlled names cannot exhaust the rich-message budget. A core is one row: its name
+/// keeps both ends (where the account number usually is), and the full name stays in the details.
+pub(super) fn row_html(row: &Row, by_core: bool) -> String {
+    let (cell, lead, name, total) = match row {
+        Row::Line(name, total) | Row::Repeat(name, total) if by_core => {
+            ("td", "", compact_label(name), total)
+        }
+        Row::Line(name, total) | Row::Repeat(name, total) => ("td", "", plain_label(name), total),
+        // A header cell is centred unless told otherwise.
+        Row::Group(name, total) => ("th", " align=\"right\"", plain_label(name), total),
+    };
+    format!(
+        "<tr><{cell}{lead}>{}</{cell}><{cell} align=\"right\">{}</{cell}><{cell} align=\"right\">{}</{cell}></tr>",
+        escape(&name),
+        escape(&profit(total)),
+        total.orders
+    )
 }
 
 /// Help is disposable rich content; a separate message owns the reply keyboard.
