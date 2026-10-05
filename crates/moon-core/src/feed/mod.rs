@@ -934,6 +934,10 @@ fn jittered(d: Duration) -> Duration {
 ///     `false` only for a failure that cannot resolve without a settings edit.
 fn retry_can_help(e: &anyhow::Error) -> bool {
     e.downcast_ref::<live::KeyUnreadable>().is_none()
+        && !matches!(
+            e.downcast_ref::<live::EndpointUnusable>(),
+            Some(live::EndpointUnusable { unresolved: false })
+        )
 }
 
 /// Start the live backend for one core, keeping a connection at all times and subscribing on

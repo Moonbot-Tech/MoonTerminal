@@ -63,6 +63,10 @@ pub(super) struct ConnRow {
     pub(super) ids: ConnRowIds,
     name: Entity<MoonInputState>,
     key: Entity<MoonInputState>,
+    /// Hand-typed endpoint override; empty follows the key, whose endpoint is the placeholder.
+    ///
+    /// See `ServerConfig::endpoint_override` and [`follow_key_placeholder`].
+    address: Entity<MoonInputState>,
     group: Entity<MoonInputState>,
     /// AddToChart bundle name; empty delegates to the global setting.
     ///
@@ -71,7 +75,7 @@ pub(super) struct ConnRow {
     color: Entity<MoonColorPickerState>,
 }
 
-/// The twelve per-row element-id strings the row factory used to rebuild with `format!` on every
+/// The per-row element-id strings the row factory used to rebuild with `format!` on every
 /// frame. Built once in [`build_conn`] and read from thereafter, so `server_row` allocates none of
 /// them.
 ///
@@ -81,6 +85,10 @@ pub(super) struct ConnRow {
 pub(super) struct ConnRowIds {
     pub(super) name: SharedString,
     pub(super) key: SharedString,
+    pub(super) address: SharedString,
+    /// Id of the interactive wrapper that carries the address cell's tooltip. See
+    /// [`Self::feed_tip`].
+    pub(super) address_tip: SharedString,
     pub(super) group: SharedString,
     pub(super) bundle: SharedString,
     pub(super) feed: SharedString,
@@ -133,6 +141,8 @@ impl ConnRowIds {
         Self {
             name: SharedString::from(format!("name-{ident}")),
             key: SharedString::from(format!("key-{ident}")),
+            address: SharedString::from(format!("address-{ident}")),
+            address_tip: SharedString::from(format!("address-tip-{ident}")),
             group: SharedString::from(format!("group-{ident}")),
             bundle: SharedString::from(format!("bundle-{ident}")),
             feed: SharedString::from(format!("feed-{ident}")),
@@ -277,7 +287,7 @@ pub(super) fn build_conn(
         .enumerate()
         .map(|(i, s)| {
             let row_key = NEXT_ROW_KEY.fetch_add(1, Ordering::Relaxed);
-            ConnRow {
+            let row = ConnRow {
                 row_key,
                 ids: ConnRowIds::build(s.uid, row_key),
                 name: conn_input(
@@ -323,6 +333,19 @@ pub(super) fn build_conn(
                     st.update(cx, |st, c| st.set_masked(true, window, c));
                     st
                 },
+                // Empty follows the key, so the key's own endpoint is the placeholder: the row
+                // always shows which address is in effect, and typing replaces it (#616).
+                address: conn_input(
+                    window,
+                    cx,
+                    i,
+                    row_key,
+                    s.endpoint_override.clone(),
+                    Some(address_placeholder(s.key.expose())),
+                    |s| s.endpoint_override.clone(),
+                    |s, v| s.endpoint_override = v,
+                    false,
+                ),
                 group: conn_input(
                     window,
                     cx,
@@ -351,9 +374,49 @@ pub(super) fn build_conn(
                     false,
                 ),
                 color: conn_color(window, cx, i, s.color),
-            }
+            };
+            follow_key_placeholder(&row.key, &row.address, window, cx);
+            row
         })
         .collect()
+}
+
+/// The address field's placeholder for a row whose key is `key`: the key's own endpoint, or a hint
+/// that the address comes from the key while there is no readable key yet.
+pub(super) fn address_placeholder(key: &str) -> String {
+    endpoints::key_placeholder(key).unwrap_or_else(|| t!("conn.address_ph").to_string())
+}
+
+/// Keep the address field's placeholder on the key's endpoint while the key field is edited.
+///
+/// A separate subscription rather than a line in the key's `conn_input` setter: the placeholder
+/// lives on the input STATE, and `set_placeholder` needs the window the setter does not get. The
+/// Paste glyph sets the key with `set_value`, which emits no Change, so it updates the placeholder
+/// itself (`table.rs::paste_key_affix`).
+///
+/// Args:
+///     key: The row's key input.
+///     address: The row's address input whose placeholder follows the key.
+///     window: Settings window the subscription runs in.
+///     cx: Settings context that owns the subscription.
+fn follow_key_placeholder(
+    key: &Entity<MoonInputState>,
+    address: &Entity<MoonInputState>,
+    window: &mut Window,
+    cx: &mut Context<SettingsView>,
+) {
+    let address = address.clone();
+    cx.subscribe_in(
+        key,
+        window,
+        move |_, key, ev: &MoonInputEvent, window, cx| {
+            if matches!(ev, MoonInputEvent::Change) {
+                let placeholder = address_placeholder(&key.read(cx).value());
+                address.update(cx, |st, c| st.set_placeholder(placeholder, window, c));
+            }
+        },
+    )
+    .detach();
 }
 
 impl SettingsView {

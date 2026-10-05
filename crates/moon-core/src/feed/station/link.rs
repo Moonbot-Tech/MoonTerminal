@@ -37,11 +37,18 @@ impl StationLink {
     pub fn connect(server: &ServerConfig) -> anyhow::Result<Self> {
         let info = moonproto::parse_key_info(server.key.expose())
             .ok_or_else(|| anyhow::anyhow!("key unreadable"))?;
-        let (endpoint, transport) =
-            crate::feed::live::connection_target(info.network.as_ref(), server.transport);
+        let endpoint_override =
+            crate::config::parse_endpoint_override(&server.endpoint_override)
+                .map_err(|_| anyhow::anyhow!("endpoint override is not an address"))?;
+        let (target, transport) = crate::feed::live::connection_target(
+            info.network.as_ref(),
+            server.transport,
+            endpoint_override.as_ref(),
+        );
+        let resolved = target.resolve()?;
         let cfg = ClientConfig::new(
-            endpoint.address.to_string(),
-            endpoint.port,
+            resolved.client_host,
+            resolved.endpoint.port,
             info.keys.master_key,
             info.keys.mac_key,
         )

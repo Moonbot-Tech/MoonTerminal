@@ -1,15 +1,16 @@
 //! Synthetic TESTKEY exports with test key bytes, never live credentials.
 //! VALID and SAME_ENDPOINT differ in master bytes (0x11 / 0x33), both naming 198.51.100.42:4321.
-//! Other fixtures change only the port to 4322 or the host to 198.51.100.43.
+//! Other fixtures change only the port to 4322 or the host to 198.51.100.43. LEGACY carries no
+//! network block at all, so it has no address.
 
 const VALID: &str = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA==";
 const OTHER_PORT: &str = "sX85BQAAAACAlFj0nrgLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPN1GryNcv1KZClUCEhH6mRG/Np81EodJlA==";
 const OTHER_HOST: &str = "sX85BQAAAAD4HMd1j7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryBcv1KZClUCEhH6mRG/Np81EodJlA==";
 const SAME_ENDPOINT: &str = "sX85BQAAAADS70YFULzT0VN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AAstnAFE0y9hHeJZPoV5f4dLrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA==";
+const LEGACY: &str = "sX85BQAAAAD28wZIjkZrEFN0GO03YmO97mVEnuHg11uof3oqb1aJUMaYPTx2BjfkRv9KKmfKnw8RUUyCkrE508/47Z1ns3t2NH0iKCnYuILRnc8YJKtqiHTKFozEOcpM";
 
-use super::{endpoint_cells, endpoint_text};
+use super::{endpoint_cells, key_placeholder};
 use moon_core::config::{Secret, ServerConfig};
-use moon_core::feed::CoreEndpoint;
 
 /// Build an unsaved, disconnected draft row using configuration defaults.
 fn server(name: &str, key: &str) -> ServerConfig {
@@ -73,14 +74,57 @@ fn marks_exactly_all_rows_sharing_address_and_port() {
     assert!(cells.iter().all(|cell| cell.duplicate_name.is_none()));
 }
 
-/// Omitting brackets would make IPv6 address and port boundaries ambiguous to the user.
+/// Duplicates follow the address the row DIALS: an override that moves a row off a shared key
+/// endpoint clears the mark, and one that moves it onto another row's endpoint sets it. Comparing
+/// key endpoints, as before #616, would warn about the first and miss the second.
 #[test]
-fn ipv6_keeps_the_port_unambiguous() {
+fn duplicates_compare_the_overridden_endpoint() {
+    let mut servers = vec![
+        server("first", VALID),
+        server("second", SAME_ENDPOINT),
+        server("host", OTHER_HOST),
+    ];
+    servers[1].endpoint_override = "192.168.1.5".into();
+    servers[2].endpoint_override = "192.168.1.5:4321".into();
+    let cells = endpoint_cells(&servers);
+    assert_eq!(cells[0].duplicate_name, None);
+    assert_eq!(cells[1].text, "192.168.1.5:4321");
+    assert_eq!(cells[1].duplicate_name.as_deref(), Some("host"));
+    assert_eq!(cells[2].duplicate_name.as_deref(), Some("second"));
+}
+
+/// An override that is not an address is flagged and dials nothing, so it neither shows the key's
+/// address as if it were in effect nor joins a duplicate pair.
+#[test]
+fn an_invalid_override_is_flagged_and_has_no_endpoint() {
+    let mut servers = vec![server("first", VALID), server("second", VALID)];
+    servers[1].endpoint_override = "192.168.1.300".into();
+    let cells = endpoint_cells(&servers);
+    assert!(cells[1].invalid);
+    assert_eq!(cells[1].text, "");
+    assert_eq!(cells[0].duplicate_name, None);
+}
+
+/// A key without an address dials localhost (#616): the row must know it, so it can warn instead
+/// of showing `127.0.0.1` as if the key said so. A typed host ends the warning.
+#[test]
+fn a_key_without_an_address_is_flagged_until_a_host_is_typed() {
+    let mut servers = vec![server("legacy", LEGACY), server("valid", VALID)];
+    let cells = endpoint_cells(&servers);
+    assert!(cells[0].localhost_fallback);
+    assert_eq!(cells[0].text, "127.0.0.1:3000");
+    assert!(!cells[1].localhost_fallback);
+    servers[0].endpoint_override = "192.168.1.5".into();
+    assert!(!endpoint_cells(&servers)[0].localhost_fallback);
+}
+
+/// The placeholder is the key's own endpoint, IPv4 or not, and nothing for a key that has none.
+#[test]
+fn the_placeholder_is_the_keys_endpoint() {
     assert_eq!(
-        endpoint_text(Some(CoreEndpoint {
-            address: "2001:db8::1".parse().unwrap(),
-            port: 4321,
-        })),
-        "[2001:db8::1]:4321"
+        key_placeholder(VALID).as_deref(),
+        Some("198.51.100.42:4321")
     );
+    assert_eq!(key_placeholder("garbage"), None);
+    assert_eq!(key_placeholder(""), None);
 }

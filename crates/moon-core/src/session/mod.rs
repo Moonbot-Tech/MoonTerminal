@@ -84,6 +84,10 @@ fn conn_sig(server: &ServerConfig) -> u64 {
     // thread exactly as a new key does -- without this the dropdown would change nothing until
     // the next restart.
     server.transport.hash(&mut h);
+    // The endpoint override is dialed at ClientConfig time too: a typed address that did not
+    // restart the feed would keep the core on the old one until the next launch. Hashed as PARSED,
+    // so an edit that changes only spacing or the case of a host name keeps the connection.
+    crate::config::parse_endpoint_override(&server.endpoint_override).hash(&mut h);
     h.finish()
 }
 

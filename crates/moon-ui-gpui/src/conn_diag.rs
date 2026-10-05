@@ -124,6 +124,12 @@ fn reason(class: &FailureClass) -> String {
         FailureClass::KeyUnparsable { empty: false } => {
             t!("core_status.fault.reason.key_unparsable").to_string()
         }
+        FailureClass::Endpoint { unresolved: false } => {
+            t!("core_status.fault.reason.endpoint_invalid").to_string()
+        }
+        FailureClass::Endpoint { unresolved: true } => {
+            t!("core_status.fault.reason.endpoint_unresolved").to_string()
+        }
         FailureClass::LocalPort { attempts } => {
             t!("core_status.fault.reason.local_port", n = attempts).to_string()
         }
@@ -210,6 +216,12 @@ fn reason(class: &FailureClass) -> String {
 fn next_step(class: &FailureClass, suggested_mode: Option<TransportVersion>) -> String {
     let base = match class {
         FailureClass::KeyUnparsable { .. } => t!("core_status.fault.next.key"),
+        FailureClass::Endpoint { unresolved: false } => {
+            t!("core_status.fault.next.endpoint_invalid")
+        }
+        FailureClass::Endpoint { unresolved: true } => {
+            t!("core_status.fault.next.endpoint_unresolved")
+        }
         FailureClass::LocalPort { .. } => t!("core_status.fault.next.local_port"),
         FailureClass::NoResponse {
             packets_received: 0,

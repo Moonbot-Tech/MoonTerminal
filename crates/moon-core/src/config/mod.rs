@@ -16,7 +16,8 @@
 //! - `migrate` performs one-time migrations from legacy formats;
 //! - `backup` creates daily snapshots in `backups/settings/` and protects schema migrations;
 //! - `uid_counter` requires every counter construction path to name the optional store floor;
-//! - `key_endpoint` resolves exported endpoints for draft display and live connections.
+//! - `endpoint_override` parses the hand-typed address that overrides a core's key (#616);
+//! - `key_endpoint` resolves a core's connection target for draft display and live connections.
 
 pub mod arb_view;
 pub mod badges;
@@ -48,6 +49,7 @@ pub mod trade_sounds;
 
 mod backup;
 pub mod book_width;
+pub mod endpoint_override;
 mod key_endpoint;
 mod migrate;
 mod reconcile;
@@ -86,6 +88,7 @@ pub use detect_view::{
     DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
     DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,
 };
+pub use endpoint_override::{CoreHost, EndpointOverride, InvalidEndpoint, parse_endpoint_override};
 pub use groups::{
     DEFAULT_ORDER_SIZES_USD, GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
@@ -95,8 +98,8 @@ pub use hotkeys::{
     RulerDrag, SELL_PRESET_KEYS, SHIFT_PERCENT, SPLIT_ORDER_PARTS, SPLIT_PARTS_MAX,
     SPLIT_PARTS_MIN, WheelModifier,
 };
-pub use key_endpoint::endpoint_from_key;
-pub(crate) use key_endpoint::endpoint_from_network;
+pub(crate) use key_endpoint::target_from_network;
+pub use key_endpoint::{CoreTarget, ResolvedTarget, target_from_key};
 pub use lang::Language;
 pub use layout::{
     ALERT_DURATION_S_DEFAULT, ALERT_DURATION_S_MAX, ALERT_DURATION_S_MIN, ALERT_REPEAT_DEFAULT,
@@ -784,6 +787,7 @@ impl AppConfig {
                 active: true,
                 feed: FeedFlags::default(),
                 key: Secret::new(key.clone()),
+                endpoint_override: String::new(),
                 group: group.clone(),
                 market: market.clone(),
                 color: servers::default_color(),
@@ -879,6 +883,7 @@ impl AppConfig {
                         uid: server.uid,
                         name: server.name.clone(),
                         key: server.key.clone(),
+                        endpoint_override: server.endpoint_override.clone(),
                     })
                     .collect(),
                 telegram: self.telegram.clone(),

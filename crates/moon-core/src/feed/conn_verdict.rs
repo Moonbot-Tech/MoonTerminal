@@ -54,6 +54,11 @@ pub enum FailureClass {
     /// `empty` forks the WORDING only (a blank field vs. a pasted non-key); it is a fact,
     /// not a guess.
     KeyUnparsable { empty: bool },
+    /// The hand-typed address in the Connections row could not be used, so nothing was ever sent.
+    ///
+    /// Observed locally like [`Self::KeyUnparsable`]. `unresolved` separates a field that is not an
+    /// address at all from a host name the resolver did not answer for.
+    Endpoint { unresolved: bool },
     /// THIS machine could not open its own UDP socket, so nothing was ever sent.
     ///
     /// Nothing here is about the core: a local VPN, a local firewall, or exhausted ephemeral ports.
@@ -135,7 +140,10 @@ impl FailureClass {
     /// `feed::retry_can_help(&anyhow::Error)`, which makes the same decision one type earlier;
     /// the two cannot be one function and are pinned by separate tests.
     pub fn retry_can_help(&self) -> bool {
-        !matches!(self, Self::KeyUnparsable { .. })
+        !matches!(
+            self,
+            Self::KeyUnparsable { .. } | Self::Endpoint { unresolved: false }
+        )
     }
 }
 
@@ -251,6 +259,9 @@ pub fn diagnose(
     let s = &fault.startup;
     let class = match &fault.kind {
         ConnFaultKind::KeyUnparsable { empty } => FailureClass::KeyUnparsable { empty: *empty },
+        ConnFaultKind::EndpointUnusable { unresolved } => FailureClass::Endpoint {
+            unresolved: *unresolved,
+        },
         ConnFaultKind::LocalBindFailed {
             consecutive_failures,
         } => FailureClass::LocalPort {

@@ -47,8 +47,8 @@ use super::strategies::{
     strat_db_dump, strat_display_name, strat_field_bool, strat_kind_name, tg_detect,
 };
 use super::{
-    ChartTextRows, ConnStatus, CoreConfigEditEvent, CoreEndpoint, CoreLogLine, CoreStartupStatus,
-    CoreTgEvent, CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
+    ChartTextRows, ConnStatus, CoreConfigEditEvent, CoreLogLine, CoreStartupStatus, CoreTgEvent,
+    CoreTimeOffsetStatus, DetectRow, ExchangeId, FeedMsg, FeedTx, LatestMarketRole,
     SharedMoonClient, StrategyEditPhase, StrategyEditResolution, StrategyEditResult,
     StrategyEditRow, StrategyEditSnapshot, StrategyRow,
 };
@@ -206,6 +206,29 @@ impl std::fmt::Display for KeyUnreadable {
 }
 
 impl std::error::Error for KeyUnreadable {}
+
+/// The Connections row's hand-typed address could not be used: the attempt ended before any client
+/// was built.
+///
+/// `feed::spawn` stops the backoff loop for an `unresolved: false` field — it is not an address,
+/// and no retry can change that until it is edited — and keeps retrying an unresolved name, which
+/// a resolver or a network that comes back can fix on its own.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::feed) struct EndpointUnusable {
+    pub(in crate::feed) unresolved: bool,
+}
+
+impl std::fmt::Display for EndpointUnusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.unresolved {
+            f.write_str("endpoint host did not resolve")
+        } else {
+            f.write_str("endpoint override is not an address")
+        }
+    }
+}
+
+impl std::error::Error for EndpointUnusable {}
 
 /// Tag one `run` failure with whether the attempt had ever become operational.
 ///
@@ -414,31 +437,34 @@ impl Drop for ClientSlotGuard {
     }
 }
 
-/// Resolve the connection endpoint and transport carried by a parsed MoonBot key.
+/// Resolve the connection target and transport for a parsed MoonBot key.
 ///
-/// The configured transport outranks the key's: MoonBot's own V0/V1/V2 switch moves without
-/// issuing a new key, so a core that was flipped after its export is reachable only by following
-/// the local choice. The key still answers when nothing is configured -- a legacy export carries
-/// no network block at all, and that is what the V0 fallback is for.
+/// Both configured values outrank the key's. The transport: MoonBot's own V0/V1/V2 switch moves
+/// without issuing a new key, so a core that was flipped after its export is reachable only by
+/// following the local choice. The endpoint override: the key's address can be wrong, missing,
+/// or the public address a terminal on the core's own LAN cannot reach (#616). The key still
+/// answers whatever is not configured -- a legacy export carries no network block at all, and
+/// that is what the localhost/3000/V0 fallbacks are for.
 ///
 /// Args:
 ///     network: Optional network metadata from `moonproto::parse_key_info`.
 ///     transport: Configured transport mode for this core, or `None` to follow the key.
+///     endpoint_override: The row's parsed endpoint override, or `None` to follow the key.
 ///
 /// Returns:
-///     Decoded endpoint plus transport, with the same localhost/3000/V0 fallbacks used for legacy
-///     exports.
+///     The unresolved target plus transport.
 pub(crate) fn connection_target(
     network: Option<&moonproto::ImportedNetworkConfig>,
     transport: Option<TransportVersion>,
-) -> (CoreEndpoint, TransportMode) {
-    let endpoint = crate::config::endpoint_from_network(network);
+    endpoint_override: Option<&crate::config::EndpointOverride>,
+) -> (crate::config::CoreTarget, TransportMode) {
+    let target = crate::config::target_from_network(network, endpoint_override);
     let transport = transport.map(TransportMode::from).unwrap_or_else(|| {
         network
             .map(|network| network.transport_mode)
             .unwrap_or(TransportMode::V0)
     });
-    (endpoint, transport)
+    (target, transport)
 }
 
 /// Which run-state halves the MoonBot instance currently on the other end has reported.
@@ -512,14 +538,34 @@ pub(super) fn run(
         return Err(KeyUnreadable { empty }.into());
     };
 
-    // 2. Derive the endpoint from the key, which embeds host and port; the config no longer has
-    //    separate fields for those. The transport mode is the exception: the key only seeds it,
-    //    and a configured mode wins (see `connection_target`).
-    let (endpoint, transport) = connection_target(info.network.as_ref(), server.transport);
-    let address = endpoint.address;
+    // 2. Derive the endpoint from the key, which embeds host and port, with the row's hand-typed
+    //    override laid over it; the transport mode, too, is only seeded by the key, and a
+    //    configured one wins (see `connection_target`). An override that is not an address is
+    //    reported, never quietly replaced by the key's: the user typed it to stop dialing that.
+    let Ok(endpoint_override) = crate::config::parse_endpoint_override(&server.endpoint_override)
+    else {
+        let _ = tx.send(FeedMsg::ConnFault(convert::endpoint_fault(false)));
+        return Err(EndpointUnusable { unresolved: false }.into());
+    };
+    let (target, transport) = connection_target(
+        info.network.as_ref(),
+        server.transport,
+        endpoint_override.as_ref(),
+    );
+    // A host name blocks here on the system resolver; this is the core's own feed thread.
+    let Ok(resolved) = target.resolve() else {
+        let _ = tx.send(FeedMsg::ConnFault(convert::endpoint_fault(true)));
+        return Err(EndpointUnusable { unresolved: true }.into());
+    };
+    let endpoint = resolved.endpoint;
     let port = endpoint.port;
-    let host = address.to_string();
-    let _ = tx.send(FeedMsg::Endpoint(endpoint));
+    let host = resolved.client_host;
+    // The resolver above can block for seconds, and a Save in the meantime respawns this core on
+    // a NEW thread and drops this one's receiver. A thread that wakes up superseded must stop here,
+    // before it builds a client and dials the core with the old address and the same key.
+    if tx.send(FeedMsg::Endpoint(endpoint)).is_err() {
+        return Ok(());
+    }
     // Name the core, never its address: the endpoint still reaches the UI through `FeedMsg::
     // Endpoint` for Core Status, but a log file is shared far more casually than a screen is.
     log::info!(

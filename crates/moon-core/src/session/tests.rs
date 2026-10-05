@@ -27,6 +27,32 @@ fn changing_the_transport_mode_requires_a_reconnect() {
     assert_ne!(v1, v2, "switching between modes must restart it too");
 }
 
+/// The endpoint override is dialed when `ClientConfig` is built, exactly like the transport mode:
+/// left out of the signature, a typed LAN address would change nothing until the next restart.
+#[test]
+fn changing_the_endpoint_override_requires_a_reconnect() {
+    let mut lan = server(None);
+    lan.endpoint_override = "192.168.1.5".to_string();
+    assert_ne!(conn_sig(&server(None)), conn_sig(&lan));
+}
+
+/// The signature follows what the override DIALS, not its spelling: retyping a host name in
+/// another case or with stray spaces must not drop a live connection, while a different port must.
+#[test]
+fn respelling_the_same_endpoint_override_keeps_the_connection() {
+    let with = |text: &str| {
+        let mut s = server(None);
+        s.endpoint_override = text.to_string();
+        conn_sig(&s)
+    };
+    assert_eq!(
+        with("Core.Example.net:5017"),
+        with("  core.example.net:5017 ")
+    );
+    assert_eq!(with(""), with("   "));
+    assert_ne!(with("core.example.net:5017"), with("core.example.net:5018"));
+}
+
 /// The other half: a signature that moved for a presentation field would reconnect every core on
 /// an unrelated edit. Colour is the cheapest witness that the hash still covers only connection
 /// inputs.

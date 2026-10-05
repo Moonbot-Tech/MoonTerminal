@@ -13,6 +13,7 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
         active: true,
         feed: FeedFlags::default(),
         key: Secret::new(""),
+        endpoint_override: String::new(),
         group: "fleet".to_string(),
         market: "BTCUSDT".to_string(),
         color: [0, 0, 0],
