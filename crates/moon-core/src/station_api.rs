@@ -231,23 +231,23 @@ pub struct ListedCore {
     /// The station's uid: names its credential `core-<uid>` and keys its report rows. Stable.
     pub uid: u64,
     pub name: String,
-    /// `core_address(key)`; `None` when the credential is unavailable or the key undecodable.
+    /// The effective endpoint, without DNS resolution; absent for unavailable or invalid keys/overrides.
     #[serde(default)]
     pub address: Option<String>,
     /// `key_fingerprint(key)`; `None` when the credential is unavailable.
     #[serde(default)]
     pub key_fp: Option<String>,
+    /// Hand-typed override, including empty (follow the key). Absent means an older station
+    /// whose listing and feed still use the key's own address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_override: Option<String>,
 }
 
-/// SocketAddr display of the key's own endpoint, no hand-typed override (`198.51.100.11:4510`,
-/// `[::1]:4510`). None if undecodable.
-pub fn core_address(key: &str) -> Option<String> {
-    let target = crate::config::target_from_key(key, None)?;
-    // Without an override the host is always the key's address or the localhost fallback.
-    let crate::config::CoreHost::Ip(address) = target.host else {
-        return None;
-    };
-    Some(std::net::SocketAddr::new(address, target.port).to_string())
+/// Format the same effective target the feed dials, without resolving host names.
+/// Invalid keys or overrides return `None` rather than silently falling back to a stale address.
+pub fn core_address(key: &str, endpoint_override: &str) -> Option<String> {
+    let endpoint_override = crate::config::parse_endpoint_override(endpoint_override).ok()?;
+    crate::config::target_from_key(key, endpoint_override.as_ref()).map(|target| target.text())
 }
 
 /// First 16 hex digits of SHA-256(b"moon-station core key v1\n" ++ key.trim()).

@@ -393,6 +393,14 @@ cmd_status() {
     echo "remove_station=yes"
     echo "removal_guard=yes"
     echo "bot_settings_merge=yes"
+    # Config-field support belongs to the installed binary, not this independently upgraded helper.
+    core_endpoint_override=no
+    if [ -x "$BIN" ] && capabilities=$("$BIN" capabilities 2>/dev/null); then
+        if printf '%s\n' "$capabilities" | grep -qx 'core_endpoint_override=yes'; then
+            core_endpoint_override=yes
+        fi
+    fi
+    echo "core_endpoint_override=$core_endpoint_override"
     [ -s "$UPDATE_LOG" ] && echo "last_update=$(tail -n1 "$UPDATE_LOG")"
     return 0
 }

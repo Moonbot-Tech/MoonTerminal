@@ -24,12 +24,14 @@ use crate::hosts::Hosts;
 use crate::script::{self, STEP_TIMEOUT};
 use crate::ssh::{Auth, Conn, Target};
 
-/// One core for the station.
+/// One station credential with its transport and hand-typed endpoint settings.
 pub struct CoreKey {
     pub uid: u64,
     pub name: String,
     pub transport: Option<TransportVersion>,
     pub key: Secret,
+    /// Hand-typed endpoint carried unchanged; empty follows the key.
+    pub endpoint_override: String,
 }
 
 pub use moon_core::station_api::TapeWindow;
@@ -83,7 +85,7 @@ pub fn merge_cores(
     merge_core_table(file, upsert, tape)
 }
 
-/// Return serialized config with named upserts and the allocation floor, retaining other sections.
+/// Serialize uid-preserving credential metadata, including override updates/clears and the uid floor.
 fn merge_core_table(
     mut file: toml::Table,
     upsert: &[CoreKey],
@@ -114,6 +116,14 @@ fn merge_core_table(
         entry.insert("uid".into(), toml::Value::Integer(uid));
         entry.insert("name".into(), toml::Value::String(core.name.clone()));
         entry.insert("active".into(), toml::Value::Boolean(true));
+        if core.endpoint_override.is_empty() {
+            entry.remove("endpoint_override");
+        } else {
+            entry.insert(
+                "endpoint_override".into(),
+                toml::Value::String(core.endpoint_override.clone()),
+            );
+        }
         match core.transport {
             Some(transport) => {
                 entry.insert("transport".into(), toml::Value::try_from(transport)?);
@@ -534,13 +544,17 @@ fn edit_config(
     anyhow::bail!("station.toml kept changing under this push: another terminal is writing it")
 }
 
-/// Whether a helper's `status` advertises guarded removal and bot-settings preservation.
-/// Refresh older helpers before writes that could erase fields a sender does not know.
+/// Require guarded removal, bot preservation and an explicit installed-binary capability reading.
+/// Both yes and no are current: an old binary must not cause repeated helper refreshes.
 fn helper_is_current(status: &str) -> bool {
     script::value(status, "bot_return") == Some("yes")
         && script::value(status, "remove_station") == Some("yes")
         && script::value(status, "removal_guard") == Some("yes")
         && script::value(status, "bot_settings_merge") == Some("yes")
+        && matches!(
+            script::value(status, "core_endpoint_override"),
+            Some("yes" | "no")
+        )
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -658,13 +672,14 @@ pub fn push_cores(
                 name: core.name.clone(),
                 transport: core.transport,
                 key: core.key.clone(),
+                endpoint_override: core.endpoint_override.clone(),
             })
             .collect()
     };
     push_cores_with_add_flags(target, &cores, &vec![true; cores.len()], tape, say)
 }
 
-/// Keep CLI picks add-only, rejecting existing addresses and allocating above all known uids.
+/// Keep CLI picks add-only, rejecting the peer's effective addresses and allocating above known uids.
 /// The push revalidates the floor before writing, so a concurrent allocation requires a retry.
 fn allocate_cli_cores(
     cores: &[CoreKey],
@@ -682,7 +697,14 @@ fn allocate_cli_cores(
     cores
         .iter()
         .map(|core| {
-            if let Some(address) = moon_core::station_api::core_address(core.key.expose()) {
+            let endpoint_override = if listing.iter().any(|core| core.endpoint_override.is_some()) {
+                core.endpoint_override.as_str()
+            } else {
+                ""
+            };
+            if let Some(address) =
+                moon_core::station_api::core_address(core.key.expose(), endpoint_override)
+            {
                 anyhow::ensure!(
                     !listing
                         .iter()
@@ -699,6 +721,7 @@ fn allocate_cli_cores(
                 name: core.name.clone(),
                 transport: core.transport,
                 key: core.key.clone(),
+                endpoint_override: core.endpoint_override.clone(),
             })
         })
         .collect()
@@ -720,6 +743,8 @@ fn validate_cores(cores: &[CoreKey]) -> anyhow::Result<()> {
 }
 
 /// Push reconciled cores, refusing occupied or retired uids before writing any credential.
+/// The installed binary's capability controls override fields even before its first start;
+/// older stations receive the original key-only configuration.
 /// CLI picks and fresh installs mark every picked core as an add.
 pub fn push_cores_with_add_flags(
     target: &Target,
@@ -736,6 +761,8 @@ pub fn push_cores_with_add_flags(
     // Read before anything is written: an old helper or an unreadable file stops the push here,
     // not between the credentials and the configuration. No file yet is the first push.
     let status = current_helper_status(&conn)?;
+    let cores = peer_cores(cores, &status);
+    let cores = cores.as_slice();
     let exists = script::value(&status, "config") == Some("yes");
     // Existing history needs a live reading before an add; stopped/unreadable stations fail closed.
     let high_water = if exists && adds.contains(&true) {
@@ -773,6 +800,25 @@ pub fn push_cores_with_add_flags(
         merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
     })?;
     restart_and_report(&conn, say)
+}
+
+/// Suppress unknown TOML fields for old binaries; helper upgrades alone cannot enable overrides.
+fn peer_cores(cores: &[CoreKey], status: &str) -> Vec<CoreKey> {
+    let supports = script::value(status, "core_endpoint_override") == Some("yes");
+    cores
+        .iter()
+        .map(|core| CoreKey {
+            uid: core.uid,
+            name: core.name.clone(),
+            transport: core.transport,
+            key: core.key.clone(),
+            endpoint_override: if supports {
+                core.endpoint_override.clone()
+            } else {
+                String::new()
+            },
+        })
+        .collect()
 }
 
 /// Reject stale adds, retired uids and missing updates before any credential write.

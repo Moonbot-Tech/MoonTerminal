@@ -1,9 +1,129 @@
 use super::*;
 
+/// Dropping an override during a uid-preserving upsert would keep the station dialing the old key.
+#[test]
+fn core_override_push_round_trips_updates_and_explicit_clear() {
+    let current = "[[core]]\nuid = 3\nname = 'Old'\n[[core]]\nuid = 9\nname = 'Station only'\nendpoint_override = '203.0.113.9:5020'\n";
+    let mut core = synthetic_core(3, "Renamed", None);
+    core.endpoint_override = "Core.Example.Invalid:5020".into();
+    let pushed = peer_cores(&[core], "core_endpoint_override=yes\n");
+    let merged = merge_cores_with_add_flags(Some(current), &pushed, &[false], None, None).unwrap();
+    let file: toml::Value = toml::from_str(&merged).unwrap();
+    let cores = file["core"].as_array().unwrap();
+    assert_eq!(cores.len(), 2);
+    assert_eq!(cores[0]["uid"].as_integer(), Some(3));
+    assert_eq!(
+        cores[0]["endpoint_override"].as_str(),
+        Some("Core.Example.Invalid:5020")
+    );
+    assert_eq!(
+        cores[1]["endpoint_override"].as_str(),
+        Some("203.0.113.9:5020")
+    );
+    assert!(!merged.contains("synthetic-core-key"));
+    let mut cleared = pushed;
+    cleared[0].endpoint_override.clear();
+    let merged = merge_cores_with_add_flags(Some(&merged), &cleared, &[false], None, None).unwrap();
+    let file: toml::Value = toml::from_str(&merged).unwrap();
+    assert!(file["core"][0].get("endpoint_override").is_none());
+    assert_eq!(
+        file["core"][1]["endpoint_override"].as_str(),
+        Some("203.0.113.9:5020")
+    );
+}
+
+/// A helper refresh must not send a field that an older installed binary refuses at startup.
+#[test]
+fn old_station_pushes_omit_overrides_and_keep_credentials() {
+    let mut core = synthetic_core(3, "Fixture", None);
+    core.endpoint_override = "core.example.invalid:5020".into();
+    for status in [
+        "",
+        "core_endpoint_override=no\n",
+        "core_endpoint_override=unknown\n",
+    ] {
+        let pushed = peer_cores(std::slice::from_ref(&core), status);
+        let config = merge_cores(None, &pushed, None).unwrap();
+        assert!(!config.contains("endpoint_override"));
+        assert_eq!(pushed[0].key.expose(), "synthetic-core-key");
+        assert_eq!(pushed[0].uid, 3);
+    }
+}
+
+/// A static helper marker would enable an override against an older binary that rejects the field.
+#[test]
+fn helper_reads_override_capability_from_the_installed_binary() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let helper = crate::script::HELPER
+        .replace("/opt/moon-station", "${fixture}/opt")
+        .replace("/etc/moon-station", "${fixture}/etc")
+        .replace("/var/lib/moon-station", "${fixture}/data")
+        .replace("/run/moon-station/api.sock", "${fixture}/api.sock");
+    let helper = helper
+        .lines()
+        .map(|line| {
+            if let Some((name, value)) = line
+                .split_once('=')
+                .filter(|(_, value)| value.starts_with("${fixture}/"))
+            {
+                return format!("{name}=\"{value}\"");
+            }
+            line.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    for (binary, expected) in [
+        (None, "no"),
+        (Some("exit 1"), "no"),
+        (Some("printf 'core_endpoint_override=unknown\\n'"), "no"),
+        (Some("printf 'core_endpoint_override=yes\\n'; exit 1"), "no"),
+        (Some("printf 'core_endpoint_override=yes\\n'"), "yes"),
+    ] {
+        let before = r#"
+set -eu
+fixture=$(mktemp -d)
+test -d "$fixture"
+trap 'rm -r -- "$fixture"' EXIT
+mkdir -p "$fixture/opt/bin" "$fixture/etc/creds" "$fixture/data"
+id() { printf '0\n'; }
+systemctl() { printf 'inactive\n'; }
+"#;
+        let binary = binary.map(|code| format!("printf '%s\\n' '#!/bin/sh' \"{code}\" >\"$fixture/opt/bin/moon-station\"\nchmod +x \"$fixture/opt/bin/moon-station\"\n")).unwrap_or_default();
+        let code = format!("{before}\n{binary}\nset -- status\n{helper}");
+        let mut child = Command::new("sh")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("POSIX sh is required for the synthetic helper fixture");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(code.as_bytes())
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            crate::script::value(
+                &String::from_utf8(output.stdout).unwrap(),
+                "core_endpoint_override"
+            ),
+            Some(expected)
+        );
+    }
+}
+
 /// Sending terminal uid 3 directly would reject a valid CLI add to a station whose floor is 12.
 #[test]
 fn cli_adds_allocate_above_retired_config_reports_and_both_uid_sets() {
     let listing = [moon_core::station_api::ListedCore {
+        endpoint_override: None,
         uid: 9,
         name: "Keep".into(),
         address: None,
@@ -47,6 +167,7 @@ fn cli_adds_do_not_duplicate_an_existing_station_address() {
     let mut core = synthetic_core(3, "Already listed", None);
     core.key = Secret::new(key);
     let listing = [moon_core::station_api::ListedCore {
+        endpoint_override: None,
         uid: 9,
         name: "Keep".into(),
         address: Some("198.51.100.42:4321".into()),
@@ -180,6 +301,7 @@ fn an_add_collision_is_refused_before_any_credential_write() {
 /// A made-up core credential for config-only tests; never connects.
 fn synthetic_core(uid: u64, name: &str, transport: Option<TransportVersion>) -> CoreKey {
     CoreKey {
+        endpoint_override: String::new(),
         uid,
         name: name.into(),
         transport,
@@ -400,12 +522,14 @@ fn credential_cleanup_failure_keeps_the_new_config() {
 fn the_station_file_carries_no_key() {
     let cores = [
         CoreKey {
+            endpoint_override: String::new(),
             uid: 3,
             name: "BinF \"1\"".to_owned(),
             transport: Some(TransportVersion::V1),
             key: Secret::new("SECRET-KEY-TEXT"),
         },
         CoreKey {
+            endpoint_override: String::new(),
             uid: 9,
             name: "HL".to_owned(),
             transport: None,
@@ -614,6 +738,7 @@ bot_return=yes
 remove_station=yes
 removal_guard=yes
 bot_settings_merge=yes
+core_endpoint_override=no
 "
     ));
     assert!(!helper_is_current(
@@ -622,6 +747,21 @@ remove_station=no
 "
     ));
     assert!(!helper_is_current("remove_station=yes\n"));
+}
+
+/// Treating capability=no as a stale helper would reinstall it on every old-station refresh.
+#[test]
+fn helper_capability_reading_is_current_for_both_binary_generations() {
+    let base = "bot_return=yes\nremove_station=yes\nremoval_guard=yes\nbot_settings_merge=yes\n";
+    for capability in ["yes", "no"] {
+        assert!(helper_is_current(&format!(
+            "{base}core_endpoint_override={capability}\n"
+        )));
+    }
+    assert!(!helper_is_current(base));
+    assert!(!helper_is_current(&format!(
+        "{base}core_endpoint_override=unknown\n"
+    )));
 }
 
 /// The switch is written only when it changes, and only `[update]` is touched; a cores push keeps

@@ -9,6 +9,10 @@ pub(crate) struct LocalCore {
     pub(crate) uid: u64,
     pub(crate) name: String,
     pub(crate) address: Option<String>,
+    /// Legacy peers still compare and dial the key's endpoint.
+    pub(crate) key_address: Option<String>,
+    /// Retain typed text so an override edit invalidates the comparison cache and can be pushed.
+    pub(crate) endpoint_override: String,
     pub(crate) key_fp: String,
 }
 
@@ -77,7 +81,7 @@ pub(crate) fn local_cores(cfg: &AppConfig) -> Vec<LocalCore> {
     cfg.servers
         .iter()
         .filter(|s| eligible(s.active, s.synthetic, &s.key))
-        .map(|s| local_core(s.uid, &s.name, &s.key))
+        .map(|s| local_core(s.uid, &s.name, &s.key, &s.endpoint_override))
         .collect()
 }
 
@@ -86,12 +90,19 @@ pub(crate) fn eligible(active: bool, synthetic: bool, key: &moon_core::config::S
     active && !synthetic && !key.is_empty()
 }
 
-/// Derive the same secret-free identity for a saved key and a live config entry.
-pub(crate) fn local_core(uid: u64, name: &str, key: &moon_core::config::Secret) -> LocalCore {
+/// Derive effective and legacy endpoints without DNS for saved credentials and live config alike.
+pub(crate) fn local_core(
+    uid: u64,
+    name: &str,
+    key: &moon_core::config::Secret,
+    endpoint_override: &str,
+) -> LocalCore {
     LocalCore {
         uid,
         name: name.to_owned(),
-        address: core_address(key.expose()),
+        address: core_address(key.expose(), endpoint_override),
+        key_address: core_address(key.expose(), ""),
+        endpoint_override: endpoint_override.to_owned(),
         key_fp: key_fingerprint(key.expose()),
     }
 }
@@ -101,11 +112,13 @@ pub(crate) fn trace_cores(cfg: &AppConfig) -> Vec<LocalCore> {
     cfg.servers
         .iter()
         .filter(|s| eligible(true, s.synthetic, &s.key))
-        .map(|s| local_core(s.uid, &s.name, &s.key))
+        .map(|s| local_core(s.uid, &s.name, &s.key, &s.endpoint_override))
         .collect()
 }
 
-/// Match duplicate addresses by ascending uid, consuming each local core at most once.
+/// Match duplicate effective addresses by ascending uid, consuming each local core at most once.
+/// Reserve all address matches first, then identify an endpoint-only edit by a unique unchanged
+/// credential. Old peers keep key-address matching and never offer an unsupported override edit.
 /// Unmatched terminal cores receive proposed uids above both sets and the retirement floor.
 /// An exhausted TOML uid range leaves their station uid absent, so no add can be selected.
 pub(crate) fn reconcile(
@@ -126,16 +139,59 @@ pub(crate) fn reconcile(
         .unwrap_or(0)
         .max(high_water.unwrap_or(0));
     let mut rows = Vec::new();
-    for remote in station {
-        let local = remote.address.as_ref().and_then(|address| {
-            here.iter()
-                .enumerate()
-                .find(|(index, core)| !matched[*index] && core.address.as_ref() == Some(address))
-        });
+    let overrides_supported = station.iter().any(|core| core.endpoint_override.is_some());
+    let mut matches: Vec<_> = station
+        .iter()
+        .map(|remote| {
+            let local = remote.address.as_ref().and_then(|address| {
+                here.iter().enumerate().find(|(index, core)| {
+                    !matched[*index] && peer_address(core, remote).as_ref() == Some(address)
+                })
+            });
+            local.map(|(index, _)| {
+                matched[index] = true;
+                index
+            })
+        })
+        .collect();
+    for (remote, index) in station.iter().zip(&mut matches) {
+        if index.is_some() || remote.endpoint_override.is_none() {
+            continue;
+        }
+        let Some(fp) = remote.key_fp.as_ref() else {
+            continue;
+        };
+        // Duplicate credentials cannot prove which historical identity an endpoint edit belongs to.
+        if station
+            .iter()
+            .filter(|core| core.key_fp.as_ref() == Some(fp))
+            .count()
+            != 1
+            || here.iter().filter(|core| &core.key_fp == fp).count() != 1
+        {
+            continue;
+        }
+        if let Some((i, _)) = here
+            .iter()
+            .enumerate()
+            .find(|(i, core)| !matched[*i] && &core.key_fp == fp)
+        {
+            matched[i] = true;
+            *index = Some(i);
+        }
+    }
+    for (remote, index) in station.into_iter().zip(matches) {
+        let local = index.map(|index| (index, here[index]));
         if let Some((index, local)) = local {
             matched[index] = true;
             rows.push(Row {
-                state: if remote.key_fp.as_ref() != Some(&local.key_fp) {
+                state: if remote.key_fp.as_ref() != Some(&local.key_fp)
+                    || remote
+                        .endpoint_override
+                        .as_ref()
+                        .is_some_and(|value| value != &local.endpoint_override)
+                    || remote.address != *peer_address(local, remote)
+                {
                     RowState::KeyDiffers
                 } else if remote.name != local.name {
                     RowState::NameDiffers
@@ -144,7 +200,7 @@ pub(crate) fn reconcile(
                 },
                 name: local.name.clone(),
                 station_name: Some(remote.name.clone()),
-                address: local.address.clone(),
+                address: peer_address(local, remote).clone(),
                 terminal_uid: Some(local.uid),
                 station_uid: Some(remote.uid),
             });
@@ -171,7 +227,11 @@ pub(crate) fn reconcile(
             state: RowState::OnlyHere,
             name: local.name.clone(),
             station_name: None,
-            address: local.address.clone(),
+            address: if overrides_supported {
+                local.address.clone()
+            } else {
+                local.key_address.clone()
+            },
             terminal_uid: Some(local.uid),
             station_uid: uid,
         });
@@ -179,7 +239,16 @@ pub(crate) fn reconcile(
     rows
 }
 
-/// Select adds and name/key changes without ever removing a station-only core.
+/// An absent override field is the per-core capability marker for a key-only older station.
+fn peer_address<'a>(local: &'a LocalCore, remote: &ListedCore) -> &'a Option<String> {
+    if remote.endpoint_override.is_some() || local.endpoint_override.is_empty() {
+        &local.address
+    } else {
+        &local.key_address
+    }
+}
+
+/// Select adds and name/key/endpoint changes without ever removing a station-only core.
 pub(crate) fn bulk(rows: &[Row]) -> Vec<Upsert> {
     rows.iter()
         .filter_map(|row| match row.state {
@@ -199,22 +268,17 @@ pub(crate) fn station_uid_for(
     here: &[LocalCore],
     listing: &[ListedCore],
 ) -> Option<u64> {
-    let address = here
-        .iter()
-        .find(|core| core.uid == local_uid)?
-        .address
-        .as_ref()?;
-    if here
-        .iter()
-        .filter(|core| core.address.as_ref() == Some(address))
-        .count()
-        != 1
-    {
-        return None;
-    }
-    let mut matches = listing
-        .iter()
-        .filter(|core| core.address.as_ref() == Some(address));
+    let local = here.iter().find(|core| core.uid == local_uid)?;
+    let mut matches = listing.iter().filter(|remote| {
+        peer_address(local, remote).as_ref().is_some_and(|address| {
+            remote.address.as_ref() == Some(address)
+                && here
+                    .iter()
+                    .filter(|core| peer_address(core, remote).as_ref() == Some(address))
+                    .count()
+                    == 1
+        })
+    });
     let uid = matches.next()?.uid;
     matches.next().is_none().then_some(uid)
 }

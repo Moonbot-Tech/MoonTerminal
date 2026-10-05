@@ -62,10 +62,43 @@ fn core_fingerprints_are_domain_separated_trimmed_and_secret_free() {
 #[test]
 fn listed_core_addresses_decode_synthetic_keys() {
     assert_eq!(
-        core_address(SYNTHETIC_KEY).as_deref(),
+        core_address(SYNTHETIC_KEY, "").as_deref(),
         Some("198.51.100.42:4321")
     );
-    assert_eq!(core_address("not-a-key"), None);
+    assert_eq!(core_address("not-a-key", ""), None);
+}
+
+/// Falling back to the key or resolving DNS would match an overridden core to the wrong station row.
+#[test]
+fn station_addresses_use_the_feed_target_without_dns_resolution() {
+    for (override_text, expected) in [
+        ("203.0.113.9:5020", "203.0.113.9:5020"),
+        (":5020", "198.51.100.42:5020"),
+        ("Core.Example.Invalid", "core.example.invalid:4321"),
+        ("[2001:db8::7]:5020", "[2001:db8::7]:5020"),
+    ] {
+        assert_eq!(
+            core_address(SYNTHETIC_KEY, override_text).as_deref(),
+            Some(expected)
+        );
+    }
+    assert_eq!(core_address(SYNTHETIC_KEY, "host:0"), None);
+    assert_eq!(core_address("not-a-key", "core.example.invalid:5020"), None);
+}
+
+/// Making the override mandatory would reject old listings; losing empty Some would hide new support.
+#[test]
+fn override_listing_capability_is_optional_and_preserves_typed_text() {
+    let old = r#"{"uid":7,"name":"Fixture","address":"198.51.100.42:4321","key_fp":"fixture"}"#;
+    let mut core: ListedCore = serde_json::from_str(old).unwrap();
+    assert_eq!(core.endpoint_override, None);
+    assert_eq!(serde_json::to_string(&core).unwrap(), old);
+    for text in ["", "Core.Example.Invalid:5020"] {
+        core.endpoint_override = Some(text.into());
+        let back: ListedCore =
+            serde_json::from_str(&serde_json::to_string(&core).unwrap()).unwrap();
+        assert_eq!(back.endpoint_override.as_deref(), Some(text));
+    }
 }
 
 fn chat(chat_id: i64, core_uids: &[u64]) -> TelegramChatAccess {
@@ -149,6 +182,7 @@ fn a_status_reads_back_whole() {
         auto_update: Some(false),
         core_uid_high_water: Some(12),
         cores: Some(vec![ListedCore {
+            endpoint_override: None,
             uid: 3,
             name: "Core A".into(),
             address: Some("198.51.100.42:4321".into()),

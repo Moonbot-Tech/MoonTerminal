@@ -36,6 +36,7 @@ fn core_addresses_keep_intrinsic_width_without_ellipsis() {
 #[test]
 fn confirmation_is_cleared_when_identity_changes_or_becomes_local() {
     let listing = [3, 9].map(|uid| ListedCore {
+        endpoint_override: None,
         uid,
         name: format!("Core {uid}"),
         address: Some(format!("198.51.100.{uid}:4510")),
@@ -65,6 +66,8 @@ fn confirmation_is_cleared_when_identity_changes_or_becomes_local() {
         None
     );
     let local = LocalCore {
+        endpoint_override: String::new(),
+        key_address: listing[1].address.clone(),
         uid: 17,
         name: "Now local".into(),
         address: listing[1].address.clone(),
@@ -119,12 +122,15 @@ fn layout_switches_at_the_measured_content_boundary() {
 fn cache_invalidates_on_listing_and_local_revision() {
     let mut cache = CoreCache::default();
     let remote = ListedCore {
+        endpoint_override: None,
         uid: 9,
         name: "Core".into(),
         address: Some("198.51.100.9:4510".into()),
         key_fp: Some("fp".into()),
     };
     let local = LocalCore {
+        endpoint_override: String::new(),
+        key_address: remote.address.clone(),
         uid: 3,
         name: "Core".into(),
         address: remote.address.clone(),
@@ -146,6 +152,8 @@ fn cache_invalidates_on_listing_and_local_revision() {
 fn cache_invalidates_when_only_retirement_floor_changes() {
     let mut cache = CoreCache::default();
     let local = LocalCore {
+        endpoint_override: String::new(),
+        key_address: Some("198.51.100.3:4510".into()),
         uid: 3,
         name: "New".into(),
         address: Some("198.51.100.3:4510".into()),

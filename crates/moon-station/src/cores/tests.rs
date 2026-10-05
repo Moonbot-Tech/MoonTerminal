@@ -1,5 +1,37 @@
 use super::*;
 
+/// A dropped stored override would make the feed and listing disagree with the terminal after reload.
+#[test]
+fn stored_core_override_reaches_the_feed_and_listing_without_dns() {
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let dir = creds("override", &[(3, key)]);
+    for (text, expected) in [
+        ("Core.Example.Invalid:5020", "core.example.invalid:5020"),
+        ("203.0.113.8:5020", "203.0.113.8:5020"),
+        ("", "198.51.100.42:4321"),
+    ] {
+        let config = format!("[[core]]\nuid = 3\nname = 'Fixture'\nendpoint_override = '{text}'\n");
+        let station = from_station_file(&config, Some(&dir)).unwrap();
+        assert_eq!(station.listed[0].address.as_deref(), Some(expected));
+        assert_eq!(station.listed[0].endpoint_override.as_deref(), Some(text));
+        let server = &station.config.servers[0];
+        let parsed = moon_core::config::parse_endpoint_override(&server.endpoint_override).unwrap();
+        assert_eq!(
+            moon_core::config::target_from_key(server.key.expose(), parsed.as_ref())
+                .unwrap()
+                .text(),
+            expected
+        );
+    }
+    let invalid = from_station_file(
+        "[[core]]\nuid = 3\nname = 'Fixture'\nendpoint_override = 'host:0'\n",
+        Some(&dir),
+    )
+    .unwrap();
+    assert_eq!(invalid.listed[0].address, None);
+    assert_eq!(invalid.config.servers[0].endpoint_override, "host:0");
+}
+
 /// Ignoring the report maximum on upgrade could allocate uid 10 into uid 12's retired history.
 #[test]
 fn upgraded_uid_floor_includes_retired_report_rows_and_persisted_counter() {

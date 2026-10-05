@@ -32,6 +32,8 @@
 //!
 //! `moon-station release-fetch --out <path>` is what the root updater runs: the latest release's
 //! station binary, found and checked against its immutable digest (`release.rs`, §4.6).
+//! `moon-station capabilities` prints supported config fields without opening files or feeds,
+//! so the helper can negotiate a first push even before the station has started.
 //!
 //! Signals: SIGTERM (and SIGINT) stop it cleanly — the tape recorder files what it drained before
 //! the process exits; the report replica and the order traces need no such step, the replica
@@ -72,8 +74,12 @@ const STATUS_EVERY: Duration = Duration::from_secs(60);
 /// before it kills.
 const STOP_WAIT: Duration = Duration::from_secs(15);
 
-/// Run the station, keeping unavailable core credentials visible without blocking other cores.
+/// Answer stateless helper queries first, then run the station with unavailable credentials visible.
 fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("capabilities") {
+        println!("core_endpoint_override=yes");
+        return Ok(());
+    }
     // The API's client: no log, no data root — one exchange with the running station.
     if std::env::args().nth(1).as_deref() == Some("ctl") {
         return api::ctl(std::env::args().skip(2));
