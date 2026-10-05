@@ -149,3 +149,67 @@ fn the_offset_label_reads_like_a_clock() {
         "UTC\u{2212}4"
     );
 }
+
+/// Turning off Hourly must leave Today due every hour and Month due only at midnight;
+/// coupling the switches or changing their slots would contradict the schedule labels.
+#[test]
+fn today_keeps_its_hourly_schedule_with_hourly_off() {
+    let root = TempRoot::new("auto-today-hourly-off");
+    let mut host = host_with(
+        &root,
+        &[AutoReport::Today, AutoReport::Month],
+        Some(at(13, 0)),
+    );
+    host.tick(at(14, 0));
+    reopen(&mut host);
+    host.tick(at(14, 59));
+    assert_eq!(host.outbox().len(), 1);
+    reopen(&mut host);
+    host.tick(at(15, 0));
+    assert_eq!(host.outbox().len(), 2);
+    assert!(
+        host.outbox()
+            .iter()
+            .all(|row| row.auto.as_ref().unwrap().kind == AutoReport::Today)
+    );
+    reopen(&mut host);
+    host.tick(at(0, 0) + 86_400);
+    let kinds: Vec<_> = host
+        .outbox()
+        .iter()
+        .map(|row| row.auto.as_ref().unwrap().kind)
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![
+            AutoReport::Today,
+            AutoReport::Today,
+            AutoReport::Today,
+            AutoReport::Month
+        ]
+    );
+    let window = moon_core::telegram::report::auto_window(
+        AutoReport::Today,
+        at(0, 0) + 86_400,
+        chrono_tz::UTC,
+    )
+    .unwrap();
+    assert_eq!((window.from, window.to), (at(0, 0), at(0, 0) + 86_400 - 1));
+    assert_eq!(
+        window.period,
+        moon_core::telegram::report::Period::Yesterday
+    );
+}
+
+/// Reusing the compact toggle key in a delivered report turns its caption into a settings
+/// instruction. Preserve the independently reviewed report title while the toggle names timing.
+#[test]
+fn hourly_caption_keeps_the_delivered_report_title() {
+    let _locale = crate::test_locale::force("en");
+    let window =
+        moon_core::telegram::report::auto_window(AutoReport::Hourly, at(14, 0), chrono_tz::UTC)
+            .unwrap();
+    let caption = super::caption(AutoReport::Hourly, &window, chrono_tz::UTC);
+    assert_eq!(caption.title, "\u{1f4ca} Hourly report");
+    assert_eq!(caption.zone, "UTC");
+}

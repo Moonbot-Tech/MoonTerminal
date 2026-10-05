@@ -81,9 +81,10 @@ telegram.notify_editor.charts: "Gráfico de la operación — la cinta alrededor
 telegram.notify_editor.charts_hint: "Llega aparte de las tarjetas, con la tarjeta de la operación como pie. Se envía cuando la operación está en $ (una stablecoin cuenta 1:1, otra moneda espera su valoración hasta %{minutes} min; sin valoración, sin imagen). Umbrales: beneficio desde o pérdida desde; vacío — cada operación. La cinta la graba la estación."
 telegram.auto.title: "Informes automáticos"
 telegram.auto.hourly: "Informe por hora"
-telegram.auto.today: "Informe de hoy"
-telegram.auto.month: "Informe del mes"
-telegram.auto.hint: "Por hora: al inicio de cada hora, de la hora que terminó; queda en el historial. Hoy: cada hora, desde la medianoche; mes: a medianoche, desde el día 1; uno nuevo sustituye al anterior. La vista y la base son las del informe del bot. Un bot en el terminal envía mientras el terminal está abierto; un bot en el servidor, todo el día."
+telegram.auto.toggle_hourly: "Cada hora · separado"
+telegram.auto.today: "Hoy · cada hora"
+telegram.auto.month: "Mes · a medianoche"
+telegram.auto.hint: "Cada hora: un informe separado al inicio de cada hora sobre la hora anterior; queda en el historial. Hoy: un resumen acumulado que se reemplaza al inicio de cada hora; a medianoche llega el total del día anterior. Mes: a medianoche, desde el día 1; el nuevo reemplaza al anterior. Desactivar el informe horario no desactiva Hoy. Se usa la zona horaria de los informes. La vista y la base son las del bot. El bot del terminal envía mientras está abierto; el de la estación, las 24 horas."
 telegram.auto.open_basis: "Por apertura: la hora pasada aún crece, pues las operaciones abiertas en ella cierran más tarde."
 
 # The Control section (stage 5).

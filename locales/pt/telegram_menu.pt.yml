@@ -81,9 +81,10 @@ telegram.notify_editor.charts: "Gráfico da operação — a fita em torno da op
 telegram.notify_editor.charts_hint: "Chega separado dos cartões, com o cartão da operação como legenda. Enviado quando a operação está em $ (uma stablecoin conta 1:1, outra moeda espera até %{minutes} min pela avaliação; sem avaliação, sem imagem). Limites: lucro a partir de ou prejuízo a partir de; vazio — toda operação. A fita é gravada pela estação."
 telegram.auto.title: "Relatórios automáticos"
 telegram.auto.hourly: "Relatório por hora"
-telegram.auto.today: "Relatório de hoje"
-telegram.auto.month: "Relatório mensal"
-telegram.auto.hint: "Por hora: no início de cada hora, da hora que terminou; fica no histórico. Hoje: a cada hora, desde a meia-noite; mês: à meia-noite, desde o dia 1º; um novo substitui o anterior. A visualização e a base são as do relatório do bot. Um bot no terminal envia enquanto o terminal roda; um bot no servidor, o tempo todo."
+telegram.auto.toggle_hourly: "Cada hora · separado"
+telegram.auto.today: "Hoje · a cada hora"
+telegram.auto.month: "Mês · à meia-noite"
+telegram.auto.hint: "Por hora: um relatório separado no início de cada hora sobre a hora anterior; fica no histórico. Hoje: um resumo acumulado substituído no início de cada hora; à meia-noite chega o total do dia anterior. Mês: à meia-noite, desde o dia 1; o novo substitui o anterior. Desativar o relatório por hora não desativa Hoje. Usa o fuso horário dos relatórios. A vista e a base são as do relatório do bot. O bot do terminal envia enquanto o terminal está aberto; o da estação, 24 horas por dia."
 telegram.auto.open_basis: "Pelo horário de abertura: a hora passada ainda cresce, pois operações abertas nela fecham depois."
 
 # The Control section (stage 5).

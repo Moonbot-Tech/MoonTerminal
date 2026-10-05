@@ -251,11 +251,16 @@ Automatic reports are the rich report a menu button opens, sent by the bot on it
 switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->
 Bot menu and notifications (the Mini App does not show them, and its save leaves them as they are):
 
-- Hourly, at the top of every hour in the display time zone, for the hour that just ended. Every
+- Each hour separately, at the top of every hour in the display time zone, for the hour that just ended. Every
   hourly report stays in the chat.
-- Today, at the top of every hour, from midnight; at midnight, the whole day that just ended.
-- Month, at midnight, from the 1st to the end of the day that just ended; on the 1st, the whole
+- Today, every hour: the running summary from midnight is replaced at the start of each hour;
+  at midnight, the whole day that just ended.
+- Month, at midnight: from the 1st to the end of the day that just ended; on the 1st, the whole
   month that just ended.
+
+Turning off the separate hourly reports does not turn off Today's hourly updates. The compact
+toggle labels show these schedules in both the bot's Notifications menu and Settings -> Telegram;
+the section hint explains replacement and the midnight summary.
 
 A new today or month report replaces the chat's previous one of its kind. Each opens in the bot's
 report view and counts on its period basis; a line on top names it, the zone offset and the basis,

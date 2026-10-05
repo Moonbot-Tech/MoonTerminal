@@ -81,9 +81,10 @@ telegram.notify_editor.charts: "İşlem grafiği — işlemin etrafındaki akı�
 telegram.notify_editor.charts_hint: "Kartlardan ayrı gelir, açıklaması işlem kartıdır. İşlem $ cinsinden hesaplanınca gönderilir (stablecoin 1:1 sayılır, başka para birimi değerlemeyi %{minutes} dk bekler; değerlenmezse resim yok). Eşikler: kârdan itibaren veya zarardan itibaren; boş — her işlem. Akışı istasyon kaydeder."
 telegram.auto.title: "Otomatik raporlar"
 telegram.auto.hourly: "Saatlik rapor"
-telegram.auto.today: "Bugünün raporu"
-telegram.auto.month: "Aylık rapor"
-telegram.auto.hint: "Saatlik: her saat başında, biten saat için; geçmişte kalır. Bugün: her saat, gece yarısından beri; ay: gece yarısında, ayın 1'inden beri; yenisi öncekinin yerini alır. Görünüm ve dönem esası botun raporundakidir. Terminaldeki bot terminal çalışırken gönderir; sunucudaki bot gece gündüz."
+telegram.auto.toggle_hourly: "Her saat · ayrı"
+telegram.auto.today: "Bugün · her saat"
+telegram.auto.month: "Ay · gece yarısı"
+telegram.auto.hint: "Saatlik: her saat başında biten saat için ayrı bir rapor; geçmişte kalır. Bugün: her saat başında yenisiyle değiştirilen günün özeti; gece yarısında önceki günün tamamı gelir. Ay: gece yarısında, ayın 1'inden itibaren; yenisi öncekini değiştirir. Saatlik raporu kapatmak Bugün raporunu kapatmaz. Raporların saat dilimi kullanılır. Görünüm ve zaman temeli bot raporuyla aynıdır. Terminal botu terminal çalışırken, istasyon botu günün her saati gönderir."
 telegram.auto.open_basis: "Açılış zamanına göre: geçen saat hâlâ büyür, çünkü içinde açılan işlemler sonra kapanır."
 
 # The Control section (stage 5).

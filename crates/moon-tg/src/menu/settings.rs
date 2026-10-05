@@ -508,10 +508,10 @@ fn notify_screen(notify: &NotifySettings) -> Rendered {
     )
 }
 
-/// An automatic report's name.
+/// An automatic report toggle's compact schedule, separate from delivered report titles.
 fn auto_title(kind: AutoReport) -> String {
     match kind {
-        AutoReport::Hourly => t!("telegram.auto.hourly"),
+        AutoReport::Hourly => t!("telegram.auto.toggle_hourly"),
         AutoReport::Today => t!("telegram.auto.today"),
         AutoReport::Month => t!("telegram.auto.month"),
     }

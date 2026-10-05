@@ -81,9 +81,10 @@ telegram.notify_editor.charts: "Biểu đồ giao dịch — dòng lệnh quanh 
 telegram.notify_editor.charts_hint: "Gửi riêng với thẻ, chú thích là thẻ giao dịch. Gửi khi giao dịch đã quy ra $ (stablecoin tính 1:1, đồng tiền khác chờ định giá tới %{minutes} phút; không định giá được thì không có hình). Ngưỡng: lãi từ hoặc lỗ từ; để trống — mọi giao dịch. Trạm ghi dòng lệnh."
 telegram.auto.title: "Báo cáo tự động"
 telegram.auto.hourly: "Báo cáo mỗi giờ"
-telegram.auto.today: "Báo cáo hôm nay"
-telegram.auto.month: "Báo cáo tháng"
-telegram.auto.hint: "Mỗi giờ: vào đầu mỗi giờ, cho giờ vừa kết thúc; nó ở lại trong lịch sử. Hôm nay: mỗi giờ, từ nửa đêm; tháng: lúc nửa đêm, từ ngày 1; bản mới thay bản trước. Kiểu và mốc tính theo báo cáo của bot. Bot trong terminal gửi khi terminal đang chạy; bot trên máy chủ gửi suốt ngày đêm."
+telegram.auto.toggle_hourly: "Mỗi giờ · riêng"
+telegram.auto.today: "Hôm nay · mỗi giờ"
+telegram.auto.month: "Tháng · nửa đêm"
+telegram.auto.hint: "Theo giờ: báo cáo riêng vào đầu mỗi giờ cho giờ vừa kết thúc; được giữ trong lịch sử. Hôm nay: tổng kết từ đầu ngày, được thay thế vào đầu mỗi giờ; lúc nửa đêm gửi tổng kết cả ngày trước. Tháng: lúc nửa đêm, từ ngày 1; báo cáo mới thay thế báo cáo trước. Tắt báo cáo theo giờ không tắt Hôm nay. Thời gian theo múi giờ báo cáo. Chế độ xem và cơ sở thời gian theo báo cáo của bot. Bot của terminal gửi khi terminal chạy; bot của trạm gửi suốt ngày đêm."
 telegram.auto.open_basis: "Theo giờ mở: giờ đã qua vẫn tăng thêm, vì giao dịch mở trong giờ đó đóng sau."
 
 # The Control section (stage 5).

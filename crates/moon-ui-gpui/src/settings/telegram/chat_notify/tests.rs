@@ -1,6 +1,21 @@
 use super::{parse_amount, settings_from};
 use moon_core::telegram::notify::{CoreScope, NotifySettings};
 
+/// Reverting a shared checkbox caption to a period alone hides the delivery schedule from
+/// both terminal and station settings. The oracle is the reviewed English UI wording.
+#[test]
+fn telegram_report_checkboxes_name_the_schedule() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::telegram::notify::AutoReport;
+    for (kind, expected) in [
+        (AutoReport::Hourly, "Each hour · separate"),
+        (AutoReport::Today, "Today · hourly"),
+        (AutoReport::Month, "Month · midnight"),
+    ] {
+        assert_eq!(super::auto_label(kind), expected);
+    }
+}
+
 /// A threshold reads with a point or a comma; empty is none; a negative or a word is refused.
 #[test]
 fn amounts_read_as_typed() {

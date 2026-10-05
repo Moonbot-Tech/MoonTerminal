@@ -129,3 +129,67 @@ fn the_notify_screen_keeps_its_buttons_readable() {
         vec![SettingsAction::DownAfter(1), SettingsAction::DownAfter(5)]
     );
 }
+
+/// Losing schedule words or reverting to vague report names would revive the hourly confusion.
+/// Reviewed English labels are pinned at the actual callback buttons, not just in the dictionary.
+#[test]
+fn report_buttons_name_their_schedule() {
+    let _locale = crate::test_locale::force("en");
+    let (_, lines, rows) = super::notify_screen(&NotifySettings::default());
+    for (kind, label) in [
+        (
+            moon_core::telegram::notify::AutoReport::Hourly,
+            "Each hour · separate",
+        ),
+        (
+            moon_core::telegram::notify::AutoReport::Today,
+            "Today · hourly",
+        ),
+        (
+            moon_core::telegram::notify::AutoReport::Month,
+            "Month · midnight",
+        ),
+    ] {
+        let button = rows
+            .iter()
+            .flatten()
+            .find(|button| {
+                action(button) == Some(MenuAction::Settings(SettingsAction::Auto(kind, true)))
+            })
+            .expect("report toggle");
+        assert_eq!(button.text, format!("\u{2b1c} {label}"));
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turning off Hourly does not turn off Today"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("full previous day at midnight"))
+    );
+}
+
+/// Translations must keep two report buttons readable on a phone; moving explanations into
+/// button labels would exceed this reviewed compact-text budget.
+#[test]
+fn report_buttons_remain_compact_in_every_locale() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let (_, _, rows) = super::notify_screen(&NotifySettings::default());
+        for button in rows.iter().flatten().filter(|button| {
+            matches!(
+                action(button),
+                Some(MenuAction::Settings(SettingsAction::Auto(..)))
+            )
+        }) {
+            assert!(
+                button.text.chars().count() <= 24,
+                "{}: {}",
+                language.code(),
+                button.text
+            );
+        }
+    }
+}
