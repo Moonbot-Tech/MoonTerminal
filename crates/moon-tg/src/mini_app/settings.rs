@@ -15,6 +15,43 @@ use moon_core::util::time::now_unix_secs;
 
 use crate::TgHost;
 
+/// Read the live store or the transport-free fixture store shared with notification ticks.
+fn settings_store(state: &crate::TelegramState) -> Option<Arc<Mutex<NotifyStore>>> {
+    state
+        .service
+        .as_ref()
+        .and_then(moon_core::telegram::TelegramService::notify_store)
+        .or_else(|| state.notify_store_override.clone())
+}
+
+/// Snapshot a stored row, or initial draft rules at revision zero without creating a file.
+pub(super) fn settings_row(file: &NotifyFile, chat: i64) -> moon_core::station_api::ChatNotifyRow {
+    match file.chats.get(&chat) {
+        Some(row) => moon_core::station_api::ChatNotifyRow {
+            settings: row.settings.clone(),
+            revision: row.revision,
+        },
+        None => moon_core::station_api::ChatNotifyRow {
+            settings: NotifySettings::new_chat(),
+            revision: 0,
+        },
+    }
+}
+
+/// Use injected core ids for synthetic settings routes; production keeps the current chat grant.
+fn settings_cores(
+    host: &dyn TgHost,
+    access: &moon_core::config::telegram_access::TelegramReportAccess,
+) -> Vec<(u64, String, String)> {
+    match host.state().visible_override.as_ref() {
+        Some(ids) => ids
+            .iter()
+            .map(|&id| (id, id.to_string(), String::new()))
+            .collect(),
+        None => super::visible_cores(host, access),
+    }
+}
+
 /// Why a save was refused before the file was touched.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SaveFault {
@@ -150,6 +187,22 @@ pub(super) fn commit_settings(
     );
 }
 
+/// Persist initial rules once, recording the enable time so historical closes are not sent.
+/// Existing rows, including empty legacy rows, are left untouched; a failed save changes nothing.
+pub(crate) fn create_chat_settings(
+    store: &mut NotifyStore,
+    chat: i64,
+    now_utc: i64,
+    zone: Tz,
+) -> Result<(), String> {
+    if !store.file.chats.contains_key(&chat) {
+        store
+            .update(|file| commit_settings(file, chat, NotifySettings::new_chat(), now_utc, zone))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 /// Prepare, then save. A refusal does not call [`NotifyStore::update`].
 ///
 /// The revision is compared with the stored row before [`prepare_settings`], so a stale draft
@@ -198,25 +251,14 @@ pub(super) fn store_settings(
 /// This chat's notification settings as stored, for the bot's own Settings section.
 ///
 /// Returns:
-///     The stored settings (the all-off default for a chat with none); `None` when the bot has
+///     The stored settings (initial rules for a chat with none); `None` when the bot has
 ///     no notifications store.
 pub(crate) fn chat_notify(host: &dyn TgHost, chat_id: i64) -> Option<NotifySettings> {
-    let store = host
-        .state()
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)?;
+    let store = settings_store(host.state())?;
     let guard = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    Some(
-        guard
-            .file
-            .chats
-            .get(&chat_id)
-            .map(|row| row.settings.clone())
-            .unwrap_or_default(),
-    )
+    Some(settings_row(&guard.file, chat_id).settings)
 }
 
 /// Change this chat's notification settings from the bot's own Settings section, through the
@@ -231,13 +273,9 @@ pub(crate) fn save_chat_notify(
     chat_id: i64,
     edit: impl FnOnce(&mut NotifySettings),
 ) -> Result<NotifySettings, String> {
-    let store = host
-        .state()
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)
+    let store = settings_store(host.state())
         .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
-    let mut visible: Vec<u64> = super::visible_cores(
+    let mut visible: Vec<u64> = settings_cores(
         host,
         &moon_core::config::telegram_access::TelegramReportAccess::Owner,
     )
@@ -249,10 +287,8 @@ pub(crate) fn save_chat_notify(
     let mut guard = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let (mut settings, revision) = match guard.file.chats.get(&chat_id) {
-        Some(row) => (row.settings.clone(), row.revision),
-        None => (NotifySettings::default(), 0),
-    };
+    let row = settings_row(&guard.file, chat_id);
+    let (mut settings, revision) = (row.settings, row.revision);
     // A switch here never names cores: the stored choice stays whole, a core of it that is not
     // connected now included (the owner's grant is every core).
     if let CoreScope::Only(ids) = &settings.trades.cores {
@@ -260,12 +296,7 @@ pub(crate) fn save_chat_notify(
     }
     edit(&mut settings);
     match store_settings(&mut guard, chat_id, settings, &visible, now, zone, revision) {
-        SaveResult::Saved => Ok(guard
-            .file
-            .chats
-            .get(&chat_id)
-            .map(|row| row.settings.clone())
-            .unwrap_or_default()),
+        SaveResult::Saved => Ok(settings_row(&guard.file, chat_id).settings),
         SaveResult::Refused(fault) => Err(save_fault_text(fault)),
         SaveResult::Failed(error) => {
             log::warn!("telegram notification settings not saved for chat {chat_id}: {error}");
@@ -283,10 +314,7 @@ pub fn notify_rows(
     state: &crate::TelegramState,
     telegram: &moon_core::config::TelegramConfig,
 ) -> Option<std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>> {
-    let store = state
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)?;
+    let store = settings_store(state)?;
     let guard = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -294,16 +322,7 @@ pub fn notify_rows(
         telegram
             .authorized_chat_ids
             .iter()
-            .map(|&chat| {
-                let row = guard.file.chats.get(&chat);
-                (
-                    chat,
-                    moon_core::station_api::ChatNotifyRow {
-                        settings: row.map(|r| r.settings.clone()).unwrap_or_default(),
-                        revision: row.map_or(0, |r| r.revision),
-                    },
-                )
-            })
+            .map(|&chat| (chat, settings_row(&guard.file, chat)))
             .collect(),
     )
 }
@@ -334,11 +353,8 @@ pub fn check_notify_rows(
     telegram: &moon_core::config::TelegramConfig,
     rows: &std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>,
 ) -> Result<(), String> {
-    let store = state
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)
-        .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
+    let store =
+        settings_store(state).ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
     let guard = store
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -377,11 +393,8 @@ pub fn save_notify_rows(
     rows: &std::collections::BTreeMap<i64, moon_core::station_api::ChatNotifyRow>,
     zone: Tz,
 ) -> Result<(), String> {
-    let store = state
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)
-        .ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
+    let store =
+        settings_store(state).ok_or_else(|| t!("telegram.mini_settings_err_save").to_string())?;
     let now = i64::try_from(now_unix_secs()).unwrap_or(i64::MAX);
     let mut guard = store
         .lock()
@@ -431,7 +444,7 @@ struct NotifyView {
     cores: Vec<(u64, String, String)>,
     /// Host report zone.
     zone: Tz,
-    /// Settings stored for this chat, or the all-off default when the chat is absent.
+    /// Settings stored for this chat, or initial rules when the chat is absent.
     settings: NotifySettings,
     /// Stored revision. `0` when the chat is absent.
     revision: u64,
@@ -454,22 +467,15 @@ struct NotifyView {
 ///     [`MiniAppApiError::ReadFailed`] when the bot has no notifications store.
 fn notify_view(host: &dyn TgHost, chat_id: i64) -> Result<NotifyView, MiniAppApiError> {
     let access = super::mini_access(host, chat_id).ok_or(MiniAppApiError::Rejected)?;
-    let store = host
-        .state()
-        .service
-        .as_ref()
-        .and_then(moon_core::telegram::TelegramService::notify_store)
-        .ok_or(MiniAppApiError::ReadFailed)?;
-    let cores = super::visible_cores(host, &access);
+    let store = settings_store(host.state()).ok_or(MiniAppApiError::ReadFailed)?;
+    let cores = settings_cores(host, &access);
     let zone = host.report_zone();
     let (settings, revision) = {
         let guard = store
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match guard.file.chats.get(&chat_id) {
-            Some(row) => (row.settings.clone(), row.revision),
-            None => (NotifySettings::default(), 0),
-        }
+        let row = settings_row(&guard.file, chat_id);
+        (row.settings, row.revision)
     };
     Ok(NotifyView {
         store,
@@ -480,7 +486,7 @@ fn notify_view(host: &dyn TgHost, chat_id: i64) -> Result<NotifyView, MiniAppApi
     })
 }
 
-/// Read this chat's settings. A missing chat is the all-off default and revision `0`.
+/// Read this chat's settings. A missing chat gets initial rules and revision `0`, without saving.
 ///
 /// Args:
 ///     host: Process that owns the bot.
@@ -538,10 +544,8 @@ pub(super) fn mini_notify_save(
     let outcome = store_settings(
         &mut guard, chat_id, settings, &visible, now, view.zone, revision,
     );
-    let (current, stored_revision) = match guard.file.chats.get(&chat_id) {
-        Some(row) => (row.settings.clone(), row.revision),
-        None => (NotifySettings::default(), 0),
-    };
+    let row = settings_row(&guard.file, chat_id);
+    let (current, stored_revision) = (row.settings, row.revision);
     drop(guard);
     match outcome {
         SaveResult::Saved => Ok(dto_of(current, &view.cores, stored_revision, None, None)),

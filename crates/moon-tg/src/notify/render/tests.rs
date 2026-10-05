@@ -67,12 +67,12 @@ fn moonbot_preset_names_the_core_first_and_prints_prices() {
     row.sell_price = Some(0.10844);
     assert_eq!(
         trade_card(&row, false, &CardLayout::moonbot_preset()),
-        "Name: #alpha\n\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%)\n0.10739 \u{2192} 0.10844\n<i>grid</i>"
+        "Name: alpha\n\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%)\n0.10739 \u{2192} 0.10844\n<i>grid</i>"
     );
     row.sell_price = None;
     assert_eq!(
         trade_card(&row, false, &CardLayout::moonbot_preset()),
-        "Name: #alpha\n\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%)\n<i>grid</i>"
+        "Name: alpha\n\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%)\n<i>grid</i>"
     );
 }
 
@@ -85,6 +85,7 @@ fn hashtag_switches_are_independent_and_plain_names_are_escaped() {
     row.core_name = "alpha<&>".into();
     let mut layout = CardLayout {
         coin_hashtag: false,
+        core_hashtag: true,
         ..CardLayout::default()
     };
     assert_eq!(
@@ -135,7 +136,7 @@ fn a_mark_last_on_a_line_stands_alone() {
     };
     assert_eq!(
         trade_card(&trade(), false, &layout),
-        "<b>#BTC</b> \u{00b7} \u{1f7e2}\n#alpha"
+        "<b>#BTC</b> \u{00b7} \u{1f7e2}\nalpha"
     );
 }
 
@@ -186,7 +187,7 @@ fn names_are_escaped_before_they_enter_html() {
     assert_only_allowed_tags(&html);
 }
 
-/// Dropping either hashtag or using a different mapping on outage notices would split the
+/// Dropping a saved hashtag or using a different mapping on outage notices would split the
 /// coin/core history; strategy punctuation must retain its existing escaped appearance.
 #[test]
 fn cards_and_outages_share_coin_and_core_hashtags() {
@@ -195,7 +196,11 @@ fn cards_and_outages_share_coin_and_core_hashtags() {
     row.coin = "SAMPLE714".into();
     row.core_name = "Desk F-2.v1/test".into();
     row.strategy = "grid<&>".into();
-    let card = trade_card(&row, false, &CardLayout::default());
+    let saved_layout = CardLayout {
+        core_hashtag: true,
+        ..CardLayout::default()
+    };
+    let card = trade_card(&row, false, &saved_layout);
     assert_eq!(
         card,
         "\u{1f7e2} <b>#SAMPLE714</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#Desk_F_2_v1_test\n<i>grid&lt;&amp;&gt;</i>"
@@ -214,7 +219,8 @@ fn cards_and_outages_share_coin_and_core_hashtags() {
 }
 
 /// Putting the core or prices first would hide coin and profit in the push preview. Chart
-/// metadata must not add lines to the historical three-line card or its unchecked variant.
+/// metadata must not add lines to the three-line card or its unchecked variant; core names
+/// now start plain while the coin hashtag stays on.
 #[test]
 fn the_complete_card_keeps_the_pre_873_layout() {
     let _locale = crate::test_locale::force("en");
@@ -225,11 +231,11 @@ fn the_complete_card_keeps_the_pre_873_layout() {
     row.report_uid = Some(42);
     assert_eq!(
         trade_card(&row, false, &CardLayout::default()),
-        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#alpha\n<i>grid</i>"
+        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\nalpha\n<i>grid</i>"
     );
     assert_eq!(
         trade_card(&row, true, &CardLayout::default()),
-        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#alpha\n<i>grid</i>\nThresholds not checked: no dollar value"
+        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\nalpha\n<i>grid</i>\nThresholds not checked: no dollar value"
     );
 }
 
@@ -270,7 +276,7 @@ fn unvalued_profit_is_a_word_and_missing_volume_is_omitted() {
         html,
         "\
 \u{26aa} <b>#BTC</b> \u{00b7} Unvalued \u{00b7} 2m
-#alpha
+alpha
 <i>grid</i>"
     );
     assert!(!html.contains("0.00"));

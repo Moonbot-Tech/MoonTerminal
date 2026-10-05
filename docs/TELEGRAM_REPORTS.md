@@ -178,7 +178,8 @@ to apply it. A terminal-hosted bot stores it in its own config through the globa
 The Card tab arranges fields into lines. Drag fields and lines to reorder them, hide fields in
 the tray, or restore them from it; the move and hide buttons and tray also work with the keyboard.
 "Coin first" is the default, matching the existing card. "Core first, as in MoonBot" starts with
-`Name: <core>`. The coin and core hashtag switches affect cards only: core down/back notices
+`Name: <core>`. Without a saved layout, the coin hashtag is on and the core hashtag is off.
+Saved hashtag choices stay unchanged. The switches affect cards only: core down/back notices
 always keep their hashtags.
 
 The Report tab keeps the first column fixed and lets you reorder or hide Profit, Trades,
@@ -194,8 +195,13 @@ An older station or terminal may ignore or reset the layout when it saves the bo
 
 ## Notifications
 
-The Mini App «Настройки» tab is where a paired chat turns on messages the bot sends on its own.
-Every switch is off until that chat saves it. Each chat has its own settings. A viewer is limited
+The Mini App «Настройки» tab and the bot's Settings -> Notifications edit each chat's rules.
+A newly paired chat starts with closed-trade cards on for all permitted cores, profit and loss
+thresholds of at least 100 USD each, and no volume floor. Core down/back notices start on after
+five minutes. Dollar follow-ups, automatic reports, core events and deal charts stay off.
+Existing stored chats keep their choices, including off switches omitted from old documents.
+The first settings draft for a chat with no stored entry uses the same initial rules.
+Each chat has its own settings. A viewer is limited
 to the cores that chat can see. The owner can hear about every core the host keeps.
 
 Three kinds of message are ordinary bot messages, not rich reports (automatic reports, below, are
@@ -209,7 +215,8 @@ rich):
   the profit and percent, the entry volume when known, and the holding duration, separated by
   middle dots. Profit and volume use the trade's own currency (`+0.00012 BTC`, `+3.3 USDC`;
   outside a USD stablecoin the dollar profit follows once the USDT valuation has it). Without
-  native volume, the valued entry volume prints in whole dollars. The second line is the core hashtag,
+  native volume, the valued entry volume prints in whole dollars. The second line is the core name
+  (a hashtag only when that card-layout switch is on),
   and the third is the strategy in italics. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
   A trade in another currency that a filter needs to judge waits up to five minutes for its
   valuation; after that it is sent with a line saying its thresholds were not checked. With the
@@ -219,7 +226,7 @@ rich):
   chat receives one down message. When that core connects again, the chat receives one back
   message. A core that leaves the configured set is forgotten: it does not stay announced as
   down, and no back message is sent for it. If it returns and is lost again, the delay starts
-  over. Both notices use the same core hashtag as its trade cards.
+  over. Both notices always use the core hashtag, independently of the card-layout switch.
 - What the cores themselves would send to their own Telegram, which does not come over the
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
@@ -232,7 +239,8 @@ rich):
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
   a chat whose queue Telegram has not drained for five minutes.
 
-Coin and core hashtags are always shown on these pushes and chart captions. Tapping one searches
+Core event pushes and chart captions always show coin and core hashtags; trade cards follow the
+saved layout switches. Tapping a hashtag searches
 the chat for that coin or core. The first 64 Unicode scalars keep their case, letters and digits;
 spaces, dashes, dots, slashes and other punctuation become underscores. Cyrillic letters stay as
 they are. A name without a letter (including a digits-only or empty name) keeps its original

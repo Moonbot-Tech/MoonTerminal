@@ -19,11 +19,11 @@ pub struct CardLayout {
     pub lines: Vec<Vec<CardField>>,
     #[serde(default = "yes")]
     pub coin_hashtag: bool,
-    #[serde(default = "yes")]
+    #[serde(default)]
     pub core_hashtag: bool,
 }
 
-/// Keep existing hashtags when their switches were not saved.
+/// Keep the coin hashtag when its switch was not saved.
 fn yes() -> bool {
     true
 }
@@ -39,12 +39,12 @@ fn default_lines() -> Vec<Vec<CardField>> {
 }
 
 impl Default for CardLayout {
-    /// Preserve the existing trade card when no layout was saved.
+    /// Use coin hashtags and plain core names when no layout was saved.
     fn default() -> Self {
         Self {
             lines: default_lines(),
             coin_hashtag: true,
-            core_hashtag: true,
+            core_hashtag: false,
         }
     }
 }

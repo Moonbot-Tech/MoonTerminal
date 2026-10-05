@@ -151,10 +151,35 @@ fn drain_service(host: &mut dyn TgHost) {
     }
 }
 
-/// Save a chat that sent a valid pairing code and answer it.
+/// Save a valid pairing and initialize a newly paired chat's rules without changing stored rows.
 fn pair(host: &mut dyn TgHost, chat_id: i64, reply: SyncSender<Response>) {
+    let newly_paired = !host
+        .config()
+        .telegram
+        .authorized_chat_ids
+        .contains(&chat_id);
     let saved = host.save_paired_chat(chat_id);
     if saved {
+        if newly_paired
+            && let Some(store) = host
+                .state()
+                .service
+                .as_ref()
+                .and_then(TelegramService::notify_store)
+                .or_else(|| host.state().notify_store_override.clone())
+        {
+            let now = i64::try_from(moon_core::util::time::now_unix_secs()).unwrap_or(i64::MAX);
+            let mut guard = store
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Err(error) =
+                mini_app::create_chat_settings(&mut guard, chat_id, now, host.report_zone())
+            {
+                log::warn!(
+                    "telegram initial notification settings not saved for chat {chat_id}: {error}"
+                );
+            }
+        }
         let telegram = host.config().telegram.clone();
         let state = host.state_mut();
         if let Some(service) = state.service.as_ref() {

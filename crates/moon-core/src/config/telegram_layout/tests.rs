@@ -1,6 +1,25 @@
 //! Regression checks for forward-compatible layouts and drag editing invariants.
 use super::*;
 
+/// Turning core hashtags back on by default, or overwriting a saved choice, changes card text.
+#[test]
+fn default_hashtags_and_saved_core_choice_stay_distinct() {
+    for card in [
+        CardLayout::default(),
+        serde_json::from_str::<CardLayout>("{}").unwrap(),
+        serde_json::from_str::<MessageLayout>("{}").unwrap().card,
+    ] {
+        assert!(!card.core_hashtag);
+        assert!(card.coin_hashtag);
+    }
+    let saved: MessageLayout =
+        serde_json::from_str(r#"{"card":{"core_hashtag":true,"coin_hashtag":false}}"#).unwrap();
+    let reread: MessageLayout =
+        serde_json::from_str(&serde_json::to_string(&saved.sanitized()).unwrap()).unwrap();
+    assert!(reread.card.core_hashtag);
+    assert!(!reread.card.coin_hashtag);
+}
+
 /// Independent report capture must recover drawable columns without discarding future ids.
 #[test]
 fn report_sanitized_and_drawable_columns_preserve_saved_order() {
@@ -59,7 +78,7 @@ fn newer_layout_ids_round_trip() {
         vec![vec![CardField::Coin, CardField::Other("sparkline".into())]]
     );
     assert!(!layout.card.coin_hashtag);
-    assert!(layout.card.core_hashtag);
+    assert!(!layout.card.core_hashtag);
     assert_eq!(layout.report.total, TotalPlace::Top);
     assert_eq!(layout.report.separation, TotalSeparation::GapBand);
     assert_eq!(layout.report.group_row, GroupRowStyle::BoldLeft);
