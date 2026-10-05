@@ -218,8 +218,9 @@ rich):
   A close older than that window is not announced. The card leaves within about five seconds of
   the trade reaching the report replica. Its first line shows the sign mark, the coin hashtag in bold,
   the profit and percent, the entry volume when known, and the holding duration, separated by
-  middle dots. Profit and volume use the trade's own currency (`+0.00012 BTC`, `+3.3 USDC`;
-  outside a USD stablecoin the dollar profit follows once the USDT valuation has it). Without
+  middle dots. USD stablecoin profit and volume use a dollar suffix without a space or ticker
+  (`-106.36$`, `5 993$` for USDT or USDC). Other quotes keep their own currency (`+0.00012 BTC`)
+  and the dollar profit follows once the USDT valuation has it. Without
   native volume, the valued entry volume prints in whole dollars. The second line is the core name
   (a hashtag only when that card-layout switch is on),
   and the third is the strategy in italics. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.

@@ -132,8 +132,9 @@ fn preview_card_spans_carry_link_gain_loss_and_strategy_styles() {
         lines[0]
             .spans
             .iter()
-            .any(|span| span.text == "+12.4 USDT" && span.bold && span.tone == Tone::Gain)
+            .any(|span| span.text == "+12.40$" && span.bold && span.tone == Tone::Gain)
     );
+    assert!(lines[0].spans.iter().any(|span| span.text == "250$"));
     assert!(
         lines
             .last()
@@ -149,6 +150,6 @@ fn preview_card_spans_carry_link_gain_loss_and_strategy_styles() {
         lines[0]
             .spans
             .iter()
-            .any(|span| span.text == "-0.42 USDT" && span.tone == Tone::Loss)
+            .any(|span| span.text == "-0.42$" && span.tone == Tone::Loss)
     );
 }

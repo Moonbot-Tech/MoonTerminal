@@ -337,10 +337,17 @@ fn report_volume_falls_back_to_one_native_quote_only() {
     let usdt = bucket(moon_core::db::QuoteCurrency::usdt(), 1234.4);
     for (buckets, expected) in [
         (vec![btc], "0.01234567 BTC".to_string()),
-        (vec![usdt], "1 234 USDT".to_string()),
+        (vec![usdt], "1 234$".to_string()),
+        (
+            vec![bucket(
+                moon_core::db::QuoteCurrency::from_report_ordinal(8).expect("USDC"),
+                5992.5,
+            )],
+            "5 993$".to_string(),
+        ),
         (
             vec![bucket(moon_core::db::QuoteCurrency::usdt(), 0.12)],
-            "0.12 USDT".to_string(),
+            "0.12$".to_string(),
         ),
         (
             vec![btc, usdt],

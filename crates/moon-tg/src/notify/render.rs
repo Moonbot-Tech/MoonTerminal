@@ -22,7 +22,7 @@ const NAME_CHARS: usize = 64;
 /// falls back to the default card, which preserves the original format.
 ///
 /// The profit and the volume print in the trade's own currency (`+0.00012 BTC`,
-/// `+3.30 USDC`) the moment the row lands, without a valuation. Outside a USD
+/// `+3.30$` for a USD stablecoin) the moment the row lands, without a valuation. Outside a USD
 /// stablecoin the dollar value follows once the valuation has it
 /// (`≈ +7.50$`). A row without its own amount falls back to the dollars alone.
 ///
@@ -163,8 +163,8 @@ pub(crate) fn shows_dollars(t: &ClosedTrade) -> bool {
     !t.stable_quote()
 }
 
-/// The trade's own signed profit with its ticker, and the sign that text shows. A profit that
-/// rounds to zero prints unsigned, as the dollar figure does: a `+` there would claim a gain.
+/// The trade's own signed profit with `$` for a USD stablecoin or its ticker otherwise, and
+/// the sign that text shows. Rounded zero stays unsigned so it does not claim a gain.
 fn native_profit(t: &ClosedTrade) -> Option<(String, fmt::DeltaSign)> {
     let total = moon_core::db::QuoteTotal {
         currency: t.quote?,
@@ -172,6 +172,9 @@ fn native_profit(t: &ClosedTrade) -> Option<(String, fmt::DeltaSign)> {
         orders: 1,
     };
     let (text, sign) = total.signed_display();
+    if t.stable_quote() {
+        return Some((signed_money(total.profit), sign));
+    }
     let text = match sign {
         fmt::DeltaSign::Zero => text.trim_start_matches('+').to_string(),
         _ => text,
@@ -188,8 +191,8 @@ fn volume_text(t: &ClosedTrade) -> Option<String> {
     }
 }
 
-/// Native volume shared by cards and reports: whole stablecoin units, cents below one,
-/// and the quote currency's own decimal precision otherwise.
+/// Native volume shared by cards and reports: whole stablecoin units with `$`, cents below one,
+/// and the quote currency's own decimal precision and ticker otherwise.
 pub(crate) fn native_volume_text(
     quote: moon_core::db::QuoteCurrency,
     volume: f64,
@@ -203,7 +206,11 @@ pub(crate) fn native_volume_text(
     } else {
         fmt::compact(volume, quote.display_decimals())
     };
-    Some(format!("{amount} {}", quote.ticker()))
+    Some(if stable {
+        format!("{amount}$")
+    } else {
+        format!("{amount} {}", quote.ticker())
+    })
 }
 
 /// One line: the core lost its link, and the local time that outage started.

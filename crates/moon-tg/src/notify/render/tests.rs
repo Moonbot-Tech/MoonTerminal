@@ -507,7 +507,7 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     assert_eq!(
         card.lines().next(),
         Some(
-            "\u{1f534} <b>#ETHBTC</b> \u{00b7} <b>-3.3 USDC</b> (-0.50%) \u{00b7} 1 234 USDC \u{00b7} 2m"
+            "\u{1f534} <b>#ETHBTC</b> \u{00b7} <b>-3.30$</b> (-0.50%) \u{00b7} 1 234$ \u{00b7} 2m"
         )
     );
     assert_eq!(
@@ -520,11 +520,49 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     let flat = trade_card(&row, false, &CardLayout::default());
     assert!(flat.starts_with('\u{26aa}'), "{flat}");
     assert!(
-        flat.contains("<b>0 USDC</b>"),
+        flat.contains("<b>0.00$</b>"),
         "a flat trade claims no gain: {flat}"
     );
     assert!(
-        flat.contains(" 0.4 USDC "),
+        flat.contains(" 0.4$ "),
         "a notional under one keeps its cents: {flat}"
     );
+}
+
+/// Restoring ticker text or formatting the valuation instead of native stablecoin money would
+/// change the owner's dollar card, even before historical conversion becomes available.
+#[test]
+fn stablecoin_cards_use_dollar_suffixes_without_a_valuation() {
+    let _locale = crate::test_locale::force("ru");
+    for quote in [
+        moon_core::db::QuoteCurrency::usdt(),
+        moon_core::db::QuoteCurrency::from_report_ordinal(8).expect("USDC"),
+    ] {
+        let mut row = trade();
+        row.coin = "ONE".into();
+        row.quote = Some(quote);
+        row.profit_native = Some(-106.36);
+        row.volume_native = Some(5992.5);
+        row.profit_usd = None;
+        row.volume_usd = None;
+        row.profit_pct = Some(-1.77);
+        row.close_utc = 45;
+        let expected = "\u{1f534} <b>#ONE</b> \u{00b7} <b>-106.36$</b> (-1.77%) \u{00b7} 5 993$ \u{00b7} 0m\nalpha\n<i>grid</i>";
+        assert_eq!(trade_card(&row, false, &CardLayout::default()), expected);
+        row.profit_usd = Some(-999.0);
+        row.volume_usd = Some(888.0);
+        assert_eq!(trade_card(&row, false, &CardLayout::default()), expected);
+
+        for value in [0.0, 0.001, -0.001] {
+            row.profit_native = Some(value);
+            row.profit_pct = Some(0.0);
+            row.volume_native = Some(0.4);
+            assert_eq!(
+                trade_card(&row, false, &CardLayout::default()),
+                "\u{26aa} <b>#ONE</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 0.4$ \u{00b7} 0m\nalpha\n<i>grid</i>"
+            );
+        }
+        row.profit_native = Some(1234.5);
+        assert!(trade_card(&row, false, &CardLayout::default()).contains("<b>+1 234.50$</b>"));
+    }
 }
