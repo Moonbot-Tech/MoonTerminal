@@ -287,6 +287,10 @@ pub struct Status {
     /// listing — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub cores: Option<Vec<ListedCore>>,
+    /// Largest uid ever allocated, including removed cores and pre-upgrade report rows.
+    /// Absent on older stations; allocation then starts above both currently listed sets.
+    #[serde(default)]
+    pub core_uid_high_water: Option<u64>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

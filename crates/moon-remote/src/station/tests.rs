@@ -1,5 +1,143 @@
 use super::*;
 
+/// Sending terminal uid 3 directly would reject a valid CLI add to a station whose floor is 12.
+#[test]
+fn cli_adds_allocate_above_retired_config_reports_and_both_uid_sets() {
+    let listing = [moon_core::station_api::ListedCore {
+        uid: 9,
+        name: "Keep".into(),
+        address: None,
+        key_fp: None,
+    }];
+    let cores = [
+        synthetic_core(3, "New", None),
+        synthetic_core(7, "Other", None),
+    ];
+    let allocated = allocate_cli_cores(&cores, &listing, 12).unwrap();
+    assert_eq!(
+        allocated.iter().map(|core| core.uid).collect::<Vec<_>>(),
+        [13, 14]
+    );
+    assert!(
+        merge_cores_with_add_flags(
+            Some("[[core]]\nuid = 9\nname = 'Keep'\n"),
+            &allocated,
+            &[true, true],
+            None,
+            Some(12)
+        )
+        .is_ok()
+    );
+    let old = allocate_cli_cores(&[synthetic_core(20, "New", None)], &listing, 0).unwrap();
+    assert_eq!(old[0].uid, 21);
+    let top = i64::MAX as u64;
+    assert_eq!(
+        allocate_cli_cores(&cores[..1], &[], top - 1).unwrap()[0].uid,
+        top
+    );
+    assert!(allocate_cli_cores(&cores[..1], &[], top).is_err());
+    assert!(allocate_cli_cores(&[synthetic_core(0, "Invalid", None)], &[], 12).is_err());
+}
+
+/// Renumbering a listed address as an add would open duplicate connections and split history.
+#[test]
+fn cli_adds_do_not_duplicate_an_existing_station_address() {
+    // Frozen synthetic key from the endpoint wire fixture; no real credentials or connections.
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let mut core = synthetic_core(3, "Already listed", None);
+    core.key = Secret::new(key);
+    let listing = [moon_core::station_api::ListedCore {
+        uid: 9,
+        name: "Keep".into(),
+        address: Some("198.51.100.42:4321".into()),
+        key_fp: None,
+    }];
+    assert!(allocate_cli_cores(&[core], &listing, 12).is_err());
+}
+
+/// Dropping the maximum during removal would reuse a retired uid after the service restarts.
+#[test]
+fn removed_uids_remain_retired_in_persisted_station_config() {
+    let original = "[[core]]\nuid = 3\nname = 'Keep'\n[[core]]\nuid = 7\nname = 'Remove'\n";
+    let (removed, _) = without_cores(original, &[7]).unwrap();
+    assert!(
+        merge_cores_with_add_flags(
+            Some(&removed),
+            &[synthetic_core(7, "New", None)],
+            &[true],
+            None,
+            None
+        )
+        .is_err()
+    );
+    let next = merge_cores_with_add_flags(
+        Some(&removed),
+        &[synthetic_core(8, "New", None)],
+        &[true],
+        None,
+        None,
+    )
+    .unwrap();
+    let persisted: toml::Table = toml::from_str(&next).unwrap();
+    assert_eq!(persisted["core_uid_high_water"].as_integer(), Some(8));
+    let (removed_again, _) = without_cores(&next, &[8]).unwrap();
+    assert!(
+        merge_cores_with_add_flags(
+            Some(&removed_again),
+            &[synthetic_core(8, "Another", None)],
+            &[true],
+            None,
+            None
+        )
+        .is_err()
+    );
+}
+
+/// A report-only retired uid from an upgraded station must be checked before credentials change.
+#[test]
+fn upgrade_report_floor_is_enforced_and_persisted_by_pushes() {
+    let config = "[[core]]\nuid = 9\nname = 'Keep'\n";
+    assert!(
+        merge_cores_with_add_flags(
+            Some(config),
+            &[synthetic_core(12, "New", None)],
+            &[true],
+            None,
+            Some(12)
+        )
+        .is_err()
+    );
+    let next = merge_cores_with_add_flags(
+        Some(config),
+        &[synthetic_core(13, "New", None)],
+        &[true],
+        None,
+        Some(12),
+    )
+    .unwrap();
+    let (removed, _) = without_cores(&next, &[13]).unwrap();
+    assert!(
+        merge_cores_with_add_flags(
+            Some(&removed),
+            &[synthetic_core(12, "Other", None)],
+            &[true],
+            None,
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        merge_cores_with_add_flags(
+            Some(config),
+            &[synthetic_core(9, "Rename", None)],
+            &[false],
+            None,
+            Some(12)
+        )
+        .is_ok()
+    );
+}
+
 /// C3: validating after put-cred overwrites an unrelated station core before refusing the add.
 #[test]
 fn an_add_collision_is_refused_before_any_credential_write() {
@@ -9,13 +147,13 @@ fn an_add_collision_is_refused_before_any_credential_write() {
         synthetic_core(3, "Collision", None),
     ];
     assert_eq!(
-        merge_cores_with_add_flags(Some(config), &cores, &[true, true], None)
+        merge_cores_with_add_flags(Some(config), &cores, &[true, true], None, None)
             .unwrap_err()
             .to_string(),
         "station changed, refresh"
     );
-    merge_cores_with_add_flags(Some(config), &cores, &[true, false], None).unwrap();
-    merge_cores_with_add_flags(None, &cores, &[true, true], None).unwrap();
+    merge_cores_with_add_flags(Some(config), &cores, &[true, false], None, None).unwrap();
+    merge_cores_with_add_flags(None, &cores, &[true, true], None, None).unwrap();
     let source = include_str!("../station.rs");
     let cli_push = source
         .split("pub fn push_cores(")
@@ -203,11 +341,12 @@ fn updates_require_an_existing_destination() {
             Some("[[core]]\nuid = 3\nname = 'Keep'\n"),
             &core,
             &[false],
+            None,
             None
         )
         .is_err()
     );
-    assert!(merge_cores_with_add_flags(None, &core, &[false], None).is_err());
+    assert!(merge_cores_with_add_flags(None, &core, &[false], None, None).is_err());
 }
 
 /// Dropping credentials before a failed removal commit strands a still-referenced core on restart.
@@ -306,15 +445,15 @@ fn the_station_file_carries_no_key() {
 /// file, and a server without one gets none.
 #[test]
 fn a_cores_push_keeps_the_bot_section() {
-    let upsert = [synthetic_core(3, "A", None)];
+    let upsert = [synthetic_core(10, "A", None)];
     let current = "[[core]]\nuid = 9\nname = 'Old'\n[telegram]\nmini_app = true\nzone = 'UTC'\n";
     let merged: toml::Value =
         toml::from_str(&merge_cores(Some(current), &upsert, None).unwrap()).unwrap();
     assert_eq!(merged["core"][0]["uid"].as_integer(), Some(9));
-    assert_eq!(merged["core"][1]["uid"].as_integer(), Some(3));
+    assert_eq!(merged["core"][1]["uid"].as_integer(), Some(10));
     assert_eq!(merged["telegram"]["mini_app"].as_bool(), Some(true));
     let fresh: toml::Value = toml::from_str(&merge_cores(None, &upsert, None).unwrap()).unwrap();
-    assert_eq!(fresh["core"][0]["uid"].as_integer(), Some(3));
+    assert_eq!(fresh["core"][0]["uid"].as_integer(), Some(10));
     assert!(fresh.get("telegram").is_none());
 }
 
@@ -323,7 +462,7 @@ fn a_cores_push_keeps_the_bot_section() {
 fn a_cores_push_never_replaces_the_stations_window() {
     let current =
         "[[core]]\nuid = 9\nname = 'Old'\n[tape]\nmargin_s = 300\nlong_position_min = 20\n";
-    let upsert = [synthetic_core(3, "A", None)];
+    let upsert = [synthetic_core(10, "A", None)];
     let tape = Some(TapeWindow {
         margin_s: 180,
         long_position_min: 10,

@@ -83,12 +83,14 @@ pub fn merge_cores(
     merge_core_table(file, upsert, tape)
 }
 
-/// Apply a named upsert to the already parsed table, retaining every other section.
+/// Apply named upserts and persist the largest allocated uid, retaining every other section.
 fn merge_core_table(
     mut file: toml::Table,
     upsert: &[CoreKey],
     tape: Option<TapeWindow>,
 ) -> anyhow::Result<String> {
+    let retired = config_high_water(&file)?;
+    let high_water = retired.max(upsert.iter().map(|core| core.uid).max().unwrap_or(0));
     let cores = file
         .entry("core")
         .or_insert_with(|| toml::Value::Array(Vec::new()))
@@ -102,6 +104,7 @@ fn merge_core_table(
         let entry = match position {
             Some(index) => &mut cores[index],
             None => {
+                anyhow::ensure!(core.uid > retired, "station uid retired, refresh");
                 cores.push(toml::Value::Table(toml::Table::new()));
                 cores.last_mut().expect("just appended")
             }
@@ -120,6 +123,7 @@ fn merge_core_table(
             }
         }
     }
+    set_high_water(&mut file, high_water)?;
     if !file.contains_key("tape") {
         if let Some(tape) = tape {
             file.insert("tape".into(), toml::Value::try_from(tape)?);
@@ -131,6 +135,8 @@ fn merge_core_table(
 /// Return changed config and actually removed uids; absent identities are harmless retries.
 pub fn without_cores(current: &str, uids: &[u64]) -> anyhow::Result<(String, Vec<u64>)> {
     let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
+    let high_water = config_high_water(&file)?;
+    set_high_water(&mut file, high_water)?;
     let cores = file
         .get_mut("core")
         .and_then(toml::Value::as_array_mut)
@@ -155,6 +161,38 @@ pub fn without_cores(current: &str, uids: &[u64]) -> anyhow::Result<(String, Vec
         "removal would leave the station without cores"
     );
     Ok((toml::to_string_pretty(&file)?, removed))
+}
+
+/// Read the retirement floor and surviving entries before an edit can remove their evidence.
+fn config_high_water(file: &toml::Table) -> anyhow::Result<u64> {
+    let persisted = match file.get("core_uid_high_water") {
+        None => 0,
+        Some(value) => value
+            .as_integer()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("invalid core_uid_high_water"))?,
+    };
+    let configured = file
+        .get("core")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("uid").and_then(toml::Value::as_integer))
+        .filter_map(|uid| u64::try_from(uid).ok())
+        .max()
+        .unwrap_or(0);
+    Ok(persisted.max(configured))
+}
+
+/// Store a TOML-bounded monotonic floor in the same atomic config update as its cores.
+fn set_high_water(file: &mut toml::Table, high_water: u64) -> anyhow::Result<()> {
+    let high_water =
+        i64::try_from(high_water).context("station uid history exceeds TOML's integer range")?;
+    file.insert(
+        "core_uid_high_water".into(),
+        toml::Value::Integer(high_water),
+    );
+    Ok(())
 }
 
 /// What `moon-remote telegram` changes in `[telegram]`; `None` keeps the server's value.
@@ -586,7 +624,7 @@ pub fn push_telegram(
     Ok(())
 }
 
-/// Add CLI-picked cores without overwriting occupied identities, then restart.
+/// Allocate fresh station identities for CLI adds to an existing station, then restart.
 /// A failed config write leaves unused credentials but never removes another core's key.
 pub fn push_cores(
     target: &Target,
@@ -594,18 +632,80 @@ pub fn push_cores(
     tape: Option<TapeWindow>,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
-    push_cores_with_add_flags(target, cores, &vec![true; cores.len()], tape, say)
+    validate_cores(cores)?;
+    let conn = admin_conn(target)?;
+    let helper = current_helper_status(&conn)?;
+    let cores = if script::value(&helper, "config") == Some("yes") {
+        let status = match api::call(&conn, &Request::Status)? {
+            Answer::Status(status) => status,
+            _ => anyhow::bail!("the station did not answer status"),
+        };
+        let listing = status
+            .cores
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("the station cannot list cores; update it first"))?;
+        let current =
+            script::checked(conn.run(&script::helper("get-config", &[]), &[], STEP_TIMEOUT)?)?
+                .stdout_text();
+        let file: toml::Table = toml::from_str(&current).context("the server's station.toml")?;
+        let floor = config_high_water(&file)?.max(status.core_uid_high_water.unwrap_or(0));
+        allocate_cli_cores(cores, listing, floor)?
+    } else {
+        cores
+            .iter()
+            .map(|core| CoreKey {
+                uid: core.uid,
+                name: core.name.clone(),
+                transport: core.transport,
+                key: core.key.clone(),
+            })
+            .collect()
+    };
+    push_cores_with_add_flags(target, &cores, &vec![true; cores.len()], tape, say)
 }
 
-/// Push reconciled cores, refusing an add over an occupied uid before writing any credential.
-/// CLI picks and fresh installs mark every picked core as an add.
-pub fn push_cores_with_add_flags(
-    target: &Target,
+/// Keep CLI picks add-only, rejecting existing addresses and allocating above all known uids.
+/// The push revalidates the floor before writing, so a concurrent allocation requires a retry.
+fn allocate_cli_cores(
     cores: &[CoreKey],
-    adds: &[bool],
-    tape: Option<TapeWindow>,
-    say: &mut dyn FnMut(Progress),
-) -> anyhow::Result<()> {
+    listing: &[moon_core::station_api::ListedCore],
+    floor: u64,
+) -> anyhow::Result<Vec<CoreKey>> {
+    validate_cores(cores)?;
+    let mut largest = cores
+        .iter()
+        .map(|core| core.uid)
+        .chain(listing.iter().map(|core| core.uid))
+        .max()
+        .unwrap_or(0)
+        .max(floor);
+    cores
+        .iter()
+        .map(|core| {
+            if let Some(address) = moon_core::station_api::core_address(core.key.expose()) {
+                anyhow::ensure!(
+                    !listing
+                        .iter()
+                        .any(|listed| listed.address.as_ref() == Some(&address)),
+                    "core already on the station; use the terminal to update it"
+                );
+            }
+            largest = largest
+                .checked_add(1)
+                .filter(|uid| *uid <= i64::MAX as u64)
+                .ok_or_else(|| anyhow::anyhow!("station uid range exhausted"))?;
+            Ok(CoreKey {
+                uid: largest,
+                name: core.name.clone(),
+                transport: core.transport,
+                key: core.key.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Refuse invalid picks before any helper operation, including the CLI's allocation preflight.
+fn validate_cores(cores: &[CoreKey]) -> anyhow::Result<()> {
     anyhow::ensure!(!cores.is_empty(), StationError::NoCorePicked);
     let mut seen = std::collections::HashSet::new();
     for core in cores {
@@ -616,6 +716,19 @@ pub fn push_cores_with_add_flags(
             StationError::CoreWithoutKey(core.name.clone())
         );
     }
+    Ok(())
+}
+
+/// Push reconciled cores, refusing occupied or retired uids before writing any credential.
+/// CLI picks and fresh installs mark every picked core as an add.
+pub fn push_cores_with_add_flags(
+    target: &Target,
+    cores: &[CoreKey],
+    adds: &[bool],
+    tape: Option<TapeWindow>,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<()> {
+    validate_cores(cores)?;
     let conn = admin_conn(target)?;
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<String> {
         Ok(script::checked(conn.run(&command, stdin, STEP_TIMEOUT)?)?.stdout_text())
@@ -624,6 +737,15 @@ pub fn push_cores_with_add_flags(
     // not between the credentials and the configuration. No file yet is the first push.
     let status = current_helper_status(&conn)?;
     let exists = script::value(&status, "config") == Some("yes");
+    // Existing history needs a live reading before an add; stopped/unreadable stations fail closed.
+    let high_water = if exists && adds.contains(&true) {
+        match api::call(&conn, &Request::Status)? {
+            Answer::Status(status) => status.core_uid_high_water,
+            _ => anyhow::bail!("the station did not answer status"),
+        }
+    } else {
+        None
+    };
     // A dry run of the merge before any credential is written; the real one below reads the file
     // again, as it is by then.
     let current = if exists {
@@ -634,7 +756,7 @@ pub fn push_cores_with_add_flags(
     } else {
         None
     };
-    merge_cores_with_add_flags(current.as_deref(), cores, adds, tape)?;
+    merge_cores_with_add_flags(current.as_deref(), cores, adds, tape, high_water)?;
     for core in cores {
         let uid = core.uid.to_string();
         run(
@@ -648,26 +770,28 @@ pub fn push_cores_with_add_flags(
         ));
     }
     edit_config(&conn, exists, |current| {
-        merge_cores_with_add_flags(current, cores, adds, tape).map(Some)
+        merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
     })?;
     restart_and_report(&conn, say)
 }
 
-/// Reject stale adds and updates before any credential write, parsing the current config once.
+/// Reject stale adds, retired uids and missing updates before any credential write.
 fn merge_cores_with_add_flags(
     current: Option<&str>,
     cores: &[CoreKey],
     adds: &[bool],
     tape: Option<TapeWindow>,
+    high_water: Option<u64>,
 ) -> anyhow::Result<String> {
     anyhow::ensure!(
         cores.len() == adds.len(),
         "core add flags do not match selected cores"
     );
-    let file: toml::Table = match current {
+    let mut file: toml::Table = match current {
         Some(text) => toml::from_str(text).context("the server's station.toml")?,
         None => toml::Table::new(),
     };
+    let high_water = config_high_water(&file)?.max(high_water.unwrap_or(0));
     let entries = file.get("core").and_then(toml::Value::as_array);
     for (core, add) in cores.iter().zip(adds) {
         let exists = entries.is_some_and(|entries| {
@@ -680,7 +804,12 @@ fn merge_cores_with_add_flags(
             })
         });
         anyhow::ensure!(*add != exists, "station changed, refresh");
+        anyhow::ensure!(
+            !add || core.uid > high_water,
+            "station uid retired, refresh"
+        );
     }
+    set_high_water(&mut file, high_water)?;
     merge_core_table(file, cores, tape)
 }
 

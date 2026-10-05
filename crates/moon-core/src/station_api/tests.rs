@@ -107,6 +107,7 @@ fn a_status_reads_back_whole() {
         })),
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
         auto_update: Some(false),
+        core_uid_high_water: Some(12),
         cores: Some(vec![ListedCore {
             uid: 3,
             name: "Core A".into(),
@@ -123,6 +124,7 @@ fn a_status_reads_back_whole() {
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
     assert_eq!(old.cores, None);
+    assert_eq!(old.core_uid_high_water, None);
     assert_eq!(
         old.auto_update, None,
         "a station older than the switch reads as unknown, not as on or off"

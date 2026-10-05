@@ -70,6 +70,9 @@ const TOKEN_CREDENTIAL: &str = "telegram-token";
 /// `station.toml`.
 #[derive(Deserialize)]
 struct StationFile {
+    /// Written monotonically by configuration pushes, never decreased by removal.
+    #[serde(default)]
+    core_uid_high_water: u64,
     #[serde(default, rename = "core")]
     cores: Vec<CoreEntry>,
     #[serde(default)]
@@ -134,6 +137,8 @@ impl Telegram {
 
 /// What the station runs with: the cores, the tape window and the bot.
 pub struct Station {
+    /// Persisted allocation floor, raised from all configured identities.
+    pub core_uid_high_water: u64,
     /// Every configured core, including entries with unavailable credentials.
     pub listed: Vec<ListedCore>,
     pub config: AppConfig,
@@ -221,10 +226,34 @@ pub fn load(path: &Path) -> anyhow::Result<Station> {
         let text =
             std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let creds = std::env::var_os("CREDENTIALS_DIRECTORY").map(std::path::PathBuf::from);
-        return from_station_file(&text, creds.as_deref())
-            .with_context(|| format!("parse {}", path.display()));
+        let mut station = from_station_file(&text, creds.as_deref())
+            .with_context(|| format!("parse {}", path.display()))?;
+        station.core_uid_high_water = observed_high_water(station.core_uid_high_water);
+        return Ok(station);
     }
     terminal_config(path)
+}
+
+/// Seed upgrades from retained report rows; unreadable history disables allocation safely.
+fn observed_high_water(configured: u64) -> u64 {
+    let reports =
+        moon_core::db::open_readonly().and_then(|conn| moon_core::db::max_core_uid(&conn));
+    high_water_from_reports(configured, reports)
+}
+
+/// Fold the persisted/configured maximum with report history, failing closed on read errors.
+fn high_water_from_reports(
+    configured: u64,
+    reports: moon_core::db::ReadResult<Option<u64>>,
+) -> u64 {
+    match reports {
+        Ok(maximum) => configured.max(maximum.unwrap_or(0)),
+        Err(moon_core::db::ReadFail::NotReady) => configured,
+        Err(error) => {
+            log::error!("station uid history unreadable: {error}; new core allocation disabled");
+            u64::MAX
+        }
+    }
 }
 
 /// `creds` is the credentials directory; `None` when the process was not given one. Keep the
@@ -286,6 +315,9 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         .transpose()
         .context("[telegram]")?;
     let mut station = Station {
+        core_uid_high_water: file
+            .core_uid_high_water
+            .max(seen.into_iter().max().unwrap_or(0)),
         listed,
         config: AppConfig::headless(servers),
         tape: file.tape,
@@ -363,6 +395,12 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         })
         .collect();
     Ok(Station {
+        core_uid_high_water: config
+            .servers
+            .iter()
+            .map(|server| server.uid)
+            .max()
+            .unwrap_or(0),
         listed,
         config,
         tape: Tape::default(),

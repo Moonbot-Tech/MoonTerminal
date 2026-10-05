@@ -50,6 +50,7 @@ pub(super) type RemovalArm = (u64, Option<String>, String);
 #[derive(Default)]
 pub(super) struct CoreCache {
     seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
+    high_water: Option<u64>,
     local_revision: Vec<cores_sync::LocalCore>,
     pub(super) rows: Vec<Row>,
 }
@@ -59,14 +60,16 @@ impl CoreCache {
         &mut self,
         seen: &Option<Option<Vec<moon_core::station_api::ListedCore>>>,
         local: Vec<cores_sync::LocalCore>,
+        high_water: Option<u64>,
     ) {
-        if &self.seen != seen || self.local_revision != local {
+        if &self.seen != seen || self.local_revision != local || self.high_water != high_water {
             self.rows = seen
                 .as_ref()
                 .and_then(Option::as_ref)
-                .map(|listing| cores_sync::reconcile(&local, listing))
+                .map(|listing| cores_sync::reconcile(&local, listing, high_water))
                 .unwrap_or_default();
             self.seen = seen.clone();
+            self.high_water = high_water;
             self.local_revision = local;
         }
     }
@@ -84,6 +87,7 @@ impl SettingsView {
         self.telegram.server.cores_cache.update(
             &backend.station.cores_seen,
             cores_sync::local_cores(&backend.config),
+            backend.station.core_uid_high_water,
         );
         self.telegram.server.cores_armed = if backend.station.busy() {
             None

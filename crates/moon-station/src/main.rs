@@ -53,6 +53,7 @@ mod release;
 mod signals;
 mod storage;
 mod tg;
+mod uid_history;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -125,6 +126,7 @@ fn main() -> anyhow::Result<()> {
     let auto_update = auto_update::AutoUpdate::start(station.auto_update, data_root.clone());
     let mut skipped_cores = station.skipped_cores;
     let mut listed = station.listed;
+    let mut core_uid_high_water = station.core_uid_high_water;
     let mut cfg = station.config;
     // `load` gave the cores the feed of `station.toml` alone; the menu may ask for more.
     cores::set_feed(&mut cfg, profile);
@@ -139,6 +141,7 @@ fn main() -> anyhow::Result<()> {
     let Some(permit) = moon_core::db::report_recovery::prepare() else {
         anyhow::bail!("the report replica is held by another process on this data root");
     };
+    core_uid_high_water = uid_history::raise(core_uid_high_water)?;
     let reports = moon_core::db::spawn_writer(permit)
         .ok_or_else(|| anyhow::anyhow!("report writer did not start"))?;
     // The USDT valuation of reports whose quote is not USDT, on either profile: the bot's trade
@@ -203,6 +206,7 @@ fn main() -> anyhow::Result<()> {
         if signals.take_reload() {
             match reload(&config_path) {
                 Ok(reloaded) => {
+                    core_uid_high_water = core_uid_high_water.max(reloaded.core_uid_high_water);
                     skipped_cores = reloaded.skipped_cores;
                     listed = reloaded.listed;
                     auto_update.set(reloaded.auto_update);
@@ -246,6 +250,7 @@ fn main() -> anyhow::Result<()> {
             data_root: &data_root,
             skipped_cores: &skipped_cores,
             listed: &listed,
+            core_uid_high_water,
             auto_update: &auto_update,
         };
         if let Some(bot) = bot.as_mut() {
@@ -324,6 +329,8 @@ struct StationNow<'a> {
     /// Load failures remain in the total even though they have no connection session.
     skipped_cores: &'a [String],
     listed: &'a [ListedCore],
+    /// Retirement floor never decreases during a running station's reloads.
+    core_uid_high_water: u64,
     auto_update: &'a auto_update::AutoUpdate,
 }
 
@@ -346,6 +353,7 @@ impl StationNow<'_> {
             last_update: release::last_update(self.data_root),
             auto_update: Some(self.auto_update.on()),
             cores: Some(self.listed.to_vec()),
+            core_uid_high_water: Some(self.core_uid_high_water),
         }
     }
 }
@@ -385,9 +393,10 @@ fn answer(
     Reply::from(answer)
 }
 
-/// Re-read `station.toml` and apply its tape window; the cores are for the caller to reconcile.
+/// Re-read config and persist its retirement floor before applying tape or admitting new cores.
 fn reload(path: &Path) -> anyhow::Result<cores::Station> {
-    let station = cores::load(path)?;
+    let mut station = cores::load(path)?;
+    station.core_uid_high_water = uid_history::raise(station.core_uid_high_water)?;
     log::info!("reloaded {}", path.display());
     apply_tape(&station.tape);
     log_cores(&station.config);

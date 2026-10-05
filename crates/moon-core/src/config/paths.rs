@@ -672,6 +672,11 @@ pub fn reports_db_path() -> PathBuf {
     db_dir().join(REPORTS_DB_FILE_NAMES[0])
 }
 
+/// Station-owned allocation watermark, independent of terminal-pushed configuration and reports.
+pub fn station_core_uid_path() -> PathBuf {
+    data_dir().join("station-core-uid.txt")
+}
+
 /// Main, WAL, and SHM paths that together form the reports-replica file set.
 ///
 /// Returns:

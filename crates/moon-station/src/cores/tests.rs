@@ -1,5 +1,30 @@
 use super::*;
 
+/// Ignoring the report maximum on upgrade could allocate uid 10 into uid 12's retired history.
+#[test]
+fn upgraded_uid_floor_includes_retired_report_rows_and_persisted_counter() {
+    let config = "[[core]]\nuid = 9\nname = 'Survivor'\nactive = false\n";
+    let station = from_station_file(config, None).unwrap();
+    assert_eq!(
+        high_water_from_reports(station.core_uid_high_water, Ok(Some(12))),
+        12
+    );
+    let station = from_station_file(&format!("core_uid_high_water = 17\n{config}"), None).unwrap();
+    assert_eq!(
+        high_water_from_reports(station.core_uid_high_water, Ok(Some(12))),
+        17
+    );
+    assert_eq!(high_water_from_reports(9, Ok(None)), 9);
+    assert_eq!(
+        high_water_from_reports(9, Err(moon_core::db::ReadFail::NotReady)),
+        9
+    );
+    assert_eq!(
+        high_water_from_reports(9, Err(moon_core::db::ReadFail::PeriodOutOfRange)),
+        u64::MAX
+    );
+}
+
 /// C1: legacy station files and credentials retain uids and addresses, including inactive entries.
 #[test]
 fn listing_includes_available_and_unavailable_credentials_without_keys() {

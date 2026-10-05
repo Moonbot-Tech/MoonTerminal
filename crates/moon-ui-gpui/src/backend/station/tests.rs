@@ -278,6 +278,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
     assert!(jobs.cores_seen.is_none());
     bot.station = Some(Box::new(moon_core::station_api::Status {
         station_version: "synthetic".into(),
+        core_uid_high_water: Some(7),
         cores_total: 0,
         cores_ready: 0,
         cores: Some(Vec::new()),
@@ -289,11 +290,14 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
     }));
     jobs.observe_bot(bot.clone());
     assert_eq!(jobs.cores_seen, Some(Some(Vec::new())));
+    assert_eq!(jobs.core_uid_high_water, Some(7));
     bot.station = None;
     jobs.observe_bot(bot.clone());
     assert_eq!(jobs.cores_seen, Some(Some(Vec::new())));
+    assert_eq!(jobs.core_uid_high_water, Some(7));
     bot.station = Some(Box::new(moon_core::station_api::Status {
         station_version: "old".into(),
+        core_uid_high_water: None,
         cores_total: 0,
         cores_ready: 0,
         cores: None,
@@ -305,6 +309,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
     }));
     jobs.observe_bot(bot);
     assert_eq!(jobs.cores_seen, Some(None));
+    assert_eq!(jobs.core_uid_high_water, None);
 }
 
 /// Dropping either ownership marker permits Forget/Remove to discard the only recovery route.

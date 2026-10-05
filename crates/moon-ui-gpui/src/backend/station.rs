@@ -74,6 +74,8 @@ pub(crate) struct StationJobs {
     pub(crate) bot: Option<BotState>,
     /// Outer None means unread; inner None means an older station without listing support.
     pub(crate) cores_seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
+    /// Retain the allocation floor with its listing across restart gaps.
+    pub(crate) core_uid_high_water: Option<u64>,
     /// The last explicit core operation's result line.
     pub(crate) cores_result: Option<String>,
     /// The running job changes station cores.
@@ -184,6 +186,7 @@ impl StationJobs {
     fn observe_bot(&mut self, bot: BotState) {
         if let Some(status) = &bot.station {
             self.cores_seen = Some(status.cores.clone());
+            self.core_uid_high_water = status.core_uid_high_water;
         }
         self.bot = Some(bot);
     }
@@ -196,6 +199,7 @@ impl StationJobs {
         st.install_probe = None;
         st.bot = None;
         st.cores_seen = None;
+        st.core_uid_high_water = None;
         st.cores_result = None;
         st.cores_job = false;
         st.bot_error = None;

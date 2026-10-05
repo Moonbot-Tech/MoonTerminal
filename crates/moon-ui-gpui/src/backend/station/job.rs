@@ -317,11 +317,12 @@ fn run(
             setup::run(&setup, say)?;
             // Before the first start: the station opens the cache as its own.
             send_valuation(&target, say);
-            let listing = bot::bot_state(&target)
-                .ok()
-                .and_then(|state| state.station)
-                .and_then(|status| status.cores);
-            let changes = install_changes(&keys, listing.as_deref())?;
+            let status = bot::bot_state(&target).ok().and_then(|state| state.station);
+            let listing = status.as_ref().and_then(|status| status.cores.as_deref());
+            let high_water = status
+                .as_ref()
+                .and_then(|status| status.core_uid_high_water);
+            let changes = install_changes(&keys, listing, high_water)?;
             if !changes.is_empty() {
                 let keys: Vec<_> = changes
                     .iter()
@@ -382,13 +383,12 @@ fn run(
             if moon_remote::script::value(&status, "config") != Some("yes") {
                 return Err(station::access::RemovalError::NotConfigured.into());
             }
-            let listing = bot::bot_state(&target)?
-                .station
-                .and_then(|status| status.cores)
-                .ok_or(CoresChanged)?;
+            let status = bot::bot_state(&target)?.station.ok_or(CoresChanged)?;
+            let high_water = status.core_uid_high_water;
+            let listing = status.cores.ok_or(CoresChanged)?;
             let all = moon_core::config::read_core_keys()?;
             let here = saved_local_cores(&all, &eligible);
-            let fresh = cores_sync::reconcile(&here, &listing);
+            let fresh = cores_sync::reconcile(&here, &listing, high_water);
             let selected = cores_sync::selected_changes(&upsert, &fresh).ok_or(CoresChanged)?;
             if !selected.is_empty() {
                 let keys = upsert_keys(&all, &selected)?;
@@ -449,12 +449,12 @@ fn run(
             if moon_remote::script::value(&status, "config") != Some("yes") {
                 return Err(station::access::RemovalError::NotConfigured.into());
             }
-            let listing = bot::bot_state(&target)?
-                .station
-                .and_then(|status| status.cores)
-                .ok_or(CoresChanged)?;
+            let status = bot::bot_state(&target)?.station.ok_or(CoresChanged)?;
+            let high_water = status.core_uid_high_water;
+            let listing = status.cores.ok_or(CoresChanged)?;
             let all = moon_core::config::read_core_keys()?;
-            let fresh = cores_sync::reconcile(&saved_local_cores(&all, &eligible), &listing);
+            let fresh =
+                cores_sync::reconcile(&saved_local_cores(&all, &eligible), &listing, high_water);
             anyhow::ensure!(
                 cores_sync::removal_matches(&uids, &names, &addresses, &fresh),
                 CoresChanged
@@ -728,6 +728,7 @@ fn core_keys(picked: &[u64]) -> anyhow::Result<Vec<CoreKey>> {
 fn install_changes(
     keys: &[CoreKey],
     listing: Option<&[moon_core::station_api::ListedCore]>,
+    high_water: Option<u64>,
 ) -> anyhow::Result<Vec<Upsert>> {
     let Some(listing) = listing else {
         return Ok(keys
@@ -743,7 +744,7 @@ fn install_changes(
         .iter()
         .map(|key| cores_sync::local_core(key.uid, &key.name, &key.key))
         .collect();
-    let fresh = cores_sync::reconcile(&here, listing);
+    let fresh = cores_sync::reconcile(&here, listing, high_water);
     anyhow::ensure!(
         !fresh
             .iter()

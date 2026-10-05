@@ -106,20 +106,24 @@ pub(crate) fn trace_cores(cfg: &AppConfig) -> Vec<LocalCore> {
 }
 
 /// Match duplicate addresses by ascending uid, consuming each local core at most once.
-/// Unmatched local identities use their uid unless occupied, then allocate above both sets.
-pub(crate) fn reconcile(here: &[LocalCore], station: &[ListedCore]) -> Vec<Row> {
+/// Unmatched identities allocate above both sets and the station's durable retirement floor.
+pub(crate) fn reconcile(
+    here: &[LocalCore],
+    station: &[ListedCore],
+    high_water: Option<u64>,
+) -> Vec<Row> {
     let mut here: Vec<_> = here.iter().collect();
     here.sort_by_key(|core| core.uid);
     let mut station: Vec<_> = station.iter().collect();
     station.sort_by_key(|core| core.uid);
     let mut matched = vec![false; here.len()];
-    let mut occupied: std::collections::HashSet<_> = station.iter().map(|core| core.uid).collect();
     let mut largest = here
         .iter()
         .map(|core| core.uid)
         .chain(station.iter().map(|core| core.uid))
         .max()
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .max(high_water.unwrap_or(0));
     let mut rows = Vec::new();
     for remote in station {
         let local = remote.address.as_ref().and_then(|address| {
@@ -158,17 +162,10 @@ pub(crate) fn reconcile(here: &[LocalCore], station: &[ListedCore]) -> Vec<Row> 
         if matched[index] {
             continue;
         }
-        let uid = if occupied.contains(&local.uid) {
-            largest
-                .checked_add(1)
-                .filter(|uid| *uid <= i64::MAX as u64)
-                .inspect(|uid| largest = *uid)
-        } else {
-            (local.uid <= i64::MAX as u64 && local.uid != 0).then_some(local.uid)
-        };
-        if let Some(uid) = uid {
-            occupied.insert(uid);
-        }
+        let uid = largest
+            .checked_add(1)
+            .filter(|uid| *uid <= i64::MAX as u64)
+            .inspect(|uid| largest = *uid);
         rows.push(Row {
             state: RowState::OnlyHere,
             name: local.name.clone(),

@@ -3,6 +3,38 @@ use super::{Counts, LocalCore, RowState, Upsert, bulk, local_cores, reconcile, s
 use moon_core::config::{AppConfig, Secret, ServerConfig};
 use moon_core::station_api::ListedCore;
 
+/// Reusing an unmatched terminal uid would attach a new address to a removed core's reports.
+#[test]
+fn removed_and_upgraded_station_uids_are_never_allocated_again() {
+    let rows = reconcile(&[local(7, 2)], &[remote(3, 1)], Some(7));
+    assert_eq!(bulk(&rows)[0].station_uid, 8);
+    let rows = reconcile(&[local(7, 2)], &[remote(9, 1)], Some(12));
+    assert_eq!(bulk(&rows)[0].station_uid, 13);
+    let rows = reconcile(&[local(7, 2), local(8, 3)], &[remote(9, 1)], Some(12));
+    assert_eq!(
+        bulk(&rows)
+            .iter()
+            .map(|change| change.station_uid)
+            .collect::<Vec<_>>(),
+        [13, 14]
+    );
+}
+
+/// A missing wire field still allocates above both sets, even for an unused terminal uid.
+#[test]
+fn old_station_fallback_never_allocates_below_either_current_set() {
+    let rows = reconcile(&[local(7, 2), local(20, 3)], &[remote(9, 1)], None);
+    assert_eq!(
+        bulk(&rows)
+            .iter()
+            .map(|change| change.station_uid)
+            .collect::<Vec<_>>(),
+        [21, 22]
+    );
+    let rows = reconcile(&[local(1, 2)], &[], Some(i64::MAX as u64));
+    assert!(bulk(&rows).is_empty());
+}
+
 /// Build a local comparison fixture without credentials or connections.
 fn local(uid: u64, endpoint: u64) -> LocalCore {
     LocalCore {
@@ -28,7 +60,7 @@ fn remote(uid: u64, endpoint: u64) -> ListedCore {
 fn synchronized_added_and_old_terminals_only_push_local_changes() {
     let station: Vec<_> = (1..=4).map(|n| remote(n * 10, n)).collect();
     let here: Vec<_> = (1..=4).map(|n| local(n, n)).collect();
-    let rows = reconcile(&here, &station);
+    let rows = reconcile(&here, &station, None);
     assert!(rows.iter().all(|row| row.state == RowState::Same));
     assert!(bulk(&rows).is_empty());
     assert_eq!(
@@ -42,17 +74,17 @@ fn synchronized_added_and_old_terminals_only_push_local_changes() {
     );
     let mut added = here.clone();
     added.push(local(5, 5));
-    let rows = reconcile(&added, &station);
+    let rows = reconcile(&added, &station, None);
     assert_eq!(
         bulk(&rows),
         [Upsert {
             terminal_uid: 5,
-            station_uid: 5,
+            station_uid: 41,
             add: true
         }]
     );
     assert_eq!(Counts::from_rows(&rows).same, 4);
-    let rows = reconcile(&[local(1, 1), local(2, 2), local(5, 5)], &station);
+    let rows = reconcile(&[local(1, 1), local(2, 2), local(5, 5)], &station, None);
     assert_eq!(
         Counts::from_rows(&rows),
         Counts {
@@ -69,13 +101,13 @@ fn synchronized_added_and_old_terminals_only_push_local_changes() {
         bulk(&rows),
         [Upsert {
             terminal_uid: 5,
-            station_uid: 5,
+            station_uid: 41,
             add: true
         }]
     );
     assert_eq!(
         rows.iter().map(|row| row.station_uid).collect::<Vec<_>>(),
-        [Some(10), Some(20), Some(30), Some(40), Some(5)]
+        [Some(10), Some(20), Some(30), Some(40), Some(41)]
     );
 }
 
@@ -87,7 +119,7 @@ fn rename_and_key_change_preserve_station_identity_and_previous_name() {
     let mut rekeyed = local(9, 2);
     rekeyed.name = "New name and key".into();
     rekeyed.key_fp = "new-fp".into();
-    let rows = reconcile(&[renamed, rekeyed], &[remote(7, 2), remote(5, 1)]);
+    let rows = reconcile(&[renamed, rekeyed], &[remote(7, 2), remote(5, 1)], None);
     assert_eq!(rows[0].state, RowState::NameDiffers);
     assert_eq!(rows[0].name, "Renamed");
     assert_eq!(rows[0].station_name.as_deref(), Some("Core 1"));
@@ -115,7 +147,7 @@ fn rename_and_key_change_preserve_station_identity_and_previous_name() {
 fn an_address_match_is_never_an_add_even_with_different_uids() {
     let mut core = local(3, 1);
     core.key_fp = "replacement".into();
-    let rows = reconcile(&[core], &[remote(9, 1)]);
+    let rows = reconcile(&[core], &[remote(9, 1)], None);
     assert_eq!(
         bulk(&rows),
         [Upsert {
@@ -130,7 +162,7 @@ fn an_address_match_is_never_an_add_even_with_different_uids() {
 #[test]
 fn colliding_local_uids_allocate_fresh_station_uids() {
     let here = [local(3, 1), local(8, 8), local(5, 5)];
-    let rows = reconcile(&here, &[remote(5, 6), remote(3, 2)]);
+    let rows = reconcile(&here, &[remote(5, 6), remote(3, 2)], None);
     assert_eq!(
         bulk(&rows),
         [
@@ -146,7 +178,7 @@ fn colliding_local_uids_allocate_fresh_station_uids() {
             },
             Upsert {
                 terminal_uid: 8,
-                station_uid: 8,
+                station_uid: 11,
                 add: true
             }
         ]
@@ -162,18 +194,18 @@ fn unknown_addresses_never_match_and_duplicates_match_by_ascending_uid() {
     unknown.address = None;
     let mut local_unknown = local(1, 1);
     local_unknown.address = None;
-    let rows = reconcile(&[local_unknown], &[unknown]);
+    let rows = reconcile(&[local_unknown], &[unknown], None);
     assert_eq!(
         (rows[0].state, rows[1].state),
         (RowState::OnlyOnStation, RowState::OnlyHere)
     );
     let here = [local(7, 1), local(2, 1), local(8, 1)];
-    let rows = reconcile(&here, &[remote(9, 1), remote(3, 1)]);
+    let rows = reconcile(&here, &[remote(9, 1), remote(3, 1)], None);
     assert_eq!(
         rows.iter()
             .map(|row| (row.terminal_uid, row.station_uid))
             .collect::<Vec<_>>(),
-        [(Some(2), Some(3)), (Some(7), Some(9)), (Some(8), Some(8))]
+        [(Some(2), Some(3)), (Some(7), Some(9)), (Some(8), Some(10))]
     );
 }
 
@@ -242,14 +274,14 @@ fn ambiguous_trace_addresses_are_skipped() {
 #[test]
 fn allocation_is_bounded_by_toml_integer_range() {
     let top = i64::MAX as u64;
-    let rows = reconcile(&[local(top, 1)], &[remote(top, 2)]);
+    let rows = reconcile(&[local(top, 1)], &[remote(top, 2)], None);
     assert_eq!(rows[1].station_uid, None);
     assert!(bulk(&rows).is_empty());
     assert_eq!(Counts::from_rows(&rows).pushable, 0);
-    let rows = reconcile(&[local(top - 1, 1)], &[remote(top - 1, 2)]);
+    let rows = reconcile(&[local(top - 1, 1)], &[remote(top - 1, 2)], None);
     assert_eq!(rows[1].station_uid, Some(top));
     assert_eq!(bulk(&rows).len(), 1);
-    assert!(bulk(&reconcile(&[local(u64::MAX, 1)], &[])).is_empty());
+    assert!(bulk(&reconcile(&[local(u64::MAX, 1)], &[], None)).is_empty());
 }
 
 /// A stale add or update must not silently become another operation or destination.
@@ -268,28 +300,32 @@ fn stale_push_selections_are_refused() {
     assert_eq!(
         super::selected_changes(
             &wanted,
-            &reconcile(std::slice::from_ref(&renamed), &[remote(9, 1)])
+            &reconcile(std::slice::from_ref(&renamed), &[remote(9, 1)], None)
         ),
         Some(wanted.to_vec())
     );
     assert!(
         super::selected_changes(
             &wanted,
-            &reconcile(std::slice::from_ref(&renamed), &[remote(12, 1)])
+            &reconcile(std::slice::from_ref(&renamed), &[remote(12, 1)], None)
         )
         .is_none()
     );
     assert!(
-        super::selected_changes(&wanted, &reconcile(std::slice::from_ref(&renamed), &[])).is_none()
+        super::selected_changes(
+            &wanted,
+            &reconcile(std::slice::from_ref(&renamed), &[], None)
+        )
+        .is_none()
     );
     let add = [Upsert {
         terminal_uid: 3,
         station_uid: 3,
         add: true,
     }];
-    assert!(super::selected_changes(&add, &reconcile(&[renamed], &[remote(9, 1)])).is_none());
+    assert!(super::selected_changes(&add, &reconcile(&[renamed], &[remote(9, 1)], None)).is_none());
     assert_eq!(
-        super::selected_changes(&wanted, &reconcile(&[local(3, 1)], &[remote(9, 1)])),
+        super::selected_changes(&wanted, &reconcile(&[local(3, 1)], &[remote(9, 1)], None)),
         Some(vec![])
     );
 }
@@ -304,20 +340,20 @@ fn stale_removal_selections_are_refused() {
         &[9],
         &names,
         &addresses,
-        &reconcile(&[], &listing)
+        &reconcile(&[], &listing, None)
     ));
     assert!(!super::removal_matches(
         &[9],
         &names,
         &addresses,
-        &reconcile(&[local(3, 1)], &listing)
+        &reconcile(&[local(3, 1)], &listing, None)
     ));
     let changed = [remote(9, 3), remote(12, 2)];
     assert!(!super::removal_matches(
         &[9],
         &names,
         &addresses,
-        &reconcile(&[], &changed)
+        &reconcile(&[], &changed, None)
     ));
     let mut renamed = listing.clone();
     renamed[0].name = "Renamed".into();
@@ -325,7 +361,7 @@ fn stale_removal_selections_are_refused() {
         &[9],
         &names,
         &addresses,
-        &reconcile(&[], &renamed)
+        &reconcile(&[], &renamed, None)
     ));
 }
 

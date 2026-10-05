@@ -111,7 +111,7 @@ fn excluded_persisted_keys_do_not_raise_allocated_uids() {
         address: Some("198.51.100.9:4510".into()),
         key_fp: None,
     }];
-    let rows = cores_sync::reconcile(&here, &listing);
+    let rows = cores_sync::reconcile(&here, &listing, None);
     assert_eq!(cores_sync::bulk(&rows)[0].station_uid, 4);
     assert!(saved_local_cores(&all, &[]).is_empty());
 }
@@ -144,7 +144,7 @@ fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
         },
     ];
     assert_eq!(
-        super::install_changes(&keys[..1], Some(&listing)).unwrap(),
+        super::install_changes(&keys[..1], Some(&listing), None).unwrap(),
         [cores_sync::Upsert {
             terminal_uid: 3,
             station_uid: 9,
@@ -152,7 +152,7 @@ fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
         }]
     );
     assert_eq!(
-        super::install_changes(&keys[1..], Some(&listing[1..])).unwrap(),
+        super::install_changes(&keys[1..], Some(&listing[1..]), None).unwrap(),
         [cores_sync::Upsert {
             terminal_uid: 5,
             station_uid: 6,
@@ -160,7 +160,7 @@ fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
         }]
     );
     assert_eq!(
-        super::install_changes(&keys[..1], None).unwrap(),
+        super::install_changes(&keys[..1], None, None).unwrap(),
         [cores_sync::Upsert {
             terminal_uid: 3,
             station_uid: 3,
