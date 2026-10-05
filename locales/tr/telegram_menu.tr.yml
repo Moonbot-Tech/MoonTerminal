@@ -165,3 +165,7 @@ telegram.control.already: "Zaten öyle — hiçbir şey gönderilmedi."
 telegram.control.not_ready: "Çekirdek ayarlarını henüz göndermedi — kara listesi henüz düzenlenemez."
 telegram.control.no_list: "Bu emrin kara listesi olan bir stratejisi yok."
 telegram.control.hidden: "Kontrol bölümü bot menüsünde kapalı: terminalin Ayarlar'ında açın."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Bu terminalin botu"
+telegram.settings.host_station: "İstasyon botu"

@@ -41,3 +41,31 @@ fn rows_number_buttons_by_their_row() {
             .all(|c| rows.contains_key(c.id.as_ref()))
     );
 }
+
+/// Reusing one generic title for both branches hides which bot owns the chat settings.
+/// A synthetic configured host must appear only on the station branch.
+#[test]
+fn telegram_bot_menu_titles_identify_their_host() {
+    let _locale = crate::test_locale::force("en");
+    use crate::settings::telegram::access::ChatsOf;
+    assert_eq!(
+        super::bot_section_title(
+            ChatsOf::Terminal,
+            "203.0.113.17",
+            "telegram.menu_editor.title"
+        ),
+        "Bot of this terminal — Bot menu and notifications"
+    );
+    assert_eq!(
+        super::bot_section_title(
+            ChatsOf::Station,
+            "203.0.113.17",
+            "telegram.menu_editor.title"
+        ),
+        "Station bot 203.0.113.17 — Bot menu and notifications"
+    );
+    assert_eq!(
+        super::bot_section_title(ChatsOf::Station, "", "telegram.menu_editor.title"),
+        "Station bot — Bot menu and notifications"
+    );
+}

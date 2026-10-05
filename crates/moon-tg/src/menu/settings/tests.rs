@@ -193,3 +193,40 @@ fn report_buttons_remain_compact_in_every_locale() {
         }
     }
 }
+
+/// Removing the shared header or using the wrong host would make independent bot settings
+/// indistinguishable. Exercise the rendered HTML for every local Settings subsection.
+#[test]
+fn every_settings_screen_names_the_bot_host() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::config::telegram_menu::ReportBasis;
+    use moon_core::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    use moon_core::telegram::runtime::Response;
+    let root = crate::notify::test_host::TempRoot::new("settings-host-title");
+    let fixture = crate::notify::test_host::TickHost::open(root.notifications());
+    for (host, expected, other) in [
+        (HostKind::Terminal, "Bot of this terminal", "Station bot"),
+        (HostKind::Station, "Station bot", "Bot of this terminal"),
+    ] {
+        for screen in [
+            super::root(&fixture, true),
+            super::buttons(&BotSettings::default(), host),
+            super::view(ReportView::Exchanges),
+            super::basis(ReportBasis::Close),
+            super::notify_screen(&NotifySettings::default()),
+        ] {
+            let Response::Rich { html, .. } = super::render(
+                host,
+                screen,
+                ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
+            ) else {
+                panic!("settings must be a rich message")
+            };
+            assert!(
+                html.starts_with(&format!("<p><b>{expected}</b></p>")),
+                "{html}"
+            );
+            assert!(!html.contains(other), "{html}");
+        }
+    }
+}

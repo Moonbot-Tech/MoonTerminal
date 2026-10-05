@@ -264,7 +264,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Stack chat cards and expand a single editor so narrow Settings needs no sideways scrolling.
+    /// Name the bot host, stack chat cards and expand one editor so narrow Settings stays readable.
     ///
     /// Args:
     ///     side: Whose chats.
@@ -280,7 +280,7 @@ impl SettingsView {
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
         let section = MoonGroupBox::new(side.id("chat-access"))
-            .title(t!("telegram.access_title").to_string())
+            .title(self.bot_section_title(side, "telegram.access_title"))
             .padding(14.0)
             .gap(10.0)
             .child(

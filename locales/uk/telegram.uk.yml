@@ -28,7 +28,7 @@ station.tab: "Станція"
 
 telegram.server.on_station: "Бот працює на станції на сервері Linux. Встановлення, стан і дії станції є на вкладці Станція."
 
-telegram.section_bot: "Бот"
+telegram.section_bot: "Бот цього термінала"
 telegram.section_mini_app: "Mini App"
 
 telegram.token: "Токен бота"
@@ -384,7 +384,7 @@ telegram.server.handover_save_failed: "Не вдалося зберегти пе
 telegram.server.need_host: "Введіть IP сервера (порт може йти слідом: 1.2.3.4:2222)."
 telegram.server.job_lost: "Завдання зупинилося, не повідомивши результат."
 telegram.server.local_bot_held: "Бот термінала лишається вимкненим: сервер може й далі опитувати цей токен. Натисніть «Зняти бота з сервера» — після цього бот термінала запуститься сам."
-telegram.server.bot_title: "Бот на сервері %{addr}"
+telegram.server.bot_title: "Бот станції %{addr}"
 telegram.server.bot_unknown: "Стан бота ще не відомий."
 telegram.server.bot_none: "Немає бота на сервері: введіть токен."
 telegram.server.bot_paired: "Працює, прив'язаних чатів: %{count}."

@@ -165,3 +165,7 @@ telegram.control.already: "Ya está así: no se envió nada."
 telegram.control.not_ready: "El núcleo aún no envió su configuración: su lista negra no se puede editar todavía."
 telegram.control.no_list: "Esta orden no tiene una estrategia con lista negra."
 telegram.control.hidden: "La sección Control está desactivada en el menú del bot: actívela en los Ajustes del terminal."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Bot de este terminal"
+telegram.settings.host_station: "Bot de la estación"

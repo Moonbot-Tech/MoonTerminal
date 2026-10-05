@@ -28,7 +28,7 @@ station.tab: "İstasyon"
 
 telegram.server.on_station: "Bot, Linux sunucusundaki istasyonda çalışır. İstasyonun kurulumu, durumu ve eylemleri İstasyon sekmesindedir."
 
-telegram.section_bot: "Bot"
+telegram.section_bot: "Bu terminalin botu"
 telegram.section_mini_app: "Mini App"
 
 telegram.token: "Bot token'ı"
@@ -384,7 +384,7 @@ telegram.server.handover_save_failed: "Bot devri kaydedilemedi. İş başlamadı
 telegram.server.need_host: "Sunucu IP'sini girin (arkasından port gelebilir: 1.2.3.4:2222)."
 telegram.server.job_lost: "İş, sonucunu bildirmeden durdu."
 telegram.server.local_bot_held: "Terminalin botu kapalı kalır: sunucu bu token'ı hâlâ yokluyor olabilir. «Botu sunucudan kaldır»a basın — terminalin botu sonra kendiliğinden başlar."
-telegram.server.bot_title: "Sunucudaki bot %{addr}"
+telegram.server.bot_title: "İstasyon botu %{addr}"
 telegram.server.bot_unknown: "Botun durumu henüz bilinmiyor."
 telegram.server.bot_none: "Sunucuda bot yok: bir token girin."
 telegram.server.bot_paired: "Çalışıyor, eşleşen sohbet: %{count}."

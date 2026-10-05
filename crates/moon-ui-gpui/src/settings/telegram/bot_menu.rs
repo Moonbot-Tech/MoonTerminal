@@ -86,6 +86,18 @@ fn item_caption(item: MenuItem) -> String {
     t!(&key).to_string()
 }
 
+/// Identify the edited bot in a settings section, using the station's configured host.
+fn bot_section_title(side: ChatsOf, station_host: &str, section: &str) -> String {
+    let host = match side {
+        ChatsOf::Terminal => t!("telegram.settings.host_terminal").to_string(),
+        ChatsOf::Station if station_host.is_empty() => {
+            t!("telegram.settings.host_station").to_string()
+        }
+        ChatsOf::Station => t!("telegram.server.bot_title", addr = station_host).to_string(),
+    };
+    format!("{host} — {}", t!(section))
+}
+
 /// One button as a row shows it.
 #[derive(Clone, Copy)]
 struct Row {
@@ -120,6 +132,19 @@ fn rows_by_id(menu: &BotMenu) -> HashMap<String, Row> {
 }
 
 impl SettingsView {
+    /// Name the bot whose independent settings this section edits, even after scrolling.
+    pub(super) fn bot_section_title(&self, side: ChatsOf, section: &str) -> String {
+        bot_section_title(
+            side,
+            self.telegram
+                .server
+                .known()
+                .map(|target| target.host.as_str())
+                .unwrap_or_default(),
+            section,
+        )
+    }
+
     fn bot_menu_ed(&self, side: ChatsOf) -> &BotMenuEd {
         match side {
             ChatsOf::Terminal => &self.telegram.menu,
@@ -163,7 +188,7 @@ impl SettingsView {
         self.chats_edit(side, cx, |telegram| edit(&mut telegram.bot));
     }
 
-    /// The bot's box for `side`: the menu on the left, a chat's notifications on the right.
+    /// The named host's bot box: the menu on the left, a chat's notifications on the right.
     pub(in crate::settings) fn bot_menu_box(
         &self,
         side: ChatsOf,
@@ -185,7 +210,7 @@ impl SettingsView {
             )
         };
         MoonGroupBox::new(id("box"))
-            .title(t!("telegram.menu_editor.title").to_string())
+            .title(self.bot_section_title(side, "telegram.menu_editor.title"))
             .padding(14.0)
             .gap(10.0)
             .child(

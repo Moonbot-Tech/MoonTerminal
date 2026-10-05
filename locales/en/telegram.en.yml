@@ -28,7 +28,7 @@ station.tab: "Station"
 
 telegram.server.on_station: "The bot runs on the station on a Linux server. The station's install, status and actions are in the Station tab."
 
-telegram.section_bot: "Bot"
+telegram.section_bot: "Bot of this terminal"
 telegram.section_mini_app: "Mini App"
 
 telegram.token: "Bot token"
@@ -384,7 +384,7 @@ telegram.server.handover_save_failed: "Could not save the bot hand-over. The job
 telegram.server.need_host: "Enter the server IP (a port may follow: 1.2.3.4:2222)."
 telegram.server.job_lost: "The job stopped without reporting its result."
 telegram.server.local_bot_held: "The terminal's bot stays off: the server may still poll this token. Press «Take the bot off the server» — the terminal's bot then starts again by itself."
-telegram.server.bot_title: "Bot on server %{addr}"
+telegram.server.bot_title: "Station bot %{addr}"
 telegram.server.bot_unknown: "The bot's state is not known yet."
 telegram.server.bot_none: "No bot on the server: enter a token."
 telegram.server.bot_paired: "Running, paired chats: %{count}."

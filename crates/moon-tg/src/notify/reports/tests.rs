@@ -161,12 +161,28 @@ fn today_keeps_its_hourly_schedule_with_hourly_off() {
         Some(at(13, 0)),
     );
     host.tick(at(14, 0));
+    let first = host.outbox()[0].id;
     reopen(&mut host);
     host.tick(at(14, 59));
     assert_eq!(host.outbox().len(), 1);
+    assert_eq!(host.outbox()[0].id, first, "no update inside the same hour");
     reopen(&mut host);
     host.tick(at(15, 0));
-    assert_eq!(host.outbox().len(), 2);
+    assert_eq!(
+        host.outbox().len(),
+        1,
+        "Today replaces its queued predecessor"
+    );
+    assert_ne!(
+        host.outbox()[0].id,
+        first,
+        "a new hour queues a fresh Today report"
+    );
+    assert_eq!(host.outbox()[0].created_utc, at(15, 0));
+    assert_eq!(
+        host.file().chats[&CHAT].ledger.reports.today.slot_utc,
+        Some(at(15, 0))
+    );
     assert!(
         host.outbox()
             .iter()
@@ -179,15 +195,8 @@ fn today_keeps_its_hourly_schedule_with_hourly_off() {
         .iter()
         .map(|row| row.auto.as_ref().unwrap().kind)
         .collect();
-    assert_eq!(
-        kinds,
-        vec![
-            AutoReport::Today,
-            AutoReport::Today,
-            AutoReport::Today,
-            AutoReport::Month
-        ]
-    );
+    assert_eq!(kinds, vec![AutoReport::Today, AutoReport::Month]);
+    assert_eq!(host.outbox()[0].created_utc, at(0, 0) + 86_400);
     let window = moon_core::telegram::report::auto_window(
         AutoReport::Today,
         at(0, 0) + 86_400,

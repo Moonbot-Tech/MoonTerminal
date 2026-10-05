@@ -28,7 +28,7 @@ station.tab: "Estação"
 
 telegram.server.on_station: "O bot roda na estação, num servidor Linux. A instalação, o estado e as ações da estação ficam na aba Estação."
 
-telegram.section_bot: "Bot"
+telegram.section_bot: "Bot deste terminal"
 telegram.section_mini_app: "Mini App"
 
 telegram.token: "Token do bot"
@@ -384,7 +384,7 @@ telegram.server.handover_save_failed: "Não foi possível salvar a entrega do bo
 telegram.server.need_host: "Digite o IP do servidor (uma porta pode seguir: 1.2.3.4:2222)."
 telegram.server.job_lost: "O trabalho parou sem informar o resultado."
 telegram.server.local_bot_held: "O bot do terminal continua desligado: o servidor ainda pode consultar este token. Pressione «Tirar o bot do servidor» — o bot do terminal então inicia sozinho de novo."
-telegram.server.bot_title: "Bot no servidor %{addr}"
+telegram.server.bot_title: "Bot da estação %{addr}"
 telegram.server.bot_unknown: "O estado do bot ainda não é conhecido."
 telegram.server.bot_none: "Nenhum bot no servidor: digite um token."
 telegram.server.bot_paired: "Rodando, chats vinculados: %{count}."

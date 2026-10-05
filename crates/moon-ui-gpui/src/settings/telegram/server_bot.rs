@@ -705,7 +705,7 @@ impl SettingsView {
             )
     }
 
-    /// Render one Chats box with pairing and role actions, then the station's Mini App.
+    /// Render host-named Chats and Mini App sections so they identify the station's bot.
     /// Sections appear once the station has reported its bot and access state.
     pub(in crate::settings) fn server_bot_sections(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let b = self.backend.read(cx);
@@ -823,7 +823,7 @@ impl SettingsView {
             _ => None,
         };
         let mini = MoonGroupBox::new("telegram-server-mini")
-            .title(t!("telegram.section_mini_app").to_string())
+            .title(self.bot_section_title(ChatsOf::Station, "telegram.section_mini_app"))
             .padding(14.0)
             .gap(10.0)
             .child(

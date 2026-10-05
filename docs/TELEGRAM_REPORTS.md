@@ -85,6 +85,11 @@ status. Each switch saves at once; button order and rows stay in the terminal's 
 thresholds and cores in the terminal's Settings and the Mini App's Settings tab. A change made in
 the chat reaches an open terminal Settings window only where that window had not been edited.
 
+Every screen under the bot's Settings menu names its host: "Bot of this terminal" or "Station
+bot". In Settings -> Telegram, the bot and menu/notifications section titles distinguish the
+terminal's bot from the station's bot; the station title includes its configured host. These
+are independent bots with independent chat settings: changing one does not change the other.
+
 Each chat's notifications can also be set in Settings -> Telegram, in the right column of the
 "Bot menu and notifications" box: pick a chat, then its trade cards (cores, minimum volume, profit
 and loss thresholds, the dollar follow-up), core down/back notices with their delay, and the

@@ -195,7 +195,8 @@ impl SettingsView {
     }
 
     /// Render exactly one bot: the station's when known, otherwise the terminal's.
-    /// Pairing and role edits share one Chats box; server jobs retain their outcome feedback.
+    /// Host-named sections distinguish independent bot settings. Pairing and role edits share
+    /// one Chats box; server jobs retain their outcome feedback.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -392,7 +393,12 @@ impl SettingsView {
             .child(self.message_layout_box(access::ChatsOf::Terminal, cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
-                    .title(t!("telegram.section_mini_app").to_string())
+                    .title(
+                        self.bot_section_title(
+                            access::ChatsOf::Terminal,
+                            "telegram.section_mini_app",
+                        ),
+                    )
                     .padding(14.0)
                     .gap(10.0)
                     .child(

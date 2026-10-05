@@ -2,6 +2,8 @@
 
 /// Counts station calls without starting transport, sessions, or an updater.
 struct StationHost {
+    /// Process identity selected by the header regression; existing fixtures stay stations.
+    kind: crate::HostKind,
     config: moon_core::config::AppConfig,
     state: crate::TelegramState,
     status_calls: usize,
@@ -20,6 +22,7 @@ impl StationHost {
         let state = crate::TelegramState::new(&config.telegram, crate::HostKind::Station);
         assert!(state.service.is_none());
         Self {
+            kind: crate::HostKind::Station,
             config,
             state,
             status_calls: 0,
@@ -37,9 +40,9 @@ impl StationHost {
 }
 
 impl crate::TgHost for StationHost {
-    /// Identify this fixture as a station.
+    /// Identify the bot's fixture process without starting either host.
     fn kind(&self) -> crate::HostKind {
-        crate::HostKind::Station
+        self.kind
     }
     /// Expose the current saved fixture grant.
     fn config(&self) -> &moon_core::config::AppConfig {
@@ -117,6 +120,34 @@ impl crate::TgHost for StationHost {
     fn request_station_update(&mut self) -> Option<Result<(), crate::UpdateRefusal>> {
         self.update_calls += 1;
         Some(Ok(()))
+    }
+}
+
+/// Bypassing the shared settings renderer would drop the host header despite helper tests
+/// passing. Exercise owner commands through dispatch for each host and every service-free page.
+#[test]
+fn settings_dispatch_names_the_process_being_edited() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    for (kind, name) in [
+        (crate::HostKind::Terminal, "Bot of this terminal"),
+        (crate::HostKind::Station, "Station bot"),
+    ] {
+        let mut host = StationHost::new();
+        host.kind = kind;
+        for action in [
+            SettingsAction::Root,
+            SettingsAction::Buttons,
+            SettingsAction::View,
+            SettingsAction::Basis,
+        ] {
+            let super::Response::Rich { html, .. } =
+                host.command(10, super::ParsedCommand::Menu(MenuAction::Settings(action)))
+            else {
+                panic!("owner settings must render")
+            };
+            assert!(html.starts_with(&format!("<p><b>{name}</b></p>")), "{html}");
+        }
     }
 }
 

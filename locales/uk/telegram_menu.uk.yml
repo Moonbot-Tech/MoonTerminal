@@ -165,3 +165,7 @@ telegram.control.already: "Уже так — нічого не надіслан�
 telegram.control.not_ready: "Ядро ще не надіслало свої налаштування — ЧС поки не змінити."
 telegram.control.no_list: "У цього ордера немає стратегії зі списком ЧС."
 telegram.control.hidden: "Розділ «Керування» вимкнено в меню бота: увімкніть його в налаштуваннях термінала."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Бот цього термінала"
+telegram.settings.host_station: "Бот станції"

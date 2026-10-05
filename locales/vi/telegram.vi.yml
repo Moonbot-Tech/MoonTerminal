@@ -28,7 +28,7 @@ station.tab: "Trạm"
 
 telegram.server.on_station: "Bot chạy trên trạm, trên máy chủ Linux. Cài đặt, trạng thái và thao tác của trạm nằm ở tab Trạm."
 
-telegram.section_bot: "Bot"
+telegram.section_bot: "Bot của terminal này"
 telegram.section_mini_app: "Mini App"
 
 telegram.token: "Token bot"
@@ -384,7 +384,7 @@ telegram.server.handover_save_failed: "Không lưu được việc giao bot. Vi�
 telegram.server.need_host: "Nhập IP máy chủ (có thể kèm cổng: 1.2.3.4:2222)."
 telegram.server.job_lost: "Việc dừng mà không báo kết quả."
 telegram.server.local_bot_held: "Bot của terminal vẫn tắt: máy chủ có thể vẫn đang dùng token này. Nhấn «Gỡ bot khỏi máy chủ» — bot của terminal sẽ tự chạy lại."
-telegram.server.bot_title: "Bot trên máy chủ %{addr}"
+telegram.server.bot_title: "Bot của trạm %{addr}"
 telegram.server.bot_unknown: "Chưa biết trạng thái của bot."
 telegram.server.bot_none: "Máy chủ chưa có bot: nhập token."
 telegram.server.bot_paired: "Đang chạy, chat đã ghép: %{count}."

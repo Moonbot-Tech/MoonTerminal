@@ -165,3 +165,7 @@ telegram.control.already: "Vốn đã vậy — không gửi gì."
 telegram.control.not_ready: "Core chưa gửi cài đặt — chưa sửa được danh sách chặn của nó."
 telegram.control.no_list: "Lệnh này không có chiến lược nào có danh sách chặn."
 telegram.control.hidden: "Mục Điều khiển đang tắt trong menu bot: hãy bật nó trong Cài đặt của terminal."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Bot của terminal này"
+telegram.settings.host_station: "Bot của trạm"

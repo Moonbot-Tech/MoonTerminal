@@ -165,3 +165,7 @@ telegram.control.already: "Already so — nothing sent."
 telegram.control.not_ready: "The core has not sent its settings yet — its blacklist cannot be edited yet."
 telegram.control.no_list: "This order has no strategy with a blacklist."
 telegram.control.hidden: "The Control section is off in the bot menu: switch it on in the terminal's Settings."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Bot of this terminal"
+telegram.settings.host_station: "Station bot"
