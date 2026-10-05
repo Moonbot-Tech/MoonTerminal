@@ -63,15 +63,42 @@ fn assert_only_allowed_tags(html: &str) {
 fn names_are_escaped_before_they_enter_html() {
     let _locale = crate::test_locale::force("en");
     let mut row = trade();
-    row.coin = "BTC<&>\"USDT".to_string();
-    row.core_name = "core<&>\"".to_string();
+    row.coin = "123<&>\"".to_string();
+    row.core_name = "<&>\"".to_string();
     row.strategy = "strat<&>\"".to_string();
     let html = trade_card(&row, false);
-    assert!(html.contains("<b>BTC&lt;&amp;&gt;&quot;USDT</b>"));
-    assert!(html.contains("core&lt;&amp;&gt;&quot;"));
+    assert!(html.contains("<b>123&lt;&amp;&gt;&quot;</b>"));
+    assert_eq!(html.lines().nth(1), Some("&lt;&amp;&gt;&quot;"));
     assert!(html.contains("<i>strat&lt;&amp;&gt;&quot;</i>"));
     assert!(!html.contains("<&>"));
     assert_only_allowed_tags(&html);
+}
+
+/// Dropping either hashtag or using a different mapping on outage notices would split the
+/// coin/core history; strategy punctuation must retain its existing escaped appearance.
+#[test]
+fn cards_and_outages_share_coin_and_core_hashtags() {
+    let _locale = crate::test_locale::force("en");
+    let mut row = trade();
+    row.coin = "SAMPLE714".into();
+    row.core_name = "Desk F-2.v1/test".into();
+    row.strategy = "grid<&>".into();
+    let card = trade_card(&row, false);
+    assert_eq!(
+        card,
+        "\u{1f7e2} <b>#SAMPLE714</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#Desk_F_2_v1_test\n<i>grid&lt;&amp;&gt;</i>"
+    );
+    assert!(down_line(&row.core_name, 0, Tz::UTC).starts_with("\u{1f534} #Desk_F_2_v1_test "));
+    assert!(back_line(&row.core_name, 60).starts_with("\u{1f7e2} #Desk_F_2_v1_test "));
+    assert_only_allowed_tags(&card);
+
+    row.coin = "12345".into();
+    row.core_name = "<&>\"".into();
+    let fallback = trade_card(&row, false);
+    assert!(fallback.starts_with("\u{1f7e2} <b>12345</b> "));
+    assert_eq!(fallback.lines().nth(1), Some("&lt;&amp;&gt;&quot;"));
+    assert!(back_line(&row.core_name, 60).starts_with("\u{1f7e2} &lt;&amp;&gt;&quot; "));
+    assert_only_allowed_tags(&fallback);
 }
 
 /// Putting the core or prices first would hide coin and profit in the push preview. Chart
@@ -86,11 +113,11 @@ fn the_complete_card_keeps_the_pre_873_layout() {
     row.report_uid = Some(42);
     assert_eq!(
         trade_card(&row, false),
-        "\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\nalpha\n<i>grid</i>"
+        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#alpha\n<i>grid</i>"
     );
     assert_eq!(
         trade_card(&row, true),
-        "\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\nalpha\n<i>grid</i>\nThresholds not checked: no dollar value"
+        "\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 100$ \u{00b7} 2m\n#alpha\n<i>grid</i>\nThresholds not checked: no dollar value"
     );
 }
 
@@ -130,8 +157,8 @@ fn unvalued_profit_is_a_word_and_missing_volume_is_omitted() {
     assert_eq!(
         html,
         "\
-\u{26aa} <b>BTC</b> \u{00b7} Unvalued \u{00b7} 2m
-alpha
+\u{26aa} <b>#BTC</b> \u{00b7} Unvalued \u{00b7} 2m
+#alpha
 <i>grid</i>"
     );
     assert!(!html.contains("0.00"));
@@ -150,19 +177,19 @@ fn duration_and_sign_follow_the_rounded_figure() {
     row.volume_usd = None;
     assert_eq!(
         trade_card(&row, false).lines().next(),
-        Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
+        Some("\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
     );
     row.profit_usd = Some(-4.0);
     row.profit_pct = Some(-0.5);
     assert_eq!(
         trade_card(&row, false).lines().next(),
-        Some("\u{1f534} <b>BTC</b> \u{00b7} <b>-4.00$</b> (-0.50%) \u{00b7} 2m")
+        Some("\u{1f534} <b>#BTC</b> \u{00b7} <b>-4.00$</b> (-0.50%) \u{00b7} 2m")
     );
     row.profit_usd = Some(0.0);
     row.profit_pct = Some(0.0);
     assert_eq!(
         trade_card(&row, false).lines().next(),
-        Some("\u{26aa} <b>BTC</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 2m")
+        Some("\u{26aa} <b>#BTC</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 2m")
     );
     assert!(!trade_card(&row, false).contains("+0.00$"));
     row.profit_usd = Some(0.001);
@@ -183,11 +210,11 @@ fn duration_and_sign_follow_the_rounded_figure() {
     assert!(!trade_card(&row, false).contains("Duration"));
     assert_eq!(
         back_line("alpha", 3 * 86_400 + 4 * 3_600),
-        "\u{1f7e2} alpha \u{2014} connection restored (3d 4h)"
+        "\u{1f7e2} #alpha \u{2014} connection restored (3d 4h)"
     );
     assert_eq!(
         back_line("alpha", -5),
-        "\u{1f7e2} alpha \u{2014} connection restored (0m)"
+        "\u{1f7e2} #alpha \u{2014} connection restored (0m)"
     );
 }
 
@@ -198,14 +225,14 @@ fn down_line_uses_the_report_zone_clock() {
     let _locale = crate::test_locale::force("en");
     // 2026-10-02 15:04:00 UTC. Moscow is UTC+3 with no DST.
     let since = 1_790_953_440_i64;
-    let marked = "core<&>\"";
+    let marked = "<&>\"";
     assert_eq!(
         down_line(marked, since, Tz::UTC),
-        "\u{1f534} core&lt;&amp;&gt;&quot; \u{2014} lost connection since 15:04"
+        "\u{1f534} &lt;&amp;&gt;&quot; \u{2014} lost connection since 15:04"
     );
     assert_eq!(
         down_line("alpha", since, Tz::Europe__Moscow),
-        "\u{1f534} alpha \u{2014} lost connection since 18:04"
+        "\u{1f534} #alpha \u{2014} lost connection since 18:04"
     );
     assert_only_allowed_tags(&down_line(marked, since, Tz::UTC));
 }
@@ -284,7 +311,7 @@ fn entry_volume_is_grouped_whole_dollars() {
     row.volume_usd = Some(f64::NAN);
     assert_eq!(
         trade_card(&row, false).lines().next(),
-        Some("\u{1f7e2} <b>BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
+        Some("\u{1f7e2} <b>#BTC</b> \u{00b7} <b>+12.50$</b> (+1.25%) \u{00b7} 2m")
     );
 }
 
@@ -315,14 +342,14 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     assert_eq!(
         trade_card(&row, false).lines().next(),
         Some(
-            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
+            "\u{1f7e2} <b>#ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
         )
     );
     row.profit_usd = Some(7.5);
     assert_eq!(
         trade_card(&row, false).lines().next(),
         Some(
-            "\u{1f7e2} <b>ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> \u{2248} +7.50$ (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
+            "\u{1f7e2} <b>#ETHBTC</b> \u{00b7} <b>+0.00012 BTC</b> \u{2248} +7.50$ (+1.25%) \u{00b7} 0.0105 BTC \u{00b7} 2m"
         )
     );
     row.quote = moon_core::db::QuoteCurrency::from_report_ordinal(8);
@@ -334,7 +361,7 @@ fn a_card_prints_the_trade_in_its_own_currency() {
     assert_eq!(
         card.lines().next(),
         Some(
-            "\u{1f534} <b>ETHBTC</b> \u{00b7} <b>-3.3 USDC</b> (-0.50%) \u{00b7} 1 234 USDC \u{00b7} 2m"
+            "\u{1f534} <b>#ETHBTC</b> \u{00b7} <b>-3.3 USDC</b> (-0.50%) \u{00b7} 1 234 USDC \u{00b7} 2m"
         )
     );
     assert_eq!(

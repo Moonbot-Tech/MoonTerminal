@@ -168,11 +168,11 @@ rich):
   least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
   that closes after the switch is turned on is eligible, and the dedup window is 72 hours.
   A close older than that window is not announced. The card leaves within about five seconds of
-  the trade reaching the report replica. Its first line shows the sign mark, the coin in bold,
+  the trade reaching the report replica. Its first line shows the sign mark, the coin hashtag in bold,
   the profit and percent, the entry volume when known, and the holding duration, separated by
   middle dots. Profit and volume use the trade's own currency (`+0.00012 BTC`, `+3.3 USDC`;
   outside a USD stablecoin the dollar profit follows once the USDT valuation has it). Without
-  native volume, the valued entry volume prints in whole dollars. The second line names the core,
+  native volume, the valued entry volume prints in whole dollars. The second line is the core hashtag,
   and the third is the strategy in italics. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
   A trade in another currency that a filter needs to judge waits up to five minutes for its
   valuation; after that it is sent with a line saying its thresholds were not checked. With the
@@ -182,18 +182,24 @@ rich):
   chat receives one down message. When that core connects again, the chat receives one back
   message. A core that leaves the configured set is forgotten: it does not stay announced as
   down, and no back message is sent for it. If it returns and is lost again, the delay starts
-  over.
+  over. Both notices use the same core hashtag as its trade cards.
 - What the cores themselves would send to their own Telegram, which does not come over the
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
   terminal's Settings and the bot's Settings -> Notifications; emulator trades are included, and
-  the chat adds no filters of its own. These events keep the core's name and a colon first,
+  the chat adds no filters of its own. These events keep the core's hashtag and a colon first,
   then each event with its coin as a hashtag and the strategy on the line below; consecutive
   events of one core share its name. The first event after a quiet spell goes at once; what
   follows within 2 seconds (5 in a group, which Telegram takes slower) is merged into one message,
   so a burst of detects is one list; a long list is cut and counted. Only what happens
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
   a chat whose queue Telegram has not drained for five minutes.
+
+Coin and core hashtags are always shown on these pushes and chart captions. Tapping one searches
+the chat for that coin or core. The first 64 Unicode scalars keep their case, letters and digits;
+spaces, dashes, dots, slashes and other punctuation become underscores. Cyrillic letters stay as
+they are. A name without a letter (including a digits-only or empty name) keeps its original
+escaped text without `#`. The same mapping and length cap apply to every push above.
 
 Deal charts are a picture of a closed trade, sent apart from the trade cards — a chat may have the
 cards off and the pictures on. They are switched per chat in the terminal's Settings -> Telegram,

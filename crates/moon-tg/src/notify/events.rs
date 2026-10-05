@@ -26,7 +26,7 @@ use moon_core::telegram::reply::utf16_len;
 use moon_core::telegram::runtime::{NotifyStore, push_outbox};
 
 use crate::TgHost;
-use crate::html::{coin_tag, escape};
+use crate::html::{TAG_NAME_CHARS, escape, name_tag};
 
 /// Shortest gap between two batches to a private chat. Telegram takes its message a second
 /// (`CHAT_GAP_PRIVATE`), so a storm's lists stay ahead of the sender, not behind it.
@@ -256,7 +256,7 @@ fn wanted(rule: EventRule, event: &CoreTgEvent) -> bool {
 /// a ring before they could be read, are counted on a last line. `None` when there is nothing to
 /// tell.
 ///
-/// Laid out as the cores' own bot writes it (LinKvo, 04.10): the core's name and a colon, then
+/// Laid out as the cores' own bot writes it (LinKvo, 04.10): the core's hashtag and a colon, then
 /// its events, each on its own line with the strategy in italics below. A run of one core's
 /// events shares its name.
 ///
@@ -286,7 +286,7 @@ pub(crate) fn render(
             let fallback = format!("core {}", event.core);
             block.push(format!(
                 "{}:",
-                cut(names.resolve(event.core, &fallback), NAME_CHARS)
+                name_tag(names.resolve(event.core, &fallback), TAG_NAME_CHARS, false)
             ));
         }
         block.extend(line(event));
@@ -319,7 +319,7 @@ fn line(event: &Fresh) -> Vec<String> {
             strat_name,
             ..
         } => {
-            let mut text = format!("\u{1f514} {}", coin_tag(market, NAME_CHARS));
+            let mut text = format!("\u{1f514} {}", name_tag(market, TAG_NAME_CHARS, true));
             let msg = msg.trim();
             if !msg.is_empty() {
                 text.push_str(" \u{2014} ");
@@ -340,7 +340,7 @@ fn line(event: &Fresh) -> Vec<String> {
             (
                 format!(
                     "\u{1f7e6} {} \u{2014} {}",
-                    coin_tag(coin, NAME_CHARS),
+                    name_tag(coin, TAG_NAME_CHARS, true),
                     escape(&word)
                 ),
                 strat_name,

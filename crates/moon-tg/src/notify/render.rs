@@ -10,15 +10,16 @@ use moon_core::feed::order_math::MONEY_DECIMALS;
 use moon_core::util::{display_time, fmt};
 
 use super::trades::ClosedTrade;
-use crate::html::escape;
+use crate::html::{TAG_NAME_CHARS, escape, name_tag};
 
 /// Longest coin, core, or strategy kept on a card, in Unicode scalars.
 const NAME_CHARS: usize = 64;
 
 /// One closed trade as a three-line HTML card, in the trade's own currency.
 ///
-/// Line 1 is a sign mark, the coin, the signed profit, an optional entry
-/// volume, and the duration. Line 2 is the core name. Line 3 is the strategy,
+/// Line 1 is a sign mark, the coin hashtag, the signed profit, an optional entry
+/// volume, and the duration. Line 2 is the core hashtag. Untaggable names keep their
+/// escaped text. Line 3 is the strategy,
 /// in italics. An unchecked card adds a fourth line saying its thresholds were
 /// not checked.
 ///
@@ -43,7 +44,7 @@ pub(crate) fn trade_card(t: &ClosedTrade, unchecked: bool) -> String {
         None => sign_mark(t.profit_usd),
     };
     let mut parts = vec![
-        format!("{mark} <b>{}</b>", name(&t.coin)),
+        format!("{mark} <b>{}</b>", name_tag(&t.coin, TAG_NAME_CHARS, false)),
         profit_text(t, native.map(|(text, _)| text)),
     ];
     if let Some(volume) = volume_text(t) {
@@ -53,7 +54,7 @@ pub(crate) fn trade_card(t: &ClosedTrade, unchecked: bool) -> String {
     let mut card = format!(
         "{}\n{}\n{}",
         parts.join(" \u{00b7} "),
-        name(&t.core_name),
+        name_tag(&t.core_name, TAG_NAME_CHARS, false),
         strategy_line(&t.strategy)
     );
     if unchecked {
@@ -114,7 +115,7 @@ fn volume_text(t: &ClosedTrade) -> Option<String> {
 /// One line: the core lost its link, and the local time that outage started.
 ///
 /// Args:
-///     core_name: Configured core name. Cut to 64 chars, then escaped.
+///     core_name: Configured core name, mapped to the card's hashtag or escaped fallback.
 ///     since_utc: UTC Unix seconds when the loss was first observed.
 ///     zone: Host report zone. The clock is that zone's `HH:MM`.
 ///
@@ -124,7 +125,7 @@ fn volume_text(t: &ClosedTrade) -> Option<String> {
 pub(crate) fn down_line(core_name: &str, since_utc: i64, zone: Tz) -> String {
     format!(
         "\u{1f534} {} \u{2014} {} {}",
-        name(core_name),
+        name_tag(core_name, TAG_NAME_CHARS, false),
         escape(&t!("telegram.notify_down")),
         local_hhmm(since_utc, zone)
     )
@@ -133,7 +134,7 @@ pub(crate) fn down_line(core_name: &str, since_utc: i64, zone: Tz) -> String {
 /// One line: the core is back, with how long the announced outage lasted.
 ///
 /// Args:
-///     core_name: Configured core name. Cut to 64 chars, then escaped.
+///     core_name: Configured core name, mapped to the card's hashtag or escaped fallback.
 ///     down_for_secs: Seconds from the recorded loss to now. Negative becomes
 ///         zero minutes.
 ///
@@ -143,7 +144,7 @@ pub(crate) fn down_line(core_name: &str, since_utc: i64, zone: Tz) -> String {
 pub(crate) fn back_line(core_name: &str, down_for_secs: i64) -> String {
     format!(
         "\u{1f7e2} {} \u{2014} {} ({})",
-        name(core_name),
+        name_tag(core_name, TAG_NAME_CHARS, false),
         escape(&t!("telegram.notify_back")),
         human_duration(down_for_secs)
     )
