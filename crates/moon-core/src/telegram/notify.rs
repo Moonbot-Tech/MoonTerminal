@@ -25,7 +25,7 @@ pub enum CoreScope {
     Only(Vec<u64>),
 }
 
-/// Closed-trade card rule. `on` defaults to off, so a new chat announces nothing.
+/// Closed-trade card rule. Missing stored fields keep cards off.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct TradeRule {
@@ -159,7 +159,7 @@ impl AutoReports {
     }
 }
 
-/// One chat's notification rules. Every switch defaults to off.
+/// One chat's notification rules. Missing stored switches default to off.
 ///
 /// Unknown fields are ignored, not rejected: a document written before the daily summary was
 /// removed still carries `"daily"`, and it must keep loading.
@@ -183,6 +183,25 @@ pub struct NotifySettings {
     /// keeps the stored value.
     #[serde(skip_serializing_if = "ChartRule::is_off")]
     pub charts: ChartRule,
+}
+
+impl NotifySettings {
+    /// Initial rules for a chat with no stored entry; serde defaults stay all-off for old chats.
+    pub fn new_chat() -> Self {
+        Self {
+            trades: TradeRule {
+                on: true,
+                profit_at_least_usd: Some(100.0),
+                loss_at_least_usd: Some(100.0),
+                ..TradeRule::default()
+            },
+            down: DownRule {
+                on: true,
+                ..DownRule::default()
+            },
+            ..Self::default()
+        }
+    }
 }
 
 /// The cores' own Telegram reports a chat relays: what a strategy marks for Telegram

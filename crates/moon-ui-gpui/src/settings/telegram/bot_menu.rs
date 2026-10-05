@@ -53,7 +53,7 @@ const ROOT: &str = "kb";
 const ROW_H: f32 = 30.0;
 
 /// Unscaled narrowest width of one column; below two of them the columns stack.
-const COLUMN_MIN_W: f32 = 320.0;
+pub(super) const COLUMN_MIN_W: f32 = 320.0;
 
 /// The button order and the language its labels are in: all the tree's items depend on.
 fn shape_sig(menu: &BotMenu) -> u64 {
@@ -84,6 +84,18 @@ fn tree_items(menu: &BotMenu) -> Vec<MoonTreeItem> {
 fn item_caption(item: MenuItem) -> String {
     let key = format!("telegram.button_{}", item.id());
     t!(&key).to_string()
+}
+
+/// Identify the edited bot in a settings section, using the station's configured host.
+fn bot_section_title(side: ChatsOf, station_host: &str, section: &str) -> String {
+    let host = match side {
+        ChatsOf::Terminal => t!("telegram.settings.host_terminal").to_string(),
+        ChatsOf::Station if station_host.is_empty() => {
+            t!("telegram.settings.host_station").to_string()
+        }
+        ChatsOf::Station => t!("telegram.server.bot_title", addr = station_host).to_string(),
+    };
+    format!("{host} — {}", t!(section))
 }
 
 /// One button as a row shows it.
@@ -120,6 +132,19 @@ fn rows_by_id(menu: &BotMenu) -> HashMap<String, Row> {
 }
 
 impl SettingsView {
+    /// Name the bot whose independent settings this section edits, even after scrolling.
+    pub(super) fn bot_section_title(&self, side: ChatsOf, section: &str) -> String {
+        bot_section_title(
+            side,
+            self.telegram
+                .server
+                .known()
+                .map(|target| target.host.as_str())
+                .unwrap_or_default(),
+            section,
+        )
+    }
+
     fn bot_menu_ed(&self, side: ChatsOf) -> &BotMenuEd {
         match side {
             ChatsOf::Terminal => &self.telegram.menu,
@@ -154,7 +179,7 @@ impl SettingsView {
     }
 
     /// Change `side`'s bot settings; `edit` says whether it changed anything.
-    fn bot_settings_edit(
+    pub(in crate::settings) fn bot_settings_edit(
         &mut self,
         side: ChatsOf,
         cx: &mut Context<Self>,
@@ -163,7 +188,7 @@ impl SettingsView {
         self.chats_edit(side, cx, |telegram| edit(&mut telegram.bot));
     }
 
-    /// The bot's box for `side`: the menu on the left, a chat's notifications on the right.
+    /// The named host's bot box: the menu on the left, a chat's notifications on the right.
     pub(in crate::settings) fn bot_menu_box(
         &self,
         side: ChatsOf,
@@ -185,7 +210,7 @@ impl SettingsView {
             )
         };
         MoonGroupBox::new(id("box"))
-            .title(t!("telegram.menu_editor.title").to_string())
+            .title(self.bot_section_title(side, "telegram.menu_editor.title"))
             .padding(14.0)
             .gap(10.0)
             .child(

@@ -61,6 +61,8 @@ fn status(host: Option<Host>) -> Status {
         host: host.map(Box::new),
         last_update: None,
         auto_update: None,
+        core_uid_high_water: None,
+        cores: None,
     }
 }
 

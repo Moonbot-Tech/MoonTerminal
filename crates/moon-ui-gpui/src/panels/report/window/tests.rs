@@ -136,6 +136,7 @@ fn report_rejects_unusable_saved_dimensions() {
 /// appending it for implicit All or multi-select must fail the surrounding assertions.
 #[test]
 fn report_title_names_only_an_explicit_sole_core() {
+    let _locale = crate::test_locale::force("en");
     let cores = vec![(1, "CORE-A".to_string()), (2, "CORE-B".to_string())];
     assert_eq!(report_title(&Default::default(), &cores), "Report");
     assert_eq!(

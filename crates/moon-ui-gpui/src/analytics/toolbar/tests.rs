@@ -195,6 +195,7 @@ fn nothing_to_say_renders_no_strip() {
 /// user gets the full warning band on the tab they use most.
 #[test]
 fn the_notice_starts_collapsed_and_opens_only_on_request() {
+    let _locale = crate::test_locale::force("en");
     // The default is half the claim, so assert it here rather than leaving it to a source
     // grep: `undated_banner_state` only ever sees the value it is handed.
     assert!(
@@ -224,6 +225,7 @@ fn the_notice_starts_collapsed_and_opens_only_on_request() {
 /// one-line count — claiming a number for rows nobody managed to read.
 #[test]
 fn a_read_failure_is_never_collapsed() {
+    let _locale = crate::test_locale::force("en");
     for expanded in [false, true] {
         assert!(
             matches!(

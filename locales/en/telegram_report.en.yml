@@ -1,4 +1,7 @@
 _version: 1
+telegram.report_title: "Report"
+telegram.report_average_col: "Avg %"
+telegram.report_volume_col: "Volume"
 
 telegram.help_hour: "This hour"
 
@@ -106,6 +109,7 @@ telegram.notify_manual: "Manual"
 telegram.notify_unvalued: "Unvalued"
 
 telegram.notify_unchecked: "Thresholds not checked: no dollar value"
+telegram.notify_core_named: "Name: %{name}"
 
 telegram.notify_opened: "Trade opened"
 telegram.notify_emulator: "emulator"

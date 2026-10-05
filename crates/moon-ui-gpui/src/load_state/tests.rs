@@ -119,11 +119,10 @@ fn db_read_failed_retryable_only_for_busy_and_other() {
 
 /// `load_state.rs:db_read_failed_hint` must emit the published common.yml copy in each locale.
 /// Collapsing every kind onto `chart.trade_history.failed` is the badge the user reported.
+/// Resolve the expected folder under the shared locale/data-dir guard so fixture installation
+/// cannot change it between capture and rendering.
 #[test]
 fn db_read_failed_hint_names_the_cause_in_english_and_russian() {
-    let data_dir = moon_core::config::paths::db_dir_path()
-        .display()
-        .to_string();
     for (locale, busy_needles, corrupt, other, denial_title) in [
         (
             "en",
@@ -153,6 +152,9 @@ fn db_read_failed_hint_names_the_cause_in_english_and_russian() {
         ),
     ] {
         let _locale = crate::test_locale::force(locale);
+        let data_dir = moon_core::config::paths::db_dir_path()
+            .display()
+            .to_string();
         let busy = db_read_failed_hint(FailKind::Busy);
         for needle in busy_needles {
             assert!(

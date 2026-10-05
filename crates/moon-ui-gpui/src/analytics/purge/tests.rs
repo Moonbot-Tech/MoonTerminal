@@ -102,6 +102,7 @@ fn strategy(id: u64, folder_path: &str) -> StrategyRow {
 /// confirmation that omits them promises a clean sweep the operation will not deliver.
 #[test]
 fn the_legacy_caveat_appears_whenever_there_are_legacy_rows() {
+    let _locale = crate::test_locale::force("en");
     let lines = purge_summary_lines(PurgeMode::Whole, 12, 4, 3);
 
     assert_eq!(lines.len(), 2, "count line plus the caveat: {lines:?}");
@@ -114,6 +115,7 @@ fn the_legacy_caveat_appears_whenever_there_are_legacy_rows() {
 /// Adding an unconditional warning would falsely claim that addressable rows must survive.
 #[test]
 fn no_legacy_rows_means_no_caveat() {
+    let _locale = crate::test_locale::force("en");
     let lines = purge_summary_lines(PurgeMode::Whole, 12, 4, 0);
 
     assert_eq!(lines.len(), 1, "nothing to warn about: {lines:?}");
@@ -123,6 +125,7 @@ fn no_legacy_rows_means_no_caveat() {
 /// whose trades are already gone.
 #[test]
 fn zero_trades_is_stated_not_counted() {
+    let _locale = crate::test_locale::force("en");
     let zero = purge_summary_lines(PurgeMode::Whole, 0, 0, 0);
     let some = purge_summary_lines(PurgeMode::Whole, 5, 2, 0);
 
@@ -136,6 +139,7 @@ fn zero_trades_is_stated_not_counted() {
 /// summary carrying only one of them would read as the wrong number rather than as a wider scope.
 #[test]
 fn the_count_line_states_both_scopes() {
+    let _locale = crate::test_locale::force("en");
     let lines = purge_summary_lines(PurgeMode::Whole, 120, 37, 0);
 
     assert!(
@@ -147,6 +151,7 @@ fn the_count_line_states_both_scopes() {
 /// Report-only progress must never imply that the strategy is being disabled or deleted.
 #[test]
 fn report_rows_only_has_one_progress_step_and_distinct_empty_copy() {
+    let _locale = crate::test_locale::force("en");
     assert_eq!(PurgeMode::RowsOnly.steps(), &[super::PurgeStep::Rows]);
     assert_ne!(
         purge_summary_lines(PurgeMode::RowsOnly, 0, 0, 0),

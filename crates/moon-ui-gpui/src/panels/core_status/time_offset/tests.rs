@@ -41,6 +41,7 @@ fn a_quarter_hour_offset_keeps_its_minutes() {
 /// measured must not read the same.
 #[test]
 fn unknown_never_renders_as_utc() {
+    let _locale = crate::test_locale::force("en");
     let text = tz_offset_cell_text(TzOffsetCell::Unknown);
     assert!(!text.starts_with("UTC"), "unknown text was {text:?}");
 }
@@ -76,6 +77,7 @@ fn measured_values_order_by_signed_offset() {
 /// never-measured line and the sample count standing behind it.
 #[test]
 fn an_unmeasured_status_reports_no_offset_line() {
+    let _locale = crate::test_locale::force("en");
     let facts = TzOffsetFacts {
         offset_secs: None,
         samples: 2,
@@ -93,6 +95,7 @@ fn an_unmeasured_status_reports_no_offset_line() {
 /// string that ignores its argument.
 #[test]
 fn the_tooltip_is_built_from_the_facts_not_restated() {
+    let _locale = crate::test_locale::force("en");
     let base = TzOffsetFacts {
         offset_secs: Some(3_600),
         samples: 5,

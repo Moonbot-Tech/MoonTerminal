@@ -81,6 +81,7 @@ fn a_normal_completed_count_stays_under_the_fixed_total() {
 /// tooltip's line count equals the fact count — the two can never disagree about what is shown.
 #[test]
 fn an_absent_upstream_value_contributes_no_fact_line() {
+    let _locale = crate::test_locale::force("en");
     let s = CoreStartupStatus {
         state: CoreStartupState::Connecting,
         round_trip_ms: None,
@@ -187,6 +188,7 @@ fn local_udp_ports_add_three_distinct_optional_fact_lines() {
 /// socket while the counters beneath it silently describe another.
 #[test]
 fn problem_diagnostic_keeps_verdict_and_socket_facts_on_the_failed_attempt() {
+    let _locale = crate::test_locale::force("en");
     let failed = CoreStartupStatus {
         current_local_udp_port: Some(31_002),
         current_port_sent_packets: 17,

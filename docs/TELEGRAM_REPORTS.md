@@ -21,8 +21,13 @@ and then each page holds the largest of a fixed set of page sizes that still fit
 Previous keep their rows when a trade closes between two presses. A core is one table row: a long name keeps its
 first 8 and last 15 characters, and the full name is in the details. Native currency amounts and
 averages are in an expandable two-column table. The main table starts with column titles and
-ends with the whole-period Total row, with every total cell bold. Its caption keeps the view and
-period on one line; an automatic report uses its own title and zone. Dollar-denominated amounts
+ends with the whole-period Total row, with every total cell bold. A short paragraph before the
+table starts with the bold localized word "Report", followed by the existing view or scope title
+when present, then the period for the chat-list and push preview. For example: **Report** ·
+05.10 · 00:00—19:13, or **Report · Cores** · 05.10 · 00:00—19:13. An automatic report keeps
+its own title and zone. Same-day periods separate the date from the times with a middle dot;
+whole-day dates and across-days ranges keep their existing form. The table does not repeat
+that text in a caption. Dollar-denominated amounts
 use two decimals; crypto-denominated amounts retain up to eight. Calculation guidance is in Help; average-coverage counts remain in the monetary details only
 when rows were excluded.
 Exchange membership uses reported venue identity, including market type and HIP-3 DEX.
@@ -68,6 +73,14 @@ was last sent. The station's bot menu shows whether its groups are this terminal
 groups to the station" when they are not — never on its own, so a terminal without groups cannot
 wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
 
+Settings -> Station -> Cores on the station compares cores by address, using the station's own
+identities for Chats grants. Save in Connections never changes the station. The block shows
+matching cores, cores only here, cores only on the station, and changed names or keys; row buttons
+add a core or send its name or key. Send changes sends only additions and changes, leaving
+station-only cores untouched. Removing a station-only core requires two inline clicks and keeps
+its reports on the station; the final station core cannot be removed. An older station shows an
+update notice until it supports the listing. Installation sends only the picked cores.
+
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;
 a station's is switched in the terminal's Settings), set this chat's notifications — trade
@@ -76,6 +89,11 @@ on a station, open its
 status. Each switch saves at once; button order and rows stay in the terminal's Settings, trade
 thresholds and cores in the terminal's Settings and the Mini App's Settings tab. A change made in
 the chat reaches an open terminal Settings window only where that window had not been edited.
+
+Every screen under the bot's Settings menu names its host: "Bot of this terminal" or "Station
+bot". In Settings -> Telegram, the bot and menu/notifications section titles distinguish the
+terminal's bot from the station's bot; the station title includes its configured host. These
+are independent bots with independent chat settings: changing one does not change the other.
 
 Each chat's notifications can also be set in Settings -> Telegram, in the right column of the
 "Bot menu and notifications" box: pick a chat, then its trade cards (cores, minimum volume, profit
@@ -155,10 +173,40 @@ Atomic persistence completes before deleting a replaced answer; a failed save re
 The history cache never grants authorization and contains no token or report content.
 Messages sent before this persistence feature cannot be recovered from Telegram history.
 
+## Message look
+
+Settings -> Telegram has a "Bot message builder" box under the bot menu, with Card and Report
+tabs and a preview made from synthetic examples. A station-hosted bot stores the layout with its
+bot settings **on the station**: every terminal edits the same set. Press "Save on the station"
+to apply it. A terminal-hosted bot stores it in its own config through the global Save button.
+
+The Card tab arranges fields into lines. Drag fields and lines to reorder them, hide fields in
+the tray, or restore them from it; the move and hide buttons and tray also work with the keyboard.
+"Coin first" is the default, matching the existing card. "Core first, as in MoonBot" starts with
+`Name: <core>`. Without a saved layout, the coin hashtag is on and the core hashtag is off.
+Saved hashtag choices stay unchanged. The switches affect cards only: core down/back notices
+always keep their hashtags.
+
+The Report tab keeps the first column fixed and lets you reorder or hide Profit, Trades,
+Average % and Volume. At least one of these columns stays visible; all four may not fit a phone.
+Volume shows a native amount only for a complete single-currency scope.
+The total goes at the Bottom by default, or at the Top. Separation is Band by default, a shaded
+row with bold text and values; Spacer + band adds an empty row beside it. There is no line option
+because Telegram rich tables cannot draw a rule inside a table. Group rows use Band by default,
+or Bold left for bold cells with a left-aligned name.
+
+A layout saved by a newer terminal still renders the fields and columns this version knows.
+An older station or terminal may ignore or reset the layout when it saves the bot settings.
+
 ## Notifications
 
-The Mini App «Настройки» tab is where a paired chat turns on messages the bot sends on its own.
-Every switch is off until that chat saves it. Each chat has its own settings. A viewer is limited
+The Mini App «Настройки» tab and the bot's Settings -> Notifications edit each chat's rules.
+A newly paired chat starts with closed-trade cards on for all permitted cores, profit and loss
+thresholds of at least 100 USD each, and no volume floor. Core down/back notices start on after
+five minutes. Dollar follow-ups, automatic reports, core events and deal charts stay off.
+Existing stored chats keep their choices, including off switches omitted from old documents.
+The first settings draft for a chat with no stored entry uses the same initial rules.
+Each chat has its own settings. A viewer is limited
 to the cores that chat can see. The owner can hear about every core the host keeps.
 
 Three kinds of message are ordinary bot messages, not rich reports (automatic reports, below, are
@@ -168,11 +216,13 @@ rich):
   least some USD, and a loss of at least some USD. Each trade is announced once. Only a trade
   that closes after the switch is turned on is eligible, and the dedup window is 72 hours.
   A close older than that window is not announced. The card leaves within about five seconds of
-  the trade reaching the report replica. Its first line shows the sign mark, the coin in bold,
+  the trade reaching the report replica. Its first line shows the sign mark, the coin hashtag in bold,
   the profit and percent, the entry volume when known, and the holding duration, separated by
-  middle dots. Profit and volume use the trade's own currency (`+0.00012 BTC`, `+3.3 USDC`;
-  outside a USD stablecoin the dollar profit follows once the USDT valuation has it). Without
-  native volume, the valued entry volume prints in whole dollars. The second line names the core,
+  middle dots. USD stablecoin profit and volume use a dollar suffix without a space or ticker
+  (`-106.36$`, `5 993$` for USDT or USDC). Other quotes keep their own currency (`+0.00012 BTC`)
+  and the dollar profit follows once the USDT valuation has it. Without
+  native volume, the valued entry volume prints in whole dollars. The second line is the core name
+  (a hashtag only when that card-layout switch is on),
   and the third is the strategy in italics. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
   A trade in another currency that a filter needs to judge waits up to five minutes for its
   valuation; after that it is sent with a line saying its thresholds were not checked. With the
@@ -182,18 +232,25 @@ rich):
   chat receives one down message. When that core connects again, the chat receives one back
   message. A core that leaves the configured set is forgotten: it does not stay announced as
   down, and no back message is sent for it. If it returns and is lost again, the delay starts
-  over.
+  over. Both notices always use the core hashtag, independently of the card-layout switch.
 - What the cores themselves would send to their own Telegram, which does not come over the
   wire: a trade opened, when its strategy has "Report trades to Telegram" on, and a detect, when
   its strategy has "Report to Telegram" on. Two switches, "Trade opened" and "Detect", in the
   terminal's Settings and the bot's Settings -> Notifications; emulator trades are included, and
-  the chat adds no filters of its own. These events keep the core's name and a colon first,
+  the chat adds no filters of its own. These events keep the core's hashtag and a colon first,
   then each event with its coin as a hashtag and the strategy on the line below; consecutive
   events of one core share its name. The first event after a quiet spell goes at once; what
   follows within 2 seconds (5 in a group, which Telegram takes slower) is merged into one message,
   so a burst of detects is one list; a long list is cut and counted. Only what happens
   while the bot runs is relayed: nothing older than two minutes, each trade once, and nothing for
   a chat whose queue Telegram has not drained for five minutes.
+
+Core event pushes and chart captions always show coin and core hashtags; trade cards follow the
+saved layout switches. Tapping a hashtag searches
+the chat for that coin or core. The first 64 Unicode scalars keep their case, letters and digits;
+spaces, dashes, dots, slashes and other punctuation become underscores. Cyrillic letters stay as
+they are. A name without a letter (including a digits-only or empty name) keeps its original
+escaped text without `#`. The same mapping and length cap apply to every push above.
 
 Deal charts are a picture of a closed trade, sent apart from the trade cards — a chat may have the
 cards off and the pictures on. They are switched per chat in the terminal's Settings -> Telegram,
@@ -213,11 +270,16 @@ Automatic reports are the rich report a menu button opens, sent by the bot on it
 switched per chat from the bot's Settings -> Notifications or the terminal's Settings -> Telegram ->
 Bot menu and notifications (the Mini App does not show them, and its save leaves them as they are):
 
-- Hourly, at the top of every hour in the display time zone, for the hour that just ended. Every
+- Each hour separately, at the top of every hour in the display time zone, for the hour that just ended. Every
   hourly report stays in the chat.
-- Today, at the top of every hour, from midnight; at midnight, the whole day that just ended.
-- Month, at midnight, from the 1st to the end of the day that just ended; on the 1st, the whole
+- Today, every hour: the running summary from midnight is replaced at the start of each hour;
+  at midnight, the whole day that just ended.
+- Month, at midnight: from the 1st to the end of the day that just ended; on the 1st, the whole
   month that just ended.
+
+Turning off the separate hourly reports does not turn off Today's hourly updates. The compact
+toggle labels show these schedules in both the bot's Notifications menu and Settings -> Telegram;
+the section hint explains replacement and the midnight summary.
 
 A new today or month report replaces the chat's previous one of its kind. Each opens in the bot's
 report view and counts on its period basis; a line on top names it, the zone offset and the basis,

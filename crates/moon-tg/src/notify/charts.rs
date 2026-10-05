@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use chrono_tz::Tz;
+use moon_core::config::telegram_layout::CardLayout;
 use moon_core::db::CoreNames;
 use moon_core::db::order_traces::{self, TraceEntry};
 use moon_core::feed::ArchivedLineKind;
@@ -79,6 +80,7 @@ struct Outcome {
 }
 
 /// Start a drawing job when pictures are queued, none is in flight, and the interval is open.
+/// Capture the saved card layout on the owner thread before drawing captions in the job.
 ///
 /// Args:
 ///     host: The queue, the busy flag and the spawn hook.
@@ -96,6 +98,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
     }
     let zone = host.report_zone();
     let names = CoreNames::from_servers(&host.config().servers);
+    let layout = host.config().telegram.bot.message_layout.card.sanitized();
     let spool = chart_spool_dir(&host.notifications_path());
     let store = Arc::clone(store);
     let state = host.state_mut();
@@ -106,7 +109,7 @@ pub(crate) fn run(host: &mut dyn TgHost, store: &Arc<Mutex<NotifyStore>>, now_ut
         // A picture that panics costs this job's pictures, never the busy flag: the finish
         // always comes back.
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            draw_all(due, zone, names, &spool)
+            draw_all(due, zone, names, &spool, &layout)
         }))
         .unwrap_or_else(|_| {
             log::error!("telegram charts: drawing panicked, this job's pictures are lost");
@@ -164,8 +167,14 @@ fn finish(host: &mut dyn TgHost, store: &Mutex<NotifyStore>, outcome: Outcome, n
     state.charts_busy = false;
 }
 
-/// Draw every picture that is ready; one trade due in several chats is drawn once.
-fn draw_all(due: Vec<Due>, zone: Tz, names: CoreNames, spool: &Path) -> Outcome {
+/// Draw ready pictures once per trade, using the owner's captured layout for captions.
+fn draw_all(
+    due: Vec<Due>,
+    zone: Tz,
+    names: CoreNames,
+    spool: &Path,
+    layout: &CardLayout,
+) -> Outcome {
     let mut by_trade: BTreeMap<(u64, i64), Vec<Due>> = BTreeMap::new();
     for entry in due {
         by_trade
@@ -230,7 +239,7 @@ fn draw_all(due: Vec<Due>, zone: Tz, names: CoreNames, spool: &Path) -> Outcome 
             chats: entries.iter().map(|e| e.chat).collect(),
             core,
             file,
-            caption: trade_card(&trade, false),
+            caption: trade_card(&trade, false, layout),
         });
     }
     outcome

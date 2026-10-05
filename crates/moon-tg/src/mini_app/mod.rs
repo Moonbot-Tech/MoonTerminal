@@ -22,7 +22,7 @@ pub(crate) mod dto;
 mod reads;
 mod settings;
 
-pub(crate) use settings::{chat_notify, save_chat_notify};
+pub(crate) use settings::{chat_notify, create_chat_settings, save_chat_notify};
 pub use settings::{check_notify_rows, notify_rows, save_notify_rows};
 
 /// Answer one Mini App request. The live session check is handled by the caller.

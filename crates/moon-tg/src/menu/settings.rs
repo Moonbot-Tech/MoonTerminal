@@ -22,7 +22,7 @@ use crate::{HostKind, TgHost};
 /// Minutes a core may stay down before the notice, offered as presets.
 const DOWN_PRESETS: [u16; 2] = [1, 5];
 
-/// Answer a Settings button: apply its switch, if any, then show its screen.
+/// Answer a Settings button: apply any requested switch, then render its screen or request status.
 pub(super) fn run(
     host: &mut dyn TgHost,
     chat: i64,
@@ -57,21 +57,39 @@ pub(super) fn run(
             }
         },
     };
-    let (title, lines, keyboard) = rows;
     // The keyboard as the change left it: a button hidden here leaves the chat's keyboard now.
     let navigation = navigation_keyboard(host.kind(), true, &host.config().telegram);
-    let mut html = format!("<p><b>{}</b></p>", escape(&title));
+    let _ = reply.try_send(render(host.kind(), rows, navigation));
+}
+
+/// Render every Settings screen with the same host header, preserving its actions and navigation.
+fn render(host: HostKind, rows: Rendered, navigation: ReplyMarkup) -> Response {
+    let (title, lines, keyboard) = rows;
+    let mut html = format!(
+        "<p><b>{}</b></p><p><b>{}</b></p>",
+        escape(&host_title(host)),
+        escape(&title)
+    );
     for line in lines {
         html.push_str(&format!("<p>{}</p>", escape(&line)));
     }
-    let _ = reply.try_send(Response::Rich {
+    Response::Rich {
         html,
         keyboard: ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(keyboard)),
         navigation: (
             t!("telegram.report_navigation_hint").to_string(),
             navigation,
         ),
-    });
+    }
+}
+
+/// Name the process whose settings this screen edits; core addresses are not station addresses.
+fn host_title(host: HostKind) -> String {
+    match host {
+        HostKind::Terminal => t!("telegram.settings.host_terminal"),
+        HostKind::Station => t!("telegram.settings.host_station"),
+    }
+    .to_string()
 }
 
 /// Which screen a button leads to.
@@ -508,10 +526,10 @@ fn notify_screen(notify: &NotifySettings) -> Rendered {
     )
 }
 
-/// An automatic report's name.
+/// An automatic report toggle's compact schedule, separate from delivered report titles.
 fn auto_title(kind: AutoReport) -> String {
     match kind {
-        AutoReport::Hourly => t!("telegram.auto.hourly"),
+        AutoReport::Hourly => t!("telegram.auto.toggle_hourly"),
         AutoReport::Today => t!("telegram.auto.today"),
         AutoReport::Month => t!("telegram.auto.month"),
     }

@@ -10,6 +10,7 @@ use super::{MoonTone, OrdCol, OrderStopKind, column_def, stop_look};
 /// reacting to clicks while its neighbours still sort, and the matching assertion reddens.
 #[test]
 fn every_order_column_descriptor_is_sortable() {
+    let _locale = crate::test_locale::force("en");
     for column in OrdCol::ALL {
         assert!(
             column_def(column).sortable,

@@ -298,8 +298,9 @@ pub fn set_token(
 }
 
 /// Move the terminal's bot to the station: its token, its paired chats with their access, and
-/// `[telegram]`; then restart the station and wait until its bot polls — paired when chats came
-/// with it, offering a pairing code when none did.
+/// `[telegram]`. The helper preserves bot fields absent from the pairing payload; this function
+/// then restarts the station and waits until its bot polls — paired when chats came with it,
+/// offering a pairing code when none did.
 ///
 /// The caller suspends its own bot BEFORE this — one token, one poller — and erases its token only
 /// when this returns `Ok`; on an error its own bot is what should run again, and the station's is
@@ -350,7 +351,7 @@ pub fn transfer_bot(
             Step::TokenWritten,
             "bot token: credential written",
         ));
-        // Stops the station: it owns the file and would overwrite it on a /pair.
+        // Stops the station and merges bot fields there before writing its owned pairing file.
         run(script::helper("put-pairing", &[]), &pairing_json).context("telegram.json")?;
         say(Progress::step(
             Step::ChatsTransferred,
@@ -482,6 +483,27 @@ fn wait_until(
                 .unwrap_or_else(|| "nothing".into());
             return Err(anyhow::anyhow!(StationError::BotNotReady).context(format!("last: {seen}")));
         }
+    }
+}
+
+/// Retry reads of the restarted service API without requiring a Telegram bot.
+/// Check the sixty-second deadline after each unsuccessful read; blocking reads may exceed it.
+/// Each retry reads fresh helper/API state, tolerating transient connection failures.
+pub fn wait_status(target: &Target, say: &mut dyn FnMut(Progress)) -> anyhow::Result<BotState> {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let last = match bot_state(target) {
+            Ok(state) if state.station.is_some() => {
+                say(Progress::step(Step::Status, "station API answering"));
+                return Ok(state);
+            }
+            Ok(state) => state.summary(),
+            Err(error) => format!("{error:#}"),
+        };
+        if Instant::now() >= deadline {
+            anyhow::bail!("station status did not settle: {last}");
+        }
+        std::thread::sleep(ASK_EVERY);
     }
 }
 

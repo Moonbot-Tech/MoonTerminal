@@ -24,11 +24,13 @@ mod bot_menu;
 mod chat_notify;
 mod chat_notify_charts;
 mod core_section;
+mod message_layout;
 mod qr;
 mod server_auto_update;
 mod server_bot;
 mod server_tape;
 mod station_access;
+mod station_cores;
 mod station_groups;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
@@ -57,6 +59,8 @@ pub(super) struct TelegramEd {
     server: server_bot::ServerBotEd,
     /// The terminal bot's menu tree.
     menu: bot_menu::BotMenuEd,
+    /// The terminal's session-only message editor and typed preview cache.
+    message_layout: message_layout::MessageLayoutEd,
 }
 
 impl TelegramEd {
@@ -116,6 +120,7 @@ pub(super) fn build(
         core: core_section::build(window, cx),
         server: server_bot::build(window, cx, server_bot::known_server()),
         menu: bot_menu::BotMenuEd::new(cx),
+        message_layout: message_layout::MessageLayoutEd::default(),
     };
     ed.chats.wire(access::ChatsOf::Terminal, cx);
     ed.server.chats.wire(access::ChatsOf::Station, cx);
@@ -186,11 +191,12 @@ impl SettingsView {
         v_flex()
             .w(px(column_w))
             .gap(design::ui_px(cx, 16.0))
-            .child(self.server_bot_section(cx))
+            .child(self.server_bot_section(column_w, cx))
     }
 
     /// Render exactly one bot: the station's when known, otherwise the terminal's.
-    /// Pairing and role edits share one Chats box; server jobs retain their outcome feedback.
+    /// Host-named sections distinguish independent bot settings. Pairing and role edits share
+    /// one Chats box; server jobs retain their outcome feedback.
     ///
     /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
     /// scrollbar. Unsaved edits remain explicit while live transport health is shown
@@ -384,9 +390,15 @@ impl SettingsView {
             )
             .child(self.telegram_chat_access(access::ChatsOf::Terminal, pairing_actions, None, cx))
             .child(self.bot_menu_box(access::ChatsOf::Terminal, cx))
+            .child(self.message_layout_box(access::ChatsOf::Terminal, cx))
             .child(
                 MoonGroupBox::new("telegram-mini-section")
-                    .title(t!("telegram.section_mini_app").to_string())
+                    .title(
+                        self.bot_section_title(
+                            access::ChatsOf::Terminal,
+                            "telegram.section_mini_app",
+                        ),
+                    )
                     .padding(14.0)
                     .gap(10.0)
                     .child(

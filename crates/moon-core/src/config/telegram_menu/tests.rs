@@ -2,6 +2,74 @@ use super::*;
 use crate::config::schema::ServersFile;
 use MenuItem::*;
 
+/// Dropping flattened fields would make any later save erase settings introduced by newer builds.
+#[test]
+fn unknown_bot_keys_survive_json_and_toml() {
+    let bot: BotSettings = serde_json::from_value(serde_json::json!({
+        "future_scalar": 17,
+        "received_fields": "opaque future preference",
+        "future_table": {"enabled": true, "columns": ["a", "b"]}
+    }))
+    .unwrap();
+    let json = serde_json::to_value(&bot).unwrap();
+    assert_eq!(json["future_scalar"], 17);
+    assert_eq!(json["received_fields"], "opaque future preference");
+    assert_eq!(
+        json["future_table"],
+        serde_json::json!({"enabled": true, "columns": ["a", "b"]})
+    );
+    let stored = toml::to_string(&bot).unwrap();
+    let back: BotSettings = toml::from_str(&stored).unwrap();
+    assert_eq!(back.extensions.extra, bot.extensions.extra);
+}
+
+/// Transport presence cannot change configuration signatures or equality after persistence.
+#[test]
+fn field_presence_is_not_a_preference() {
+    use std::collections::hash_map::DefaultHasher;
+    let partial: BotSettings = serde_json::from_str("{}").unwrap();
+    let complete = BotSettings::default();
+    assert_eq!(partial, complete);
+    let signature = |bot: &BotSettings| {
+        let mut hash = DefaultHasher::new();
+        bot.hash(&mut hash);
+        hash.finish()
+    };
+    assert_eq!(signature(&partial), signature(&complete));
+    assert!(
+        serde_json::to_value(partial)
+            .unwrap()
+            .get("received_fields")
+            .is_none()
+    );
+}
+
+/// Adding layout preferences must preserve bot TOML saved before the layout field existed.
+#[test]
+fn bot_without_message_layout_loads_default() {
+    let bot: BotSettings =
+        toml::from_str("report_view = 'cores'\nperiod_basis = 'open'\n").unwrap();
+    assert_eq!(*bot.message_layout, MessageLayout::default());
+    assert_eq!(bot.report_view, ReportView::Cores);
+}
+
+/// Nested layout tables must precede the menu and survive the terminal's TOML storage.
+#[test]
+fn nondefault_message_layout_survives_toml() {
+    let mut bot = BotSettings::default();
+    bot.message_layout.card = crate::config::CardLayout::moonbot_preset();
+    bot.message_layout.card.coin_hashtag = false;
+    bot.message_layout.report.total = crate::config::TotalPlace::Top;
+    bot.message_layout.report.separation = crate::config::TotalSeparation::GapBand;
+    bot.message_layout.report.columns = vec![
+        crate::config::ReportColumn::Volume,
+        crate::config::ReportColumn::Trades,
+    ];
+    let text = toml::to_string(&bot).unwrap();
+    assert!(text.find("[message_layout.").unwrap() < text.find("[menu]").unwrap());
+    assert_eq!(toml::from_str::<BotSettings>(&text).unwrap(), bot);
+}
+
 /// `servers.enc` exactly as a build before the menu wrote it.
 const OLD_SERVERS_TOML: &str = r#"
 [[servers]]
@@ -50,6 +118,7 @@ fn settings_survive_the_servers_file_round_trip() {
     file.telegram.bot = BotSettings {
         report_view: ReportView::Cores,
         period_basis: ReportBasis::Open,
+        message_layout: Default::default(),
         menu: BotMenu {
             keyboard: vec![
                 vec![MenuEntry::shown(Report), MenuEntry::shown(Help)],
@@ -57,6 +126,7 @@ fn settings_survive_the_servers_file_round_trip() {
             ],
         }
         .normalized(),
+        ..BotSettings::default()
     };
     let text = toml::to_string(&file).unwrap();
     let back: ServersFile = toml::from_str(&text).unwrap();
@@ -117,7 +187,8 @@ fn a_menu_with_the_retired_report_level_and_mini_app_loads() {
         MenuItem::ALL.len()
     );
     let text = serde_json::to_string(&bot).unwrap();
-    assert!(!text.contains("\"report\":"), "{text}");
+    let saved: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(saved["menu"].get("report").is_none(), "{text}");
     assert!(!text.contains("miniapp"), "{text}");
 }
 

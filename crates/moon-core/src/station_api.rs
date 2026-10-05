@@ -13,6 +13,7 @@
 //! Nothing here deletes data.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::config::telegram_access::TelegramChatAccess;
 use crate::config::telegram_menu::BotSettings;
@@ -224,6 +225,42 @@ impl From<TraceLine> for ArchivedOrderTrace {
     }
 }
 
+/// One core in the station's `station.toml`, as the running station reports it — never its key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ListedCore {
+    /// The station's uid: names its credential `core-<uid>` and keys its report rows. Stable.
+    pub uid: u64,
+    pub name: String,
+    /// `core_address(key)`; `None` when the credential is unavailable or the key undecodable.
+    #[serde(default)]
+    pub address: Option<String>,
+    /// `key_fingerprint(key)`; `None` when the credential is unavailable.
+    #[serde(default)]
+    pub key_fp: Option<String>,
+}
+
+/// SocketAddr display of the key's own endpoint, no hand-typed override (`198.51.100.11:4510`,
+/// `[::1]:4510`). None if undecodable.
+pub fn core_address(key: &str) -> Option<String> {
+    let target = crate::config::target_from_key(key, None)?;
+    // Without an override the host is always the key's address or the localhost fallback.
+    let crate::config::CoreHost::Ip(address) = target.host else {
+        return None;
+    };
+    Some(std::net::SocketAddr::new(address, target.port).to_string())
+}
+
+/// First 16 hex digits of SHA-256(b"moon-station core key v1\n" ++ key.trim()).
+pub fn key_fingerprint(key: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update(b"moon-station core key v1\n");
+    hash.update(key.trim().as_bytes());
+    hash.finalize()[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 /// The station now.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -251,6 +288,15 @@ pub struct Status {
     /// misreads the other.
     #[serde(default)]
     pub auto_update: Option<bool>,
+    /// The cores of `station.toml`, loaded or skipped. `None` from a station older than the
+    /// listing — an added field with a default, so neither end of version 2 misreads the other.
+    #[serde(default)]
+    pub cores: Option<Vec<ListedCore>>,
+    /// Monotonic allocation floor, including removed cores and pre-upgrade report rows.
+    /// History read errors other than `ReadFail::NotReady` raise it to `u64::MAX`, disabling adds.
+    /// Absent on older stations; allocation then starts above both currently listed sets.
+    #[serde(default)]
+    pub core_uid_high_water: Option<u64>,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the
@@ -376,8 +422,8 @@ pub struct Access {
     pub notify: Option<BTreeMap<i64, ChatNotifyRow>>,
     /// The terminal's saved core groups, for the bot's report by cores: answered by a station
     /// that knows them, sent only when the user sends them (another terminal's set is not
-    /// overwritten by a terminal that has none). Absent keeps the station's. Core uids are the
-    /// terminal's, which the station shares.
+    /// overwritten by a terminal that has none). Absent keeps the station's. Membership uids
+    /// are forwarded unchanged and interpreted in the station's own uid namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<CoreGroup>>,
 }
@@ -443,7 +489,8 @@ impl Access {
     }
 
     /// Whether a change edited from `self` (as the client read it) still applies to `current`:
-    /// the same chats, and — when the client read the bot's settings — the same settings. The zone
+    /// the same chats, and — when the client read the bot's settings — the same supplied fields.
+    /// Fields absent from an older client's payload do not count against its base. The zone
     /// is never compared: it is pushed on its own and an edit of the chats does not carry it. Nor
     /// are the notifications: each chat's row carries its own revision.
     pub fn base_holds(&self, current: &Self) -> bool {
@@ -451,7 +498,7 @@ impl Access {
             && self
                 .bot
                 .as_ref()
-                .is_none_or(|bot| current.bot.as_ref() == Some(bot))
+                .is_none_or(|bot| current.bot.as_ref().is_some_and(|now| bot.base_holds(now)))
     }
 
     /// Upgrade a saved pairing that predates the owner: its first chat becomes the explicit owner.

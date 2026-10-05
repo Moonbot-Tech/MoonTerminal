@@ -13,6 +13,10 @@
 //! Every test that switches the locale OR asserts localized text takes [`force`]. One mutex means
 //! they cannot overlap each other, and the guard puts the previous locale back — including when the
 //! test panics, so one failure does not cascade into the next test's language.
+//!
+//! The same guard also serializes tests that install or read the process-wide data-dir override.
+//! Acquire it before resolving the expected path and keep it through rendering and assertions.
+//! Installers hold it for their entire fixture use; the override itself is one-shot and persists.
 
 use std::sync::{Mutex, MutexGuard, Once, OnceLock};
 
@@ -52,6 +56,7 @@ fn lock() -> MutexGuard<'static, ()> {
 }
 
 /// Hold the interface locale at `code` for as long as the returned guard lives.
+/// Also excludes data-dir override installers and readers that use this shared test guard.
 ///
 /// Args:
 ///     code: Locale to switch to for the duration of the test.

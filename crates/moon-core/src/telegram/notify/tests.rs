@@ -81,6 +81,30 @@ fn empty_json_object_loads_all_off() {
     assert!(chat.settings.validate().is_ok());
 }
 
+/// Initial-chat values must not leak into deserialization of an existing sparse chat document.
+#[test]
+fn new_chat_rules_do_not_change_stored_missing_fields() {
+    let initial = NotifySettings::new_chat();
+    assert!(initial.trades.on);
+    assert_eq!(initial.trades.cores, CoreScope::All);
+    assert_eq!(initial.trades.profit_at_least_usd, Some(100.0));
+    assert_eq!(initial.trades.loss_at_least_usd, Some(100.0));
+    assert_eq!(initial.trades.min_volume_usd, None);
+    assert!(!initial.trades.usd_followup);
+    assert!(initial.down.on);
+    assert_eq!(initial.down.after_minutes, 5);
+    assert!(!initial.reports.any());
+    assert!(!initial.charts.on);
+    assert!(initial.events.is_off());
+    assert!(initial.validate().is_ok());
+    let file: NotifyFile = serde_json::from_str(
+        r#"{"chats":{"7":{"settings":{"reports":{"hourly":true}},"revision":4}}}"#,
+    )
+    .unwrap();
+    assert_all_off(&file.chats[&7].settings);
+    assert!(file.chats[&7].settings.reports.hourly);
+}
+
 /// An object that sets only `on` must keep the 5 minute default, not zero.
 #[test]
 fn partial_rules_keep_clock_defaults() {

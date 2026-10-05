@@ -68,6 +68,7 @@ fn a_bare_item_yields_just_its_body() {
 /// sum is not a duration at all — the delay is the later mark, here the send at +2349.
 #[test]
 fn the_delay_is_the_latest_service_mark_not_the_sum() {
+    let _locale = crate::test_locale::force("en");
     let timed = NewsItem {
         time_ms: TIME_MS,
         recv_time_ms: Some(TIME_MS + 6),

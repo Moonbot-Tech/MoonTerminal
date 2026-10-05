@@ -165,6 +165,7 @@ fn venue(code: u8, id_dex: u32, dex: &str, reported: &str) -> CoreVenue {
 /// every hover repaint, or a large strategy tree returns to its previous per-frame rebuild cost.
 #[test]
 fn venue_digest_is_stable_for_unchanged_ordered_input() {
+    let _locale = crate::test_locale::force("en");
     let venue = venue(9, 17, "alpha", "caption");
     let before = venues_digest([(7, Some(&venue)), (8, None)]);
     let after = venues_digest([(7, Some(&venue)), (8, None)]);
@@ -175,6 +176,7 @@ fn venue_digest_is_stable_for_unchanged_ordered_input() {
 /// exchange heading visible after venue discovery changes while no strategy row itself moved.
 #[test]
 fn venue_digest_moves_for_every_grouping_and_caption_input() {
+    let _locale = crate::test_locale::force("en");
     let base = venue(9, 17, "alpha", "caption");
     let baseline = venues_digest([(7, Some(&base))]);
 

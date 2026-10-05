@@ -14,6 +14,8 @@ fn status(auto_update: Option<bool>) -> Status {
         host: None,
         last_update: None,
         auto_update,
+        core_uid_high_water: None,
+        cores: None,
     }
 }
 

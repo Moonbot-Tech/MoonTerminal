@@ -5,6 +5,8 @@
 //!
 //! Each push rewrites `station.toml` from what the server holds (`edit_config`), and only while
 //! the file is still the one read: several terminals may share one station.
+//! Core pushes only add or update; only `remove_cores` removes named entries and credentials,
+//! leaving their report data intact.
 //!
 //! Only to a server `setup` closed: the administrator must already be recorded in `hosts.toml`,
 //! which `setup` writes only after its key login and sudo rule were verified. A key goes on the
@@ -15,7 +17,6 @@ use crate::progress::{Progress, Step};
 use anyhow::Context;
 use moon_core::config::{Secret, TransportVersion};
 use moon_core::station_api::{Answer, Request};
-use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::app_key;
@@ -47,38 +48,6 @@ pub fn terminal_tape() -> Option<TapeWindow> {
     })
 }
 
-/// `station.toml` as the station reads it: no key, the credential is `core-<uid>`.
-#[derive(Serialize)]
-struct StationFile<'a> {
-    core: Vec<StationCore<'a>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tape: Option<TapeWindow>,
-}
-
-#[derive(Serialize)]
-struct StationCore<'a> {
-    uid: u64,
-    name: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    transport: Option<TransportVersion>,
-}
-
-/// The station's `station.toml` for `cores`; without `tape` the station keeps its own window.
-pub fn station_toml(cores: &[CoreKey], tape: Option<TapeWindow>) -> anyhow::Result<String> {
-    let file = StationFile {
-        core: cores
-            .iter()
-            .map(|c| StationCore {
-                uid: c.uid,
-                name: &c.name,
-                transport: c.transport,
-            })
-            .collect(),
-        tape,
-    };
-    Ok(toml::to_string_pretty(&file)?)
-}
-
 /// The administrator's connection to a server `setup` closed.
 pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
     let hosts = Hosts::load(&Hosts::path())?;
@@ -100,32 +69,130 @@ pub fn admin_conn(target: &Target) -> anyhow::Result<Conn> {
     )?)
 }
 
-/// `new` with the server's own sections carried over from `current`: `[telegram]` (set by the
-/// bot's own command), `[tape]` (set by hand, `push_tape`) and `[update]` (`push_auto_update`) —
-/// the window `new` brings is only
-/// what a station without one starts with. The cores are the terminal's to push whole.
-///
-/// Args:
-///     new: A freshly built `station.toml`, without `[telegram]`.
-///     current: The server's `station.toml`, when it has one.
-pub fn keep_server_sections(new: &str, current: Option<&str>) -> anyhow::Result<String> {
-    let Some(current) = current else {
-        return Ok(new.to_owned());
+/// Add or update `upsert` by uid, preserving other cores, their unknown fields and all sections.
+/// `tape` seeds only a station without a window; malformed tables return an error.
+pub fn merge_cores(
+    current: Option<&str>,
+    upsert: &[CoreKey],
+    tape: Option<TapeWindow>,
+) -> anyhow::Result<String> {
+    let file: toml::Table = match current {
+        Some(text) => toml::from_str(text).context("the server's station.toml")?,
+        None => toml::Table::new(),
     };
-    let current: toml::Table = toml::from_str(current).context("the server's station.toml")?;
-    let mut merged: toml::Table = toml::from_str(new)?;
-    let mut changed = false;
-    for section in ["telegram", "tape", "update"] {
-        let Some(value) = current.get(section) else {
-            continue;
-        };
-        merged.insert(section.to_owned(), value.clone());
-        changed = true;
+    merge_core_table(file, upsert, tape)
+}
+
+/// Return serialized config with named upserts and the allocation floor, retaining other sections.
+fn merge_core_table(
+    mut file: toml::Table,
+    upsert: &[CoreKey],
+    tape: Option<TapeWindow>,
+) -> anyhow::Result<String> {
+    let retired = config_high_water(&file)?;
+    let high_water = retired.max(upsert.iter().map(|core| core.uid).max().unwrap_or(0));
+    let cores = file
+        .entry("core")
+        .or_insert_with(|| toml::Value::Array(Vec::new()))
+        .as_array_mut()
+        .ok_or_else(|| anyhow::anyhow!("core in station.toml is not an array"))?;
+    for core in upsert {
+        let uid = i64::try_from(core.uid).context("core uid exceeds TOML's integer range")?;
+        let position = cores
+            .iter()
+            .position(|entry| entry.get("uid").and_then(toml::Value::as_integer) == Some(uid));
+        let entry = match position {
+            Some(index) => &mut cores[index],
+            None => {
+                anyhow::ensure!(core.uid > retired, "station uid retired, refresh");
+                cores.push(toml::Value::Table(toml::Table::new()));
+                cores.last_mut().expect("just appended")
+            }
+        }
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("core in station.toml is not a table"))?;
+        entry.insert("uid".into(), toml::Value::Integer(uid));
+        entry.insert("name".into(), toml::Value::String(core.name.clone()));
+        entry.insert("active".into(), toml::Value::Boolean(true));
+        match core.transport {
+            Some(transport) => {
+                entry.insert("transport".into(), toml::Value::try_from(transport)?);
+            }
+            None => {
+                entry.remove("transport");
+            }
+        }
     }
-    match changed {
-        true => Ok(toml::to_string_pretty(&merged)?),
-        false => Ok(new.to_owned()),
+    set_high_water(&mut file, high_water)?;
+    if !file.contains_key("tape") {
+        if let Some(tape) = tape {
+            file.insert("tape".into(), toml::Value::try_from(tape)?);
+        }
     }
+    Ok(toml::to_string_pretty(&file)?)
+}
+
+/// Return changed config and actually removed uids; absent identities are harmless retries.
+pub fn without_cores(current: &str, uids: &[u64]) -> anyhow::Result<(String, Vec<u64>)> {
+    let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
+    let high_water = config_high_water(&file)?;
+    set_high_water(&mut file, high_water)?;
+    let cores = file
+        .get_mut("core")
+        .and_then(toml::Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("station.toml has no core array"))?;
+    let mut removed = Vec::new();
+    cores.retain(|entry| {
+        entry
+            .get("uid")
+            .and_then(toml::Value::as_integer)
+            .and_then(|uid| u64::try_from(uid).ok())
+            .is_none_or(|uid| {
+                if uids.contains(&uid) {
+                    removed.push(uid);
+                    false
+                } else {
+                    true
+                }
+            })
+    });
+    anyhow::ensure!(
+        !cores.is_empty(),
+        "removal would leave the station without cores"
+    );
+    Ok((toml::to_string_pretty(&file)?, removed))
+}
+
+/// Read the retirement floor and surviving entries before an edit can remove their evidence.
+fn config_high_water(file: &toml::Table) -> anyhow::Result<u64> {
+    let persisted = match file.get("core_uid_high_water") {
+        None => 0,
+        Some(value) => value
+            .as_integer()
+            .and_then(|value| u64::try_from(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("invalid core_uid_high_water"))?,
+    };
+    let configured = file
+        .get("core")
+        .and_then(toml::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("uid").and_then(toml::Value::as_integer))
+        .filter_map(|uid| u64::try_from(uid).ok())
+        .max()
+        .unwrap_or(0);
+    Ok(persisted.max(configured))
+}
+
+/// Insert the TOML-bounded allocation floor into the table the caller will persist with its cores.
+fn set_high_water(file: &mut toml::Table, high_water: u64) -> anyhow::Result<()> {
+    let high_water =
+        i64::try_from(high_water).context("station uid history exceeds TOML's integer range")?;
+    file.insert(
+        "core_uid_high_water".into(),
+        toml::Value::Integer(high_water),
+    );
+    Ok(())
 }
 
 /// What `moon-remote telegram` changes in `[telegram]`; `None` keeps the server's value.
@@ -467,13 +534,13 @@ fn edit_config(
     anyhow::bail!("station.toml kept changing under this push: another terminal is writing it")
 }
 
-/// Whether a helper's `status` comes from this crate's helper: `removal_guard=yes` is the
-/// latest capability marker. Refresh older helpers before using commands they cannot handle
-/// or writes they cannot guard against concurrent removal.
+/// Whether a helper's `status` advertises guarded removal and bot-settings preservation.
+/// Refresh older helpers before writes that could erase fields a sender does not know.
 fn helper_is_current(status: &str) -> bool {
     script::value(status, "bot_return") == Some("yes")
         && script::value(status, "remove_station") == Some("yes")
         && script::value(status, "removal_guard") == Some("yes")
+        && script::value(status, "bot_settings_merge") == Some("yes")
 }
 
 /// The helper's `status`, after putting this crate's helper in place when the server's is older —
@@ -557,15 +624,88 @@ pub fn push_telegram(
     Ok(())
 }
 
-/// Make `cores` the station's whole set: credentials for these, none for any other, the matching
-/// `station.toml`, and the service (re)started. Commit the config before dropping credentials,
-/// so a failed push leaves only unused credentials. The bot's `[telegram]` stays as it was.
+/// Allocate fresh station identities for CLI adds to an existing station, then restart.
+/// A failed config write leaves unused credentials but never removes another core's key.
 pub fn push_cores(
     target: &Target,
     cores: &[CoreKey],
     tape: Option<TapeWindow>,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
+    validate_cores(cores)?;
+    let conn = admin_conn(target)?;
+    let helper = current_helper_status(&conn)?;
+    let cores = if script::value(&helper, "config") == Some("yes") {
+        let status = match api::call(&conn, &Request::Status)? {
+            Answer::Status(status) => status,
+            _ => anyhow::bail!("the station did not answer status"),
+        };
+        let listing = status
+            .cores
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("the station cannot list cores; update it first"))?;
+        let current =
+            script::checked(conn.run(&script::helper("get-config", &[]), &[], STEP_TIMEOUT)?)?
+                .stdout_text();
+        let file: toml::Table = toml::from_str(&current).context("the server's station.toml")?;
+        let floor = config_high_water(&file)?.max(status.core_uid_high_water.unwrap_or(0));
+        allocate_cli_cores(cores, listing, floor)?
+    } else {
+        cores
+            .iter()
+            .map(|core| CoreKey {
+                uid: core.uid,
+                name: core.name.clone(),
+                transport: core.transport,
+                key: core.key.clone(),
+            })
+            .collect()
+    };
+    push_cores_with_add_flags(target, &cores, &vec![true; cores.len()], tape, say)
+}
+
+/// Keep CLI picks add-only, rejecting existing addresses and allocating above all known uids.
+/// The push revalidates the floor before writing, so a concurrent allocation requires a retry.
+fn allocate_cli_cores(
+    cores: &[CoreKey],
+    listing: &[moon_core::station_api::ListedCore],
+    floor: u64,
+) -> anyhow::Result<Vec<CoreKey>> {
+    validate_cores(cores)?;
+    let mut largest = cores
+        .iter()
+        .map(|core| core.uid)
+        .chain(listing.iter().map(|core| core.uid))
+        .max()
+        .unwrap_or(0)
+        .max(floor);
+    cores
+        .iter()
+        .map(|core| {
+            if let Some(address) = moon_core::station_api::core_address(core.key.expose()) {
+                anyhow::ensure!(
+                    !listing
+                        .iter()
+                        .any(|listed| listed.address.as_ref() == Some(&address)),
+                    "core already on the station; use the terminal to update it"
+                );
+            }
+            largest = largest
+                .checked_add(1)
+                .filter(|uid| *uid <= i64::MAX as u64)
+                .ok_or_else(|| anyhow::anyhow!("station uid range exhausted"))?;
+            Ok(CoreKey {
+                uid: largest,
+                name: core.name.clone(),
+                transport: core.transport,
+                key: core.key.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Refuse invalid picks before any helper operation, including the CLI's allocation preflight.
+fn validate_cores(cores: &[CoreKey]) -> anyhow::Result<()> {
     anyhow::ensure!(!cores.is_empty(), StationError::NoCorePicked);
     let mut seen = std::collections::HashSet::new();
     for core in cores {
@@ -576,6 +716,19 @@ pub fn push_cores(
             StationError::CoreWithoutKey(core.name.clone())
         );
     }
+    Ok(())
+}
+
+/// Push reconciled cores, refusing occupied or retired uids before writing any credential.
+/// CLI picks and fresh installs mark every picked core as an add.
+pub fn push_cores_with_add_flags(
+    target: &Target,
+    cores: &[CoreKey],
+    adds: &[bool],
+    tape: Option<TapeWindow>,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<()> {
+    validate_cores(cores)?;
     let conn = admin_conn(target)?;
     let run = |command: String, stdin: &[u8]| -> anyhow::Result<String> {
         Ok(script::checked(conn.run(&command, stdin, STEP_TIMEOUT)?)?.stdout_text())
@@ -583,16 +736,27 @@ pub fn push_cores(
     // Read before anything is written: an old helper or an unreadable file stops the push here,
     // not between the credentials and the configuration. No file yet is the first push.
     let status = current_helper_status(&conn)?;
-    let new = station_toml(cores, tape)?;
     let exists = script::value(&status, "config") == Some("yes");
+    // Existing history needs a live reading before an add; stopped/unreadable stations fail closed.
+    let high_water = if exists && adds.contains(&true) {
+        match api::call(&conn, &Request::Status)? {
+            Answer::Status(status) => status.core_uid_high_water,
+            _ => anyhow::bail!("the station did not answer status"),
+        }
+    } else {
+        None
+    };
     // A dry run of the merge before any credential is written; the real one below reads the file
     // again, as it is by then.
-    if exists {
-        let current = run(script::helper("get-config", &[]), &[])
-            .context("read the server's station.toml")?;
-        keep_server_sections(&new, Some(&current))?;
-    }
-
+    let current = if exists {
+        Some(
+            run(script::helper("get-config", &[]), &[])
+                .context("read the server's station.toml")?,
+        )
+    } else {
+        None
+    };
+    merge_cores_with_add_flags(current.as_deref(), cores, adds, tape, high_water)?;
     for core in cores {
         let uid = core.uid.to_string();
         run(
@@ -605,33 +769,115 @@ pub fn push_cores(
             format!("core {} ({}): credential written", core.name, core.uid),
         ));
     }
-    commit_cores_config(
-        || {
-            edit_config(&conn, exists, |current| {
-                keep_server_sections(&new, current).map(Some)
+    edit_config(&conn, exists, |current| {
+        merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
+    })?;
+    restart_and_report(&conn, say)
+}
+
+/// Reject stale adds, retired uids and missing updates before any credential write.
+fn merge_cores_with_add_flags(
+    current: Option<&str>,
+    cores: &[CoreKey],
+    adds: &[bool],
+    tape: Option<TapeWindow>,
+    high_water: Option<u64>,
+) -> anyhow::Result<String> {
+    anyhow::ensure!(
+        cores.len() == adds.len(),
+        "core add flags do not match selected cores"
+    );
+    let mut file: toml::Table = match current {
+        Some(text) => toml::from_str(text).context("the server's station.toml")?,
+        None => toml::Table::new(),
+    };
+    let high_water = config_high_water(&file)?.max(high_water.unwrap_or(0));
+    let entries = file.get("core").and_then(toml::Value::as_array);
+    for (core, add) in cores.iter().zip(adds) {
+        let exists = entries.is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry
+                    .get("uid")
+                    .and_then(toml::Value::as_integer)
+                    .and_then(|uid| u64::try_from(uid).ok())
+                    == Some(core.uid)
             })
+        });
+        anyhow::ensure!(*add != exists, "station changed, refresh");
+        anyhow::ensure!(
+            !add || core.uid > high_water,
+            "station uid retired, refresh"
+        );
+    }
+    set_high_water(&mut file, high_water)?;
+    merge_core_table(file, cores, tape)
+}
+
+/// Remove exactly the named config entries, then their credentials, leaving report data intact.
+/// Empty or zero uids and removing the last core are refused; config failures keep credentials.
+/// An absent uid is an idempotent credential cleanup, which can race a concurrent add from
+/// another terminal. The terminal UI guards its removal selection with `removal_matches`.
+pub fn remove_cores(
+    target: &Target,
+    uids: &[u64],
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!uids.is_empty(), "no cores selected for removal");
+    anyhow::ensure!(!uids.contains(&0), "uid 0 is not a uid");
+    let conn = admin_conn(target)?;
+    let status = current_helper_status(&conn)?;
+    let exists = script::value(&status, "config") == Some("yes");
+    let committed = std::cell::Cell::new(false);
+    let cleanup = commit_cores_config(
+        || {
+            let changed = edit_config(&conn, exists, |current| {
+                let current =
+                    current.ok_or_else(|| anyhow::anyhow!("the station has no station.toml"))?;
+                let (config, actual) = without_cores(current, uids)?;
+                Ok((!actual.is_empty()).then_some(config))
+            })?;
+            committed.set(true);
+            Ok(changed)
         },
         || {
-            let status = run(script::helper("status", &[]), &[])?;
-            let wanted: std::collections::HashSet<String> =
-                cores.iter().map(|c| format!("core-{}", c.uid)).collect();
-            for stale in script::value(&status, "creds")
-                .unwrap_or_default()
-                .split_whitespace()
-                .filter(|name| !wanted.contains(*name))
-            {
-                let uid = stale.trim_start_matches("core-");
-                run(script::helper("drop-cred", &[uid]), &[])?;
+            let mut dropped = std::collections::HashSet::new();
+            for uid in uids {
+                if !dropped.insert(*uid) {
+                    continue;
+                }
+                script::checked(conn.run(
+                    &script::helper("drop-cred", &[&uid.to_string()]),
+                    &[],
+                    STEP_TIMEOUT,
+                )?)?;
                 say(Progress::step(
                     Step::CoreDropped,
-                    format!("{stale}: dropped, not in the set"),
+                    format!("core-{uid}: explicitly removed"),
                 ));
             }
             Ok(())
         },
-    )?;
-    run(script::helper("start", &[]), &[])?;
-    let status = run(script::helper("status", &[]), &[])?;
+    );
+    if !committed.get() {
+        return cleanup;
+    }
+    finish_cores_cleanup(cleanup, || restart_and_report(&conn, say))
+}
+
+/// Always restart after cleanup, preserving a cleanup failure as the primary error.
+fn finish_cores_cleanup(
+    cleanup: anyhow::Result<()>,
+    restart: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let restarted = restart();
+    cleanup.and(restarted)
+}
+
+/// Start after a core edit and publish the helper status through the same progress tail.
+fn restart_and_report(conn: &Conn, say: &mut dyn FnMut(Progress)) -> anyhow::Result<()> {
+    script::checked(conn.run(&script::helper("start", &[]), &[], STEP_TIMEOUT)?)?;
+    let status = script::checked(conn.run(&script::helper("status", &[]), &[], STEP_TIMEOUT)?)?
+        .stdout_text();
     for line in status.lines() {
         say(Progress::Diagnostic(line.to_owned()));
     }
@@ -639,14 +885,14 @@ pub fn push_cores(
     Ok(())
 }
 
-/// Commit the new core references before cleanup; any write failure keeps every old credential.
+/// Commit the removal before credential cleanup; any write failure keeps every old credential.
 /// A cleanup failure is returned after the config is safely committed.
 fn commit_cores_config(
     write_config: impl FnOnce() -> anyhow::Result<bool>,
-    drop_stale: impl FnOnce() -> anyhow::Result<()>,
+    drop_credentials: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     write_config()?;
-    drop_stale()
+    drop_credentials()
 }
 
 /// Update the station from the latest release (the Settings' "Update the service"): the helper's

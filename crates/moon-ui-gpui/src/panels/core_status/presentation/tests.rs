@@ -22,6 +22,7 @@ fn a_day_count_renders_without_its_unit() {
 /// days would look like a count, and this is the one arm an operator must not have to decode.
 #[test]
 fn an_expired_key_reads_as_a_word() {
+    let _locale = crate::test_locale::force("en");
     let text = api_expiry_text(ApiKeyState::Days(-3));
     assert!(
         text.parse::<i32>().is_err(),
@@ -183,6 +184,7 @@ fn connection_states_distinguish_reconnects_from_outages() {
 /// unexplained infinity glyph again.
 #[test]
 fn perpetual_api_keys_keep_an_explanatory_tooltip() {
+    let _locale = crate::test_locale::force("en");
     let perpetual_tip = api_expiry_tooltip(ApiKeyState::Perpetual)
         .expect("a perpetual key needs a tooltip that explains its infinity glyph");
     assert!(

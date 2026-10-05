@@ -108,6 +108,7 @@ fn tones(facts: &[super::FooterFact]) -> Vec<FactTone> {
 /// the counts qualifying it stay on screen.
 #[test]
 fn the_head_is_the_caption_and_one_money_figure() {
+    let _locale = crate::test_locale::force("en");
     let facts = historical_facts(
         Some(&data(vec![(Some(0), 12.5, 3)], 5)),
         false,
@@ -135,6 +136,7 @@ fn the_head_is_the_caption_and_one_money_figure() {
 /// codes and duration become unreachable exactly on the narrow dock the tooltip exists to rescue.
 #[test]
 fn a_clipped_facts_diagnostic_survives_in_the_row_tooltip() {
+    let _locale = crate::test_locale::force("en");
     let snapshot = data(vec![(Some(0), 12.5, 3)], 5);
     let facts = historical_facts(Some(&snapshot), false, &stalled(), T0 + 200_000);
 
@@ -156,6 +158,7 @@ fn a_clipped_facts_diagnostic_survives_in_the_row_tooltip() {
 /// which hides a wrong-number warning before a count the table itself already exposes.
 #[test]
 fn a_stall_leads_the_tail_and_the_counts_close_it() {
+    let _locale = crate::test_locale::force("en");
     let snapshot = data(
         vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2), (None, 0.0, 4)],
         5,
@@ -187,6 +190,7 @@ fn a_stall_leads_the_tail_and_the_counts_close_it() {
 /// as an unlabelled number in the one place there was room to explain it.
 #[test]
 fn the_tooltip_spells_out_the_caption_count() {
+    let _locale = crate::test_locale::force("en");
     let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 4)], 2);
     let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
 
@@ -215,6 +219,7 @@ fn the_tooltip_spells_out_the_caption_count() {
 /// narrow dock — and where the row's right edge goes empty.
 #[test]
 fn the_shown_rows_tally_is_pinned_right_rather_than_clipped() {
+    let _locale = crate::test_locale::force("en");
     let snapshot = data(vec![(Some(0), 12.5, 3)], 5);
     let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
 
@@ -245,6 +250,7 @@ fn the_shown_rows_tally_is_pinned_right_rather_than_clipped() {
 /// which is exactly the fact a user reads the footer for.
 #[test]
 fn the_caption_states_the_order_count_and_the_tail_no_longer_does() {
+    let _locale = crate::test_locale::force("en");
     // 3 + 4 orders over 2 shown rows: the count "7" appears in no amount and in no other tally,
     // so finding it is evidence about the caption rather than about the fixture.
     let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 4)], 2);
@@ -274,6 +280,7 @@ fn the_caption_states_the_order_count_and_the_tail_no_longer_does() {
 /// that no longer reads as the decomposition of the headline figure.
 #[test]
 fn the_currency_breakdown_is_wrapped_in_one_pair_of_brackets() {
+    let _locale = crate::test_locale::force("en");
     let mut snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
     snapshot.totals = snapshot.totals.with_valuation(ValuationCoverage {
         eligible_orders: 5,
@@ -314,6 +321,7 @@ fn the_currency_breakdown_is_wrapped_in_one_pair_of_brackets() {
 /// ships a stray unmatched bracket into the footer.
 #[test]
 fn a_single_currency_breakdown_is_bracketed_on_both_sides() {
+    let _locale = crate::test_locale::force("en");
     let snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
 
     let facts = historical_facts(Some(&snapshot), false, &ValuationStatus::default(), T0);
@@ -334,6 +342,7 @@ fn a_single_currency_breakdown_is_bracketed_on_both_sides() {
 /// stuck worker is a property of the worker, not of the rows on screen.
 #[test]
 fn worker_health_is_stated_outside_every_quote_scope_branch() {
+    let _locale = crate::test_locale::force("en");
     let single = data(vec![(Some(1), 5.0, 2)], 2);
 
     let healthy = historical_facts(Some(&single), false, &ValuationStatus::default(), T0);
@@ -357,6 +366,7 @@ fn worker_health_is_stated_outside_every_quote_scope_branch() {
 /// period.
 #[test]
 fn an_absent_snapshot_states_the_read_rather_than_a_zero() {
+    let _locale = crate::test_locale::force("en");
     let failed: FooterFacts = historical_facts(None, true, &ValuationStatus::default(), T0);
     assert_eq!(
         tones(&failed.essential),
@@ -381,6 +391,7 @@ fn an_absent_snapshot_states_the_read_rather_than_a_zero() {
 /// whose requery is still running cannot put the new mode's words under the old mode's numbers.
 #[test]
 fn a_current_rate_total_is_labelled_apart_from_historical_profit() {
+    let _locale = crate::test_locale::force("en");
     let head_under = |mode| {
         let mut snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
         snapshot.totals = snapshot.totals.with_valuation(ValuationCoverage {
@@ -425,6 +436,7 @@ fn a_current_rate_total_is_labelled_apart_from_historical_profit() {
 /// total: both are simply positive.
 #[test]
 fn a_unified_usdt_total_outranks_the_currency_it_was_built_from() {
+    let _locale = crate::test_locale::force("en");
     let mut snapshot = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
     snapshot.totals = snapshot.totals.with_valuation(ValuationCoverage {
         eligible_orders: 5,
@@ -473,6 +485,7 @@ fn a_unified_usdt_total_outranks_the_currency_it_was_built_from() {
 /// rounded to zero, and the invariant it names would not be pinned at all.
 #[test]
 fn a_partial_headline_figure_is_stated_in_the_untrusted_tone() {
+    let _locale = crate::test_locale::force("en");
     let mixed = data(vec![(Some(0), 12.5, 3), (Some(2), -0.25, 2)], 5);
     assert_eq!(
         tones(&historical_facts(Some(&mixed), false, &ValuationStatus::default(), T0).essential)[1],
@@ -496,6 +509,7 @@ fn a_partial_headline_figure_is_stated_in_the_untrusted_tone() {
 /// answer indistinguishable from a pending one.
 #[test]
 fn a_loaded_empty_result_promotes_no_figure() {
+    let _locale = crate::test_locale::force("en");
     let facts = historical_facts(
         Some(&data(Vec::new(), 0)),
         false,
@@ -526,6 +540,7 @@ fn a_loaded_empty_result_promotes_no_figure() {
 /// scopes, the separator and clipping-tooltip reachability pinned alongside those representations.
 #[test]
 fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let single = with_volume(
@@ -628,6 +643,7 @@ fn traded_volume_is_unsigned_complete_separated_and_tooltip_recoverable() {
 /// Full summary, while empty/loading/failed states must still never fabricate a volume fact.
 #[test]
 fn traded_volume_keeps_its_known_buckets_and_is_absent_only_with_nothing_provable() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let incomplete = with_volume(
@@ -678,6 +694,7 @@ fn traded_volume_keeps_its_known_buckets_and_is_absent_only_with_nothing_provabl
 /// USDT volume instead of warning that one order and its quote currency were withheld.
 #[test]
 fn partial_traded_volume_keeps_the_known_bucket_and_spells_its_shortfall() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let incomplete = with_volume(
@@ -730,6 +747,7 @@ fn partial_traded_volume_keeps_the_known_bucket_and_spells_its_shortfall() {
 /// figure and, in current valuation mode, gives a lone-currency Report the wrong money and wording.
 #[test]
 fn single_quote_volume_keeps_its_persisted_native_amount() {
+    let _locale = crate::test_locale::force("en");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let single = with_volume(
         data(vec![(Some(8), 12.5, 1)], 1),
@@ -766,6 +784,7 @@ fn single_quote_volume_keeps_its_persisted_native_amount() {
 /// stated AND short would then contribute nothing to the gap.
 #[test]
 fn partial_single_currency_volume_is_stated_and_marked_rather_than_withheld() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let usdc = QuoteCurrency::from_report_ordinal(8).expect("USDC ordinal");
     let single = with_volume(
@@ -858,6 +877,7 @@ fn partial_single_currency_volume_is_stated_and_marked_rather_than_withheld() {
 /// ordering assertion catches it.
 #[test]
 fn open_positions_fact_clips_before_traded_volume() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let mut snapshot = with_volume(
         data(vec![(Some(1), 12.5, 2)], 2),
@@ -916,6 +936,7 @@ fn no_match_scope_has_no_average_order_fact() {
 /// open tally or disrupt the footer's documented narrow-dock clipping priority.
 #[test]
 fn average_order_fact_clips_between_volume_and_open_positions() {
+    let _locale = crate::test_locale::force("en");
     let usdt = QuoteCurrency::from_report_ordinal(1).expect("USDT ordinal");
     let mut snapshot = with_volume(
         with_average_order(data(vec![(Some(1), 10.0, 1)], 1)),

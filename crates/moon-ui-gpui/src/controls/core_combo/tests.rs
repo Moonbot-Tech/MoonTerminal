@@ -21,6 +21,7 @@ fn venue(code: u8) -> CoreVenue {
 /// dropdown.
 #[test]
 fn menu_sections_are_unknown_first_alphabetical_and_member_stable() {
+    let _locale = crate::test_locale::force("en");
     let cores = vec![
         (1, "Bybit first".to_string()),
         (2, "Unknown".to_string()),

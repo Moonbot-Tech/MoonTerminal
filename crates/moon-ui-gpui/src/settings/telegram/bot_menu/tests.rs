@@ -19,8 +19,10 @@ fn the_shape_moves_with_the_order_only() {
 }
 
 /// Every keyboard button is a row under the one root, numbered by the row it sits in.
+/// The locale guard initializes translated tree labels before the default-stack test reads them.
 #[test]
 fn rows_number_buttons_by_their_row() {
+    let _locale = crate::test_locale::force("en");
     let menu = BotMenu::default();
     let rows = rows_by_id(&menu);
     assert_eq!(rows.len(), MenuItem::ALL.len());
@@ -37,5 +39,33 @@ fn rows_number_buttons_by_their_row() {
             .children
             .iter()
             .all(|c| rows.contains_key(c.id.as_ref()))
+    );
+}
+
+/// Reusing one generic title for both branches hides which bot owns the chat settings.
+/// A synthetic configured host must appear only on the station branch.
+#[test]
+fn telegram_bot_menu_titles_identify_their_host() {
+    let _locale = crate::test_locale::force("en");
+    use crate::settings::telegram::access::ChatsOf;
+    assert_eq!(
+        super::bot_section_title(
+            ChatsOf::Terminal,
+            "203.0.113.17",
+            "telegram.menu_editor.title"
+        ),
+        "Bot of this terminal — Bot menu and notifications"
+    );
+    assert_eq!(
+        super::bot_section_title(
+            ChatsOf::Station,
+            "203.0.113.17",
+            "telegram.menu_editor.title"
+        ),
+        "Station bot 203.0.113.17 — Bot menu and notifications"
+    );
+    assert_eq!(
+        super::bot_section_title(ChatsOf::Station, "", "telegram.menu_editor.title"),
+        "Station bot — Bot menu and notifications"
     );
 }

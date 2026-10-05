@@ -2,6 +2,529 @@
 use super::Page;
 use super::render::{profit, render};
 use moon_core::config::telegram_menu::ReportBasis;
+use moon_core::config::{GroupRowStyle, ReportColumn, ReportLayout, TotalPlace, TotalSeparation};
+
+/// Fixture whose average amount and percent differ, with valued volume and profit.
+fn layout_page(layout: ReportLayout) -> Page {
+    let mut total = QuoteBreakdown::from_groups([(Some(0), 20.0, 2)]);
+    total.entry_spend = moon_core::db::EntrySpend {
+        totals: vec![moon_core::db::QuoteSpend {
+            currency: moon_core::db::QuoteCurrency::btc(),
+            spent: 200.0,
+            profit: 20.0,
+            orders: 2,
+        }],
+        counted_orders: 2,
+        ..Default::default()
+    };
+    total.traded_volume.usdt = Some(1234.4);
+    total.valuation = Some(ValuationCoverage {
+        eligible_orders: 2,
+        valued_orders: 2,
+        unavailable_orders: 0,
+        usdt: Some(UsdtTotal {
+            profit: 20.0,
+            spent: Some(200.0),
+        }),
+    });
+    Page {
+        request: ReportRequest::new(Period::Today, false),
+        from: 0,
+        to: 1,
+        zone: chrono_tz::UTC,
+        total: total.clone(),
+        rows: vec![super::Row::Line("Fixture".into(), total)],
+        pages: 1,
+        drilldowns: vec![],
+        scope_label: None,
+        basis: ReportBasis::Close,
+        layout,
+        cores: vec![],
+        caption: None,
+    }
+}
+
+/// Restoring a caption or placing an empty notice first would hide report identity in previews.
+/// Manual pages lead with "Report"; automatic titles and the open-basis note stay exactly once.
+#[test]
+fn report_preview_title_leads_every_kind() {
+    let _locale = crate::test_locale::force("en");
+    for period in [Period::Hour, Period::Today, Period::Month] {
+        for (by_exchange, daily, scope, title) in [
+            (
+                true,
+                false,
+                None,
+                "<b>Report</b> · 01.01.1970 · 00:00—00:59",
+            ),
+            (
+                false,
+                false,
+                None,
+                "<b>Report · Cores</b> · 01.01.1970 · 00:00—00:59",
+            ),
+            (
+                false,
+                true,
+                None,
+                "<b>Report · Days</b> · 01.01.1970 · 00:00—00:59",
+            ),
+            (
+                false,
+                false,
+                Some("Desk <A>"),
+                "<b>Report · Desk &lt;A&gt;</b> · 01.01.1970 · 00:00—00:59",
+            ),
+        ] {
+            for auto in [
+                None,
+                Some("Hourly <report>"),
+                Some("Today report"),
+                Some("Month report"),
+            ] {
+                for basis in [ReportBasis::Close, ReportBasis::Open] {
+                    for empty in [false, true] {
+                        let mut page = layout_page(ReportLayout::default());
+                        page.request = ReportRequest::new(period.clone(), daily);
+                        page.request.by_exchange = by_exchange;
+                        page.scope_label = scope.map(str::to_owned);
+                        page.to = 3599;
+                        page.basis = basis;
+                        page.caption = auto.map(|title| super::AutoCaption {
+                            title: title.into(),
+                            zone: "UTC".into(),
+                        });
+                        if empty {
+                            page.total = QuoteBreakdown::default();
+                            page.rows.clear();
+                        }
+                        let mut expected = auto.map_or_else(
+                            || title.to_owned(),
+                            |title| {
+                                format!(
+                                    "<b>{}</b> · 01.01.1970 · 00:00—00:59 UTC",
+                                    title.replace('<', "&lt;").replace('>', "&gt;")
+                                )
+                            },
+                        );
+                        if basis == ReportBasis::Open {
+                            expected.push_str(" · <i>By open date</i>");
+                        }
+                        let html = super::report_html(&page);
+                        assert!(html.starts_with(&format!("<p>{expected}</p>")), "{html}");
+                        assert_eq!(
+                            html.matches("01.01.1970 · 00:00—00:59").count(),
+                            1,
+                            "{html}"
+                        );
+                        assert!(!html.contains("<caption>"), "{html}");
+                        let after_title = &html[html.find("</p>").unwrap() + 4..];
+                        assert!(
+                            after_title.starts_with(if empty {
+                                "<p>No closed real trades in this period.</p><table compact>"
+                            } else {
+                                "<table compact>"
+                            }),
+                            "{html}"
+                        );
+                        assert!(super::rich_message_fits(&html), "{html}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Missing a locale key or using a bare period would hide report identity in localized previews.
+/// Scope labels must stay escaped and automatic titles must not receive a second report word.
+#[test]
+fn report_preview_titles_are_localized() {
+    for (locale, report, cores, days) in [
+        ("ru", "Отчёт", "Ядра", "Дни"),
+        ("en", "Report", "Cores", "Days"),
+        ("es", "Informe", "Núcleos", "Días"),
+        ("uk", "Звіт", "Ядра", "Дні"),
+        ("tr", "Rapor", "Çekirdekler", "Günler"),
+        ("pt", "Relatório", "Núcleos", "Dias"),
+        ("vi", "Báo cáo", "Core", "Ngày"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for (by_exchange, daily, scope, title) in [
+            (true, false, None, report.to_owned()),
+            (false, false, None, format!("{report} · {cores}")),
+            (false, true, None, format!("{report} · {days}")),
+            (
+                true,
+                false,
+                Some("Desk <A>"),
+                format!("{report} · Desk &lt;A&gt;"),
+            ),
+        ] {
+            let mut page = layout_page(ReportLayout::default());
+            page.request.by_exchange = by_exchange;
+            page.request.daily = daily;
+            page.scope_label = scope.map(str::to_owned);
+            page.to = 3599;
+            let html = super::report_html(&page);
+            assert!(
+                html.starts_with(&format!("<p><b>{title}</b> · 01.01.1970 · 00:00—00:59</p>")),
+                "{locale}: {html}"
+            );
+            page.caption = Some(super::AutoCaption {
+                title: "Auto <report>".into(),
+                zone: "UTC".into(),
+            });
+            let html = super::report_html(&page);
+            assert!(
+                html.starts_with(
+                    "<p><b>Auto &lt;report&gt;</b> · 01.01.1970 · 00:00—00:59 UTC</p>"
+                ),
+                "{locale}: {html}"
+            );
+        }
+    }
+}
+
+/// Bypassing the shared period formatter would leave the builder's date and clock run together.
+#[test]
+fn report_builder_preview_separates_date_from_time() {
+    let _locale = crate::test_locale::force("en");
+    let mut page = layout_page(ReportLayout::default());
+    page.to = 3599;
+    assert_eq!(
+        super::render::preview_table(&page).caption,
+        "01.01.1970 · 00:00—00:59"
+    );
+}
+
+/// Ignoring the preview paragraph in fit accounting could send a page over Telegram's block cap.
+#[test]
+fn report_preview_paragraph_counts_toward_block_limit() {
+    let at_limit = format!(
+        "<p>Report title</p><table compact>{}</table>",
+        "<tr><td>row</td></tr>".repeat(498)
+    );
+    assert_eq!(super::render::rich_message_blocks(&at_limit), 500);
+    assert!(super::rich_message_fits(&at_limit));
+    assert!(!super::rich_message_fits(&format!(
+        "{at_limit}<p>Page 2/2</p>"
+    )));
+}
+
+/// Reordering or ignoring saved columns must change neither header nor numeric cell order.
+#[test]
+fn report_layout_columns_follow_saved_order_and_skip_future_ids() {
+    let _locale = crate::test_locale::force("en");
+    let page = layout_page(ReportLayout {
+        columns: vec![ReportColumn::Trades, ReportColumn::Volume],
+        ..Default::default()
+    });
+    let html = super::report_html(&page);
+    let table = html.split("</table>").next().unwrap();
+    assert!(table.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th></tr>"));
+    assert!(table.contains(
+        "<tr><td>Fixture</td><td align=\"right\">2</td><td align=\"right\">1 234$</td></tr>"
+    ));
+    assert!(!table.contains("Profit / loss"));
+    assert!(!table.contains("+20.00$"));
+    let page = layout_page(ReportLayout {
+        columns: vec![
+            ReportColumn::Profit,
+            ReportColumn::Other("fees".into()),
+            ReportColumn::Trades,
+        ],
+        ..Default::default()
+    });
+    let row = super::render::row_html(&page.rows[0], true, &page.layout);
+    assert_eq!(
+        row,
+        "<tr><td>Fixture</td><td align=\"right\">+20.00$</td><td align=\"right\">2</td></tr>"
+    );
+    let html = super::report_html(&page);
+    assert!(
+        html.contains("<th align=\"right\">Profit / loss</th><th align=\"right\">Trades</th></tr>")
+    );
+    assert!(!html.contains("fees"));
+}
+
+/// Using the details' average amount in the configurable column would misstate return.
+#[test]
+fn report_average_column_shows_percent_and_missing_values_stay_unvalued() {
+    let _locale = crate::test_locale::force("en");
+    let mut page = layout_page(ReportLayout {
+        columns: vec![ReportColumn::Average, ReportColumn::Volume],
+        ..Default::default()
+    });
+    // Average order size is 200 / 2 = 100 BTC; 20 BTC total profit is 20% of that size.
+    assert_eq!(
+        super::render::row_html(&page.rows[0], true, &page.layout),
+        "<tr><td>Fixture</td><td align=\"right\">+20.0%</td><td align=\"right\">1 234$</td></tr>"
+    );
+    page.rows = vec![super::Row::Line(
+        "Missing".into(),
+        QuoteBreakdown::default(),
+    )];
+    let missing = super::render::escape(&crate::t!("telegram.report_unvalued"));
+    assert_eq!(
+        super::render::row_html(&page.rows[0], true, &page.layout),
+        format!(
+            "<tr><td>Missing</td><td align=\"right\">{missing}</td><td align=\"right\">{missing}</td></tr>"
+        )
+    );
+}
+
+/// Total placement and spacer rows must follow the saved layout without losing band shading.
+#[test]
+fn report_total_band_and_gap_follow_saved_placement() {
+    let _locale = crate::test_locale::force("en");
+    let total = "<tr><th align=\"left\"><b>Total</b></th><th align=\"right\"><b>+20.00$</b></th><th align=\"right\"><b>2</b></th></tr>";
+    let row = "<tr><td>Fixture</td><td align=\"right\">+20.00$</td><td align=\"right\">2</td></tr>";
+    for place in [TotalPlace::Bottom, TotalPlace::Top] {
+        for separation in [TotalSeparation::Band, TotalSeparation::GapBand] {
+            let page = layout_page(ReportLayout {
+                total: place,
+                separation,
+                ..Default::default()
+            });
+            let html = super::report_html(&page);
+            let table = html.split("</table>").next().unwrap();
+            let gap = if separation == TotalSeparation::GapBand {
+                "<tr><td colspan=\"3\">&#160;</td></tr>"
+            } else {
+                ""
+            };
+            let expected = if place == TotalPlace::Top {
+                format!("{total}{gap}{row}")
+            } else {
+                format!("{row}{gap}{total}")
+            };
+            assert!(table.ends_with(&expected), "{table}");
+            assert_eq!(
+                table.matches("<tr>").count(),
+                if gap.is_empty() { 3 } else { 4 }
+            );
+        }
+    }
+}
+
+/// Losing explicit total bolding would make its band blend into an ordinary group band.
+#[test]
+fn report_total_band_is_bold_while_group_band_is_unchanged() {
+    let _locale = crate::test_locale::force("en");
+    let mut page = layout_page(ReportLayout::default());
+    page.rows = vec![super::Row::Group("Group".into(), page.total.clone())];
+    let html = super::report_html(&page);
+    assert!(html.contains("<tr><th align=\"right\">Group</th><th align=\"right\">+20.00$</th><th align=\"right\">2</th></tr>"));
+    assert!(html.contains("<tr><th align=\"left\"><b>Total</b></th><th align=\"right\"><b>+20.00$</b></th><th align=\"right\"><b>2</b></th></tr>"));
+}
+
+/// Withholding a single native bucket would hide usable volume; mixing currencies must not
+/// invent a unified amount. Stablecoin rounding and crypto precision match trade cards.
+#[test]
+fn report_volume_falls_back_to_one_native_quote_only() {
+    let _locale = crate::test_locale::force("en");
+    let page = layout_page(ReportLayout {
+        columns: vec![ReportColumn::Volume],
+        ..Default::default()
+    });
+    let bucket = |currency, amount| moon_core::db::QuoteVolume {
+        currency,
+        amount,
+        orders: 1,
+        reconstructed: 1,
+    };
+    let btc = bucket(moon_core::db::QuoteCurrency::btc(), 0.01234567);
+    let usdt = bucket(moon_core::db::QuoteCurrency::usdt(), 1234.4);
+    for (buckets, expected) in [
+        (vec![btc], "0.01234567 BTC".to_string()),
+        (vec![usdt], "1 234$".to_string()),
+        (
+            vec![bucket(
+                moon_core::db::QuoteCurrency::from_report_ordinal(8).expect("USDC"),
+                5992.5,
+            )],
+            "5 993$".to_string(),
+        ),
+        (
+            vec![bucket(moon_core::db::QuoteCurrency::usdt(), 0.12)],
+            "0.12$".to_string(),
+        ),
+        (
+            vec![btc, usdt],
+            crate::t!("telegram.report_unvalued").to_string(),
+        ),
+        (vec![], crate::t!("telegram.report_unvalued").to_string()),
+    ] {
+        let mut total = page.total.clone();
+        total.traded_volume.usdt = None;
+        total.traded_volume.eligible_orders = buckets.len() as i64;
+        total.traded_volume.reconstructed_orders = buckets.len() as i64;
+        total.traded_volume.totals = buckets;
+        let row = super::Row::Line("Native".into(), total);
+        assert_eq!(
+            super::render::row_html(&row, true, &page.layout),
+            format!("<tr><td>Native</td><td align=\"right\">{expected}</td></tr>")
+        );
+    }
+}
+
+/// Partial reconstructions, unknown trades and empty scopes must not print a native subtotal.
+#[test]
+fn report_native_volume_requires_complete_scope() {
+    let _locale = crate::test_locale::force("en");
+    let page = layout_page(ReportLayout {
+        columns: vec![ReportColumn::Volume],
+        ..Default::default()
+    });
+    for (eligible, reconstructed, unknown, expected) in [
+        (2, 1, 0, crate::t!("telegram.report_unvalued").to_string()),
+        (1, 1, 1, crate::t!("telegram.report_unvalued").to_string()),
+        (0, 0, 0, crate::t!("telegram.report_unvalued").to_string()),
+        (1, 1, 0, "0.01 BTC".to_string()),
+    ] {
+        let mut total = page.total.clone();
+        total.traded_volume = moon_core::db::TradedVolume {
+            totals: vec![moon_core::db::QuoteVolume {
+                currency: moon_core::db::QuoteCurrency::btc(),
+                amount: 0.01,
+                orders: eligible,
+                reconstructed,
+            }],
+            eligible_orders: eligible,
+            reconstructed_orders: reconstructed,
+            unknown_orders: unknown,
+            ..Default::default()
+        };
+        let row = super::Row::Line("Native".into(), total);
+        assert_eq!(
+            super::render::row_html(&row, true, &page.layout),
+            format!("<tr><td>Native</td><td align=\"right\">{expected}</td></tr>")
+        );
+    }
+}
+
+/// Group styles must preserve current right-aligned bands or render bold left-aligned cells.
+#[test]
+fn report_group_rows_follow_saved_style() {
+    let _locale = crate::test_locale::force("en");
+    let mut page = layout_page(ReportLayout::default());
+    let row = super::Row::Group("Group & name".into(), page.total.clone());
+    assert_eq!(
+        super::render::row_html(&row, true, &page.layout),
+        "<tr><th align=\"right\">Group &amp; name</th><th align=\"right\">+20.00$</th><th align=\"right\">2</th></tr>"
+    );
+    page.layout.group_row = GroupRowStyle::BoldLeft;
+    assert_eq!(
+        super::render::row_html(&row, true, &page.layout),
+        "<tr><td><b>Group &amp; name</b></td><td align=\"right\"><b>+20.00$</b></td><td align=\"right\"><b>2</b></td></tr>"
+    );
+}
+
+/// Four-column pages with a spacer must be sized by their actual markup, including group headers.
+#[test]
+fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);").unwrap();
+    for id in 1..=300 {
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,1,100,0)",
+            rusqlite::params![
+                id,
+                format!("Desk {id:03} / a long account name of this core")
+            ],
+        )
+        .unwrap();
+    }
+    let layout = ReportLayout {
+        columns: vec![
+            ReportColumn::Trades,
+            ReportColumn::Volume,
+            ReportColumn::Average,
+            ReportColumn::Profit,
+        ],
+        separation: TotalSeparation::GapBand,
+        total: TotalPlace::Top,
+        group_row: GroupRowStyle::BoldLeft,
+    };
+    let groups = vec![moon_core::config::CoreGroup {
+        name: "Group with a long header".into(),
+        cores: (1..=300).collect(),
+    }];
+    let mut request = ReportRequest::new(Period::Today, false);
+    request.by_exchange = false;
+    let mut seen = 0;
+    loop {
+        let page = super::read_page_with(
+            &conn,
+            request.clone(),
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            layout.clone(),
+            &Default::default(),
+            &groups,
+            |cores| {
+                cores.sort_by_key(|(id, _)| *id);
+                (Default::default(), super::TelegramReportAccess::Owner)
+            },
+        )
+        .unwrap();
+        let html = super::report_html(&page);
+        assert!(super::rich_message_fits(&html));
+        assert!(html.starts_with("<p><b>Report · Cores</b> · "), "{html}");
+        assert!(!html.contains("<caption>"), "{html}");
+        assert!(html.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th><th align=\"right\">Avg %</th><th align=\"right\">Profit / loss</th>"));
+        assert!(html.contains("<tr><td colspan=\"5\">&#160;</td></tr>"));
+        assert!(page.pages > 1);
+        seen += page
+            .rows
+            .iter()
+            .filter(|row| !matches!(row, super::Row::Group(..)))
+            .count();
+        request.page += 1;
+        if request.page == page.pages {
+            break;
+        }
+    }
+    assert_eq!(seen, 300);
+    let inputs = super::AutoInputs {
+        zone: chrono_tz::UTC,
+        basis: ReportBasis::Close,
+        layout,
+        view: moon_core::config::telegram_menu::ReportView::Cores,
+        order: moon_core::session::core_order::CoreOrder::new(
+            &moon_core::config::AppConfig::headless(Vec::new()),
+        ),
+        names: Default::default(),
+        venues: Default::default(),
+        groups,
+    };
+    let window = moon_core::telegram::report::AutoWindow {
+        at: 201,
+        from: 100,
+        to: 200,
+        period: Period::Today,
+    };
+    let auto = super::read_auto_report(
+        &conn,
+        &window,
+        super::AutoCaption {
+            title: "Auto".into(),
+            zone: "UTC".into(),
+        },
+        &inputs,
+        &super::TelegramReportAccess::Owner,
+    )
+    .unwrap()
+    .unwrap();
+    assert!(super::rich_message_fits(&auto.html));
+    assert!(auto.html.starts_with("<p><b>Auto</b> · "), "{}", auto.html);
+    assert!(!auto.html.contains("<caption>"));
+    assert!(auto.html.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th><th align=\"right\">Avg %</th><th align=\"right\">Profit / loss</th>"));
+    assert!(auto.html.contains("<tr><td colspan=\"5\">&#160;</td></tr>"));
+}
 
 /// A viewer never receives another client's rows or money, including daily and exchange totals.
 #[test]
@@ -98,7 +621,7 @@ fn viewer_empty_or_unavailable_scope_never_becomes_global() {
 }
 
 /// Putting the total first or summing only visible rows would break the report's footer.
-/// All views, including empty tables, keep translated column titles and bold footer cells.
+/// All views, including empty tables, keep translated column titles and shaded footer cells.
 #[test]
 fn full_total_is_the_tables_last_row_under_column_titles() {
     let _locale = crate::test_locale::force("en");
@@ -129,6 +652,7 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -168,7 +692,7 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
             assert_eq!(
                 footer,
                 format!(
-                    "<tr><td><b>Total</b></td><td align=\"right\"><b>{profit}</b></td><td align=\"right\"><b>{trades}</b></td></tr>"
+                    "<tr><th align=\"left\"><b>Total</b></th><th align=\"right\"><b>{profit}</b></th><th align=\"right\"><b>{trades}</b></th></tr>"
                 )
             );
             if !empty {
@@ -200,6 +724,7 @@ fn inline_buttons_keep_the_current_period() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -240,6 +765,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -644,6 +1170,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -747,6 +1274,7 @@ fn station_reports_and_help_limit_navigation_to_the_owner() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -831,6 +1359,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -867,6 +1396,7 @@ fn collapsed_keyboard_hides_exchanges_until_opened() {
         drilldowns: vec![("Binance".into(), binance), ("Bybit".into(), bybit)],
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -958,6 +1488,7 @@ fn today_omits_daily_navigation() {
             drilldowns: Vec::new(),
             scope_label: None,
             basis: ReportBasis::Close,
+            layout: moon_core::config::ReportLayout::default(),
             cores: Vec::new(),
             caption: None,
         };
@@ -1000,6 +1531,7 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -1372,7 +1904,7 @@ fn the_open_basis_counts_trades_by_when_they_opened() {
 }
 
 /// An automatic report is the button's report over the slot's frozen period, its title and zone
-/// heading the table in one line, its buttons carrying the window, the cores it may disclose; a
+/// opening the message in one paragraph, its buttons carrying the window, the cores it may disclose; a
 /// viewer with no cores gets none.
 #[test]
 fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
@@ -1391,6 +1923,7 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     let inputs = super::AutoInputs {
         zone: chrono_tz::UTC,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         view: moon_core::config::telegram_menu::ReportView::Cores,
         order: moon_core::session::core_order::CoreOrder::new(&AppConfig::headless(Vec::new())),
         names: Default::default(),
@@ -1412,7 +1945,7 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     .expect("an owner always gets a report");
     assert!(
         page.html.starts_with(
-            "<table compact><caption><b>Hourly report</b> · 01.01.1970 00:00—00:59 UTC</caption>"
+            "<p><b>Hourly report</b> · 01.01.1970 · 00:00—00:59 UTC</p><table compact>"
         ),
         "{}",
         page.html
@@ -1481,7 +2014,7 @@ fn closed_trades_carry_their_own_money() {
     assert_eq!(unproven.volume_native, None);
 }
 
-/// A report fits a phone screen: the view and its period are the table's caption, a single day
+/// Moving the period back into the table would hide it from the chat preview; a single day
 /// names its date once, and its buttons are one row in either view.
 #[test]
 fn a_days_report_is_compact() {
@@ -1500,16 +2033,19 @@ fn a_days_report_is_compact() {
             drilldowns: Vec::new(),
             scope_label: None,
             basis: ReportBasis::Close,
+            layout: moon_core::config::ReportLayout::default(),
             cores: Vec::new(),
             caption: None,
         };
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
         assert!(
-            html[table..].contains("01.01.1970 00:00—08:59</caption>"),
+            html[..table].contains("01.01.1970 · 00:00—08:59</p>"),
             "{html}"
         );
-        assert!(!html[..table].contains("01.01.1970"), "{html}");
+        assert!(html.starts_with("<p>"), "{html}");
+        assert!(!html[table..].contains("01.01.1970"), "{html}");
+        assert!(!html.contains("<caption>"), "{html}");
         let moon_core::telegram::api::ReplyMarkup::Inline(markup) = super::render::keyboard(&page)
         else {
             panic!("expected inline navigation")
@@ -1577,6 +2113,7 @@ fn cores_are_listed_under_their_groups() {
             200,
             chrono_tz::UTC,
             ReportBasis::Close,
+            moon_core::config::ReportLayout::default(),
             &Default::default(),
             &groups,
             |cores| {
@@ -1628,7 +2165,8 @@ fn cores_are_listed_under_their_groups() {
     assert!(html.contains("<tr><th align=\"right\">main</th>"), "{html}");
     let table = &html[..html.find("</table>").unwrap()];
     assert!(
-        table[table.rfind("<tr>").unwrap()..].starts_with("<tr><td><b>Total</b></td>"),
+        table[table.rfind("<tr>").unwrap()..]
+            .starts_with("<tr><th align=\"left\"><b>Total</b></th>"),
         "{html}"
     );
     assert!(html.contains("<tr><td>A</td>"), "{html}");
@@ -1672,6 +2210,7 @@ fn cores_are_listed_under_their_groups() {
         200,
         chrono_tz::UTC,
         ReportBasis::Close,
+        moon_core::config::ReportLayout::default(),
         &Default::default(),
         &all,
         |_| (Default::default(), super::TelegramReportAccess::Owner),
@@ -1733,6 +2272,7 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
@@ -1755,7 +2295,8 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
 }
 
 /// The period names as little as stays unambiguous: no year inside the current one, no clock on a
-/// bound that falls on a day's edge, a whole day as its date alone.
+/// bound that falls on a day's edge, a whole day as its date alone. Removing the same-day middle
+/// dot would run the date into the clock in every report and builder preview.
 #[test]
 fn the_period_is_short() {
     let day = 86_400;
@@ -1772,19 +2313,20 @@ fn the_period_is_short() {
         drilldowns: Vec::new(),
         scope_label: None,
         basis: ReportBasis::Close,
+        layout: moon_core::config::ReportLayout::default(),
         cores: Vec::new(),
         caption: None,
     };
     let period = |from, to, year| super::render::period(&page(from, to), year);
     assert_eq!(
         period(midnight, midnight + 6 * 3600 - 1, 2026),
-        "05.10 00:00—05:59"
+        "05.10 · 00:00—05:59"
     );
     assert_eq!(period(midnight, midnight + day - 1, 2026), "05.10");
     // Cut 30 s before the day ends, it is not the whole day.
     assert_eq!(
         period(midnight, midnight + day - 31, 2026),
-        "05.10 00:00—23:59"
+        "05.10 · 00:00—23:59"
     );
     assert_eq!(
         period(midnight - 4 * day, midnight + 6 * 3600 - 1, 2026),
@@ -1801,6 +2343,6 @@ fn the_period_is_short() {
     // A period outside the current year keeps its year.
     assert_eq!(
         period(midnight, midnight + 6 * 3600 - 1, 2027),
-        "05.10.2026 00:00—05:59"
+        "05.10.2026 · 00:00—05:59"
     );
 }

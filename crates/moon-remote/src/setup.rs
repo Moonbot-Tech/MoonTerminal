@@ -1,7 +1,7 @@
 //! Preparing a server, in the order `docs-internal/STATION.md` §5.1 fixes: get in with what the
 //! provider gave → an administrator reached by the app's key → close the server → the station's
 //! account and unit. Core keys are not part of it; they go later, to a closed server only
-//! (`station::push_cores`).
+//! (`station::push_cores`, additive; only `station::remove_cores` removes named cores).
 //!
 //! Before any of it the server's host key is read without a credential ([`probe_host_key`]) and
 //! confirmed by the user; only then does the first login go out. The probe is read-only and refuses

@@ -71,6 +71,7 @@ fn rail_row(core: u64) -> WorkspaceRosterRow {
 /// again lose the exact live stage and the transport evidence needed to explain a stuck server.
 #[test]
 fn problem_hover_keeps_connection_stage_and_complete_startup_diagnostics() {
+    let _locale = crate::test_locale::force("en");
     let mut row = rail_row(18);
     row.status = WorkspaceCoreStatus::Problem;
     row.connection = Some(ConnStatus::Failed("authentication refused".to_string()));
@@ -482,6 +483,7 @@ fn icon_summary_stays_bounded_for_two_hundred_cores() {
 /// `ready: %{n}` to `Ready: %{n}`, or drop the `es` sibling of any one of the three new keys.
 #[test]
 fn rail_summary_segments_still_compose_the_frozen_summary_sentence_per_locale() {
+    let _locale = crate::test_locale::force("en");
     const SEP: &str = " · ";
     let cases: [(u32, u32, u32); 2] = [(56, 41, 3), (7, 7, 0)];
     for locale in ["ru", "en", "es"] {

@@ -10,7 +10,9 @@ use rust_i18n::t;
 
 /// Render a typed failure with optional diagnostic detail, never raw English as the headline.
 pub(crate) fn error(error: &anyhow::Error) -> String {
-    let headline = if error.downcast_ref::<StationMayStillPoll>().is_some() {
+    let headline = if error.downcast_ref::<super::job::CoresChanged>().is_some() {
+        t!("telegram.server.cores_changed")
+    } else if error.downcast_ref::<StationMayStillPoll>().is_some() {
         t!("station.error.may_poll")
     } else if let Some(kind) = error.downcast_ref::<BotReturnError>() {
         return match kind {
@@ -30,7 +32,7 @@ pub(crate) fn error(error: &anyhow::Error) -> String {
             RemovalError::Unsupported => "telegram.server.remove_unsupported",
             RemovalError::Unconfirmed => "telegram.server.remove_unconfirmed",
             RemovalError::LocalForgetFailed => "telegram.server.remove_local_failed",
-            RemovalError::NotConfigured => "telegram.server.core_sync_refused",
+            RemovalError::NotConfigured => "telegram.server.cores_not_configured",
         })
     } else if let Some(kind) = error.downcast_ref::<StationError>() {
         return with_detail(station_error(kind), error);

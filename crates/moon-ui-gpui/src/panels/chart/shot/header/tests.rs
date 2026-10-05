@@ -33,6 +33,7 @@ fn field_text(field: &super::StripField) -> String {
 /// magnitude is shown as a directional move on a chart image someone can trade from.
 #[test]
 fn a_positive_window_magnitude_is_printed_without_an_invented_sign() {
+    let _locale = crate::test_locale::force("en");
     let strip = header_strip(&inputs());
     let tail: Vec<String> = strip.tail.iter().map(field_text).collect();
 
@@ -44,6 +45,7 @@ fn a_positive_window_magnitude_is_printed_without_an_invented_sign() {
 /// or keeps the least useful movement while dropping the longer context first.
 #[test]
 fn identity_stays_in_the_head_and_fifteen_minutes_is_the_first_window_to_clip() {
+    let _locale = crate::test_locale::force("en");
     let strip = header_strip(&inputs());
     let head: Vec<String> = strip.head.iter().map(field_text).collect();
     let tail: Vec<String> = strip.tail.iter().map(field_text).collect();
@@ -76,6 +78,7 @@ fn identity_stays_in_the_head_and_fifteen_minutes_is_the_first_window_to_clip() 
 /// is presented as a quiet `0.0%` market in the screenshot.
 #[test]
 fn an_unknown_window_is_omitted_instead_of_becoming_a_zero() {
+    let _locale = crate::test_locale::force("en");
     let mut snapshot = inputs();
     snapshot.delta_1h = None;
 
@@ -141,6 +144,7 @@ fn a_field_survives_or_clips_when_only_the_group_gap_changes() {
 /// only; otherwise the redesigned hierarchy becomes a uniform run of ungrouped text.
 #[test]
 fn group_boundaries_fall_on_the_stamp_and_three_hour_field_only() {
+    let _locale = crate::test_locale::force("en");
     let strip = header_strip(&inputs());
     let grouped: Vec<String> = strip
         .tail
@@ -158,6 +162,7 @@ fn group_boundaries_fall_on_the_stamp_and_three_hour_field_only() {
 /// place the shown scale before the market windows; otherwise the screenshot contradicts its chart.
 #[test]
 fn the_scale_badge_follows_the_chart_convention_and_view_order() {
+    let _locale = crate::test_locale::force("en");
     let mut hidden = inputs();
     hidden.scale_pct = None;
     let mut sub_percent = inputs();
@@ -185,6 +190,7 @@ fn the_scale_badge_follows_the_chart_convention_and_view_order() {
 /// screenshot wastes width on punctuation and reads as the old undifferentiated header.
 #[test]
 fn the_builder_emits_no_separator_glyphs() {
+    let _locale = crate::test_locale::force("en");
     let strip = header_strip(&inputs());
     for field in strip.head.iter().chain(&strip.tail) {
         let text = field_text(field);
@@ -196,6 +202,7 @@ fn the_builder_emits_no_separator_glyphs() {
 /// context text competes with the market figures a reader opens the screenshot to scan.
 #[test]
 fn only_movement_figures_are_primary_runs() {
+    let _locale = crate::test_locale::force("en");
     let strip = header_strip(&inputs());
     let mut primary_fields = Vec::new();
     for field in strip.head.iter().chain(&strip.tail) {
@@ -327,6 +334,7 @@ fn an_empty_run_uses_the_inset_instead_of_the_strip_midpoint() {
 /// picture states a span the chart inside it does not.
 #[test]
 fn the_time_scale_follows_the_y_scale_in_the_chart_spelling() {
+    let _locale = crate::test_locale::force("en");
     let mut shown = inputs();
     shown.time_scale_s = Some(6_720);
 

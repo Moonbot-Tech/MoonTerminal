@@ -172,6 +172,7 @@ fn core_mode_preserves_canonical_order_and_unknown_exchange_is_explicit() {
 /// code alone merges two Hyperliquid DEXes whose markets have nothing in common.
 #[test]
 fn exchange_rows_group_by_venue_identity_not_by_caption() {
+    let _locale = crate::test_locale::force("en");
     let mut summary = summary();
     for core in &mut summary.cores {
         core.profit = 0.0;
@@ -1084,6 +1085,7 @@ fn an_abbreviated_amount_keeps_its_rounded_sign_and_its_small_digits() {
 /// refreshes of identical data, because the group map iterates in hash order.
 #[test]
 fn merged_rows_carry_the_newest_trade_of_their_cores() {
+    let _locale = crate::test_locale::force("en");
     let summary = summary();
     let live = LiveContext {
         venues: HashMap::from([
@@ -1336,6 +1338,7 @@ fn the_run_column_is_paid_for_by_the_name_column() {
 /// venue row for a core that reported no trade to name one.
 #[test]
 fn idle_rows_cover_active_cores_only_and_only_by_core() {
+    let _locale = crate::test_locale::force("en");
     let live = LiveContext {
         core_names: HashMap::from([(1, "First".to_string()), (9, "Quiet".to_string())]),
         core_order: vec![9, 1, 2],

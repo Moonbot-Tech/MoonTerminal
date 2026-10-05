@@ -6,10 +6,9 @@
 //! here, and the Settings segment only starts jobs and shows this state.
 //!
 //! One job runs at a time: the user's (a button; it owns the progress lines and the
-//! outcome), a quiet read of the station's bot (on opening the tab; it touches only the bot's
-//! state), and the automatic core keys after a Save changed the cores (its lines append, the last
-//! outcome stays). A user's job pressed during a quiet read waits for it; cores changed during any
-//! job go right after it. A recovery read resolves a persisted hand-over before local polling.
+//! outcome), a quiet read of the station's bot and core listing (on opening the tab; it preserves
+//! the user's outcome). A user's job pressed during a quiet read waits for it. A recovery read
+//! resolves a persisted hand-over before local polling.
 //!
 //! Handing the bot over: the terminal's transport is suspended first (`TelegramState::suspend`:
 //! one token, one poller) with the saved configuration untouched, so a Save meanwhile writes the
@@ -29,6 +28,7 @@ use rust_i18n::t;
 
 use crate::Backend;
 
+pub(crate) mod cores_sync;
 pub(crate) mod job;
 pub(crate) mod pull;
 mod recovery;
@@ -45,10 +45,8 @@ enum Kind {
     /// A button: owns the progress lines and the outcome.
     #[default]
     User,
-    /// A read of the bot's state: touches that state only.
+    /// A read of bot state and core identities that preserves the user's outcome.
     Quiet,
-    /// The core keys after a Save: appends its lines, keeps the outcome unless it fails.
-    Auto,
     /// The header clock's zone pushed to the station: appends its line, keeps the outcome, and
     /// like a quiet read does not hold the buttons.
     Zone,
@@ -74,6 +72,14 @@ pub(crate) struct StationJobs {
     /// The last job's end: `Ok(summary)` or `Err(reason)`.
     pub(crate) outcome: Option<Result<String, String>>,
     pub(crate) bot: Option<BotState>,
+    /// Outer None means unread; inner None means an older station without listing support.
+    pub(crate) cores_seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
+    /// Retain the allocation floor with its listing across restart gaps.
+    pub(crate) core_uid_high_water: Option<u64>,
+    /// The last explicit core operation's result line.
+    pub(crate) cores_result: Option<String>,
+    /// The running job changes station cores.
+    pub(crate) cores_job: bool,
     /// Why the last read of the bot's state failed; shown instead of a state that may be stale.
     pub(crate) bot_error: Option<String>,
     /// The server predates key-only sudo: its old administrator password is asked once.
@@ -97,8 +103,6 @@ pub(crate) struct StationJobs {
     handing_over: bool,
     /// A user's job pressed while a quiet read or a zone push ran: it starts right after.
     waiting: Option<(job::Job, bool)>,
-    /// The terminal's cores changed while a job ran: their keys go to the station after it.
-    pending_cores: bool,
     /// The last user job said nothing about the bot: its state is read again after it.
     pending_refresh: bool,
     /// The running job is an "Apply on the server" of the chats and the bot's menu.
@@ -125,12 +129,12 @@ impl StationJobs {
         self.returned.is_some()
     }
 
-    /// Preserve the recovery destination and the only retained bot credentials until resolved.
-    pub(crate) fn access_refusal(&self) -> Option<String> {
+    /// Return the recovery refusal key without initializing the UI dictionary on a worker stack.
+    pub(crate) fn access_refusal(&self) -> Option<&'static str> {
         if self.holds_bot() {
-            Some(t!("telegram.server.access_pending_handover").to_string())
+            Some("telegram.server.access_pending_handover")
         } else if self.has_returned_bot() {
-            Some(t!("telegram.server.access_pending_return").to_string())
+            Some("telegram.server.access_pending_return")
         } else {
             None
         }
@@ -178,6 +182,15 @@ impl StationJobs {
         }
     }
 
+    /// Retain a listing through a restart gap; an answering old station reports unsupported.
+    fn observe_bot(&mut self, bot: BotState) {
+        if let Some(status) = &bot.station {
+            self.cores_seen = Some(status.cores.clone());
+            self.core_uid_high_water = status.core_uid_high_water;
+        }
+        self.bot = Some(bot);
+    }
+
     /// The server was forgotten: nothing learnt about it applies to the next one.
     fn clear_known(&mut self, outcome: Result<String, String>) {
         let st = self;
@@ -185,9 +198,12 @@ impl StationJobs {
         st.address_change = None;
         st.install_probe = None;
         st.bot = None;
+        st.cores_seen = None;
+        st.core_uid_high_water = None;
+        st.cores_result = None;
+        st.cores_job = false;
         st.bot_error = None;
         st.needs_old_admin = false;
-        st.pending_cores = false;
         st.pending_refresh = false;
         st.zone_pushed = None;
         st.applying = false;
@@ -245,20 +261,6 @@ impl Backend {
         }
     }
 
-    /// The terminal's cores changed (added, removed, switched on or off, renamed, a key or
-    /// transport replaced): every active core's key goes to the station — now, or right after the
-    /// job that runs.
-    pub(crate) fn station_cores_changed(&mut self, cx: &mut Context<Self>) {
-        if known_target().is_none() {
-            return;
-        }
-        if self.station.running {
-            self.station.pending_cores = true;
-            return;
-        }
-        self.station_send_cores(cx);
-    }
-
     /// Push the header clock's zone to the station when the station's bot reports another one;
     /// a job that runs pushes it after. Nothing for a station without a bot or one that predates
     /// the bot's settings (its access carries none). A push that failed is tried again after the
@@ -296,29 +298,6 @@ impl Backend {
         // Address changes use this path too; re-read instead of assuming the last station is gone.
         self.station.known = known_target().is_some();
         self.resume_terminal_telegram();
-    }
-
-    fn station_send_cores(&mut self, cx: &mut Context<Self>) {
-        self.station.pending_cores = false;
-        let Some(target) = known_target() else {
-            return;
-        };
-        let cores: Vec<u64> = self
-            .config
-            .servers
-            .iter()
-            .filter(|s| s.active && s.uid != 0)
-            .map(|s| s.uid)
-            .collect();
-        if cores.is_empty() {
-            // A station without cores would still be a station; the keys it has stay until one
-            // is switched on again.
-            self.station
-                .push_line(t!("telegram.server.no_active_cores").to_string());
-            self.station.revision = self.station.revision.wrapping_add(1);
-            return;
-        }
-        self.station_begin(job::Job::Cores { target, cores }, false, Kind::Auto, cx);
     }
 
     /// Keep saved local tokens gated while resolving outstanding hand-over ownership first.
@@ -359,7 +338,7 @@ impl Backend {
         if job.changes_access()
             && let Some(reason) = self.station.access_refusal()
         {
-            self.station.outcome = Some(Err(reason));
+            self.station.outcome = Some(Err(t!(reason).to_string()));
             self.station.revision = self.station.revision.wrapping_add(1);
             cx.notify();
             return;
@@ -404,6 +383,10 @@ impl Backend {
         let st = &mut self.station;
         st.running = true;
         st.applying = applying;
+        st.cores_job = matches!(job, job::Job::Cores { .. } | job::Job::CoresRemove { .. });
+        if st.cores_job {
+            st.cores_result = None;
+        }
         if applying {
             st.applied = None;
         }
@@ -417,7 +400,6 @@ impl Backend {
                 st.lines.clear();
                 st.status = None;
             }
-            Kind::Auto => st.push_line(t!("telegram.server.auto_cores").to_string()),
             Kind::Quiet | Kind::Zone | Kind::Recovery => {}
         }
         st.revision = st.revision.wrapping_add(1);
@@ -467,15 +449,11 @@ impl Backend {
         cx.notify();
     }
 
-    /// After a job: the user's job that waited, then the cores that changed, then a read of the
-    /// bot when the last job said nothing about it.
+    /// After a job: start queued user work, then refresh when the last job gave no bot state.
     fn station_next(&mut self, cx: &mut Context<Self>) {
         if let Some((job, hand_over)) = self.station.waiting.take() {
             self.station_begin(job, hand_over, Kind::User, cx);
-        } else if self.station.pending_cores {
-            self.station_send_cores(cx);
         }
-        // Also after cores that had nothing to send: nothing else would run the read.
         if !self.station.running && std::mem::take(&mut self.station.pending_refresh) {
             self.station_refresh_bot(cx);
         }
@@ -499,6 +477,12 @@ impl Backend {
                 self.station.push_line(line);
                 return false;
             }
+            job::Event::CoresResult(line) => {
+                if self.station.cores_job {
+                    self.station.cores_result = Some(line);
+                }
+                return false;
+            }
             job::Event::Status(facts) => {
                 self.station.status = Some(facts);
                 return false;
@@ -510,16 +494,17 @@ impl Backend {
         let handing_over = std::mem::take(&mut self.station.handing_over);
         let kind = self.station.kind;
         self.station.running = false;
+        self.station.cores_job = false;
         if kind == Kind::Recovery {
             self.station_apply_recovery(done);
             return true;
         }
         if kind == Kind::Zone {
-            // A zone push changes only the bot's state; its line says what happened.
+            // A zone push refreshes bot state and core identities; its line says what happened.
             match done {
                 job::Done::Ok { bot, .. } => {
                     if let Some(bot) = bot {
-                        self.station.bot = Some(bot);
+                        self.station.observe_bot(bot);
                         self.station.bot_error = None;
                     }
                 }
@@ -539,10 +524,11 @@ impl Backend {
             return true;
         }
         if kind == Kind::Quiet {
-            // A quiet read changes only the bot's state, or says why it could not read it.
+            // A quiet read refreshes bot state and core identities while preserving the user's
+            // outcome; a failed read records its error instead.
             match done {
                 job::Done::Ok { bot: Some(bot), .. } => {
-                    self.station.bot = Some(bot);
+                    self.station.observe_bot(bot);
                     self.station.bot_error = None;
                 }
                 job::Done::Ok { .. }
@@ -581,10 +567,7 @@ impl Backend {
                 return true;
             }
             job::Done::AddressChanged => {
-                let pending_cores = self.station.pending_cores;
                 self.station_forgotten(Ok(t!("telegram.server.address_changed").to_string()));
-                // A Save during verification follows this station to its new address.
-                self.station.pending_cores = pending_cores;
                 self.station.pending_refresh = true;
                 return true;
             }
@@ -610,17 +593,12 @@ impl Backend {
                 }
                 self.station.needs_old_admin = false;
                 if let Some(bot) = bot {
-                    self.station.bot = Some(bot);
+                    self.station.observe_bot(bot);
                     self.station.bot_error = None;
                     said_bot = true;
                 }
-                match kind {
-                    Kind::User => {
-                        self.station.outcome = Some(Ok(t!("telegram.server.done").to_string()))
-                    }
-                    _ => self
-                        .station
-                        .push_line(t!("telegram.server.auto_cores_done").to_string()),
+                if kind == Kind::User {
+                    self.station.outcome = Some(Ok(t!("telegram.server.done").to_string()));
                 }
             }
             job::Done::NeedsAdminPassword => {
@@ -731,7 +709,7 @@ impl Backend {
             .map(|p| recovery::decide(p, &bot));
         self.station.bot_error = None;
         let stopped_with_token = bot.stopped && bot.has_token;
-        self.station.bot = Some(bot);
+        self.station.observe_bot(bot);
         let result = match decision {
             Some(recovery::Decision::Erase) => self.station_erase_local_bot(),
             Some(recovery::Decision::Resume) => self.station_clear_handover().map(|()| {
@@ -834,26 +812,6 @@ fn save_returned_bot(
         restore_bot(&mut draft.telegram, returned);
     }
     Ok(true)
-}
-
-/// Whether the cores the station would get differ: one added or removed, switched on or off,
-/// renamed, or its key or transport replaced. Compared in place, so no key is copied out of the
-/// configuration.
-pub(crate) fn cores_differ(before: &AppConfig, after: &AppConfig) -> bool {
-    fn active(c: &AppConfig) -> Vec<&moon_core::config::ServerConfig> {
-        c.servers
-            .iter()
-            .filter(|s| s.active && s.uid != 0)
-            .collect()
-    }
-    let (a, b) = (active(before), active(after));
-    a.len() != b.len()
-        || a.iter().zip(&b).any(|(x, y)| {
-            x.uid != y.uid
-                || x.name != y.name
-                || x.transport != y.transport
-                || x.key.expose() != y.key.expose()
-        })
 }
 
 #[cfg(test)]

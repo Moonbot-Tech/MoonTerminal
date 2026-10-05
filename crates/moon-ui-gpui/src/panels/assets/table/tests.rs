@@ -12,6 +12,7 @@ use crate::panels::assets::columns::AssetCol;
 /// the column sum, and visibly push coin/qty/value apart again — the spread this pins shut.
 #[test]
 fn the_title_less_actions_column_never_stretches() {
+    let _locale = crate::test_locale::force("en");
     let columns = assets_columns(&AssetCol::ALL);
     let actions = columns
         .iter()
@@ -36,6 +37,7 @@ fn the_title_less_actions_column_never_stretches() {
 /// leave the table with more columns than cells.
 #[test]
 fn the_columns_follow_the_selected_fields_exactly() {
+    let _locale = crate::test_locale::force("en");
     let columns = assets_columns(&[AssetCol::Coin, AssetCol::Pnl]);
     let keys: Vec<&str> = columns.iter().map(|c| c.key.as_ref()).collect();
     assert_eq!(keys, vec!["coin", "pnl"]);

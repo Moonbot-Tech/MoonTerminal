@@ -4,7 +4,9 @@ use chrono::Days;
 use chrono_tz::Tz;
 use moon_core::session::core_order::{self, CoreOrder};
 use moon_core::{
-    config::{CoreGroup, telegram_access::TelegramReportAccess, telegram_menu::ReportBasis},
+    config::{
+        CoreGroup, ReportLayout, telegram_access::TelegramReportAccess, telegram_menu::ReportBasis,
+    },
     db::{self, QuoteBreakdown, ReportFilter, RowScope},
     telegram::{
         report::{ReportRequest, ReportScope},
@@ -70,10 +72,68 @@ struct Page {
     scope_label: Option<String>,
     /// Which timestamp the period was read on.
     basis: ReportBasis,
+    /// Saved appearance used by rendering and fit probes.
+    layout: ReportLayout,
     /// Cores the chat may see, whose trades the totals can include.
     cores: Vec<u64>,
     /// An automatic report's own title and zone, which head the table in place of the view.
     caption: Option<AutoCaption>,
+}
+
+/// Build a synthetic local-day table through the production layout walk, without reading storage.
+pub(crate) fn preview_table(layout: &ReportLayout) -> crate::preview::PreviewTable {
+    use moon_core::db::{EntrySpend, QuoteCurrency, QuoteSpend, UsdtTotal, ValuationCoverage};
+    let money = |profit: f64, volume: f64, orders: i64| {
+        let mut total = QuoteBreakdown::from_groups([(Some(1), profit, orders)]);
+        total.entry_spend = EntrySpend {
+            totals: vec![QuoteSpend {
+                currency: QuoteCurrency::usdt(),
+                spent: volume,
+                profit,
+                orders,
+            }],
+            counted_orders: orders,
+            ..Default::default()
+        };
+        total.traded_volume.usdt = Some(volume);
+        total.valuation = Some(ValuationCoverage {
+            eligible_orders: orders,
+            valued_orders: orders,
+            unavailable_orders: 0,
+            usdt: Some(UsdtTotal {
+                profit,
+                spent: Some(volume),
+            }),
+        });
+        total
+    };
+    let now = crate::preview::sample_clock();
+    let zone = chrono_tz::UTC;
+    let from = now
+        .date_naive()
+        .and_time(chrono::NaiveTime::MIN)
+        .and_utc()
+        .timestamp();
+    let page = Page {
+        request: ReportRequest::new(moon_core::telegram::report::Period::Today, false),
+        from,
+        to: now.timestamp(),
+        zone,
+        total: money(12.40, 250.0, 2),
+        rows: vec![
+            Row::Group("Margo".into(), money(12.40, 250.0, 2)),
+            Row::Line("Binance-2".into(), money(8.40, 150.0, 1)),
+            Row::Line("Spot-7".into(), money(4.0, 100.0, 1)),
+        ],
+        pages: 1,
+        drilldowns: vec![],
+        scope_label: None,
+        basis: ReportBasis::Close,
+        layout: layout.sanitized(),
+        cores: vec![],
+        caption: None,
+    };
+    render::preview_table(&page)
 }
 
 /// What an automatic report names itself by: `📊 Today` and the zone its period is in (`UTC+3`).
@@ -86,7 +146,7 @@ pub(crate) struct AutoCaption {
 /// Read off the owner thread and recheck the saved chat authorization before returning any money.
 ///
 /// A request whose view the chat did not pick opens in the bot's `report_view`; a request that does
-/// not carry its basis yet is read on the bot's `period_basis`.
+/// not carry its basis yet is read on the bot's `period_basis`, using its sanitized layout.
 pub(crate) fn telegram_report(
     host: &mut dyn TgHost,
     chat: i64,
@@ -102,6 +162,7 @@ pub(crate) fn telegram_report(
     let request = request.resolve_view(bot.report_view);
     // A page's own buttons carry the basis it was read on; a fresh request takes the bot's.
     let basis = request.basis.unwrap_or(bot.period_basis);
+    let layout = bot.message_layout.report.sanitized();
     let navigation = navigation_keyboard(host.kind(), owner, &host.config().telegram);
     if matches!(&access, TelegramReportAccess::Viewer(ids) if ids.is_empty()) {
         report_notice(
@@ -134,6 +195,7 @@ pub(crate) fn telegram_report(
             to,
             zone,
             basis,
+            layout,
             order,
             names,
             venues,
@@ -168,7 +230,7 @@ fn report_notice(reply: &SyncSender<Response>, text: String, navigation: ReplyMa
     });
 }
 
-/// Read only visible groups, while the headline always covers the entire requested period.
+/// Read visible groups with the saved layout, while the total covers the entire period.
 #[allow(clippy::too_many_arguments)]
 fn read_page(
     request: ReportRequest,
@@ -176,6 +238,7 @@ fn read_page(
     to: i64,
     zone: Tz,
     basis: ReportBasis,
+    layout: ReportLayout,
     order: CoreOrder,
     names: db::CoreNames,
     venues: std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
@@ -190,6 +253,7 @@ fn read_page(
         to,
         zone,
         basis,
+        layout,
         &names,
         &groups,
         |cores| {
@@ -217,7 +281,18 @@ fn read_page_on(
         TelegramReportAccess,
     ),
 ) -> db::ReadResult<Page> {
-    read_page_with(conn, request, from, to, zone, basis, names, &[], order)
+    read_page_with(
+        conn,
+        request,
+        from,
+        to,
+        zone,
+        basis,
+        ReportLayout::default(),
+        names,
+        &[],
+        order,
+    )
 }
 
 /// Connection-injected reader lets fixtures exercise the exact production query contract.
@@ -225,6 +300,7 @@ fn read_page_on(
 /// `groups` are the bot's saved core groups: the view by cores lists its cores under them, as the
 /// Profit monitor does ([`sections`]). A group's header carries the database's own total over its
 /// cores, so a core in two groups counts in each, while the headline counts every core once.
+/// The supplied layout also sizes the pages and their repeated group headers.
 #[allow(clippy::too_many_arguments)]
 fn read_page_with(
     conn: &rusqlite::Connection,
@@ -233,6 +309,7 @@ fn read_page_with(
     to: i64,
     zone: Tz,
     basis: ReportBasis,
+    layout: ReportLayout,
     names: &db::CoreNames,
     groups: &[CoreGroup],
     order: impl FnOnce(
@@ -389,7 +466,7 @@ fn read_page_with(
         .iter()
         .filter(|row| matches!(row, Row::Group(..)))
         // Telegram counts characters of the escaped text.
-        .max_by_key(|row| render::row_html(row, true).chars().count())
+        .max_by_key(|row| render::row_html(row, true, &layout).chars().count())
         .cloned();
     let fits = |rows: &[Row]| {
         let partial = rows.len() < active.len();
@@ -411,6 +488,7 @@ fn read_page_with(
             drilldowns: drilldowns.clone(),
             scope_label: scope_label.clone(),
             basis,
+            layout: layout.clone(),
             cores: Vec::new(),
             caption: None,
         }))
@@ -430,6 +508,7 @@ fn read_page_with(
         drilldowns,
         scope_label,
         basis,
+        layout,
         cores: accessible.iter().map(|(id, _)| *id).collect(),
         caption: None,
     })
@@ -473,6 +552,8 @@ pub(crate) struct AutoPage {
 pub(crate) struct AutoInputs {
     pub(crate) zone: Tz,
     pub(crate) basis: ReportBasis,
+    /// Saved appearance for automatic reads and paging.
+    pub(crate) layout: ReportLayout,
     pub(crate) view: moon_core::config::telegram_menu::ReportView,
     pub(crate) order: CoreOrder,
     pub(crate) names: db::CoreNames,
@@ -482,7 +563,7 @@ pub(crate) struct AutoInputs {
 }
 
 /// Read one automatic report: the report a button opens, over the slot's frozen period, in the
-/// bot's view and basis, headed by `caption`.
+/// bot's view, basis and layout, headed by `caption`.
 ///
 /// Returns:
 ///     `None` for a viewer with no cores, which has nothing to see, and for a report that does
@@ -505,6 +586,7 @@ pub(crate) fn read_auto_report(
         window.to,
         inputs.zone,
         inputs.basis,
+        inputs.layout.clone(),
         &inputs.names,
         &inputs.groups,
         |cores| {

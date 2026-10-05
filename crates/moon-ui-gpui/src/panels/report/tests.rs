@@ -27,8 +27,11 @@ fn export_fixture_root() -> PathBuf {
 /// resolving through the display schema makes this nonzero core look like core zero and exports
 /// the uncorrected replicated timestamp. Treating `last_update_at` as replicated instead would
 /// also shift the terminal-written freshness stamp by the core's offset.
+/// Hold the shared locale/data-dir guard before installing the fixture root so concurrent
+/// failure-copy tests cannot capture a different folder from the one their rendered text names.
 #[test]
 fn csv_export_uses_parallel_core_uid_without_correcting_terminal_utc_stamps() {
+    let _locale = crate::test_locale::force("en");
     const CORE_UID: u64 = 77;
     const CORE_CLOCK_SECONDS: i64 = 1_700_000_000;
     let root = export_fixture_root();

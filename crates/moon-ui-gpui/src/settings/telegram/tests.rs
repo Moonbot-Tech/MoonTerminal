@@ -54,6 +54,7 @@ fn fixture(window: &mut Window, cx: &mut Context<EditorFixture>) -> EditorFixtur
         },
         server: super::server_bot::build(window, cx, None),
         menu: super::bot_menu::BotMenuEd::new(cx),
+        message_layout: super::message_layout::MessageLayoutEd::default(),
     })
 }
 

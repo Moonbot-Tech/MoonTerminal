@@ -129,3 +129,104 @@ fn the_notify_screen_keeps_its_buttons_readable() {
         vec![SettingsAction::DownAfter(1), SettingsAction::DownAfter(5)]
     );
 }
+
+/// Losing schedule words or reverting to vague report names would revive the hourly confusion.
+/// Reviewed English labels are pinned at the actual callback buttons, not just in the dictionary.
+#[test]
+fn report_buttons_name_their_schedule() {
+    let _locale = crate::test_locale::force("en");
+    let (_, lines, rows) = super::notify_screen(&NotifySettings::default());
+    for (kind, label) in [
+        (
+            moon_core::telegram::notify::AutoReport::Hourly,
+            "Each hour · separate",
+        ),
+        (
+            moon_core::telegram::notify::AutoReport::Today,
+            "Today · hourly",
+        ),
+        (
+            moon_core::telegram::notify::AutoReport::Month,
+            "Month · midnight",
+        ),
+    ] {
+        let button = rows
+            .iter()
+            .flatten()
+            .find(|button| {
+                action(button) == Some(MenuAction::Settings(SettingsAction::Auto(kind, true)))
+            })
+            .expect("report toggle");
+        assert_eq!(button.text, format!("\u{2b1c} {label}"));
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("Turning off Hourly does not turn off Today"))
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("full previous day at midnight"))
+    );
+}
+
+/// Translations must keep two report buttons readable on a phone; moving explanations into
+/// button labels would exceed this reviewed compact-text budget.
+#[test]
+fn report_buttons_remain_compact_in_every_locale() {
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let (_, _, rows) = super::notify_screen(&NotifySettings::default());
+        for button in rows.iter().flatten().filter(|button| {
+            matches!(
+                action(button),
+                Some(MenuAction::Settings(SettingsAction::Auto(..)))
+            )
+        }) {
+            assert!(
+                button.text.chars().count() <= 24,
+                "{}: {}",
+                language.code(),
+                button.text
+            );
+        }
+    }
+}
+
+/// Removing the shared header or using the wrong host would make independent bot settings
+/// indistinguishable. Exercise the rendered HTML for every local Settings subsection.
+#[test]
+fn every_settings_screen_names_the_bot_host() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::config::telegram_menu::ReportBasis;
+    use moon_core::telegram::api::{InlineKeyboardMarkup, ReplyMarkup};
+    use moon_core::telegram::runtime::Response;
+    let root = crate::notify::test_host::TempRoot::new("settings-host-title");
+    let fixture = crate::notify::test_host::TickHost::open(root.notifications());
+    for (host, expected, other) in [
+        (HostKind::Terminal, "Bot of this terminal", "Station bot"),
+        (HostKind::Station, "Station bot", "Bot of this terminal"),
+    ] {
+        for screen in [
+            super::root(&fixture, true),
+            super::buttons(&BotSettings::default(), host),
+            super::view(ReportView::Exchanges),
+            super::basis(ReportBasis::Close),
+            super::notify_screen(&NotifySettings::default()),
+        ] {
+            let Response::Rich { html, .. } = super::render(
+                host,
+                screen,
+                ReplyMarkup::Inline(InlineKeyboardMarkup::from_rows(Vec::new())),
+            ) else {
+                panic!("settings must be a rich message")
+            };
+            assert!(
+                html.starts_with(&format!("<p><b>{expected}</b></p>")),
+                "{html}"
+            );
+            assert!(!html.contains(other), "{html}");
+        }
+    }
+}

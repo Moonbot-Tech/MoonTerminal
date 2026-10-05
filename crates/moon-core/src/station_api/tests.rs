@@ -1,5 +1,73 @@
 use super::*;
 
+/// Losing layout in Access storage or equality would discard station edits or accept stale ones.
+#[test]
+fn message_layout_rides_access_and_participates_in_base_holds() {
+    let access: Access = serde_json::from_value(serde_json::json!({"bot": {"message_layout": {"card": {"lines": [["core"], ["coin", "prices"]], "core_hashtag": false}, "report": {"columns": ["volume", "average"], "total": "top", "separation": "gap_band"}}}})).unwrap();
+    let wire = serde_json::to_string(&access).unwrap();
+    let back: Access = serde_json::from_str(&wire).unwrap();
+    let mut telegram = TelegramConfig::default();
+    back.apply_to(&mut telegram);
+    assert_eq!(
+        telegram.bot.message_layout.card.lines,
+        vec![
+            vec![crate::config::CardField::Core],
+            vec![
+                crate::config::CardField::Coin,
+                crate::config::CardField::Prices
+            ]
+        ]
+    );
+    assert!(!telegram.bot.message_layout.card.core_hashtag);
+    assert_eq!(
+        telegram.bot.message_layout.report.columns,
+        vec![
+            crate::config::ReportColumn::Volume,
+            crate::config::ReportColumn::Average
+        ]
+    );
+    assert_eq!(
+        telegram.bot.message_layout.report.total,
+        crate::config::TotalPlace::Top
+    );
+    assert_eq!(
+        telegram.bot.message_layout.report.separation,
+        crate::config::TotalSeparation::GapBand
+    );
+    let current = Access::of(&telegram);
+    assert!(back.base_holds(&current));
+    telegram.bot.message_layout.card.coin_hashtag = false;
+    assert!(!back.base_holds(&Access::of(&telegram)));
+}
+
+/// Frozen TESTKEY V1 export: master 0x11, MAC 0x22, endpoint 198.51.100.42:4321.
+const SYNTHETIC_KEY: &str = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+
+/// Dropping the domain separator or trimming changes fingerprints across station and terminal.
+#[test]
+fn core_fingerprints_are_domain_separated_trimmed_and_secret_free() {
+    assert_eq!(key_fingerprint("synthetic-core-key"), "5e7efb7e11148007");
+    assert_eq!(
+        key_fingerprint(" \nsynthetic-core-key\t"),
+        "5e7efb7e11148007"
+    );
+    assert_ne!(
+        key_fingerprint("synthetic-core-key"),
+        key_fingerprint("other-synthetic-key")
+    );
+    assert!(!key_fingerprint("synthetic-core-key").contains("synthetic-core-key"));
+}
+
+/// Displaying fallback or losing the port would match station cores to the wrong endpoint.
+#[test]
+fn listed_core_addresses_decode_synthetic_keys() {
+    assert_eq!(
+        core_address(SYNTHETIC_KEY).as_deref(),
+        Some("198.51.100.42:4321")
+    );
+    assert_eq!(core_address("not-a-key"), None);
+}
+
 fn chat(chat_id: i64, core_uids: &[u64]) -> TelegramChatAccess {
     TelegramChatAccess {
         chat_id,
@@ -79,6 +147,13 @@ fn a_status_reads_back_whole() {
         })),
         last_update: Some("2026-09-30T14:02Z health=ok".into()),
         auto_update: Some(false),
+        core_uid_high_water: Some(12),
+        cores: Some(vec![ListedCore {
+            uid: 3,
+            name: "Core A".into(),
+            address: Some("198.51.100.42:4321".into()),
+            key_fp: Some("9f2c0123456789ab".into()),
+        }]),
     }));
     let text = serde_json::to_string(&reply).unwrap();
     assert_eq!(serde_json::from_str::<Reply>(&text).unwrap(), reply);
@@ -88,6 +163,8 @@ fn a_status_reads_back_whole() {
         panic!("not a status");
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
+    assert_eq!(old.cores, None);
+    assert_eq!(old.core_uid_high_water, None);
     assert_eq!(
         old.auto_update, None,
         "a station older than the switch reads as unknown, not as on or off"

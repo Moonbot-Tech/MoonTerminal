@@ -128,6 +128,16 @@ fn amount_text(value: Option<f64>) -> String {
     value.map(|v| format!("{v}")).unwrap_or_default()
 }
 
+/// The toggle schedule shared with the bot menu, separate from delivered report titles.
+fn auto_label(kind: AutoReport) -> String {
+    let key = match kind {
+        AutoReport::Hourly => "telegram.auto.toggle_hourly",
+        AutoReport::Today => "telegram.auto.today",
+        AutoReport::Month => "telegram.auto.month",
+    };
+    t!(key).to_string()
+}
+
 /// A threshold typed into a field: empty is none; a comma reads as the decimal point.
 fn parse_amount(text: &str) -> Result<Option<f64>, ()> {
     let text = text.trim().replace(',', ".");
@@ -614,14 +624,9 @@ impl SettingsView {
             .filter(|(c, _)| *c == chat)
             .map(|(_, status)| status.clone());
         let auto = |kind: AutoReport| {
-            let key = match kind {
-                AutoReport::Hourly => "telegram.auto.hourly",
-                AutoReport::Today => "telegram.auto.today",
-                AutoReport::Month => "telegram.auto.month",
-            };
             MoonCheckbox::new(id(&format!("auto-{kind:?}")))
                 .checked(draft.reports.on(kind))
-                .label(t!(key).to_string())
+                .label(auto_label(kind))
                 .on_change(cx.listener(move |this, v: &bool, _, cx| {
                     let v = *v;
                     this.notify_edit(side, cx, |s| s.reports.set(kind, v));

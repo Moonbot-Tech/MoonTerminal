@@ -346,6 +346,7 @@ fn hidden_owner_reconciles_once_after_config_and_window_changes() {
 /// marking them selectable routes a click into a group with no owning window.
 #[test]
 fn roster_groups_reported_exchanges_and_keeps_unavailable_rows() {
+    let _locale = crate::test_locale::force("en");
     let mut connecting = roster_input(
         44,
         "Connecting",

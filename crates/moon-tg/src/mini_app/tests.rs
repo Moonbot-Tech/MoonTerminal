@@ -861,6 +861,73 @@ fn empty_store(path: PathBuf) -> NotifyStore {
     }
 }
 
+/// Initial rules must record an enable boundary once and preserve even an empty stored row.
+#[test]
+fn create_chat_settings_preserves_old_rows_and_enable_time() {
+    let root = NotifyTemp::new("initial-rules");
+    let path = root.path("notifications.json");
+    let mut store = empty_store(path.clone());
+    let legacy = root.path("legacy.json");
+    std::fs::write(&legacy, r#"{"chats":{"7":{"revision":3}}}"#).unwrap();
+    store.file = NotifyFile::load(&legacy).unwrap();
+    super::settings::create_chat_settings(&mut store, 8, 1_000, chrono_tz::UTC).unwrap();
+    assert_eq!(store.file.chats[&8].settings, NotifySettings::new_chat());
+    assert_eq!(store.file.chats[&8].ledger.trades_enabled_utc, Some(1_000));
+    let bytes = std::fs::read(&path).unwrap();
+    super::settings::create_chat_settings(&mut store, 8, 2_000, chrono_tz::UTC).unwrap();
+    super::settings::create_chat_settings(&mut store, 7, 2_000, chrono_tz::UTC).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert_eq!(store.file.chats[&7].settings, NotifySettings::default());
+    assert_eq!(store.file.chats[&7].revision, 3);
+    assert_eq!(NotifyFile::load(&path).unwrap(), store.file);
+
+    store.path = root.path("directory");
+    std::fs::create_dir(&store.path).unwrap();
+    let before = store.file.clone();
+    assert!(super::settings::create_chat_settings(&mut store, 9, 3_000, chrono_tz::UTC).is_err());
+    assert_eq!(
+        store.file, before,
+        "a failed initial save must not publish enabled rules"
+    );
+}
+
+/// First settings drafts share pairing defaults, but viewing a sparse stored row must not opt in.
+#[test]
+fn initial_settings_draft_saves_without_changing_sparse_chats() {
+    let root = NotifyTemp::new("initial-draft");
+    let mut store = empty_store(root.path("notifications.json"));
+    let legacy = root.path("legacy.json");
+    std::fs::write(&legacy, r#"{"chats":{"7":{"revision":3}}}"#).unwrap();
+    store.file = NotifyFile::load(&legacy).unwrap();
+    let old = super::settings::settings_row(&store.file, 7);
+    assert_eq!(old.settings, NotifySettings::default());
+    assert_eq!(old.revision, 3);
+    let draft = super::settings::settings_row(&store.file, 8);
+    assert!(draft.settings.trades.on);
+    assert!(draft.settings.down.on);
+    assert_eq!(draft.settings.trades.profit_at_least_usd, Some(100.0));
+    assert_eq!(draft.settings.trades.loss_at_least_usd, Some(100.0));
+    assert_eq!(draft.revision, 0);
+    assert!(
+        !store.path.exists(),
+        "opening a draft must not create settings"
+    );
+    assert_eq!(
+        store_settings(
+            &mut store,
+            8,
+            draft.settings,
+            &[],
+            1_000,
+            chrono_tz::UTC,
+            draft.revision
+        ),
+        SaveResult::Saved
+    );
+    assert_eq!(store.file.chats[&8].ledger.trades_enabled_utc, Some(1_000));
+    assert_eq!(store.file.chats[&7].settings, NotifySettings::default());
+}
+
 /// Save with the revision currently stored for `chat`, in UTC.
 ///
 /// An absent chat is revision 0. Tests that must send a different revision call

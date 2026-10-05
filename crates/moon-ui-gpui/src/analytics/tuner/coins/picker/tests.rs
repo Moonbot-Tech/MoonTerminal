@@ -33,6 +33,7 @@ fn texts(coins: &[super::PickCoin]) -> Vec<String> {
 /// the field sit still while the badge beside it counted the edits.
 #[test]
 fn the_field_follows_the_edit_not_the_saved_list() {
+    let _locale = crate::test_locale::force("en");
     let data = CoinListRows {
         white: Vec::new(),
         black: vec![row("BTC", &["BTC"], "BB1", Some(NOW - DAY))],
@@ -51,6 +52,7 @@ fn the_field_follows_the_edit_not_the_saved_list() {
 /// already holds it.
 #[test]
 fn a_pending_tick_claims_no_date_and_no_core() {
+    let _locale = crate::test_locale::force("en");
     let f = build(
         &CoinListRows::default(),
         &set(&["ETH"]),

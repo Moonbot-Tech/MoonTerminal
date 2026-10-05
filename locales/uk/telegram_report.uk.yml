@@ -1,4 +1,7 @@
 _version: 1
+telegram.report_title: "Звіт"
+telegram.report_average_col: "Середня %"
+telegram.report_volume_col: "Обсяг"
 
 telegram.help_hour: "Ця година"
 
@@ -106,6 +109,7 @@ telegram.notify_manual: "Вручну"
 telegram.notify_unvalued: "Без оцінки"
 
 telegram.notify_unchecked: "Пороги не перевірено: оцінки в $ немає"
+telegram.notify_core_named: "Name: %{name}"
 
 telegram.notify_opened: "Угоду відкрито"
 telegram.notify_emulator: "емулятор"

@@ -2,6 +2,8 @@
 
 /// Counts station calls without starting transport, sessions, or an updater.
 struct StationHost {
+    /// Process identity selected by the header regression; existing fixtures stay stations.
+    kind: crate::HostKind,
     config: moon_core::config::AppConfig,
     state: crate::TelegramState,
     status_calls: usize,
@@ -20,6 +22,7 @@ impl StationHost {
         let state = crate::TelegramState::new(&config.telegram, crate::HostKind::Station);
         assert!(state.service.is_none());
         Self {
+            kind: crate::HostKind::Station,
             config,
             state,
             status_calls: 0,
@@ -37,9 +40,9 @@ impl StationHost {
 }
 
 impl crate::TgHost for StationHost {
-    /// Identify this fixture as a station.
+    /// Identify the bot's fixture process without starting either host.
     fn kind(&self) -> crate::HostKind {
-        crate::HostKind::Station
+        self.kind
     }
     /// Expose the current saved fixture grant.
     fn config(&self) -> &moon_core::config::AppConfig {
@@ -117,6 +120,34 @@ impl crate::TgHost for StationHost {
     fn request_station_update(&mut self) -> Option<Result<(), crate::UpdateRefusal>> {
         self.update_calls += 1;
         Some(Ok(()))
+    }
+}
+
+/// Bypassing the shared settings renderer would drop the host header despite helper tests
+/// passing. Exercise owner commands through dispatch for each host and every service-free page.
+#[test]
+fn settings_dispatch_names_the_process_being_edited() {
+    let _locale = crate::test_locale::force("en");
+    use moon_core::telegram::menu_action::{MenuAction, SettingsAction};
+    for (kind, name) in [
+        (crate::HostKind::Terminal, "Bot of this terminal"),
+        (crate::HostKind::Station, "Station bot"),
+    ] {
+        let mut host = StationHost::new();
+        host.kind = kind;
+        for action in [
+            SettingsAction::Root,
+            SettingsAction::Buttons,
+            SettingsAction::View,
+            SettingsAction::Basis,
+        ] {
+            let super::Response::Rich { html, .. } =
+                host.command(10, super::ParsedCommand::Menu(MenuAction::Settings(action)))
+            else {
+                panic!("owner settings must render")
+            };
+            assert!(html.starts_with(&format!("<p><b>{name}</b></p>")), "{html}");
+        }
     }
 }
 
@@ -301,4 +332,155 @@ fn the_status_knows_where_it_was_asked_from() {
         host.status_calls, 2,
         "a viewer is refused before the station is asked"
     );
+}
+
+/// Both host kinds must create rules at pairing, with no historical replay or legacy opt-in.
+#[test]
+fn pairing_initializes_new_chat_rules_for_both_hosts() {
+    use moon_core::telegram::notify::{NotifyFile, NotifySettings};
+    use moon_core::telegram::runtime::NotifyStore;
+    use std::sync::{Arc, Mutex};
+    let _locale = crate::test_locale::force("en");
+    for kind in [crate::HostKind::Terminal, crate::HostKind::Station] {
+        let root = crate::notify::test_host::TempRoot::new("pair-defaults");
+        let mut host = StationHost::new();
+        host.kind = kind;
+        let mut store = NotifyStore::open(root.notifications()).unwrap();
+        let legacy = root.notifications().with_extension("legacy.json");
+        std::fs::write(&legacy, r#"{"chats":{"11":{"revision":4}}}"#).unwrap();
+        store.file = NotifyFile::load(&legacy).unwrap();
+        let store = Arc::new(Mutex::new(store));
+        host.state.notify_store_override = Some(Arc::clone(&store));
+        for chat in [40, 11] {
+            let (reply, receive) = std::sync::mpsc::sync_channel(1);
+            super::pair(&mut host, chat, reply);
+            assert!(matches!(
+                receive.try_recv().unwrap(),
+                super::Response::PairSaved { saved: true, .. }
+            ));
+        }
+        let guard = store.lock().unwrap();
+        let row = &guard.file.chats[&40];
+        assert!(row.settings.trades.on);
+        assert!(row.settings.down.on);
+        assert_eq!(row.settings.trades.profit_at_least_usd, Some(100.0));
+        assert_eq!(row.settings.trades.loss_at_least_usd, Some(100.0));
+        assert_eq!(row.revision, 1);
+        assert!(row.ledger.trades_enabled_utc.is_some());
+        assert!(row.ledger.seen.is_empty());
+        assert_eq!(guard.file.chats[&11].settings, NotifySettings::default());
+        assert_eq!(guard.file.chats[&11].revision, 4);
+        let stored = guard.file.clone();
+        assert_eq!(NotifyFile::load(&guard.path).unwrap(), stored);
+        drop(guard);
+        let rows = crate::notify_rows(&host.state, &host.config.telegram).unwrap();
+        assert_eq!(rows[&40].settings, stored.chats[&40].settings);
+        assert_eq!(rows[&20].settings, NotifySettings::new_chat());
+        assert_eq!(rows[&20].revision, 0);
+        assert_eq!(
+            crate::mini_app::chat_notify(&host, 11),
+            Some(NotifySettings::default())
+        );
+        assert_eq!(
+            crate::mini_app::chat_notify(&host, 20),
+            Some(NotifySettings::new_chat())
+        );
+        let (reply, _) = std::sync::mpsc::sync_channel(1);
+        super::pair(&mut host, 40, reply);
+        assert_eq!(
+            store.lock().unwrap().file,
+            stored,
+            "repeat pairing must not reset rules or their enable time"
+        );
+    }
+}
+
+/// Mini App, in-chat settings and desktop/station settings must share the initial draft rules.
+/// Sparse stored documents must stay off on every route, even after unrelated settings edits.
+#[test]
+fn first_settings_routes_share_new_rules_for_both_hosts() {
+    use moon_core::telegram::init_data::{SignedInitData, SignedUser};
+    use moon_core::telegram::notify::NotifySettings;
+    use moon_core::telegram::runtime::NotifyStore;
+    use moon_core::telegram::web::MiniAppApiRequest;
+    use std::sync::{Arc, Mutex};
+    let _locale = crate::test_locale::force("en");
+    for kind in [crate::HostKind::Terminal, crate::HostKind::Station] {
+        let root = crate::notify::test_host::TempRoot::new("settings-defaults");
+        let mut host = StationHost::new();
+        host.kind = kind;
+        host.config.telegram.mini_app_enabled = true;
+        host.state.visible_override = Some(vec![]);
+        let mut store = NotifyStore::open(root.notifications()).unwrap();
+        let legacy = root.notifications().with_extension("legacy.json");
+        std::fs::write(&legacy, r#"{"chats":{"10":{"revision":4}}}"#).unwrap();
+        store.file = moon_core::telegram::notify::NotifyFile::load(&legacy).unwrap();
+        let store = Arc::new(Mutex::new(store));
+        host.state.notify_store_override = Some(Arc::clone(&store));
+        let identity = |id| SignedInitData {
+            auth_date: 0,
+            user: SignedUser {
+                id,
+                first_name: "fixture".into(),
+                last_name: None,
+                username: None,
+                language_code: None,
+            },
+            chat: None,
+            query_id: None,
+        };
+        for (chat, expected, revision) in [
+            (10, NotifySettings::default(), 4),
+            (20, NotifySettings::new_chat(), 0),
+        ] {
+            let (reply, receive) = std::sync::mpsc::sync_channel(1);
+            super::mini_request(
+                &mut host,
+                MiniAppApiRequest::Notify {
+                    identity: identity(chat),
+                    chat_id: chat,
+                    reply,
+                },
+            );
+            let draft = receive.try_recv().unwrap().unwrap();
+            assert_eq!(draft.settings, expected);
+            assert_eq!(draft.revision, revision);
+            assert!(
+                !root.notifications().exists(),
+                "read-only first open must not create a row"
+            );
+        }
+        let (reply, receive) = std::sync::mpsc::sync_channel(1);
+        super::mini_request(
+            &mut host,
+            MiniAppApiRequest::NotifySave {
+                identity: identity(20),
+                chat_id: 20,
+                settings: NotifySettings::new_chat(),
+                revision: 0,
+                reply,
+            },
+        );
+        let saved = receive.try_recv().unwrap().unwrap();
+        assert!(saved.error.is_none());
+        assert_eq!(saved.settings, NotifySettings::new_chat());
+        assert_eq!(saved.revision, 1);
+        let bot = crate::mini_app::save_chat_notify(&host, 30, |settings| {
+            settings.trades.usd_followup = true
+        })
+        .unwrap();
+        assert!(bot.trades.on && bot.down.on && bot.trades.usd_followup);
+        assert_eq!(bot.trades.profit_at_least_usd, Some(100.0));
+        let mut rows = crate::notify_rows(&host.state, &host.config.telegram).unwrap();
+        assert_eq!(rows[&10].settings, NotifySettings::default());
+        rows.get_mut(&10).unwrap().settings.charts.on = true;
+        crate::save_notify_rows(&host.state, &host.config.telegram, &rows, chrono_tz::UTC).unwrap();
+        let guard = store.lock().unwrap();
+        assert!(!guard.file.chats[&10].settings.trades.on);
+        assert!(!guard.file.chats[&10].settings.down.on);
+        for chat in [20, 30] {
+            assert!(guard.file.chats[&chat].ledger.trades_enabled_utc.is_some());
+            assert!(guard.file.chats[&chat].settings.down.on);
+        }
+    }
 }

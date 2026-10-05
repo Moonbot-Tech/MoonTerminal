@@ -26,6 +26,7 @@ fn result(holdout_n: Option<i64>, holdout_open: usize) -> SearchResult {
 /// check both warn as "no check", an open one warns, a real one is printed against the fact.
 #[test]
 fn every_answer_states_its_out_of_sample_status() {
+    let _locale = crate::test_locale::force("en");
     let none = holdout_part(&result(None, 0));
     let small = holdout_part(&result(Some(MIN_HOLDOUT - 1), 0));
     // A 4-deal holdout the answer left a deal open in is still no check: the size speaks first.

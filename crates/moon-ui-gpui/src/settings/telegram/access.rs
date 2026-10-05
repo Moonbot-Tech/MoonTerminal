@@ -15,6 +15,38 @@ use super::SettingsView;
 use crate::design;
 use moon_core::session::core_order::CoreOrder;
 
+/// Station grants use its own identities, even when a local uid names another address.
+/// Only a confirmed old station uses the local catalog; an unread station exposes no choices.
+fn station_catalog(
+    local: Vec<(u64, String)>,
+    listing: Option<Option<&[moon_core::station_api::ListedCore]>>,
+) -> Vec<(u64, String)> {
+    match listing {
+        Some(Some(listing)) => listing
+            .iter()
+            .map(|core| (core.uid, core.name.clone()))
+            .collect(),
+        Some(None) => local,
+        None => Vec::new(),
+    }
+}
+
+/// Retain grants to cores removed from the latest listing as editable archived choices.
+fn retain_granted(
+    cores: &mut Vec<(u64, String)>,
+    grants: impl IntoIterator<Item = u64>,
+    archived: &str,
+) {
+    for id in grants {
+        if id != 0
+            && id != moon_core::config::NO_MATCH_CORE_UID
+            && !cores.iter().any(|(known, _)| *known == id)
+        {
+            cores.push((id, archived.to_owned()));
+        }
+    }
+}
+
 /// Whose chats an editor shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::settings) enum ChatsOf {
@@ -23,6 +55,9 @@ pub(in crate::settings) enum ChatsOf {
     /// The bot on the station: a draft of the server's chats, applied by a button.
     Station,
 }
+
+#[cfg(test)]
+mod tests;
 
 impl ChatsOf {
     /// An element id unique to this editor and its retained input entities.
@@ -229,7 +264,7 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Stack chat cards and expand a single editor so narrow Settings needs no sideways scrolling.
+    /// Name the bot host, stack chat cards and expand one editor so narrow Settings stays readable.
     ///
     /// Args:
     ///     side: Whose chats.
@@ -245,7 +280,7 @@ impl SettingsView {
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
         let section = MoonGroupBox::new(side.id("chat-access"))
-            .title(t!("telegram.access_title").to_string())
+            .title(self.bot_section_title(side, "telegram.access_title"))
             .padding(14.0)
             .gap(10.0)
             .child(
@@ -422,7 +457,13 @@ impl SettingsView {
             Some(TelegramReportAccess::Viewer(ids)) => ids,
             _ => Vec::new(),
         };
-        // The station serves the terminal's cores: the same uids, the same names.
+        let unread = side == ChatsOf::Station && backend.station.cores_seen.is_none();
+        let seen = backend
+            .station
+            .cores_seen
+            .as_ref()
+            .map(|seen| seen.as_deref());
+        let listing = seen.flatten();
         let mut cores: Vec<_> = cfg
             .servers
             .iter()
@@ -430,9 +471,21 @@ impl SettingsView {
             .map(|s| (s.uid, s.name.clone()))
             .collect();
         CoreOrder::new(cfg).sort_by(&mut cores, |(id, _)| *id);
+        let mut cores = station_catalog(
+            cores,
+            if side == ChatsOf::Station {
+                seen
+            } else {
+                Some(None)
+            },
+        );
         let current_ids: Vec<_> = cores.iter().map(|(id, _)| *id).collect();
         for (id, name) in &self.telegram.history_cores {
-            if *id != 0 && !cores.iter().any(|(known, _)| known == id) {
+            if !unread
+                && listing.is_none()
+                && *id != 0
+                && !cores.iter().any(|(known, _)| known == id)
+            {
                 cores.push((
                     *id,
                     format!("{} ({})", name, t!("telegram.access_archived")),
@@ -441,17 +494,18 @@ impl SettingsView {
         }
         // Saved grants stay available during a failed or pending history read, even after unchecking.
         let drafted = telegram.map_or(&[][..], |t| t.chat_access.as_slice());
-        for profile in self.chats_saved(side, cx).iter().chain(drafted) {
-            for &id in &profile.core_uids {
-                if id != 0
-                    && id != moon_core::config::NO_MATCH_CORE_UID
-                    && !cores.iter().any(|(known, _)| *known == id)
-                {
-                    cores.push((id, t!("telegram.access_archived").to_string()));
-                }
-            }
+        retain_granted(
+            &mut cores,
+            self.chats_saved(side, cx)
+                .iter()
+                .chain(drafted)
+                .filter(|_| !unread)
+                .flat_map(|profile| profile.core_uids.iter().copied()),
+            &t!("telegram.access_archived"),
+        );
+        if listing.is_none() {
+            CoreOrder::new(cfg).sort_by(&mut cores, |(id, _)| *id);
         }
-        CoreOrder::new(cfg).sort_by(&mut cores, |(id, _)| *id);
         let ed = self.chat_ed(side);
         let query = ed.search.read(cx).value().trim().to_lowercase();
         let mut content = v_flex()
@@ -491,7 +545,7 @@ impl SettingsView {
                         MoonButton::new(side.id("clear-cores"))
                             .ghost()
                             .label(t!("telegram.access_clear").to_string())
-                            .disabled(selected.is_empty())
+                            .disabled(unread || selected.is_empty())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.chats_edit(side, cx, |telegram| {
                                     telegram.chat_profile_mut(chat).core_uids.clear();

@@ -295,6 +295,8 @@ fn the_reach_is_the_margin_and_the_orders_wait_in_whole_seconds() {
 /// copy, and it installs the process-wide data-dir override, so it runs alone:
 /// `cargo test -p moon-ui-gpui --target x86_64-pc-windows-msvc -- --ignored --nocapture
 /// probe_a_copied_data_dir`.
+/// The shared locale/data-dir guard serializes override installation with localized path readers;
+/// the one-shot override still requires this probe to run in its own test process.
 #[test]
 #[ignore]
 fn probe_a_copied_data_dir() {
@@ -303,6 +305,7 @@ fn probe_a_copied_data_dir() {
         return;
     };
     let dir = std::path::PathBuf::from(dir);
+    let _locale = crate::test_locale::force("en");
     assert!(
         moon_core::config::paths::set_data_dir_override(dir.clone()),
         "the override must be installed before any path resolves"

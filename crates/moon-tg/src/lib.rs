@@ -20,6 +20,7 @@ mod labels;
 mod menu;
 mod mini_app;
 pub(crate) mod notify;
+mod preview;
 mod report;
 mod state;
 mod station_status;
@@ -34,6 +35,9 @@ pub use dispatch::{issue_pairing, reconcile, reset_pairing, tick};
 pub use host::{Finish, HostKind, Job, ReportRevision, TgHost};
 pub use labels::{station_owner_navigation, status_text};
 pub use mini_app::{check_notify_rows, notify_rows, save_notify_rows};
+pub use preview::{
+    PreviewLine, PreviewRow, PreviewRowKind, PreviewTable, Span, Tone, preview_card, preview_report,
+};
 
 /// How long a closed trade waits for its dollar value when a chat's threshold needs one, in
 /// minutes; the terminal's notification editor says so.

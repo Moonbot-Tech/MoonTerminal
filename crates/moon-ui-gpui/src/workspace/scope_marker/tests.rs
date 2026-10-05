@@ -63,6 +63,7 @@ fn a_full_scope_states_nothing_and_offers_no_hint() {
 /// figures that the row exists to state.
 #[test]
 fn the_footer_head_never_joins_the_clipping_tail() {
+    let _locale = crate::test_locale::force("en");
     let marker = ScopeMarker::new(Some(WorkspaceMode::AutoTrading), 1, 2);
     let head = "figures".to_string();
     let expected_tail = marker.facts();
@@ -121,6 +122,7 @@ fn the_footer_tooltip_repeats_the_row_then_closes_with_the_hint() {
 /// and Strategies captions begin with a stray bullet while still needing both localized facts.
 #[test]
 fn line_joins_the_footer_facts_without_a_leading_separator() {
+    let _locale = crate::test_locale::force("en");
     let marker = ScopeMarker::new(Some(WorkspaceMode::Classic), 3, 56);
     let facts = marker.facts();
     let expected_facts = facts

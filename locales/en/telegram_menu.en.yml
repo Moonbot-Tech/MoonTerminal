@@ -81,9 +81,10 @@ telegram.notify_editor.charts: "Trade chart — the tape around the trade as a p
 telegram.notify_editor.charts_hint: "Comes apart from the cards, with the trade card as its caption. Sent once the trade is in $ (a stablecoin counts 1:1, another currency waits up to %{minutes} min for its valuation; no valuation, no picture). Thresholds: profit from or loss from; empty — every trade. The station records the tape."
 telegram.auto.title: "Automatic reports"
 telegram.auto.hourly: "Hourly report"
-telegram.auto.today: "Today's report"
-telegram.auto.month: "Monthly report"
-telegram.auto.hint: "Hourly: at the top of every hour, for the hour that ended; it stays in the history. Today: every hour, since midnight; month: at midnight, since the 1st; a new one replaces the previous. View and basis are the bot report's. A bot in the terminal sends while the terminal runs; a bot on the server, around the clock."
+telegram.auto.toggle_hourly: "Each hour · separate"
+telegram.auto.today: "Today · hourly"
+telegram.auto.month: "Month · midnight"
+telegram.auto.hint: "Hourly: a separate report at the start of each hour for the hour just ended; it stays in history. Today: a running summary replaced at the start of each hour, with the full previous day at midnight. Month: at midnight, from the 1st; a new one replaces the previous. Turning off Hourly does not turn off Today. Times follow the report time zone. View and basis are the bot report's. A terminal bot sends while the terminal runs; a station bot, around the clock."
 telegram.auto.open_basis: "By open time: the past hour still grows, as trades opened in it close later."
 
 # The Control section (stage 5).
@@ -164,3 +165,7 @@ telegram.control.already: "Already so — nothing sent."
 telegram.control.not_ready: "The core has not sent its settings yet — its blacklist cannot be edited yet."
 telegram.control.no_list: "This order has no strategy with a blacklist."
 telegram.control.hidden: "The Control section is off in the bot menu: switch it on in the terminal's Settings."
+
+# Host identity on every bot settings screen.
+telegram.settings.host_terminal: "Bot of this terminal"
+telegram.settings.host_station: "Station bot"

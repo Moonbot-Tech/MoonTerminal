@@ -312,6 +312,7 @@ fn by_ip_sort_restore_keeps_valid_choice_and_historical_default() {
 /// vanish from the operator's fleet list, or a future broken partition could duplicate it.
 #[test]
 fn flat_lines_partitions_each_input_row_once_by_venue_identity() {
+    let _locale = crate::test_locale::force("en");
     let rows = (0..6).map(|id| row_with_key(id, None)).collect::<Vec<_>>();
     let venues = HashMap::from([
         (1, CoreVenue::identify(200, "", None)),
