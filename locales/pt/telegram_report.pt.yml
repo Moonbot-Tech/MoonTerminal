@@ -1,4 +1,5 @@
 _version: 1
+telegram.report_title: "Relatório"
 telegram.report_average_col: "Média %"
 telegram.report_volume_col: "Volume"
 

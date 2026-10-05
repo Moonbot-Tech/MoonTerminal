@@ -45,20 +45,35 @@ fn layout_page(layout: ReportLayout) -> Page {
 }
 
 /// Restoring a caption or placing an empty notice first would hide report identity in previews.
-/// Every view keeps its existing title/period, automatic override and open-basis note exactly once.
+/// Manual pages lead with "Report"; automatic titles and the open-basis note stay exactly once.
 #[test]
 fn report_preview_title_leads_every_kind() {
     let _locale = crate::test_locale::force("en");
     for period in [Period::Hour, Period::Today, Period::Month] {
         for (by_exchange, daily, scope, title) in [
-            (true, false, None, "01.01.1970 00:00—00:59"),
-            (false, false, None, "<b>Cores</b> · 01.01.1970 00:00—00:59"),
-            (false, true, None, "<b>Days</b> · 01.01.1970 00:00—00:59"),
+            (
+                true,
+                false,
+                None,
+                "<b>Report</b> · 01.01.1970 · 00:00—00:59",
+            ),
+            (
+                false,
+                false,
+                None,
+                "<b>Report · Cores</b> · 01.01.1970 · 00:00—00:59",
+            ),
+            (
+                false,
+                true,
+                None,
+                "<b>Report · Days</b> · 01.01.1970 · 00:00—00:59",
+            ),
             (
                 false,
                 false,
                 Some("Desk <A>"),
-                "<b>Desk &lt;A&gt;</b> · 01.01.1970 00:00—00:59",
+                "<b>Report · Desk &lt;A&gt;</b> · 01.01.1970 · 00:00—00:59",
             ),
         ] {
             for auto in [
@@ -87,7 +102,7 @@ fn report_preview_title_leads_every_kind() {
                             || title.to_owned(),
                             |title| {
                                 format!(
-                                    "<b>{}</b> · 01.01.1970 00:00—00:59 UTC",
+                                    "<b>{}</b> · 01.01.1970 · 00:00—00:59 UTC",
                                     title.replace('<', "&lt;").replace('>', "&gt;")
                                 )
                             },
@@ -97,7 +112,11 @@ fn report_preview_title_leads_every_kind() {
                         }
                         let html = super::report_html(&page);
                         assert!(html.starts_with(&format!("<p>{expected}</p>")), "{html}");
-                        assert_eq!(html.matches("01.01.1970 00:00—00:59").count(), 1, "{html}");
+                        assert_eq!(
+                            html.matches("01.01.1970 · 00:00—00:59").count(),
+                            1,
+                            "{html}"
+                        );
                         assert!(!html.contains("<caption>"), "{html}");
                         let after_title = &html[html.find("</p>").unwrap() + 4..];
                         assert!(
@@ -114,6 +133,68 @@ fn report_preview_title_leads_every_kind() {
             }
         }
     }
+}
+
+/// Missing a locale key or using a bare period would hide report identity in localized previews.
+/// Scope labels must stay escaped and automatic titles must not receive a second report word.
+#[test]
+fn report_preview_titles_are_localized() {
+    for (locale, report, cores, days) in [
+        ("ru", "Отчёт", "Ядра", "Дни"),
+        ("en", "Report", "Cores", "Days"),
+        ("es", "Informe", "Núcleos", "Días"),
+        ("uk", "Звіт", "Ядра", "Дні"),
+        ("tr", "Rapor", "Çekirdekler", "Günler"),
+        ("pt", "Relatório", "Núcleos", "Dias"),
+        ("vi", "Báo cáo", "Core", "Ngày"),
+    ] {
+        let _locale = crate::test_locale::force(locale);
+        for (by_exchange, daily, scope, title) in [
+            (true, false, None, report.to_owned()),
+            (false, false, None, format!("{report} · {cores}")),
+            (false, true, None, format!("{report} · {days}")),
+            (
+                true,
+                false,
+                Some("Desk <A>"),
+                format!("{report} · Desk &lt;A&gt;"),
+            ),
+        ] {
+            let mut page = layout_page(ReportLayout::default());
+            page.request.by_exchange = by_exchange;
+            page.request.daily = daily;
+            page.scope_label = scope.map(str::to_owned);
+            page.to = 3599;
+            let html = super::report_html(&page);
+            assert!(
+                html.starts_with(&format!("<p><b>{title}</b> · 01.01.1970 · 00:00—00:59</p>")),
+                "{locale}: {html}"
+            );
+            page.caption = Some(super::AutoCaption {
+                title: "Auto <report>".into(),
+                zone: "UTC".into(),
+            });
+            let html = super::report_html(&page);
+            assert!(
+                html.starts_with(
+                    "<p><b>Auto &lt;report&gt;</b> · 01.01.1970 · 00:00—00:59 UTC</p>"
+                ),
+                "{locale}: {html}"
+            );
+        }
+    }
+}
+
+/// Bypassing the shared period formatter would leave the builder's date and clock run together.
+#[test]
+fn report_builder_preview_separates_date_from_time() {
+    let _locale = crate::test_locale::force("en");
+    let mut page = layout_page(ReportLayout::default());
+    page.to = 3599;
+    assert_eq!(
+        super::render::preview_table(&page).caption,
+        "01.01.1970 · 00:00—00:59"
+    );
 }
 
 /// Ignoring the preview paragraph in fit accounting could send a page over Telegram's block cap.
@@ -385,7 +466,7 @@ fn report_four_columns_page_within_rich_message_caps_and_auto_uses_layout() {
         .unwrap();
         let html = super::report_html(&page);
         assert!(super::rich_message_fits(&html));
-        assert!(html.starts_with("<p><b>Cores</b> · "), "{html}");
+        assert!(html.starts_with("<p><b>Report · Cores</b> · "), "{html}");
         assert!(!html.contains("<caption>"), "{html}");
         assert!(html.contains("<th align=\"right\">Trades</th><th align=\"right\">Volume</th><th align=\"right\">Avg %</th><th align=\"right\">Profit / loss</th>"));
         assert!(html.contains("<tr><td colspan=\"5\">&#160;</td></tr>"));
@@ -1856,8 +1937,9 @@ fn an_auto_report_reads_the_frozen_slot_with_its_caption() {
     .unwrap()
     .expect("an owner always gets a report");
     assert!(
-        page.html
-            .starts_with("<p><b>Hourly report</b> · 01.01.1970 00:00—00:59 UTC</p><table compact>"),
+        page.html.starts_with(
+            "<p><b>Hourly report</b> · 01.01.1970 · 00:00—00:59 UTC</p><table compact>"
+        ),
         "{}",
         page.html
     );
@@ -1951,7 +2033,7 @@ fn a_days_report_is_compact() {
         let html = super::render::report_html(&page);
         let table = html.find("<table").unwrap();
         assert!(
-            html[..table].contains("01.01.1970 00:00—08:59</p>"),
+            html[..table].contains("01.01.1970 · 00:00—08:59</p>"),
             "{html}"
         );
         assert!(html.starts_with("<p>"), "{html}");
@@ -2206,7 +2288,8 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
 }
 
 /// The period names as little as stays unambiguous: no year inside the current one, no clock on a
-/// bound that falls on a day's edge, a whole day as its date alone.
+/// bound that falls on a day's edge, a whole day as its date alone. Removing the same-day middle
+/// dot would run the date into the clock in every report and builder preview.
 #[test]
 fn the_period_is_short() {
     let day = 86_400;
@@ -2230,13 +2313,13 @@ fn the_period_is_short() {
     let period = |from, to, year| super::render::period(&page(from, to), year);
     assert_eq!(
         period(midnight, midnight + 6 * 3600 - 1, 2026),
-        "05.10 00:00—05:59"
+        "05.10 · 00:00—05:59"
     );
     assert_eq!(period(midnight, midnight + day - 1, 2026), "05.10");
     // Cut 30 s before the day ends, it is not the whole day.
     assert_eq!(
         period(midnight, midnight + day - 31, 2026),
-        "05.10 00:00—23:59"
+        "05.10 · 00:00—23:59"
     );
     assert_eq!(
         period(midnight - 4 * day, midnight + 6 * 3600 - 1, 2026),
@@ -2253,6 +2336,6 @@ fn the_period_is_short() {
     // A period outside the current year keeps its year.
     assert_eq!(
         period(midnight, midnight + 6 * 3600 - 1, 2027),
-        "05.10.2026 00:00—05:59"
+        "05.10.2026 · 00:00—05:59"
     );
 }

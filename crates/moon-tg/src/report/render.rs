@@ -94,7 +94,7 @@ pub(super) fn render(page: &Page, host: HostKind, navigation: ReplyMarkup) -> Re
     }
 }
 
-/// The page's period, as short as it stays unambiguous: `05.10 00:00—05:59` inside one day,
+/// The page's period, as short as it stays unambiguous: `05.10 · 00:00—05:59` inside one day,
 /// `04.10` for a whole day, `01.10 — 05.10 05:59` across days, where a bound on midnight or on
 /// the day's last second names only its date. The year shows only for a period outside `year`.
 pub(super) fn period(page: &Page, year: i32) -> String {
@@ -120,7 +120,7 @@ pub(super) fn period(page: &Page, year: i32) -> String {
             return from.format(date).to_string();
         }
         return format!(
-            "{} {}—{}",
+            "{} · {}—{}",
             from.format(date),
             from.format("%H:%M"),
             to.format("%H:%M")
@@ -137,6 +137,7 @@ pub(super) fn period(page: &Page, year: i32) -> String {
 }
 
 /// HTML beginning with the report title and period so Telegram can preview every report page.
+/// Manual titles start with localized "Report"; automatic captions keep their own title.
 /// Saved columns, group styles and whole-scope total placement govern the following table.
 /// The caller decides whether it fits Telegram's rich-message caps.
 pub(super) fn report_html(page: &Page) -> String {
@@ -160,8 +161,17 @@ pub(super) fn report_html(page: &Page) -> String {
             escape(&period),
             escape(&auto.zone)
         ),
-        None if page.request.by_exchange && page.scope_label.is_none() => escape(&period),
-        None => format!("<b>{}</b> · {}", escape(title), escape(&period)),
+        None if page.request.by_exchange && page.scope_label.is_none() => format!(
+            "<b>{}</b> · {}",
+            escape(&t!("telegram.report_title")),
+            escape(&period)
+        ),
+        None => format!(
+            "<b>{} · {}</b> · {}",
+            escape(&t!("telegram.report_title")),
+            escape(title),
+            escape(&period)
+        ),
     };
     // The terminal's Report wording: the period counts trades by when they opened.
     if page.basis == ReportBasis::Open {

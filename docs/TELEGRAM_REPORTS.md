@@ -22,8 +22,12 @@ Previous keep their rows when a trade closes between two presses. A core is one 
 first 8 and last 15 characters, and the full name is in the details. Native currency amounts and
 averages are in an expandable two-column table. The main table starts with column titles and
 ends with the whole-period Total row, with every total cell bold. A short paragraph before the
-table carries the view and period for the chat-list and push preview; an automatic report uses
-its own title and zone. The table does not repeat that text in a caption. Dollar-denominated amounts
+table starts with the bold localized word "Report", followed by the existing view or scope title
+when present, then the period for the chat-list and push preview. For example: **Report** ·
+05.10 · 00:00—19:13, or **Report · Cores** · 05.10 · 00:00—19:13. An automatic report keeps
+its own title and zone. Same-day periods separate the date from the times with a middle dot;
+whole-day dates and across-days ranges keep their existing form. The table does not repeat
+that text in a caption. Dollar-denominated amounts
 use two decimals; crypto-denominated amounts retain up to eight. Calculation guidance is in Help; average-coverage counts remain in the monetary details only
 when rows were excluded.
 Exchange membership uses reported venue identity, including market type and HIP-3 DEX.

@@ -1,4 +1,5 @@
 _version: 1
+telegram.report_title: "Báo cáo"
 telegram.report_average_col: "TB %"
 telegram.report_volume_col: "Khối lượng"
 

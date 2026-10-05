@@ -1,4 +1,5 @@
 _version: 1
+telegram.report_title: "Звіт"
 telegram.report_average_col: "Середня %"
 telegram.report_volume_col: "Обсяг"
 
