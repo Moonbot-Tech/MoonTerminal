@@ -12,12 +12,14 @@ fn station_catalog_uses_station_uids_and_preserves_station_only_cores() {
             name: "Address B".into(),
             address: Some("198.51.100.12:4510".into()),
             key_fp: None,
+            endpoint_override: None,
         },
         ListedCore {
             uid: 9,
             name: "Address A".into(),
             address: Some("198.51.100.11:4510".into()),
             key_fp: None,
+            endpoint_override: None,
         },
     ];
     assert_eq!(

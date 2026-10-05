@@ -22,6 +22,8 @@ fn read(cores: Option<Vec<ListedCore>>) -> BotState {
 #[test]
 fn freshly_fetched_listing_maps_station_identity() {
     let here = [LocalCore {
+        endpoint_override: String::new(),
+        key_address: Some("198.51.100.1:4510".into()),
         uid: 3,
         name: "Local".into(),
         address: Some("198.51.100.1:4510".into()),
@@ -29,6 +31,7 @@ fn freshly_fetched_listing_maps_station_identity() {
     }];
     let listing = trace_listing(None, || {
         Ok(read(Some(vec![ListedCore {
+            endpoint_override: None,
             uid: 9,
             name: "Station".into(),
             address: Some("198.51.100.1:4510".into()),

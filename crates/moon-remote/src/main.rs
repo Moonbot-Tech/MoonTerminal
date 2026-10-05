@@ -307,6 +307,7 @@ fn terminal_cores(picks: &[String]) -> anyhow::Result<Vec<CoreKey>> {
             name: entry.name.clone(),
             transport: entry.transport,
             key: entry.key.clone(),
+            endpoint_override: entry.endpoint_override.clone(),
         });
     }
     Ok(cores)
@@ -323,6 +324,7 @@ fn dummy_core(spec: &str) -> anyhow::Result<CoreKey> {
         name: name.to_owned(),
         transport: None,
         key: Secret::new(format!("dummy-not-a-key-{uid}")),
+        endpoint_override: String::new(),
     })
 }
 

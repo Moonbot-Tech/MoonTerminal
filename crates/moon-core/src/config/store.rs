@@ -26,11 +26,13 @@ pub fn read_servers() -> anyhow::Result<ServersFile> {
     Ok(sf)
 }
 
-/// One core's key as the terminal stores it — for handing it to the station.
+/// One core's credential and endpoint override as stored, for handing both to the station.
 pub struct CoreKeyEntry {
     pub uid: u64,
     pub name: String,
     pub key: super::Secret,
+    /// The hand-typed endpoint kept beside the credential in servers.enc.
+    pub endpoint_override: String,
     /// The terminal's transport override from settings.toml; `None` = the key's own mode.
     pub transport: Option<super::TransportVersion>,
     /// Switched on in the terminal (settings.toml; on when the file does not say, as there).
@@ -39,8 +41,9 @@ pub struct CoreKeyEntry {
 
 /// Every core's key from servers.enc, READ ONLY: decrypted without adopting the file's key
 /// material and parsed without [`super::AppConfig::load`], which may assign uids, upgrade the
-/// schema and save — racing a running terminal's own saves. settings.toml is read only for the
-/// transport overrides and the on/off switch; unreadable, it is an error and nothing is moved.
+/// schema and save — racing a running terminal's own saves. Endpoint overrides ride the keys;
+/// settings.toml is read only for transport overrides and the on/off switch; unreadable,
+/// it is an error and nothing is moved.
 pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
     let bytes = std::fs::read(paths::servers_path()).context("read servers.enc")?;
     let plain = zeroize::Zeroizing::new(crypto::decrypt_standalone(&bytes)?);
@@ -71,6 +74,7 @@ pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
                 uid: entry.uid,
                 name: entry.name,
                 key: entry.key,
+                endpoint_override: entry.endpoint_override,
             }
         })
         .collect())

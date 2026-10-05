@@ -35,7 +35,9 @@ fn saved_local_cores(
         .filter(|core| {
             eligible.contains(&core.uid) && cores_sync::eligible(core.active, false, &core.key)
         })
-        .map(|core| cores_sync::local_core(core.uid, &core.name, &core.key))
+        .map(|core| {
+            cores_sync::local_core(core.uid, &core.name, &core.key, &core.endpoint_override)
+        })
         .collect()
 }
 
@@ -336,6 +338,7 @@ fn run(
                             name: key.name.clone(),
                             transport: key.transport,
                             key: key.key.clone(),
+                            endpoint_override: key.endpoint_override.clone(),
                         })
                     })
                     .collect::<anyhow::Result<_>>()?;
@@ -742,7 +745,7 @@ fn install_changes(
     };
     let here: Vec<_> = keys
         .iter()
-        .map(|key| cores_sync::local_core(key.uid, &key.name, &key.key))
+        .map(|key| cores_sync::local_core(key.uid, &key.name, &key.key, &key.endpoint_override))
         .collect();
     let fresh = cores_sync::reconcile(&here, listing, high_water);
     anyhow::ensure!(
@@ -754,7 +757,7 @@ fn install_changes(
     Ok(cores_sync::bulk(&fresh))
 }
 
-/// Read each selected local credential while writing only the freshly reconciled station uid.
+/// Carry each saved key and override under its freshly reconciled station uid.
 fn upsert_keys(
     all: &[moon_core::config::CoreKeyEntry],
     picked: &[Upsert],
@@ -769,7 +772,7 @@ fn upsert_keys(
         .collect()
 }
 
-/// Resolve a picked core without allowing missing or empty keys into an install.
+/// Resolve a picked credential and its stored override, rejecting missing/empty keys before install.
 fn picked_core_key(all: &[moon_core::config::CoreKeyEntry], uid: u64) -> anyhow::Result<CoreKey> {
     let entry = all
         .iter()
@@ -784,6 +787,7 @@ fn picked_core_key(all: &[moon_core::config::CoreKeyEntry], uid: u64) -> anyhow:
         name: entry.name.clone(),
         transport: entry.transport,
         key: entry.key.clone(),
+        endpoint_override: entry.endpoint_override.clone(),
     })
 }
 

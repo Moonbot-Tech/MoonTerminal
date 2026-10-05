@@ -11,6 +11,7 @@
 //! uid = 3
 //! name = "BinF1"
 //! transport = "v1"   # optional; the key's own mode when absent
+//! endpoint_override = "core.example.net:5020" # optional; empty follows the key
 //! ```
 //!
 //! `[tape]` is the station's window around a trade — its own, set from the terminal's Settings by
@@ -178,6 +179,9 @@ struct CoreEntry {
     /// A transport mode the terminal overrides the key's with.
     #[serde(default)]
     transport: Option<TransportVersion>,
+    /// The terminal's hand-typed endpoint, carried into the feed unchanged.
+    #[serde(default)]
+    endpoint_override: String,
 }
 
 /// What the light station reads from a core: its reports alone (`STATION.md` §3.2). Above all no
@@ -283,8 +287,12 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         listed.push(ListedCore {
             uid: entry.uid,
             name: entry.name.clone(),
-            address: key.as_ref().ok().and_then(|key| core_address(key.expose())),
+            address: key
+                .as_ref()
+                .ok()
+                .and_then(|key| core_address(key.expose(), &entry.endpoint_override)),
             key_fp: key.as_ref().ok().map(|key| key_fingerprint(key.expose())),
+            endpoint_override: Some(entry.endpoint_override.clone()),
         });
         // Every other field keeps the terminal's own default for a new server.
         // `id` alone has no serde default; it is set from the uid below.
@@ -307,6 +315,7 @@ fn from_station_file(text: &str, creds: Option<&Path>) -> anyhow::Result<Station
         server.name = entry.name;
         server.active = entry.active;
         server.transport = entry.transport;
+        server.endpoint_override = entry.endpoint_override;
         servers.push(server);
     }
     let telegram = file
@@ -390,8 +399,9 @@ fn terminal_config(_missing: &Path) -> anyhow::Result<Station> {
         .map(|server| ListedCore {
             uid: server.uid,
             name: server.name.clone(),
-            address: core_address(server.key.expose()),
+            address: core_address(server.key.expose(), &server.endpoint_override),
             key_fp: (!server.key.is_empty()).then(|| key_fingerprint(server.key.expose())),
+            endpoint_override: Some(server.endpoint_override.clone()),
         })
         .collect();
     Ok(Station {

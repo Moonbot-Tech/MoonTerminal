@@ -3,6 +3,125 @@ use super::{Counts, LocalCore, RowState, Upsert, bulk, local_cores, reconcile, s
 use moon_core::config::{AppConfig, Secret, ServerConfig};
 use moon_core::station_api::ListedCore;
 
+/// Frozen endpoint export lets the production local projection run without a network connection.
+fn overridden(text: &str) -> LocalCore {
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    super::local_core(3, "Fixture", &Secret::new(key), text)
+}
+
+/// Key-only matching would duplicate a pushed override, and lose trace/grant station identity.
+#[test]
+fn effective_hostname_matches_station_identity_without_resolution() {
+    let here = overridden("Core.Example.Invalid:5020");
+    let station = ListedCore {
+        uid: 9,
+        name: "Fixture".into(),
+        address: Some("core.example.invalid:5020".into()),
+        key_fp: Some(here.key_fp.clone()),
+        endpoint_override: Some("Core.Example.Invalid:5020".into()),
+    };
+    let rows = reconcile(
+        std::slice::from_ref(&here),
+        std::slice::from_ref(&station),
+        None,
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].state, RowState::Same);
+    assert_eq!(rows[0].station_uid, Some(9));
+    assert!(bulk(&rows).is_empty());
+    assert_eq!(station_uid_for(3, &[here], &[station]), Some(9));
+}
+
+/// Removing the credential fallback would classify an override edit as an add plus a removal.
+#[test]
+fn override_only_edit_updates_existing_uid_and_clear_is_an_update() {
+    for (old, new) in [
+        ("", "203.0.113.7:5020"),
+        ("203.0.113.7:5020", ""),
+        ("203.0.113.7:5020", "core.example.invalid:5020"),
+        ("", "host:0"),
+    ] {
+        let previous = overridden(old);
+        let here = overridden(new);
+        let remote = ListedCore {
+            uid: 9,
+            name: here.name.clone(),
+            address: previous.address,
+            key_fp: Some(here.key_fp.clone()),
+            endpoint_override: Some(old.into()),
+        };
+        let rows = reconcile(&[here], &[remote], None);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, RowState::KeyDiffers);
+        assert_eq!(
+            bulk(&rows),
+            [Upsert {
+                terminal_uid: 3,
+                station_uid: 9,
+                add: false
+            }]
+        );
+    }
+}
+
+/// Surfacing unsupported override differences on every old-station read would invite endless retries.
+#[test]
+fn old_station_ignores_override_differences_on_repeated_reads() {
+    let here = overridden("core.example.invalid:5020");
+    let remote = ListedCore {
+        uid: 9,
+        name: here.name.clone(),
+        address: Some("198.51.100.42:4321".into()),
+        key_fp: Some(here.key_fp.clone()),
+        endpoint_override: None,
+    };
+    for _ in 0..3 {
+        let rows = reconcile(
+            std::slice::from_ref(&here),
+            std::slice::from_ref(&remote),
+            None,
+        );
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, RowState::Same);
+        assert_eq!(rows[0].address.as_deref(), Some("198.51.100.42:4321"));
+        assert!(bulk(&rows).is_empty());
+    }
+    assert_eq!(station_uid_for(3, &[here], &[remote]), Some(9));
+}
+
+/// A fingerprint fallback before address reservation could steal another row's live endpoint match.
+#[test]
+fn address_matches_win_and_ambiguous_keys_do_not_move_history() {
+    let moved = overridden("203.0.113.7:5020");
+    let previous = overridden("");
+    let old = ListedCore {
+        uid: 1,
+        name: moved.name.clone(),
+        address: previous.address,
+        key_fp: Some(moved.key_fp.clone()),
+        endpoint_override: Some(String::new()),
+    };
+    let destination = ListedCore {
+        uid: 9,
+        address: moved.address.clone(),
+        key_fp: Some("another-key".into()),
+        ..old.clone()
+    };
+    let rows = reconcile(
+        std::slice::from_ref(&moved),
+        &[old.clone(), destination],
+        None,
+    );
+    assert_eq!(rows[0].state, RowState::OnlyOnStation);
+    assert_eq!(rows[1].terminal_uid, Some(3));
+    assert_eq!(bulk(&rows)[0].station_uid, 9);
+    let mut duplicate = moved.clone();
+    duplicate.uid = 4;
+    let rows = reconcile(&[moved, duplicate], &[old], None);
+    assert_eq!(rows[0].state, RowState::OnlyOnStation);
+    assert!(bulk(&rows).iter().all(|change| change.add));
+}
+
 /// Reusing an unmatched terminal uid would attach a new address to a removed core's reports.
 #[test]
 fn removed_and_upgraded_station_uids_are_never_allocated_again() {
@@ -38,6 +157,8 @@ fn old_station_fallback_never_allocates_below_either_current_set() {
 /// Build a local comparison fixture without credentials or connections.
 fn local(uid: u64, endpoint: u64) -> LocalCore {
     LocalCore {
+        endpoint_override: String::new(),
+        key_address: Some(format!("198.51.100.{endpoint}:4510")),
         uid,
         name: format!("Core {endpoint}"),
         address: Some(format!("198.51.100.{endpoint}:4510")),
@@ -48,6 +169,7 @@ fn local(uid: u64, endpoint: u64) -> LocalCore {
 /// Build an independently numbered station entry at the synthetic endpoint.
 fn remote(uid: u64, endpoint: u64) -> ListedCore {
     ListedCore {
+        endpoint_override: None,
         uid,
         name: format!("Core {endpoint}"),
         address: Some(format!("198.51.100.{endpoint}:4510")),

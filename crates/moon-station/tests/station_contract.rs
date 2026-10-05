@@ -12,6 +12,24 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+/// Moving capability dispatch after normal startup would create station state or reject a first push.
+#[test]
+fn capabilities_are_available_without_config_credentials_or_a_running_service() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_moon-station"))
+        .arg("capabilities")
+        .output()
+        .expect("run the stateless capability query");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        "core_endpoint_override=yes"
+    );
+}
+
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

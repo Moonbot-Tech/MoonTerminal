@@ -9,6 +9,31 @@ use moon_core::station_api::ListedCore;
 use moon_remote::error::StationError;
 use moon_remote::station::bot::BotState;
 
+/// Losing the persisted override in picked/upsert projections would make preview and push disagree.
+#[test]
+fn persisted_override_survives_station_uid_translation() {
+    let entries = [CoreKeyEntry {
+        uid: 3,
+        name: "Fixture".into(),
+        key: Secret::new("synthetic-core-key"),
+        transport: None,
+        active: true,
+        endpoint_override: "Core.Example.Invalid:5020".into(),
+    }];
+    let picks = [cores_sync::Upsert {
+        terminal_uid: 3,
+        station_uid: 9,
+        add: false,
+    }];
+    let keys = super::upsert_keys(&entries, &picks).unwrap();
+    assert_eq!(keys[0].uid, 9);
+    assert_eq!(keys[0].endpoint_override, "Core.Example.Invalid:5020");
+    assert_eq!(
+        saved_local_cores(&entries, &[3])[0].endpoint_override,
+        "Core.Example.Invalid:5020"
+    );
+}
+
 /// Collect the exact lines the production job would send to Settings.
 fn lines(show: impl FnOnce(&mut dyn FnMut(moon_remote::progress::Progress))) -> Vec<String> {
     let mut lines = Vec::new();
@@ -39,6 +64,7 @@ fn missing_password_and_core_selection_are_typed() {
 #[test]
 fn missing_and_keyless_cores_fail_before_server_work() {
     let entries = [CoreKeyEntry {
+        endpoint_override: String::new(),
         uid: 17,
         name: "Fixture core".into(),
         key: Secret::default(),
@@ -97,6 +123,7 @@ fn requested_journal_preserves_raw_lines_without_detail_prefixes() {
 #[test]
 fn excluded_persisted_keys_do_not_raise_allocated_uids() {
     let all = [3, 1000].map(|uid| CoreKeyEntry {
+        endpoint_override: String::new(),
         uid,
         name: format!("Core {uid}"),
         key: Secret::new("synthetic-fixture"),
@@ -106,6 +133,7 @@ fn excluded_persisted_keys_do_not_raise_allocated_uids() {
     let here = saved_local_cores(&all, &[3]);
     assert_eq!(here.iter().map(|core| core.uid).collect::<Vec<_>>(), [3]);
     let listing = [ListedCore {
+        endpoint_override: None,
         uid: 3,
         name: "Other address".into(),
         address: Some("198.51.100.9:4510".into()),
@@ -122,21 +150,24 @@ fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
     // Frozen TESTKEY V1 export from the endpoint contract fixture.
     let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
     let keys = [3, 5].map(|uid| moon_remote::station::CoreKey {
+        endpoint_override: String::new(),
         uid,
         name: format!("Local {uid}"),
         transport: None,
         key: Secret::new(key),
     });
-    let address = moon_core::station_api::core_address(keys[0].key.expose());
+    let address = moon_core::station_api::core_address(keys[0].key.expose(), "");
     assert!(address.is_some());
     let listing = [
         ListedCore {
+            endpoint_override: None,
             uid: 9,
             name: "Old name".into(),
             address,
             key_fp: None,
         },
         ListedCore {
+            endpoint_override: None,
             uid: 5,
             name: "Station only".into(),
             address: Some("198.51.100.9:4510".into()),
