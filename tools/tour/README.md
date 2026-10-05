@@ -46,8 +46,9 @@ So: **a locale, palette, or zone-copy change is a re-run; a new visual widget is
 
 - **`locales/<lang>/*.yml`** — the same files the terminal compiles in through `rust_i18n`.
   A content slot spelled `{locale: toolbar.live_tip}` pulls the application's own
-  string, in every language it ships. That text is never retyped here, so it cannot
-  drift from what a user actually sees in the terminal.
+  string, in every language configured in `content/languages.yml` (currently Russian
+  and English). The terminal's language list is separate. That text is never
+  retyped here, so it cannot drift from what a user actually sees in the terminal.
 - **`theme.snapshot.toml`** — a committed copy of MoonUI's `moon-terminal.toml`,
   carrying the upstream revision it was taken from.
 - **`content/*.yml`** — the prose the tour itself owns: first-class window-map
@@ -65,8 +66,8 @@ title:                              # authored: every configured language, requi
 body: {locale: toolbar.live_tip}    # the app's own tooltip, all languages at once
 ```
 
-Anything else is an error. A one-key `locale` mapping can never be confused with a
-language triple, so there is no convention to remember.
+Anything else is an error. A one-key `locale` mapping can never be confused with an
+authored language mapping, so there is no convention to remember.
 
 **Markup is opt-in.** Content reaches the DOM through `innerHTML`, so every slot is
 HTML-escaped unless it says `html: true`. Quick-start bodies and block text use
