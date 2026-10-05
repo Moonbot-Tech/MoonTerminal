@@ -14,6 +14,19 @@ fn only_an_unreadable_key_stops_the_feed_retry() {
     assert!(retry_can_help(&anyhow!("connect timeout")));
 }
 
+/// A typed address that is not an address cannot become one by waiting, so retrying it would spin
+/// the backoff forever; a name the resolver did not answer for can, so stopping there would leave
+/// a dynamic-DNS core down until the next launch.
+#[test]
+fn only_an_invalid_endpoint_override_stops_the_retry() {
+    assert!(!retry_can_help(&anyhow::Error::new(
+        live::EndpointUnusable { unresolved: false }
+    )));
+    assert!(retry_can_help(&anyhow::Error::new(
+        live::EndpointUnusable { unresolved: true }
+    )));
+}
+
 /// A stop switched off after the entry filled must not be re-supplied by its strategy.
 ///
 /// The core materializes a stop INTO the order at the fill, so from then on the order's own flag is

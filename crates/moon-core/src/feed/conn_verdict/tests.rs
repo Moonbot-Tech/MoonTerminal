@@ -57,6 +57,33 @@ fn key_faults_do_not_promise_retries_but_timeouts_do() {
     assert!(retrying_timeout.retrying);
 }
 
+/// An override that is not an address is fixed only by editing it, so its verdict must not promise
+/// a retry; an unresolved name is retried, so its verdict must say so (`FailureClass::retry_can_help`).
+#[test]
+fn an_invalid_endpoint_stops_but_an_unresolved_one_retries() {
+    let verdict = |unresolved| {
+        diagnose(
+            &ConnStatus::Failed("endpoint".to_string()),
+            Some(&ConnFault {
+                kind: ConnFaultKind::EndpointUnusable { unresolved },
+                identity: CoreIdentityFacts::default(),
+                startup: CoreStartupStatus::default(),
+            }),
+            &CoreStartupStatus::default(),
+        )
+        .expect("a retained endpoint fault must have a diagnosis")
+    };
+    let invalid = verdict(false);
+    assert_eq!(invalid.class, FailureClass::Endpoint { unresolved: false });
+    assert!(!invalid.retrying);
+    let unresolved = verdict(true);
+    assert_eq!(
+        unresolved.class,
+        FailureClass::Endpoint { unresolved: true }
+    );
+    assert!(unresolved.retrying);
+}
+
 /// A transport timeout must distinguish no return path from packets that reached the process but
 /// were rejected above the UDP socket.
 ///

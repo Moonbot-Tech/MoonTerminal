@@ -475,6 +475,14 @@ pub enum ConnFaultKind {
         /// that is not a MoonBot key export.
         empty: bool,
     },
+    /// The Connections row's hand-typed address could not be used, so nothing was sent. Decided by
+    /// this terminal (`feed::live::run`), like [`Self::KeyUnparsable`].
+    EndpointUnusable {
+        /// `false`: the field is not an address at all (`config::parse_endpoint_override`), and no
+        /// retry can help until it is edited. `true`: it names a host the system resolver could
+        /// not resolve, which may well work on the next attempt.
+        unresolved: bool,
+    },
     /// THIS machine could not bind its own UDP socket — repeated 200-port sweeps failed.
     ///
     /// From `LifecycleEvent::BindFailed`, so it says nothing about the core: the usual causes are a

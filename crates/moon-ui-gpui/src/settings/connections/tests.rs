@@ -82,6 +82,7 @@ fn server(group: &str) -> ServerConfig {
         active: true,
         feed: FeedFlags::default(),
         key: Secret::new(""),
+        endpoint_override: String::new(),
         group: group.to_string(),
         market: "BTCUSDT".to_string(),
         color: [1, 2, 3],

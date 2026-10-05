@@ -169,10 +169,18 @@ pub struct ServerConfig {
     /// What to accept from the core (client-side filter).
     #[serde(default)]
     pub feed: FeedFlags,
-    /// Base64 Moonbot key containing host and port; there are no separate fields for those.
-    /// It also names a transport mode, but only as the seed for [`ServerConfig::transport`].
+    /// Base64 Moonbot key. It carries the core's host and port, which
+    /// [`ServerConfig::endpoint_override`] may replace, and names a transport mode, but only as the
+    /// seed for [`ServerConfig::transport`].
     #[serde(default)]
     pub key: Secret,
+    /// The Connections row's hand-typed `host`, `host:port` or `:port`, laid over the key's
+    /// endpoint (`config::target_from_key`); empty follows the key. Kept as typed, like the key, so
+    /// an invalid entry survives Save and is reported rather than silently dropped
+    /// (`config::endpoint_override`). Stored in `servers.enc` beside the key, never in
+    /// `settings.toml`: the feed keeps core addresses out of even its own log.
+    #[serde(default)]
+    pub endpoint_override: String,
     /// Group is the name of the window containing the core. Color/icon belong to GroupConfig.
     #[serde(default = "default_group")]
     pub group: String,

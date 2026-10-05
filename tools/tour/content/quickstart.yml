@@ -113,8 +113,37 @@ steps:
       ru: Вставьте ключ в поле «Ключ» кнопкой из буфера.
       en: Paste the key into the Key field with the clipboard button.
   - note:
-      ru: Хост и порт отдельно вводить не надо — они внутри ключа.
-      en: Host and port are not entered separately — they are inside the key.
+      ru: Хост и порт отдельно вводить не надо — они внутри ключа и видны серым в колонке «Адрес:порт».
+      en: Host and port are not entered separately — they are inside the key and show in grey in the
+        Address:port column.
+  - group:
+      ru: Ядро и терминал в одной локальной сети
+      en: Core and terminal on one local network
+  - p:
+      ru: 'Ключ несёт внешний адрес машины с ядром, а многие домашние роутеры не пускают компьютер
+        изнутри сети на свой же внешний адрес — соединения не будет. Впишите в колонку «Адрес:порт»
+        локальный адрес машины с ядром, например <code>192.168.1.20</code> (порт возьмётся из ключа).
+        Перевыпускать ключ не нужно.'
+      en: 'The key carries the core machine''s public address, and many home routers do not let a
+        computer inside the network reach its own public address — there is no connection. Type the
+        core machine''s local address into the Address:port column, for example
+        <code>192.168.1.20</code> (the port comes from the key). There is no need to re-export the key.'
+      html: true
+  - note:
+      ru: Проброс порта на роутере в этой схеме не нужен, а правило фаервола на машине с ядром нужно (шаг
+        выше). Проверка порта в MoonBot меряет доступность снаружи и может ругаться, хотя подключение из
+        локальной сети работает.
+      en: No router port forwarding is needed here, but the firewall rule on the core machine is (the step
+        above). MoonBot's port check measures reachability from outside and may complain even though the
+        connection from the local network works.
+  - note:
+      ru: 'Та же колонка выручает, если в ключе неверный адрес или его нет (поле подсвечено жёлтым), или
+        провайдер сменил IP: впишите адрес, адрес:порт, <code>:порт</code> или DDNS-имя. Новый ключ это
+        поле не затирает, а крестик в нём возвращает адрес из ключа.'
+      en: 'The same column helps when the key''s address is wrong or missing (the field is highlighted in
+        yellow), or your ISP changed the IP: type an address, address:port, <code>:port</code> or a DDNS
+        name. A new key does not overwrite the field, and its cross returns to the key''s address.'
+      html: true
 - title:
     ru: Отметьте, что принимать
     en: Choose what to accept

@@ -6,6 +6,8 @@ fn every_fault() -> Vec<ConnFaultKind> {
     vec![
         ConnFaultKind::KeyUnparsable { empty: true },
         ConnFaultKind::KeyUnparsable { empty: false },
+        ConnFaultKind::EndpointUnusable { unresolved: false },
+        ConnFaultKind::EndpointUnusable { unresolved: true },
         ConnFaultKind::LocalBindFailed {
             consecutive_failures: 1,
         },

@@ -707,6 +707,23 @@ pub(super) fn key_fault(empty: bool) -> ConnFault {
     )
 }
 
+/// Build the fault for a hand-typed address that could not be used — no client was ever built,
+/// so, as for [`key_fault`], the defaults are the honest identity and startup values.
+///
+/// Args:
+///     unresolved: `true` when a host name did not resolve; `false` when the field is not an
+///         address at all.
+///
+/// Returns:
+///     The fault record for an unusable endpoint override.
+pub(super) fn endpoint_fault(unresolved: bool) -> ConnFault {
+    fault(
+        ConnFaultKind::EndpointUnusable { unresolved },
+        None,
+        CoreStartupStatus::default(),
+    )
+}
+
 /// Convert one successful `CheckAPIExpirationTime` answer into terminal state.
 ///
 /// The day count is the core's own (`reported_days_left`), because the terminal's clock plays no

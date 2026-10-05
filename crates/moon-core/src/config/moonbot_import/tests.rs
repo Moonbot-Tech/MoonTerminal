@@ -47,6 +47,7 @@ fn config() -> AppConfig {
             active: true,
             feed: FeedFlags::default(),
             key: Secret::new(String::new()),
+            endpoint_override: String::new(),
             group: if id <= 2 { "desk-a" } else { "desk-b" }.into(),
             market: "BINANCE_FUTURES".into(),
             color: [0xFF, 0xB3, 0x47],

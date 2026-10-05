@@ -45,13 +45,21 @@ pub(in crate::settings) const CONN_INDENT_PAD: f32 =
 
 /// Width of 21 Geist Mono glyphs (the longest IPv4 endpoint) at the body size, normalized by the
 /// text ratio the column's `TextScaled` policy multiplies back in (`tokens.font(10) / 10` at the
-/// design's font delta). The endpoint cell has no copy affix or horizontal padding.
-const ENDPOINT_CONTENT: f32 =
+/// design's font delta).
+const ENDPOINT_TEXT: f32 =
     21.0 * 0.6 * crate::design::BODY_TEXT * 10.0 / (10.0 + crate::design::DESIGN_FONT_DELTA);
 
+/// The small input's own chrome around that text since the cell became the editable endpoint
+/// override (#616): 8px of padding on each side (the inset `head_pad` matches) and the clear
+/// affix with its gap. A design reference like the text, so it scales with the column.
+const ENDPOINT_INPUT_CHROME: f32 = 8.0 + 8.0 + 18.0;
+
+/// [`ENDPOINT_TEXT`] inside the input's chrome: the basis, so narrow-window shrink weights sit just
+/// under the full field.
+const ENDPOINT_CONTENT: f32 = ENDPOINT_TEXT + ENDPOINT_INPUT_CHROME;
+
 /// [`ENDPOINT_CONTENT`] plus 2px rounding room: the cap the column grows to and no further, so a
-/// wide window hands the rest to the name column. The basis stays the bare content so narrow-window
-/// shrink weights sit just under it.
+/// wide window hands the rest to the name column.
 const ENDPOINT_CONTENT_CAP: f32 = ENDPOINT_CONTENT + 2.0;
 
 /// Five glyphs (`8/8`, space and caret) at MoonUI's 16px `Md` reference font — a ceiling above
@@ -222,8 +230,9 @@ const CONN_COLS: [ConnCol; 14] = [
         align: ConnColAlign::Left,
         head_pad: 8.0,
     },
-    // Only grows to its IPv4 content budget; longer IPv6 values keep their full tooltip.
-    // `grow: true` preserves shrinkage alongside the editable text at narrow widths.
+    // Only grows to its IPv4 content budget; longer IPv6 values and host names scroll inside the
+    // field and keep their full tooltip. `grow: true` preserves shrinkage alongside the other
+    // editable text at narrow widths.
     ConnCol {
         id: "h-endpoint",
         label: Some("conn.col.endpoint"),
@@ -233,7 +242,7 @@ const CONN_COLS: [ConnCol; 14] = [
         max: Some(ENDPOINT_CONTENT_CAP),
         width: ConnColWidth::TextScaled,
         align: ConnColAlign::Left,
-        head_pad: 0.0,
+        head_pad: 8.0,
     },
     // The three Micro dropdowns keep their design reference and are scaled with it; a raw basis
     // here is what let the trigger render ~1.3x wider than its own column at the shipped font

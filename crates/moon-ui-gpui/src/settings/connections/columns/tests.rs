@@ -152,8 +152,9 @@ fn caps_match_the_text_column_contract_at_each_font_scale() {
     for column in ConnColId::ALL {
         let expected_cap = match column {
             ConnColId::Key => Some(260.0),
-            // 21 glyphs at 0.6 em of the 14px body, normalized by the 1.3 text ratio, plus 2.
-            ConnColId::Endpoint => Some(21.0 * 0.6 * 14.0 * 10.0 / 13.0 + 2.0),
+            // 21 glyphs at 0.6 em of the 14px body, normalized by the 1.3 text ratio, inside the
+            // small input's 8 + 8 padding and 18 clear affix, plus 2.
+            ConnColId::Endpoint => Some(21.0 * 0.6 * 14.0 * 10.0 / 13.0 + 34.0 + 2.0),
             ConnColId::Group => Some(140.0),
             _ => None,
         };
@@ -211,7 +212,9 @@ fn endpoint_cap_fits_ipv4_without_consuming_spare_name_width() {
         );
         let scale = tokens.font(10.0) / 10.0;
         let body_size = tokens.ui(tokens.tier().control_metrics().font_size);
-        let content = "255.255.255.255:65535".chars().count() as f32 * 0.6 * body_size;
+        // The text inside the input's padding and clear affix (#616 made the cell an input).
+        let content =
+            "255.255.255.255:65535".chars().count() as f32 * 0.6 * body_size + 34.0 * scale;
         required_reference = required_reference.max(content / scale);
         let cap = ConnColId::Endpoint
             .max_width(MicroTriggerMetrics {

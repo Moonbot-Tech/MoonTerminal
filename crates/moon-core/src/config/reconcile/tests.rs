@@ -462,6 +462,67 @@ fn merged_server(key: &str, meta_toml: &str) -> crate::config::ServerConfig {
         .expect("the merged config keeps its only server")
 }
 
+/// The endpoint override must survive a load/save round trip through `servers.enc`, or Save would
+/// silently send the core back to its key's address (#616).
+#[test]
+fn the_endpoint_override_round_trips_through_servers_enc() {
+    let entry: crate::config::schema::ServerEntry = toml::from_str(
+        "uid = 7\nname = \"alpha\"\nkey = \"\"\nendpoint_override = \"192.168.1.5:5020\"",
+    )
+    .expect("server entry fixture must parse");
+    let merged = merge(
+        ServersFile {
+            servers: vec![entry],
+            telegram: TelegramConfig::default(),
+        },
+        SettingsFile::default(),
+        None,
+    );
+    assert_eq!(merged.servers[0].endpoint_override, "192.168.1.5:5020");
+    let (servers_file, _) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.order_book_width_px,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.next_uid.get(),
+        TelegramConfig::default(),
+    );
+    assert_eq!(
+        servers_file.servers[0].endpoint_override,
+        "192.168.1.5:5020"
+    );
+}
+
+/// Old `servers.enc` files still carry the `host`/`port` fields of the pre-key format. They must
+/// stay ignored: an override read from them would dial an address that went stale years ago.
+#[test]
+fn legacy_host_and_port_fields_do_not_become_an_override() {
+    let entry: crate::config::schema::ServerEntry =
+        toml::from_str("uid = 7\nname = \"alpha\"\nkey = \"\"\nhost = \"10.9.8.7\"\nport = 5017")
+            .expect("a legacy entry must still parse");
+    assert_eq!(entry.endpoint_override, "");
+    let text = toml::to_string(&entry).unwrap();
+    assert!(
+        !text.contains("endpoint_override"),
+        "an empty override is not written: {text}"
+    );
+}
+
 /// The stored transport mode is the user's choice and must outrank the key it was seeded from.
 /// MoonBot moves a core's own V0/V1/V2 switch without issuing a new key, so re-reading the key on
 /// every load would silently undo the switch the user made here, which is the whole point of the

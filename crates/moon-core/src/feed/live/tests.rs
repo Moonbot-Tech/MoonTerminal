@@ -1,5 +1,5 @@
 use super::*;
-use crate::feed::{CoreCmd, CoreCmdTx, CoreStartupState, LatestMarketRole};
+use crate::feed::{CoreCmd, CoreCmdTx, CoreEndpoint, CoreStartupState, LatestMarketRole};
 use moonproto::state::BalanceEvent;
 use moonproto::{ImportedIpVersion, ImportedNetworkConfig};
 use std::net::{IpAddr, Ipv4Addr};
@@ -108,15 +108,36 @@ fn parsed_network_selects_the_connection_endpoint() {
         transport_mode: TransportMode::V2,
     };
 
-    let (endpoint, transport) = connection_target(Some(&network), None);
+    let (target, transport) = connection_target(Some(&network), None, None);
 
     assert_eq!(
-        endpoint,
+        target.resolve().unwrap().endpoint,
         CoreEndpoint {
             address: IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42)),
             port: 4321,
         }
     );
+    assert_eq!(transport, TransportMode::V2);
+}
+
+/// `live/mod.rs:connection_target` must dial the Connections row's override instead of the key's
+/// address (#616) while the key keeps answering for the transport: dropping the override argument
+/// sends a LAN terminal back to the router's public address it cannot reach.
+#[test]
+fn the_endpoint_override_outranks_the_keys_address() {
+    let network = ImportedNetworkConfig {
+        ip_version: ImportedIpVersion::V4,
+        address: Some(IpAddr::V4(Ipv4Addr::new(198, 51, 100, 42))),
+        port: 4321,
+        transport_mode: TransportMode::V2,
+    };
+    let lan = crate::config::parse_endpoint_override("192.168.1.5:5020")
+        .unwrap()
+        .unwrap();
+
+    let (target, transport) = connection_target(Some(&network), None, Some(&lan));
+
+    assert_eq!(target.text(), "192.168.1.5:5020");
     assert_eq!(transport, TransportMode::V2);
 }
 
@@ -132,12 +153,15 @@ fn the_configured_transport_outranks_the_key() {
         transport_mode: TransportMode::V2,
     };
 
-    let (endpoint, transport) =
-        connection_target(Some(&network), Some(crate::config::TransportVersion::V1));
+    let (target, transport) = connection_target(
+        Some(&network),
+        Some(crate::config::TransportVersion::V1),
+        None,
+    );
 
     assert_eq!(transport, TransportMode::V1);
     assert_eq!(
-        endpoint.port, 4321,
+        target.port, 4321,
         "the endpoint still comes from the key; only the mode is overridden"
     );
 }
@@ -146,10 +170,11 @@ fn the_configured_transport_outranks_the_key() {
 /// answer; without it the V0 fallback would connect a V1/V2 core to nothing.
 #[test]
 fn a_keyless_network_still_honors_the_configured_transport() {
-    let (endpoint, transport) = connection_target(None, Some(crate::config::TransportVersion::V2));
+    let (target, transport) =
+        connection_target(None, Some(crate::config::TransportVersion::V2), None);
 
     assert_eq!(transport, TransportMode::V2);
-    assert_eq!(endpoint.port, 3000, "legacy exports keep the 3000 fallback");
+    assert_eq!(target.port, 3000, "legacy exports keep the 3000 fallback");
 }
 
 /// `live/mod.rs:should_publish_assets` removing the Balance-event bypass would leave the header's

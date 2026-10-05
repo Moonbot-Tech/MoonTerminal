@@ -274,6 +274,31 @@ fn srv_check(
     checkbox
 }
 
+/// Word the address cell's hover: the endpoint in effect, what is wrong with it, and how the field
+/// works.
+///
+/// Args:
+///     cell: The row's endpoint as derived from the draft.
+///
+/// Returns:
+///     The localized tooltip text, one fact per line.
+fn endpoint_tip(cell: &super::endpoints::EndpointCell) -> String {
+    let mut lines = Vec::with_capacity(3);
+    if cell.invalid {
+        lines.push(t!("conn.endpoint_invalid").to_string());
+    } else if !cell.text.is_empty() {
+        lines.push(cell.text.clone());
+    }
+    if cell.localhost_fallback {
+        lines.push(t!("conn.endpoint_no_address").to_string());
+    }
+    if let Some(name) = &cell.duplicate_name {
+        lines.push(t!("conn.endpoint_duplicate", name = name).to_string());
+    }
+    lines.push(t!("conn.endpoint_hint").to_string());
+    lines.join("\n")
+}
+
 /// Build a Paste glyph control beside the key field, styled like its built-in affixes.
 ///
 /// Clicking reads a nonempty key from the clipboard and updates both input state and
@@ -287,6 +312,8 @@ fn srv_check(
 ///     i: Draft index of the server being edited.
 ///     row_key: Stable identity for the control.
 ///     key_state: Input state that mirrors the pasted key.
+///     address_state: Address input whose placeholder shows the key's endpoint; `set_value` emits
+///         no Change, so the subscription that otherwise keeps it in step never fires for a paste.
 ///     p: Active palette.
 ///
 /// Returns:
@@ -296,6 +323,7 @@ fn paste_key_affix(
     i: usize,
     row_key: u64,
     key_state: Entity<MoonInputState>,
+    address_state: Entity<MoonInputState>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
@@ -329,6 +357,8 @@ fn paste_key_affix(
             };
             let text = text.trim().to_string();
             key_state.update(cx, |st, c| st.set_value(text.clone(), window, c));
+            let placeholder = super::address_placeholder(&text);
+            address_state.update(cx, |st, c| st.set_placeholder(placeholder, window, c));
             let _ = weak.update(cx, |this, ctx| {
                 this.backend.update(ctx, |b, bcx| {
                     if let Some(pv) = b.preview.as_mut()
@@ -455,6 +485,7 @@ impl SettingsView {
                     active: true,
                     feed: FeedFlags::default(),
                     key: Secret::new(""),
+                    endpoint_override: String::new(),
                     group,
                     market: "BTCUSDT".into(),
                     color: default_color,
@@ -1110,34 +1141,49 @@ pub(super) fn server_row(
                         crate::pulse::attention_ring(MoonPalette::active(cx).accent, at)
                     })),
             )
-            .child(paste_key_affix(weak, i, row_key, row.key.clone(), p, cx))
+            .child(paste_key_affix(
+                weak,
+                i,
+                row_key,
+                row.key.clone(),
+                row.address.clone(),
+                p,
+                cx,
+            ))
             .into_any_element(),
+        // The address cell edits the endpoint override (#616): empty follows the key, whose
+        // endpoint is the placeholder. Red for a field that is not an address, amber for a row
+        // that would dial localhost only because its key names no address, or for a duplicate.
+        // The hover always states the endpoint in effect and why, so a truncated or placeholder
+        // value is never the only place the user can read it.
         div()
-            .id(("conn-endpoint", row_key))
+            .id(ids.address_tip.clone())
             .w_full()
-            .overflow_hidden()
-            .font_family(design::mono())
-            .text_size(design::t_body(cx))
-            .text_color(rgb(if endpoint.duplicate_name.is_some() {
-                p.amber
-            } else {
-                p.text
-            }))
-            .child(div().truncate().child(endpoint.text.clone()))
-            .when(!endpoint.text.is_empty(), |cell| {
-                let tip = match &endpoint.duplicate_name {
-                    Some(name) => format!(
-                        "{}\n{}",
-                        endpoint.text,
-                        t!("conn.endpoint_duplicate", name = name)
-                    ),
-                    None => endpoint.text.clone(),
-                };
-                cell.tooltip(move |_window, cx| {
-                    cx.new(|_| MoonTooltipView::new(tip.clone()).max_width(360.0))
+            .min_w_0()
+            .tooltip({
+                // Worded on hover only: the row factory runs for every mounted row on every
+                // rebuild, and the hover is the one place the wording is needed.
+                let cell = endpoint.clone();
+                move |_window, cx| {
+                    let tip = endpoint_tip(&cell);
+                    cx.new(|_| MoonTooltipView::new(tip).max_width(360.0))
                         .into()
-                })
+                }
             })
+            .child(
+                MoonInput::new(ids.address.clone())
+                    .state(&row.address)
+                    .small()
+                    .cleanable(true)
+                    .when(endpoint.invalid, |i| {
+                        i.tone(MoonTone::Danger).selected(true)
+                    })
+                    .when(
+                        !endpoint.invalid
+                            && (endpoint.localhost_fallback || endpoint.duplicate_name.is_some()),
+                        |i| i.tone(MoonTone::Warning).selected(true),
+                    ),
+            )
             .into_any_element(),
         proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),
         preset_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),

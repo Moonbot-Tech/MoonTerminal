@@ -21,6 +21,10 @@ pub fn failure_short_key(class: &FailureClass) -> &'static str {
     match class {
         FailureClass::KeyUnparsable { empty: true } => "core_status.fault.short.key_empty",
         FailureClass::KeyUnparsable { empty: false } => "core_status.fault.short.key_unparsable",
+        FailureClass::Endpoint { unresolved: false } => "core_status.fault.short.endpoint_invalid",
+        FailureClass::Endpoint { unresolved: true } => {
+            "core_status.fault.short.endpoint_unresolved"
+        }
         FailureClass::LocalPort { .. } => "core_status.fault.short.local_port",
         FailureClass::NoResponse {
             packets_received: 0,
@@ -52,6 +56,8 @@ pub fn fault_kind(kind: &ConnFaultKind) -> &'static str {
     match kind {
         ConnFaultKind::KeyUnparsable { empty: true } => "key_empty",
         ConnFaultKind::KeyUnparsable { empty: false } => "key_unparsable",
+        ConnFaultKind::EndpointUnusable { unresolved: false } => "endpoint_invalid",
+        ConnFaultKind::EndpointUnusable { unresolved: true } => "endpoint_unresolved",
         ConnFaultKind::LocalBindFailed { .. } => "local_bind_failed",
         ConnFaultKind::Aborted => "aborted",
         ConnFaultKind::ConnectTimedOut { .. } => "connect_timed_out",
@@ -66,6 +72,14 @@ pub fn fault_kind(kind: &ConnFaultKind) -> &'static str {
 pub const FAULT_KIND_SHORT_KEYS: &[(&str, &str)] = &[
     ("key_empty", "core_status.fault.short.key_empty"),
     ("key_unparsable", "core_status.fault.short.key_unparsable"),
+    (
+        "endpoint_invalid",
+        "core_status.fault.short.endpoint_invalid",
+    ),
+    (
+        "endpoint_unresolved",
+        "core_status.fault.short.endpoint_unresolved",
+    ),
     ("local_bind_failed", "core_status.fault.short.local_port"),
     ("aborted", "core_status.fault.short.aborted"),
     ("connect_timed_out", "core_status.fault.short.no_response"),

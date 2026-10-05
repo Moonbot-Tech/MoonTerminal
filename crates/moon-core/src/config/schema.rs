@@ -199,9 +199,12 @@ pub(crate) fn resolve_ui_theme_mode(
 ///
 /// host/port are NOT stored because they are encoded in the Moonbot key itself (see
 /// `parse_key_info` in feed/live/mod.rs). Older servers.enc files with host/port fields still
-/// load: serde ignores unknown fields and connection details come from the key. The transport
-/// mode is the one connection detail the key only SEEDS -- it is kept in `ServerMeta::transport`,
-/// because MoonBot lets a core's own V0/V1/V2 switch move without issuing a new key.
+/// load: serde ignores unknown fields and connection details come from the key. Those two names
+/// stay retired for that reason: the hand-typed override below is `endpoint_override`, because a
+/// field called `host` would bring a long-stale address back to life from an old file. The
+/// transport mode is the other connection detail the key only SEEDS -- it is kept in
+/// `ServerMeta::transport`, because MoonBot lets a core's own V0/V1/V2 switch move without issuing
+/// a new key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerEntry {
     /// Stable core identifier (see `ServerConfig::uid`). A 0 in older files is assigned
@@ -212,6 +215,10 @@ pub struct ServerEntry {
     pub name: String,
     #[serde(default)]
     pub key: Secret,
+    /// Hand-typed endpoint override; see `ServerConfig::endpoint_override`. Absent in older files
+    /// and whenever the row follows its key.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub endpoint_override: String,
 }
 
 /// Telegram bot credentials, pairing, and preferences stored only in `servers.enc`.
