@@ -493,6 +493,12 @@ pub(in crate::analytics) struct TicksState {
     /// the stage that re-judges it has folded.
     pub(in crate::analytics::tuner) judged_under:
         Option<moon_core::db::tuner::ticks::ModelSettings>,
+    /// The tape store's revision (`trade_cache::filed_since`) read when the published rows were
+    /// carried: a later reload re-reads a row refused as unservable whose market gained prints
+    /// after it (`refiled.rs`). Read before the tape stage asks the store, so a write landing in
+    /// between only costs one more ask, never a missed one. Moved with the rows of each stage B
+    /// that publishes, never before.
+    pub(in crate::analytics::tuner) tape_rev: u64,
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
@@ -574,6 +580,7 @@ impl Default for TicksState {
             fetch_listening: Default::default(),
             tape_reading: false,
             judged_under: None,
+            tape_rev: 0,
             tape_seq: 0,
             trade: Default::default(),
             plan: HashMap::new(),

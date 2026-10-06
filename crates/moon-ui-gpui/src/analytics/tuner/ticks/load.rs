@@ -314,6 +314,11 @@ impl AnalyticsView {
         } else {
             HashMap::new()
         };
+        // A refusal is of what the store held when it was said: a row whose market gained prints
+        // since — the station's recording, the core's archive — is asked about again.
+        let (tape_rev, refiled) =
+            moon_core::market::trade_replay::trade_cache::filed_since(self.ticks.tape_rev);
+        let judged = super::refiled::drop_refiled(judged, &refiled);
         self.spawn_latest_db(
             &[ReadLane::TicksReplay],
             false,
@@ -386,6 +391,9 @@ impl AnalyticsView {
                     report_result_is_stale(report_req, this.current_report_generation(), false);
                 this.ticks.publish(Ok(data), false);
                 this.ticks.loaded_period = Some(period);
+                // The published rows' refusals now stand checked against this revision: the ones
+                // whose market gained prints before it were not carried.
+                this.ticks.tape_rev = tape_rev;
                 // The fetch job runs on across reloads and windows: a window that finds a batch
                 // running listens to it from here on.
                 if super::fetch::job::progress().active {

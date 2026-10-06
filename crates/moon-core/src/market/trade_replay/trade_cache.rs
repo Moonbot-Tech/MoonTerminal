@@ -64,6 +64,7 @@
 
 mod codec;
 mod evict;
+mod filed;
 mod remote;
 mod trim;
 
@@ -76,6 +77,8 @@ use rusqlite::OptionalExtension;
 
 use super::tick_tiles::TileSource;
 use crate::feed::types::Tick;
+pub use filed::filed_since;
+pub(super) use filed::note as note_filed;
 pub use remote::{TapeFile, decode_prints, encode_prints};
 pub use trim::{Inventory, KeepMap, TrimReport};
 
@@ -708,6 +711,11 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
             });
             match res {
                 Ok(wrote) => {
+                    // A reader that judged this market's rows unservable asks again
+                    // (`filed::filed_since`); a span already held whole wrote nothing.
+                    if wrote > 0 {
+                        filed::note(&exchange, &market);
+                    }
                     *held += wrote;
                     match trim_to_ceiling(conn, *held, ceiling()) {
                         Ok(now_held) => *held = now_held,
