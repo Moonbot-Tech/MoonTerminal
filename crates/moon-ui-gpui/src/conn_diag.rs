@@ -23,6 +23,67 @@ use rust_i18n::t;
 #[cfg(test)]
 mod tests;
 
+/// First configured mode and all connected contributions for one identity.
+struct FleetModeEntry {
+    own_mode: Option<TransportVersion>,
+    connected: [usize; 3],
+}
+
+/// Fleet advice snapshot with constant-time queries, including duplicate-id exclusion.
+pub(crate) struct FleetModeIndex {
+    entries: std::collections::HashMap<CoreId, FleetModeEntry>,
+    connected: [usize; 3],
+}
+
+/// Address the three protocol modes without relying on enum discriminants.
+fn mode_slot(mode: TransportVersion) -> usize {
+    match mode {
+        TransportVersion::V0 => 0,
+        TransportVersion::V1 => 1,
+        TransportVersion::V2 => 2,
+    }
+}
+
+impl FleetModeIndex {
+    /// Resolve modes and readiness once per configured entry across the complete fleet.
+    pub(crate) fn new(servers: &[ServerConfig], is_ready: impl Fn(CoreId) -> bool) -> Self {
+        let mut entries = std::collections::HashMap::with_capacity(servers.len());
+        let mut connected = [0; 3];
+        for server in servers {
+            let mode = seeded_transport(server.transport, server.key.expose());
+            let ready = is_ready(server.id);
+            // Preserve an unresolved first mode even when a duplicate can resolve its own.
+            let entry = entries.entry(server.id).or_insert(FleetModeEntry {
+                own_mode: mode,
+                connected: [0; 3],
+            });
+            if ready && let Some(mode) = mode {
+                let slot = mode_slot(mode);
+                connected[slot] += 1;
+                entry.connected[slot] += 1;
+            }
+        }
+        Self { entries, connected }
+    }
+
+    /// Resolve advice with first-id own-mode and all-duplicate sibling exclusion.
+    pub(crate) fn suggestion(&self, id: CoreId) -> Option<TransportVersion> {
+        let entry = self.entries.get(&id)?;
+        let own_mode = entry.own_mode?;
+        // Subtract every configured entry with this id, matching the original sibling filter.
+        suggest_alternate_mode(
+            own_mode,
+            TransportVersion::ALL.map(|mode| {
+                let slot = mode_slot(mode);
+                SiblingOutcome {
+                    mode,
+                    connected: self.connected[slot] > entry.connected[slot],
+                }
+            }),
+        )
+    }
+}
+
 /// One labelled line of the verdict hover.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct FaultFact {

@@ -51,7 +51,7 @@ fn data_render_roots_keep_the_mono_family() {
             "asset figures",
         ),
         (
-            "panels/core_status/mod.rs",
+            "panels/core_status/render.rs",
             "impl Render for CoreStatusView",
             "core-status figures",
         ),

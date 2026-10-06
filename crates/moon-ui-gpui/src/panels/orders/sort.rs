@@ -246,7 +246,7 @@ fn numeric_order(left: f64, right: f64, ascending: bool) -> std::cmp::Ordering {
     if ascending { order } else { order.reverse() }
 }
 
-/// Return the effective scope's order-table signature from each core's table revision.
+/// Return data and name signatures for the effective scope without owning session names.
 ///
 /// This deliberately uses the table revision rather than chart-line revisions so numeric fields and
 /// statuses refresh independently of chart userdata. Core IDs keep membership changes observable
@@ -257,16 +257,40 @@ fn numeric_order(left: f64, right: f64, ascending: bool) -> std::cmp::Ordering {
 ///     scope: Effective query scope whose changes may affect this panel.
 ///
 /// Returns:
-///     Deterministic signature independent of out-of-scope core activity.
-pub(super) fn orders_sig(b: &Backend, scope: &EffectiveCoreScope) -> u64 {
+///     The original data signature and a separate name signature, both scoped to the same IDs.
+pub(super) fn orders_signatures(b: &Backend, scope: &EffectiveCoreScope) -> (u64, u64) {
     let store = b.session.store();
-    scope.ids().iter().fold(0u64, |signature, core| {
+    orders_signatures_from(scope.ids().iter().map(|core| {
+        let name = b
+            .session
+            .sessions()
+            .iter()
+            .find(|session| session.id == *core)
+            .map(|session| session.name.as_str());
+        (
+            *core,
+            store.core(*core).map_or(0, |data| data.orders_table_rev),
+            name,
+        )
+    }))
+}
+
+/// Fold explicit scoped revisions and borrowed names in one pass, preserving the data formula.
+pub(super) fn orders_signatures_from<'a>(
+    cores: impl Iterator<Item = (CoreId, u64, Option<&'a str>)>,
+) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut names = std::collections::hash_map::DefaultHasher::new();
+    let data = cores.fold(0u64, |signature, (core, revision, name)| {
+        core.hash(&mut names);
+        name.hash(&mut names);
         signature
             .wrapping_mul(31)
-            .wrapping_add(*core)
+            .wrapping_add(core)
             .wrapping_mul(31)
-            .wrapping_add(store.core(*core).map_or(0, |data| data.orders_table_rev))
-    })
+            .wrapping_add(revision)
+    });
+    (data, names.finish())
 }
 
 #[cfg(test)]

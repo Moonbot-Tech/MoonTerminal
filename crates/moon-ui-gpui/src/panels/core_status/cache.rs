@@ -7,12 +7,95 @@ use std::rc::Rc;
 
 use gpui::*;
 
-use super::model::{self, CoreStatusRow, ServerKey, aggregate_servers};
+use super::model::{self, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
 use super::ordering::{self, assign_server_names, compare_flat_rows, compare_groups, natural_cmp};
 use super::{CoreStatusView, server_view};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
+
+#[cfg(test)]
+mod tests;
+
+/// Sort owned flat rows while preserving the attention-first stable tie order.
+fn sort_flat_rows(
+    rows: &[CoreStatusRow],
+    flat_sort: Option<&(String, bool)>,
+    groups: &[ServerStatusGroup],
+) -> Vec<CoreStatusRow> {
+    let mut out = model::ordered_flat_rows(rows);
+    if let Some((key, ascending)) = flat_sort {
+        if key == "server" {
+            let names: HashMap<ServerKey, &str> = groups
+                .iter()
+                .map(|group| (group.key, group.display_name.as_str()))
+                .collect();
+            let name_of =
+                |row: &CoreStatusRow| names.get(&ServerKey::for_row(row)).copied().unwrap_or("");
+            out.sort_by(|a, b| {
+                let ordering = natural_cmp(name_of(a), name_of(b));
+                if *ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                }
+            });
+        } else {
+            out.sort_by(|a, b| {
+                let ordering = compare_flat_rows(a, b, key);
+                if *ascending {
+                    ordering
+                } else {
+                    ordering.reverse()
+                }
+            });
+        }
+    }
+    out
+}
+
+/// Sorted-row snapshot; venue lines deliberately remain outside this cache.
+#[derive(Default)]
+pub(super) struct FlatViewCache {
+    generation: u64,
+    sort: Option<(String, bool)>,
+    rows: Option<Rc<Vec<CoreStatusRow>>>,
+}
+
+impl FlatViewCache {
+    /// Reuse sorted rows on a key hit; build once when generation or sort changes.
+    pub(super) fn get_or_build(
+        &mut self,
+        generation: u64,
+        sort: Option<&(String, bool)>,
+        build: impl FnOnce() -> Vec<CoreStatusRow>,
+    ) -> Rc<Vec<CoreStatusRow>> {
+        if self.generation == generation
+            && self.sort.as_ref() == sort
+            && let Some(rows) = &self.rows
+        {
+            return rows.clone();
+        }
+        let rows = Rc::new(build());
+        self.generation = generation;
+        self.sort = sort.cloned();
+        self.rows = Some(rows.clone());
+        rows
+    }
+}
+
+/// Publish row and group snapshots under one new generation so flat sorting cannot reuse old rows.
+fn replace_snapshots(
+    cached_rows: &mut Rc<Vec<CoreStatusRow>>,
+    cached_groups: &mut Rc<Vec<ServerStatusGroup>>,
+    generation: &mut u64,
+    rows: Vec<CoreStatusRow>,
+    groups: Vec<ServerStatusGroup>,
+) {
+    *cached_rows = Rc::new(rows);
+    *cached_groups = Rc::new(groups);
+    *generation = generation.wrapping_add(1);
+}
 
 impl CoreStatusView {
     /// Collect filtered core rows for the group scope in canonical order.
@@ -43,6 +126,7 @@ impl CoreStatusView {
                 .core(id)
                 .is_some_and(|core| core.status == ConnStatus::Ready)
         };
+        let mode_index = crate::conn_diag::FleetModeIndex::new(&b.config.servers, is_ready);
         let mut out = Vec::new();
         for (id, name) in self.query_cores(b) {
             // One store lookup per core: this loop runs for every core on every cache rebuild.
@@ -83,11 +167,7 @@ impl CoreStatusView {
                 sys,
                 startup,
                 time_offset,
-                mode_suggestion: crate::conn_diag::fleet_mode_suggestion(
-                    id,
-                    &b.config.servers,
-                    is_ready,
-                ),
+                mode_suggestion: mode_index.suggestion(id),
                 fault,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),
@@ -173,8 +253,13 @@ impl CoreStatusView {
             bw.cmp(&aw).then(field_ord)
         });
         self.has_warn = groups.iter().any(|group| group.has_warn());
-        self.cached_groups = Rc::new(groups);
-        self.cached_rows = Rc::new(rows);
+        replace_snapshots(
+            &mut self.cached_rows,
+            &mut self.cached_groups,
+            &mut self.rows_generation,
+            rows,
+            groups,
+        );
         // Prune the row selection against the rows that now EXIST. This is the one call that
         // keeps a bulk update honest: a preset change, a group switch or a core simply leaving
         // the scope removes a row from the screen, and a core the user can no longer see must
@@ -216,54 +301,7 @@ impl CoreStatusView {
         });
     }
 
-    /// Order flat-mode rows: the active column sort, or the default attention-first order.
-    ///
-    /// Args:
-    ///     rows: Current filtered core snapshots.
-    ///
-    /// Returns:
-    ///     A sorted copy for the flat table.
-    pub(super) fn sorted_flat_rows(&self, rows: &[CoreStatusRow]) -> Vec<CoreStatusRow> {
-        let mut out = model::ordered_flat_rows(rows);
-        if let Some((key, ascending)) = &self.flat_sort {
-            if key == "server" {
-                // The "server" column sorts by the displayed server NAME (natural order), which
-                // lives on the aggregated groups rather than the row.
-                let names: HashMap<ServerKey, String> = self
-                    .cached_groups
-                    .iter()
-                    .map(|group| (group.key, group.display_name.clone()))
-                    .collect();
-                let name_of = |row: &CoreStatusRow| {
-                    names
-                        .get(&ServerKey::for_row(row))
-                        .cloned()
-                        .unwrap_or_default()
-                };
-                out.sort_by(|a, b| {
-                    let ordering = natural_cmp(&name_of(a), &name_of(b));
-                    if *ascending {
-                        ordering
-                    } else {
-                        ordering.reverse()
-                    }
-                });
-            } else {
-                out.sort_by(|a, b| {
-                    let ordering = compare_flat_rows(a, b, key);
-                    if *ascending {
-                        ordering
-                    } else {
-                        ordering.reverse()
-                    }
-                });
-            }
-        }
-        out
-    }
-
-    /// Build the Flat presentation: rows in their final order, plus the exchange lines drawn over
-    /// them.
+    /// Reuse the sorted snapshot and refresh exchange lines from current venues and locale.
     ///
     /// Everything returned is OWNED. [`moon_ui::MoonDataTable`]'s row closure is `'static`, so it
     /// cannot hold a `&CoreVenue` borrowed out of the session's venue map; resolving the sections
@@ -278,9 +316,19 @@ impl CoreStatusView {
         &self,
         cx: &App,
     ) -> (Rc<Vec<CoreStatusRow>>, Rc<Vec<ordering::FlatLine>>) {
-        let rows = self.sorted_flat_rows(&self.cached_rows);
+        let rows = self.flat_cache.borrow_mut().get_or_build(
+            self.rows_generation,
+            self.flat_sort.as_ref(),
+            || {
+                sort_flat_rows(
+                    &self.cached_rows,
+                    self.flat_sort.as_ref(),
+                    &self.cached_groups,
+                )
+            },
+        );
         let venues = self.backend.read(cx).session.core_venues();
         let lines = ordering::flat_lines(&rows, venues);
-        (Rc::new(rows), Rc::new(lines))
+        (rows, Rc::new(lines))
     }
 }

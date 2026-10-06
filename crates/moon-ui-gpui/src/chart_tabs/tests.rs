@@ -112,7 +112,7 @@ fn auto_chart_target_commits_only_after_success_and_retries_new_catalog_revision
 fn market_data_revisions_wake_pending_auto_chart_retargets() {
     let main = include_str!("../main.rs");
     let startup = include_str!("../startup/boot.rs");
-    let backend = include_str!("../backend/mod.rs");
+    let backend = include_str!("../backend/workspace_entities.rs");
     let chart_tabs = include_str!("mod.rs");
     assert!(main.contains("market_data_revision: Entity<MarketDataRevision>"));
     assert!(startup.contains(

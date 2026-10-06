@@ -51,7 +51,7 @@ fn station_handover_publishes_before_suspend_and_remote_work() {
 fn startup_detects_and_persists_an_untouched_profiles_system_zone() {
     let startup = code_only(&read_startup());
     let clock = code_only(&read_src("chrome/clock.rs"));
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let reconcile = braced_body(
         &clock,
         "pub(crate) fn reconcile_clock_zone(backend: &Entity<Backend>, cx: &mut App)",
@@ -193,9 +193,9 @@ fn quit_serializes_the_latest_full_snapshot_behind_live_work() {
 #[test]
 fn invalid_auto_dock_waits_for_an_explicit_user_topology_change() {
     let persistence = code_only(&read_src("persistence/auto_dock_persist.rs"));
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let shell_init = code_only(&read_src("shell/init.rs"));
-    let shell_workspace = code_only(&read_src("shell/workspace.rs"));
+    let shell_workspace = code_only(&read_shell_workspace());
     let startup_state = braced_body(
         &persistence,
         "pub(crate) fn into_startup_state(self) -> AutoDockStartupState",
@@ -235,7 +235,7 @@ fn invalid_auto_dock_waits_for_an_explicit_user_topology_change() {
 /// detached News or Alerts state would recreate a second local identity inside Auto.
 #[test]
 fn live_classic_panel_names_outrank_stale_detached_records_in_auto() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let names = braced_body(&workspace, "fn auto_only_detached_panel_names(");
     let apply = braced_body(&workspace, "pub(super) fn apply_workspace_mode(");
 

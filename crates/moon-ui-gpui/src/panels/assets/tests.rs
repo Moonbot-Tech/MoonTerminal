@@ -7,6 +7,35 @@ use super::{
     resolve_workspace_wallet_core, roster_width, wallets::wallet_count_label,
 };
 
+/// Synthetic unique ids make every configured setting independently observable without keys.
+pub(super) fn synthetic_servers() -> Vec<moon_core::config::ServerConfig> {
+    (1..=200)
+        .map(|id| moon_core::config::ServerConfig {
+            id,
+            uid: id,
+            name: format!("Synthetic {id}"),
+            active: true,
+            feed: Default::default(),
+            key: moon_core::config::Secret::new(""),
+            endpoint_override: String::new(),
+            endpoint_to_station: false,
+            group: "Synthetic".into(),
+            market: "BTCUSDT".into(),
+            color: [0, 0, 0],
+            synthetic: true,
+            chart_bundle: String::new(),
+            default_alert_strategy: 0,
+            own_trade_config: false,
+            strat_slots: None,
+            manual_strategy: None,
+            trade: None,
+            transport: None,
+            workspace_membership: Default::default(),
+            total_mode: Default::default(),
+        })
+        .collect()
+}
+
 /// Removing the selection predicate from `global_query_cores` keeps unticked cores in requests,
 /// rows and balances. Exercise the same toggle helper as the picker and retain canonical order.
 #[test]
@@ -371,7 +400,7 @@ fn function_source<'a>(source: &'a str, marker: &str) -> &'a str {
 ///
 /// Returns:
 ///     The source without comments, while retaining line breaks and double-quoted literals.
-fn strip_rust_comments(source: &str) -> String {
+pub(super) fn strip_rust_comments(source: &str) -> String {
     let mut stripped = String::with_capacity(source.len());
     let mut characters = source.chars().peekable();
 

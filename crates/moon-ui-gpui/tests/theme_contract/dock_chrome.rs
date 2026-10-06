@@ -71,7 +71,7 @@ fn every_footer_adopts_the_shared_footer_helpers() {
         ("panels/report/render.rs", "footer_row("),
         ("panels/assets/table.rs", "footer_row("),
         ("panels/orders/render.rs", "footer_row("),
-        ("panels/core_status/mod.rs", "footer_row("),
+        ("panels/core_status/footer.rs", "footer_row("),
         ("panels/news/mod.rs", "footer_row("),
         ("panels/assets/balances.rs", "footer_caption("),
     ];
@@ -295,7 +295,7 @@ fn chrome_label_helpers_keep_the_single_contrast_lift() {
 /// detached window instead of only rebuilding the current workspace layout.
 #[test]
 fn dock_layout_reset_changes_only_layout_authorities() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let docks = code_only(&read_src("shell/docks.rs"));
     let drain = braced_body(&workspace, "fn drain_dock_layout_reset(");
     let classic = braced_body(&docks, "fn reset_classic_dock_layout(");

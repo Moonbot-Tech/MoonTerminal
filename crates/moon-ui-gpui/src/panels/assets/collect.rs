@@ -2,6 +2,55 @@
 
 use super::*;
 
+/// Applies the existing dust and minimum-position-lot rules without changing IEEE comparisons.
+/// Positive thresholds retain non-quote spot holdings at the threshold and positions reaching
+/// their minimum lot (one USD when unknown); a non-positive threshold bypasses filtering.
+pub(super) fn market_row_visible(row: &AssetRow, futures_account: bool, thr: f64) -> bool {
+    let min_lot = if row.min_lot_usd > 0.0 {
+        row.min_lot_usd
+    } else {
+        1.0
+    };
+    let is_position = row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
+    let spot_coin_visible = !futures_account && !row.is_quote_asset && row.value_usdt >= thr;
+    thr <= 0.0 || is_position || spot_coin_visible
+}
+
+/// Produces visible owned market rows in source order, cloning only after the borrowed check.
+pub(super) fn market_rows(
+    rows: &[AssetRow],
+    futures_account: bool,
+    thr: f64,
+) -> impl Iterator<Item = AssetRow> + '_ {
+    rows.iter()
+        .filter(move |row| market_row_visible(row, futures_account, thr))
+        .cloned()
+}
+
+#[cfg(test)]
+mod tests;
+
+/// Resolves configured balance modes with the first-id semantics of `core_total_mode`.
+struct TotalModeIndex {
+    modes: std::collections::HashMap<CoreId, moon_core::config::TotalMode>,
+}
+
+impl TotalModeIndex {
+    /// Indexes each core once, retaining the first mode when configured ids repeat.
+    fn new(servers: &[moon_core::config::ServerConfig]) -> Self {
+        let mut modes = std::collections::HashMap::with_capacity(servers.len());
+        for server in servers {
+            modes.entry(server.id).or_insert(server.total_mode);
+        }
+        Self { modes }
+    }
+
+    /// Returns the first configured mode for a core, defaulting when no entry exists.
+    fn get(&self, core: CoreId) -> moon_core::config::TotalMode {
+        self.modes.get(&core).copied().unwrap_or_default()
+    }
+}
+
 /// Asset-table row associated with its core and computed USDT values.
 #[derive(Clone)]
 pub(super) struct AssetEntry {
@@ -162,6 +211,7 @@ impl AssetsView {
     /// Collects asset rows from every filtered core and sorts them by descending held-balance USDT
     /// value. A positive `min_value_usd` retains spot holdings at or above the threshold and open
     /// positions at or above their minimum lot; a non-positive threshold disables filtering.
+    /// Per-market rows are filtered while borrowed so hidden dust needs no owned strings.
     pub(super) fn collect(&self, b: &Backend) -> Vec<AssetEntry> {
         let store = b.session.store();
         // The top-bar dust threshold; a non-positive value shows every row.
@@ -206,32 +256,13 @@ impl AssetsView {
             // Track coins already emitted from per-market rows to avoid duplicating them from the
             // spot transfer wallet below.
             let mut seen_coin: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for row in &cd.assets.rows {
-                let row = row.clone();
+            for row in market_rows(&cd.assets.rows, cd.assets.futures_account, thr) {
                 // Display the full open position, as Moonbot does. Do not subtract quantities in
                 // closing sell or take-profit orders, which would hide a fully listed position.
                 let value = row.value_usdt;
-                // Moonbot visibility rules: futures cores, including Coin-M, show only open
-                // positions whose notional reaches `min_lot_usd`, falling back to 1 USD when that
-                // minimum is unknown. Their balances are quote collateral rather than purchased
-                // coins. Spot cores instead show non-quote holdings whose raw value reaches the
-                // user-selected `thr`; the minimum-lot fallback does not filter spot rows. A
-                // non-positive threshold bypasses all filtering.
-                let min_lot = if row.min_lot_usd > 0.0 {
-                    row.min_lot_usd
-                } else {
-                    1.0
-                };
-                let is_position = row.pos_size != 0.0 && row.pos_size.abs() * row.price >= min_lot;
-                let spot_coin_visible =
-                    !cd.assets.futures_account && !row.is_quote_asset && value >= thr;
-                let keep = thr <= 0.0 || is_position || spot_coin_visible;
-                if !keep {
-                    continue;
-                }
                 seen_coin.insert(row.coin.to_ascii_uppercase());
                 // Same predicate the cell renderer uses (`assets_row`), NOT the dust-aware
-                // `is_position` above: the displayed value and the summed value must be one
+                // `market_row_visible`: the displayed value and the summed value must be one
                 // number, so they must also agree on what counts as a position.
                 let display_value = if row.pos_size != 0.0 {
                     row.pos_size.abs() * row.price
@@ -328,13 +359,15 @@ impl AssetsView {
 
     /// Per-core free/total USD balances and the store-owned trust state for each figure.
     /// Missing store entries are represented as `Awaiting` so every scoped core remains visible.
+    /// A single first-id mode index avoids scanning the configured fleet for every scoped core.
     pub(super) fn per_core(&self, b: &Backend) -> Vec<CoreAgg> {
         let store = b.session.store();
+        let modes = TotalModeIndex::new(&b.config.servers);
         self.query_cores(b)
             .into_iter()
             .map(|(id, name)| {
                 let merge = b.session.account_merge_key(id);
-                let mode = moon_core::session::balances::core_total_mode(&b.config.servers, id);
+                let mode = modes.get(id);
                 let Some(cd) = store.core(id) else {
                     return CoreAgg {
                         id,

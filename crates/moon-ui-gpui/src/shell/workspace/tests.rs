@@ -1,5 +1,339 @@
 //! Regression tests for Auto-workspace Shell presentation policy.
 
+/// Reintroducing unconditional ranking wastes a fleet scan on empty and singleton lists.
+#[test]
+fn status_lists_skip_rank_table_when_nothing_to_order() {
+    let mut config = rail_fleet();
+    config.core_sort = moon_core::config::CoreSortMode::AddedNewest;
+    for down_len in 0..=2 {
+        for sync_len in 0..=2 {
+            let mut down = [1, 2][..down_len].to_vec();
+            let mut sync = [3, 4][..sync_len].to_vec();
+            let mut expected_down = down.clone();
+            let mut expected_sync = sync.clone();
+            expected_down.reverse();
+            expected_sync.reverse();
+            let calls = std::cell::Cell::new(0);
+            super::sort_status_lists(
+                &mut down,
+                &mut sync,
+                |id| *id,
+                |id| *id,
+                || {
+                    calls.set(calls.get() + 1);
+                    moon_core::session::core_order::CoreOrder::new(&config)
+                },
+            );
+            assert_eq!(calls.get(), usize::from(down_len > 1 || sync_len > 1));
+            assert_eq!(down, expected_down);
+            assert_eq!(sync, expected_sync);
+        }
+    }
+}
+
+/// Backend-free Shell construction contract prevents moving index creation into the row loop.
+#[test]
+fn shell_status_builds_one_fleet_index_per_render() {
+    let render = include_str!("../render.rs");
+    assert_eq!(render.matches("FleetModeIndex::new(").count(), 1);
+    assert!(render.contains("if conn.down.is_empty()"));
+    assert!(!render.contains("crate::conn_diag::fleet_mode_suggestion("));
+}
+
+/// Restoring per-row advice or bypassing rail_inputs disconnects the indexed production path.
+#[test]
+fn workspace_rail_calls_indexed_inputs() {
+    let source: String = include_str!("../workspace.rs")
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<String>();
+    let rail = source.split("fn workspace_rail(").nth(1).unwrap();
+    assert!(rail.contains("rail_inputs("));
+    assert!(!source.contains("fleet_mode_suggestion("));
+}
+
+/// Replay the pre-goal linear membership path against the production index at both group sizes.
+#[test]
+#[ignore]
+fn bench_effective_scope_membership_5_and_200() {
+    use crate::backend::WorkspaceLiveIndex;
+    use moon_core::config::WorkspaceMode;
+    use std::hint::black_box;
+    let mut config = rail_fleet();
+    for (ix, server) in config.servers.iter_mut().enumerate() {
+        server.id = ix as u64;
+        server.active = true;
+        server.group = "Group".into();
+    }
+    let live: Vec<_> = config
+        .servers
+        .iter()
+        .map(|s| (s.id, s.group.as_str()))
+        .collect();
+    for size in [5, 200] {
+        let cores: Vec<_> = config.servers.iter().take(size).map(|s| s.id).collect();
+        let linear =
+            || {
+                cores
+                    .iter()
+                    .copied()
+                    .filter(|id| {
+                        config
+                            .servers
+                            .iter()
+                            .find(|s| s.id == *id && s.group == "Group")
+                            .is_some_and(|s| s.active)
+                            && live
+                                .iter()
+                                .any(|(core, group)| core == id && *group == "Group")
+                    })
+                    .filter(|id| {
+                        config.servers.iter().find(|s| s.id == *id).is_none_or(|s| {
+                            s.workspace_membership.displays_in(WorkspaceMode::Classic)
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            };
+        let indexed = || {
+            let index = WorkspaceLiveIndex::new(black_box(&config.servers), live.iter().copied());
+            cores
+                .iter()
+                .copied()
+                .filter(|id| {
+                    index.server("Group", *id).is_some_and(|s| s.active) && index.live("Group", *id)
+                })
+                .filter(|id| index.displayed(Some(WorkspaceMode::Classic), *id))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(linear(), indexed());
+        for (label, run) in [
+            ("pre_goal", &linear as &dyn Fn() -> Vec<u64>),
+            ("whole_fleet", &indexed),
+        ] {
+            let started = std::time::Instant::now();
+            for _ in 0..10_000 {
+                black_box(run());
+            }
+            println!(
+                "effective_scope_membership size={size} {label} ns/iter={}",
+                started.elapsed().as_nanos() / 10_000
+            );
+        }
+    }
+}
+
+/// Synthetic fleet includes duplicate identities whose group and preset semantics differ.
+fn rail_fleet() -> moon_core::config::AppConfig {
+    use moon_core::config::{
+        FeedFlags, Secret, ServerConfig, TransportVersion, WorkspaceMembership,
+    };
+    let mut config = moon_core::config::AppConfig::headless(Vec::new());
+    config.servers = (0..200)
+        .map(|index| {
+            let id = if index >= 198 { 7 } else { index };
+            ServerConfig {
+                id,
+                uid: index,
+                name: format!("core-{:03}", 200 - index),
+                active: index % 4 != 0,
+                feed: FeedFlags::default(),
+                key: Secret::new("synthetic"),
+                endpoint_override: String::new(),
+                endpoint_to_station: false,
+                group: format!("G{}", index % 3),
+                market: "BTCUSDT".into(),
+                color: [0, 0, 0],
+                synthetic: true,
+                chart_bundle: String::new(),
+                default_alert_strategy: 0,
+                own_trade_config: false,
+                strat_slots: None,
+                manual_strategy: None,
+                trade: None,
+                transport: Some(if index % 2 == 0 {
+                    TransportVersion::V1
+                } else {
+                    TransportVersion::V2
+                }),
+                workspace_membership: if index % 5 == 0 {
+                    WorkspaceMembership::ClassicOnly
+                } else {
+                    WorkspaceMembership::default()
+                },
+                total_mode: Default::default(),
+            }
+        })
+        .collect();
+    config
+}
+
+/// Synthetic lifecycle facts exercise active, live, missing, and opening groups.
+fn rail_availability(
+    group: &str,
+    server: Option<&moon_core::config::ServerConfig>,
+    live_session: bool,
+) -> crate::workspace::WorkspaceCoreAvailability {
+    crate::workspace::WorkspaceCoreAvailability {
+        group_active: group != "G2",
+        core_active: server.is_some_and(|server| server.active),
+        live_session,
+        window: match group {
+            "G0" => crate::workspace::WorkspaceWindowState::Live,
+            "G1" => crate::workspace::WorkspaceWindowState::Opening,
+            _ => crate::workspace::WorkspaceWindowState::Missing,
+        },
+    }
+}
+
+/// Independent old per-row searches pin duplicate membership, order, lifecycle, and advice.
+#[test]
+fn rail_inputs_match_per_core_linear_path() {
+    use moon_core::config::{CoreSortMode, WorkspaceMode};
+    let mut config = rail_fleet();
+    config.servers[198].group = "G1".into();
+    config.servers[198].active = false;
+    config.servers[199].group = "G0".into();
+    config.servers[199].workspace_membership = moon_core::config::WorkspaceMembership::ClassicOnly;
+    let live: Vec<_> = config
+        .servers
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| index % 4 != 0)
+        .map(|(_, server)| (server.id, server.group.as_str()))
+        .collect();
+    let mut ready = moon_core::session::store::CoreData::default();
+    ready.status = ConnStatus::Ready;
+    let get_core = |id| (id % 3 != 0).then_some(&ready);
+    let get_venue = |server: &moon_core::config::ServerConfig| {
+        server
+            .id
+            .is_multiple_of(2)
+            .then(|| moon_core::venue::CoreVenue::identify(1, "", None))
+    };
+    let index = crate::backend::WorkspaceLiveIndex::new(&config.servers, live.iter().copied());
+    for id in [7, 8, 198, 999] {
+        for group in ["G0", "G1", "G2", "missing"] {
+            assert_eq!(
+                index.server(group, id).map(|server| server.uid),
+                config
+                    .servers
+                    .iter()
+                    .find(|server| server.id == id && server.group == group)
+                    .map(|server| server.uid)
+            );
+            assert_eq!(
+                index.live(group, id),
+                live.iter()
+                    .any(|&(core, owner)| core == id && owner == group)
+            );
+        }
+        for preset in [
+            None,
+            Some(WorkspaceMode::Classic),
+            Some(WorkspaceMode::AutoTrading),
+        ] {
+            assert_eq!(
+                index.displayed(preset, id),
+                preset.is_none_or(|preset| config
+                    .servers
+                    .iter()
+                    .find(|server| server.id == id)
+                    .is_none_or(|server| server.workspace_membership.displays_in(preset)))
+            );
+        }
+    }
+    for mode in [
+        CoreSortMode::Name,
+        CoreSortMode::AddedOldest,
+        CoreSortMode::AddedNewest,
+    ] {
+        config.core_sort = mode;
+        let order = moon_core::session::core_order::CoreOrder::new(&config);
+        let actual = super::rail_inputs(
+            &config.servers,
+            &order,
+            live.iter().copied(),
+            get_core,
+            get_venue,
+            rail_availability,
+        );
+        let mut servers = config.servers.clone();
+        order.sort_by(&mut servers, |server| server.id);
+        let expected: Vec<_> = servers
+            .iter()
+            .map(|server| {
+                let core = get_core(server.id);
+                crate::workspace::WorkspaceRosterInput {
+                    core: server.id,
+                    name: server.name.clone(),
+                    group: server.group.clone(),
+                    venue: get_venue(server),
+                    availability: rail_availability(
+                        &server.group,
+                        config.servers.iter().find(|candidate| {
+                            candidate.id == server.id && candidate.group == server.group
+                        }),
+                        live.iter()
+                            .any(|&(id, group)| id == server.id && group == server.group),
+                    ),
+                    ready: core.is_some_and(|core| core.status == ConnStatus::Ready),
+                    connection: core.map(|core| core.status.clone()),
+                    startup: core.map(|core| core.startup).unwrap_or_default(),
+                    fault: core.and_then(|core| core.fault.clone()),
+                    mode_suggestion: crate::conn_diag::fleet_mode_suggestion(
+                        server.id,
+                        &servers,
+                        |id| get_core(id).is_some_and(|core| core.status == ConnStatus::Ready),
+                    ),
+                }
+            })
+            .filter(|input| {
+                config
+                    .servers
+                    .iter()
+                    .find(|server| server.id == input.core)
+                    .is_none_or(|server| {
+                        server
+                            .workspace_membership
+                            .displays_in(WorkspaceMode::AutoTrading)
+                    })
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+/// Measure production input assembly including fleet order, lookups, advice, and filtering.
+#[test]
+#[ignore]
+fn bench_workspace_rail_inputs_200() {
+    let config = rail_fleet();
+    let live: Vec<_> = config
+        .servers
+        .iter()
+        .map(|server| (server.id, server.group.as_str()))
+        .collect();
+    let mut ready = moon_core::session::store::CoreData::default();
+    ready.status = ConnStatus::Ready;
+    let start = std::time::Instant::now();
+    for _ in 0..2000 {
+        let config = std::hint::black_box(&config);
+        let order = moon_core::session::core_order::CoreOrder::new(config);
+        std::hint::black_box(super::rail_inputs(
+            &config.servers,
+            &order,
+            live.iter().copied(),
+            |id| (id % 3 != 0).then_some(&ready),
+            |_| None,
+            rail_availability,
+        ));
+    }
+    println!(
+        "bench_workspace_rail_inputs_200 ns/iter={}",
+        start.elapsed().as_nanos() / 2000
+    );
+}
+
 #[cfg(feature = "debug-tools")]
 use gpui::{AppContext as _, Context, EventEmitter};
 
@@ -11,6 +345,8 @@ use moon_core::feed::{ConnStatus, CoreInitStep, CoreStartupState, CoreStartupSta
 use moon_ui::DockEvent;
 use moon_ui::{DockTopologyByName, DockTopologyNode};
 
+use super::topology::auto_workspace_tab_is_eligible;
+
 #[cfg(feature = "debug-tools")]
 use super::{
     DeferredAutoTopologyGuard, auto_workspace_tab_to_persist,
@@ -18,10 +354,9 @@ use super::{
 };
 use super::{
     RailItem, append_core_section_items, auto_classic_only_panel_names,
-    auto_only_detached_panel_names, auto_workspace_activation_fallback,
-    auto_workspace_tab_is_eligible, core_rail_metrics, default_auto_workspace_topology,
-    ensure_auto_topology_contains_panel, fitted_auto_rail_width, icon_workspace_summary,
-    rehome_auto_panel, resolved_auto_workspace_tab, workspace_core_tooltip,
+    auto_only_detached_panel_names, auto_workspace_activation_fallback, core_rail_metrics,
+    default_auto_workspace_topology, ensure_auto_topology_contains_panel, fitted_auto_rail_width,
+    icon_workspace_summary, rehome_auto_panel, resolved_auto_workspace_tab, workspace_core_tooltip,
     workspace_status_label_visible,
 };
 use crate::window::detached::DetachedSpec;
@@ -661,7 +996,7 @@ fn auto_panel_activation_has_a_narrow_guarded_persistence_path() {
     assert!(arm.contains("return;"));
     assert!(!arm.contains("set_auto_dock_topology"));
 
-    let backend = include_str!("../../backend/mod.rs");
+    let backend = include_str!("../../backend/workspace_scope.rs");
     let setter = backend
         .split("pub(crate) fn set_auto_workspace_tab")
         .nth(1)

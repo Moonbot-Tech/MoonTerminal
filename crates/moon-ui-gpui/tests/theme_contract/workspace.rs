@@ -13,7 +13,7 @@ fn marker_counts_come_from_the_membership_boundary() {
         scope_model.contains("computed by the caller before Classic or\n    /// Auto retained filtering narrows `ids` further"),
         "EffectiveCoreScope documents that membership counts precede retained filtering"
     );
-    let backend = read_src("backend/mod.rs");
+    let backend = read_backend();
     let scope = code_only(braced_body(
         &backend,
         "pub(crate) fn effective_workspace_scope(",
@@ -52,7 +52,7 @@ fn marker_counts_come_from_the_membership_boundary() {
 fn auto_workspace_keeps_one_dock_and_the_chart_route() {
     let shell = code_only(&read_src("shell/mod.rs"));
     let init = code_only(&read_src("shell/init.rs"));
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let chart_tabs = code_only(&read_src("chart_tabs/mod.rs"));
 
     assert_eq!(
@@ -163,7 +163,7 @@ fn auto_and_classic_persist_to_separate_layout_authorities() {
         "Auto topology must publish and return before the Classic persistence-facing dump"
     );
 
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let mode = code_only(braced_body(
         &workspace,
         "pub(super) fn apply_workspace_mode(",
@@ -183,7 +183,7 @@ fn auto_and_classic_persist_to_separate_layout_authorities() {
 /// their exact instances, pinning Charts first, and allowing close to re-home a stray surface.
 #[test]
 fn auto_dock_is_modular_attached_and_charts_first() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let mode = code_only(braced_body(
         &workspace,
         "pub(super) fn apply_workspace_mode(",
@@ -260,11 +260,15 @@ fn auto_dock_is_modular_attached_and_charts_first() {
 /// and its group's window lifecycle.
 #[test]
 fn headless_core_uses_its_live_group_window_owner() {
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let availability = code_only(braced_body(
         &backend,
-        "pub(crate) fn workspace_core_availability(",
+        "pub(crate) fn workspace_core_availability_resolved(",
     ));
+    assert!(
+        braced_body(&backend, "pub(crate) fn workspace_core_availability(")
+            .contains("self.workspace_core_availability_resolved(")
+    );
     assert!(
         availability.contains("server.active")
             && availability.contains("WorkspaceWindowState::Live")
@@ -367,7 +371,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
 /// must wake/consume only in its current group, while a removed target must cancel its reveal.
 #[test]
 fn main_open_requests_revalidate_live_group_before_signature_and_consume() {
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let pending = code_only(braced_body(
         &backend,
         "pub(crate) fn pending_open_main_request_for_group(",
@@ -447,7 +451,7 @@ fn primary_group_close_uses_one_production_workspace_transition() {
         "startup must delegate a primary close as one production transition"
     );
 
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let helper = code_only(braced_body(&backend, "pub(crate) fn close_group_window("));
     assert!(
         helper.contains("self.group_windows.remove(&group)?;")
@@ -464,7 +468,7 @@ fn primary_group_close_uses_one_production_workspace_transition() {
 /// cross-group plan; large core fleets would regress and a click could retarget the wrong window.
 #[test]
 fn workspace_navigation_uses_the_shared_virtual_rail_and_owner_action() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let rail = code_only(braced_body(&workspace, "fn workspace_rail("));
     assert!(
         rail.contains("CoreOrder::new(&backend.config)")
@@ -515,7 +519,7 @@ fn workspace_navigation_uses_the_shared_virtual_rail_and_owner_action() {
 /// reintroduced nested row would break.
 #[test]
 fn auto_rail_centers_only_the_summary_and_overview_content() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let rail = braced_body(&workspace, "fn workspace_rail(")
         .split_whitespace()
         .collect::<String>();
@@ -583,7 +587,7 @@ fn auto_rail_centers_only_the_summary_and_overview_content() {
 /// grouping from `ServerConfig::group` hides exchanges.
 #[test]
 fn auto_body_keeps_a_visible_dock_resizable_rail_and_exchange_sections() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let body = code_only(braced_body(&workspace, "pub(super) fn workspace_body("));
     assert!(
         body.contains("moon_h_resizable(state_id)")
@@ -635,7 +639,7 @@ fn auto_body_keeps_a_visible_dock_resizable_rail_and_exchange_sections() {
 /// core instead of using one exchange branch marker.
 #[test]
 fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let prewarm = code_only(braced_body(&workspace, "fn start_exchange_logo_prewarm("));
     assert!(
         prewarm.contains("cx.background_spawn(async { crate::media::exchange_logos::prewarm() })")
@@ -681,7 +685,7 @@ fn auto_rail_prewarm_and_exchange_only_logo_contract_stays_explicit() {
 fn every_workspace_scoped_surface_uses_the_effective_authority() {
     let scoped = [
         ("panels/alerts/mod.rs", "effective_workspace_scope"),
-        ("panels/core_status/mod.rs", "effective_workspace_scope"),
+        ("panels/core_status/scope.rs", "effective_workspace_scope"),
         ("panels/core_status/interactions.rs", "effective_scope"),
         ("panels/log/mod.rs", "effective_workspace_scope"),
         ("panels/orders/mod.rs", "effective_workspace_scope"),
@@ -817,7 +821,7 @@ fn singleton_classic_membership_uses_display_authority_without_changing_auto_sco
 /// Orders/Alerts persistence, would serialize Auto topology and temporary panels into Classic.
 #[test]
 fn panel_payload_persistence_cannot_overwrite_classic_from_auto() {
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let helper = code_only(braced_body(
         &backend,
         "pub(crate) fn store_classic_dock_state(",
@@ -848,7 +852,7 @@ fn delayed_workspace_actions_revalidate_inside_the_dispatch_path() {
             .filter(|ch| !ch.is_whitespace())
             .collect::<String>()
     };
-    let backend = read_src("backend/mod.rs");
+    let backend = read_backend();
     let authority = compact(braced_body(
         &backend,
         "pub(crate) fn workspace_action_allows_core(",
@@ -976,7 +980,7 @@ fn fixed_header_rows_cannot_flex_shrink_between_modes() {
 /// Report query use the fleet, while using availability or membership helpers would reintroduce liveness.
 #[test]
 fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
-    let backend = code_only(&read_src("backend/mod.rs"));
+    let backend = code_only(&read_backend());
     let configured = code_only(braced_body(
         &backend,
         "pub(crate) fn configured_workspace_scope(",
@@ -1042,7 +1046,7 @@ fn rail_summary_problem_segment_alarms_in_danger_colour_and_resists_truncation()
          implicit default flex_shrink of 1.0, or the alarm segment loses its shrink-priority edge"
     );
 
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let rail = braced_body(&workspace, "fn workspace_rail(")
         .split_whitespace()
         .collect::<String>();
@@ -1087,7 +1091,7 @@ fn rail_summary_problem_segment_alarms_in_danger_colour_and_resists_truncation()
 /// contract holds identically at every density without density itself being named here.
 #[test]
 fn rail_problem_core_dot_is_larger_than_the_ready_dot_in_every_density() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let render = braced_body(&workspace, "fn render_rail_item(");
     let core_start = render
         .find("RailItem::Core {")
@@ -1110,7 +1114,7 @@ fn rail_problem_core_dot_is_larger_than_the_ready_dot_in_every_density() {
 /// explicitly forbids this: "the name div gets no colour — never colour the user's core name").
 #[test]
 fn rail_core_name_is_never_recoloured_by_status() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let render = braced_body(&workspace, "fn render_rail_item(");
     let core_start = render
         .find("RailItem::Core {")
@@ -1141,7 +1145,7 @@ fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable
         "hover ({hover}) must sit strictly between 0.0 and the selected alpha ({selected})"
     );
 
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let row_base = braced_body(&workspace, "fn rail_row_base(")
         .split_whitespace()
         .collect::<String>();
@@ -1166,7 +1170,7 @@ fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable
 /// tab strip and leave the user back at deleting cfg files to recover it.
 #[test]
 fn auto_close_routes_a_split_panel_back_to_its_home_strip() {
-    let workspace = code_only(&read_src("shell/workspace.rs"));
+    let workspace = code_only(&read_shell_workspace());
     let init = code_only(&read_src("shell/init.rs"));
     let auto_branch = workspace
         .split("WorkspaceMode::AutoTrading =>")

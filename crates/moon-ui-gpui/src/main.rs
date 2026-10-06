@@ -335,6 +335,8 @@ struct Backend {
     /// Including the coarse connection phase forces one retry after a feed respawn even when the
     /// first new snapshot equals the retained pre-reconnect value and therefore keeps its revision.
     group_exit_sync: HashMap<CoreId, (moon_core::config::GroupExitSettings, u64, bool)>,
+    /// Reusable sorted live-core roster for pruning manual sync bookkeeping.
+    live_core_scratch: Vec<CoreId>,
     /// Snapshot revisions `(strategies, client_settings)` the manual-strategy settle pass has
     /// already examined per core, so it re-runs only when one of them actually moves.
     manual_strat_checked: HashMap<CoreId, crate::backend::SettleKey>,

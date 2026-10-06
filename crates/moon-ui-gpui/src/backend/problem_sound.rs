@@ -54,17 +54,18 @@ enum Observation {
 }
 
 impl ProblemSoundState {
-    /// Folds one core's current list in and says whether it holds a new network finding.
+    /// Collects a changed list only, reporting whether it holds a new network finding.
     fn observe(
         &mut self,
         core: CoreId,
         rev: u64,
-        network_kinds: HashSet<u8>,
+        network_kinds: impl FnOnce() -> HashSet<u8>,
         now_ms: i64,
     ) -> Observation {
         if self.last_rev.get(&core) == Some(&rev) {
             return Observation::Unchanged;
         }
+        let network_kinds = network_kinds();
         self.last_rev.insert(core, rev);
         // A first list seeds silently: findings that were already there when the terminal
         // connected are old news, not an alarm. The whole set is stored either way, so a finding
@@ -126,13 +127,14 @@ impl Backend {
                 self.problem_sound.disarm(core);
                 continue;
             };
-            let network_kinds = data
-                .problems
-                .items
-                .iter()
-                .filter(|p| p.category == CoreProblemCategory::Network)
-                .map(|p| p.kind)
-                .collect();
+            let network_kinds = || {
+                data.problems
+                    .items
+                    .iter()
+                    .filter(|p| p.category == CoreProblemCategory::Network)
+                    .map(|p| p.kind)
+                    .collect()
+            };
             let throttled =
                 match self
                     .problem_sound

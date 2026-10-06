@@ -598,6 +598,23 @@ pub(crate) struct CoreWarnEngine {
 }
 
 impl CoreWarnEngine {
+    /// Whether the clock has advanced past the last processed second, including rollback.
+    pub(crate) fn tick_due(&self, now_ms: i64) -> bool {
+        now_ms / 1000 > self.last_sec
+    }
+
+    /// Collect live telemetry only when the engine can advance; otherwise return an empty tick.
+    pub(crate) fn tick_with_samples(
+        &mut self,
+        now_ms: i64,
+        samples: impl FnOnce() -> Vec<CoreSample>,
+    ) -> TickResult {
+        if !self.tick_due(now_ms) {
+            return TickResult::default();
+        }
+        self.tick(&samples(), now_ms)
+    }
+
     /// Advance the engine by one second's worth of samples (a no-op within the same second).
     ///
     /// Args:

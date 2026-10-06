@@ -4,6 +4,149 @@
 use super::*;
 use moon_core::config::{FeedFlags, Secret};
 
+/// Synthetic fleet includes blank and malformed keys, stored modes and duplicate identities.
+fn indexed_fleet() -> Vec<ServerConfig> {
+    (0..200)
+        .map(|n| {
+            let mut s = server(
+                n % 173,
+                match n % 5 {
+                    0 => None,
+                    1 => Some(TransportVersion::V0),
+                    2 => Some(TransportVersion::V1),
+                    _ => Some(TransportVersion::V2),
+                },
+            );
+            if n % 7 == 0 {
+                s.key = Secret::new("synthetic-invalid-key");
+            }
+            s
+        })
+        .collect()
+}
+
+/// Incorrect duplicate subtraction or first-mode selection changes the original advice.
+#[test]
+fn fleet_mode_index_matches_fleet_mode_suggestion() {
+    let mut fleet = indexed_fleet();
+    for scenario in 0..5 {
+        if scenario == 4 {
+            for server in &mut fleet {
+                server.transport = Some(TransportVersion::V1);
+            }
+            fleet[0].transport = Some(TransportVersion::V0);
+            fleet[173].transport = Some(TransportVersion::V2);
+        }
+        let ready = |id| match scenario {
+            0 => false,
+            1 => true,
+            2 => id % 3 == 0,
+            _ => id != 0,
+        };
+        let index = FleetModeIndex::new(&fleet, ready);
+        for id in 0..201 {
+            assert_eq!(
+                index.suggestion(id),
+                fleet_mode_suggestion(id, &fleet, ready),
+                "scenario={scenario} id={id}"
+            );
+        }
+    }
+    let fleet = [
+        server(1, None),
+        server(1, Some(TransportVersion::V0)),
+        server(2, Some(TransportVersion::V1)),
+    ];
+    assert_eq!(FleetModeIndex::new(&fleet, |_| true).suggestion(1), None);
+    let modes = [
+        None,
+        Some(TransportVersion::V0),
+        Some(TransportVersion::V1),
+        Some(TransportVersion::V2),
+    ];
+    for first in modes {
+        for duplicate in modes {
+            for sibling in modes {
+                let fleet = [server(1, first), server(1, duplicate), server(2, sibling)];
+                for mask in 0..4 {
+                    let ready = |id| mask & (1 << (id - 1)) != 0;
+                    let index = FleetModeIndex::new(&fleet, ready);
+                    for id in [1, 2, 99] {
+                        assert_eq!(
+                            index.suggestion(id),
+                            fleet_mode_suggestion(id, &fleet, ready)
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Reintroducing per-query readiness scans makes fleet rebuilds quadratic.
+#[test]
+fn fleet_mode_index_calls_is_ready_once_per_server() {
+    let fleet = indexed_fleet();
+    let calls = std::cell::Cell::new(0);
+    let index = FleetModeIndex::new(&fleet, |_| {
+        calls.set(calls.get() + 1);
+        true
+    });
+    for server in &fleet {
+        let _ = index.suggestion(server.id);
+    }
+    assert_eq!(calls.get(), fleet.len());
+    // No ready siblings forces the reference to inspect every resolvable configured entry.
+    let fleet: Vec<_> = (0..200)
+        .map(|id| server(id, Some(TransportVersion::V1)))
+        .collect();
+    let linear_calls = std::cell::Cell::new(0);
+    let indexed_calls = std::cell::Cell::new(0);
+    let index = FleetModeIndex::new(&fleet, |_| {
+        indexed_calls.set(indexed_calls.get() + 1);
+        false
+    });
+    for server in &fleet {
+        let original = fleet_mode_suggestion(server.id, &fleet, |_| {
+            linear_calls.set(linear_calls.get() + 1);
+            false
+        });
+        assert_eq!(index.suggestion(server.id), original);
+    }
+    assert_eq!(linear_calls.get(), fleet.len() * (fleet.len() - 1));
+    assert_eq!(indexed_calls.get(), fleet.len());
+}
+
+/// Measure complete 200-core rebuild advice, including snapshot construction.
+#[test]
+#[ignore]
+fn bench_fleet_mode_200() {
+    let fleet: Vec<_> = (0..200)
+        .map(|id| {
+            server(
+                id,
+                Some(if id == 0 {
+                    TransportVersion::V0
+                } else {
+                    TransportVersion::V1
+                }),
+            )
+        })
+        .collect();
+    let iterations = 2000;
+    let start = std::time::Instant::now();
+    for _ in 0..iterations {
+        let index = FleetModeIndex::new(std::hint::black_box(&fleet), |id| id != 0);
+        for server in &fleet {
+            std::hint::black_box(index.suggestion(server.id));
+        }
+    }
+    println!(
+        "bench_fleet_mode_200 ns/iter={}",
+        start.elapsed().as_nanos() / iterations
+    );
+}
+
 /// Build a server whose stored mode is the effective mode under this test's explicit fixtures.
 fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
     ServerConfig {

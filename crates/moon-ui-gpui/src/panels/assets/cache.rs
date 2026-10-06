@@ -2,20 +2,104 @@
 
 use super::*;
 
+/// Folds every configured id and total mode without allocating, including out-of-scope cores.
+pub(super) fn total_modes_sig(servers: &[moon_core::config::ServerConfig]) -> u64 {
+    servers.iter().fold(0u64, |sig, server| {
+        sig.wrapping_mul(31)
+            .wrapping_add(server.id)
+            .wrapping_mul(31)
+            .wrapping_add(server.total_mode as u64)
+    })
+}
+
+#[cfg(test)]
+mod tests;
+
+/// Cache work selected from explicit full-row, sale-marker, and periodic inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AssetsRefresh {
+    /// Replace every cache and retry missing transfer snapshots.
+    Full,
+    /// Replace sale markers while retaining rows, balances, and wallet caches.
+    SaleOnly,
+    /// Keep every cache and skip notification.
+    None,
+}
+
+/// Gives full-key changes and admitted gate ticks priority over order-only marker refreshes.
+pub(super) fn assets_refresh(
+    prev_key: Option<(u64, u64)>,
+    key: (u64, u64),
+    prev_sale: Option<u64>,
+    sale: u64,
+    gate_due: bool,
+) -> AssetsRefresh {
+    if prev_key != Some(key) || gate_due {
+        AssetsRefresh::Full
+    } else if prev_sale != Some(sale) {
+        AssetsRefresh::SaleOnly
+    } else {
+        AssetsRefresh::None
+    }
+}
+
+/// Advance represented identities together with the work admitted by the existing render gate.
+pub(super) fn assets_observe_step(
+    prev_key: Option<(u64, u64)>,
+    key: (u64, u64),
+    prev_sale: Option<u64>,
+    sale: u64,
+    gate_due: bool,
+) -> (AssetsRefresh, Option<(u64, u64)>, Option<u64>) {
+    let refresh = assets_refresh(prev_key, key, prev_sale, sale, gate_due);
+    match refresh {
+        AssetsRefresh::Full => (refresh, Some(key), Some(sale)),
+        AssetsRefresh::SaleOnly => (refresh, prev_key, Some(sale)),
+        AssetsRefresh::None => (refresh, prev_key, prev_sale),
+    }
+}
+
+/// Combines full-cache and order-only identities for the existing repaint gate.
+pub(super) fn mix(assets: u64, sale: u64) -> u64 {
+    assets.wrapping_mul(31).wrapping_add(sale)
+}
+
+/// Selects cores awaiting their first transfer snapshot, retaining input order and duplicate ids.
+pub(super) fn missing_transfer_cores(
+    cores: impl Iterator<Item = (CoreId, u64)>,
+) -> impl Iterator<Item = CoreId> {
+    cores.filter_map(|(id, rev)| (rev == 0).then_some(id))
+}
+
+/// Folds scoped order revisions in canonical core order for sale-marker invalidation.
+pub(super) fn sale_revisions_sig(cores: impl Iterator<Item = (CoreId, u64)>) -> u64 {
+    cores.fold(0u64, |sig, (id, rev)| {
+        sig.wrapping_mul(31)
+            .wrapping_add(id)
+            .wrapping_mul(31)
+            .wrapping_add(rev)
+    })
+}
+
+/// Returns the order-only identity of the cores represented by the cached sale markers.
+pub(super) fn sale_sig(b: &Backend, cores: &[(CoreId, String)]) -> u64 {
+    let store = b.session.store();
+    sale_revisions_sig(
+        cores
+            .iter()
+            .map(|(id, _)| (*id, store.core(*id).map_or(0, |core| core.orders_table_rev))),
+    )
+}
+
 impl AssetsView {
-    /// Render-gate signature for asset, transfer, sale-marker, and balance-freshness inputs.
+    /// Full-cache signature for assets, transfers, balance trust, and account-total settings.
     pub(super) fn assets_sig(&self, b: &Backend) -> u64 {
         use std::hash::{Hash, Hasher};
         let store = b.session.store();
         // The footer total folds cores by account and per-core setting; neither bumps a data
         // revision (a Settings change, or `AuthCheck` arriving after the balance), so both enter
-        // the signature directly. One pass over the configured servers, not one per core.
-        let modes: std::collections::HashMap<CoreId, moon_core::config::TotalMode> = b
-            .config
-            .servers
-            .iter()
-            .map(|sv| (sv.id, sv.total_mode))
-            .collect();
+        // the signature directly. Configured modes use one allocation-free fold, including
+        // out-of-scope settings whose changes can conservatively trigger an extra rebuild.
         // One hasher for every merge key: the key holds strings, so it is hashed, but only once.
         let mut keys = std::collections::hash_map::DefaultHasher::new();
         let sig = self
@@ -25,12 +109,7 @@ impl AssetsView {
             .map(|(id, _)| (*id, store.core(*id)))
             .fold(0u64, |a, (id, core)| {
                 b.session.account_merge_key(id).hash(&mut keys);
-                let mode = modes.get(&id).copied().unwrap_or_default();
-                let a = a
-                    .wrapping_mul(31)
-                    .wrapping_add(id)
-                    .wrapping_mul(31)
-                    .wrapping_add(mode as u64);
+                let a = a.wrapping_mul(31).wrapping_add(id);
                 let Some(c) = core else {
                     return a;
                 };
@@ -38,20 +117,20 @@ impl AssetsView {
                     .wrapping_add(c.assets_rev)
                     .wrapping_mul(31)
                     .wrapping_add(c.transfer_rev)
-                    .wrapping_mul(31)
-                    .wrapping_add(c.orders_table_rev)
                     // Hash the rendered trust state rather than selected ingredients. Status
                     // transitions bump no data revision, but they can change `balance_state()`
                     // and must therefore invalidate the rendered balance immediately.
                     .wrapping_mul(31)
                     .wrapping_add(c.balance_state().code())
             });
-        sig.wrapping_mul(31).wrapping_add(keys.finish())
+        sig.wrapping_mul(31)
+            .wrapping_add(keys.finish())
+            .wrapping_mul(31)
+            .wrapping_add(total_modes_sig(&b.config.servers))
     }
 
-    /// Cache identity: every input `collect`/`per_core` read, so a change to any of them forces
-    /// a rebuild. Kept in one place because it is built at two sites (the backend observer and
-    /// `rebuild_cache`) that must not drift apart.
+    /// Full-row cache identity from the asset/balance signature and dust threshold. Kept in one
+    /// place because the backend observer and `rebuild_cache` must use the same identity.
     pub(super) fn cache_key(&self, sig: u64) -> (u64, u64) {
         (sig, self.min_value_usd.to_bits())
     }
@@ -85,6 +164,7 @@ impl AssetsView {
         // `cached_cores` is intentionally only the effective query scope.
         self.request_missing_transfers(b);
         self.sell_marked = Rc::new(self.collect_sell_marked(b));
+        self.sale_sig = Some(sale_sig(b, &self.cached_cores));
         // Apply the header sort here, over the collector's default order: rows are rebuilt on data
         // changes (about 1 Hz while the panel is open), so it costs one pass per rebuild and
         // nothing per repaint. With no active sort this is a no-op and `collect`'s
@@ -124,11 +204,12 @@ impl AssetsView {
     /// assets.
     pub(super) fn request_missing_transfers(&self, b: &Backend) {
         let store = b.session.store();
-        for (id, _) in &self.cached_cores {
-            let rev = store.core(*id).map(|cd| cd.transfer_rev).unwrap_or(0);
-            if rev == 0 {
-                let _ = b.session.refresh_transfer_assets(*id);
-            }
+        let cores = &self.cached_cores;
+        let revisions = cores
+            .iter()
+            .map(|(id, _)| (*id, store.core(*id).map_or(0, |cd| cd.transfer_rev)));
+        for id in missing_transfer_cores(revisions) {
+            let _ = b.session.refresh_transfer_assets(id);
         }
     }
 
