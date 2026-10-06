@@ -259,7 +259,7 @@ pub enum MarketQuantityUnit {
 /// Whether a market is INVERSE (coin-margined), from the quote currency it reports.
 ///
 /// A coin-margined contract is denominated in USD and reports NO quote currency; a linear one
-/// names it. This is the same test `feed/live/convert.rs` uses to read positions back, and the
+/// names it. This is the same test `feed/live/convert/orders.rs` uses to read positions back, and the
 /// same one `build_assets` uses.
 ///
 /// Two other discriminators were tried against a live COIN-M core and neither works:
@@ -278,7 +278,7 @@ pub enum MarketQuantityUnit {
 /// It is also not sufficient ON ITS OWN, which is why the caller pairs it with a contract size
 /// other than 1: Hyperliquid markets report an empty catalog quote while being USDC-quoted and
 /// LINEAR (`HFUN` in `label_tests.rs`), and reading one of those as contracts would send the USD
-/// figure straight through as a coin quantity. `convert.rs` draws the line in the same place.
+/// figure straight through as a coin quantity. `convert/orders.rs` draws the line in the same place.
 fn quote_is_absent(quote: &str) -> bool {
     quote.trim().is_empty()
 }
@@ -309,7 +309,7 @@ pub struct OrderSizeRules {
 /// the two answers must never disagree: a cap stated in USD beside an order sized in contracts is
 /// how a $500 order becomes $50 000.
 ///
-/// `feed/live/convert.rs` still carries its own INBOUND version of this test (contracts -> coins).
+/// `feed/live/convert/orders.rs` still carries its own INBOUND version of this test (contracts -> coins).
 /// It is deliberately left alone here: it reads positions the core already reports and is not on
 /// the money path this rule protects. Unifying the two is worth doing, and is not worth doing
 /// inside a fix to order sizing.
@@ -331,7 +331,7 @@ pub(crate) fn market_quantity_unit(quote: &str, contract_size: f64) -> Option<Ma
     // through as a coin quantity — the same trap in the opposite direction. A genuine inverse
     // contract worth exactly one dollar is therefore read as linear too; that costs the coin's
     // price as a factor on one venue, against emptying an account on the other reading.
-    // `convert.rs` makes the identical trade-off inbound.
+    // `convert/orders.rs` makes the identical trade-off inbound.
     if !contract_size.is_finite() || contract_size <= 0.0 {
         return None;
     }
@@ -424,7 +424,7 @@ pub(crate) fn min_order_floor(
 ///
 /// - **Inverse (coin-margined) futures report quantity in CONTRACTS**, each worth a fixed amount of
 ///   quote currency (`contract_size` — BTCUSD is $100, other `*USD` contracts $10). The notional is
-///   therefore `max_qty * contract_size` and needs no price at all. `feed/live/convert.rs` derives
+///   therefore `max_qty * contract_size` and needs no price at all. `feed/live/convert/orders.rs` derives
 ///   position sizes from the same fact; multiplying a contract COUNT by a coin PRICE instead would
 ///   be off by roughly the contract size.
 /// - **Linear markets report quantity in the base coin**, so the notional is `max_qty * ask`. This

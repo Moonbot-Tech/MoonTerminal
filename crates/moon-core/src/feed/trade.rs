@@ -658,7 +658,7 @@ pub(super) fn set_order_stop(
     };
     // Effective order strategy: its own OR the core settings' `manual strategy`, which governs
     // manual orders with strat_id=0. A 0 means no strategy at all, so stops use ClientSettings
-    // defaults. Keep this synchronized with feed/live/convert.rs (display).
+    // defaults. Keep this synchronized with feed/live/convert/orders.rs (display).
     let strat_id = super::strategies::effective_strat_id(&snap, o.strat_id);
     let has_strat = snap.strats().snapshot(strat_id).is_some();
     let cs = snap.settings().client_settings.as_ref();

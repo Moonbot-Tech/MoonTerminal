@@ -600,7 +600,7 @@ mod tests;
 /// Three trade routes report a CONTRACT count in `qty` (see the module doc), and the drawn
 /// prints never needed the multiplier — their scale is window-relative. The band's sums do: they
 /// are printed as absolute quote figures. The multiplier is the core's own `contract_size` for
-/// the market, read the way `feed/live/convert.rs` and `market_quantity_unit` read it: an EMPTY
+/// the market, read the way `feed/live/convert/orders.rs` and `market_quantity_unit` read it: an EMPTY
 /// quote beside a contract size other than one is a coin-margined contract worth that many
 /// dollars, anything else is a linear contract of that many coins (Gate's quanto contracts, OKX
 /// swaps). A contract route whose market the core has not described yet states no value at all.

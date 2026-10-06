@@ -21,103 +21,18 @@ use crate::session::clock_skew::CoreClockSkew;
 use crate::session::order_lines::OrderLineStore;
 use crate::util::{now_unix_ms, now_unix_ms_i64};
 
-/// Maximum number of recent detects retained in memory for each core.
-const MAX_DETECTS: usize = 2000;
+/// Core collection and cross-core activity summaries.
+mod core_store;
+/// Snapshot trust accessors for retained core state.
+mod freshness;
+/// Retained row models and per-core capacity limits.
+mod rows;
 
-/// Telegram events retained per core for the bot, which drains them every few seconds.
-const MAX_TG_EVENTS: usize = 256;
-
-/// Entries remembered per core against announcing one trade twice.
-const MAX_TG_OPENED: usize = 512;
-
-/// One [`CoreTgEvent`] as the bot reads it: stamped and numbered on arrival.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TgEventRow {
-    /// Per-core number, rising; the bot keeps its own cursor on it.
-    pub seq: u64,
-    /// When it happened, true UTC milliseconds: the entry stamp of an opened trade, the arrival of
-    /// a detect.
-    pub at_utc_ms: i64,
-    pub event: CoreTgEvent,
-}
-
-/// Maximum number of recent server-log lines retained per core for live viewing and search.
-/// Older history remains in `logs/<date>_<core>.log` files.
-const MAX_LOG: usize = 5000;
-
-/// Maximum number of undelivered Engine action toasts queued while no window is active.
-/// The active window's shell consumes the queue.
-const MAX_ENGINE_ACTIONS: usize = 64;
-/// One filed answer about a report row's archived traces; see `CoreData::report_traces`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ReportTracesEntry {
-    /// `CoreData::report_traces_rev` at the moment this answer was filed.
-    pub rev: u64,
-    pub outcome: crate::feed::ReportTracesOutcome,
-}
-
-/// Cap on retained archived-trace answers per core.
-///
-/// The map is a mailbox: the UI's trace resolver takes what it is waiting for on every feed drain,
-/// and the feed sends at most eight requests unanswered at once (`live::trace_backfill`), so far
-/// fewer than this can land between two drains — an answer can only be evicted long after it was
-/// read. The cap exists so a long session's backfill answers, which nothing in the UI is waiting
-/// for, cannot grow this map without bound; an entry is a few dozen bytes plus the lines, which a
-/// drawing surface keeps alive by its own `Arc` regardless.
-const MAX_REPORT_TRACES: usize = 256;
-
-pub type CoreId = u64;
-
-/// The store's best available trust classification for a core's USD balance figures.
-///
-/// The classification lives here, next to the inputs it reads, because the raw numbers
-/// alone cannot be rendered honestly: missing pricing can produce a finite zero or partial sum,
-/// and a retained snapshot survives a reconnect. Every consumer of `assets.global` must agree
-/// about that, so they all go through [`CoreData::balance_state`] instead of re-deriving the rule
-/// from `status`/`assets_rev`/`usd_rate_known` on their own.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum BalanceState {
-    /// A snapshot exists, the connection is ready, no stale marker remains, and the USD
-    /// valuation is valid. See [`CoreData::assets_stale`] for the freshness limit.
-    Live,
-    /// The connection is not ready, or it became ready but still awaits a fresh snapshot.
-    /// Retained figures may be shown only with an explicit stale marker.
-    Stale,
-    /// No snapshot has arrived: the balance is UNKNOWN, not zero.
-    Awaiting,
-    /// A snapshot exists but its free/total USD valuation is incomplete or non-finite.
-    /// The figures must render as unavailable rather than as a zero or partial balance.
-    Unpriced,
-}
-
-impl BalanceState {
-    /// Whether there is a usable number to render and to sum.
-    pub fn has_value(self) -> bool {
-        matches!(self, BalanceState::Live | BalanceState::Stale)
-    }
-
-    /// Whether the store classifies the number as current enough to show without a stale marker.
-    ///
-    /// This is the companion to [`Self::has_value`]: one asks whether there is a figure, the
-    /// other whether the available freshness signals classify it as live. The known limit on
-    /// [`CoreData::assets_stale`] still applies.
-    pub fn is_current(self) -> bool {
-        matches!(self, BalanceState::Live)
-    }
-
-    /// Stable small integer for hashing this state into a render signature.
-    ///
-    /// Exists so consumers do not invent their own numbering: the exhaustive match keeps a new
-    /// variant a compile error here rather than a silently unhashed state somewhere downstream.
-    pub fn code(self) -> u64 {
-        match self {
-            BalanceState::Live => 1,
-            BalanceState::Stale => 2,
-            BalanceState::Awaiting => 3,
-            BalanceState::Unpriced => 4,
-        }
-    }
-}
+pub use core_store::*;
+pub use rows::*;
+use rows::{
+    MAX_DETECTS, MAX_ENGINE_ACTIONS, MAX_LOG, MAX_REPORT_TRACES, MAX_TG_EVENTS, MAX_TG_OPENED,
+};
 
 /// Retained account-plane and operational state for one configured core.
 pub struct CoreData {
@@ -1506,123 +1421,6 @@ impl CoreData {
             // Stamped by the session, which owns the time axis (`push_tg_event`).
             | FeedMsg::TelegramEvents(_) => {}
         }
-    }
-
-    /// Best available trust classification for this core's `assets.global` USD figures.
-    ///
-    /// `Unpriced` outranks `Stale`: an unpriced figure has no number to show at all, so its
-    /// freshness is moot. Staleness needs BOTH inputs — `assets_stale` covers the reconnect
-    /// window (status returns to `Ready` before the new snapshot lands), while the `status`
-    /// check covers a snapshot that arrived before the link ever reached `Ready`. The generation
-    /// ambiguity documented on [`Self::assets_stale`] prevents this from proving freshness.
-    pub fn balance_state(&self) -> BalanceState {
-        if self.assets_rev == 0 {
-            BalanceState::Awaiting
-        } else if !self.assets.global.usd_rate_known {
-            BalanceState::Unpriced
-        } else if self.assets_stale || !matches!(self.status, ConnStatus::Ready) {
-            BalanceState::Stale
-        } else {
-            BalanceState::Live
-        }
-    }
-
-    /// Best available trust classification for this core's full safe-share configuration
-    /// projection (`core_config`), mirroring [`Self::balance_state`]'s shape.
-    pub fn core_config_state(&self) -> CoreConfigState {
-        if self.core_config.is_none() {
-            CoreConfigState::Awaiting
-        } else if self.core_config_stale || !matches!(self.status, ConnStatus::Ready) {
-            CoreConfigState::Stale
-        } else {
-            CoreConfigState::Live
-        }
-    }
-
-    /// The projected page while — and only while — [`Self::core_config_state`] rates it `Live`:
-    /// the one reading a surface may seed from, compare, or send.
-    ///
-    /// `Live` implies the page is present, so this is the classification and its consumer in one
-    /// place rather than a `Live` check followed by a second `is_none` test at every call site.
-    pub fn live_core_config(&self) -> Option<&CoreConfig> {
-        match self.core_config_state() {
-            CoreConfigState::Live => self.core_config.as_ref(),
-            CoreConfigState::Awaiting | CoreConfigState::Stale => None,
-        }
-    }
-
-    /// Best available trust classification for this core's compact client-settings snapshot
-    /// (`client_settings`), mirroring [`Self::balance_state`]'s shape.
-    pub fn client_settings_state(&self) -> CoreConfigState {
-        if self.client_settings.is_none() {
-            CoreConfigState::Awaiting
-        } else if self.client_settings_stale || !matches!(self.status, ConnStatus::Ready) {
-            CoreConfigState::Stale
-        } else {
-            CoreConfigState::Live
-        }
-    }
-}
-
-impl Default for CoreData {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Default)]
-pub struct CoreStore {
-    cores: HashMap<CoreId, CoreData>,
-}
-
-impl CoreStore {
-    pub fn ensure(&mut self, id: CoreId) {
-        self.cores.entry(id).or_default();
-    }
-
-    /// Remove account data for a core whose server was removed from configuration.
-    /// The session lifecycle separately removes its feed handle, market client, and coordination
-    /// state.
-    pub fn remove(&mut self, id: CoreId) {
-        self.cores.remove(&id);
-    }
-
-    pub fn core(&self, id: CoreId) -> Option<&CoreData> {
-        self.cores.get(&id)
-    }
-
-    pub fn core_mut(&mut self, id: CoreId) -> Option<&mut CoreData> {
-        self.cores.get_mut(&id)
-    }
-
-    /// Iterate over owned snapshots of every core's status for Settings badges.
-    pub fn statuses(&self) -> impl Iterator<Item = (CoreId, ConnStatus)> + '_ {
-        self.cores.iter().map(|(id, d)| (*id, d.status.clone()))
-    }
-
-    /// Iterate over core ids and data for chart-alert reconciliation and similar consumers.
-    pub fn cores(&self) -> impl Iterator<Item = (CoreId, &CoreData)> + '_ {
-        self.cores.iter().map(|(id, d)| (*id, d))
-    }
-
-    /// Return the combined chart-alert revision across all cores.
-    ///
-    /// This cheaply detects whether any server-owned alert set changed and gates remote-figure
-    /// reconciliation.
-    pub fn chart_alerts_activity(&self) -> u64 {
-        self.cores
-            .values()
-            .fold(0u64, |a, c| a.wrapping_add(c.chart_alerts_rev))
-    }
-
-    /// Return the combined log revision across all cores.
-    ///
-    /// This cheaply detects new log lines on any core so the application can request a frame for
-    /// windows whose Log tab is active.
-    pub fn log_activity(&self) -> u64 {
-        self.cores
-            .values()
-            .fold(0u64, |a, c| a.wrapping_add(c.log_rev))
     }
 }
 
