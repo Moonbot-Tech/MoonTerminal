@@ -1,4 +1,18 @@
-use super::{CoreHost, EndpointOverride, InvalidEndpoint, parse_endpoint_override};
+use super::{
+    CoreHost, EndpointOverride, InvalidEndpoint, parse_endpoint_override, station_endpoint,
+};
+
+/// The station gets the override only where it is ticked: without the gate a LAN address typed for
+/// this terminal reaches a station on a VPS that cannot dial it (#616).
+#[test]
+fn the_station_gets_only_a_ticked_override() {
+    assert_eq!(
+        station_endpoint("core.example.net:5017", true),
+        "core.example.net:5017"
+    );
+    assert_eq!(station_endpoint("192.168.1.5", false), "");
+    assert_eq!(station_endpoint("", true), "");
+}
 
 /// Parse `text` that must be accepted.
 fn ok(text: &str) -> EndpointOverride {

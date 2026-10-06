@@ -89,6 +89,8 @@ pub(super) struct ConnRowIds {
     /// Id of the interactive wrapper that carries the address cell's tooltip. See
     /// [`Self::feed_tip`].
     pub(super) address_tip: SharedString,
+    /// Id of the station glyph beside a filled address field (`table.rs::station_affix`).
+    pub(super) address_station: SharedString,
     pub(super) group: SharedString,
     pub(super) bundle: SharedString,
     pub(super) feed: SharedString,
@@ -143,6 +145,7 @@ impl ConnRowIds {
             key: SharedString::from(format!("key-{ident}")),
             address: SharedString::from(format!("address-{ident}")),
             address_tip: SharedString::from(format!("address-tip-{ident}")),
+            address_station: SharedString::from(format!("address-station-{ident}")),
             group: SharedString::from(format!("group-{ident}")),
             bundle: SharedString::from(format!("bundle-{ident}")),
             feed: SharedString::from(format!("feed-{ident}")),
@@ -343,7 +346,7 @@ pub(super) fn build_conn(
                     s.endpoint_override.clone(),
                     Some(address_placeholder(s.key.expose())),
                     |s| s.endpoint_override.clone(),
-                    |s, v| s.endpoint_override = v,
+                    set_endpoint_override,
                     false,
                 ),
                 group: conn_input(
@@ -379,6 +382,22 @@ pub(super) fn build_conn(
             row
         })
         .collect()
+}
+
+/// Write the address field into the draft, dropping the station tick on ANY change.
+///
+/// The tick belongs to the address it was given for: replacing, editing or clearing the text must
+/// not hand the new address — a LAN one, say — to the station unasked. The cloud glyph turns grey
+/// at once, so re-ticking a corrected address is one visible click.
+///
+/// Args:
+///     s: The draft row.
+///     v: The field's new text.
+pub(super) fn set_endpoint_override(s: &mut ServerConfig, v: String) {
+    if s.endpoint_override != v {
+        s.endpoint_to_station = false;
+    }
+    s.endpoint_override = v;
 }
 
 /// The address field's placeholder for a row whose key is `key`: the key's own endpoint, or a hint

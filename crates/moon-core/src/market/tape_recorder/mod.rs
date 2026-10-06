@@ -132,6 +132,9 @@ struct Core {
     server: ServerConfig,
     /// `"{code}:{dex:08x}"`, once the core named its exchange.
     exchange: Option<String>,
+    /// The endpoint the core's feed resolved for this configuration, once it did: a donor dials
+    /// it instead of resolving a host name on the recorder's thread (`StationLink::connect`).
+    endpoint: Option<crate::feed::CoreEndpoint>,
 }
 
 /// Every running core, whether or not the recorder is on: switching it on must find them.
@@ -181,6 +184,7 @@ pub fn core_up(server: &ServerConfig) {
     cores.push(Core {
         server: server.clone(),
         exchange: None,
+        endpoint: None,
     });
     drop(cores);
     // A donor built from the previous configuration is stale.
@@ -191,6 +195,13 @@ pub fn core_up(server: &ServerConfig) {
 pub fn core_exchange(id: CoreId, exchange_key: String) {
     if let Some(core) = cores().iter_mut().find(|c| c.server.id == id) {
         core.exchange = Some(exchange_key);
+    }
+}
+
+/// A core's feed resolved the endpoint it dials.
+pub fn core_endpoint(id: CoreId, endpoint: crate::feed::CoreEndpoint) {
+    if let Some(core) = cores().iter_mut().find(|c| c.server.id == id) {
+        core.endpoint = Some(endpoint);
     }
 }
 
@@ -837,17 +848,16 @@ impl Recorder {
 
     /// Connect a donor for `exchange` from the first core of it that is not shunned.
     fn connect_donor(&mut self, exchange: &str, now: Instant) -> bool {
-        let server = cores()
+        let picked = cores()
             .iter()
             .filter(|c| c.exchange.as_deref() == Some(exchange))
-            .map(|c| &c.server)
-            .filter(|s| !self.shunned.contains_key(&s.id))
-            .min_by_key(|s| s.id)
-            .cloned();
-        let Some(server) = server else {
+            .filter(|c| !self.shunned.contains_key(&c.server.id))
+            .min_by_key(|c| c.server.id)
+            .map(|c| (c.server.clone(), c.endpoint));
+        let Some((server, endpoint)) = picked else {
             return false;
         };
-        match Donor::connect(&server, now) {
+        match Donor::connect(&server, endpoint, now) {
             Ok(donor) => {
                 line(&format!(
                     "donor {exchange} core={}: connecting",
@@ -855,6 +865,14 @@ impl Recorder {
                 ));
                 self.donors.insert(exchange.to_string(), donor);
                 true
+            }
+            // Its feed has not resolved the host name yet: the next tick tries again, and a shun
+            // would hold a healthy core back for minutes.
+            Err(e)
+                if e.downcast_ref::<crate::feed::station::NotResolvedYet>()
+                    .is_some() =>
+            {
+                false
             }
             Err(e) => {
                 self.shunned.insert(server.id, now);

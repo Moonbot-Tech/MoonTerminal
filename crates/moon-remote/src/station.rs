@@ -757,6 +757,11 @@ pub fn push_cores_with_add_flags(
     // Read before anything is written: an old helper or an unreadable file stops the push here,
     // not between the credentials and the configuration. No file yet is the first push.
     let status = current_helper_status(&conn)?;
+    // `peer_cores` drops the addresses an older binary would refuse; the user who ticked one for
+    // the station is told rather than left to find the core on its key's address.
+    for name in endpoints_not_sent(cores, &status) {
+        say(Progress::step(Step::EndpointNotSent, name));
+    }
     let cores = peer_cores(cores, &status);
     let cores = cores.as_slice();
     let exists = script::value(&status, "config") == Some("yes");
@@ -796,6 +801,19 @@ pub fn push_cores_with_add_flags(
         merge_cores_with_add_flags(current, cores, adds, tape, high_water).map(Some)
     })?;
     restart_and_report(&conn, say)
+}
+
+/// The cores whose ticked address `peer_cores` is about to drop because the installed station
+/// binary does not advertise `core_endpoint_override`: their names, for one notice each.
+fn endpoints_not_sent(cores: &[CoreKey], status: &str) -> Vec<String> {
+    if script::value(status, "core_endpoint_override") == Some("yes") {
+        return Vec::new();
+    }
+    cores
+        .iter()
+        .filter(|core| !core.endpoint_override.is_empty())
+        .map(|core| core.name.clone())
+        .collect()
 }
 
 /// Suppress unknown TOML fields for old binaries; helper upgrades alone cannot enable overrides.

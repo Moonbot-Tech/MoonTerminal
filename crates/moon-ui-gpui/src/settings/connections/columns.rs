@@ -51,8 +51,9 @@ const ENDPOINT_TEXT: f32 =
 
 /// The small input's own chrome around that text since the cell became the editable endpoint
 /// override (#616): 8px of padding on each side (the inset `head_pad` matches) and the clear
-/// affix with its gap. A design reference like the text, so it scales with the column.
-const ENDPOINT_INPUT_CHROME: f32 = 8.0 + 8.0 + 18.0;
+/// affix with its gap, plus the station glyph beside a filled field with its gap. A design
+/// reference like the text, so it scales with the column.
+const ENDPOINT_INPUT_CHROME: f32 = 8.0 + 8.0 + 18.0 + 16.0;
 
 /// [`ENDPOINT_TEXT`] inside the input's chrome: the basis, so narrow-window shrink weights sit just
 /// under the full field.

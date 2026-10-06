@@ -40,6 +40,9 @@ pub enum Step {
     ChatsDropped,
     CoreWritten,
     CoreDropped,
+    /// A core's typed address was not sent: the installed station binary predates it and dials
+    /// the key's address. The diagnostic is the core's name.
+    EndpointNotSent,
     Status,
     Update,
     NoNewRelease,

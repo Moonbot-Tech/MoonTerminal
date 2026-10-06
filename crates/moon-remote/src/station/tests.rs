@@ -517,6 +517,33 @@ fn credential_cleanup_failure_keeps_the_new_config() {
     assert_eq!(file["core"][0]["uid"].as_integer(), Some(3));
 }
 
+/// An older station binary loses the ticked addresses (`peer_cores`), so each such core is named
+/// to the user; a supporting binary, or a core without one, says nothing (#616).
+#[test]
+fn only_dropped_addresses_are_announced() {
+    let cores = [
+        CoreKey {
+            uid: 3,
+            name: "Ticked".to_owned(),
+            transport: None,
+            key: Secret::new("K1"),
+            endpoint_override: "core.example.net:5017".to_owned(),
+        },
+        CoreKey {
+            uid: 4,
+            name: "Plain".to_owned(),
+            transport: None,
+            key: Secret::new("K2"),
+            endpoint_override: String::new(),
+        },
+    ];
+    assert_eq!(
+        super::endpoints_not_sent(&cores, "core_endpoint_override=no\n"),
+        ["Ticked"]
+    );
+    assert!(super::endpoints_not_sent(&cores, "core_endpoint_override=yes\n").is_empty());
+}
+
 /// The file that goes to the server names each core and never carries its key.
 #[test]
 fn the_station_file_carries_no_key() {

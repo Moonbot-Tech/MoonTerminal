@@ -462,6 +462,66 @@ fn merged_server(key: &str, meta_toml: &str) -> crate::config::ServerConfig {
         .expect("the merged config keeps its only server")
 }
 
+/// The station tick must survive a load/save round trip through `servers.enc`, or the next Save
+/// would quietly stop sending the station the address the user ticked; a file written before the
+/// tick existed must read it OFF, so an upgrade never starts sending a LAN address to a VPS
+/// station (#616).
+#[test]
+fn the_station_tick_round_trips_and_an_older_file_reads_it_off() {
+    let entry: crate::config::schema::ServerEntry = toml::from_str(
+        "uid = 7\nname = \"alpha\"\nkey = \"\"\nendpoint_override = \"core.example.net\"\nendpoint_to_station = true",
+    )
+    .expect("server entry fixture must parse");
+    let merged = merge(
+        ServersFile {
+            servers: vec![entry],
+            telegram: TelegramConfig::default(),
+        },
+        SettingsFile::default(),
+        None,
+    );
+    assert!(merged.servers[0].endpoint_to_station);
+    let (servers_file, _) = split(
+        &merged.servers,
+        &merged.groups,
+        &merged.core_groups,
+        merged.language,
+        merged.market_mode,
+        merged.charts_split_by_core,
+        merged.charts_stack_scroll,
+        merged.charts_stack_compress,
+        merged.chart_stack_height,
+        merged.separate_control_zones,
+        merged.main_idle_close_secs,
+        merged.log_to_file,
+        merged.log_retention_days,
+        merged.ui_theme_mode,
+        merged.ui_scale,
+        merged.order_book_width_px,
+        merged.chart_memory_percent,
+        merged.core_sort,
+        merged.report_valuation_mode,
+        merged.next_uid.get(),
+        TelegramConfig::default(),
+    );
+    assert!(
+        servers_file.servers[0].endpoint_to_station,
+        "Save must write the tick back"
+    );
+    let older: crate::config::schema::ServerEntry =
+        toml::from_str("uid = 7\nname = \"alpha\"\nkey = \"\"\nendpoint_override = \"x\"")
+            .expect("a file without the tick must still parse");
+    assert!(
+        !older.endpoint_to_station,
+        "an older file never sends to the station"
+    );
+    let written = toml::to_string(&older).unwrap();
+    assert!(
+        !written.contains("endpoint_to_station"),
+        "off is not written: {written}"
+    );
+}
+
 /// The endpoint override must survive a load/save round trip through `servers.enc`, or Save would
 /// silently send the core back to its key's address (#616).
 #[test]

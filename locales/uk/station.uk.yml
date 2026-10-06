@@ -48,6 +48,7 @@ station.progress.TokenDropped: "Токен бота видалено зі ста
 station.progress.ChatsDropped: "Прив'язки чатів бота видалено."
 station.progress.CoreWritten: "Ключ ядра збережено як шифровані облікові дані."
 station.progress.CoreDropped: "Ключ виключеного ядра видалено зі станції."
+station.progress.EndpointNotSent: "Ядро “%{name}”: адресу не надіслано — служба станції її ще не розуміє і підключається за адресою з ключа. Оновіть службу й надішліть ядра знову."
 station.progress.Status: "Стан станції прочитано."
 station.progress.Update: "Запит оновлення служби завершено."
 station.progress.NoNewRelease: "Нічого не встановлено: новішого релізу служби немає."

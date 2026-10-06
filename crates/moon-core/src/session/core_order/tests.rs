@@ -14,6 +14,7 @@ fn server(id: u64, uid: u64, name: &str) -> ServerConfig {
         feed: FeedFlags::default(),
         key: Secret::default(),
         endpoint_override: String::new(),
+        endpoint_to_station: false,
         group: "default".to_string(),
         market: "Binance".to_string(),
         color: [0, 0, 0],

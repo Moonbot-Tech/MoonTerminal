@@ -115,6 +115,7 @@ fn three_cores() -> AppConfig {
             feed: crate::config::FeedFlags::default(),
             key: crate::config::Secret::new(String::new()),
             endpoint_override: String::new(),
+            endpoint_to_station: false,
             group: if id <= 2 { "desk-a" } else { "desk-b" }.into(),
             market: "BINANCE_FUTURES".into(),
             color: [0xFF, 0xB3, 0x47],

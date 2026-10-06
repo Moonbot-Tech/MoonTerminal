@@ -81,8 +81,14 @@ pub(crate) fn local_cores(cfg: &AppConfig) -> Vec<LocalCore> {
     cfg.servers
         .iter()
         .filter(|s| eligible(s.active, s.synthetic, &s.key))
-        .map(|s| local_core(s.uid, &s.name, &s.key, &s.endpoint_override))
+        .map(|s| local_core(s.uid, &s.name, &s.key, station_override(s)))
         .collect()
+}
+
+/// The override the station has for `s`: only one ticked for it (`config::station_endpoint`). The
+/// station is matched by the address IT dials, so an unticked override must not move the match.
+fn station_override(s: &moon_core::config::ServerConfig) -> &str {
+    moon_core::config::station_endpoint(&s.endpoint_override, s.endpoint_to_station)
 }
 
 /// Credentials without a real enabled core are never eligible for an explicit push.
@@ -112,7 +118,7 @@ pub(crate) fn trace_cores(cfg: &AppConfig) -> Vec<LocalCore> {
     cfg.servers
         .iter()
         .filter(|s| eligible(true, s.synthetic, &s.key))
-        .map(|s| local_core(s.uid, &s.name, &s.key, &s.endpoint_override))
+        .map(|s| local_core(s.uid, &s.name, &s.key, station_override(s)))
         .collect()
 }
 

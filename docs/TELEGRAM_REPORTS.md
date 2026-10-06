@@ -73,8 +73,9 @@ was last sent. The station's bot menu shows whether its groups are this terminal
 groups to the station" when they are not — never on its own, so a terminal without groups cannot
 wipe the set another one sent. Moving the bot to the station takes this terminal's groups along.
 
-Settings -> Station -> Cores on the station compares cores by their effective endpoint (the
-Connections override laid over the key), using the station's own
+Settings -> Station -> Cores on the station compares cores by the endpoint the station dials: the
+key's address, or the Connections override where its cloud glyph is lit for the station (off by
+default, and dropped whenever the address is edited), using the station's own
 identities for Chats grants. Save in Connections never changes the station. The block shows
 matching cores, cores only here, cores only on the station, and changed names or keys; row buttons
 add a core or send its name or key. Send changes sends only additions and changes, leaving
@@ -82,14 +83,15 @@ station-only cores untouched. Removing a station-only core requires two inline c
 its reports on the station; the final station core cannot be removed. An older station shows an
 update notice until it supports the listing. Installation sends only the picked cores.
 
-Core pushes carry the hand-typed override into `station.toml`; the station's feed uses that same
-target. Host names stay names for matching, without DNS resolution. Changing or clearing only
+Core pushes carry the hand-typed override into `station.toml` only for cores ticked for the
+station; the station's feed uses that same target, and its tape recorder dials the address that
+feed resolved rather than resolving a name itself. Host names stay names for matching, without DNS resolution. Changing or clearing only
 the override offers an update of the existing station identity when its unchanged key fingerprint
 is unique on both sides; ambiguous credentials are never used to infer an address move. Address
 matches take precedence. The existing key-change action sends these endpoint changes too.
-Older station binaries advertise no `core_endpoint_override` capability: pushes omit that field,
-comparison keeps their key-only addresses, and unsupported override differences create no repeated
-push action. Save in Connections still does not push anything automatically.
+Older station binaries advertise no `core_endpoint_override` capability: pushes omit that field and
+name each core whose ticked address was not sent, comparison keeps their key-only addresses, and
+unsupported override differences create no repeated push action. Save in Connections still does not push anything automatically.
 
 The owner also has a Settings button (and `/settings`): a menu under one message to show or hide
 buttons, pick the report view and the period basis, switch the Mini App (a terminal-hosted bot;

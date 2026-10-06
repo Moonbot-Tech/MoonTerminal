@@ -299,6 +299,89 @@ fn endpoint_tip(cell: &super::endpoints::EndpointCell) -> String {
     lines.join("\n")
 }
 
+/// Whether row `i` sends its endpoint override to the station, or `None` while the row has no
+/// override to send — the glyph that toggles it is then not drawn at all.
+///
+/// Args:
+///     view: Settings state whose draft is read.
+///     i: Draft index of the server.
+///     cx: Application context.
+///
+/// Returns:
+///     `Some(ServerConfig::endpoint_to_station)` for a row with a non-blank override.
+fn station_flag(view: &SettingsView, i: usize, cx: &App) -> Option<bool> {
+    let b = view.backend.read(cx);
+    b.preview
+        .as_ref()
+        .unwrap_or(&b.config)
+        .servers
+        .get(i)
+        .filter(|s| !s.endpoint_override.trim().is_empty())
+        .map(|s| s.endpoint_to_station)
+}
+
+/// Build the station glyph beside a filled address field: lit when the station dials the typed
+/// address too, muted when it keeps the key's. A click flips `ServerConfig::endpoint_to_station`
+/// in the draft; Save then offers the station's cores again through the core comparison.
+///
+/// Off by default: an address typed for a terminal on the core's own LAN is exactly the one a
+/// station on a VPS cannot reach, so only the user knows which way a row goes.
+///
+/// Args:
+///     weak: Weak owner used to update the Settings draft.
+///     i: Draft index of the server being edited.
+///     id: The glyph's element id.
+///     on: Whether the station currently gets the override.
+///     p: Active palette.
+///     cx: Application context.
+///
+/// Returns:
+///     A clickable glyph with its own tooltip.
+fn station_affix(
+    weak: &WeakEntity<SettingsView>,
+    i: usize,
+    id: SharedString,
+    on: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement {
+    let weak = weak.clone();
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .px(px(2.0))
+        .cursor_pointer()
+        .tooltip(move |_window, cx| {
+            let tip = if on {
+                t!("conn.endpoint_to_station_on")
+            } else {
+                t!("conn.endpoint_to_station_off")
+            };
+            cx.new(|_| MoonTooltipView::new(tip.to_string()).max_width(320.0))
+                .into()
+        })
+        .child(
+            MoonText::new("☁")
+                .color(if on { p.accent } else { p.text_muted })
+                .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
+                .uppercase(false)
+                .render(),
+        )
+        .on_click(move |_, _, cx| {
+            let _ = weak.update(cx, |this, ctx| {
+                this.backend.update(ctx, |b, bcx| {
+                    if let Some(s) = b.preview.as_mut().and_then(|p| p.servers.get_mut(i)) {
+                        s.endpoint_to_station = !s.endpoint_to_station;
+                        bcx.notify();
+                    }
+                });
+                ctx.notify();
+            });
+        })
+}
+
 /// Build a Paste glyph control beside the key field, styled like its built-in affixes.
 ///
 /// Clicking reads a nonempty key from the clipboard and updates both input state and
@@ -486,6 +569,7 @@ impl SettingsView {
                     feed: FeedFlags::default(),
                     key: Secret::new(""),
                     endpoint_override: String::new(),
+                    endpoint_to_station: false,
                     group,
                     market: "BTCUSDT".into(),
                     color: default_color,
@@ -1155,34 +1239,47 @@ pub(super) fn server_row(
         // endpoint is the placeholder. Red for a field that is not an address, amber for a row
         // that would dial localhost only because its key names no address, or for a duplicate.
         // The hover always states the endpoint in effect and why, so a truncated or placeholder
-        // value is never the only place the user can read it.
-        div()
-            .id(ids.address_tip.clone())
+        // value is never the only place the user can read it. The station glyph beside a filled
+        // field says whether the station dials it too; it sits OUTSIDE the hover area, so its own
+        // tooltip is never stacked on the cell's.
+        h_flex()
             .w_full()
-            .min_w_0()
-            .tooltip({
-                // Worded on hover only: the row factory runs for every mounted row on every
-                // rebuild, and the hover is the one place the wording is needed.
-                let cell = endpoint.clone();
-                move |_window, cx| {
-                    let tip = endpoint_tip(&cell);
-                    cx.new(|_| MoonTooltipView::new(tip).max_width(360.0))
-                        .into()
-                }
-            })
+            .gap_1()
+            .items_center()
             .child(
-                MoonInput::new(ids.address.clone())
-                    .state(&row.address)
-                    .small()
-                    .cleanable(true)
-                    .when(endpoint.invalid, |i| {
-                        i.tone(MoonTone::Danger).selected(true)
+                div()
+                    .id(ids.address_tip.clone())
+                    .flex_grow_1()
+                    .min_w_0()
+                    .tooltip({
+                        // Worded on hover only: the row factory runs for every mounted row on every
+                        // rebuild, and the hover is the one place the wording is needed.
+                        let cell = endpoint.clone();
+                        move |_window, cx| {
+                            let tip = endpoint_tip(&cell);
+                            cx.new(|_| MoonTooltipView::new(tip).max_width(360.0))
+                                .into()
+                        }
                     })
-                    .when(
-                        !endpoint.invalid
-                            && (endpoint.localhost_fallback || endpoint.duplicate_name.is_some()),
-                        |i| i.tone(MoonTone::Warning).selected(true),
+                    .child(
+                        MoonInput::new(ids.address.clone())
+                            .state(&row.address)
+                            .small()
+                            .cleanable(true)
+                            .when(endpoint.invalid, |i| {
+                                i.tone(MoonTone::Danger).selected(true)
+                            })
+                            .when(
+                                !endpoint.invalid
+                                    && (endpoint.localhost_fallback
+                                        || endpoint.duplicate_name.is_some()),
+                                |i| i.tone(MoonTone::Warning).selected(true),
+                            ),
                     ),
+            )
+            .children(
+                station_flag(view, i, cx)
+                    .map(|on| station_affix(weak, i, ids.address_station.clone(), on, p, cx)),
             )
             .into_any_element(),
         proto_dropdown(view, weak, i, row_key, ids, cx).into_any_element(),

@@ -96,8 +96,12 @@ pub(super) struct Donor {
 impl Donor {
     /// Connect a client of `server` in the station's mode. Returns at once; [`Self::pump`]
     /// notices when Init finished.
-    pub(super) fn connect(server: &ServerConfig, now: Instant) -> anyhow::Result<Self> {
-        let client = StationLink::connect(server)?;
+    pub(super) fn connect(
+        server: &ServerConfig,
+        resolved: Option<crate::feed::CoreEndpoint>,
+        now: Instant,
+    ) -> anyhow::Result<Self> {
+        let client = StationLink::connect(server, resolved)?;
         Ok(Self {
             core: server.id,
             client,
