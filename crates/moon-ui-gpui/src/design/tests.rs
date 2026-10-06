@@ -354,7 +354,7 @@ fn micro_control_h_value_stays_below_the_control_row(cx: &mut gpui::TestAppConte
 use super::{body_font_base, font_w, line_px, t_body, t_body_lg, t_caption, t_title, ui_px};
 use gpui::px;
 
-/// `design.rs:t_body` and its siblings must render what MoonUI's font channel rendered for the
+/// `design/scale.rs:t_body` and its siblings must render what MoonUI's font channel rendered for the
 /// reviewed design: the text sizes the rest of the interface was measured against.
 ///
 /// Breakage: changing `BODY_TEXT`, `DESIGN_FONT_DELTA` or the caption/body/title steps shifts
@@ -387,7 +387,7 @@ fn body_text_matches_the_legacy_font_channel_at_the_design(cx: &mut gpui::TestAp
     assert_eq!((body, caption, body_lg, title, line), legacy);
 }
 
-/// `design.rs:BODY_TEXT` is the control tier's own font, and the `t_*` helpers and `font_w` derive
+/// `design/scale.rs:BODY_TEXT` is the control tier's own font, and the `t_*` helpers and `font_w` derive
 /// from it, so text sits on the same size system as the controls beside it.
 ///
 /// Breakage: pinning a `t_*` helper to a literal, or leaving `font_w` on another width scale,
@@ -415,7 +415,7 @@ fn t_body_is_the_control_tiers_font(cx: &mut gpui::TestAppContext) {
     assert_eq!(width, f32::from(body), "body width");
 }
 
-/// `design.rs:body_font_base` must invert MoonUI's font channel.
+/// `design/scale.rs:body_font_base` must invert MoonUI's font channel.
 ///
 /// Breakage: clamping MoonUI's font transform or dropping the helper's UI-value wrapping puts
 /// table cells and header pills off the body size without changing their call sites.

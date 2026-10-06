@@ -119,7 +119,7 @@ fn pinned_scope_host_keeps_its_tooltip() {
 /// beside it in the same row — a drift neither function's own body would ever reveal by itself.
 #[test]
 fn action_control_h_value_agrees_with_glyph_btn_w() {
-    let design = code_only(&read_src("design.rs"));
+    let design = code_only(&read_unsplit("design.rs"));
     let action = braced_body(&design, "fn action_control_h_value(");
     let glyph = braced_body(&design, "fn glyph_btn_w(");
     assert!(
@@ -266,7 +266,7 @@ fn every_data_table_applies_the_chrome_header_style() {
 /// while dim ink can erase the active-versus-inactive distinction in the dark palette.
 #[test]
 fn chrome_label_helpers_keep_the_single_contrast_lift() {
-    let design = code_only(&read_src("design.rs"));
+    let design = code_only(&read_unsplit("design.rs"));
     let label_color = braced_body(&design, "fn chrome_label_color(");
     assert!(
         label_color.contains("p.text_soft"),

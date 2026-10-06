@@ -183,7 +183,7 @@ fn restored_window_overlap_threshold_and_chosen_monitor_are_respected() {
     assert_eq!((actual.x, actual.y, actual.w, actual.h), (0, 100, 600, 400));
 }
 
-/// `config/layout.rs:first_run_workspace_mode` must not collapse to
+/// `config/layout/first_run.rs:first_run_workspace_mode` must not collapse to
 /// `stored.or(Some(WorkspaceMode::AutoTrading))`; otherwise an established profile with no
 /// workspace entry is silently moved from Classic to Auto on its next launch.
 #[test]
@@ -454,7 +454,7 @@ fn auto_workspace_rail_width_defaults_decodes_and_clamps() {
     }
 }
 
-/// `config/layout.rs:clamp_strategies_tree_text_step` and
+/// `config/layout/bounds.rs:clamp_strategies_tree_text_step` and
 /// `layout/serde_compat.rs:de_strategies_tree_text_step` must salvage one malformed text-step
 /// field, round it, and keep it within the stepper range; removing the custom decoder, clamp, or
 /// rounding would reset every unrelated saved window position after the next launch.

@@ -527,7 +527,7 @@ fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
 /// whole body survives the exact call sites moving a few lines as the implementation lands.
 #[test]
 fn toolbar_unset_readouts_resolve_their_colour_through_readout_color() {
-    let source = read_src("controls/toolbar.rs");
+    let source = read_unsplit("controls/toolbar.rs");
     let signature = "pub fn toolbar(";
     assert_eq!(
         source.matches(signature).count(),
@@ -597,7 +597,7 @@ fn chrome_toggles_resolve_their_tone_through_one_helper() {
     ];
 
     for (rel, signature) in SITES {
-        let source = read_src(rel);
+        let source = read_unsplit(rel);
         assert_eq!(
             source.matches(signature).count(),
             1,

@@ -656,14 +656,7 @@ fn strategy_sort_clicks_persist_through_the_layout() {
     let list = read_src("analytics/tuner/list/mod.rs");
     let table = read_src("analytics/tuner/list/table.rs");
     let analytics = read_src("analytics/mod.rs");
-    let layout_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("moon-core")
-        .join("src")
-        .join("config")
-        .join("layout.rs");
-    let layout = fs::read_to_string(&layout_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", layout_path.display()));
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     let toggle = braced_body(&list, "fn toggle_sort(");
 
     assert!(

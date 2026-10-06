@@ -4,7 +4,7 @@
 //! `design::BODY_TEXT` plus a local step, scaled as a whole by the window content zoom. These
 //! contracts keep a surface from forking that system back into a second one.
 
-use super::support::{Path, braced_body, code_only, read_src, rust_sources};
+use super::support::{Path, braced_body, code_only, read_src, read_unsplit, rust_sources};
 
 /// Reversing slider bound setters crashes Settings when a range starts above MoonUI's default 100.
 ///
@@ -54,7 +54,8 @@ fn terminal_text_uses_no_legacy_font_channel_outside_documented_mirrors() {
                 .to_string_lossy()
                 .replace('\\', "/");
             let code = code_only(&std::fs::read_to_string(path).ok()?);
-            (!matches!(rel.as_str(), "design.rs" | "settings/connections/table.rs")
+            (!(matches!(rel.as_str(), "design.rs" | "settings/connections/table.rs")
+                || rel.starts_with("design/"))
                 && (code.contains("tokens.font(") || code.contains("design::font_value(")))
             .then_some(rel)
         })
@@ -91,7 +92,7 @@ fn ordinary_controls_do_not_spell_the_control_tier_as_a_literal() {
         "chrome/terminal_chrome.rs",
     ] {
         assert!(
-            !code_only(&read_src(path)).contains("MoonSize::Sm"),
+            !code_only(&read_unsplit(path)).contains("MoonSize::Sm"),
             "{path} must read design::CONTROL_TIER instead of spelling MoonSize::Sm"
         );
     }
@@ -103,7 +104,7 @@ fn ordinary_controls_do_not_spell_the_control_tier_as_a_literal() {
 /// use a legacy size, so their row no longer aligns with the preset controls.
 #[test]
 fn toolbar_strip_text_uses_rendered_text_metrics() {
-    let toolbar = read_src("controls/toolbar.rs");
+    let toolbar = read_unsplit("controls/toolbar.rs");
     let strip_text = code_only(braced_body(&toolbar, "fn strip_text("));
     assert!(
         strip_text.contains(".rendered_metrics(design::text_metrics("),

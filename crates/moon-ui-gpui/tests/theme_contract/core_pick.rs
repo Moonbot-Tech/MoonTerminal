@@ -335,7 +335,7 @@ fn core_groups_persist_in_settings_not_layout() {
         .join("src")
         .join("config");
     let schema = code_only(&fs::read_to_string(moon_core_src.join("schema.rs")).unwrap());
-    let layout = code_only(&fs::read_to_string(moon_core_src.join("layout.rs")).unwrap());
+    let layout = code_only(&read_unsplit("../../moon-core/src/config/layout.rs"));
 
     let settings_body = braced_body(&schema, "pub struct SettingsFile {");
     assert!(

@@ -34,7 +34,7 @@ fn unbound_slots_are_filled_once_and_user_choices_survive() {
     assert!(old.cancel_buy.is_empty());
 }
 
-/// Pins `hotkeys.rs::clear_generation_2_collisions` against an off-by-one duplicate threshold.
+/// Pins `hotkeys/persist.rs::clear_generation_2_collisions` against an off-by-one duplicate threshold.
 ///
 /// Plausible breakage: treating the two holders of Ctrl+F10 as non-colliding leaves the new chart
 /// shot above the user's existing panic-sell binding, so that keystroke captures a chart instead
@@ -56,7 +56,7 @@ fn generation_2_yields_chart_shot_to_an_existing_binding() {
     );
 }
 
-/// Pins `hotkeys.rs::clear_generation_3_collisions`: the arriving Ctrl+Z default must yield to a
+/// Pins `hotkeys/persist.rs::clear_generation_3_collisions`: the arriving Ctrl+Z default must yield to a
 /// user who had already given that keystroke away.
 ///
 /// Plausible breakage: the figure layer resolves ABOVE the trading actions, so a duplicated Ctrl+Z
@@ -94,7 +94,7 @@ fn generation_3_keeps_fig_undo_on_a_file_that_never_used_it() {
     assert_eq!(existing_file.fig_undo, "ctrl-z");
 }
 
-/// Pins `hotkeys.rs::clear_generation_6_collisions`: the arriving Ctrl+Right default must yield to
+/// Pins `hotkeys/persist.rs::clear_generation_6_collisions`: the arriving Ctrl+Right default must yield to
 /// a user who had already given that keystroke away.
 ///
 /// Plausible breakage: the chart keys resolve ABOVE the trading actions, so a duplicated Ctrl+Right
@@ -132,7 +132,7 @@ fn generation_6_keeps_center_chart_on_a_file_that_never_used_it() {
     assert_eq!(existing_file.center_chart, "ctrl-right");
 }
 
-/// Pins `hotkeys.rs::clear_generation_7_collisions`: the arriving Space default must yield to a
+/// Pins `hotkeys/persist.rs::clear_generation_7_collisions`: the arriving Space default must yield to a
 /// user who had already given that keystroke away.
 ///
 /// Plausible breakage: the chart keys resolve ABOVE the trading actions, so a duplicated Space
@@ -182,7 +182,7 @@ fn no_tool_is_excluded_from_the_cycle_by_default() {
     assert!(old_file.switch_figure_skip.is_empty());
 }
 
-/// Pins `hotkeys.rs::fill_unbound_slots` so generation 1 cannot re-run on a generation-1 file.
+/// Pins `hotkeys/persist.rs::fill_unbound_slots` so generation 1 cannot re-run on a generation-1 file.
 ///
 /// Plausible breakage: collapsing the generation gates restores a deliberately cleared Cancel Buy
 /// key while upgrading the chart-shot slot, so a user can accidentally send an order they disabled.

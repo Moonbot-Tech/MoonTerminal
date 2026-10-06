@@ -244,7 +244,7 @@ fn the_logo_switch_reaches_every_empty_surface_and_the_cover_stays() {
 
     // The builder itself: everything that makes the cover a COVER is applied before the gate that
     // adds the mark. Searched inside that one function, so the comparison is a real one.
-    let cover = include_str!("../../../design.rs")
+    let cover = include_str!("../../../design/logo.rs")
         .split("pub fn empty_cover(")
         .nth(1)
         .and_then(|tail| {

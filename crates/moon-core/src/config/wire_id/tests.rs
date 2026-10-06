@@ -192,11 +192,43 @@ fn undecided_u64_fields(source: &str) -> Vec<String> {
 /// deliberate act rather than an omission nobody sees until a user cannot save.
 #[test]
 fn every_persisted_u64_field_is_adapted_or_marked_exempt() {
-    const SOURCES: [(&str, &str); 4] = [
+    const SOURCES: [(&str, &str); 12] = [
         ("config/schema.rs", include_str!("../schema.rs")),
         ("config/servers.rs", include_str!("../servers.rs")),
         ("config/core_groups.rs", include_str!("../core_groups.rs")),
         ("config/layout.rs", include_str!("../layout.rs")),
+        (
+            "config/layout/bounds.rs",
+            include_str!("../layout/bounds.rs"),
+        ),
+        (
+            "config/layout/first_run.rs",
+            include_str!("../layout/first_run.rs"),
+        ),
+        (
+            "config/layout/panels.rs",
+            include_str!("../layout/panels.rs"),
+        ),
+        (
+            "config/layout/geometry.rs",
+            include_str!("../layout/geometry.rs"),
+        ),
+        (
+            "config/layout/table_prefs.rs",
+            include_str!("../layout/table_prefs.rs"),
+        ),
+        (
+            "config/layout/graphics.rs",
+            include_str!("../layout/graphics.rs"),
+        ),
+        (
+            "config/layout/warnings.rs",
+            include_str!("../layout/warnings.rs"),
+        ),
+        (
+            "config/layout/per_tab.rs",
+            include_str!("../layout/per_tab.rs"),
+        ),
     ];
 
     for (name, source) in SOURCES {

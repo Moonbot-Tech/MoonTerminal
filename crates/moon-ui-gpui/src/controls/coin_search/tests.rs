@@ -269,7 +269,7 @@ fn whole_row_cap_retains_one_row_below_the_raw_floor() {
 /// larger font scales even while the pure helper's direct tests remain green.
 #[test]
 fn render_popup_wires_whole_row_cap_instead_of_raw_height() {
-    let source = include_str!("../coin_search.rs");
+    let source = include_str!("popup.rs");
     let popup_source = source
         .split_once("pub(crate) fn render_popup")
         .expect("coin search module must retain render_popup")
@@ -282,7 +282,7 @@ fn render_popup_wires_whole_row_cap_instead_of_raw_height() {
     );
 }
 
-/// `coin_search.rs::group_hits` must fold all core offerings of one instrument on one venue into
+/// `coin_search/group.rs::group_hits` must fold all core offerings of one instrument on one venue into
 /// one expandable group while retaining every original choice in core order.
 ///
 /// Breakage this pins: reverting grouping to one visible row per `CoinHit`. A coin available on
@@ -312,7 +312,7 @@ fn fifty_six_cores_of_one_coin_fold_into_one_coin_row() {
     );
 }
 
-/// `coin_search.rs::group_hits` must key groups by the full `MarketLabel::pair`, rather than a
+/// `coin_search/group.rs::group_hits` must key groups by the full `MarketLabel::pair`, rather than a
 /// contract-stripped search key.
 ///
 /// Breakage this pins: changing the key to `match_key` or `display_coin`. A perpetual and dated
@@ -335,7 +335,7 @@ fn a_dated_contract_never_groups_with_its_perpetual() {
     );
 }
 
-/// `coin_search.rs::group_hits` must make the venue a section boundary as well as grouping by
+/// `coin_search/group.rs::group_hits` must make the venue a section boundary as well as grouping by
 /// full instrument label.
 ///
 /// Breakage this pins: dropping the exchange section from the group key. Identically named
@@ -389,7 +389,7 @@ fn a_collapsed_group_is_one_row_and_an_open_one_is_its_cores() {
     );
 }
 
-/// `coin_search.rs::group_starts_expanded` must expand no more than three cores by default.
+/// `coin_search/group.rs::group_starts_expanded` must expand no more than three cores by default.
 ///
 /// Breakage this pins: raising or removing the automatic-collapse boundary. A large multi-core
 /// search would consume the dropdown before the user can see other matching instruments.
@@ -399,7 +399,7 @@ fn groups_above_three_cores_start_collapsed() {
     assert!(!group_starts_expanded(4));
 }
 
-/// `coin_search.rs::pick_core` must prefer the active core when it offers the selected market.
+/// `coin_search/group.rs::pick_core` must prefer the active core when it offers the selected market.
 ///
 /// Breakage this pins: always taking the first group member. Enter or click would open the same
 /// coin on a foreign core despite the user searching from a narrowed workspace.
@@ -412,7 +412,7 @@ fn pick_core_prefers_the_active_core_and_falls_back_to_the_first() {
     assert_eq!(pick_core(&members, None).map(|hit| hit.core), Some(11));
 }
 
-/// `coin_search.rs::enter_target` must open only a typed-query match, selecting its active-core
+/// `coin_search/group.rs::enter_target` must open only a typed-query match, selecting its active-core
 /// group member when available.
 ///
 /// Breakage this pins: returning a suggestion from the `Suggest` arm. Pressing Enter in an empty

@@ -41,6 +41,76 @@ pub fn read_src(rel: &str) -> String {
     text.replace("\r\n", "\n")
 }
 
+/// Source files split by a pure move, root first, then the files now holding their text.
+const SPLIT_SOURCES: &[(&str, &[&str])] = &[
+    (
+        "../../moon-core/src/config/layout.rs",
+        &[
+            "../../moon-core/src/config/layout.rs",
+            "../../moon-core/src/config/layout/bounds.rs",
+            "../../moon-core/src/config/layout/first_run.rs",
+            "../../moon-core/src/config/layout/panels.rs",
+            "../../moon-core/src/config/layout/geometry.rs",
+            "../../moon-core/src/config/layout/table_prefs.rs",
+            "../../moon-core/src/config/layout/graphics.rs",
+            "../../moon-core/src/config/layout/warnings.rs",
+            "../../moon-core/src/config/layout/per_tab.rs",
+        ],
+    ),
+    (
+        "design.rs",
+        &[
+            "design.rs",
+            "design/chrome.rs",
+            "design/window.rs",
+            "design/logo.rs",
+            "design/color.rs",
+            "design/scale.rs",
+            "design/measure.rs",
+            "design/fit.rs",
+            "design/table.rs",
+            "design/rules.rs",
+        ],
+    ),
+    (
+        "controls/toolbar.rs",
+        &[
+            "controls/toolbar.rs",
+            "controls/toolbar/strip.rs",
+            "controls/toolbar/fit.rs",
+            "controls/toolbar/cores.rs",
+            "controls/toolbar/compose.rs",
+            "controls/toolbar/launch.rs",
+        ],
+    ),
+    (
+        "controls/coin_search.rs",
+        &[
+            "controls/coin_search.rs",
+            "controls/coin_search/search.rs",
+            "controls/coin_search/suggest.rs",
+            "controls/coin_search/group.rs",
+            "controls/coin_search/sections.rs",
+            "controls/coin_search/popup.rs",
+        ],
+    ),
+];
+
+/// Read the former full source text of a split file, normalizing line endings through `read_src`.
+///
+/// Unsplit paths retain the ordinary single-file reader. The explicit manifest excludes children
+/// that already existed before the pure move so source occurrence counts keep their scope.
+pub fn read_unsplit(rel: &str) -> String {
+    match SPLIT_SOURCES.iter().find(|(root, _)| *root == rel) {
+        Some((_, files)) => files
+            .iter()
+            .map(|file| read_src(file))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => read_src(rel),
+    }
+}
+
 /// Codes of `moon_core::config::Language::ALL`, in dropdown order.
 ///
 /// `languages_match_language_all` reads `crates/moon-core/src/config/lang.rs` as text and

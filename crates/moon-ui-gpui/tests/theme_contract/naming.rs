@@ -82,7 +82,7 @@ fn coin_surfaces_resolve_through_the_market_source() {
         "panels/report/columns.rs",
         "panels/chart/trade.rs",
     ] {
-        let src = read_src(rel);
+        let src = read_unsplit(rel);
         assert!(
             src.contains("market_label(") || src.contains("market_labels("),
             "{rel}: a coin surface must resolve through MarketDataSource::market_label"

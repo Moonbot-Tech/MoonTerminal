@@ -759,7 +759,7 @@ fn new_strategy_dialog_controls_stay_inside_the_scaled_card() {
 fn strategies_settings_own_restore_persistence_and_reveal_visibility() {
     let settings = read_src("strategies/settings.rs");
     let state = read_src("strategies/state.rs");
-    let layout = read_src("../../moon-core/src/config/layout.rs");
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     let selection = read_src("strategies/selection.rs");
     let dialogs = read_src("strategies/tree/dialogs.rs");
     let dnd = read_src("strategies/tree/dnd.rs");
@@ -1237,17 +1237,7 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     let moon = read_src("strategies/tree/moon.rs");
     let actions = read_src("strategies/actions.rs");
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
-    let layout = fs::read_to_string(
-        root.parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("moon-core")
-            .join("src")
-            .join("config")
-            .join("layout.rs"),
-    )
-    .unwrap();
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
 
     assert!(
         main.contains("ui_session: UiSessionState,")
