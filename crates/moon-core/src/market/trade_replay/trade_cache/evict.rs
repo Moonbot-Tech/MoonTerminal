@@ -55,7 +55,7 @@ pub(super) fn evict_oldest(conn: &Connection, held: i64, bytes: i64) -> rusqlite
         return Ok(Evicted::NotShrinkable);
     }
     let tx = conn.unchecked_transaction()?;
-    let after = super::trim_to_ceiling(&tx, held, Some(held.saturating_sub(bytes).max(0)))?;
+    let after = super::trim_to_ceiling(&tx, held, Some(held.saturating_sub(bytes).max(0)), None)?;
     {
         let mut stmt = tx.prepare("PRAGMA incremental_vacuum")?;
         let mut rows = stmt.query([])?;

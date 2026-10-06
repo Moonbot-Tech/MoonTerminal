@@ -101,6 +101,28 @@ impl Table {
         }
     }
 
+    /// Selects this table's oldest victim using the same age and rowid ordering as eviction.
+    const fn oldest_sql(self) -> &'static str {
+        match self {
+            Self::Legacy => {
+                "SELECT rowid, LENGTH(ticks), updated_ms FROM spans
+                         ORDER BY updated_ms ASC, rowid ASC LIMIT 1"
+            }
+            Self::Packs => {
+                "SELECT rowid, LENGTH(ticks), updated_ms FROM packs
+                         ORDER BY updated_ms ASC, rowid ASC LIMIT 1"
+            }
+        }
+    }
+
+    /// Deletes the selected row without allocating SQL on every insert.
+    const fn delete_sql(self) -> &'static str {
+        match self {
+            Self::Legacy => "DELETE FROM spans WHERE rowid = ?1",
+            Self::Packs => "DELETE FROM packs WHERE rowid = ?1",
+        }
+    }
+
     /// The SQL expression counting a row's prints without reading its blob.
     fn prints_sql(self) -> String {
         match self {
@@ -586,67 +608,102 @@ fn held_bytes(conn: &rusqlite::Connection) -> rusqlite::Result<i64> {
 /// copy of those prints (see the module header), and a reader who wants the file smaller has the
 /// ceiling for it.
 ///
+/// Victim deletes commit in bounded chunks; eviction supplies its own transaction separately.
+///
 /// Returns:
 ///     The packed bytes the file holds afterwards, for the worker to carry forward.
 fn prune(conn: &rusqlite::Connection, ceiling: Option<i64>) -> rusqlite::Result<i64> {
-    trim_to_ceiling(conn, held_bytes(conn)?, ceiling)
+    let held = held_bytes(conn)?;
+    trim_in_chunks(conn, held, ceiling)
 }
 
-/// Drop the spans written longest ago until `held` packed bytes fit under `ceiling`.
+/// Bounds WAL growth and reader snapshot age per standalone trim transaction.
+const TRIM_CHUNK: usize = 64;
+
+/// Trims standalone callers in committed chunks, preserving oldest-first order across commits.
+///
+/// Args:
+///     conn: A connection outside a transaction.
+///     held: Packed bytes currently held.
+///     ceiling: Packed bytes allowed, or `None` to keep everything.
+/// Returns:
+///     Held bytes after meeting the ceiling or exhausting progress.
+/// Errors:
+///     A SQLite failure rolls back the current chunk; earlier committed chunks remain removed.
+fn trim_in_chunks(
+    conn: &rusqlite::Connection,
+    mut held: i64,
+    ceiling: Option<i64>,
+) -> rusqlite::Result<i64> {
+    let Some(limit) = ceiling else {
+        return Ok(held);
+    };
+    while held > limit {
+        let tx = conn.unchecked_transaction()?;
+        let after = trim_to_ceiling(&tx, held, ceiling, Some(TRIM_CHUNK))?;
+        tx.commit()?;
+        if after == held {
+            break;
+        }
+        held = after;
+    }
+    Ok(held)
+}
+
+/// Drop the spans written longest ago until `held` fits under `ceiling` or the victim limit is met.
 ///
 /// "Written", not "used": `updated_ms` is set by [`insert_span`] alone, a read leaves it as it
 /// was, so the order is the order the prints were filed in — the oldest trades' prints go first.
 ///
 /// The ceiling is a parameter, not read here: the worker resolves the live setting
 /// ([`max_bytes`]) at each call, and a test hands in a number of its own.
+/// This function never opens a transaction: standalone callers and eviction each own theirs.
+/// Cached statements are dropped before returning so their caller can commit.
 ///
 /// Args:
 ///     conn: The open connection.
 ///     held: Packed bytes the file holds now.
 ///     ceiling: Packed bytes allowed, or `None` for no ceiling.
+///     max_victims: Maximum rows deleted by this call, or `None` for no chunk limit.
 ///
 /// Returns:
 ///     Packed bytes held afterwards.
+/// Errors:
+///     A SQLite query or delete failure; rollback belongs to the caller's transaction.
 fn trim_to_ceiling(
     conn: &rusqlite::Connection,
     mut held: i64,
     ceiling: Option<i64>,
+    max_victims: Option<usize>,
 ) -> rusqlite::Result<i64> {
     let Some(ceiling) = ceiling else {
         return Ok(held);
     };
-    while held > ceiling {
+    let queries = Table::ALL.map(|table| (table.oldest_sql(), table.delete_sql()));
+    let mut victims = 0;
+    while held > ceiling && max_victims.is_none_or(|limit| victims < limit) {
         // One span at a time, oldest first: the excess is usually one wide harvest, and a
         // batch would take a fresh neighbour down with it. Each table answers its own oldest
         // off its `updated_ms` index; the older of the two goes.
-        let mut oldest: Option<(Table, i64, i64, i64)> = None;
-        for table in Table::ALL {
+        let mut oldest: Option<(&str, i64, i64, i64)> = None;
+        for (select, delete) in &queries {
             let row: Option<(i64, i64, i64)> = conn
-                .query_row(
-                    &format!(
-                        "SELECT rowid, LENGTH(ticks), updated_ms FROM {}
-                         ORDER BY updated_ms ASC, rowid ASC LIMIT 1",
-                        table.name()
-                    ),
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
+                .prepare_cached(select)?
+                .query_row([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                 .optional()?;
             let Some((rowid, bytes, updated_ms)) = row else {
                 continue;
             };
             if oldest.is_none_or(|(.., held_updated)| updated_ms < held_updated) {
-                oldest = Some((table, rowid, bytes, updated_ms));
+                oldest = Some((delete, rowid, bytes, updated_ms));
             }
         }
-        let Some((table, rowid, bytes, _)) = oldest else {
+        let Some((delete, rowid, bytes, _)) = oldest else {
             break;
         };
-        conn.execute(
-            &format!("DELETE FROM {} WHERE rowid = ?1", table.name()),
-            [rowid],
-        )?;
+        conn.prepare_cached(delete)?.execute([rowid])?;
         held -= bytes;
+        victims += 1;
     }
     Ok(held)
 }
@@ -691,7 +748,7 @@ fn run(
     }
 }
 
-/// One queued op.
+/// Serves one queued op, committing standalone post-insert ceiling deletes in bounded chunks.
 fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> Option<i64>) {
     match op {
         Op::Insert {
@@ -717,11 +774,11 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
                         filed::note(&exchange, &market);
                     }
                     *held += wrote;
-                    match trim_to_ceiling(conn, *held, ceiling()) {
+                    match trim_in_chunks(conn, *held, ceiling()) {
                         Ok(now_held) => *held = now_held,
                         Err(e) => {
-                            // Rows may already be gone: re-count rather than carry an
-                            // overcount that would evict fresh spans on the next insert.
+                            // The failed chunk rolled back; re-count as a guard rather than
+                            // trust the carried figure after earlier chunks committed.
                             log::warn!("trade cache ceiling failed: {e}");
                             *held = held_bytes(conn).unwrap_or(*held);
                         }
@@ -1003,6 +1060,7 @@ struct LegacyRow {
 ///
 /// What is held comes from the span bounds alone ([`read_span_bounds`]): deciding the gaps never
 /// needs a print, and unpacking every neighbour to learn its edges would cost more than the write.
+/// Finite sorted stamps have monotone integer casts, so each gap selects a slice by two searches.
 ///
 /// Args:
 ///     updated_ms: The row's write stamp — now for a fresh answer, the original stamp for a
@@ -1030,15 +1088,10 @@ fn insert_span(
         .collect();
     sorted.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
     for (gap_from, gap_to) in super::tick_tiles::gaps_between(&held, from_ms, to_ms) {
-        let inside: Vec<Tick> = sorted
-            .iter()
-            .copied()
-            .filter(|t| {
-                let time_ms = t.time_ms as i64;
-                time_ms >= gap_from && time_ms <= gap_to
-            })
-            .collect();
-        let blob = codec::encode(&inside);
+        let lo = sorted.partition_point(|t| (t.time_ms as i64) < gap_from);
+        let hi = sorted.partition_point(|t| (t.time_ms as i64) <= gap_to);
+        let inside = &sorted[lo..hi];
+        let blob = codec::encode(inside);
         written += blob.len() as i64;
         conn.execute(
             "INSERT OR REPLACE INTO packs(exchange, market, from_ms, to_ms, ticks, prints, source, updated_ms)
