@@ -68,6 +68,7 @@ fn verdict(entry: Option<bool>, exit: Option<bool>) -> Verdict {
         },
         fill_clock_ms: None,
         rules: moon_core::db::tuner::ticks::verify::RuleFlags::default(),
+        stop: moon_core::db::tuner::ticks::verify::StopFacts::default(),
     }
 }
 

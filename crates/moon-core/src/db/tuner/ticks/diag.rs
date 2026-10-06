@@ -21,11 +21,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::Deal;
+use super::exit::stops::StopTrigger;
 use super::settings::ModelSettings;
 use super::unmodelled::UnmodelledField;
 use super::verify::{
-    EntryFinding, ExitFinding, ExitMiss, REASON_TAKE, REASONS_LINE, RULE_FLAG_COUNT, Unjudged,
-    Verdict, is_stop_reason, reason_starts_with,
+    EntryFinding, ExitFinding, ExitMiss, QuoteSide, REASON_TAKE, REASONS_LINE, RULE_FLAG_COUNT,
+    Unjudged, Verdict, is_stop_reason, reason_starts_with,
 };
 
 mod text;
@@ -34,7 +35,7 @@ mod text;
 mod tests;
 
 /// The report format's version, printed in its first line; raised when a line changes meaning.
-pub const REPORT_VERSION: u32 = 2;
+pub const REPORT_VERSION: u32 = 3;
 
 /// Which rule closed the fact, by the core's `sellreason` — the segment's last key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -192,6 +193,9 @@ pub(super) struct CoreLine {
     pub clock: Vec<i64>,
     /// Covered rows without such a print.
     pub clock_unmatched: usize,
+    /// `StopFacts::ticker_age_ms` of every stop whose reason's quote a print matched before the
+    /// archived activation, with no hole of the tape in the lookback.
+    pub ticker_age: Vec<i64>,
 }
 
 /// A segment's key: kind × venue × side × close.
@@ -221,7 +225,8 @@ pub(super) struct ExitTally {
     pub misses: usize,
     pub stop_not_fired: usize,
     pub no_level: usize,
-    /// |deviation| of every level miss that had one, per cent.
+    /// Signed deviation of every level miss that had one, per cent of the fact: a modifier sum or
+    /// a take shift the model reads wrong leans one way, a price grid's rounding both.
     pub level: Vec<f64>,
     /// Level misses whose deviation could not be formed.
     pub level_no_dev: usize,
@@ -232,6 +237,15 @@ pub(super) struct ExitTally {
     /// Line misses at a later move.
     pub line_later: usize,
     pub unjudged: BTreeMap<&'static str, usize>,
+    /// Judged trades whose model closed on a stop, by the rule that fired it.
+    pub triggers: BTreeMap<StopTrigger, usize>,
+    /// Moment misses by the rule that fired the model's stop: `[early, late]`.
+    pub late_by: BTreeMap<StopTrigger, [usize; 2]>,
+    /// Model − core, ms, of every judged stop whose activation the archive holds, hit or miss — a
+    /// stop the verdict timed against the close is left out (the close trails the activation).
+    pub moments: Vec<i64>,
+    /// Where the core's reason quote stood against the level, per trade that printed one.
+    pub quotes: BTreeMap<QuoteSide, usize>,
 }
 
 /// One segment's counts.
@@ -304,6 +318,7 @@ pub(super) fn aggregate(input: &ReportInput) -> Report {
             Some(dt) => core.clock.push(dt),
             None => core.clock_unmatched += 1,
         }
+        core.ticker_age.extend(verdict.stop.ticker_age_ms);
         funnel.holed += usize::from(deal.gap.is_some());
         if verdict.entry_finding != EntryFinding::Fact {
             funnel.entry.n += 1;
@@ -368,12 +383,15 @@ fn add(seg: &mut Segment, verdict: &Verdict, outside: &[UnmodelledField]) {
                 ExitMiss::Off(parts) => {
                     if parts.level {
                         match verdict.exit_dev_pct {
-                            Some(dev) => exit.level.push(dev.abs()),
+                            Some(dev) => exit.level.push(dev),
                             None => exit.level_no_dev += 1,
                         }
                     }
                     if let Some(late) = parts.late_ms {
                         exit.late.push(late);
+                        if let Some(trigger) = verdict.stop.trigger {
+                            exit.late_by.entry(trigger).or_default()[usize::from(late >= 0)] += 1;
+                        }
                     }
                     match parts.first_unmatched {
                         Some(0) => exit.line_at_take += 1,
@@ -386,6 +404,17 @@ fn add(seg: &mut Segment, verdict: &Verdict, outside: &[UnmodelledField]) {
         ExitFinding::Unjudged(why) => {
             *exit.unjudged.entry(unjudged_label(why)).or_default() += 1;
         }
+    }
+    // The stop facts count over judged trades only: an unjudged one says nothing about the rules.
+    if verdict.exit.is_some() {
+        if let Some(trigger) = verdict.stop.trigger {
+            *exit.triggers.entry(trigger).or_default() += 1;
+        }
+        exit.moments.extend(verdict.stop.moment_ms);
+    }
+    // The quote is the fact's own, whatever the model made of the trade.
+    if let Some(quote) = verdict.stop.quote {
+        *exit.quotes.entry(quote).or_default() += 1;
     }
     for (i, (_, on)) in verdict.rules.named().iter().enumerate() {
         seg.rules[i] += usize::from(*on);

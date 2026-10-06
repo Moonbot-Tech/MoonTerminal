@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
+use super::super::exit::stops::StopTrigger;
 use super::super::settings::ModelSettings;
 use super::super::tests::deal;
-use super::super::verify::{EntryFinding, ExitFinding, ExitMiss, MissParts, RuleFlags, Verdict};
+use super::super::verify::{
+    EntryFinding, ExitFinding, ExitMiss, MissParts, QuoteSide, RuleFlags, StopFacts, Verdict,
+};
 use super::*;
 
 /// A verdict with the given findings, its `Option<bool>`s read off them as `verify` does.
@@ -23,6 +26,7 @@ fn verdict(entry: EntryFinding, exit: ExitFinding) -> Verdict {
             fast_stop: true,
             ..RuleFlags::default()
         },
+        stop: StopFacts::default(),
     }
 }
 
@@ -258,4 +262,89 @@ fn moment_misses_are_split_by_side_each_with_its_own_median() {
         text.contains("moment 2 (early 2: med -2500 ms · tail -3500 ms)"),
         "{text}"
     );
+}
+
+#[test]
+fn the_stop_facts_print_per_segment_and_per_core() {
+    let short = |reason: &str| Deal {
+        is_short: true,
+        ..private_deal(11, reason)
+    };
+    let deals = [
+        short("StopLoss AutoActivated"),
+        short("StopLoss AutoActivated"),
+        short("StopLoss AutoActivated"),
+        private_deal(11, "StopLoss AutoActivated"),
+    ];
+    let with = |exit: ExitFinding, stop: StopFacts| Verdict {
+        stop,
+        ..verdict(EntryFinding::Fact, exit)
+    };
+    let off = |late_ms: i64, level: bool| {
+        ExitFinding::Miss(ExitMiss::Off(MissParts {
+            level,
+            late_ms: Some(late_ms),
+            first_unmatched: None,
+        }))
+    };
+    let verdicts = [
+        with(
+            ExitFinding::Hit,
+            StopFacts {
+                trigger: Some(StopTrigger::Ticker),
+                moment_ms: Some(-500),
+                quote: Some(QuoteSide::StopSideOnly),
+                ticker_age_ms: Some(1_000),
+            },
+        ),
+        with(
+            off(-6_000, true),
+            StopFacts {
+                trigger: Some(StopTrigger::Ticker),
+                moment_ms: Some(-6_000),
+                quote: Some(QuoteSide::Both),
+                ticker_age_ms: Some(4_000),
+            },
+        ),
+        with(
+            off(3_000, false),
+            StopFacts {
+                trigger: Some(StopTrigger::Series),
+                moment_ms: Some(3_000),
+                quote: Some(QuoteSide::StopSideOnly),
+                ticker_age_ms: None,
+            },
+        ),
+        with(
+            ExitFinding::Hit,
+            StopFacts {
+                quote: Some(QuoteSide::StopSideOnly),
+                ..StopFacts::default()
+            },
+        ),
+    ];
+    let rows = deals
+        .iter()
+        .zip(&verdicts)
+        .map(|(deal, verdict)| ReportRow {
+            deal,
+            venue: Some("Gate-Futures".into()),
+            tape: TapeClass::Covered,
+            verdict: Some(verdict),
+            outside_model: &[],
+        })
+        .collect();
+    let text = render(&input(rows, ModelSettings::default()));
+    for line in [
+        "  model stop fired by: ticker 2 · series 1 (moment ✗: ticker 1 early / 0 late · series 0 early / 1 late)",
+        "  stop moment over 3 judged with an archived activation: med -500 ms · early >1 s 1 · late >1 s 1",
+        // The short's own side is the ASK, the long's the BID.
+        "  core's quote past the stop level: both 1 · only ASK 2",
+        "  core's quote past the stop level: only BID 1",
+        // Signed: a level the model reads too low shows as such, not as a distance.
+        "level 1 (dev med -0.400% · |dev| p90 0.400%)",
+        "stop ticker age med 4000 ms · p90 4000 ms (n 2)",
+    ] {
+        assert!(text.contains(line), "missing {line:?} in:\n{text}");
+    }
 }

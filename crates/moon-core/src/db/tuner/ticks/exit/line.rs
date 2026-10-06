@@ -17,7 +17,7 @@
 
 use super::pump_move::PumpMove;
 use super::sell_order::{PriceDown, SellLevel, armed_at};
-use super::stops::Stops;
+use super::stops::{StopTrigger, Stops};
 use super::{ExitParams, Side};
 use crate::db::tuner::ticks::gap::{
     HOLE_PRICE_TOLERANCE, HOLE_TIME_SLACK_MS, TapeGap, fact_level_near, sell_not_nearer,
@@ -41,6 +41,9 @@ pub struct LineWalk {
     /// Where the stop stood when the walk ended — the ladder's last step, else the first stop's
     /// level; `None` without a stop. What the verdict holds against the level the core printed.
     pub stop_level: Option<f64>,
+    /// Which rule fired the stop the walk closed on; `None` when it closed otherwise — or on a
+    /// stop judged across a hole of the tape, which no single rule fired.
+    pub stop_trigger: Option<StopTrigger>,
     /// The first print once the take was live, when it was already through the untouched take:
     /// the take fills at the market there, not at its level. What the verdict prices the take at,
     /// while no move had landed by the moment it judges ([`Self::moved_at`]).
@@ -268,6 +271,7 @@ impl Line {
             exit,
             points: self.points,
             stop_level: None,
+            stop_trigger: None,
         }
     }
 }
@@ -530,10 +534,13 @@ fn cross_hole(
     if reached { in_gap } else { None }
 }
 
-/// Close the line on `exit`, with the stop's level as it then stood.
+/// Close the line on `exit`, with the stop's level as it then stood and the rule that fired it.
 fn finish(line: Line, exit: Exit, stops: &Stops) -> LineWalk {
     let mut walked = line.close(exit);
     walked.stop_level = stops.level();
+    walked.stop_trigger = stops
+        .fired_trigger()
+        .filter(|_| exit.kind == ExitKind::Stop);
     walked
 }
 

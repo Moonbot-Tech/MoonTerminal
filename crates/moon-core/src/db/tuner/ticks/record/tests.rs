@@ -309,6 +309,7 @@ fn only_a_reproduced_trade_is_searched() {
         },
         fill_clock_ms: None,
         rules: crate::db::tuner::ticks::verify::RuleFlags::default(),
+        stop: crate::db::tuner::ticks::verify::StopFacts::default(),
     };
     assert!(fit_for_search(&verdict(None, Some(true))));
     assert!(fit_for_search(&verdict(Some(true), Some(true))));

@@ -56,11 +56,13 @@ use super::{
 use crate::feed::types::Tick;
 
 mod finding;
+mod stop_facts;
 
 pub use finding::{
     EntryFinding, ExitFinding, ExitMiss, FILL_CLOCK_WINDOW_MS, MissParts, RULE_FLAG_COUNT,
     RuleFlags, Unjudged, fill_clock_ms,
 };
+pub use stop_facts::{QuoteSide, StopFacts};
 
 /// How far apart a modelled and an archived replacement may be in time and still be the same
 /// move: the archive stamps the core's own moment, the model the print that triggered it.
@@ -125,6 +127,8 @@ pub struct Verdict {
     pub fill_clock_ms: Option<i64>,
     /// Which rules the trade's strategy ran with, for the report's per-segment counts.
     pub rules: RuleFlags,
+    /// What the report reads about a stop the core fired, beside the verdict.
+    pub stop: StopFacts,
 }
 
 /// Relative deviation of `modelled` from `fact`, per cent of the fact.
@@ -281,6 +285,8 @@ pub fn verify(
     let unjudged = |why: Unjudged| -> (ExitFinding, Option<f64>, Option<(usize, usize)>) {
         (ExitFinding::Unjudged(why), None, None)
     };
+    // The model's stop minus the core's activation, on a stop judged by its moment.
+    let mut stop_moment_ms = None;
     let (exit_finding, exit_dev, line_points) = if let Some(rule) = exit.unmodelled {
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
@@ -298,14 +304,16 @@ pub fn verify(
         // No line stood at the close: a miss of the exit group, not an unanswered question.
         (ExitFinding::Miss(ExitMiss::NoLevel), None, None)
     } else if closed.kind == ExitKind::Stop && exit_rule_matches(closed.kind, &deal.sell_reason) {
-        verify_stop(
+        let (finding, dev, points, moment_ms) = verify_stop(
             deal,
             &fact_exit,
             &walked.points,
             closed,
             walked.stop_level,
             exit_points,
-        )
+        );
+        stop_moment_ms = moment_ms;
+        (finding, dev, points)
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {
         let dev = deviation_pct(closed.price, deal.sell_price);
         let tolerance = model.price_pct;
@@ -376,6 +384,13 @@ pub fn verify(
         exit_finding,
         fill_clock_ms: fill_clock_ms(deal, ticks, model.price_pct),
         rules: RuleFlags::of(entry, exit, &deal.kind),
+        stop: StopFacts {
+            trigger: walked
+                .stop_trigger
+                .filter(|_| closed.kind == ExitKind::Stop),
+            moment_ms: stop_moment_ms,
+            ..stop_facts::quote_facts(deal, ticks, &fact_exit, exit_points)
+        },
     }
 }
 
@@ -555,6 +570,12 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 /// A trailing stop's reason is timed with the book stop's tolerance whatever `FastStopLoss` says:
 /// the trailing fires on the ticker's arrivals, like the book stop.
 ///
+/// Returns the finding, the level's deviation, the archived points matched, and the model's stop
+/// minus the archived activation in ms — signed whether or not it fell inside the tolerance, for
+/// the report's moment over the judged stops ([`StopFacts::moment_ms`]); `None` when the archive
+/// holds no jump, where the verdict falls back to the close, which trails the activation by the
+/// sale and would read every such model stop as early.
+///
 /// Args:
 ///     deal: The report row.
 ///     exit: The parameters the fact is replayed with.
@@ -570,7 +591,12 @@ fn verify_stop(
     closed: Exit,
     stop_level: Option<f64>,
     exit_points: Option<&[(i64, f64)]>,
-) -> (ExitFinding, Option<f64>, Option<(usize, usize)>) {
+) -> (
+    ExitFinding,
+    Option<f64>,
+    Option<(usize, usize)>,
+    Option<i64>,
+) {
     let level = stop_level.unwrap_or_else(|| {
         level_off_buy(
             deal.buy_price,
@@ -617,7 +643,7 @@ fn verify_stop(
             first_unmatched: if line_ok { None } else { first_unmatched },
         }))
     };
-    (finding, dev, points)
+    (finding, dev, points, activation.map(|at| closed.t_ms - at))
 }
 
 /// The level an archived line's jump into the panic sell is read against:

@@ -4,9 +4,14 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
+use super::super::exit::stops::StopTrigger;
 use super::super::settings::ModelSettings;
-use super::super::verify::RuleFlags;
+use super::super::verify::{QuoteSide, RuleFlags};
 use super::{CoreLine, REPORT_VERSION, Report, ReportInput, Segment, TapeClass};
+
+/// A model stop within this many ms of the core's counts as neither early nor late in the
+/// moment over the judged stops: the fast stop's tolerance, under the ticker's period.
+const MOMENT_EVEN_MS: i64 = 1_000;
 
 /// Below this share of the table's rows with tape, the report opens by saying so: what follows
 /// describes a sample too thin to say anything about the model.
@@ -188,6 +193,13 @@ fn core_line(core: &CoreLine, input: &ReportInput) -> String {
             },
         );
     }
+    if let Some(med) = quantile_i(&core.ticker_age, 0.5) {
+        parts.push(format!(
+            "stop ticker age med {med} ms · p90 {} ms (n {})",
+            quantile_i(&core.ticker_age, 0.9).unwrap_or(med),
+            core.ticker_age.len()
+        ));
+    }
     parts.join(" · ")
 }
 
@@ -245,11 +257,12 @@ fn segment(out: &mut String, seg: &Segment) {
         misses.push(format!("no level at close {}", x.no_level));
     }
     let level_n = x.level.len() + x.level_no_dev;
+    let level_abs: Vec<f64> = x.level.iter().map(|d| d.abs()).collect();
     if level_n > 0 {
         misses.push(format!(
             "level {level_n}{}",
-            match (quantile_f(&x.level, 0.5), quantile_f(&x.level, 0.9)) {
-                (Some(med), Some(p90)) => format!(" (|dev| med {med:.3}% · p90 {p90:.3}%)"),
+            match (quantile_f(&x.level, 0.5), quantile_f(&level_abs, 0.9)) {
+                (Some(med), Some(p90)) => format!(" (dev med {med:+.3}% · |dev| p90 {p90:.3}%)"),
                 _ => String::new(),
             }
         ));
@@ -272,6 +285,7 @@ fn segment(out: &mut String, seg: &Segment) {
     if !misses.is_empty() {
         let _ = writeln!(out, "    ✗ {}", misses.join(" · "));
     }
+    stop_lines(out, seg);
     if unjudged > 0 {
         let why: Vec<String> = x
             .unjudged
@@ -305,6 +319,75 @@ fn quantile_f(values: &[f64], q: f64) -> Option<f64> {
     let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(f64::total_cmp);
     quantile_index(sorted.len(), q).map(|i| sorted[i])
+}
+
+/// A segment's stop facts, each line only when it has something to say: which rule fired the
+/// model's stops (and its moment misses, early/late), the moment over the judged stops whose
+/// activation the archive holds, and
+/// where the core's reason quote stood against the level.
+fn stop_lines(out: &mut String, seg: &Segment) {
+    let x = &seg.exit;
+    if !x.triggers.is_empty() {
+        let by: Vec<String> = x
+            .triggers
+            .iter()
+            .map(|(trigger, n)| format!("{} {n}", trigger_label(*trigger)))
+            .collect();
+        let mut line = format!("  model stop fired by: {}", by.join(" · "));
+        if !x.late_by.is_empty() {
+            let missed: Vec<String> = x
+                .late_by
+                .iter()
+                .map(|(trigger, [early, late])| {
+                    format!("{} {early} early / {late} late", trigger_label(*trigger))
+                })
+                .collect();
+            let _ = write!(line, " (moment ✗: {})", missed.join(" · "));
+        }
+        let _ = writeln!(out, "{line}");
+    }
+    if let Some(med) = quantile_i(&x.moments, 0.5) {
+        let early = x.moments.iter().filter(|&&ms| ms < -MOMENT_EVEN_MS).count();
+        let late = x.moments.iter().filter(|&&ms| ms > MOMENT_EVEN_MS).count();
+        let _ = writeln!(
+            out,
+            "  stop moment over {} judged with an archived activation: med {med:+} ms · early >1 s {early} · late >1 s {late}",
+            x.moments.len()
+        );
+    }
+    if !x.quotes.is_empty() {
+        let (own, other) = if seg.key.short {
+            ("ASK", "BID")
+        } else {
+            ("BID", "ASK")
+        };
+        let parts: Vec<String> = x
+            .quotes
+            .iter()
+            .map(|(quote, n)| match quote {
+                QuoteSide::Both => format!("both {n}"),
+                QuoteSide::StopSideOnly => format!("only {own} {n}"),
+                QuoteSide::OtherSideOnly => format!("only {other} {n}"),
+                QuoteSide::Neither => format!("neither {n}"),
+            })
+            .collect();
+        let _ = writeln!(
+            out,
+            "  core's quote past the stop level: {}",
+            parts.join(" · ")
+        );
+    }
+}
+
+/// The name the report prints for the rule that fired a model stop.
+fn trigger_label(trigger: StopTrigger) -> &'static str {
+    match trigger {
+        StopTrigger::Ticker => "ticker",
+        StopTrigger::Series => "series",
+        StopTrigger::FastTick => "fast tick",
+        StopTrigger::Trailing => "trailing",
+        StopTrigger::Fact => "fact",
+    }
 }
 
 /// One side of a segment's moment misses — the model firing `early` (model − core below zero)
