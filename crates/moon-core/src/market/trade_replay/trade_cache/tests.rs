@@ -5,10 +5,454 @@ use crate::feed::types::Side;
 /// Milliseconds in a day, for stamps the tests spread a year apart.
 const DAY_MS: i64 = 86_400_000;
 
+/// Keeps synthetic SQLite fixtures isolated and removes them after connections close.
+struct BenchDir(std::path::PathBuf);
+
+impl BenchDir {
+    /// Creates a unique temporary directory for one ignored benchmark.
+    fn new(name: &str) -> Self {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&path).expect("fixture directory");
+        Self(path)
+    }
+}
+
+impl Drop for BenchDir {
+    /// Connections are scoped inside this guard, so no live worker owns these files.
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).expect("fixture cleanup");
+    }
+}
+
+/// Seeds 600k non-overlapping spans with one million ticks using the production writer.
+fn bench_trade_fixture(dir: &BenchDir) -> std::path::PathBuf {
+    let path = dir.0.join("synthetic.sqlite");
+    let conn = rusqlite::Connection::open(&path).expect("fixture database");
+    init_schema(&conn).expect("fixture schema");
+    let setup = std::time::Instant::now();
+    let tx = conn.unchecked_transaction().expect("fixture transaction");
+    for market in 0..300 {
+        let market = format!("SYN{market:04}-USDT");
+        // Descending inserts leave no earlier rows for the writer's from_ms range scan.
+        for span in (0..2_000).rev() {
+            let from = span * 1_000;
+            let ticks = if span % 3 == 0 {
+                vec![tick(from + 100, Side::Buy)]
+            } else {
+                vec![tick(from + 100, Side::Buy), tick(from + 200, Side::Sell)]
+            };
+            insert_span(
+                &tx,
+                "synx",
+                &market,
+                from,
+                from + 499,
+                &ticks,
+                TileSource::Core,
+                from,
+            )
+            .expect("fixture span");
+        }
+    }
+    tx.commit().expect("fixture commit");
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .expect("checkpoint");
+    assert!(
+        !read_spans(&conn, "synx", "SYN0000-USDT", 1_999_000, 1_999_499)
+            .expect("fixture read")
+            .is_empty()
+    );
+    println!(
+        "[bench] trade_fixture markets=300 spans_per_market=2000 spans=600000 ticks=999900 setup_ms={:.3}",
+        setup.elapsed().as_secs_f64() * 1e3
+    );
+    path
+}
+
+/// Measures standalone production prune with committed chunks against a fresh populated file.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_trade_trim_to_ceiling() {
+    let dir = BenchDir::new("bench-trade-trim");
+    let path = bench_trade_fixture(&dir);
+    let mut total = Duration::ZERO;
+    for repetition in 0..3 {
+        let copy = dir.0.join(format!("trim-{repetition}.sqlite"));
+        std::fs::copy(&path, &copy).expect("fresh populated copy");
+        let conn = rusqlite::Connection::open(copy).expect("trim database");
+        init_schema(&conn).expect("trim schema");
+        let held = held_bytes(&conn).expect("held bytes");
+        let started = std::time::Instant::now();
+        let after = prune(&conn, Some(held / 2)).expect("ceiling trim");
+        let elapsed = started.elapsed();
+        total += elapsed;
+        assert!(after > 0);
+        println!(
+            "[bench] bench_trade_trim_to_ceiling repetition={repetition} trim_ms={:.3} before_bytes={held} after_bytes={after}",
+            elapsed.as_secs_f64() * 1e3
+        );
+    }
+    println!(
+        "[bench] bench_trade_trim_to_ceiling mean_ms={:.3}",
+        total.as_secs_f64() * 1e3 / 3.0
+    );
+}
+
+/// Measures gap slicing and persistence with 200 held islands and 200k incoming ticks.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_trade_persist_many_gaps() {
+    let dir = BenchDir::new("bench-trade-gaps");
+    let path = bench_trade_fixture(&dir);
+    let ticks: Vec<_> = (0..200_000).map(|time| tick(time, Side::Buy)).collect();
+    let mut total = Duration::ZERO;
+    for repetition in 0..3 {
+        let copy = dir.0.join(format!("gaps-{repetition}.sqlite"));
+        std::fs::copy(&path, &copy).expect("fresh populated copy");
+        let conn = rusqlite::Connection::open(copy).expect("gap database");
+        init_schema(&conn).expect("gap schema");
+        // A separate synthetic market has exactly 200 islands, leaving 201 uncovered gaps.
+        let tx = conn.unchecked_transaction().expect("island transaction");
+        for island in (0..200).rev() {
+            let from = island * 1_000 + 250;
+            insert_span(
+                &tx,
+                "synx",
+                "SYN0300-USDT",
+                from,
+                from + 249,
+                &[tick(from, Side::Buy)],
+                TileSource::Core,
+                1,
+            )
+            .expect("held island");
+        }
+        tx.commit().expect("island commit");
+        let started = std::time::Instant::now();
+        let written = insert_span(
+            &conn,
+            "synx",
+            "SYN0300-USDT",
+            0,
+            199_999,
+            &ticks,
+            TileSource::Core,
+            2,
+        )
+        .expect("persist gaps");
+        let elapsed = started.elapsed();
+        total += elapsed;
+        assert!(written > 0);
+        println!(
+            "[bench] bench_trade_persist_many_gaps repetition={repetition} persist_ms={:.3} incoming_ticks=200000 held_islands=200 gaps=201 written_bytes={written}",
+            elapsed.as_secs_f64() * 1e3
+        );
+    }
+    println!(
+        "[bench] bench_trade_persist_many_gaps mean_ms={:.3}",
+        total.as_secs_f64() * 1e3 / 3.0
+    );
+}
+
+/// Measures late-window overlap decoding after many earlier spans and prints both query plans.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_trade_overlap_read() {
+    let dir = BenchDir::new("bench-trade-overlap");
+    let path = bench_trade_fixture(&dir);
+    let conn = rusqlite::Connection::open(&path).expect("read database");
+    init_schema(&conn).expect("read schema");
+    for table in Table::ALL {
+        let sql = format!(
+            "EXPLAIN QUERY PLAN SELECT rowid, from_ms, to_ms, ticks, source FROM {} WHERE exchange = ?1 AND market = ?2 AND to_ms >= ?3 AND from_ms <= ?4",
+            table.name()
+        );
+        let mut stmt = conn.prepare(&sql).expect("explain overlap");
+        let plans = stmt
+            .query_map(
+                rusqlite::params!["synx", "SYN0000-USDT", 1_990_000, 1_999_499],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("query plan");
+        for plan in plans {
+            println!(
+                "[bench] bench_trade_overlap_read table={} query_plan={}",
+                table.name(),
+                plan.expect("plan row")
+            );
+        }
+    }
+    let mut total = Duration::ZERO;
+    for repetition in 0..3 {
+        let started = std::time::Instant::now();
+        let mut count = 0;
+        for _ in 0..1_000 {
+            let spans = read_spans(&conn, "synx", "SYN0000-USDT", 1_990_000, 1_999_499)
+                .expect("overlap read");
+            count += spans.len();
+            std::hint::black_box(spans);
+        }
+        let elapsed = started.elapsed();
+        total += elapsed;
+        assert!(count > 0);
+        println!(
+            "[bench] bench_trade_overlap_read repetition={repetition} reads=1000 total_ms={:.3} spans_read={count}",
+            elapsed.as_secs_f64() * 1e3
+        );
+    }
+    println!(
+        "[bench] bench_trade_overlap_read mean_us_per_read={:.3} file_bytes={}",
+        total.as_secs_f64() * 1e6 / 3_000.0,
+        std::fs::metadata(&path).expect("fixture size").len()
+    );
+}
+
 fn conn() -> rusqlite::Connection {
     let conn = rusqlite::Connection::open_in_memory().expect("in-memory db");
     init_schema(&conn).expect("schema");
     conn
+}
+
+/// Transactions must keep the oldest-first cut identical across legacy and packed rows.
+#[test]
+fn trade_trim_same_survivors() {
+    let conn = conn();
+    for (from, updated) in [(0, 10), (100, 50), (200, 30)] {
+        file_legacy(
+            &conn,
+            "SYN0000-USDT",
+            from,
+            from + 49,
+            &[tick(from + 5, Side::Buy)],
+            updated,
+        );
+    }
+    for (from, updated) in [(300, 40), (400, 20), (500, 60)] {
+        insert_span(
+            &conn,
+            "x",
+            "SYN0000-USDT",
+            from,
+            from + 49,
+            &[tick(from + 5, Side::Sell)],
+            TileSource::Core,
+            updated,
+        )
+        .expect("packed row");
+    }
+    let held = held_bytes(&conn).expect("held");
+    // Independent cut: ages 10, 20 and 30 remove legacy rowids 1/3 and packed rowid 2.
+    let victim_bytes: i64 = conn
+        .query_row(
+            "SELECT (SELECT SUM(LENGTH(ticks)) FROM spans WHERE rowid IN (1,3))
+              + (SELECT LENGTH(ticks) FROM packs WHERE rowid=2)",
+            [],
+            |r| r.get(0),
+        )
+        .expect("expected cut bytes");
+    let ceiling = held - victim_bytes;
+    let after = prune(&conn, Some(ceiling)).expect("standalone prune");
+    let rowids = |table| -> Vec<i64> {
+        conn.prepare(&format!("SELECT rowid FROM {table} ORDER BY rowid"))
+            .expect("rowid query")
+            .query_map([], |r| r.get(0))
+            .expect("rowids")
+            .collect::<Result<_, _>>()
+            .expect("rowid rows")
+    };
+    assert_eq!(rowids("spans"), vec![2]);
+    assert_eq!(rowids("packs"), vec![1, 3]);
+    assert!(after <= ceiling);
+    assert_eq!(after, held_bytes(&conn).expect("held after"));
+    let mut carried = after;
+    serve(
+        &conn,
+        Op::Insert {
+            exchange: "x".into(),
+            market: "SYN0000-USDT".into(),
+            from_ms: 600,
+            to_ms: 649,
+            ticks: vec![tick(605, Side::Buy)],
+            source: TileSource::Core,
+        },
+        &mut carried,
+        || Some(0),
+    );
+    assert_eq!(
+        carried, 0,
+        "post-insert standalone trim must meet its ceiling"
+    );
+    assert_eq!(held_bytes(&conn).expect("post-insert bytes"), 0);
+}
+
+/// Chunking must stop at its victim limit and keep the same oldest-first survivors across commits.
+#[test]
+fn trade_trim_chunks_same_survivors() {
+    let conn = conn();
+    for index in 0..256_i64 {
+        let from = index * 100;
+        // Same-age legacy/packed pairs exercise the existing table-order tie break.
+        let updated = index / 2;
+        if index % 2 == 0 {
+            file_legacy(
+                &conn,
+                "SYN0000-USDT",
+                from,
+                from + 49,
+                &[tick(from + 5, Side::Buy)],
+                updated,
+            );
+        } else {
+            insert_span(
+                &conn,
+                "x",
+                "SYN0000-USDT",
+                from,
+                from + 49,
+                &[tick(from + 5, Side::Sell)],
+                TileSource::Core,
+                updated,
+            )
+            .expect("packed row");
+        }
+    }
+    let held = held_bytes(&conn).expect("held");
+    let victim_bytes: i64 = conn
+        .query_row(
+            "SELECT (SELECT SUM(LENGTH(ticks)) FROM spans WHERE updated_ms < 100)
+              + (SELECT SUM(LENGTH(ticks)) FROM packs WHERE updated_ms < 100)",
+            [],
+            |r| r.get(0),
+        )
+        .expect("independent 200-victim cut");
+    let ceiling = held - victim_bytes;
+    {
+        let tx = conn
+            .unchecked_transaction()
+            .expect("limit probe transaction");
+        let after = trim_to_ceiling(&tx, held, Some(ceiling), Some(64)).expect("one chunk");
+        let count: i64 = tx
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM spans) + (SELECT COUNT(*) FROM packs)",
+                [],
+                |r| r.get(0),
+            )
+            .expect("remaining rows");
+        assert_eq!(
+            count, 192,
+            "one chunk removes exactly 64 of the 200 victims"
+        );
+        assert!(after > ceiling);
+        assert_eq!(after, held_bytes(&tx).expect("chunk held"));
+        tx.rollback()
+            .expect("restore all rows before production prune");
+    }
+    let after = prune(&conn, Some(ceiling)).expect("chunked standalone prune");
+    for table in ["spans", "packs"] {
+        let rowids: Vec<i64> = conn
+            .prepare(&format!("SELECT rowid FROM {table} ORDER BY rowid"))
+            .expect("rowid query")
+            .query_map([], |r| r.get(0))
+            .expect("rowids")
+            .collect::<Result<_, _>>()
+            .expect("rowid rows");
+        assert_eq!(rowids, (101..=128).collect::<Vec<_>>(), "{table} survivors");
+    }
+    assert!(after <= ceiling);
+    assert_eq!(after, held_bytes(&conn).expect("held after"));
+}
+
+/// The pre-optimization filter is an independent oracle for gap membership and encoded bytes.
+fn old_filter_gap_blobs(ticks: &[Tick], gaps: &[(i64, i64)]) -> Vec<(i64, i64, Vec<u8>, i64)> {
+    let mut sorted: Vec<_> = ticks
+        .iter()
+        .copied()
+        .filter(|t| t.time_ms.is_finite())
+        .collect();
+    sorted.sort_by(|a, b| a.time_ms.total_cmp(&b.time_ms));
+    gaps.iter()
+        .map(|&(from, to)| {
+            let inside: Vec<_> = sorted
+                .iter()
+                .copied()
+                .filter(|t| {
+                    let stamp = t.time_ms as i64;
+                    stamp >= from && stamp <= to
+                })
+                .collect();
+            (from, to, codec::encode(&inside), inside.len() as i64)
+        })
+        .collect()
+}
+
+/// Replacing integer-cast gap boundaries or dropping duplicate prints changes persistent bytes.
+#[test]
+fn trade_persist_blobs_identical() {
+    let conn = conn();
+    file_legacy(&conn, "SYN0000-USDT", 10, 19, &[tick(15, Side::Buy)], 1);
+    insert_span(
+        &conn,
+        "x",
+        "SYN0000-USDT",
+        40,
+        49,
+        &[tick(45, Side::Sell)],
+        TileSource::Core,
+        1,
+    )
+    .expect("held packed island");
+    let ticks: Vec<_> = [
+        59.5,
+        9.5,
+        20.0,
+        39.5,
+        19.5,
+        49.5,
+        -0.5,
+        9.5,
+        9.0,
+        10.0,
+        40.0,
+        50.0,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, time_ms)| Tick {
+        time_ms,
+        price: 1.0 + index as f32,
+        qty: 2.0 + index as f32,
+        side: if index % 2 == 0 {
+            Side::Buy
+        } else {
+            Side::Sell
+        },
+    })
+    .collect();
+    // Explicit gap bounds are independent of both the old and optimized membership loops.
+    let expected = old_filter_gap_blobs(&ticks, &[(0, 9), (20, 39), (50, 59)]);
+    insert_span(
+        &conn,
+        "x",
+        "SYN0000-USDT",
+        0,
+        59,
+        &ticks,
+        TileSource::Core,
+        2,
+    )
+    .expect("persist incoming span");
+    let actual: Vec<(i64, i64, Vec<u8>, i64)> = conn.prepare(
+        "SELECT from_ms, to_ms, ticks, prints FROM packs WHERE exchange='x' AND market='SYN0000-USDT' AND updated_ms=2 ORDER BY from_ms"
+    ).expect("written packs").query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .expect("pack rows").collect::<Result<_, _>>().expect("packed data");
+    assert_eq!(actual, expected);
 }
 
 fn tick(time_ms: i64, side: Side) -> Tick {
@@ -597,14 +1041,14 @@ fn the_ceiling_evicts_across_both_tables_by_write_age() {
     .expect("packed, middle");
     let held = held_bytes(&conn).expect("bytes");
     let legacy = codec::LEGACY_ROW_BYTES as i64;
-    let after = trim_to_ceiling(&conn, held, Some(held - legacy)).expect("trim");
+    let after = trim_to_ceiling(&conn, held, Some(held - legacy), None).expect("trim");
     assert_eq!(after, held - legacy);
     assert_eq!(
         read_span_bounds(&conn, "x", "M", 0, 1_000).expect("bounds"),
         vec![(0, 99), (200, 299)],
         "the legacy row was the oldest"
     );
-    let after = trim_to_ceiling(&conn, after, Some(after - 1)).expect("trim again");
+    let after = trim_to_ceiling(&conn, after, Some(after - 1), None).expect("trim again");
     assert!(after < held - legacy);
     assert_eq!(
         read_span_bounds(&conn, "x", "M", 0, 1_000).expect("bounds"),

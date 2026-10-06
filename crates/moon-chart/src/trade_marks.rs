@@ -680,6 +680,7 @@ pub fn build_trade_geometry(
 }
 
 /// [`build_trade_geometry`] over actions sorted once by the caller, culled to a time window.
+/// Connector buffers grow only for visible spans, so a narrow rebuild does not reserve all trades.
 ///
 /// Args:
 ///     marks: Trades to draw, already filtered to the pane's own core and coin.
@@ -724,19 +725,18 @@ pub fn build_trade_geometry_sorted(
     {
         let thickness = clamp_connector_thickness(connector_thickness) * scale;
         let min_px = (CONNECTOR_MIN_PX * scale.max(0.1)) as f64;
-        segs.reserve(marks.len());
         for mark in marks {
+            // Cull the connector before per-mark work; the full marks list still owns hit keys.
+            if let Some((lo, hi)) = window {
+                let (a, b) = (mark.buy_ms as f64, mark.close_ms as f64);
+                if (a < lo && b < lo) || (a > hi && b > hi) {
+                    continue;
+                }
+            }
             // A connector joins two arrows; with one end drawn as a line there is nothing to
             // join it to.
             if !mark.whole() {
                 continue;
-            }
-            // Outside the culled span; the window's glyph margin covers the line's half-thickness.
-            if let Some((lo, hi)) = window {
-                let (a, b) = (mark.buy_ms as f64, mark.close_ms as f64);
-                if a.max(b) < lo || a.min(b) > hi {
-                    continue;
-                }
             }
             // Skip a connector too short to read. Measured in the CURRENT view, so the same trade
             // gains its line back the moment the user zooms in on it.

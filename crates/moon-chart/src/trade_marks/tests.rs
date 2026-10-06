@@ -2,6 +2,241 @@
 
 use super::*;
 
+/// The pre-optimization connector loop, retained independently to catch culling or style drift.
+fn old_trade_connectors(
+    marks: &[TradeMark],
+    window: Option<(f64, f64)>,
+    ctx: &TradeGeometryCtx,
+) -> Vec<SegInstance> {
+    let mut segs = Vec::with_capacity(marks.len());
+    let thickness = clamp_connector_thickness(ctx.connector_thickness) * ctx.scale;
+    let min_px = (CONNECTOR_MIN_PX * ctx.scale.max(0.1)) as f64;
+    for mark in marks {
+        if !mark.whole() {
+            continue;
+        }
+        if let Some((lo, hi)) = window {
+            let (a, b) = (mark.buy_ms as f64, mark.close_ms as f64);
+            if a.max(b) < lo || a.min(b) > hi {
+                continue;
+            }
+        }
+        let dx = (mark.close_ms - mark.buy_ms) as f64 * ctx.px_per_ms as f64;
+        let dy = (mark.sell_price - mark.buy_price) * ctx.px_per_price as f64;
+        let len_px = dx.hypot(dy);
+        if len_px.is_finite() && len_px < min_px {
+            continue;
+        }
+        let rgb = if mark.is_short {
+            ctx.short_rgb
+        } else {
+            ctx.long_rgb
+        };
+        segs.push(SegInstance {
+            t0_rel: (mark.buy_ms as f64 - ctx.epoch_ms) as f32,
+            p0: mark.buy_price as f32,
+            t1_rel: (mark.close_ms as f64 - ctx.epoch_ms) as f32,
+            p1: mark.sell_price as f32,
+            thickness,
+            pattern: SEG_PATTERN_DASH,
+            extend: SEG_EXTEND_NONE,
+            clamp: SEG_CLAMP_NONE,
+            color: rgba(rgb, CONNECTOR_ALPHA),
+        });
+    }
+    segs
+}
+
+/// Compare every GPU field without adding equality behavior to the production instance type.
+fn connector_fields(seg: &SegInstance) -> [f32; 12] {
+    [
+        seg.t0_rel,
+        seg.p0,
+        seg.t1_rel,
+        seg.p1,
+        seg.thickness,
+        seg.pattern,
+        seg.extend,
+        seg.clamp,
+        seg.color[0],
+        seg.color[1],
+        seg.color[2],
+        seg.color[3],
+    ]
+}
+
+/// Moving culling before per-trade work must preserve segments and full-list hover identities.
+#[test]
+fn trade_marks_hit_test_unchanged() {
+    // Outside trades precede visible trades, so filtering and re-enumerating breaks hover keys.
+    let marks: Vec<_> = [
+        (0, 20_000, 100.0, 102.0, true, true),
+        (400_000, 420_000, 110.0, 112.0, true, true),
+        (150_000, 180_000, 120.0, 122.0, true, true),
+        (50_000, 350_000, 130.0, 132.0, true, true),
+        (300_000, 100_000, 140.0, 142.0, true, true),
+        (220_000, 250_000, 150.0, 152.0, true, false),
+        (270_000, 270_001, 160.0, 160.0, true, true),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(
+        |(index, (buy_ms, close_ms, buy_price, sell_price, show_entry, show_exit))| TradeMark {
+            buy_ms,
+            close_ms,
+            buy_price,
+            sell_price,
+            qty: 1.0,
+            is_short: index % 2 == 0,
+            show_entry,
+            show_exit,
+        },
+    )
+    .collect();
+    let sorted = sort_actions(&explode_actions(&marks));
+    let ctx = TradeGeometryCtx {
+        epoch_ms: 100_000.0,
+        long_rgb: [20, 200, 80],
+        short_rgb: [200, 40, 60],
+        scale: 1.25,
+        px_per_ms: 0.001,
+        px_per_price: 5.0,
+        arrow_scale: 1.5,
+        connector_thickness: 2.0,
+        hovered: Some((2, true)),
+    };
+    let x_of = |t: f64| ((t - ctx.epoch_ms) * f64::from(ctx.px_per_ms)) as f32;
+    let y_of = |p: f64| (1000.0 - p * f64::from(ctx.px_per_price)) as f32;
+    for window in [Some((100_000.0, 300_000.0)), None, Some((0.0, 0.0))] {
+        let mut markers = Vec::new();
+        let mut segs = Vec::new();
+        let clusters =
+            build_trade_geometry_sorted(&marks, &sorted, window, &ctx, &mut markers, &mut segs);
+        let old_segs = old_trade_connectors(&marks, window, &ctx);
+        assert_eq!(
+            segs.iter().map(connector_fields).collect::<Vec<_>>(),
+            old_segs.iter().map(connector_fields).collect::<Vec<_>>()
+        );
+        // The old build clustered the complete action list, independently of connector culling.
+        let old_clusters =
+            cluster_sorted(&sorted, window, ctx.px_per_ms, ctx.px_per_price, ctx.scale);
+        assert_eq!(clusters, old_clusters);
+        let order = order_by_time(&clusters);
+        let old_arrows: Vec<_> = old_clusters
+            .iter()
+            .map(|cluster| TradeMarkAt {
+                x: x_of(cluster.t_ms),
+                apex_y: y_of(cluster.price),
+                buy: cluster.buy,
+                count: cluster.members.len() as u32,
+            })
+            .collect();
+        for arrow in &old_arrows {
+            for offset in [-20.0, 0.0, 20.0] {
+                let cursor = (
+                    arrow.x + offset,
+                    arrow.apex_y + if arrow.buy { 2.0 } else { -2.0 },
+                );
+                assert_eq!(
+                    hit_trade_marks_windowed(
+                        &clusters,
+                        &order,
+                        x_of,
+                        y_of,
+                        cursor,
+                        ctx.scale,
+                        ctx.arrow_scale
+                    ),
+                    hit_trade_marks(
+                        old_arrows.iter().copied(),
+                        cursor,
+                        ctx.scale,
+                        ctx.arrow_scale
+                    )
+                );
+            }
+        }
+        if window == Some((100_000.0, 300_000.0)) {
+            let hit = hit_trade_marks_windowed(
+                &clusters,
+                &order,
+                x_of,
+                y_of,
+                (x_of(150_000.0), y_of(120.0) - 2.0),
+                ctx.scale,
+                ctx.arrow_scale,
+            )
+            .expect("visible entry hits");
+            assert_eq!(clusters[hit.nearest].members, vec![2]);
+            assert!(!clusters[hit.nearest].buy, "a short entry sells");
+        }
+    }
+}
+
+/// Measures the production culled rebuild with 50k closed trades, retaining sorted actions.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_closed_geometry_50k_marks() {
+    let marks: Vec<_> = (0..50_000)
+        .map(|index| TradeMark {
+            buy_ms: 1_000_000 + index * 60_000,
+            close_ms: 1_030_000 + index * 60_000,
+            buy_price: 100.0 + (index % 10) as f64,
+            sell_price: 101.0 + (index % 10) as f64,
+            qty: 1.0,
+            is_short: index % 2 == 0,
+            show_entry: true,
+            show_exit: true,
+        })
+        .collect();
+    let sorted = sort_actions(&explode_actions(&marks));
+    let window = Some((
+        1_000_000.0 + 49_000.0 * 60_000.0,
+        1_000_000.0 + 49_100.0 * 60_000.0,
+    ));
+    let ctx = TradeGeometryCtx {
+        epoch_ms: 1_000_000.0,
+        long_rgb: [20, 200, 80],
+        short_rgb: [200, 40, 60],
+        scale: 1.0,
+        px_per_ms: 0.001,
+        px_per_price: 5.0,
+        arrow_scale: 1.0,
+        connector_thickness: CONNECTOR_THICKNESS,
+        hovered: None,
+    };
+    let mut markers = Vec::new();
+    let mut segs = Vec::new();
+    let mut total = std::time::Duration::ZERO;
+    for repetition in 0..20 {
+        markers.clear();
+        segs.clear();
+        let started = std::time::Instant::now();
+        let clusters = build_trade_geometry_sorted(
+            std::hint::black_box(&marks),
+            &sorted,
+            window,
+            &ctx,
+            &mut markers,
+            &mut segs,
+        );
+        std::hint::black_box((&clusters, &markers, &segs));
+        let elapsed = started.elapsed();
+        total += elapsed;
+        assert!(!clusters.is_empty() && !segs.is_empty());
+        println!(
+            "[bench] bench_closed_geometry_50k_marks repetition={repetition} rebuild_us={:.3} markers={} connectors={}",
+            elapsed.as_secs_f64() * 1e6,
+            markers.len(),
+            segs.len()
+        );
+    }
+    println!(
+        "[bench] bench_closed_geometry_50k_marks marks=50000 rebuilds=20 visible_minutes=100 mean_us={:.3}",
+        total.as_secs_f64() * 1e6 / 20.0
+    );
+}
+
 /// `trade_marks.rs:fold_cluster` — replacing the shared `cluster_weight` clamp with the raw
 /// quantity in the `total` accumulator lets a cluster holding a positive and a negative quantity
 /// divide the (still clamped) numerators by an unclamped denominator, placing the aggregate

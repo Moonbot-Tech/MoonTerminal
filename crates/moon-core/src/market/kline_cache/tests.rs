@@ -1,6 +1,163 @@
 use super::*;
 use crate::market::candles::estimate_quote_volume;
 
+/// Owns an isolated synthetic fixture; retries cleanup while cache workers close their files.
+struct BenchDir(std::path::PathBuf);
+
+impl BenchDir {
+    /// Creates a unique directory without sharing files between ignored benchmarks.
+    fn new(name: &str) -> Self {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("{name}-{}-{stamp}", std::process::id()));
+        std::fs::create_dir(&path).expect("fixture directory");
+        Self(path)
+    }
+}
+
+impl Drop for BenchDir {
+    /// Removes only this fixture after the worker's asynchronous connection shutdown.
+    fn drop(&mut self) {
+        for _ in 0..50 {
+            if std::fs::remove_dir_all(&self.0).is_ok() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("fixture cleanup failed: {}", self.0.display());
+    }
+}
+
+/// Builds native-cadence candles through the normal merge path, including expired days.
+fn bench_kline_fixture(dir: &BenchDir) -> (KlineCache, std::path::PathBuf, i64) {
+    let path = dir.0.join("synthetic.sqlite");
+    let cache = KlineCache::open(path.clone()).expect("fixture cache");
+    let today = now_unix_ms() / DAY_MS * DAY_MS;
+    let setup = std::time::Instant::now();
+    for market in 0..300 {
+        let items = [1, 5, 60]
+            .into_iter()
+            .map(|kind_min| MergeItem {
+                exchange: "synx".into(),
+                market: format!("SYN{market:04}-USDT"),
+                kind_min,
+                rows: (0..120)
+                    .flat_map(|day| {
+                        (0..1440 / kind_min).map(move |slot| {
+                            candle(
+                                (today - day * DAY_MS + i64::from(slot * kind_min) * 60_000) as f64,
+                                100.0,
+                            )
+                        })
+                    })
+                    .collect(),
+            })
+            .collect();
+        cache.merge_batch_blocking(items);
+    }
+    let rows = cache
+        .read_range("synx", "SYN0000-USDT", 60, today, today + DAY_MS)
+        .expect("fixture read");
+    assert!(!rows.is_empty());
+    let conn = rusqlite::Connection::open(&path).expect("checkpoint connection");
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .expect("checkpoint");
+    println!(
+        "[bench] kline_fixture markets=300 kinds=3 days=120 candles=63072000 native_cadence=true setup_ms={:.3}",
+        setup.elapsed().as_secs_f64() * 1e3
+    );
+    (cache, path, today)
+}
+
+/// Measures caller-side populated-cache open, with startup work preceding the untimed sanity read.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_kline_open_latency() {
+    let dir = BenchDir::new("bench-kline-open");
+    let (seed, path, today) = bench_kline_fixture(&dir);
+    let mut handles = Vec::new();
+    let mut total = std::time::Duration::ZERO;
+    for repetition in 0..3 {
+        let copy = dir.0.join(format!("open-{repetition}.sqlite"));
+        std::fs::copy(&path, &copy).expect("fresh populated copy");
+        let started = std::time::Instant::now();
+        let cache = KlineCache::open(copy).expect("populated open");
+        let elapsed = started.elapsed();
+        total += elapsed;
+        // An acknowledged batch with no rows waits for startup pruning without changing the file.
+        // The public read timeout stays short even when pruning the full fixture takes seconds.
+        cache.merge_batch_blocking(vec![MergeItem {
+            exchange: "synx".into(),
+            market: "SYN0000-USDT".into(),
+            kind_min: 60,
+            rows: Vec::new(),
+        }]);
+        assert!(
+            !cache
+                .read_range("synx", "SYN0000-USDT", 60, today, today + DAY_MS)
+                .expect("opened read")
+                .is_empty()
+        );
+        println!(
+            "[bench] bench_kline_open_latency repetition={repetition} open_ms={:.3}",
+            elapsed.as_secs_f64() * 1e3
+        );
+        handles.push(cache);
+    }
+    println!(
+        "[bench] bench_kline_open_latency mean_ms={:.3}",
+        total.as_secs_f64() * 1e3 / 3.0
+    );
+    drop(handles);
+    drop(seed);
+}
+
+/// Measures an acknowledged tail rewrite so queue submission alone cannot look like a speedup.
+#[test]
+#[ignore = "synthetic performance baseline"]
+fn bench_kline_merge_tail_batch() {
+    let dir = BenchDir::new("bench-kline-tail");
+    let (cache, _, today) = bench_kline_fixture(&dir);
+    let mut total = std::time::Duration::ZERO;
+    for repetition in 0..3 {
+        let items = (0..300)
+            .flat_map(|market| {
+                [1, 5, 60].into_iter().map(move |kind_min| MergeItem {
+                    exchange: "synx".into(),
+                    market: format!("SYN{market:04}-USDT"),
+                    kind_min,
+                    rows: (0..1440 / kind_min)
+                        .map(|slot| {
+                            candle((today + i64::from(slot * kind_min) * 60_000) as f64, 100.0)
+                        })
+                        .collect(),
+                })
+            })
+            .collect();
+        let started = std::time::Instant::now();
+        cache.merge_batch_blocking(items);
+        let elapsed = started.elapsed();
+        total += elapsed;
+        println!(
+            "[bench] bench_kline_merge_tail_batch repetition={repetition} merge_ms={:.3}",
+            elapsed.as_secs_f64() * 1e3
+        );
+    }
+    assert!(
+        !cache
+            .read_range("synx", "SYN0299-USDT", 5, today, today + DAY_MS)
+            .expect("tail read")
+            .is_empty()
+    );
+    println!(
+        "[bench] bench_kline_merge_tail_batch mean_ms={:.3}",
+        total.as_secs_f64() * 1e3 / 3.0
+    );
+    drop(cache);
+}
+
 fn candle(t: f64, p: f32) -> ChartCandle {
     ChartCandle {
         t_open_ms: t,
@@ -147,7 +304,7 @@ fn cache_merges_only_into_v2_without_rewriting_legacy_chunk_bytes() {
     );
 }
 
-/// `market/kline_cache.rs:init_schema` retaining only `chunks` lets `chunks_v2` grow forever,
+/// `market/kline_cache.rs:prune_expired` retaining only `chunks` lets `chunks_v2` grow forever,
 /// eventually consuming the cache disk budget even though the same market data has aged out.
 #[test]
 fn retention_removes_expired_rows_from_both_cache_tables() {
@@ -178,7 +335,7 @@ fn retention_removes_expired_rows_from_both_cache_tables() {
             .expect("seed retention row");
         }
     }
-    init_schema(&conn).expect("retention rerun");
+    prune_expired(&conn);
     for table in ["chunks", "chunks_v2"] {
         let expired_count: i64 = conn
             .query_row(
@@ -416,4 +573,208 @@ fn both_merge_arms_trace_and_announce_through_the_helpers() {
         single_announce > wrote_gate,
         "an empty merge must not announce the cache as active"
     );
+}
+
+/// An expired queued read runs no query and drops its reply; the following read runs one query.
+#[test]
+fn kline_expired_read_runs_no_query() {
+    let conn = rusqlite::Connection::open_in_memory().expect("deadline database");
+    init_schema(&conn).expect("schema");
+    let day = now_unix_ms() / DAY_MS * DAY_MS;
+    upsert_one(
+        &conn,
+        "synx",
+        "SYN0000-USDT",
+        1,
+        &[candle(day as f64, 10.0)],
+        1,
+    )
+    .expect("seed candle");
+    let (tx, rx) = mpsc::channel();
+    let pruned = Arc::new((Mutex::new(false), Condvar::new()));
+    let worker_pruned = Arc::clone(&pruned);
+    let worker = std::thread::spawn(move || {
+        COUNT_READ_QUERIES.with(|count| count.set(true));
+        run(conn, rx, worker_pruned);
+    });
+    let cache = KlineCache { tx, pruned };
+    let before = READ_QUERIES.load(Ordering::Relaxed);
+    let (reply, expired) = mpsc::channel();
+    cache
+        .tx
+        .send(Op::Read {
+            exchange: "synx".into(),
+            market: "SYN0000-USDT".into(),
+            kind_min: 1,
+            from_ms: day,
+            to_ms: day + DAY_MS,
+            deadline: Instant::now() - Duration::from_secs(1),
+            reply,
+        })
+        .expect("expired request");
+    let rows = cache
+        .read_range("synx", "SYN0000-USDT", 1, day, day + DAY_MS)
+        .expect("normal request");
+    assert_eq!(rows, vec![candle(day as f64, 10.0)]);
+    assert_eq!(READ_QUERIES.load(Ordering::Relaxed) - before, 1);
+    assert!(matches!(
+        expired.recv_timeout(READ_TIMEOUT),
+        Err(mpsc::RecvTimeoutError::Disconnected)
+    ));
+    drop(cache);
+    worker.join().expect("worker shutdown");
+}
+
+/// Moving pruning behind the first receive would expose expired candles to the first chart read.
+#[test]
+fn kline_open_then_read_sees_pruned_rows() {
+    let dir = BenchDir::new("kline-startup-retention");
+    let path = dir.0.join("synthetic.sqlite");
+    let today = now_unix_ms() / DAY_MS;
+    let expired = today - retention_days(5) - 1;
+    {
+        let conn = rusqlite::Connection::open(&path).expect("fixture database");
+        init_schema(&conn).expect("schema");
+        for (table, market, quote) in [
+            ("chunks", "SYN0000-USDT", false),
+            ("chunks_v2", "SYN0001-USDT", true),
+        ] {
+            for day in [expired, today] {
+                let row = candle((day * DAY_MS) as f64, 10.0);
+                conn.execute(
+                    &format!("INSERT INTO {table}(exchange, market, kind, day, rows, updated_ms) VALUES(?1, ?2, ?3, ?4, ?5, ?6)"),
+                    rusqlite::params!["synx", market, 5, day, packed_rows(&[row], day * DAY_MS, quote), 1],
+                ).expect("seed retention row");
+            }
+        }
+    }
+    let cache = KlineCache::open(path).expect("cache open");
+    for market in ["SYN0000-USDT", "SYN0001-USDT"] {
+        let rows = cache
+            .read_range("synx", market, 5, expired * DAY_MS, (today + 1) * DAY_MS)
+            .expect("startup read");
+        assert_eq!(
+            rows.len(),
+            1,
+            "{market} must contain only the current candle"
+        );
+        assert_eq!(rows[0].t_open_ms, (today * DAY_MS) as f64);
+        assert_eq!(rows[0].open, 10.0);
+    }
+    drop(cache);
+}
+
+/// Statement reuse must preserve day grouping, incoming-row precedence and per-key isolation.
+#[test]
+fn kline_merge_equivalence() {
+    let dir = BenchDir::new("kline-merge-equivalence");
+    let cache = KlineCache::open(dir.0.join("synthetic.sqlite")).expect("cache open");
+    let day = now_unix_ms() / DAY_MS * DAY_MS;
+    for market in ["SYN0000-USDT", "SYN0001-USDT"] {
+        for kind_min in [1, 5] {
+            let price = if market == "SYN0000-USDT" {
+                10.0
+            } else {
+                100.0
+            } + kind_min as f32;
+            for rows in [
+                vec![
+                    candle((day - 60_000) as f64, price),
+                    candle(day as f64, price + 1.0),
+                ],
+                vec![
+                    candle(day as f64, price + 2.0),
+                    candle((day + DAY_MS) as f64, price + 3.0),
+                ],
+                vec![
+                    candle((day - 60_000) as f64, price),
+                    candle(day as f64, price + 2.0),
+                ],
+            ] {
+                cache.merge_batch_blocking(vec![MergeItem {
+                    exchange: "synx".into(),
+                    market: market.into(),
+                    kind_min,
+                    rows,
+                }]);
+            }
+        }
+    }
+    for (market, kind, prices) in [
+        ("SYN0000-USDT", 1, [11.0, 13.0, 14.0]),
+        ("SYN0000-USDT", 5, [15.0, 17.0, 18.0]),
+        ("SYN0001-USDT", 1, [101.0, 103.0, 104.0]),
+        ("SYN0001-USDT", 5, [105.0, 107.0, 108.0]),
+    ] {
+        let expected = vec![
+            candle((day - 60_000) as f64, prices[0]),
+            candle(day as f64, prices[1]),
+            candle((day + DAY_MS) as f64, prices[2]),
+        ];
+        assert_eq!(
+            cache
+                .read_range("synx", market, kind, day - DAY_MS, day + 2 * DAY_MS)
+                .expect("merged read"),
+            expected,
+            "{market} kind {kind}"
+        );
+    }
+    drop(cache);
+}
+
+/// Starting the reply timeout before startup retention completes loses a valid first-read answer.
+#[test]
+fn kline_read_during_prune_waits_for_rows() {
+    let dir = BenchDir::new("kline-delayed-prune");
+    let path = dir.0.join("synthetic.sqlite");
+    let today = now_unix_ms() / DAY_MS * DAY_MS;
+    let expired = today - (retention_days(5) + 1) * DAY_MS;
+    {
+        let conn = rusqlite::Connection::open(&path).expect("fixture database");
+        init_schema(&conn).expect("schema");
+        upsert_one(
+            &conn,
+            "synx",
+            "SYN0000-USDT",
+            5,
+            &[candle(expired as f64, 10.0), candle(today as f64, 12.0)],
+            1,
+        )
+        .expect("seed expired and current rows");
+    }
+    let _delay_reset = PruneDelayReset;
+    PRUNE_DELAY_MS.store(500, Ordering::Relaxed);
+    DELAY_PRUNE_FOR_TEST.with(|delay| delay.set(true));
+    let cache = KlineCache::open(path).expect("cache open");
+    DELAY_PRUNE_FOR_TEST.with(|delay| delay.set(false));
+    assert!(
+        !*cache.pruned.0.lock().expect("startup flag"),
+        "exercise the startup window"
+    );
+    let rows = cache.read_range("synx", "SYN0000-USDT", 5, expired, today + DAY_MS);
+    assert_eq!(rows, Some(vec![candle(today as f64, 12.0)]));
+    drop(cache);
+}
+
+/// Restores the test-only startup delay and opt-in even if a fixture assertion unwinds.
+struct PruneDelayReset;
+
+impl Drop for PruneDelayReset {
+    /// Prevents a failed test from leaving later workers delayed.
+    fn drop(&mut self) {
+        PRUNE_DELAY_MS.store(0, Ordering::Relaxed);
+        DELAY_PRUNE_FOR_TEST.with(|delay| delay.set(false));
+    }
+}
+
+/// Omitting unwind publication leaves synchronous readers blocked after a retention panic.
+#[test]
+fn prune_flag_guard_releases_on_panic() {
+    let pruned = Arc::new((Mutex::new(false), Condvar::new()));
+    let result = std::panic::catch_unwind(|| {
+        let _guard = PrunedOnDrop::new(Arc::clone(&pruned));
+        panic!("synthetic retention panic");
+    });
+    assert!(result.is_err());
+    assert!(*pruned.0.lock().expect("startup flag"));
 }

@@ -40,16 +40,16 @@
 //! reinterpretation shipped, so no v2 row poisoned by the old bug ever existed in the field —
 //! there is nothing for a v2 migration to correct.
 //!
-//! Database open, schema creation, and startup retention run synchronously. After that
-//! setup, queued reads and writes run on a dedicated worker because `Connection` is not
-//! `Sync`. Writes are nonblocking; reads use a reply channel with a timeout because an
-//! empty result is preferable to a stalled prepare.
+//! Database open and schema creation run synchronously. Startup retention and queued reads
+//! and writes run on a dedicated worker because `Connection` is not `Sync`. Retention runs
+//! before the first queued operation. Synchronous reads wait for startup retention before
+//! starting their reply timeout; expired queued reads then skip the query. Writes stay nonblocking.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use super::candles::ChartCandle;
 
@@ -61,6 +61,22 @@ const ROW_BYTES_V1: usize = 24;
 const ROW_BYTES_V2: usize = 28;
 /// Read-response timeout that avoids hanging when the cache thread is busy or dead.
 const READ_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Counts queries from the explicitly instrumented worker, excluding concurrent test workers.
+#[cfg(test)]
+static READ_QUERIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Startup delay used only by the caller that explicitly opts its worker into the prune test.
+#[cfg(test)]
+static PRUNE_DELAY_MS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+std::thread_local! {
+    /// Only the deadline regression's worker contributes to the shared query count.
+    static COUNT_READ_QUERIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Keeps the delayed-prune regression from slowing unrelated parallel cache workers.
+    static DELAY_PRUNE_FOR_TEST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// Returns retention in days for a candle kind.
 ///
@@ -151,6 +167,7 @@ impl PendingPrefixRead {
     }
 }
 
+/// Queued cache operations; a synchronous read carries its caller's useful-response deadline.
 pub(crate) enum Op {
     Merge {
         exchange: String,
@@ -170,6 +187,7 @@ pub(crate) enum Op {
         kind_min: u32,
         from_ms: i64,
         to_ms: i64,
+        deadline: Instant,
         reply: mpsc::Sender<Vec<ChartCandle>>,
     },
     ReadPrefix {
@@ -190,14 +208,39 @@ impl Drop for SettledOnDrop {
     }
 }
 
+/// Releases startup readers after retention finishes or unwinds, so a failed worker cannot park them.
+struct PrunedOnDrop(Arc<(Mutex<bool>, Condvar)>);
+
+impl PrunedOnDrop {
+    /// Holds the startup flag until the retention scope ends.
+    fn new(pruned: Arc<(Mutex<bool>, Condvar)>) -> Self {
+        Self(pruned)
+    }
+}
+
+impl Drop for PrunedOnDrop {
+    /// Publishes completion even if retention panicked while another holder poisoned the mutex.
+    fn drop(&mut self) {
+        let (ready, wake) = &*self.0;
+        *ready
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
+        wake.notify_all();
+    }
+}
+
 /// Cheaply cloneable cache handle that sends queued reads and writes to the database worker.
 #[derive(Clone)]
 pub struct KlineCache {
     tx: mpsc::Sender<Op>,
+    /// Shared startup completion, so the first read's timeout excludes retention work.
+    pruned: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl KlineCache {
     /// Opens the database and initializes its schema synchronously, then starts its worker.
+    /// The worker prunes expired chunks before serving its first queued read or merge;
+    /// synchronous reads wait for this completion before starting their response timeout.
     ///
     /// Returns `None` when opening or initialization fails because charts can operate
     /// without this optional cache.
@@ -218,19 +261,28 @@ impl KlineCache {
         // the `Op::Read` ones — unlike every other call site, which only ever opens a reader.
         crate::db::trace::install_on(&conn);
         let (tx, rx) = mpsc::channel::<Op>();
+        let pruned = Arc::new((Mutex::new(false), Condvar::new()));
+        let worker_pruned = Arc::clone(&pruned);
+        #[cfg(test)]
+        let delay_prune = DELAY_PRUNE_FOR_TEST.with(|delay| delay.get());
         std::thread::Builder::new()
             .name("kline-cache".into())
-            .spawn(move || run(conn, rx))
+            .spawn(move || {
+                #[cfg(test)]
+                DELAY_PRUNE_FOR_TEST.with(|delay| delay.set(delay_prune));
+                run(conn, rx, worker_pruned);
+            })
             .ok()?;
         log::info!("kline cache открыт: {}", path.display());
-        Some(Self { tx })
+        Some(Self { tx, pruned })
     }
 
     /// A handle whose queue is handed back instead of served: nothing it is asked ever answers.
     #[cfg(test)]
     pub(crate) fn stalled_for_tests() -> (Self, mpsc::Receiver<Op>) {
         let (tx, rx) = mpsc::channel::<Op>();
-        (Self { tx }, rx)
+        let pruned = Arc::new((Mutex::new(true), Condvar::new()));
+        (Self { tx, pruned }, rx)
     }
 
     /// Queues one chart's whole prefix read and returns at once.
@@ -302,8 +354,10 @@ impl KlineCache {
 
     /// Reads rows whose `t_open` lies in the inclusive `[from_ms, to_ms]` range.
     ///
-    /// Blocks for at most [`READ_TIMEOUT`]. `None` means the read did NOT happen — the worker was
-    /// gone, or it was busy enough that the answer did not arrive in time — as opposed to
+    /// Waits, unbounded, for the worker's one-time startup retention (work `open` used to do
+    /// before returning), then at most [`READ_TIMEOUT`] for the reply.
+    ///
+    /// `None` means the worker was gone or the answer did not arrive in time, as opposed to
     /// `Some(vec![])`, which is an authoritative "the cache holds nothing there".
     ///
     /// The distinction is load-bearing for the caller, which CACHES this result and only rereads
@@ -317,6 +371,16 @@ impl KlineCache {
         from_ms: i64,
         to_ms: i64,
     ) -> Option<Vec<ChartCandle>> {
+        {
+            let (ready, wake) = &*self.pruned;
+            let ready = ready
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let _ready = wake
+                .wait_while(ready, |pruned| !*pruned)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        let deadline = Instant::now() + READ_TIMEOUT;
         let (reply, rx) = mpsc::channel();
         if self
             .tx
@@ -326,6 +390,7 @@ impl KlineCache {
                 kind_min,
                 from_ms,
                 to_ms,
+                deadline,
                 reply,
             })
             .is_err()
@@ -336,6 +401,7 @@ impl KlineCache {
     }
 }
 
+/// Initializes the schema without running retention on the caller's thread.
 fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     crate::db::wal::enable(conn)?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -361,14 +427,18 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     )?;
     // Marks the schema generation for a future migration to read; nothing here gates on it.
     conn.pragma_update(None, "user_version", 2)?;
+    Ok(())
+}
+
+/// Removes expired chunks on worker startup before any queued operation observes the tables.
+fn prune_expired(conn: &rusqlite::Connection) {
     // At startup, delete daily chunks older than the retention limit for their kind, in both the
     // read-only v1 table and the v2 table that replaced it as the write target — otherwise
     // `chunks` alone would grow without bound now that nothing prunes it by writing over it.
     //
     // ONE statement per table rather than one per kind: `PRIMARY KEY(exchange, market, kind, day)`
     // leaves `kind` and `day` alone unable to use an index (the two leading key columns are
-    // unconstrained here), so a per-kind loop was 7 full scans per table, run SYNCHRONOUSLY inside
-    // `KlineCache::open` on a database the module doc measures in hundreds of MB. The CASE
+    // unconstrained here), so a per-kind loop would require 7 full scans per table. The CASE
     // expression folds all seven kinds' cutoffs into one scan, and `retention_days` stays the
     // single authority for the three distinct numbers it can produce across those seven kinds —
     // bound as parameters here, never hard-coded into the SQL. Only the seven listed kinds are
@@ -389,7 +459,6 @@ fn init_schema(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
          AND day < CASE WHEN kind <= 1 THEN ?1 WHEN kind <= 5 THEN ?2 ELSE ?3 END",
         cutoffs,
     );
-    Ok(())
 }
 
 /// Level for the per-key merge trace.
@@ -460,7 +529,17 @@ fn trace_first_merge(
 /// Exchange, market and kind identifying one cache key for the trace.
 type TraceKey<'a> = (&'a str, &'a str, u32);
 
-fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
+/// Publishes startup retention completion even on unwind, then serves FIFO and skips expired reads.
+fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>, pruned: Arc<(Mutex<bool>, Condvar)>) {
+    let pruned = PrunedOnDrop::new(pruned);
+    #[cfg(test)]
+    if DELAY_PRUNE_FOR_TEST.with(|delay| delay.get()) {
+        std::thread::sleep(Duration::from_millis(
+            PRUNE_DELAY_MS.load(Ordering::Relaxed),
+        ));
+    }
+    prune_expired(&conn);
+    drop(pruned);
     // One INFO line per writer says data is reaching the cache; the per-key detail is a trace whose
     // deduplication set stays EMPTY unless that trace is on.
     //
@@ -573,8 +652,12 @@ fn run(conn: rusqlite::Connection, rx: mpsc::Receiver<Op>) {
                 kind_min,
                 from_ms,
                 to_ms,
+                deadline,
                 reply,
             } => {
+                if Instant::now() >= deadline {
+                    continue;
+                }
                 let rows = read_or_empty(&conn, &exchange, &market, kind_min, from_ms, to_ms);
                 let _ = reply.send(rows);
             }
@@ -635,6 +718,12 @@ fn read_or_empty(
     from_ms: i64,
     to_ms: i64,
 ) -> Vec<ChartCandle> {
+    #[cfg(test)]
+    COUNT_READ_QUERIES.with(|count| {
+        if count.get() {
+            READ_QUERIES.fetch_add(1, Ordering::Relaxed);
+        }
+    });
     read_rows(conn, exchange, market, kind_min, from_ms, to_ms).unwrap_or_else(|e| {
         log::warn!("kline cache read failed {exchange}/{market}/{kind_min}: {e}");
         Vec::new()
