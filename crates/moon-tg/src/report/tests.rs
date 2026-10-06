@@ -1,8 +1,18 @@
 //! Money presentation must stay honest when valuation or currency identity is incomplete.
-use super::Page;
+use super::paging;
 use super::render::{profit, render};
+use super::{Page, Row, page_rows, relabel, report_html, rich_message_fits, scope_of, sections};
+use crate::labels::section_label;
+use crate::t;
+use chrono::Days;
+use chrono_tz::Tz;
 use moon_core::config::telegram_menu::ReportBasis;
+use moon_core::config::{CoreGroup, telegram_access::TelegramReportAccess};
 use moon_core::config::{GroupRowStyle, ReportColumn, ReportLayout, TotalPlace, TotalSeparation};
+use moon_core::db::{self, ReportFilter, RowScope};
+use moon_core::session::core_order;
+use moon_core::telegram::report::ReportScope;
+use moon_core::util::display_time;
 
 /// Fixture whose average amount and percent differ, with valued volume and profit.
 fn layout_page(layout: ReportLayout) -> Page {
@@ -2344,5 +2354,404 @@ fn the_period_is_short() {
     assert_eq!(
         period(midnight, midnight + 6 * 3600 - 1, 2027),
         "05.10.2026 · 00:00—05:59"
+    );
+}
+
+/// Frozen per-row reader used to compare batching against the previous rendered output.
+#[allow(clippy::too_many_arguments)]
+fn per_row_page_with(
+    conn: &rusqlite::Connection,
+    mut request: ReportRequest,
+    from: i64,
+    to: i64,
+    zone: Tz,
+    basis: ReportBasis,
+    layout: ReportLayout,
+    names: &db::CoreNames,
+    groups: &[CoreGroup],
+    order: impl FnOnce(
+        &mut [(u64, String)],
+    ) -> (
+        std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+        TelegramReportAccess,
+    ),
+) -> db::ReadResult<Page> {
+    request.window = Some((from, to));
+    request.basis = Some(basis);
+    let snap = db::read_snapshot(conn)?;
+    let mut cores = db::distinct_cores(&snap)?;
+    relabel(&mut cores, names);
+    let (venues, access) = order(&mut cores);
+    if let TelegramReportAccess::Viewer(allowed) = &access {
+        cores.retain(|(id, _)| allowed.contains(id));
+    }
+    let accessible = cores.clone();
+    let in_scope = |id: u64| match request.scope {
+        ReportScope::All => true,
+        scope => scope_of(venues.get(&id)) == scope,
+    };
+    let scope_label = match request.scope {
+        ReportScope::All => None,
+        _ => Some(
+            cores
+                .iter()
+                .find(|(id, _)| in_scope(*id))
+                .map(|(id, _)| section_label(venues.get(id)))
+                .unwrap_or_else(|| t!("telegram.report_scope_unavailable").to_string()),
+        ),
+    };
+    cores.retain(|(id, _)| in_scope(*id));
+    let scoped_ids = if request.scope == ReportScope::All && access == TelegramReportAccess::Owner {
+        Vec::new()
+    } else if cores.is_empty() {
+        vec![moon_core::config::NO_MATCH_CORE_UID]
+    } else {
+        cores.iter().map(|(id, _)| *id).collect()
+    };
+    let filter = ReportFilter {
+        core_uids: scoped_ids,
+        date_from: Some(from),
+        date_to: Some(to),
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        period_basis: basis.period_basis(),
+        axis: db::ReportAxis::load(&snap, zone)?,
+        ..Default::default()
+    };
+    let total = db::query_totals(&snap, &filter)?.quotes;
+    let by_core = !request.daily && !request.by_exchange;
+    let mut rows_by = Vec::new();
+    // The core of each row of the view by cores, by position.
+    let mut row_cores = Vec::new();
+    if request.daily {
+        if let (Some(mut date), Some(end)) =
+            (display_time::date(from, zone), display_time::date(to, zone))
+        {
+            // A frozen range can cover additional partial days after a display-zone change.
+            // Validate rather than silently dropping dates from a complete-period headline.
+            let days = (end - date).num_days();
+            if !(0..370).contains(&days) {
+                return Err(db::ReadFail::failed(
+                    db::FailKind::Other,
+                    "telegram report calendar range is invalid",
+                    moon_core::config::paths::reports_db_path(),
+                    "telegram: calendar range",
+                    db::FailCode::None,
+                ));
+            }
+            for _ in 0..=days {
+                let Some(next) = date.checked_add_days(Days::new(1)) else {
+                    break;
+                };
+                if let (Some(start), Some(stop)) = (
+                    display_time::day_start(date, zone),
+                    display_time::day_start(next, zone),
+                ) {
+                    let mut day = filter.clone();
+                    day.date_from = Some(start.max(from));
+                    day.date_to = Some((stop - 1).min(to));
+                    rows_by.push((date.to_string(), day));
+                }
+                date = next;
+            }
+        }
+    } else if request.by_exchange {
+        for (venue, members) in core_order::exchange_sections(
+            cores
+                .iter()
+                .enumerate()
+                .map(|(index, (id, _))| (index, venues.get(id))),
+        ) {
+            let mut group = filter.clone();
+            group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+            rows_by.push((section_label(venue), group));
+        }
+    } else {
+        for (id, name) in cores {
+            let mut core = filter.clone();
+            core.core_uids = vec![id];
+            rows_by.push((name, core));
+            row_cores.push(id);
+        }
+    }
+    // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
+    let mut active = Vec::new();
+    let mut active_cores = Vec::new();
+    for (index, (name, filter)) in rows_by.into_iter().enumerate() {
+        let total = db::query_totals(&snap, &filter)?.quotes;
+        if total.orders > 0 {
+            active.push(Row::Line(name, total));
+            active_cores.extend(row_cores.get(index).copied());
+        }
+    }
+    let active = match sections::sections(&active_cores, groups).filter(|_| by_core) {
+        Some(sections) => {
+            let mut rows = Vec::new();
+            let mut listed = std::collections::HashSet::new();
+            for section in sections {
+                let name = section.group.map_or_else(
+                    || t!("profit_monitor.group.ungrouped").to_string(),
+                    |group| group.name.clone(),
+                );
+                // A group of one core totals that core's own row; no second read.
+                let subtotal = match section.members.as_slice() {
+                    [only] => active[*only].total().clone(),
+                    members => {
+                        let mut read = filter.clone();
+                        read.core_uids = members.iter().map(|&index| active_cores[index]).collect();
+                        db::query_totals(&snap, &read)?.quotes
+                    }
+                };
+                rows.push(Row::Group(name, subtotal));
+                for &index in &section.members {
+                    rows.push(match active[index].clone() {
+                        Row::Line(name, total) if !listed.insert(index) => Row::Repeat(name, total),
+                        row => row,
+                    });
+                }
+            }
+            rows
+        }
+        None => active,
+    };
+    let drilldowns = per_row_drilldowns(&snap, &accessible, &venues, &filter)?;
+    // Every view shows all its rows while the message fits; an oversized one pages with the
+    // largest ladder rung that fits (`paging`). A probe of a partial page carries the longest page
+    // label it can show, so the page actually rendered is never longer than the one measured.
+    // A partial page may open with its group's header repeated: measured with the longest one.
+    let widest_header = active
+        .iter()
+        .filter(|row| matches!(row, Row::Group(..)))
+        // Telegram counts characters of the escaped text.
+        .max_by_key(|row| super::render::row_html(row, true, &layout).chars().count())
+        .cloned();
+    let fits = |rows: &[Row]| {
+        let partial = rows.len() < active.len();
+        let mut probed = Vec::with_capacity(rows.len() + 1);
+        if partial {
+            probed.extend(widest_header.clone());
+        }
+        probed.extend_from_slice(rows);
+        let mut probe = request.clone();
+        probe.page = if partial { 9_999 } else { 0 };
+        rich_message_fits(&report_html(&Page {
+            request: probe,
+            from,
+            to,
+            zone,
+            total: total.clone(),
+            rows: probed,
+            pages: if partial { 10_000 } else { 1 },
+            drilldowns: drilldowns.clone(),
+            scope_label: scope_label.clone(),
+            basis,
+            layout: layout.clone(),
+            cores: Vec::new(),
+            caption: None,
+        }))
+    };
+    let size = paging::fitting_page_size(&active, fits);
+    let pages = active.len().div_ceil(size).max(1);
+    request.page = request.page.min(pages - 1);
+    let rows = page_rows(&active, request.page * size, size);
+    Ok(Page {
+        request,
+        from,
+        to,
+        zone,
+        total,
+        rows,
+        pages,
+        drilldowns,
+        scope_label,
+        basis,
+        layout,
+        cores: accessible.iter().map(|(id, _)| *id).collect(),
+        caption: None,
+    })
+}
+
+/// Exchange buttons always list every active venue the chat can see, including from a scoped view.
+fn per_row_drilldowns(
+    snap: &rusqlite::Transaction<'_>,
+    cores: &[(u64, String)],
+    venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
+    filter: &ReportFilter,
+) -> db::ReadResult<Vec<(String, ReportScope)>> {
+    let mut drilldowns = Vec::new();
+    for (venue, members) in core_order::exchange_sections(
+        cores
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (index, venues.get(id))),
+    ) {
+        let mut group = filter.clone();
+        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+        let total = db::query_totals(snap, &group)?.quotes;
+        if total.orders > 0 {
+            drilldowns.push((section_label(venue), scope_of(venue)));
+        }
+    }
+    Ok(drilldowns)
+}
+
+/// Populate both exchanges with partial-day trades, mixed quotes, and zero-profit activity.
+fn sliced_fixture(cores: u64, days: i64) -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);").unwrap();
+    let mut insert = conn
+        .prepare("INSERT INTO orders_rep VALUES (?1,?2,?3,?4,?5,100,?6)")
+        .unwrap();
+    for id in 1..=cores {
+        for day in 0..days {
+            insert
+                .execute(rusqlite::params![
+                    id as i64,
+                    format!("Core {id}"),
+                    day + 1,
+                    day * 86400 + 150,
+                    if id == 6 { 0.0 } else { id as f64 },
+                    (id % 2) as i64
+                ])
+                .unwrap();
+        }
+    }
+    drop(insert);
+    conn
+}
+
+/// Compare complete rendered pages and exchange buttons with the frozen per-row reader.
+#[test]
+fn chat_report_sliced_reads_match_per_row_totals() {
+    let _locale = crate::test_locale::force("en");
+    let empty = rusqlite::Connection::open_in_memory().unwrap();
+    let invalid = super::read_page_with(
+        &empty,
+        ReportRequest::new(Period::Today, true),
+        0,
+        370 * 86400,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        ReportLayout::default(),
+        &Default::default(),
+        &[],
+        |_| panic!("invalid calendar range must return before database reads"),
+    );
+    assert!(format!("{:?}", invalid.err().unwrap()).contains("calendar range"));
+    let conn = sliced_fixture(6, 4);
+    let groups = vec![
+        CoreGroup {
+            name: "Alpha".into(),
+            cores: vec![1, 2, 3],
+        },
+        CoreGroup {
+            name: "Beta".into(),
+            cores: vec![3, 4, 5],
+        },
+    ];
+    let venues = (1..=6)
+        .map(|id| {
+            (
+                id,
+                moon_core::venue::CoreVenue::identify(if id <= 3 { 2 } else { 6 }, "", None),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    for access in [
+        TelegramReportAccess::Owner,
+        TelegramReportAccess::Viewer(vec![1, 2, 4, 5, 6]),
+        TelegramReportAccess::Viewer(vec![]),
+    ] {
+        for scope in [
+            ReportScope::All,
+            scope_of(venues.get(&1)),
+            scope_of(venues.get(&4)),
+        ] {
+            for basis in [ReportBasis::Close, ReportBasis::Open] {
+                for (daily, by_exchange) in [(true, false), (false, true), (false, false)] {
+                    let mut request = ReportRequest::new(Period::Today, daily);
+                    request.by_exchange = by_exchange;
+                    request.scope = scope;
+                    let order = |cores: &mut [(u64, String)]| {
+                        cores.sort_by_key(|(id, _)| *id);
+                        (venues.clone(), access.clone())
+                    };
+                    let page = super::read_page_with(
+                        &conn,
+                        request.clone(),
+                        100,
+                        3 * 86400 + 200,
+                        chrono_tz::UTC,
+                        basis,
+                        ReportLayout::default(),
+                        &Default::default(),
+                        &groups,
+                        order,
+                    )
+                    .unwrap();
+                    let reference = per_row_page_with(
+                        &conn,
+                        request,
+                        100,
+                        3 * 86400 + 200,
+                        chrono_tz::UTC,
+                        basis,
+                        ReportLayout::default(),
+                        &Default::default(),
+                        &groups,
+                        order,
+                    )
+                    .unwrap();
+                    assert_eq!(report_html(&page), report_html(&reference));
+                    assert_eq!(page.drilldowns, reference.drilldowns);
+                    assert_eq!(page.pages, reference.pages);
+                }
+            }
+        }
+    }
+}
+
+/// Measure full daily report reads over the same synthetic snapshot workload.
+#[test]
+#[ignore]
+fn chat_report_sliced_bench() {
+    let _locale = crate::test_locale::force("en");
+    let conn = sliced_fixture(200, 120);
+    let request = ReportRequest::new(Period::Today, true);
+    let start = std::time::Instant::now();
+    let old = per_row_page_with(
+        &conn,
+        request.clone(),
+        100,
+        119 * 86400 + 200,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        ReportLayout::default(),
+        &Default::default(),
+        &[],
+        |_| (Default::default(), TelegramReportAccess::Owner),
+    )
+    .unwrap();
+    let before = start.elapsed();
+    let start = std::time::Instant::now();
+    let new = super::read_page_with(
+        &conn,
+        request,
+        100,
+        119 * 86400 + 200,
+        chrono_tz::UTC,
+        ReportBasis::Close,
+        ReportLayout::default(),
+        &Default::default(),
+        &[],
+        |_| (Default::default(), TelegramReportAccess::Owner),
+    )
+    .unwrap();
+    let after = start.elapsed();
+    assert_eq!(report_html(&old), report_html(&new));
+    println!(
+        "chat_report_sliced_bench before_ms={} after_ms={}",
+        before.as_millis(),
+        after.as_millis()
     );
 }
