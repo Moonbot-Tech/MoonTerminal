@@ -185,7 +185,7 @@ fn market_draw_orders_matches_reference() {
     store.update(&rows, 0);
     assert_market_draw_reference(&store);
 
-    // Closure cleanup removes this UID from open_uids even though the final row revives it.
+    // The final row revives this UID before closure cleanup.
     rows[0].job_is_done = false;
     store.update(&rows, 0);
     assert_market_draw_reference(&store);
@@ -398,6 +398,72 @@ fn terminal_order_leaves_auto_fit_and_revival_restores_it() {
 
     assert!(store.update(&[order(42)], 0));
     assert_eq!(store.auto_fit_range("BTCUSDT"), Some((60_000.0, 60_000.0)));
+}
+
+/// Removing a revived UID during batch cleanup loses auto-fit, reuses its label slot, and
+/// prevents the missing-order backstop from ever closing it. Duplicate revival entries must
+/// also not survive when a UID closes and reopens several times in one batch.
+#[test]
+fn close_and_revive_batch_preserves_open_order_services() {
+    for initially_open in [false, true] {
+        let mut store = OrderLineStore::default();
+        let mut active = bench_rows(1, 1).pop().unwrap();
+        active.buy_price = 100.0;
+        active.filled = true;
+        active.fill_pct = 100.0;
+        active.sell_price = 110.0;
+        active.stop_loss = Some(90.0);
+        assert!(store.update(std::slice::from_ref(&active), 0));
+        let mut closed = active.clone();
+        closed.job_is_done = true;
+        if !initially_open {
+            assert!(store.update(std::slice::from_ref(&closed), 0));
+        }
+        assert!(store.update(&[closed.clone(), active.clone(), closed, active.clone()], 0,));
+        let state = store.order_state(active.uid).unwrap();
+        assert!(state.active);
+        assert_eq!(state.closed_reason, None);
+        assert_eq!(state.closed_store_ms, None);
+        assert_eq!(state.closed_rev, None);
+        assert_eq!(store.open_uids, [active.uid]);
+        assert_eq!(store.auto_fit_range("SYN000"), Some((90.0, 110.0)));
+        assert_eq!(store.orders[&active.uid].chart_num, 1);
+
+        let mut fresh = active.clone();
+        fresh.uid = 1;
+        assert!(store.update(&[active.clone(), fresh.clone()], 0));
+        assert_eq!(store.orders[&active.uid].chart_num, 1);
+        assert_eq!(store.orders[&fresh.uid].chart_num, 2);
+
+        store.orders.get_mut(&active.uid).unwrap().last_seen_ms -= CLOSE_GRACE_MS + 1.0;
+        assert!(store.update(&[fresh], 0));
+        let state = store.order_state(active.uid).unwrap();
+        assert!(!state.active);
+        assert_eq!(state.closed_reason, Some(OrderCloseReason::BackstopMissing));
+        assert!(state.closed_rev.is_some());
+    }
+}
+
+/// Keeping every UID that revived at any point would retain a slot and auto-fit range even
+/// when the last row closes it; final-terminal batches must still release both.
+#[test]
+fn revived_order_ending_batch_closed_releases_open_order_services() {
+    let mut store = OrderLineStore::default();
+    let active = bench_rows(1, 1).pop().unwrap();
+    assert!(store.update(std::slice::from_ref(&active), 0));
+    let mut closed = active.clone();
+    closed.job_is_done = true;
+    assert!(store.update(&[closed.clone(), active, closed], 0));
+    let state = store.order_state(0).unwrap();
+    assert!(!state.active);
+    assert_eq!(state.closed_reason, Some(OrderCloseReason::Cancel));
+    assert_eq!(state.closed_rev, Some(store.rev));
+    assert!(store.open_uids.is_empty());
+    assert_eq!(store.auto_fit_range("SYN000"), None);
+    let mut fresh = bench_rows(1, 1).pop().unwrap();
+    fresh.uid = 1;
+    assert!(store.update(&[fresh], 0));
+    assert_eq!(store.orders[&1].chart_num, 1);
 }
 
 /// `order_lines.rs:update` marking every open UID as seen without comparing snapshot generations
