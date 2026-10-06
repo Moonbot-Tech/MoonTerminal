@@ -311,7 +311,7 @@ fn decorative_animation_goes_through_the_pulse_timer() {
         for (owner, drawer, arm) in [
             ("panels/news/mod.rs", "panels/news/render.rs", "pulse::arm("),
             (
-                "analytics/profit_monitor/mod.rs",
+                "analytics/profit_monitor/actions.rs",
                 "analytics/profit_monitor/line.rs",
                 "pulse::arm_with(",
             ),
@@ -428,7 +428,7 @@ fn terminal_overlays_use_moonui_window_layers_and_moon_components() {
         fs::read_to_string(root.join("strategies").join("tree").join("dialogs.rs")).unwrap();
     let strategies_menu =
         fs::read_to_string(root.join("strategies").join("tree").join("menu.rs")).unwrap();
-    let strategies_params = fs::read_to_string(root.join("strategies").join("params.rs")).unwrap();
+    let strategies_params = read_unsplit("strategies/params.rs");
     let assets_mod = fs::read_to_string(root.join("panels").join("assets").join("mod.rs")).unwrap();
     let assets_wallets =
         fs::read_to_string(root.join("panels").join("assets").join("wallets.rs")).unwrap();
@@ -762,7 +762,7 @@ fn saved_geometry_names_its_display_and_identity_outranks_coordinates() {
     // Every window that persists geometry must persist the display with it, through the one helper
     // that reads both — a rectangle saved without its monitor reopens on the wrong one.
     for module in [
-        "analytics/mod.rs",
+        "analytics/construct.rs",
         "analytics/profit_monitor/mod.rs",
         "panels/assets/mod.rs",
         "panels/report/state.rs",
@@ -1071,7 +1071,10 @@ fn every_window_root_restores_focus_when_nothing_holds_it() {
         ("strategies window", "strategies/mod.rs"),
         ("trade window", "trade_window/render.rs"),
         ("analytics window", "analytics/render.rs"),
-        ("profit monitor window", "analytics/profit_monitor/mod.rs"),
+        (
+            "profit monitor window",
+            "analytics/profit_monitor/render.rs",
+        ),
         ("report panel and its own window", "panels/report/render.rs"),
     ] {
         let raw = read_src(path);
@@ -1270,7 +1273,7 @@ fn secondary_window_frames_expose_maximize_without_changing_login() {
         "diagnostics/debug_window.rs",
         "window/detached.rs",
     ] {
-        let source = code_only(&fs::read_to_string(root.join(path)).unwrap());
+        let source = code_only(&read_unsplit(path));
         let mut checked = 0;
         for tail in source.split("MoonWindowFrame::").skip(1) {
             let chain = tail.split(';').next().unwrap();

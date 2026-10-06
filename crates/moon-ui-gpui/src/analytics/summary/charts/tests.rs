@@ -1,10 +1,153 @@
 //! Unit tests for the pure selection and normalization rules behind the per-core ranking.
 
+use super::hover::enter_decision;
 use super::{
     PopupHover, PopupKey, core_rank_rows, core_rank_stats, distinct_core_colors, overview_ranges,
     popup_limits, popup_outer_width, thinned_labels,
 };
 use moon_core::db::analytics::CoreSeries;
+
+/// Adapt the production entry decision to test selection and delayed-work revision tokens.
+fn model_chart_enter(
+    hover: &mut PopupHover,
+    selected: &mut Option<PopupKey>,
+    key: PopupKey,
+    from_popup: bool,
+) -> Option<u64> {
+    if let Some(revision) = enter_decision(hover, *selected, key, from_popup) {
+        Some(revision)
+    } else {
+        *selected = Some(key);
+        None
+    }
+}
+
+/// Compare both pointer ownership and the same three highlight projections select_popup writes.
+fn assert_popup_selection_equal(
+    old: &PopupHover,
+    new: &PopupHover,
+    old_selected: Option<PopupKey>,
+    new_selected: Option<PopupKey>,
+) {
+    assert_eq!(old.target, new.target);
+    assert_eq!(old.over_popup, new.over_popup);
+    let highlights = |key| match key {
+        Some(PopupKey::Daily(i)) => (Some(i), None, None),
+        Some(PopupKey::Cumulative(i)) => (None, Some(i), None),
+        Some(PopupKey::Kind(i)) => (None, None, Some(i)),
+        None => (None, None, None),
+    };
+    assert_eq!(highlights(old_selected), highlights(new_selected));
+}
+
+/// Omitting old source leave must still fence its timer and preserve neighbour dwell in either direction.
+#[test]
+fn cumulative_single_source_matches_old_column_switches_both_directions() {
+    for (a, b) in [(2, 7), (7, 2)] {
+        for leave_first in [true, false] {
+            let (first, next) = (PopupKey::Cumulative(a), PopupKey::Cumulative(b));
+            let (mut old, mut new) = (PopupHover::default(), PopupHover::default());
+            let (mut old_selected, mut new_selected) = (None, None);
+            model_chart_enter(&mut old, &mut old_selected, first, false);
+            new.cumulative_pointer_entered();
+            assert!(new.cumulative_move_should_enter(a));
+            model_chart_enter(&mut new, &mut new_selected, first, false);
+            let stale = leave_first.then(|| old.leave(first, false)).flatten();
+            let old_reveal = model_chart_enter(&mut old, &mut old_selected, next, false).unwrap();
+            if !leave_first {
+                assert_eq!(old.leave(first, false), None);
+            }
+            assert!(new.cumulative_move_should_enter(b));
+            let new_reveal = model_chart_enter(&mut new, &mut new_selected, next, false).unwrap();
+            assert_popup_selection_equal(&old, &new, old_selected, new_selected);
+            if let Some(revision) = stale {
+                assert!(!old.expire(first, revision));
+            }
+            assert!(old.is_current(next, old_reveal));
+            assert!(new.is_current(next, new_reveal));
+            old_selected = Some(next);
+            new_selected = Some(next);
+            assert_popup_selection_equal(&old, &new, old_selected, new_selected);
+            let old_leave = old.leave(next, false).unwrap();
+            let new_key = new.cumulative_pointer_left().unwrap();
+            let new_leave = new.leave(new_key, false).unwrap();
+            assert!(old.expire(next, old_leave));
+            assert!(new.expire(next, new_leave));
+            assert_popup_selection_equal(&old, &new, None, None);
+        }
+    }
+}
+
+/// Same-bucket re-entry must fence popup dismissal; repeated interior moves must not restart entry.
+#[test]
+fn cumulative_same_bucket_reentry_survives_expire_and_repeated_moves_do_not_enter() {
+    let key = PopupKey::Cumulative(3);
+    let mut hover = PopupHover::default();
+    let mut selected = None;
+    hover.cumulative_pointer_entered();
+    assert!(hover.cumulative_move_should_enter(3));
+    model_chart_enter(&mut hover, &mut selected, key, false);
+    let leaving_source = hover.cumulative_pointer_left().unwrap();
+    let source_timer = hover.leave(leaving_source, false).unwrap();
+    model_chart_enter(&mut hover, &mut selected, key, true);
+    assert!(!hover.expire(key, source_timer));
+    let popup_timer = hover.leave(key, true).unwrap();
+    hover.cumulative_pointer_entered();
+    assert!(hover.cumulative_move_should_enter(3));
+    model_chart_enter(&mut hover, &mut selected, key, false);
+    assert!(!hover.expire(key, popup_timer));
+    assert_eq!(hover.target, Some(key));
+    assert_eq!(selected, Some(key));
+    let revision = hover.revision;
+    for _ in 0..100 {
+        assert!(!hover.cumulative_move_should_enter(3));
+    }
+    assert_eq!(hover.revision, revision);
+    // A popup-first callback order still needs a chart entry even before a source-enter callback.
+    hover.enter(key, true);
+    assert!(hover.cumulative_move_should_enter(3));
+    hover.enter(key, false);
+    assert!(hover.cumulative_pointer_left().is_some());
+    assert_eq!(
+        hover.cumulative_pointer_left(),
+        None,
+        "gap movement must leave only once"
+    );
+    assert!(
+        hover.cumulative_move_should_enter(3),
+        "return across the uncovered region must cancel leave"
+    );
+}
+
+/// Baseline label formatting and magnitude-based thinning; GUI font measurement is excluded.
+#[test]
+#[ignore]
+fn bench_daily_labels_400() {
+    let data = super::super::tests::synthetic_summary();
+    let started = std::time::Instant::now();
+    for _ in 0..1000 {
+        let texts: Vec<_> = data
+            .days
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}{}",
+                    moon_core::util::fmt::compact(d.profit, 0),
+                    crate::analytics::pnl_suffix()
+                )
+            })
+            .collect();
+        let profits: Vec<_> = data.days.iter().map(|d| d.profit).collect();
+        std::hint::black_box((
+            texts,
+            thinned_labels(&profits, super::PLOT_W_NOMINAL, std::hint::black_box(48.0)),
+        ));
+    }
+    println!(
+        "bench_daily_labels_400 before_us_per_iter={:.3}",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+}
 
 /// Long identities retain their entire measured row and do not lose width to the vertical track.
 #[test]
@@ -97,7 +240,7 @@ fn thinned_labels_keep_spaced_daily_extremes() {
     );
 }
 
-/// `summary/charts.rs:distinct_core_colors` must give duplicate or missing configured colors a
+/// `summary/charts/axis.rs:distinct_core_colors` must give duplicate or missing configured colors a
 /// distinct picker swatch in uid order. Dropping the taken-RGB guard makes chart lines collide,
 /// while using profit order instead of uid makes the same core change color after a reload.
 #[test]

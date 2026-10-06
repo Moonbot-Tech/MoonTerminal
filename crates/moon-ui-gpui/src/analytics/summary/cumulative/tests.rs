@@ -1,7 +1,52 @@
 use super::{
-    MAX_CORE_LINES, MAX_SWING_LABELS, drawn_core_order, place_labels, swing_labels, swing_points,
+    MAX_CORE_LINES, MAX_SWING_LABELS, drawn_core_order, hover_bucket_at, place_labels,
+    swing_labels, swing_points,
 };
 use moon_core::db::analytics::CoreSeries;
+
+/// Independent old layout oracle: last-painted half-open column owns the pointer.
+fn old_hover_bucket(frac: f32, n: usize) -> Option<usize> {
+    let step = 1.0 / n.saturating_sub(1).max(1) as f32;
+    (0..n).rev().find(|&bi| {
+        let centre = bi as f32 * step;
+        let left = (centre - step / 2.0).max(0.0);
+        let right = (centre + step / 2.0).min(1.0);
+        left <= frac && frac < right
+    })
+}
+
+/// Ideal-grid rounding loses f32 edges and the one-bucket gap, shifting popup identity.
+#[test]
+fn single_hover_matches_all_old_columns_and_shared_edges() {
+    for n in 1usize..=500 {
+        let step = 1.0 / n.saturating_sub(1).max(1) as f32;
+        for bi in 0..n {
+            let centre = bi as f32 * step;
+            let left = (centre - step / 2.0).max(0.0);
+            let right = (centre + step / 2.0).min(1.0);
+            for sample in 0..=8 {
+                let frac = left + (right - left) * sample as f32 / 8.0;
+                assert_eq!(
+                    hover_bucket_at(frac, n),
+                    old_hover_bucket(frac, n),
+                    "n={n} bi={bi} frac={frac:?}"
+                );
+            }
+            assert_eq!(hover_bucket_at(left, n), old_hover_bucket(left, n));
+            assert_eq!(hover_bucket_at(right, n), old_hover_bucket(right, n));
+            if bi + 1 < n {
+                let next_left = ((bi + 1) as f32 * step - step / 2.0).max(0.0);
+                if next_left == right {
+                    assert_eq!(hover_bucket_at(right, n), Some(bi + 1));
+                }
+            }
+        }
+    }
+    assert_eq!(hover_bucket_at(0.5, 1), None);
+    assert_eq!(hover_bucket_at(0.5001, 1), None);
+    assert_eq!(hover_bucket_at(1.0, 1), None);
+    assert_eq!(hover_bucket_at(0.0, 0), None);
+}
 
 /// Build only the fields the line-selection helper reads.
 fn core(uid: u64, total: f64) -> CoreSeries {

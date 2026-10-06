@@ -95,7 +95,18 @@ fn populated_folder_icons_follow_their_disclosure_pose() {
 }
 
 /// Compile-time source used to ensure the checkbox producer retains its action guard.
-const SRC: &str = include_str!("../moon.rs");
+const SRC: &str = concat!(
+    include_str!("../moon.rs"),
+    include_str!("../moon/geometry.rs"),
+    include_str!("../moon/node.rs"),
+    include_str!("../moon/build.rs"),
+    include_str!("../moon/shape.rs"),
+    include_str!("../moon/callbacks.rs"),
+    include_str!("../moon/rows.rs"),
+    include_str!("../moon/counts.rs"),
+    include_str!("../moon/headings.rs"),
+    include_str!("../moon/strategy_row.rs"),
+);
 
 /// Issue #689: pulling a folder caret left by the disclosure box stacks it on its
 /// core, because that box and the indent step are both 12 design units. A larger
@@ -324,7 +335,7 @@ fn preview_closures_wire_drag_chip_confinement() {
     );
 }
 
-/// `tree/moon.rs::RowCounts::subtree`: dropping the open-orders tooltip clause would leave the
+/// `tree/moon/counts.rs::RowCounts::subtree`: dropping the open-orders tooltip clause would leave the
 /// displayed `(N)` count unexplained, so users could no longer tell what the second counter means.
 #[test]
 fn subtree_tooltip_names_counts_and_open_orders_when_present() {

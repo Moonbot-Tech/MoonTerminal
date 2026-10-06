@@ -252,7 +252,21 @@ fn the_move_buttons_take_their_enablement_from_the_pane_cache() {
     for (name, source) in [
         ("tree/ui.rs", include_str!("../ui.rs")),
         ("tree/mod.rs", include_str!("../mod.rs")),
-        ("tree/moon.rs", include_str!("../moon.rs")),
+        (
+            "tree/moon.rs",
+            concat!(
+                include_str!("../moon.rs"),
+                include_str!("../moon/geometry.rs"),
+                include_str!("../moon/node.rs"),
+                include_str!("../moon/build.rs"),
+                include_str!("../moon/shape.rs"),
+                include_str!("../moon/callbacks.rs"),
+                include_str!("../moon/rows.rs"),
+                include_str!("../moon/counts.rs"),
+                include_str!("../moon/headings.rs"),
+                include_str!("../moon/strategy_row.rs"),
+            ),
+        ),
         ("tree/cache.rs", include_str!("../cache.rs")),
         ("strategies/mod.rs", include_str!("../../mod.rs")),
     ] {

@@ -44,6 +44,58 @@ pub fn read_src(rel: &str) -> String {
 /// Source files split by a pure move, root first, then the files now holding their text.
 const SPLIT_SOURCES: &[(&str, &[&str])] = &[
     (
+        "strategies/tree/moon.rs",
+        &[
+            "strategies/tree/moon.rs",
+            "strategies/tree/moon/geometry.rs",
+            "strategies/tree/moon/node.rs",
+            "strategies/tree/moon/build.rs",
+            "strategies/tree/moon/shape.rs",
+            "strategies/tree/moon/callbacks.rs",
+            "strategies/tree/moon/rows.rs",
+            "strategies/tree/moon/counts.rs",
+            "strategies/tree/moon/headings.rs",
+            "strategies/tree/moon/strategy_row.rs",
+        ],
+    ),
+    (
+        "strategies/params.rs",
+        &[
+            "strategies/params.rs",
+            "strategies/params/labels.rs",
+            "strategies/params/list_dialog.rs",
+            "strategies/params/model.rs",
+            "strategies/params/panel.rs",
+            "strategies/params/editors.rs",
+            "strategies/params/formula.rs",
+        ],
+    ),
+    (
+        "analytics/profit_monitor/mod.rs",
+        &[
+            "analytics/profit_monitor/mod.rs",
+            "analytics/profit_monitor/body_views.rs",
+            "analytics/profit_monitor/reload.rs",
+            "analytics/profit_monitor/actions.rs",
+            "analytics/profit_monitor/render.rs",
+            "analytics/profit_monitor/context.rs",
+            "analytics/profit_monitor/header.rs",
+        ],
+    ),
+    (
+        "analytics/mod.rs",
+        &[
+            "analytics/mod.rs",
+            "analytics/diag.rs",
+            "analytics/session.rs",
+            "analytics/construct.rs",
+            "analytics/observe.rs",
+            "analytics/query.rs",
+            "analytics/load.rs",
+            "analytics/controls.rs",
+        ],
+    ),
+    (
         "../../moon-core/src/config/layout.rs",
         &[
             "../../moon-core/src/config/layout.rs",
