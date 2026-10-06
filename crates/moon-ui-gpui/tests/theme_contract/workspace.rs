@@ -357,7 +357,7 @@ fn detached_chart_activation_and_activity_refresh_auto_singleton_ownership() {
         "native detached-chart activation must focus its Auto owner independently of idle polling"
     );
 
-    let stack = code_only(&read_src("chart_tabs/main_stack.rs"));
+    let stack = code_only(&read_src("chart_tabs/main_stack/close.rs"));
     let prune = code_only(braced_body(&stack, "fn prune_idle("));
     assert!(
         prune.contains(".any(|h| h.is_active(cx).unwrap_or(false))")

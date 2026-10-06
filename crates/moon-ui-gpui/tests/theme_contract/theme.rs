@@ -183,7 +183,8 @@ fn chart_background_policy_keeps_gpu_canvas_under_scene() {
 #[test]
 fn main_chart_stack_rmb_toggle_uses_full_chart_area_not_plot_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap();
+    let main_stack =
+        fs::read_to_string(root.join("chart_tabs").join("main_stack").join("tabs.rs")).unwrap();
 
     assert!(
         main_stack.contains("window_pos_allows_main_stack_toggle(event.position)"),

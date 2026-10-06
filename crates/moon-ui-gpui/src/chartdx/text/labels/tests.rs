@@ -12,7 +12,10 @@ use moon_core::config::{
 use moon_core::feed::OrderRow;
 use moon_core::util::fmt::DeltaSign;
 
-use super::{ActionInputs, LabelInputs, LabelState, basis_index, collect_open_stats, preview_row};
+use super::LabelState;
+use super::inputs::{ActionInputs, LabelInputs, basis_index};
+use super::pnl::collect_open_stats;
+use super::preview::preview_row;
 
 /// Removing the column's collapsed early return leaves filter lines covering the chart; dropping the
 /// forced header removes the only way to reopen a module whose show_name is off.
@@ -1514,8 +1517,8 @@ fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
     let mut part = ChartLabelPart::new(ChartLabelField::WindowBuyVolume);
     part.window = moon_core::config::LabelWindow::M5;
 
-    let with = super::caption_prefix(&part, true, TF_5M);
-    let without = super::caption_prefix(&part, false, TF_5M);
+    let with = super::format::caption_prefix(&part, true, TF_5M);
+    let without = super::format::caption_prefix(&part, false, TF_5M);
 
     assert!(
         with.starts_with("Bv"),
@@ -1540,8 +1543,8 @@ fn the_prefix_switch_drops_the_period_and_keeps_the_name() {
 fn the_prefix_switch_still_removes_a_plain_caption() {
     let _locale = crate::test_locale::force("en");
     let part = ChartLabelPart::new(ChartLabelField::OpenOrders);
-    assert!(!super::caption_prefix(&part, true, TF_5M).is_empty());
-    assert!(super::caption_prefix(&part, false, TF_5M).is_empty());
+    assert!(!super::format::caption_prefix(&part, true, TF_5M).is_empty());
+    assert!(super::format::caption_prefix(&part, false, TF_5M).is_empty());
 }
 
 /// The five-minute chart every countdown test measures against.
@@ -1626,7 +1629,7 @@ fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
         tf: moon_core::config::LabelTf::H1,
         ..auto
     };
-    let auto_prefix = super::caption_prefix(&auto, false, TF_5M);
+    let auto_prefix = super::format::caption_prefix(&auto, false, TF_5M);
     assert!(
         auto_prefix.contains(&*rust_i18n::t!("chart_labels.tf.m5")),
         "auto follows the chart: {auto_prefix:?}"
@@ -1635,7 +1638,7 @@ fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
         !auto_prefix.contains(&*rust_i18n::t!("chart_labels.tf.auto")),
         "the setting is not the period: {auto_prefix:?}"
     );
-    let hour_prefix = super::caption_prefix(&hour, false, TF_5M);
+    let hour_prefix = super::format::caption_prefix(&hour, false, TF_5M);
     assert!(
         hour_prefix.contains(&*rust_i18n::t!("chart_labels.tf.h1")),
         "a fixed timeframe ignores the chart: {hour_prefix:?}"
@@ -1643,7 +1646,7 @@ fn the_candle_countdown_prefix_names_the_resolved_timeframe() {
 
     // The switch drops the WORD and keeps the period: the period is what tells two countdowns
     // apart, which is the mirror of the window rule and the reason for it.
-    let named = super::caption_prefix(&hour, true, TF_5M);
+    let named = super::format::caption_prefix(&hour, true, TF_5M);
     assert!(
         named.contains(&*rust_i18n::t!("chart_labels.tf.h1")),
         "{named:?}"

@@ -108,7 +108,7 @@ fn selected_display_zone_reaches_every_cached_time_surface() {
         "a zone change must discard preset rows selected under the old civil bounds"
     );
 
-    let charts = code_only(&read_src("panels/chart/mod.rs"));
+    let charts = code_only(&read_src("panels/chart/construct.rs"));
     assert_eq!(
         charts.matches("cx.observe(&display_time_revision").count(),
         2,

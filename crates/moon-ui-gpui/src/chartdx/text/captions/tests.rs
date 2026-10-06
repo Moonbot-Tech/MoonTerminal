@@ -9,7 +9,230 @@ use moon_core::config::{
 
 use super::super::caption::CaptionGeom;
 use super::super::labels::LabelText;
-use super::{CaptionGeomInput, MAX_CAPTION_LINE_H, ZONE_PAD, group_lines, zone_start_y};
+use super::fit::group_lines;
+use super::model::{CaptionGeomInput, MAX_CAPTION_LINE_H, ZONE_PAD};
+use super::zone::zone_start_y;
+
+/// Synthetic modules cover every zone and alignment with five captions each.
+fn row_plan_fixture() -> (ChartLabelsCfg, Vec<LabelText>) {
+    let mut cfg = ChartLabelsCfg::empty();
+    let mut texts = Vec::new();
+    for (row, (zone, align)) in LabelZone::ALL
+        .into_iter()
+        .flat_map(|zone| LabelAlign::ALL.map(|align| (zone, align)))
+        .enumerate()
+    {
+        cfg.rows[row] = ChartLabelRow::new(zone, align);
+        for part in 0..5 {
+            cfg.rows[row].push_part(ChartLabelField::Coin);
+            texts.push(LabelText {
+                row,
+                part,
+                text: format!("caption {row} {part}"),
+                prefix: String::new(),
+                reachable: false,
+                venue: None,
+                sign: None,
+                color: None,
+                bar: None,
+                volume_menu: false,
+                action: None,
+            });
+        }
+    }
+    (cfg, texts)
+}
+
+/// Measures grouping and row construction against cloning pristine rows in the test profile.
+#[test]
+#[ignore]
+fn caption_row_plan_bench() {
+    use std::{hint::black_box, time::Instant};
+    let engine = crate::chartdx::ChartEngine::new(
+        1_700_000_000_000.0,
+        moon_core::config::ChartTheme::default(),
+    );
+    let data = engine.data.borrow();
+    let state = data.render.borrow();
+    let (cfg, texts) = row_plan_fixture();
+    assert_eq!(texts.len(), 60);
+    let cfg = std::rc::Rc::new(cfg);
+    let mut cache = None;
+    super::RowPlanCache::working_rows(&mut cache, 1, &cfg, state.label_font_px(), |zone, align| {
+        state.collect_rows(&cfg, &texts, zone, align)
+    });
+    let start = Instant::now();
+    let mut rebuild_calls = 0;
+    for _ in 0..10_000 {
+        for zone in LabelZone::ALL {
+            for align in LabelAlign::ALL {
+                black_box(state.collect_rows(&cfg, &texts, zone, align));
+                rebuild_calls += 1;
+            }
+        }
+    }
+    let rebuild = start.elapsed();
+    let mut cached_builder_calls = 0;
+    let start = Instant::now();
+    for _ in 0..10_000 {
+        black_box(super::RowPlanCache::working_rows(
+            &mut cache,
+            1,
+            &cfg,
+            state.label_font_px(),
+            |zone, align| {
+                cached_builder_calls += 1;
+                state.collect_rows(&cfg, &texts, zone, align)
+            },
+        ));
+    }
+    let cached = start.elapsed();
+    assert_eq!(rebuild_calls, 120_000);
+    assert_eq!(cached_builder_calls, 0);
+    println!(
+        "caption_row_plan_bench test profile: REBUILD {rebuild:?} builder_calls={rebuild_calls}; CACHED {cached:?} builder_calls={cached_builder_calls}"
+    );
+}
+
+/// A stable key must skip the production builder on the second pass.
+#[test]
+fn row_plan_reused_while_key_unchanged() {
+    let engine = crate::chartdx::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    let data = engine.data.borrow();
+    let state = data.render.borrow();
+    let (cfg, texts) = row_plan_fixture();
+    let cfg = std::rc::Rc::new(cfg);
+    let mut cache = None;
+    let mut calls = 0;
+    for pass in 0..2 {
+        let before = calls;
+        super::RowPlanCache::working_rows(&mut cache, 1, &cfg, 11.5, |zone, align| {
+            calls += 1;
+            state.collect_rows(&cfg, &texts, zone, align)
+        });
+        assert_eq!(calls - before, if pass == 0 { 12 } else { 0 });
+    }
+}
+
+/// Each grouping or styling key input independently invalidates the plan.
+#[test]
+fn row_plan_rebuilt_on_generation_cfg_or_font_change() {
+    let engine = crate::chartdx::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    let data = engine.data.borrow();
+    let state = data.render.borrow();
+    let (cfg, texts) = row_plan_fixture();
+    let cfg = std::rc::Rc::new(cfg);
+    let replacement = std::rc::Rc::new((*cfg).clone());
+    let mut cache = None;
+    for (generation, cfg, font) in [
+        (1, &cfg, 11.5),
+        (2, &cfg, 11.5),
+        (2, &replacement, 11.5),
+        (2, &replacement, 12.5),
+    ] {
+        let mut calls = 0;
+        super::RowPlanCache::working_rows(&mut cache, generation, cfg, font, |zone, align| {
+            calls += 1;
+            state.collect_rows(cfg, &texts, zone, align)
+        });
+        assert_eq!(calls, 12);
+    }
+}
+
+/// A short pane must not permanently discard filter entries from the cached plan.
+#[test]
+fn filter_rows_survive_short_then_tall_pane() {
+    let _locale = crate::test_locale::force("en");
+    let engine = crate::chartdx::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    let data = engine.data.borrow();
+    let state = data.render.borrow();
+    let mut cfg = ChartLabelsCfg::empty();
+    cfg.rows[0] = moon_core::config::strategy_filters_row();
+    let cfg = std::rc::Rc::new(cfg);
+    let view = std::rc::Rc::new(moon_core::config::ArbViewCfg::default());
+    let mut labels = super::super::labels::LabelState::default();
+    labels.update(
+        &cfg,
+        &view,
+        super::super::labels::LabelInputs {
+            filter_lines: vec!["first".into(), "second".into(), "third".into()],
+            ..Default::default()
+        },
+    );
+    let mut cache = None;
+    let mut short = super::RowPlanCache::working_rows(
+        &mut cache,
+        labels.generation,
+        &cfg,
+        state.label_font_px(),
+        |zone, align| state.collect_rows(&cfg, &labels.texts, zone, align),
+    );
+    let cell = short
+        .iter_mut()
+        .flatten()
+        .flat_map(|rows| rows.iter_mut())
+        .flat_map(|row| row.cells.iter_mut())
+        .find(|cell| cell.items.len() == 4)
+        .expect("header and three entries");
+    assert!(cell.fit_filter_header(&labels.texts, cell.items[0].block_h() * 2.0));
+    assert_eq!(cell.items.len(), 2);
+    let mut tall = super::RowPlanCache::working_rows(
+        &mut cache,
+        labels.generation,
+        &cfg,
+        state.label_font_px(),
+        |_, _| panic!("same key must reuse"),
+    );
+    let cell = tall
+        .iter_mut()
+        .flatten()
+        .flat_map(|rows| rows.iter_mut())
+        .flat_map(|row| row.cells.iter_mut())
+        .find(|cell| cell.items.len() == 4)
+        .expect("all entries survive");
+    assert!(!cell.fit_filter_header(&labels.texts, 1000.0));
+    assert_eq!(cell.items.len(), 4);
+}
+
+/// Wrapped working items must not carry narrow-pane line counts or wrap indices into a wide pane.
+#[test]
+fn narrow_then_wide_pane_reuses_pristine_rows() {
+    let engine = crate::chartdx::ChartEngine::new(0.0, moon_core::config::ChartTheme::default());
+    let data = engine.data.borrow();
+    let state = data.render.borrow();
+    let (cfg, texts) = row_plan_fixture();
+    let cfg = std::rc::Rc::new(cfg);
+    let mut cache = None;
+    let mut narrow = super::RowPlanCache::working_rows(&mut cache, 1, &cfg, 11.5, |zone, align| {
+        state.collect_rows(&cfg, &texts, zone, align)
+    });
+    for item in narrow
+        .iter_mut()
+        .flatten()
+        .flat_map(|rows| rows.iter_mut())
+        .flat_map(|row| row.cells.iter_mut())
+        .flat_map(|cell| cell.items.iter_mut())
+    {
+        item.lines = 3;
+        item.wrap_ix = 42;
+    }
+    let wide = super::RowPlanCache::working_rows(&mut cache, 1, &cfg, 11.5, |_, _| {
+        panic!("same key must reuse")
+    });
+    let items: Vec<_> = wide
+        .iter()
+        .flatten()
+        .flat_map(|rows| rows.iter())
+        .flat_map(|row| row.cells.iter())
+        .flat_map(|cell| cell.items.iter())
+        .collect();
+    assert_eq!(items.len(), 60);
+    assert!(
+        items
+            .iter()
+            .all(|item| item.lines == 1 && item.wrap_ix == usize::MAX)
+    );
+}
 
 /// Treating the filters header like an ordinary name places it beside the lines instead of
 /// above them; retaining hidden texts prevents the following module from reclaiming height.
@@ -211,7 +434,7 @@ fn an_arbitrage_column_stacks_whatever_the_flow_says() {
 /// do not share a vertical cannot be compared, which is the only thing a bar is for.
 #[test]
 fn a_module_reserves_one_bar_track_for_the_whole_column() {
-    use super::{BAR_ZONE, Cell, Item, bar_zone};
+    use super::model::{BAR_ZONE, Cell, Item, bar_zone};
 
     let bar = crate::chartdx::text::labels::VolumeBar {
         fill: 0.5,
@@ -450,8 +673,8 @@ fn chart_bottom_ignores_the_corner_strip() {
     );
 }
 
-fn wrap_item(part: usize, wraps: bool) -> super::Item {
-    super::Item {
+fn wrap_item(part: usize, wraps: bool) -> super::model::Item {
+    super::model::Item {
         pos: 0,
         row: 0,
         part,
@@ -483,7 +706,7 @@ fn overflowing_filter_cells_keep_the_header_inside_the_bottom_band() {
             ..Default::default()
         },
     );
-    let cell = || super::Cell {
+    let cell = || super::model::Cell {
         gap: 0.0,
         items: state
             .texts
@@ -551,7 +774,7 @@ fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
             );
             let grouped = group_lines(&cfg, &state.texts, zone, LabelAlign::Left);
             assert_eq!(grouped, vec![vec![vec![0], vec![1, 2, 3, 4, 5, 6]]]);
-            let mut column = super::Cell {
+            let mut column = super::model::Cell {
                 gap: 0.0,
                 items: grouped[0][1]
                     .iter()
@@ -570,7 +793,7 @@ fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
                 Some(LabelAction::ToggleStrategyFilters)
             );
             assert_eq!(
-                super::caption_style(&cfg.rows[0], header.part),
+                super::fit::caption_style(&cfg.rows[0], header.part),
                 Some(ChartLabelRow::name_style())
             );
             let pane_top = 55.0;
@@ -589,7 +812,7 @@ fn mixed_filter_column_keeps_its_header_above_entries_inside_a_short_pane() {
 /// again the moment a detect line shares the zone.
 #[test]
 fn a_wrapping_filter_column_is_hungry_not_elastic() {
-    use super::Cell;
+    use super::model::Cell;
     use moon_core::config::ARB_PART_BASE;
 
     let cell = Cell {
@@ -607,7 +830,7 @@ fn a_wrapping_filter_column_is_hungry_not_elastic() {
 /// A detect line is still the elastic prose the zone is divided for.
 #[test]
 fn a_detect_line_is_elastic_prose() {
-    use super::Cell;
+    use super::model::Cell;
 
     let cell = Cell {
         gap: 0.0,
@@ -622,11 +845,11 @@ fn a_detect_line_is_elastic_prose() {
 #[test]
 fn only_column_lines_grow_a_wheel_band() {
     let mut bands = Vec::new();
-    super::grow_column_band(&mut bands, &wrap_item(0, true), [0.0, 0.0, 10.0, 10.0]);
+    super::fit::grow_column_band(&mut bands, &wrap_item(0, true), [0.0, 0.0, 10.0, 10.0]);
     assert!(bands.is_empty());
     let line = wrap_item(super::ARB_PART_BASE, true);
-    super::grow_column_band(&mut bands, &line, [4.0, 10.0, 20.0, 12.0]);
-    super::grow_column_band(&mut bands, &line, [4.0, 22.0, 30.0, 12.0]);
+    super::fit::grow_column_band(&mut bands, &line, [4.0, 10.0, 20.0, 12.0]);
+    super::fit::grow_column_band(&mut bands, &line, [4.0, 22.0, 30.0, 12.0]);
     assert_eq!(bands.len(), 1);
     assert_eq!(bands[0].rect, [4.0, 10.0, 30.0, 24.0]);
 }
@@ -636,7 +859,7 @@ fn only_column_lines_grow_a_wheel_band() {
 /// The draw loop needs a GPU text context, so the branch is checked in the source.
 #[test]
 fn the_wrapped_draw_branch_registers_column_lines() {
-    let src = include_str!("../captions.rs");
+    let src = include_str!("stack.rs");
     let start = src
         .find("if item.wrap_ix < self.caption_wraps.len() {")
         .expect("wrapped branch");

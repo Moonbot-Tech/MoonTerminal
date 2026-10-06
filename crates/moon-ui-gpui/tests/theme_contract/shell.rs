@@ -17,7 +17,13 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
     let backend = read_backend();
     let chrome = fs::read_to_string(root.join("chrome").join("terminal_chrome.rs")).unwrap();
     let chart_tabs = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
-    let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap();
+    let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap()
+        + &read_src("chart_tabs/main_stack/open.rs")
+        + &read_src("chart_tabs/main_stack/close.rs")
+        + &read_src("chart_tabs/main_stack/prefs.rs")
+        + &read_src("chart_tabs/main_stack/focus.rs")
+        + &read_src("chart_tabs/main_stack/tabs.rs")
+        + &read_src("chart_tabs/main_stack/render.rs");
     let ingest = fs::read_to_string(root.join("chart_tabs").join("ingest.rs")).unwrap();
     let windows = fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
     let layout = read_unsplit("../../moon-core/src/config/layout.rs");
@@ -1470,7 +1476,7 @@ fn stack_cards_take_their_gutter_from_the_shared_decision() {
         "the shared gutter decision must live in stack.rs beside the card that draws it"
     );
 
-    for rel in ["chart_tabs/main_stack.rs", "chart_tabs/add_stack.rs"] {
+    for rel in ["chart_tabs/main_stack/tabs.rs", "chart_tabs/add_stack.rs"] {
         let source = read_src(rel);
         let call = chain_between(&source, "chart_stack_card(", ");", rel);
         assert!(
@@ -1490,7 +1496,9 @@ fn stack_cards_take_their_gutter_from_the_shared_decision() {
 /// perfectly in-range index, so a click selects, fullscreens or CLOSES the wrong chart.
 #[test]
 fn the_main_tab_row_is_gated_and_addresses_charts_by_identity() {
-    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let main_stack = read_src("chart_tabs/main_stack/tabs.rs")
+        + &read_src("chart_tabs/main_stack/focus.rs")
+        + &read_src("chart_tabs/main_stack/close.rs");
 
     let row = braced_body(&main_stack, "fn render_tab_row(");
     assert!(
@@ -1597,7 +1605,7 @@ fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
     );
 
     let row = code_only(braced_body(
-        &read_src("chart_tabs/main_stack.rs"),
+        &read_src("chart_tabs/main_stack/tabs.rs"),
         "fn render_tab_row(",
     ));
     assert!(
@@ -1623,7 +1631,7 @@ fn chart_tab_strips_are_in_flow_and_yield_to_chrome() {
 /// no longer exist. It is invisible until a user hits Shift+Escape or waits out the idle timer.
 #[test]
 fn every_main_chart_removal_goes_through_the_shared_teardown() {
-    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let main_stack = read_src("chart_tabs/main_stack/close.rs");
 
     for name in ["fn close_active(", "fn close_at(", "fn prune_idle("] {
         let body = braced_body(&main_stack, name);
