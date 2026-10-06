@@ -58,7 +58,7 @@ fn chart_history_keeps_the_exact_core_coin_and_report_close_window() {
     assert!(!result.truncated);
 }
 
-/// `report_read.rs::append_row_scope` and `report_read.rs::build_where` must both retain their
+/// `report_read/scope.rs::append_row_scope` and `report_read/scope.rs::build_where` must both retain their
 /// `core_uid IN (...)` guards. Removing both makes the present-but-empty sentinel scope read every
 /// core, so a Report footer can show money for a preset that visibly contains no cores.
 #[test]
@@ -133,7 +133,7 @@ fn a_zero_core_uid_filter_matches_no_rows_and_zero_totals() {
     assert_eq!(unscoped_totals.totals[0].profit, 9.5);
 }
 
-/// `report_read.rs:query_chart_trade_history` — replacing `quote::effective_ordinal_expr` with
+/// `report_read/chart.rs:query_chart_trade_history` — replacing `quote::effective_ordinal_expr` with
 /// the raw `basecurrency` column reads a COIN-M row's mislabeled persisted currency (USDT)
 /// instead of its market-derived one (BTC), so the hover card would show a BTC amount labeled
 /// USDT — wrong by the BTC price, and presented as a precise figure.
@@ -476,7 +476,7 @@ fn traded_volume_report(quote: i64) -> Connection {
     conn
 }
 
-/// `report_read.rs::entry_spend_sql` must retain its non-Funding predicate. Dropping
+/// `report_read/sums.rs::entry_spend_sql` must retain its non-Funding predicate. Dropping
 /// `AND {funding}` would count the deliberately positive-spend Funding row in the average-order
 /// denominator, quietly moving every single-core Report percentage and understating exclusions.
 #[test]
@@ -652,7 +652,7 @@ fn filtered_traded_volume_is_unsigned_two_sided_and_uses_the_active_rate_mode() 
     std::fs::remove_dir_all(dir).expect("remove traded-volume fixture directory");
 }
 
-/// `report_read.rs:closed_row_predicate` / `open_row_predicate` — dropping the `typeof(...)` gate
+/// `report_read/scope.rs:closed_row_predicate` / `open_row_predicate` — dropping the `typeof(...)` gate
 /// from the closed predicate, or hand-spelling the open one instead of the literal `NOT <closed>`,
 /// breaks the partition every Report money figure depends on: a row can then count as BOTH closed
 /// and open (its money stated twice, once realized and once floating) or as NEITHER (it vanishes
@@ -709,7 +709,7 @@ fn closed_and_open_row_predicates_partition_every_closedate_shape_exactly_once()
     );
 }
 
-/// `report_read.rs:query_totals_attempt` — folding the closed pass back into the combined
+/// `report_read/passes.rs:query_totals_attempt` — folding the closed pass back into the combined
 /// `ClosedAndOpen` scope (what a "save a round trip" simplification looks like) pulls a
 /// still-open row into the same SELECT the valuation coverage aggregate and unified USDT total
 /// are read from. Coverage's `eligible`/`valued` predicates test only whether a row's quote is
@@ -781,7 +781,7 @@ fn totals_valuation_coverage_and_usdt_total_cover_the_closed_row_only() {
     std::fs::remove_dir_all(dir).expect("remove coverage-scope fixture directory");
 }
 
-/// `report_read.rs::query_totals_attempt` -- making the open pass unconditional makes a closed-only
+/// `report_read/passes.rs::query_totals_attempt` -- making the open pass unconditional makes a closed-only
 /// Report footer name an active position the grid excludes; `query_reports_attempt` must preserve
 /// the same closed, open, and combined partition for the table and CSV export.
 ///
@@ -830,7 +830,7 @@ fn report_row_scope_keeps_rows_and_open_totals_in_the_same_partition() {
     );
 }
 
-/// `report_read.rs::append_row_scope` -- resolving `RowScope::ClosedAndOpenIfCurrent` ONCE for the
+/// `report_read/scope.rs::append_row_scope` -- resolving `RowScope::ClosedAndOpenIfCurrent` ONCE for the
 /// whole filter, instead of per offset group, makes a fleet spanning two clock offsets agree on a
 /// single verdict even though the same true-UTC window boundary has demonstrably ended on one
 /// core's own clock while still reaching the present on the other's.
@@ -901,7 +901,7 @@ fn mixed_offset_row_scope_resolves_open_positions_independently_per_core() {
     );
 }
 
-/// `db/report_read.rs::append_row_scope` -- moving the shared coarse `closedate` range in front
+/// `db/report_read/scope.rs::append_row_scope` -- moving the shared coarse `closedate` range in front
 /// of the complete closed-or-open predicate drops every open row, so a bounded report that still
 /// reaches the present hides live money while retaining its in-window closed trades.
 #[test]
@@ -980,7 +980,7 @@ fn coarse_closed_range_keeps_open_rows_outside_its_date_predicate() {
     );
 }
 
-/// `db/report_read.rs::append_row_scope` -- spelling the close date inside an offset-group
+/// `db/report_read/scope.rs::append_row_scope` -- spelling the close date inside an offset-group
 /// disjunction as a plain column lets SQLite fold every branch's `closedate > 0` into one derived
 /// term and seek the index from 0 instead of from the window: an owner read of a future window,
 /// bounded or open-ended, then steps through every closed row of the replica's history. The rows
@@ -1066,7 +1066,7 @@ fn offset_disjunction_seeks_the_index_from_the_window_not_from_zero() {
     }
 }
 
-/// `report_read.rs::append_row_scope` -- when every core in scope shares ONE measured offset, the
+/// `report_read/scope.rs::append_row_scope` -- when every core in scope shares ONE measured offset, the
 /// per-group predicate must collapse to the same single branch an unmeasured (identity) fleet
 /// produces, and each core's window bound must still be shifted by exactly that shared offset. A
 /// forgotten per-core shift, or a shift applied to only one core of the collapsed group, would
@@ -1152,7 +1152,7 @@ fn same_offset_group_shifts_every_cores_window_bound_identically() {
     );
 }
 
-/// `report_read.rs::append_row_scope` -- the window bound must be shifted on the BOUND (via
+/// `report_read/scope.rs::append_row_scope` -- the window bound must be shifted on the BOUND (via
 /// `ReportAxis::shift_bound`), never on the stored COLUMN. Wrapping `r."closedate"` in a
 /// conversion expression (e.g. `r."closedate" + ?`) would still be arithmetically correct, but it
 /// stops SQLite from opening `idx_rep_core_close` on that comparison, turning the period filter
@@ -2293,7 +2293,7 @@ fn corrupt_derived_cache_blanks_the_usdt_columns_not_the_rows() {
 
 /// Current-rate coverage must be published even when the historical cache is unavailable.
 ///
-/// Breakage: `report_read.rs::query_totals_attempt` gating `with_valuation` on `include_valuation`
+/// Breakage: `report_read/passes.rs::query_totals_attempt` gating `with_valuation` on `include_valuation`
 /// — the derived cache's attach state — instead of on the projection actually existing. The
 /// current-rate mode needs no cache, so a detached or recovering `valuation.sqlite` would make the
 /// footer compute a perfectly good USDT total and then throw it away, degrading a convertible
@@ -2347,7 +2347,7 @@ fn current_rate_coverage_survives_an_unavailable_historical_cache() {
 
 /// The USDT profit column is offered BEFORE the percentage one.
 ///
-/// Breakage this pins: swapping the entries in `report_read.rs:DISPLAY_COLUMNS` would move the
+/// Breakage this pins: swapping the entries in `report_read/catalog.rs:DISPLAY_COLUMNS` would move the
 /// amount to the right in the table, Columns menu, and CSV export. The runtime schema-derived list
 /// is the shared consumer rather than a second reading of the constant.
 #[test]
@@ -2673,7 +2673,7 @@ fn chart_history_carries_the_emulator_flag_and_defaults_it_to_real() {
     );
 }
 
-/// `report_read.rs:run_row_pass` — the open block carries its OWN leading order, newest opening
+/// `report_read/passes.rs:run_row_pass` — the open block carries its OWN leading order, newest opening
 /// first, independent of whatever column the table itself is sorted by, and independent of which
 /// physical source each open row lives in.
 ///
@@ -2740,7 +2740,7 @@ fn open_block_stays_newest_first_across_both_sources_under_an_ascending_sort() {
     );
 }
 
-/// `db/report_read.rs:run_row_pass` must retain an ASC `NULLS LAST` equivalent while optimizing
+/// `db/report_read/passes.rs:run_row_pass` must retain an ASC `NULLS LAST` equivalent while optimizing
 /// its SQL order. Dropping the leading NULL discriminator without adding `NULLS LAST` promotes an
 /// unset Profit % above completed trades in an ascending Report and CSV export, silently changing
 /// the user's visible top rows.
@@ -2787,7 +2787,7 @@ fn profit_percent_nulls_stay_last_in_both_report_directions() {
     }
 }
 
-/// `report_read.rs:run_row_pass` must retain `r.newrecid DESC` after the default closed-date
+/// `report_read/passes.rs:run_row_pass` must retain `r.newrecid DESC` after the default closed-date
 /// sort. Removing that tie-break lets SQLite choose which equal-date trades survive the
 /// source-local LIMIT, so the Report grid and CSV export can silently show a different set after
 /// an unrelated planner or schema change.
@@ -2866,7 +2866,7 @@ fn closedate_desc_source_limit_uses_the_total_replica_key() {
     );
 }
 
-/// `db/report_read.rs:query_chart_trade_history` -- making the optional millisecond columns
+/// `db/report_read/chart.rs:query_chart_trade_history` -- making the optional millisecond columns
 /// required, coalescing an absent close value to zero, or shifting their projection positions
 /// would either blank legacy chart history or draw a still-open row with a 1970 exit arrow.
 #[test]
@@ -2978,7 +2978,7 @@ fn capture_chart_history_sql(event: rusqlite::trace::TraceEvent<'_>) {
     }
 }
 
-/// `report_read.rs:query_chart_trade_history_for_cores` must map an empty `core_uids` slice to
+/// `report_read/chart.rs:query_chart_trade_history_for_cores` must map an empty `core_uids` slice to
 /// `NO_MATCH_CORE_UID`. Deleting the `if core_uids.is_empty()` arm and assigning
 /// `core_uids.to_vec()` unconditionally makes a present-but-empty chart scope read every core in
 /// the replica, so the chart draws the whole fleet's arrows with no error.
@@ -3122,7 +3122,7 @@ fn chart_history_empty_core_set_matches_nothing_and_multi_core_uses_index() {
     );
 }
 
-/// `report_read.rs::corrected_column_expression` must print, and sort by, the configured name of a
+/// `report_read/select.rs::corrected_column_expression` must print, and sort by, the configured name of a
 /// renamed core on every one of its trades, while a core no longer configured keeps the name its
 /// rows stored.
 #[test]
@@ -3200,7 +3200,7 @@ fn basis_summary(conn: &Connection, filter: &ReportFilter) -> (Vec<i64>, i64, i6
     (ids, totals.quotes.orders, totals.open.orders)
 }
 
-/// `report_read.rs::append_open_basis_scope` -- under `PeriodBasis::OpenDate` the period bounds
+/// `report_read/scope.rs::append_open_basis_scope` -- under `PeriodBasis::OpenDate` the period bounds
 /// apply to `buydate` for every row, open positions included, in both the row query and the
 /// totals query. Bounding `closedate` there instead admits trade 1 (closed today) into "today"
 /// and loses trades 1 and 2 from "yesterday"; letting open rows bypass the window (the close-date
@@ -3317,7 +3317,7 @@ fn coin_hits(conn: &Connection, raw: &str) -> Vec<i64> {
     ids
 }
 
-/// Dropping the trailing-space check in `report_read.rs:build_where` returns BIO and IOTA for
+/// Dropping the trailing-space check in `report_read/scope.rs:build_where` returns BIO and IOTA for
 /// `io `; applying it to a value without the space narrows today's substring search.
 #[test]
 fn trailing_space_selects_the_exact_ticker_and_keeps_substring_otherwise() {

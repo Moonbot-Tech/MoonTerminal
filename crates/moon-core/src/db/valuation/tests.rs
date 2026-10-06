@@ -455,7 +455,7 @@ fn rate_cache_survives_reopen_without_network_state() {
     std::fs::remove_dir_all(&dir).expect("remove rate-cache fixture directory");
 }
 
-/// `db/mod.rs:apply_message` relies on valuation outbox writes sharing the report transaction;
+/// `db/report_writer.rs:apply_msg` relies on valuation outbox writes sharing the report transaction;
 /// moving staging after commit would make the rollback assertion retain work and could also lose
 /// a committed report change on a crash between the two independent commits.
 #[test]

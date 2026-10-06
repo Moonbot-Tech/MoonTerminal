@@ -978,9 +978,9 @@ fn main() {
     }
 
     // Neither surface below can be called from this example crate: `report_quote_ordinals` is
-    // a private `fn` inside a private `mod worker` (`db/valuation/worker.rs:1953`,
-    // `db/valuation/mod.rs:12`), and `basis::probe` is a private `fn` inside the private
-    // `mod basis` of `db::analytics` (`db/analytics/basis.rs:94`, `db/analytics/mod.rs:25`) —
+    // a private `fn` in `db/valuation/worker/live_rates.rs`, under the private `mod worker`
+    // declared in `db/valuation/mod.rs`, and `basis::probe` is a private `fn` in
+    // `db/analytics/basis.rs`, under the private `mod basis` declared in `db/analytics/mod.rs` —
     // both files are out of this branch's edit scope, and a copied SQL string is explicitly
     // forbidden by the spec. Never made `pub` to reach them; kept first-class instead so the
     // omission cannot be mistaken for "measured and cheap" — printed here AND carried into the

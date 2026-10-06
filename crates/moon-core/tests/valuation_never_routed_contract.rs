@@ -1,7 +1,7 @@
 //! Proves the `db::valuation` reads that must stay on the RAW `closedate` column forever cannot
 //! be silently routed through [`moon_core`]'s report time axis by a future edit.
 //!
-//! `worker.rs`'s own module doc names these locations as load-bearing IDENTITY or ORDERING reads,
+//! The worker tree's root module doc names these locations as load-bearing IDENTITY or ORDERING reads,
 //! mirroring `report_axis.rs`'s "What this type must never be applied to": the reconciliation
 //! keyset query and its cursor, the `trade_values` coverage join, the `trade_values` upsert key,
 //! `trade_key`, and the two `TradeInput` decode sites that populate `closedate` in the first
@@ -135,6 +135,47 @@ fn code_only(relative: &str) -> String {
         .join("\n")
 }
 
+/// Read the worker root and its directly contained source modules without test fixtures.
+///
+/// Args:
+///     stem: Worker source path under `moon-core/src/`, without the `.rs` suffix.
+///
+/// Returns:
+///     Comment-stripped root and child code, with children ordered by file name.
+fn code_only_tree(stem: &str) -> String {
+    let directory = moon_core_src().join(stem);
+    let mut paths = std::fs::read_dir(&directory)
+        .unwrap_or_else(|error| panic!("read {}: {error}", directory.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read {} entry: {error}", directory.display()))
+                .path()
+        })
+        .filter(|path| {
+            path.is_file()
+                && path.extension().is_some_and(|extension| extension == "rs")
+                && path.file_name().is_some_and(|name| name != "tests.rs")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut code = vec![code_only(&format!("{stem}.rs"))];
+    for path in paths {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("UTF-8 source name");
+        code.push(code_only(&format!("{stem}/{name}")));
+    }
+    // CRLF separates files so code_only's newline-sensitive source anchors cannot span them.
+    let code = code.join("\r\n");
+    assert!(
+        code.len() >= 500,
+        "worker tree read suspiciously short ({} bytes)",
+        code.len()
+    );
+    code
+}
+
 /// Whether `haystack` contains `needle_lines` as a contiguous, trimmed run.
 ///
 /// Args:
@@ -154,13 +195,13 @@ fn contains_lines(haystack: &str, needle_lines: &[&str]) -> bool {
 /// estimate would do it again to all of history.
 #[test]
 fn reconciliation_cursor_still_carries_the_raw_closedate() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     assert!(
         contains_lines(
             &worker,
             &[".map(|input| (input.closedate, input.core_uid, input.row_id));"]
         ),
-        "worker.rs:reconcile_step must seed the next descending cursor from the RAW closedate; \
+        "worker tree:reconcile_step must seed the next descending cursor from the RAW closedate; \
          routing it through the axis (e.g. via valuation_minute or axis.to_utc) would desync the \
          cursor from the stored column it walks"
     );
@@ -171,10 +212,10 @@ fn reconciliation_cursor_still_carries_the_raw_closedate() {
 /// permanently uncovered and get re-valued from scratch on every pass.
 #[test]
 fn coverage_join_still_compares_the_raw_stored_columns() {
-    let valuation_mod = code_only("db/valuation/mod.rs");
+    let coverage = code_only("db/valuation/coverage.rs");
     assert!(
         contains_lines(
-            &valuation_mod,
+            &coverage,
             &["AND v.closedate={alias}.closedate AND v.quote_ordinal=({quote})"]
         ),
         "coverage_sql's coverage join must compare the raw stored closedate against itself; \
@@ -187,10 +228,10 @@ fn coverage_join_still_compares_the_raw_stored_columns() {
 /// would desync the cache key from every future coverage check.
 #[test]
 fn trade_values_upsert_still_stores_the_raw_closedate() {
-    let valuation_mod = code_only("db/valuation/mod.rs");
+    let rate_cache = code_only("db/valuation/rate_cache.rs");
     assert!(
         contains_lines(
-            &valuation_mod,
+            &rate_cache,
             &[
                 "ALGORITHM_VERSION,",
                 "input.closedate,",
@@ -207,7 +248,7 @@ fn trade_values_upsert_still_stores_the_raw_closedate() {
 /// identities across a restart whenever the axis changes.
 #[test]
 fn trade_key_still_carries_no_time_axis_read_at_all() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     assert!(
         contains_lines(
             &worker,
@@ -231,7 +272,7 @@ fn trade_key_still_carries_no_time_axis_read_at_all() {
 /// value. Counting occurrences is what makes converting either site alone visible.
 #[test]
 fn trade_input_decode_sites_still_both_carry_the_raw_closedate() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     let occurrences = worker.matches("closedate: row.get(2)?,").count();
     assert_eq!(
         occurrences, 2,
@@ -248,7 +289,7 @@ fn trade_input_decode_sites_still_both_carry_the_raw_closedate() {
 /// which are seeded from the same raw column one batch earlier.
 #[test]
 fn reconciliation_batch_keyset_predicate_still_carries_the_raw_closedate() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     assert!(
         contains_lines(
             &worker,
@@ -265,7 +306,7 @@ fn reconciliation_batch_keyset_predicate_still_carries_the_raw_closedate() {
 /// silently re-visiting or skipping rows exactly as a converted cursor seed would.
 #[test]
 fn reconciliation_batch_order_by_still_sorts_the_raw_closedate() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     assert!(
         contains_lines(
             &worker,
@@ -283,7 +324,7 @@ fn reconciliation_batch_order_by_still_sorts_the_raw_closedate() {
 /// `coverage_join_still_compares_the_raw_stored_columns` requires it of `coverage_sql`.
 #[test]
 fn reconciliation_batch_staleness_join_still_compares_the_raw_stored_columns() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     assert!(
         contains_lines(
             &worker,
@@ -294,7 +335,7 @@ fn reconciliation_batch_staleness_join_still_compares_the_raw_stored_columns() {
     );
 }
 
-/// `worker.rs` must call the axis from exactly ONE place: [`valuation_minute`]'s own body
+/// The worker tree must call the axis from exactly ONE place: [`valuation_minute`]'s own body
 /// (`axis.to_utc(input.closedate, input.core_uid as u64)`), and nowhere else in the file. Every
 /// anchor above proves one specific never-routed read still carries the raw column; this one
 /// closes the gap between them — a NEW route added anywhere else in the file (through
@@ -303,17 +344,17 @@ fn reconciliation_batch_staleness_join_still_compares_the_raw_stored_columns() {
 /// invisible to all eight of them at once.
 #[test]
 fn worker_calls_the_axis_from_exactly_one_place() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     let occurrences = worker.matches("axis.").count();
     assert_eq!(
         occurrences, 1,
-        "expected exactly 1 call through the axis in worker.rs (valuation_minute's own \
+        "expected exactly 1 call through the axis in worker tree (valuation_minute's own \
          `axis.to_utc`); found {occurrences} instead — a second axis. call anywhere else in the \
          file is a new, unreviewed route that the per-site anchors above cannot see"
     );
 }
 
-/// No function in `worker.rs` may assign a converted value back into a `TradeInput.closedate`
+/// No function in the worker tree may assign a converted value back into a `TradeInput.closedate`
 /// field — every one of the eight anchors above assumes the DECODED value never moves again, so
 /// an assignment-after-decode would leave the exact text each anchor matches untouched (the two
 /// `closedate: row.get(2)?,` decode sites, the cursor seed, the coverage/staleness joins and the
@@ -324,11 +365,11 @@ fn worker_calls_the_axis_from_exactly_one_place() {
 /// call site.
 #[test]
 fn no_closedate_field_is_ever_reassigned_after_decode() {
-    let worker = code_only("db/valuation/worker.rs");
+    let worker = code_only_tree("db/valuation/worker");
     let occurrences = worker.matches(".closedate =").count();
     assert_eq!(
         occurrences, 0,
-        "expected zero `.closedate =` assignments in worker.rs; found {occurrences} — a \
+        "expected zero `.closedate =` assignments in worker tree; found {occurrences} — a \
          `TradeInput.closedate` field written after decode (e.g. `input.closedate = \
          axis.to_utc(input.closedate, input.core_uid as u64);`) converts the value once under \
          text every other anchor in this file still matches unchanged, so the cursor seed, both \
