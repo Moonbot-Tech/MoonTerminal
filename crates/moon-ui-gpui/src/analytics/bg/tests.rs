@@ -93,7 +93,7 @@ fn latest_read_worker_installs_its_sqlite_cancellation_scope() {
 /// database until completion, which is the production regression the cancellation layer fixes.
 #[test]
 fn invalidation_paths_reach_the_latest_read_registry() {
-    let analytics = include_str!("../mod.rs");
+    let analytics = include_str!("../load.rs");
     let reload = analytics
         .split_once("fn reload(&mut self")
         .expect("Analytics reload")

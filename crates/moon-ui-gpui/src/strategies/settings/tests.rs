@@ -137,8 +137,8 @@ fn switching_parameters_mode_only_persists_its_preference() {
         );
     }
 
-    let params = include_str!("../params.rs");
-    let field_row = braced_body(params, "pub(super) fn field_row(");
+    let params = include_str!("../params/editors.rs");
+    let field_row = braced_body(params, "pub(in crate::strategies) fn field_row(");
     assert!(
         field_row.contains("let row_id = editor_state_id(keys, &field_name);"),
         "both modes must retain editor state under the mode-independent key derived from keys and field"

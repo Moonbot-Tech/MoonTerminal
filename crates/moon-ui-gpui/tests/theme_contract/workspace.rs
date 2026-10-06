@@ -705,8 +705,8 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ("panels/report/mod.rs", "effective_core_ids"),
         ("panels/report/actions.rs", "effective_core_ids"),
         ("panels/report/controls.rs", "workspace_scope"),
-        ("analytics/mod.rs", "analytics_workspace_scope"),
-        ("analytics/mod.rs", "analytics_display_scope"),
+        ("analytics/session.rs", "analytics_workspace_scope"),
+        ("analytics/session.rs", "analytics_display_scope"),
         ("analytics/toolbar.rs", "analytics_core_filter_ids"),
         ("analytics/tuner/mod.rs", "strategy_selection_visible"),
         ("analytics/tuner/save.rs", "workspace_core_visible"),
@@ -721,7 +721,10 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
         ("strategies/tree/ui.rs", "visible_strategy_cores"),
         ("strategies/tree/dialogs.rs", "strategy_core_is_visible"),
         ("strategies/tree/dnd.rs", "action_cores_visible"),
-        ("strategies/tree/moon.rs", "strategy_core_is_visible"),
+        (
+            "strategies/tree/moon/strategy_row.rs",
+            "strategy_core_is_visible",
+        ),
     ];
     for (path, authority) in scoped {
         assert!(
@@ -764,12 +767,12 @@ fn every_workspace_scoped_surface_uses_the_effective_authority() {
     );
 }
 
-/// `analytics/mod.rs:AnalyticsView::action_core_ids` must not fall back to `display_scope`;
+/// `analytics/query.rs:AnalyticsView::action_core_ids` must not fall back to `display_scope`;
 /// adding that fallback would make Save, Copy, or purge write through an unconfirmed Classic
 /// membership boundary instead of preserving Classic's unconfined action authority.
 #[test]
 fn analytics_classic_display_membership_never_becomes_action_authority() {
-    let analytics = code_only(&read_src("analytics/mod.rs"));
+    let analytics = code_only(&read_src("analytics/query.rs"));
     let action = code_only(braced_body(
         &analytics,
         "pub(in crate::analytics) fn action_core_ids(&self)",
@@ -786,12 +789,12 @@ fn analytics_classic_display_membership_never_becomes_action_authority() {
     );
 }
 
-/// `analytics/mod.rs:analytics_display_scope` and `strategies/state.rs:singleton_strategy_scope`
+/// `analytics/session.rs:analytics_display_scope` and `strategies/state.rs:singleton_strategy_scope`
 /// must retain the Classic display-membership path; removing its guard or reverting either body to
 /// `singleton_workspace()` makes every Classic member visible again despite workspace membership.
 #[test]
 fn singleton_classic_membership_uses_display_authority_without_changing_auto_scope() {
-    let analytics = code_only(&read_src("analytics/mod.rs"));
+    let analytics = code_only(&read_src("analytics/session.rs"));
     let analytics_display = code_only(braced_body(&analytics, "fn analytics_display_scope("));
     assert!(
         analytics_display

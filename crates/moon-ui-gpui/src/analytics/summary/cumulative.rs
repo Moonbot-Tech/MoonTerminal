@@ -11,12 +11,14 @@
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
+use std::{cell::Cell, rc::Rc};
 
 use super::super::AnalyticsView;
 use super::charts::{
     CHART_H, PLOT_W_NOMINAL, PopupKey, PopupMode, bucket_label, bucket_popup, chart_hover,
     core_color, muted_caption, widest_label_w,
 };
+use super::derived::SummaryDerived;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::analytics::{CoreSeries, DayPoint};
@@ -68,6 +70,7 @@ pub(super) fn drawn_core_order(cores: &[CoreSeries]) -> Vec<usize> {
 /// Args:
 ///     cores: Per-core series, in the query's own order.
 ///     colors: One colour per core, indexed like `cores`.
+///     order: Cached absolute-contribution order shared with the canvas.
 ///     budget_w: Width the row may occupy, in device pixels.
 ///     p: Active MoonUI palette.
 ///     cx: Analytics view context.
@@ -78,11 +81,11 @@ pub(super) fn drawn_core_order(cores: &[CoreSeries]) -> Vec<usize> {
 pub(super) fn core_legend(
     cores: &[CoreSeries],
     colors: &[Hsla],
+    order: &[usize],
     budget_w: f32,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> Option<AnyElement> {
-    let order = drawn_core_order(cores);
     if order.len() < 2 {
         return None;
     }
@@ -94,7 +97,7 @@ pub(super) fn core_legend(
     let tail_w = text_w(t!("analytics.popup_more", n = order.len()).as_ref()) + gap;
     let mut used = 0.0;
     let mut shown = 0usize;
-    for &ci in &order {
+    for &ci in order {
         let w = dot + design::ui_value(cx, 4.0) + text_w(&cores[ci].name) + gap;
         let last = shown + 1 == order.len();
         if used + w + if last { 0.0 } else { tail_w } > budget_w {
@@ -233,7 +236,7 @@ fn swing_points(pts: &[f32], thresh: f32) -> Vec<usize> {
 /// silently collapses the labels to the two ends. It is then backed off until the labels
 /// fit, because no fixed fraction can bound their number on its own — a jagged curve turns
 /// at every bucket and each of those turns is genuine.
-fn swing_labels(pts: &[f32]) -> Vec<usize> {
+pub(super) fn swing_labels(pts: &[f32]) -> Vec<usize> {
     let hi = pts.iter().copied().fold(f32::MIN, f32::max);
     let lo = pts.iter().copied().fold(f32::MAX, f32::min);
     let mut thresh = (hi - lo).max(1e-6) * SWING_FRAC;
@@ -325,7 +328,7 @@ fn label_shift(frac: f32) -> f32 {
 /// Args:
 ///     days: Ordered analytical buckets.
 ///     cores: Per-core series aligned to `days`.
-///     colors: Resolved per-core theme colors.
+///     derived: Snapshot-owned curves, range, swing indices and resolved colours.
 ///     hover: Hovered bucket index, if any.
 ///     bucket: Civil bucket width in seconds.
 ///     zone: Selected IANA display zone.
@@ -337,7 +340,7 @@ fn label_shift(frac: f32) -> f32 {
 pub(super) fn cumulative_area(
     days: &[DayPoint],
     cores: &[CoreSeries],
-    colors: &[Hsla],
+    derived: &SummaryDerived,
     hover: Option<usize>,
     bucket: i64,
     zone: chrono_tz::Tz,
@@ -349,51 +352,15 @@ pub(super) fn cumulative_area(
         return div().h(chart_h).into_any_element();
     }
     let n = days.len();
-    // A non-finite profit would poison the whole curve: `f32::max/min` folds skip NaN, so
-    // the range would stay finite while the point itself fed px(NaN) into the layout.
-    let fin = |v: f64| if v.is_finite() { v } else { 0.0 };
-    // Running total in f64 — it is money, and it is what the labels and popup print; the
-    // f32 copy below exists only for the pixel math.
-    let mut acc = 0.0f64;
-    let cum: Vec<f64> = days
-        .iter()
-        .map(|d| {
-            acc += fin(d.profit);
-            acc
-        })
-        .collect();
-    let pts: Vec<f32> = cum.iter().map(|&v| v as f32).collect();
-    let order = drawn_core_order(cores);
-    let curves: Vec<(Hsla, Vec<f32>)> = order
-        .iter()
-        .map(|&ci| {
-            let mut c = 0.0f32;
-            let v: Vec<f32> = cores[ci]
-                .per_bucket
-                .iter()
-                .take(n)
-                .map(|v| {
-                    c += fin(*v) as f32;
-                    c
-                })
-                .collect();
-            (core_color(colors, ci, p), v)
-        })
-        .collect();
+    let colors = &derived.colors;
+    let cum = &derived.cum;
+    let pts = &derived.pts;
     // ONE Y range over the total AND every core line drawn inside it. Cores sum to the
     // total, so as soon as one of them loses, another peaks ABOVE the total and the total
     // curve is compressed — that is the honest picture, and the alternative (scaling the
     // cores to fit) would draw lines whose height means nothing.
-    let mut vmax = pts.iter().copied().fold(0.0f32, f32::max);
-    let mut vmin = pts.iter().copied().fold(0.0f32, f32::min);
-    for (_, c) in &curves {
-        for &v in c {
-            vmax = vmax.max(v);
-            vmin = vmin.min(v);
-        }
-    }
-    let vmax = vmax.max(1e-6);
-    let vmin = vmin.min(0.0);
+    let vmax = derived.vmax;
+    let vmin = derived.vmin;
     let span = (vmax - vmin).max(1e-6);
     // Tone from the f64 running total through the same rounding rule the header number
     // uses: off the f32 curve, accumulated drift at five-digit cumulatives is enough to
@@ -413,7 +380,7 @@ pub(super) fn cumulative_area(
     let label_h = f32::from(design::t_caption(cx)) * 1.7;
     // The swings decide whether there is a band at all: a single-bucket period has no turn to
     // label, and reserving the strip anyway would shorten the curve for text that never comes.
-    let swings = swing_labels(&pts);
+    let swings = &derived.swings;
     let band = if swings.is_empty() {
         0.0
     } else {
@@ -461,9 +428,15 @@ pub(super) fn cumulative_area(
         .map(|i| cands[i].clone())
         .collect();
 
-    let pts_paint = pts;
+    let pts_paint = pts.clone();
+    let curves = derived.curves.clone();
+    let order = derived.order.clone();
+    let colors_paint = colors.clone();
+    // The plot spans the stack's full width; only its horizontal bounds drive hover mapping.
+    let hover_bounds = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+    let prepaint_bounds = hover_bounds.clone();
     let canvas_el = canvas(
-        |_, _, _| (),
+        move |bounds, _, _| prepaint_bounds.set(bounds),
         move |bounds, _, window, _| {
             let w = f32::from(bounds.size.width);
             let h = f32::from(bounds.size.height);
@@ -510,7 +483,8 @@ pub(super) fn cumulative_area(
             }
             // Per-core curves: thin and translucent so they read as detail inside the
             // total, never competing with it.
-            for (col, c) in &curves {
+            for (&ci, c) in order.iter().zip(curves.iter()) {
+                let col = core_color(&colors_paint, ci, p);
                 if c.len() < 2 {
                     continue;
                 }
@@ -546,7 +520,7 @@ pub(super) fn cumulative_area(
     .h(px(plot_h));
 
     // The plot is pinned to the BOTTOM of the stack, so a label's offset from the bottom is
-    // the same number the canvas maps a value to. The hover columns cover the whole stack.
+    // the same number the canvas maps a value to. The single hover overlay covers the whole stack.
     let mut stack = div()
         .relative()
         .w_full()
@@ -560,7 +534,7 @@ pub(super) fn cumulative_area(
                 .h(px(plot_h))
                 .child(canvas_el),
         )
-        .child(hover_row(n, hover, p, cx));
+        .child(hover_row(n, hover, p, hover_bounds, cx));
     for (frac, y_up, text, col) in labels {
         let shift = lw * label_shift(frac);
         stack = stack.child(
@@ -625,40 +599,84 @@ pub(super) fn cumulative_area(
         .into_any_element()
 }
 
-/// Invisible hover-catcher columns over the plot — one per bucket, the hovered one washed.
-///
-/// Positioned ABSOLUTELY around each point rather than as `flex_1` cells: the curve puts
-/// bucket `k` at `k/(n-1)` of the width, while equal flex cells centre it at `(k+0.5)/n`,
-/// so the wash would sit up to half a column away from the point it claims to highlight.
+/// Exact normalized span of an old hover column, including f32 rounding and clipped ends.
+fn hover_column(bi: usize, n: usize) -> (f32, f32) {
+    let step = 1.0 / n.saturating_sub(1).max(1) as f32;
+    let centre = bi as f32 * step;
+    (
+        (centre - step / 2.0).max(0.0),
+        (centre + step / 2.0).min(1.0),
+    )
+}
+
+/// Find the highest painted half-open column containing the pointer; keep uncovered regions intact.
+fn hover_bucket_at(frac: f32, n: usize) -> Option<usize> {
+    if !frac.is_finite() || !(0.0..=1.0).contains(&frac) {
+        return None;
+    }
+    // Left edges are monotonic. Choosing the last matching left edge preserves topmost ties
+    // without rounding to an ideal grid that differs from the old f32 column geometry.
+    let (mut lo, mut hi) = (0, n);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if hover_column(mid, n).0 <= frac {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let bi = lo.checked_sub(1)?;
+    (frac < hover_column(bi, n).1).then_some(bi)
+}
+
+/// One interactive overlay and one wash replace the old per-bucket hover elements.
 fn hover_row(
     n: usize,
     hover: Option<usize>,
     p: MoonPalette,
+    bounds: Rc<Cell<Bounds<Pixels>>>,
     cx: &Context<AnalyticsView>,
 ) -> impl IntoElement {
-    let mut row = div().absolute().inset_0();
-    // Half a step on each side of the point; the end columns are clipped by the edges.
-    let step = 1.0 / (n.saturating_sub(1)).max(1) as f32;
-    for bi in 0..n {
-        let centre = bi as f32 * step;
-        let left = (centre - step / 2.0).max(0.0);
-        let right = (centre + step / 2.0).min(1.0);
-        let mut col = div()
-            .id(SharedString::from(format!("an-cum-{bi}")))
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .left(relative(left))
+    let wash = div().absolute().top_0().bottom_0();
+    let wash = if let Some(bi) = hover.filter(|bi| *bi < n) {
+        let (left, right) = hover_column(bi, n);
+        wash.left(relative(left))
             .w(relative(right - left))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                chart_hover(this, PopupKey::Cumulative(bi), *hovered, false, cx);
-            }));
-        if hover == Some(bi) {
-            col = col.bg(moon_alpha(p.text_muted, 0.07));
-        }
-        row = row.child(col);
-    }
-    row
+            .bg(moon_alpha(p.text_muted, 0.07))
+    } else {
+        wash.w(px(0.0))
+    };
+    div()
+        .id("an-cum-hover")
+        .absolute()
+        .inset_0()
+        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            if *hovered {
+                this.summary_popup_hover.cumulative_pointer_entered();
+            } else if let Some(key) = this.summary_popup_hover.cumulative_pointer_left() {
+                chart_hover(this, key, false, false, cx);
+            }
+        }))
+        .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+            // Match GPUI's on_hover gate: a drag must not reopen the source popup.
+            if cx.has_active_drag() {
+                return;
+            }
+            let bounds = bounds.get();
+            let width = f32::from(bounds.size.width);
+            if width <= 0.0 {
+                return;
+            }
+            let frac = f32::from(event.position.x - bounds.origin.x) / width;
+            if let Some(bi) = hover_bucket_at(frac, n) {
+                if this.summary_popup_hover.cumulative_move_should_enter(bi) {
+                    chart_hover(this, PopupKey::Cumulative(bi), true, false, cx);
+                }
+            } else if let Some(key) = this.summary_popup_hover.cumulative_pointer_left() {
+                chart_hover(this, key, false, false, cx);
+            }
+        }))
+        .child(wash)
 }
 
 /// Dated X ticks: up to `X_TICKS` evenly spaced labels, first and last always present.

@@ -395,7 +395,7 @@ fn a_complete_explicit_selection_stays_a_bounded_query_filter() {
 }
 
 /// Assigning Auto ids into `sel_cores`, or bypassing the workspace argument in
-/// `analytics/mod.rs:cores_selected`, would either destroy the retained Classic filter or query
+/// `analytics/query.rs:cores_selected`, would either destroy the retained Classic filter or query
 /// its hidden cores while Auto is pinned.
 #[test]
 fn workspace_query_wiring_preserves_retained_classic_selection() {
@@ -413,7 +413,7 @@ fn workspace_query_wiring_preserves_retained_classic_selection() {
         retained
     );
 
-    let analytics = include_str!("../mod.rs");
+    let analytics = concat!(include_str!("../query.rs"), include_str!("../construct.rs"));
     let cores_selected = analytics
         .split("fn cores_selected(&self)")
         .nth(1)

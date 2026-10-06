@@ -8,7 +8,7 @@ use super::support::*;
 /// Removing the row-filter guard hides servers with neither strategies nor folders.
 #[test]
 fn empty_core_roots_remain_available_without_row_filters() {
-    let source = read_src("strategies/tree/moon.rs");
+    let source = read_src("strategies/tree/moon/build.rs");
     let body = braced_body(&source, "fn build_core_root(");
     assert!(body.contains("if filter.narrows() && !any_matched && empty_folders.is_empty()"));
 }
@@ -115,7 +115,7 @@ fn a_revealed_strategy_is_expanded_and_scrolled_into_view() {
 fn report_commits_use_a_dedicated_revision_channel() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let startup = read_startup();
-    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let analytics = read_src("analytics/construct.rs");
     let report = fs::read_to_string(root.join("panels").join("report").join("state.rs")).unwrap();
 
     assert!(
@@ -143,18 +143,12 @@ fn report_commits_use_a_dedicated_revision_channel() {
     );
 }
 
-/// `analytics/mod.rs:refresh_visible_report_data` must route a stale Strategies
+/// `analytics/observe.rs:refresh_visible_report_data` must route a stale Strategies
 /// base through `strategy_base_data`; replacing it with `reload_summary` incurs
 /// the full charts/rankings scan on every high-rate report refresh.
 #[test]
 fn strategies_refresh_uses_the_compact_base() {
-    let analytics = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("analytics")
-            .join("mod.rs"),
-    )
-    .unwrap();
+    let analytics = read_unsplit("analytics/mod.rs");
     assert!(
         analytics.contains("self.reload_strategy_base(true, true, show_overlay, cx)")
             && analytics.contains("moon_core::db::analytics::strategy_base_data(&q, read_cores)"),
@@ -179,7 +173,7 @@ fn strategies_refresh_uses_the_compact_base() {
 /// "simplifies" it back to `cx.entity()`, which compiles and behaves correctly for one session.
 #[test]
 fn moon_tree_closures_hold_weak_view_handles() {
-    let text = read_src("strategies/tree/moon.rs");
+    let text = read_unsplit("strategies/tree/moon.rs");
 
     assert!(
         text.contains("cx.entity().downgrade()"),
@@ -271,7 +265,7 @@ fn navigation_is_independent_of_the_shape_guard() {
 /// behaves identically but adds one query allocation per row per frame.
 #[test]
 fn the_per_frame_row_pass_uses_the_prepared_filter() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_src("strategies/tree/moon/build.rs");
     let body = braced_body(&src, "pub(crate) fn build(");
     assert!(
         body.contains("view.filter.prepare()"),
@@ -345,8 +339,11 @@ fn persisted_active_filter_does_not_restore_retired_controls_or_hide_params() {
         "the toggle must never assign the resolved preference directly"
     );
 
-    let params = read_src("strategies/params.rs");
-    let params_panel = code_only(braced_body(&params, "pub(super) fn params_panel("));
+    let params = read_src("strategies/params/panel.rs");
+    let params_panel = code_only(braced_body(
+        &params,
+        "pub(in crate::strategies) fn params_panel(",
+    ));
     let active_at = params_panel
         .find("let active = self.rules.field_active")
         .expect("the parameter pane must still compute dependency activity");
@@ -411,7 +408,7 @@ fn tree_state_events_reassert_the_windows_own_expansion() {
 /// moving the core row inside the `core_open` branch.
 #[test]
 fn a_collapsed_core_skips_its_subtree_but_keeps_its_row() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_src("strategies/tree/moon/build.rs");
     let body = braced_body(&src, "fn build_core_root(");
     // Whitespace-stripped so a `core_open` binding rustfmt wraps across lines is found the same
     // way as one written inline.
@@ -471,7 +468,7 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
         "render must pass the same canonical venue map into cache invalidation and tree building"
     );
 
-    let tree = read_src("strategies/tree/moon.rs");
+    let tree = read_unsplit("strategies/tree/moon.rs");
     let build = code_only(braced_body(&tree, "pub(crate) fn build("));
     let grouped = braced_body(&build, "if view.prefs.group_by_venue {");
     assert!(grouped.contains("moon_core::session::core_order::exchange_sections("));
@@ -521,7 +518,7 @@ fn strategy_tree_groups_visible_cores_by_venue_identity() {
 /// owns.
 #[test]
 fn strategy_tree_prunes_exchange_filter_in_grouped_and_flat_modes() {
-    let tree = read_src("strategies/tree/moon.rs");
+    let tree = read_src("strategies/tree/moon/build.rs");
     let build = code_only(braced_body(&tree, "pub(crate) fn build("));
     let grouped = code_only(braced_body(&build, "if view.prefs.group_by_venue {"));
     let flat = code_only(braced_body(&build, "} else {"));
@@ -558,7 +555,7 @@ fn strategy_tree_shortcuts_require_exact_focus_and_share_copy_dispatch() {
     assert!(toolbar.contains("copy_tree_target(") && toolbar.contains("disabled(!can_copy)"));
     assert!(toolbar.contains("paste_to_targets("));
 
-    let tree = read_src("strategies/tree/moon.rs");
+    let tree = read_unsplit("strategies/tree/moon.rs");
     let core_folder = code_only(braced_body(&tree, "fn core_folder_row("));
     assert!(core_folder.contains("window.focus(&this.focus, cx)"));
     assert!(core_folder.contains("(*c, String::new())"));
@@ -570,7 +567,7 @@ fn strategy_tree_shortcuts_require_exact_focus_and_share_copy_dispatch() {
 /// neutral hover makes the row appear unselected until the pointer leaves.
 #[test]
 fn selected_folder_hover_does_not_replace_its_surface() {
-    let tree = read_src("strategies/tree/moon.rs");
+    let tree = read_src("strategies/tree/moon/headings.rs");
     let row = code_only(braced_body(&tree, "fn core_folder_row("));
     assert!(row.contains(".when(selected,"));
     assert!(
@@ -987,7 +984,7 @@ fn strategy_footer_is_one_atomic_action_row() {
 /// introduced, and goes stale on the next hover.
 #[test]
 fn the_tree_cache_signature_covers_every_input_the_build_reads() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_unsplit("strategies/tree/moon.rs");
     let cache = read_src("strategies/tree/cache.rs");
 
     // Whitespace-stripped so a field reached across a line break (`view\n    .deleted`) is found
@@ -1109,7 +1106,7 @@ fn the_tree_cache_signature_covers_every_input_the_build_reads() {
 /// inspector", which compiles, looks correct, and only misbehaves on a live account.
 #[test]
 fn a_core_folder_rows_element_id_is_its_node_id() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_unsplit("strategies/tree/moon.rs");
     let row = code_only(braced_body(&src, "fn core_folder_row("));
     assert!(
         row.contains(".id(row_id)"),
@@ -1138,7 +1135,7 @@ fn a_core_folder_rows_element_id_is_its_node_id() {
 /// this is invisible without clicking the marker itself.
 #[test]
 fn a_core_folder_row_marker_stays_passive() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_src("strategies/tree/moon/headings.rs");
     let body = code_only(braced_body(&src, "fn core_folder_row("));
     assert!(
         body.contains("MoonDisclosure::glyph(expanded)"),
@@ -1150,7 +1147,7 @@ fn a_core_folder_row_marker_stays_passive() {
     );
 }
 
-/// `strategies/tree/moon.rs::core_folder_row` keeps its counter cluster passive.
+/// `strategies/tree/moon/headings.rs::core_folder_row` keeps its counter cluster passive.
 ///
 /// Mutation: add `.cursor_pointer()` to the `counts_row_id` cluster. That installs an
 /// interactive hitbox over the counters, so a click on the rightmost numbers no longer reaches
@@ -1158,7 +1155,7 @@ fn a_core_folder_row_marker_stays_passive() {
 /// works and makes the regression look flaky.
 #[test]
 fn a_core_folder_row_counter_cluster_stays_passive() {
-    let src = read_src("strategies/tree/moon.rs");
+    let src = read_src("strategies/tree/moon/headings.rs");
     let row = code_only(braced_body(&src, "fn core_folder_row("));
     let cluster = chain_between(
         &row,
@@ -1234,7 +1231,7 @@ fn strategies_reopen_state_is_process_lifetime_only() {
     let session = read_src("strategies/session.rs");
     let selection = read_src("strategies/selection.rs");
     let tree_mod = read_src("strategies/tree/mod.rs");
-    let moon = read_src("strategies/tree/moon.rs");
+    let moon = read_unsplit("strategies/tree/moon.rs");
     let actions = read_src("strategies/actions.rs");
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
     let layout = read_unsplit("../../moon-core/src/config/layout.rs");
@@ -1384,7 +1381,7 @@ fn version_restore_clears_stale_drafts_only_for_its_own_strategy() {
 /// to traders instead of a human label.
 #[test]
 fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
-    let params = read_src("strategies/params.rs");
+    let params = read_src("strategies/params/labels.rs");
     let lookup = braced_body(&params, "fn field_keys(");
     let returned: BTreeSet<String> = lookup
         .match_indices("\"strat.label.")
@@ -1428,8 +1425,11 @@ fn strategy_field_label_lookup_and_dictionary_remain_bijective() {
 /// every translated field name truncate to an ellipsis, removing the new feature from the editor.
 #[test]
 fn strategy_field_label_cell_keeps_a_definite_width_through_each_truncating_line() {
-    let params = read_src("strategies/params.rs");
-    let field_row = code_only(braced_body(&params, "pub(super) fn field_row("));
+    let params = read_src("strategies/params/editors.rs");
+    let field_row = code_only(braced_body(
+        &params,
+        "pub(in crate::strategies) fn field_row(",
+    ));
     let label_id = field_row
         .find("field-label-{row_id}")
         .expect("field_row must retain the label cell id");

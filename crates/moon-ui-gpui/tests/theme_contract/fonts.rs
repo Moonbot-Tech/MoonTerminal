@@ -71,7 +71,7 @@ fn data_render_roots_keep_the_mono_family() {
             "analytics figures",
         ),
         (
-            "analytics/profit_monitor/mod.rs",
+            "analytics/profit_monitor/render.rs",
             "impl Render for ProfitMonitorView",
             "profit-monitor rows",
         ),
@@ -107,9 +107,9 @@ fn data_render_roots_keep_the_mono_family() {
             "strategy tree names and row values",
         ),
         (
-            "strategies/params.rs",
+            "strategies/params/panel.rs",
             "impl StrategiesView",
-            "pub(super) fn params_panel(",
+            "pub(in crate::strategies) fn params_panel(",
             "strategy parameter values",
         ),
         (

@@ -677,7 +677,7 @@ fn a_field_missing_from_the_saved_list_opens_unchecked() {
 
 /// `filter/state.rs:TunerState::invalidate_for_axis` must keep a live joint search and mark it.
 ///
-/// Breakage: the method, or `analytics/mod.rs:observe_report_axis`, going back to
+/// Breakage: the method, or `analytics/observe.rs:observe_report_axis`, going back to
 /// `invalidate_suggest()`. The `SearchHandle` is cancelled, `sugg_seq` advances, and the
 /// completion guard drops the result. A minutes-long "Pick the set" run then vanishes with no
 /// error and no caption.
@@ -801,7 +801,7 @@ fn a_scope_change_still_stops_a_live_search() {
 
 /// Calling `invalidate_for_axis` again on the same live joint run must not undo the mark.
 ///
-/// `analytics/mod.rs:observe_report_axis` fires on every report generation while a minutes-long
+/// `analytics/observe.rs:observe_report_axis` fires on every report generation while a minutes-long
 /// composition is in flight. Breakage: the mark as a toggle or a counter, or the second call
 /// falling through to `invalidate_suggest()`. The handle would cancel, or the caption would
 /// disappear, halfway through a run the user is still watching.

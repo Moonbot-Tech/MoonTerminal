@@ -3,7 +3,7 @@
 
 use super::support::*;
 
-/// `analytics/mod.rs:observe_report_axis` must refresh through the Writer path and must call
+/// `analytics/observe.rs:observe_report_axis` must refresh through the Writer path and must call
 /// `TunerState::invalidate_for_axis` and `TicksState::invalidate_for_axis`, while
 /// `observe_valuation_mode` remains a real scope reload.
 ///
@@ -17,7 +17,7 @@ use super::support::*;
 /// feed reconnect; removing the valuation reload leaves a mode change under stale values.
 #[test]
 fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_src("analytics/observe.rs");
     let report_axis = code_only(braced_body(&analytics, "fn observe_report_axis("));
     let valuation_mode = code_only(braced_body(&analytics, "fn observe_valuation_mode("));
 
@@ -83,11 +83,11 @@ fn selected_display_zone_reaches_every_cached_time_surface() {
 
     for (path, label) in [
         ("panels/report/state.rs", "Report"),
-        ("analytics/mod.rs", "Analytics"),
+        ("analytics/construct.rs", "Analytics"),
         ("strategies/state.rs", "Strategies"),
         ("panels/news/mod.rs", "News"),
         ("panels/alerts/mod.rs", "Alerts"),
-        ("analytics/profit_monitor/mod.rs", "Profit Monitor"),
+        ("analytics/profit_monitor/body_views.rs", "Profit Monitor"),
         ("panels/core_status/mod.rs", "Core Status"),
         ("panels/log/mod.rs", "Log"),
     ] {
@@ -504,7 +504,7 @@ fn profit_monitor_controls_and_all_choice_persistence_stay_wired() {
 /// MoonUI's scaling and theme behavior.
 #[test]
 fn per_core_summary_rankings_stay_virtualized_and_moonui_first() {
-    let charts = read_src("analytics/summary/charts.rs");
+    let charts = read_src("analytics/summary/charts/ranking.rs");
     let overview = code_only(braced_body(&charts, "fn core_rank_overview("));
     let all = code_only(braced_body(&charts, "fn core_rank_all("));
     let row = code_only(braced_body(&charts, "fn core_rank_row("));
@@ -1259,7 +1259,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let main = fs::read_to_string(root.join("main.rs")).unwrap();
     let startup = read_startup();
-    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let analytics = read_unsplit("analytics/mod.rs");
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
     let tuner = fs::read_to_string(root.join("analytics").join("tuner").join("mod.rs")).unwrap();
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
@@ -1359,7 +1359,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
 fn liquidation_attribution_has_no_user_switch() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
-    let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
+    let analytics = read_unsplit("analytics/mod.rs");
     let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     assert!(
         !toolbar.contains("an-attr-liq") && !toolbar.contains("attr_liq"),
@@ -1404,7 +1404,7 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
             &["fn reload_coins_inner("][..],
         ),
     ] {
-        let source = read_src(rel);
+        let source = read_unsplit(rel);
         for signature in signatures {
             let after_signature = source
                 .split_once(signature)
@@ -1426,7 +1426,7 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
         }
     }
 
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     assert!(
         analytics.contains("this.reload_axis_after_report(this.strat_mode, show_overlay, cx);"),
         "the Strategy base-to-axis chain must retain the original manual/background overlay policy"
@@ -1440,7 +1440,7 @@ fn automatic_analytics_refresh_keeps_the_busy_overlay_hidden() {
 /// through its tab-entry and report-refresh routes.
 #[test]
 fn summary_completion_keeps_strategy_base_lazy() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let code = code_only(&analytics);
     let summary_reload = code_only(braced_body(&analytics, "fn reload_summary("));
 
@@ -1463,7 +1463,7 @@ fn summary_completion_keeps_strategy_base_lazy() {
 /// old-scope values visible after a manual filter change.
 #[test]
 fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let reload = braced_body(&analytics, "fn reload_strategy_base(");
     let automatic = braced_body(&analytics, "fn refresh_visible_report_data(");
     let manual = braced_body(&analytics, "fn reload(&mut self, cx: &mut Context<Self>)");
@@ -1509,12 +1509,12 @@ fn automatic_strategy_refresh_keeps_the_visible_snapshot() {
     );
 }
 
-/// `analytics/mod.rs:reload_summary` must retain only time-ordered chart hovers across a catch-up.
+/// `analytics/load.rs:reload_summary` must retain only time-ordered chart hovers across a catch-up.
 /// Moving a time-bucket clear back outside the scope-reset branch closes a valid popup on every
 /// landed trade, while retaining profit-ordered `hover_kind` can show another kind's data.
 #[test]
 fn report_catch_up_keeps_time_bucket_hovers_but_clears_profit_ordered_kind_hover() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_src("analytics/load.rs");
     let reload = braced_body(&analytics, "fn reload_summary(");
     let before_request = chain_between(
         reload,
@@ -1556,12 +1556,12 @@ fn report_catch_up_keeps_time_bucket_hovers_but_clears_profit_ordered_kind_hover
     );
 }
 
-/// `analytics/mod.rs:reload_strategy_base` must invalidate the Core-column width only when the
+/// `analytics/load.rs:reload_strategy_base` must invalidate the Core-column width only when the
 /// measured name set changed. Unwrapping that assignment makes every published writer result
 /// remeasure glyphs and visibly hitches the Strategies list despite unchanged core names.
 #[test]
 fn strategy_base_remeasures_core_width_only_for_changed_names() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_src("analytics/load.rs");
     let reload = braced_body(&analytics, "fn reload_strategy_base(");
     let publication = chain_between(
         reload,
@@ -1582,12 +1582,12 @@ fn strategy_base_remeasures_core_width_only_for_changed_names() {
     );
 }
 
-/// `analytics/mod.rs:reload_summary` must preserve a settled snapshot only across a retryable Busy
+/// `analytics/load.rs:reload_summary` must preserve a settled snapshot only across a retryable Busy
 /// catch-up failure. Broadening that publication leaves stale Summary numbers current-looking after
 /// NotReady, corruption, or an exhausted Busy budget with no retry left to correct them.
 #[test]
 fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_src("analytics/load.rs");
     let reload = braced_body(&analytics, "fn reload_summary(");
     let decision = code_only(chain_between(
         reload,
@@ -1613,7 +1613,7 @@ fn summary_catch_up_preserves_only_a_retryable_busy_snapshot() {
 /// window rebuild rather than the one repaint owed by each completed visible result.
 #[test]
 fn report_generation_bookkeeping_has_no_repaint_and_each_completion_has_one() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     for signature in [
         "fn observe_report_generation(",
         "fn mark_report_data_stale(",
@@ -1664,12 +1664,12 @@ fn report_generation_bookkeeping_has_no_repaint_and_each_completion_has_one() {
     }
 }
 
-/// `analytics/mod.rs:apply_undated_result` must call `keep_on_catch_up` before it publishes an
+/// `analytics/load.rs:apply_undated_result` must call `keep_on_catch_up` before it publishes an
 /// error. Dropping that gate flashes a retryable Busy catch-up, while broadening it hides an
 /// exhausted Busy failure and leaves the retained undated count falsely current forever.
 #[test]
 fn undated_catch_up_gate_runs_before_the_error_is_published() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_src("analytics/load.rs");
     let apply = braced_body(&analytics, "fn apply_undated_result(");
     let failure_arm = code_only(braced_body(apply, "Err(error) =>"));
     let before_error = chain_between(
@@ -1803,8 +1803,7 @@ fn calendar_cost_and_funding_tiles_keep_localized_tooltips() {
 #[test]
 fn analytics_core_metadata_is_throttled_across_tabs() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let analytics_ui =
-        fs::read_to_string(root.join("src").join("analytics").join("mod.rs")).unwrap();
+    let analytics_ui = read_unsplit("analytics/mod.rs");
     let calendar_ui = fs::read_to_string(
         root.join("src")
             .join("analytics")
@@ -1848,8 +1847,22 @@ fn analytics_core_metadata_is_throttled_across_tabs() {
 /// transition and identifies that batch at wake-up.
 #[test]
 fn the_analytics_render_root_schedules_no_repaints() {
-    let src = read_src("analytics/mod.rs");
+    let src = read_unsplit("analytics/mod.rs");
     let render_src = read_src("analytics/render.rs");
+    let derived_src = read_src("analytics/summary/derived.rs");
+    let ensure = braced_body(&derived_src, "fn ensure_summary_derived(");
+    for scheduler in [
+        "cx.notify(",
+        "cx.spawn(",
+        "spawn_in(",
+        ".timer(",
+        "on_next_frame(",
+    ] {
+        assert!(
+            !ensure.contains(scheduler),
+            "Summary derivation must schedule nothing: found {scheduler}"
+        );
+    }
 
     assert!(
         src.contains("mod render;"),
@@ -1913,7 +1926,7 @@ fn calendar_hover_is_element_state_not_view_state() {
         "analytics/calendar/month.rs",
     ] {
         assert!(
-            !read_src(rel).contains("cal_hover"),
+            !read_unsplit(rel).contains("cal_hover"),
             "{rel} must not carry calendar hover state on the view"
         );
     }
@@ -2316,7 +2329,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         "the totals row must take its conversion from the snapshot, not from the live setting"
     );
 
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let analytics_render = read_src("analytics/render.rs");
     let adopt = braced_body(&analytics, "fn observe_valuation_mode(");
     assert!(
@@ -2842,8 +2855,13 @@ fn summary_uses_resolved_core_colors_and_tooltips_unresolved_top_strategies() {
     let top = code_only(braced_body(&summary, "fn top_card("));
 
     assert!(
-        tab.contains("charts::distinct_core_colors"),
-        "Summary must build one distinct per-core color set before chart children render"
+        tab.contains("&derived.colors")
+            && braced_body(
+                &read_src("analytics/summary/derived.rs"),
+                "fn ensure_derived("
+            )
+            .contains("charts::distinct_core_colors(&configured, p)"),
+        "Summary must consume the cached distinct per-core colors resolved from configured RGBs"
     );
     assert!(
         top.contains("strat_display_ex(")

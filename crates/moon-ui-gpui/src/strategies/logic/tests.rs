@@ -736,7 +736,7 @@ fn the_sound_picklist_marks_a_missing_name_and_not_an_existing_one() {
         );
     });
 
-    let params = include_str!("../params.rs");
+    let params = include_str!("../params/editors.rs");
     let arm_at = params
         .find("FieldControl::Picklist =>")
         .expect("picklist arm");

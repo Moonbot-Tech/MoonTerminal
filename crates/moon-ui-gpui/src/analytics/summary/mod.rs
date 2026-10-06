@@ -11,6 +11,8 @@ use super::AnalyticsView;
 mod charts;
 pub(super) use charts::PopupHover;
 mod cumulative;
+/// Snapshot-owned chart derivations prepared before Summary rendering.
+pub(in crate::analytics) mod derived;
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use crate::load_state::Note;
@@ -92,6 +94,7 @@ impl AnalyticsView {
     /// Render summary data or the placeholder dictated by its exhaustive load state.
     ///
     /// Args:
+    ///     derived: Prepared chart data or the exact placeholder from the readiness fold.
     ///     p: Active MoonUI palette.
     ///     chrome_width: Window's responsive width. The cumulative legend needs it to decide how
     ///         many core names fit before rendering because GPUI exposes no measured width then.
@@ -101,12 +104,13 @@ impl AnalyticsView {
     ///     Summary surface or the placeholder for its current load state.
     pub(super) fn summary_tab(
         &self,
+        derived: Result<std::rc::Rc<derived::SummaryDerived>, Note>,
         p: MoonPalette,
         chrome_width: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let data = match self.data.view(|d| d.cur.n == 0) {
-            Ok(d) => d.clone(),
+        let derived = match derived {
+            Ok(derived) => derived,
             // An empty query result under a scope the viewing preset or the Auto rail narrowed
             // must still say so — otherwise every core hidden reads as "nothing happened",
             // rather than as the zero-core scope it actually is.
@@ -139,29 +143,18 @@ impl AnalyticsView {
             }
             Err(note) => return super::note_el("an-summary-note", note, 18.0, p, cx),
         };
+        let data = derived.data().clone();
+        debug_assert!(
+            self.data
+                .data()
+                .is_some_and(|current| std::sync::Arc::ptr_eq(current, &data))
+        );
         // Core series colors come from the server's SETTINGS (ServerConfig.color, as in the core
         // selector), and stay there unless two of them would draw as one line — a whole exchange
         // given one colour is exactly what made the cumulative chart's twelve per-core curves
         // indistinguishable. ONE source for every consumer: the legend, the hover-popup dots and
         // the daily/kind bars all read this vector, so they cannot disagree.
-        let core_colors: Vec<Hsla> = {
-            let b = self.backend.read(cx);
-            let configured: Vec<(u64, Option<[u8; 3]>)> = data
-                .core_days
-                .iter()
-                .map(|c| {
-                    (
-                        c.uid,
-                        b.config
-                            .servers
-                            .iter()
-                            .find(|s| s.id == c.uid)
-                            .map(|s| s.color),
-                    )
-                })
-                .collect();
-            charts::distinct_core_colors(&configured, p)
-        };
+        let core_colors = &derived.colors;
         // The top part (KPI/charts/tops) scrolls on its own; the "Profit by
         // core" chart is PINNED to the bottom edge of the window (like the
         // bottom bar of "Strategies").
@@ -252,7 +245,8 @@ impl AnalyticsView {
                                 .gap(design::ui_px(cx, 4.0))
                                 .children(cumulative::core_legend(
                                     &data.core_days,
-                                    &core_colors,
+                                    core_colors,
+                                    &derived.order,
                                     // The two chart cards split the row evenly inside the tab's
                                     // own padding; an ESTIMATE, exactly as `period_bar` measures
                                     // its own budget, because no measured width exists yet.
@@ -268,7 +262,7 @@ impl AnalyticsView {
                                 .child(cumulative::cumulative_area(
                                     &data.days,
                                     &data.core_days,
-                                    &core_colors,
+                                    &derived,
                                     self.hover_cum_bucket,
                                     data.bucket_secs,
                                     self.bound_zone(),
@@ -298,7 +292,7 @@ impl AnalyticsView {
                                 charts::kind_bars(
                                     &data.kinds,
                                     &data.core_days,
-                                    &core_colors,
+                                    core_colors,
                                     self.hover_kind,
                                     p,
                                     cx,
@@ -315,7 +309,8 @@ impl AnalyticsView {
                                 charts::daily_bars(
                                     &data.days,
                                     &data.core_days,
-                                    &core_colors,
+                                    core_colors,
+                                    &derived.daily,
                                     self.hover_daily_bucket,
                                     data.bucket_secs,
                                     self.bound_zone(),

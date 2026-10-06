@@ -270,7 +270,7 @@ fn retired_bot_preference_falls_back_to_core() {
     assert_eq!(GroupMode::default(), GroupMode::Core);
 }
 
-/// `profit_monitor/mod.rs:MIN_WINDOW_WIDTH` must keep fitting Name beside a profit column wide
+/// `profit_monitor/body_views.rs:MIN_WINDOW_WIDTH` must keep fitting Name beside a profit column wide
 /// enough to print an ordinary amount, and `MonitorLayout::for_width` must preserve every exact
 /// degradation boundary. Restoring the old 390px minimum, keeping Trades always visible, removing a
 /// scale multiplier, or shifting a threshold makes the budget or one adjacent pair red and blocks
@@ -1110,7 +1110,7 @@ fn merged_rows_carry_the_newest_trade_of_their_cores() {
     );
 }
 
-/// `profit_monitor/mod.rs:arrivals` must highlight a core that traded, and nothing else.
+/// `profit_monitor/context.rs:arrivals` must highlight a core that traded, and nothing else.
 ///
 /// Breakage: baselining with an empty map instead of `None` flashes every row on the first snapshot
 /// after a period change; keeping strict close-date comparison alone misses a second trade inside
@@ -1253,7 +1253,7 @@ fn display_preferences_separate_unset_from_disabled() {
     );
 }
 
-/// `profit_monitor/mod.rs:run_slots` must reserve a slot for the CONTROL that fills it and for
+/// `profit_monitor/body_views.rs:run_slots` must reserve a slot for the CONTROL that fills it and for
 /// nothing else, and `name_min_width` must pay for the run column out of the Name column down to
 /// its floor.
 ///

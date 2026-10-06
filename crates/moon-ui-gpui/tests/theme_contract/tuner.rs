@@ -122,7 +122,7 @@ fn the_tuning_strategy_list_stays_virtualized() {
 /// row zero whenever a background valuation refresh replaces the strategy data.
 #[test]
 fn the_tuning_strategy_list_retains_scroll_across_refreshes() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let table = read_src("analytics/tuner/list/table.rs");
     let card = braced_body(&table, "fn strat_list_card(");
 
@@ -655,7 +655,7 @@ fn the_composed_set_is_reported_beside_the_holdout() {
 fn strategy_sort_clicks_persist_through_the_layout() {
     let list = read_src("analytics/tuner/list/mod.rs");
     let table = read_src("analytics/tuner/list/table.rs");
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     let toggle = braced_body(&list, "fn toggle_sort(");
 
@@ -850,7 +850,7 @@ fn the_heavy_search_settings_are_hidden_below_the_core_bar() {
 #[test]
 fn the_distribution_card_collapse_is_a_display_lens_only() {
     let hist = read_src("analytics/tuner/filter/hist.rs");
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
 
     assert!(
         hist.contains("an-tuner-hist-collapse") && hist.contains("toggle_hist_collapsed(cx)"),
@@ -887,14 +887,14 @@ fn the_distribution_card_collapse_is_a_display_lens_only() {
     }
 }
 
-/// `analytics/mod.rs::toggle_side_collapsed`: adding `self.reload(cx)`, dropping the layout-dirty
+/// `analytics/controls.rs::toggle_side_collapsed`: adding `self.reload(cx)`, dropping the layout-dirty
 /// write, or making a filter/coin/time read path inspect `side_collapsed` must fail this test.
 ///
 /// The user-visible consequence is either a multi-axis rescan from a display-only caret, or an
 /// expanding column that shows a spinner because its hidden read never cleared the staleness gate.
 #[test]
 fn the_tuner_right_column_collapse_is_a_display_lens_only() {
-    let analytics = read_src("analytics/mod.rs");
+    let analytics = read_unsplit("analytics/mod.rs");
     let toggle = code_only(braced_body(&analytics, "fn toggle_side_collapsed("));
 
     assert!(
