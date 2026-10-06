@@ -21,7 +21,7 @@
 
 use moon_core::config::LabelAlign;
 
-use super::{CAPTION_GAP, MIN_LEGIBLE_W};
+use super::model::{CAPTION_GAP, MIN_LEGIBLE_W};
 
 /// Largest share of a zone the elastic band may take off the bands beside it.
 ///

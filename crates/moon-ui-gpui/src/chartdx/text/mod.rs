@@ -702,7 +702,9 @@ mod tests;
 
 pub(in crate::chartdx) use caption::CaptionBox;
 use caption::book_zone_left;
-pub(in crate::chartdx) use captions::{ActionDraw, CAPTION_PLATES, CaptionBar, CaptionGeomInput};
+pub(in crate::chartdx) use captions::{
+    ActionDraw, CAPTION_PLATES, CaptionBar, CaptionGeomInput, FitMemo, RowPlanCache,
+};
 pub(crate) use column_scroll::notch_steps;
 pub(in crate::chartdx) use column_scroll::{clamp_first, first_of};
 /// The caption editor lives outside the chart and needs exactly one thing from the text pass:

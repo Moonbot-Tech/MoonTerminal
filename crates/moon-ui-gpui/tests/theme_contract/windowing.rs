@@ -816,7 +816,7 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
     // captions are resolved rather than where an element used to be built. Two gates, and both are
     // the engine's own answer rather than something a caller states: a window that forgot to ask
     // must not be able to hand a finished trade a live weapon.
-    let engine = code_only(&read_src("chartdx/engine.rs"));
+    let engine = code_only(&read_src("chartdx/engine/hits.rs"));
     for signature in [
         "pub fn wanted_market_actions(",
         "pub(crate) fn set_pane_actions(",
@@ -847,7 +847,7 @@ fn historical_trade_windows_leave_no_live_order_or_market_action_route() {
         );
     }
 
-    let chart_mod = read_src("panels/chart/mod.rs");
+    let chart_mod = read_src("panels/chart/controls.rs") + &read_src("panels/chart/construct.rs");
     assert!(
         code_only(braced_body(&chart_mod, "pub fn set_orderbook_enabled("))
             .contains("if self.historical"),

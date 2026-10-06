@@ -20,7 +20,7 @@ fn the_burnt_in_header_never_reaches_for_the_core_name() {
 /// screenshot while leaving the header formatter unchanged.
 #[test]
 fn the_shot_input_snapshot_selects_the_ticker_and_venue_not_a_core_name() {
-    let source = read_src("panels/chart/mod.rs");
+    let source = read_src("panels/chart/introspect.rs");
     let inputs = code_only(braced_body(&source, "pub(crate) fn shot_inputs("));
 
     assert!(inputs.contains("pane_ticker"));

@@ -5,7 +5,7 @@ use moon_core::market::candles::{
     CANDLE_MODE_FILLED, CANDLE_MODE_OFF, CANDLE_TF_CHOICES_MIN, CANDLE_ZONE_MAX,
 };
 
-use super::{chart_history_floor_ms, hide_start_rel};
+use super::window::{chart_history_floor_ms, hide_start_rel};
 
 /// `market.rs:chart_history_floor_ms` must keep every supported candle timeframe within the
 /// 120-to-1500-bar request band; swapping the clamps or lowering the floor would silently request
@@ -74,14 +74,14 @@ fn a_measuring_period_is_dropped_without_a_pointer() {
         ..live
     };
 
-    let without = super::resolve_span_keys(&[live, measured], None);
+    let without = super::spans::resolve_span_keys(&[live, measured], None);
     assert_eq!(
         without,
         vec![(VolumeSpan::Millis(60_000), VolumeAt::Now)],
         "only the live-edge period survives with no pointer"
     );
 
-    let with = super::resolve_span_keys(&[live, measured], Some(1_700_000_000_000));
+    let with = super::spans::resolve_span_keys(&[live, measured], Some(1_700_000_000_000));
     assert_eq!(
         with.len(),
         2,
@@ -105,7 +105,7 @@ fn one_period_is_resolved_once() {
         anchor: SpanAnchor::Now,
         liquidations: true,
     };
-    assert_eq!(super::resolve_span_keys(&[key, key], None).len(), 1);
+    assert_eq!(super::spans::resolve_span_keys(&[key, key], None).len(), 1);
 }
 
 /// The pointer's refresh may replace only what the pointer owns.
@@ -122,7 +122,7 @@ fn a_pointer_refresh_leaves_the_live_edge_entries_alone() {
     let new_point = (VolumeSpan::Millis(60_000), VolumeAt::Around(2_000));
 
     let mut held = vec![(live, 1u32), (old_point, 2u32)];
-    super::merge_readouts(&mut held, vec![(new_point, 3u32)]);
+    super::spans::merge_readouts(&mut held, vec![(new_point, 3u32)]);
 
     assert!(held.contains(&(live, 1)), "the live-edge reading survives");
     assert!(
@@ -141,7 +141,7 @@ fn a_pointer_leaving_clears_only_its_own_entries() {
     let point = (VolumeSpan::Millis(60_000), VolumeAt::Around(1_000));
     let mut held = vec![(live, 1u32), (point, 2u32)];
 
-    super::merge_readouts(&mut held, Vec::new());
+    super::spans::merge_readouts(&mut held, Vec::new());
 
     assert_eq!(held, vec![(live, 1)]);
 }
@@ -150,23 +150,23 @@ fn a_pointer_leaving_clears_only_its_own_entries() {
 #[test]
 fn price_fit_cache_tracks_viewport_and_accumulates_subpixel_motion() {
     let cached = Some((1000.0, 60000.0, 0.01));
-    assert!(!super::price_fit_window_changed(
+    assert!(!super::window::price_fit_window_changed(
         cached,
         (1050.0, 60000.0, 0.01)
     ));
-    assert!(super::price_fit_window_changed(
+    assert!(super::window::price_fit_window_changed(
         cached,
         (1100.0, 60000.0, 0.01)
     ));
-    assert!(super::price_fit_window_changed(
+    assert!(super::window::price_fit_window_changed(
         cached,
         (1000.0, 30000.0, 0.01)
     ));
-    assert!(super::price_fit_window_changed(
+    assert!(super::window::price_fit_window_changed(
         cached,
         (1000.0, 60000.0, 0.02)
     ));
-    assert!(super::price_fit_window_changed(
+    assert!(super::window::price_fit_window_changed(
         None,
         (1000.0, 60000.0, 0.01)
     ));
@@ -247,7 +247,7 @@ fn hide_max_follows_the_oldest_trade_bucket_and_stays_off_without_one() {
 fn live_follow_inside_the_book_margin_keeps_instances_and_bitmap() {
     use crate::chartdx::orderbook::{BookBakeKey, book_v_margin_px, plan_book_bake};
 
-    use super::book_instances_stale;
+    use super::window::book_instances_stale;
 
     let epoch = 1.7e12;
     let mut view = moon_chart::view::ChartView::new(epoch);
@@ -373,7 +373,8 @@ fn live_follow_inside_the_book_margin_keeps_instances_and_bitmap() {
 /// retained. A wider tail is the other direction and must raise the bound.
 #[test]
 fn patch_bound_keeps_wide_row_and_wider_tail() {
-    use super::{CandleApply, volume_sample_timeframe_bound};
+    use super::candle_apply::CandleApply;
+    use super::spans::volume_sample_timeframe_bound;
 
     let mut samples = Vec::with_capacity(8);
     for i in 0..8 {

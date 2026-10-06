@@ -14,6 +14,9 @@ use moon_ui::MoonVirtualListScrollHandle;
 mod arrival_color;
 pub(in crate::chart_tabs) mod detect_cap;
 
+#[cfg(test)]
+mod tests;
+
 use super::stack::grid;
 use super::stack::{
     COMPACT_STABLE, ChartStackEntry, SlotOwner, apply_setting, chart_stack_card, compare_role,
@@ -1285,10 +1288,11 @@ impl Render for AddChartStack {
         let p = palette;
         let title_size = crate::design::t_body(cx);
         let tokens = moon_ui::MoonTheme::active_tokens(cx);
-        let visible_order = render_order.clone();
-        let panel_order = render_order.clone();
-        let tile_order = render_order.clone();
-        let role_order = render_order;
+        let order: Rc<[usize]> = render_order.into();
+        let visible_order = order.clone();
+        let panel_order = order.clone();
+        let tile_order = order.clone();
+        let role_order = order;
         let on_visible_range = cx.processor(move |this, range: Range<usize>, _window, cx| {
             this.sync_stack_visible_ordered(range, &visible_order, cx);
         });

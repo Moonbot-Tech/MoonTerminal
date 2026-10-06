@@ -26,6 +26,11 @@ impl RenderState {
         &mut self,
         ctx: &mut GpuCanvasTextContext<'_>,
     ) -> anyhow::Result<()> {
+        self.caption_fit_memo.begin_pass(
+            crate::design::mono().as_ref(),
+            ctx.scale_factor(),
+            ctx.content_zoom(),
+        );
         self.text_run_cursor = 0;
         // The text layer lays out in the chart's own logical pixels — the platform's, with the
         // window's content zoom taken out of the frame's factor — so its captions keep device

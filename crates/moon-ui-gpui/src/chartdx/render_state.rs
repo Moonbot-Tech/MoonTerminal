@@ -1,9 +1,217 @@
 //! Chart render state (`impl RenderState`): per-pane GPU-state composition, present pacing initialized
 //! at 60 Hz and then driven by detected monitor refresh clamped to 30-360 Hz, with the renderer target
-//! capped at 240 Hz, plus cursor, readout, and own-pass layer rendering. Extracted from `mod.rs`, where
-//! the `RenderState` structure remains declared.
+//! capped at 240 Hz, plus cursor, readout, and own-pass layer rendering. Owns the retained `RenderState` and userdata scratch buffers.
 
 use super::*;
+
+/// The userdata union and the archived pass's own buffers, reused across order syncs.
+#[derive(Default)]
+pub(in crate::chartdx) struct UdScratch {
+    pub(in crate::chartdx) zones: Vec<moon_chart::layers::ZoneInstance>,
+    pub(in crate::chartdx) hlines: Vec<moon_chart::layers::LineInstance>,
+    pub(in crate::chartdx) segs: Vec<moon_chart::layers::SegInstance>,
+    pub(in crate::chartdx) markers: Vec<moon_chart::layers::MarkerInstance>,
+    pub(in crate::chartdx) arch_zones: Vec<moon_chart::layers::ZoneInstance>,
+    pub(in crate::chartdx) arch_hlines: Vec<moon_chart::layers::LineInstance>,
+    pub(in crate::chartdx) arch_segs: Vec<moon_chart::layers::SegInstance>,
+    pub(in crate::chartdx) arch_markers: Vec<moon_chart::layers::MarkerInstance>,
+}
+
+impl UdScratch {
+    /// Empty the live union; the archived buffers are cleared by the build that fills them.
+    pub(in crate::chartdx) fn clear_live(&mut self) {
+        self.zones.clear();
+        self.hlines.clear();
+        self.segs.clear();
+        self.markers.clear();
+    }
+}
+
+/// Render state for all panels shared with `gpu_canvas` callbacks through `Rc<RefCell>`.
+///
+/// The UI is single-threaded, and `prepare` never overlaps frame callbacks in time.
+pub(in crate::chartdx) struct RenderState {
+    /// App-wide order-book width in physical pixels.
+    pub(in crate::chartdx) order_book_width_px: f32,
+    pub(in crate::chartdx) panes: Vec<PaneRender>,
+    /// Buffer for the previous frame's cursor params, reused by the market sync.
+    pub(in crate::chartdx) cursor_params_scratch: Vec<CursorParams>,
+    /// CPU-side dirty flag for `GpuCanvasDriver::frame`: `prepare()` updated resident state, so the
+    /// next platform tick must present even without GPUI dirtiness.
+    pub(in crate::chartdx) needs_present: bool,
+    /// Scene pixels changed since the optional DX11 cursor-restore cache was built.
+    /// Live-scroll draws directly and invalidates that cache; cursor-only frames may rebuild it once.
+    pub(in crate::chartdx) base_dirty: bool,
+    pub(in crate::chartdx) last_present_at: Option<Instant>,
+    pub(in crate::chartdx) target_present_interval: Duration,
+    pub(in crate::chartdx) camera_shift_window_start: Option<Instant>,
+    pub(in crate::chartdx) camera_shift_count: u32,
+    pub(in crate::chartdx) camera_shift_hz: f32,
+    pub(in crate::chartdx) last_gpu_prepare_generation: u64,
+    pub(in crate::chartdx) text_runs: Vec<GpuCanvasTextRun>,
+    pub(in crate::chartdx) text_run_cursor: usize,
+    /// Retained runs for the configured captions, addressed by
+    /// `(pane * CHART_LABEL_ROWS + row) * ROW_RUN_STRIDE + part` rather than by a running cursor.
+    ///
+    /// A separate pool precisely BECAUSE the cursor above is shared across panes and label kinds:
+    /// an index from it moves whenever anything earlier in the frame stops drawing, and a run
+    /// handed a different string reshapes it. A caption that appears and disappears — the scale
+    /// badge, the comparison delta — would otherwise reshape its neighbours for free.
+    pub(in crate::chartdx) caption_runs: Vec<GpuCanvasTextRun>,
+    /// Lines of the PROSE captions on the pane being drawn, wrapped once and then measured and
+    /// drawn from here.
+    ///
+    /// The caption pass measures a line, then measures it again to centre it, then again to draw
+    /// it — which is free for a figure and is not free for a sentence that has to be broken on
+    /// word boundaries first. Cleared per pane; an `Item` holds its index.
+    pub(in crate::chartdx) caption_wraps: Vec<Vec<(String, f32)>>,
+    /// Verified fit and wrap results retained across consecutive text passes.
+    pub(in crate::chartdx) caption_fit_memo: text::FitMemo,
+    /// Effective caption configuration, mirrored from `ChartDataState` so the text pass can read it
+    /// without borrowing the data state during a frame.
+    ///
+    /// Behind an `Rc` because the draw pass takes a handle to it on every presented frame, per
+    /// pane: the configuration owns a name string per row, and cloning it by value would allocate
+    /// sixteen strings in the frame loop for nothing.
+    pub(in crate::chartdx) chart_labels: Rc<moon_core::config::ChartLabelsCfg>,
+    /// The closed trade this engine was handed, for the captions that state one.
+    ///
+    /// `None` on every live chart, which is what makes those captions print nothing there: they
+    /// describe A trade, and a chart that was not handed one has none to describe. Mirrored here
+    /// like `chart_labels` because the text pass reads it every frame and must not borrow the data
+    /// state to do so.
+    pub(in crate::chartdx) trade_labels: Option<Rc<TradeLabels>>,
+    /// The chart's own candle timeframe in milliseconds, mirrored from `ChartDataState` like the
+    /// captions above and for the same reason: a countdown caption set to `Авто` resolves against
+    /// it while the text pass is running, and must not borrow the data state to read it.
+    pub(in crate::chartdx) chart_tf_ms: i64,
+    /// The arbitrage roster the caption column is arranged by, mirrored like `chart_labels` and for
+    /// the same reason: the text pass reads it per pane on every rebuild and must not borrow the
+    /// data state. GLOBAL — one roster for every chart — so every pane shares this handle.
+    pub(in crate::chartdx) arb_view: Rc<moon_core::config::ArbViewCfg>,
+    pub(in crate::chartdx) firetest_text_labels: Vec<String>,
+    pub(in crate::chartdx) firetest_text_runs: Vec<GpuCanvasTextRun>,
+    pub(in crate::chartdx) firetest_text_layer: GpuCanvasRetainedTextLayer,
+    pub(in crate::chartdx) firetest_text_revision: u64,
+    pub(in crate::chartdx) firetest_force_present: bool,
+    pub(in crate::chartdx) ui_palette: moon_ui::MoonPalette,
+    /// Top-left chart-slot origin in the backbuffer. UI cursor coordinates are local slot device
+    /// pixels, while own-pass renders in window coordinates.
+    pub(in crate::chartdx) slot_origin: [f32; 2],
+    pub(in crate::chartdx) cursor: Option<CursorState>,
+    /// Ghost crosshair price in comparison mode. A panel WITHOUT a real cursor draws a horizontal
+    /// line at this price using its own Y mapping, plus order-book volume and percentage through
+    /// `text/runs.rs::draw_ghost_cursor_labels`.
+    /// The hovered sibling writes it through `ChartGhostCursor`, bypassing GPUI notification like
+    /// the real cursor.
+    pub(in crate::chartdx) ghost_price: Option<f32>,
+    /// Anchor Last price for the large "+0.12%" delta below the corner label in broom mode. The stack
+    /// supplies it through `apply_compare` on each observation. `None` means no comparison or this
+    /// chart is the anchor.
+    pub(in crate::chartdx) compare_ref_price: Option<f32>,
+    /// When this chart arrived in a stack slot, driving the accent border flash and steady stroke.
+    /// Retained after the flash while `arrival_hold` is set; the final arrival-present stamp stops
+    /// extra presents once the stroke settles. Without the hold the frame loop clears it at the
+    /// pulse deadline. `None` means the arrival decoration is not armed.
+    pub(in crate::chartdx) arrival_pulse: Option<Instant>,
+    /// Accent colour for the arrival flash, handed over with the stamp so the palette stays the
+    /// single source of truth and this layer never guesses a colour.
+    pub(in crate::chartdx) arrival_pulse_color: [f32; 4],
+    /// Whether the border stays on as a steady stroke after the three pulses. Off, the pulses end
+    /// with a clear present and the arrival is forgotten; the tab's popup decides, not this layer.
+    pub(in crate::chartdx) arrival_hold: bool,
+    /// When the last arrival frame was presented, pacing the flash to `ARRIVAL_PULSE_TICK`
+    /// independently of the 60 Hz present cap. A stamp past expiry stops arrival presents after
+    /// the final steady stroke has been scheduled.
+    pub(in crate::chartdx) last_arrival_present_at: Option<Instant>,
+    /// Deadline until which every pane's core-name caption names the EXCHANGE instead, for a shot.
+    ///
+    /// Named for what it HOLDS — a wall-clock deadline — not for what it selects, so that
+    /// `shot_caption_until = None` reads as "stop substituting" rather than as clearing a string.
+    ///
+    /// ONE flag for the whole engine rather than one per pane: a picture that named the exchange in
+    /// one pane and the account in another would be worse than either.
+    ///
+    /// It carries a DEADLINE rather than a plain `bool` because the value is a privacy control. The
+    /// screen must not be left naming the exchange if the shot's callback chain never completes — a
+    /// closed window, a panel re-parented between windows, a stalled machine. `frame` expires it
+    /// from wall clock, just as it ends or settles [`Self::arrival_pulse`] at its deadline, so
+    /// nothing has to be trusted to call the caption clear.
+    pub(in crate::chartdx) shot_caption_until: Option<Instant>,
+    /// How many completed text passes have drawn substituted captions since it was armed.
+    ///
+    /// The shot's proof, and the reason it is safe to capture at all. A COUNT rather than a flag,
+    /// with a threshold above one, because `prepare_text` having run does NOT prove the frame
+    /// reached the screen: the fork's renderer skips `draw` outright on the first frame after a
+    /// DirectX device recovery and swallows a `can_present` refusal the same way, while the canvas
+    /// text pass still runs. A single drawn pass could therefore be one the GPU discarded, and
+    /// capturing on it would put the ACCOUNT NAME on the clipboard — the one outcome this exists
+    /// to prevent.
+    pub(in crate::chartdx) shot_caption_frames: u8,
+    /// Device generation the proof has been counted against, to notice a recovery mid-shot.
+    pub(in crate::chartdx) shot_caption_device_gen: u64,
+    /// Bumped on every ARM, so a superseded shot can tell it has been replaced.
+    ///
+    /// Two presses in quick succession run two wait chains against this one engine. The second
+    /// arming zeroes the frame count the first is still waiting on, and without a generation the
+    /// first would sit out its budget and report a failure for a shot that was simply replaced. It
+    /// never affected what gets CAPTURED — the count is zeroed before any later frame is tallied —
+    /// only what gets reported.
+    pub(in crate::chartdx) shot_caption_gen: u64,
+    pub(in crate::chartdx) cursor_color: [f32; 4],
+    pub(in crate::chartdx) cursor_thickness: f32,
+    pub(in crate::chartdx) readout_bg: [f32; 4],
+    pub(in crate::chartdx) readout_soft_bg: [f32; 4],
+    pub(in crate::chartdx) readout_order_bg: [f32; 4],
+    pub(in crate::chartdx) readout_border: [f32; 4],
+    pub(in crate::chartdx) readout_border_px: f32,
+    pub(in crate::chartdx) label_positive: u32,
+    pub(in crate::chartdx) label_negative: u32,
+    pub(in crate::chartdx) label_neutral: u32,
+    pub(in crate::chartdx) axis_label: u32,
+    pub(in crate::chartdx) caption_label: u32,
+    pub(in crate::chartdx) readout_label: u32,
+    /// Order-line and cursor label font-size adjustment in pixels from `ChartTheme.label_font_delta`.
+    /// `text/runs.rs` applies it through label draw/measure helpers used by the line-label column and
+    /// cursor readout in `text/prepare.rs`.
+    pub(in crate::chartdx) label_font_delta: f32,
+    /// Whether to show per-tab order-line labels from the ⚙ popup. Disabled hides the line-label
+    /// column built by `text/prepare.rs::prepare_text`.
+    pub(in crate::chartdx) line_labels: bool,
+    /// Whether to show crosshair readout labels for time, price, percentage, volume, and size.
+    /// Disabled hides cursor values prepared by `text/prepare.rs::prepare_text` and ghost labels
+    /// drawn by `text/runs.rs::draw_ghost_cursor_labels`.
+    pub(in crate::chartdx) cursor_labels: bool,
+    /// Marker drawn beside the crosshair while a mode is active — today the Sells-to-zone
+    /// drawing mode. `None` draws nothing. It rides the crosshair rather than the GPUI tree, so following
+    /// the pointer costs no repaint of the view tree.
+    ///
+    /// A `&'static str` because a mode marker is a GLYPH, not a sentence: nothing to translate and
+    /// nothing to allocate on the present path that redraws it.
+    pub(in crate::chartdx) cursor_badge: Option<&'static str>,
+    /// The percent ruler while a drag holds it (`ruler.rs`): its band rides the readout batch and
+    /// its text the text pass, both redrawn per present, so moving it costs no layer rebuild.
+    pub(in crate::chartdx) ruler: Option<ruler::RulerReadout>,
+    pub(in crate::chartdx) pixel_scale: f32,
+    /// Lazily created own-pass scissor rasterizer, recreated on device changes. It clips layers to
+    /// the panel so price-positioned order books and orders cannot spill beyond the plot onto
+    /// toolbars or scales.
+    #[cfg(windows)]
+    pub(in crate::chartdx) scissor_rs: Option<ID3D11RasterizerState>,
+    #[cfg(windows)]
+    pub(in crate::chartdx) scissor_generation: u64,
+    /// Dark base of the chart, equal to `rgb4(theme.bg)` and updated in `prepare`. The base
+    /// texture is CLEARED to it, which is both the fill and — see `base.rs`'s module doc — what
+    /// keeps a bake/blit divergence off the screen. Do not clear that texture to zero.
+    ///
+    /// Within the blitted slot it is what covers GPUI or SwapChain's unpainted white background on
+    /// the first frame. The branded empty-state logo is a GPUI SVG layer, not a native raster
+    /// splash.
+    #[cfg(windows)]
+    pub(in crate::chartdx) window_bg_color: [f32; 4],
+    #[cfg(windows)]
+    pub(in crate::chartdx) base_cache: base::BaseCache,
+}
 
 const READOUT_FALLBACK_FONT_W: f32 = 8.5;
 const READOUT_PAD_X: f32 = 5.0;

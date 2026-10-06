@@ -104,7 +104,7 @@ fn coin_surfaces_resolve_through_the_market_source() {
 /// — `market_label` takes the source lock and a snapshot and must not sit on a render path.
 #[test]
 fn the_main_tab_row_labels_charts_from_the_panels_own_ticker() {
-    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let main_stack = read_src("chart_tabs/main_stack/tabs.rs");
     let row = braced_body(&main_stack, "fn render_tab_row(");
 
     assert!(

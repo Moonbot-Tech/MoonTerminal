@@ -129,9 +129,9 @@ fn market_data_revisions_wake_pending_auto_chart_retargets() {
 /// current slot.
 #[test]
 fn auto_retarget_replaces_the_active_main_slot_without_appending() {
-    let source = include_str!("main_stack.rs");
+    let source = include_str!("main_stack/open.rs");
     let body = source
-        .split("pub(super) fn replace_or_focus(")
+        .split("pub(in crate::chart_tabs) fn replace_or_focus(")
         .nth(1)
         .and_then(|tail| {
             tail.split("/// Remove panels whose own panes are empty")

@@ -560,6 +560,54 @@ fn every_backend_draws_all_five_line_styles() {
     }
 }
 
+/// Changing a marker scalar on one backend must not silently change its appearance there alone.
+#[test]
+fn marker_constants_match_across_shader_backends() {
+    let backends = [
+        (
+            "chartdx/shaders/order_lines.hlsl",
+            "static const float ",
+            "",
+        ),
+        ("chartdx/shaders/chart_native.metal", "constant float ", ""),
+        ("chartdx/shaders/native_marker.wgsl", "const ", ": f32"),
+    ];
+    let sources =
+        backends.map(|(path, prefix, suffix)| (path, prefix, suffix, code_only(&read_src(path))));
+    for name in [
+        "GEM_FACET_GAP",
+        "GEM_LEFT_SHADE",
+        "GEM_TWO_PI",
+        "ARROW_RIM_FRAC",
+        "ARROW_RIM_SHADE",
+        "ARROW_CLUSTER_GROW",
+        "ARROW_CLUSTER_GROW_CAP",
+    ] {
+        let values = sources.each_ref().map(|(path, prefix, suffix, source)| {
+            let declaration = format!("{prefix}{name}{suffix}");
+            let tail = source
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(&declaration))
+                .unwrap_or_else(|| panic!("{path}: missing {name} declaration"));
+            let value = tail
+                .trim_start()
+                .strip_prefix('=')
+                .and_then(|value| value.split_once(';').map(|(value, _)| value.trim()))
+                .unwrap_or_else(|| panic!("{path}: malformed {name} declaration"));
+            value
+                .parse::<f32>()
+                .unwrap_or_else(|error| panic!("{path}: invalid {name} value {value}: {error}"))
+        });
+        for ix in 1..values.len() {
+            assert_eq!(
+                values[0], values[ix],
+                "{name} differs between {} and {}",
+                sources[0].0, sources[ix].0
+            );
+        }
+    }
+}
+
 /// All three backends must PIN a flagged segment to the plot.
 ///
 /// The exit line a running position is managed by is drawn on the plot's edge once its price leaves
@@ -926,7 +974,7 @@ fn an_emptied_chart_panel_drops_its_trade_history_target() {
         ttl.contains("this.clear_history_target_if_unused(cx)"),
         "TTL expiry must drop the history target of a slot that now shows nothing"
     );
-    let panel = code_only(&read_src("panels/chart/mod.rs"));
+    let panel = code_only(&read_src("panels/chart/lifecycle.rs"));
     for signature in ["fn remove_pane(", "pub fn close_all_panes("] {
         let body = braced_body(&panel, signature);
         assert!(
@@ -946,7 +994,8 @@ fn an_emptied_chart_panel_drops_its_trade_history_target() {
 /// and is heard only through the backend observer.
 #[test]
 fn a_trade_kind_change_re_runs_the_durable_history_query() {
-    let source = code_only(&read_src("panels/chart/mod.rs"));
+    let source =
+        code_only(&(read_src("panels/chart/controls.rs") + &read_src("panels/chart/construct.rs")));
     let body = braced_body(&source, "pub fn set_chart_graphics(");
     assert!(
         body.contains("self.requery_trade_history_on_trade_kinds(cx)"),
@@ -1064,13 +1113,13 @@ fn mouse_down_left_withholds_only_the_band_press() {
 /// the engine could disagree with the one everything else reads.
 #[test]
 fn historical_panels_make_the_engine_ignore_the_global_follow_flag() {
-    let engine = read_src("chartdx/engine.rs");
+    let engine = read_src("chartdx/engine/controls.rs");
     let follow = code_only(braced_body(&engine, "pub fn set_follow("));
     assert!(
         follow.contains("if self.data.borrow().historical || self.follow == follow {"),
         "set_follow must return before the live-reset body when the engine is historical"
     );
-    let panel = read_src("panels/chart/mod.rs");
+    let panel = read_src("panels/chart/construct.rs");
     let historical = code_only(braced_body(&panel, "pub fn new_historical("));
     assert!(
         historical.contains("panel.chart.set_historical(true);"),
@@ -1261,7 +1310,7 @@ fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
         "the empty Main screen must show chart.empty.hint in muted text"
     );
 
-    let main_stack = read_src("chart_tabs/main_stack.rs");
+    let main_stack = read_src("chart_tabs/main_stack/render.rs");
     let render = braced_body(
         &main_stack,
         "fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement",
@@ -1675,17 +1724,17 @@ fn every_backend_draws_the_horizontal_volumes_the_same_way() {
     }
 
     // The zone is part of the one layout, and every reader passes the tab's own spec into it.
-    let layout = code_only(&read_src("chartdx/mod.rs"));
+    let layout = code_only(&read_src("chartdx/pane_layout.rs"));
     let body = braced_body(&layout, "fn pane_layout(");
     assert!(
         body.contains("hvol_carved_w") && body.contains("ZONE_MIN_PX"),
-        "chartdx/mod.rs: pane_layout must carve the zone and floor it at ZONE_MIN_PX"
+        "chartdx/pane_layout.rs: pane_layout must carve the zone and floor it at ZONE_MIN_PX"
     );
     // Laid over the plot, the zone is floored AFTER it is clamped to the plot: the pane-relative
     // width can pass the floor while the strip a cramped plot leaves for it cannot.
     assert!(
         body.contains("w.min(chart_w)") && body.contains("hvol_floor"),
-        "chartdx/mod.rs: the overlaid zone must be clamped to the plot and floored after that"
+        "chartdx/pane_layout.rs: the overlaid zone must be clamped to the plot and floored after that"
     );
     for (file, signature) in [
         ("chartdx/data_state/market.rs", "pane_layout("),
@@ -1830,7 +1879,7 @@ fn sells_zone_cursor_badge_does_not_inherit_the_readout_style() {
         prepare.contains("Deliberately NOT behind the crosshair-label switch"),
         "the badge must keep surviving the crosshair-label switch"
     );
-    let engine = code_only(&read_src("chartdx/engine.rs"));
+    let engine = code_only(&read_src("chartdx/engine/geometry.rs"));
     let upload = braced_body(&engine, "pub fn set_ui_palette(");
     assert!(
         upload.contains("ui_palette.accent"),

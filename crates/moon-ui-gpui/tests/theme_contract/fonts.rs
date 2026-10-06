@@ -166,12 +166,12 @@ fn chart_and_header_data_text_keep_the_mono_family() {
             "chartdx/text/mod.rs:{function} must keep mono because chart axis and order-line text are compared figures"
         );
     }
-    let captions = read_src("chartdx/text/captions.rs");
+    let captions = read_src("chartdx/text/captions/measure.rs");
     for function in ["fn measure_caption_run(", "fn draw_caption_run("] {
         assert!(
             code_only(braced_body(&captions, function))
                 .contains("gpui::font(crate::design::mono())"),
-            "chartdx/text/captions.rs:{function} must keep mono because chart captions carry figures and labels with aligned geometry"
+            "chartdx/text/captions/measure.rs:{function} must keep mono because chart captions carry figures and labels with aligned geometry"
         );
     }
     let runs = read_src("chartdx/text/runs.rs");

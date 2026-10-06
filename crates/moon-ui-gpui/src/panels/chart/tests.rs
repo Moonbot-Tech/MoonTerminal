@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, rc::Rc};
 
-use super::ChartSettingsSig;
+use super::settings_sig::ChartSettingsSig;
 use moon_core::{
     config::{ChartGraphicsCfg, ChartLabelsCfg, ChartTheme, OrdersStyleSet},
     db::{OffsetSegment, ReportAxis},
@@ -85,7 +85,7 @@ fn every_chart_command_and_navigation_path_revalidates_auto_authority() {
 /// would become explicitly unscoped and the live guards above would always allow stale cores.
 #[test]
 fn chart_stacks_pass_their_workspace_group_into_every_panel() {
-    let main = include_str!("../../chart_tabs/main_stack.rs");
+    let main = include_str!("../../chart_tabs/main_stack/open.rs");
     let add = include_str!("../../chart_tabs/add_stack.rs");
     assert!(main.contains(
         "ChartPanel::new_main(\n                backend,\n                Some(workspace_group),"
