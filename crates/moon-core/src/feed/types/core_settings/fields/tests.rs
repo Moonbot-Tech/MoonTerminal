@@ -18,12 +18,20 @@ const COVERED: &[(&str, &str)] = &[
     ("interface", "InterfaceSettings"),
 ];
 
+/// Sources declaring the covered sections after the configuration model is split.
+const SOURCES: &[&str] = &[
+    include_str!("../signals_general.rs"),
+    include_str!("../order_rules.rs"),
+    include_str!("../special.rs"),
+    include_str!("../interface.rs"),
+];
+
 /// The `pub` fields of one struct as the source spells them.
 fn source_fields(source: &str, struct_name: &str) -> BTreeSet<String> {
     let header = format!("pub struct {struct_name} {{");
     let start = source
         .find(&header)
-        .unwrap_or_else(|| panic!("{struct_name} is not declared in core_settings.rs"));
+        .unwrap_or_else(|| panic!("{struct_name} is not declared in the configuration source"));
     let body = &source[start + header.len()..];
     let end = body.find("\n}").expect("struct body must close");
     body[..end]
@@ -46,9 +54,22 @@ fn field(key: &str) -> &'static CoreField {
 /// asserted by count, so the failure names the field.
 #[test]
 fn table_names_every_field_of_every_covered_section() {
-    let source = include_str!("../../core_settings.rs");
     for (prefix, struct_name) in COVERED {
-        let expected = source_fields(source, struct_name);
+        let header = format!("pub struct {struct_name} {{");
+        let sources: Vec<&str> = SOURCES
+            .iter()
+            .copied()
+            .filter(|source| source.contains(&header))
+            .collect();
+        assert_eq!(
+            sources.len(),
+            1,
+            "{struct_name} must be declared in exactly one configuration source"
+        );
+        let expected: BTreeSet<String> = sources
+            .iter()
+            .flat_map(|source| source_fields(source, struct_name))
+            .collect();
         assert!(
             !expected.is_empty(),
             "{struct_name} parsed with no fields — the parser fell out of step with the source"

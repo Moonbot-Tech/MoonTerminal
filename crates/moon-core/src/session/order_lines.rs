@@ -413,6 +413,8 @@ pub struct OrderLineStore {
     /// Closure removes an entry and revival adds it back, so update-time backstop and auto-fit work
     /// scales with live orders instead of the retained closed-history cap.
     open_uids: Vec<u64>,
+    /// Groups orders with no close time by market so chart queries avoid scanning other markets.
+    open_by_market: HashMap<String, Vec<u64>>,
     /// Cached per-market price range for auto-Y over open-order buy/sell lines and active protective
     /// stops of filled orders. Stop, trailing, and VStop prices exist only after fill. The cache is
     /// rebuilt only when orders change, together with `rev`, rather than on every prepare pass. Its
@@ -459,6 +461,7 @@ impl OrderLineStore {
             .collect();
         if !fresh.is_empty() {
             let mut used: HashMap<&str, HashSet<u32>> = HashMap::new();
+            let mut next: HashMap<&str, u32> = HashMap::new();
             for uid in &self.open_uids {
                 if let Some(order) = self.orders.get(uid) {
                     if order.chart_num > 0 {
@@ -471,11 +474,13 @@ impl OrderLineStore {
             fresh.sort_by_key(|r| r.uid);
             for r in fresh {
                 let set = used.entry(r.market.as_str()).or_default();
-                let mut n = 1u32;
+                // A market's used slots only grow within this batch, so earlier candidates stay used.
+                let mut n = next.get(r.market.as_str()).copied().unwrap_or(1);
                 while set.contains(&n) {
                     n += 1;
                 }
                 set.insert(n);
+                next.insert(r.market.as_str(), n + 1);
                 new_nums.insert(r.uid, n);
             }
         }
@@ -726,6 +731,15 @@ impl OrderLineStore {
                 }
             }
             self.rebuild_auto_fit_ranges();
+            // A UID closed and revived in one batch can leave open_uids during closure cleanup.
+            // Draw membership therefore follows the retained close state rather than that index.
+            self.open_by_market.clear();
+            for order in self.orders.values().filter(|o| o.closed_ms.is_none()) {
+                self.open_by_market
+                    .entry(order.market.clone())
+                    .or_default()
+                    .push(order.uid);
+            }
         }
         changed
     }
@@ -815,9 +829,12 @@ impl OrderLineStore {
     ///     max_closed: Cap on the returned closed orders.
     pub fn market_draw_orders(&self, market: &str, max_closed: usize) -> Vec<&RetainedOrder> {
         let mut out: Vec<&RetainedOrder> = self
-            .orders
-            .values()
-            .filter(|o| o.market == market && o.closed_ms.is_none())
+            .open_by_market
+            .get(market)
+            .into_iter()
+            .flatten()
+            .filter_map(|uid| self.orders.get(uid))
+            .filter(|o| o.closed_ms.is_none())
             .collect();
         let mut taken = 0usize;
         let mut seen: HashSet<u64> = HashSet::new();

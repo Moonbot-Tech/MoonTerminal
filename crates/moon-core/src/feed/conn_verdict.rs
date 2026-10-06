@@ -300,7 +300,7 @@ pub fn diagnose(
     // A live attempt is POSITIVE evidence that something is being tried right now, and it
     // outranks what the retained fault's class says about the attempt that already died: a
     // replacement feed (Save, or the Reconnect button) starts at `Connecting` while the previous
-    // fault is still retained on purpose (`session/store.rs:718-732` keeps it so the verdict is
+    // fault is still retained on purpose (`session/store.rs:759-763` keeps it so the verdict is
     // not blanked once per backoff cycle). Without this, a corrected key reads as "stopped" for
     // the whole window between Save and the first result of the new attempt.
     let attempting = matches!(status, ConnStatus::Connecting | ConnStatus::Stage(_));

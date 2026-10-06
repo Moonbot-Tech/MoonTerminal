@@ -107,7 +107,7 @@ pub fn position_qty(r: &OrderRow) -> Option<f64> {
 /// `buy_order` as the entry leg for both long and short lifecycle phases. The raw core snapshot
 /// stores a BREAK-EVEN price including round-trip commission in `buy_price`, so the feed converter
 /// resolves the entry itself before constructing [`OrderRow`]: the entry leg's `mean_price`, then
-/// its `actual_price`, then the raw `buy_price` (`feed/live/convert.rs::build_order_row`). It
+/// its `actual_price`, then the raw `buy_price` (`feed/live/convert/orders.rs::build_order_row`). It
 /// deliberately does not consult the market's average position price: that value is shared by
 /// every order on a coin, whereas this estimate must preserve each order's own entry.
 ///

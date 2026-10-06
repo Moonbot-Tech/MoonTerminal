@@ -881,7 +881,7 @@ Settings → Telegram tab, the second section under the terminal bot, heading "T
 with a core picker. The section above is the terminal's own bot (`moon-core/src/telegram/**`, pairing,
 pushes, Mini App): a different entity, not this reader.
 
-Inbound: `SettingsEvent::TelegramUpdated` → `feed/live/convert.rs::telegram_from_proto` →
+Inbound: `SettingsEvent::TelegramUpdated` → `feed/live/convert/news_trace.rs::telegram_from_proto` →
 `FeedMsg::Telegram(Option<Arc<CoreTelegramState>>)` → `CoreData.telegram` and `telegram_rev`;
 the panel reads this through `settings_sig`; panels do not subscribe. Outbound:
 `CoreCmd::Telegram(TelegramCmd)` → `feed/live/telegram.rs::handle` →

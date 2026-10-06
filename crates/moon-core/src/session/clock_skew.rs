@@ -254,7 +254,7 @@ impl CoreClockSkew {
     /// Corrects `create_time_ms`, `sell_create_time_ms`, and `entry_fill_time_ms` — each only when
     /// present (`> 1.0`) — plus `buy_trace.points[0]` and `sell_trace.points[0]` ONLY. The rest of
     /// each trace, `tmp_point`, and `stop_time_ms` are already corrected by the core itself (see
-    /// `feed/live/convert.rs::order_trace`), so touching them again would double-correct exactly the
+    /// `feed/live/convert/orders.rs::order_trace`), so touching them again would double-correct exactly the
     /// values that need no help.
     pub fn correct(&self, rows: &mut [OrderRow]) {
         if self.skew_ms == 0.0 {

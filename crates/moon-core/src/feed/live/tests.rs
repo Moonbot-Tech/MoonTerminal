@@ -97,7 +97,7 @@ fn an_exhausted_command_budget_never_allows_blocking() {
     assert!(commands::CommandDrain::QueueEmpty.may_wait());
 }
 
-/// `live/mod.rs:connection_target` must retain the parsed address and port; replacing either with
+/// `live/client_slot.rs:connection_target` must retain the parsed address and port; replacing either with
 /// the legacy fallback connects and groups a remote core under the wrong server.
 #[test]
 fn parsed_network_selects_the_connection_endpoint() {
@@ -120,7 +120,7 @@ fn parsed_network_selects_the_connection_endpoint() {
     assert_eq!(transport, TransportMode::V2);
 }
 
-/// `live/mod.rs:connection_target` must dial the Connections row's override instead of the key's
+/// `live/client_slot.rs:connection_target` must dial the Connections row's override instead of the key's
 /// address (#616) while the key keeps answering for the transport: dropping the override argument
 /// sends a LAN terminal back to the router's public address it cannot reach.
 #[test]
@@ -141,7 +141,7 @@ fn the_endpoint_override_outranks_the_keys_address() {
     assert_eq!(transport, TransportMode::V2);
 }
 
-/// `live/mod.rs:connection_target` must let the configured transport outrank the key's. MoonBot
+/// `live/client_slot.rs:connection_target` must let the configured transport outrank the key's. MoonBot
 /// moves its own V0/V1/V2 switch without issuing a new key, and reading only the key is what
 /// forced a re-export of every core's key to follow one core's switch.
 #[test]
@@ -177,7 +177,7 @@ fn a_keyless_network_still_honors_the_configured_transport() {
     assert_eq!(target.port, 3000, "legacy exports keep the 3000 fallback");
 }
 
-/// `live/mod.rs:should_publish_assets` removing the Balance-event bypass would leave the header's
+/// `live/loop_helpers.rs:should_publish_assets` removing the Balance-event bypass would leave the header's
 /// free funds stale until an unrelated event arrives after the five-second background interval.
 #[test]
 fn balance_events_bypass_the_background_assets_throttle() {
@@ -213,7 +213,7 @@ fn alive_completion(epoch: i32, max_rec_id: i64) -> ReportSyncComplete {
 
 /// Only a map answering THIS feed's own pending request may advance the checkpoint.
 ///
-/// Breaks on: `feed/live/mod.rs:alive_map_action` dropping its ticket comparison so any arriving
+/// Breaks on: `feed/live/alive_map.rs:alive_map_action` dropping its ticket comparison so any arriving
 /// map applies to the newest pending completion — the "it is obviously the answer we asked for"
 /// shortcut. A second `SyncComplete` replaces the pending pair while the previous map is still in
 /// flight, so the late map covers a SHORTER range than the checkpoint about to be stored: every
@@ -248,7 +248,7 @@ fn a_stale_alive_map_ticket_never_advances_the_checkpoint() {
 
 /// A map that does not describe the pending catch-up must be refused, and an unrequested one too.
 ///
-/// Breaks on: `feed/live/mod.rs:alive_map_action` losing its `epoch`/`covered_up_to` agreement
+/// Breaks on: `feed/live/alive_map.rs:alive_map_action` losing its `epoch`/`covered_up_to` agreement
 /// check, or accepting a map with no pending pair at all. A map is authoritative over
 /// `1..=covered_up_to`, so one built from another database — or from a catch-up this feed never
 /// ran — would mass-hide rows that are alive, and the checkpoint stored beside it would make that

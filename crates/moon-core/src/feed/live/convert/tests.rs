@@ -1,5 +1,142 @@
 use super::*;
 
+/// Supplies synthetic rows with distinguishable captured values without a live snapshot.
+fn overlay_row(uid: u64, revision: u64) -> OrderRow {
+    OrderRow {
+        market: format!("SYN{}", uid % 300),
+        market_display: "SYN".into(),
+        coin: "SYN".into(),
+        quote: "QUOTE".into(),
+        is_short: revision % 2 == 1,
+        size: revision as f64 + 1.0,
+        remaining_size: 1.0,
+        sl_on: false,
+        ts_on: false,
+        vstop_on: false,
+        sl_fixed: false,
+        ts_fixed: false,
+        vstop_fixed: false,
+        vstop_level: 0.0,
+        vstop_vol: 0.0,
+        buy_price: 100.0,
+        sell_price: revision as f64,
+        create_time_ms: 1000.0,
+        sell_create_time_ms: 0.0,
+        entry_fill_time_ms: 0.0,
+        price: 100.0,
+        fill_pct: 0.0,
+        strat: "synthetic".into(),
+        strat_name: String::new(),
+        strat_id: 0,
+        status: format!("revision-{revision}"),
+        uid,
+        emulator: false,
+        job_is_done: revision.is_multiple_of(3),
+        pending: false,
+        filled: false,
+        stop_loss: None,
+        trailing: None,
+        take_profit: None,
+        vstop: None,
+        pending_cond: None,
+        liq: None,
+        panic_sell: false,
+        is_moon_shot: false,
+        corridor_price_down: 0.0,
+        corridor_price_up: 0.0,
+        buy_trace: None,
+        sell_trace: None,
+    }
+}
+
+/// Preserves the original linear loop as an independent equivalence oracle.
+fn reference_overlay(order_rows: &mut Vec<OrderRow>, captured: impl IntoIterator<Item = OrderRow>) {
+    for row in captured {
+        if let Some(existing) = order_rows.iter_mut().find(|r| r.uid == row.uid) {
+            *existing = row;
+        } else {
+            order_rows.push(row);
+        }
+    }
+}
+
+/// Indexing the last duplicate base row, sorting rows, or keeping the first event loses parity.
+#[test]
+fn overlay_matches_reference_over_synthetic_streams() {
+    let mut seed = 0x1234_abcd_u64;
+    for case in 0..500 {
+        let size = [0, 1, 50, 5000][case % 4];
+        let base: Vec<_> = (0..size).map(|uid| overlay_row(uid, 1)).collect();
+        let mut captured = Vec::new();
+        if case % 10 != 0 {
+            for revision in 0..100 {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let uid = seed % (size + 20);
+                captured.push(overlay_row(uid, revision));
+            }
+        }
+        let mut expected = base.clone();
+        reference_overlay(&mut expected, captured.clone());
+        let mut actual = base.clone();
+        overlay_captured_rows(&mut actual, captured.clone());
+        assert_eq!(
+            format!("{actual:?}"),
+            format!("{expected:?}"),
+            "case {case}"
+        );
+        let mut last: HashMap<_, _> = base.iter().map(|row| (row.uid, row)).collect();
+        last.extend(captured.iter().map(|row| (row.uid, row)));
+        assert_eq!(actual.len(), last.len());
+        let mut actual_by_uid = HashMap::new();
+        for row in &actual {
+            assert!(actual_by_uid.insert(row.uid, row).is_none());
+        }
+        for (uid, row) in last {
+            assert_eq!(format!("{:?}", actual_by_uid[&uid]), format!("{row:?}"));
+        }
+    }
+    // Duplicate base rows remain duplicated, and only the first is replaced.
+    let mut actual = vec![overlay_row(7, 1), overlay_row(7, 2)];
+    let mut expected = actual.clone();
+    reference_overlay(&mut expected, [overlay_row(7, 3), overlay_row(8, 4)]);
+    overlay_captured_rows(&mut actual, [overlay_row(7, 3), overlay_row(8, 4)]);
+    assert_eq!(format!("{actual:?}"), format!("{expected:?}"));
+}
+
+/// Measures overlay work independently of input cloning over 50 synthetic batches.
+#[test]
+#[ignore]
+fn bench_captured_overlay_5k() {
+    let base: Vec<_> = (0..5000).map(|uid| overlay_row(uid, 1)).collect();
+    let captured: Vec<_> = (0..2000)
+        .map(|i| {
+            let uid = if i < 1000 {
+                i * 5
+            } else {
+                5000 + (i - 1000) % 900
+            };
+            overlay_row(uid, i + 2)
+        })
+        .collect();
+    let mut samples = Vec::new();
+    for _ in 0..50 {
+        let mut rows = base.clone();
+        let events = captured.clone();
+        let start = std::time::Instant::now();
+        overlay_captured_rows(
+            std::hint::black_box(&mut rows),
+            std::hint::black_box(events),
+        );
+        samples.push(start.elapsed().as_micros());
+        std::hint::black_box(rows);
+    }
+    samples.sort_unstable();
+    println!(
+        "[bench] B1 captured_overlay 5k + 2k: median {} us",
+        samples[25]
+    );
+}
+
 /// Distinct values prove every physical UDP diagnostic crosses the MoonProto boundary without a
 /// current/previous or sent/received swap.
 #[test]
