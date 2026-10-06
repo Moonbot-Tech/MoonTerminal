@@ -431,8 +431,8 @@ impl OrderLineStore {
     /// Applies a fresh order-row batch and returns whether retained render state changed.
     ///
     /// Active orders are updated, repricings record knots, explicit terminal rows close immediately,
-    /// and missing orders close after the grace period. Geometry, label, and zone changes increment
-    /// `rev`.
+    /// and missing orders close after the grace period. The final row for each UID determines its
+    /// open-index membership and closure revision. Geometry, label, and zone changes increment `rev`.
     ///
     /// Args:
     ///     rows: Combined order-row batch, already skew-corrected by the caller.
@@ -531,7 +531,9 @@ impl OrderLineStore {
                 order.closed_reason = None;
                 order.closed_store_ms = None;
                 order.closed_rev = None;
-                became_open = true;
+                // Closure cleanup is deferred, so a UID revived within this batch may still be
+                // indexed. Keep that reservation instead of appending a duplicate open UID.
+                became_open = !self.open_uids.contains(&r.uid);
                 changed = true;
             }
             if order.strat_id != r.strat_id || order.strat_name != r.strat_name {
@@ -720,6 +722,13 @@ impl OrderLineStore {
         if !closed_this_update.is_empty() {
             closed_this_update.sort_unstable();
             closed_this_update.dedup();
+            // A later row can revive a UID closed earlier in this batch. Only final closures
+            // release chart slots, leave auto-fit, and receive a closure revision.
+            closed_this_update.retain(|uid| {
+                self.orders
+                    .get(uid)
+                    .is_none_or(|order| order.closed_ms.is_some())
+            });
             self.open_uids
                 .retain(|uid| closed_this_update.binary_search(uid).is_err());
         }
@@ -731,8 +740,7 @@ impl OrderLineStore {
                 }
             }
             self.rebuild_auto_fit_ranges();
-            // A UID closed and revived in one batch can leave open_uids during closure cleanup.
-            // Draw membership therefore follows the retained close state rather than that index.
+            // Draw membership follows retained close state independently of the bookkeeping index.
             self.open_by_market.clear();
             for order in self.orders.values().filter(|o| o.closed_ms.is_none()) {
                 self.open_by_market
