@@ -228,7 +228,8 @@ pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
 /// carries no modifier") the data does not bear out.
 ///
 /// The take rule holds a shift that would carry the take through the fill at the fill; that hold
-/// is not inverted here. A take the core held there reads back an ask the shift inflates: the
+/// is not inverted here. A take the core held there reads back an ask the shift distorts — above
+/// the real one for a long, below it for a short: the
 /// fact's own replay still lands on the archived take (the rule holds it at the fill again), a
 /// variant with another `SellModifier` starts from the inflated ask. No live trade has reached
 /// the hold (`take_level`).
