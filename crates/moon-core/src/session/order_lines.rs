@@ -432,7 +432,8 @@ impl OrderLineStore {
     ///
     /// Active orders are updated, repricings record knots, explicit terminal rows close immediately,
     /// and missing orders close after the grace period. The final row for each UID determines its
-    /// open-index membership and closure revision. Geometry, label, and zone changes increment `rev`.
+    /// open-index membership and closure revision. Each fresh UID reserves one chart number per
+    /// batch, shared by all its rows. Geometry, label, and zone changes increment `rev`.
     ///
     /// Args:
     ///     rows: Combined order-row batch, already skew-corrected by the caller.
@@ -450,8 +451,8 @@ impl OrderLineStore {
         let mut close_now: Vec<u64> = Vec::new();
         let mut closed_this_update: Vec<u64> = Vec::new();
 
-        // Assign fresh rows in UID order. Each receives the smallest number not held by a currently
-        // open retained order or an earlier fresh row in this batch. A fresh terminal row can reserve
+        // Assign fresh UIDs in order. Each receives the smallest number not held by a currently
+        // open retained order or an earlier fresh UID in this batch. A fresh terminal row can reserve
         // a slot here because closure is processed later; after it closes, a later batch can reuse
         // the slot. An empty market therefore starts naturally at 1.
         let mut new_nums: HashMap<u64, u32> = HashMap::new();
@@ -472,6 +473,8 @@ impl OrderLineStore {
                 }
             }
             fresh.sort_by_key(|r| r.uid);
+            // Deduplicate only allocation; later rows still update the order's final state below.
+            fresh.dedup_by_key(|r| r.uid);
             for r in fresh {
                 let set = used.entry(r.market.as_str()).or_default();
                 // A market's used slots only grow within this batch, so earlier candidates stay used.

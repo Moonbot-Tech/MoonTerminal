@@ -78,6 +78,44 @@ fn chart_numbers_match_reference_assignment() {
     }
 }
 
+/// Allocating per row would leak slots and overwrite a fresh order's label; deduplicating the
+/// update rows instead would lose the final closure or revival carried by its later rows.
+#[test]
+fn repeated_fresh_uid_reserves_one_chart_number_per_batch() {
+    for terminal_rows in [
+        [false, false, false, false],
+        [true, false, true, false],
+        [false, true, false, true],
+    ] {
+        let mut store = OrderLineStore::default();
+        let fresh = bench_rows(3, 1);
+        let mut rows = vec![fresh[1].clone()];
+        for (index, terminal) in terminal_rows.into_iter().enumerate() {
+            let mut row = fresh[0].clone();
+            row.job_is_done = terminal;
+            row.buy_price = 100.0 + index as f64;
+            rows.push(row);
+        }
+        assert!(store.update(&rows, 0));
+        assert_eq!(store.orders[&0].chart_num, 1);
+        assert_eq!(store.orders[&1].chart_num, 2);
+        assert_eq!(store.current_line_price(0, LineKind::Buy), Some(103.0));
+        assert_eq!(store.order_state(0).unwrap().active, !terminal_rows[3]);
+
+        let mut next_batch = vec![fresh[1].clone(), fresh[2].clone()];
+        if !terminal_rows[3] {
+            next_batch.push(rows.last().unwrap().clone());
+        }
+        assert!(store.update(&next_batch, 0));
+        assert_eq!(store.orders[&0].chart_num, 1);
+        assert_eq!(store.orders[&1].chart_num, 2);
+        assert_eq!(
+            store.orders[&2].chart_num,
+            if terminal_rows[3] { 1 } else { 3 }
+        );
+    }
+}
+
 /// Preserves the old full-store scan and closed-ring traversal as the draw-query oracle.
 fn reference_market_draw_orders<'a>(
     store: &'a OrderLineStore,
