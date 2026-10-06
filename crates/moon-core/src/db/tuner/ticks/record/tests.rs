@@ -293,6 +293,23 @@ fn only_a_reproduced_trade_is_searched() {
         fill: None,
         exit_kind: None,
         line_points: None,
+        entry_finding: match entry {
+            None => crate::db::tuner::ticks::verify::EntryFinding::Fact,
+            Some(true) => crate::db::tuner::ticks::verify::EntryFinding::Hit,
+            Some(false) => crate::db::tuner::ticks::verify::EntryFinding::Off,
+        },
+        exit_finding: match exit {
+            None => crate::db::tuner::ticks::verify::ExitFinding::Unjudged(
+                crate::db::tuner::ticks::verify::Unjudged::OtherRule,
+            ),
+            Some(true) => crate::db::tuner::ticks::verify::ExitFinding::Hit,
+            Some(false) => crate::db::tuner::ticks::verify::ExitFinding::Miss(
+                crate::db::tuner::ticks::verify::ExitMiss::NoLevel,
+            ),
+        },
+        fill_clock_ms: None,
+        rules: crate::db::tuner::ticks::verify::RuleFlags::default(),
+        stop: crate::db::tuner::ticks::verify::StopFacts::default(),
     };
     assert!(fit_for_search(&verdict(None, Some(true))));
     assert!(fit_for_search(&verdict(Some(true), Some(true))));

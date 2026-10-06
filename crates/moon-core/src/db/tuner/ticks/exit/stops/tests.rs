@@ -314,3 +314,31 @@ fn verify_judges_a_market_stop_without_a_level_by_its_moment() {
     let v = verify(&d, &ticks, &EntryParams::Fact, &fast, None, None);
     assert_eq!(v.exit, Some(false), "six seconds off the moment, {v:?}");
 }
+
+/// The walk names the rule that fired its stop — the diagnostic report counts them per segment —
+/// and names none when the walk closed otherwise.
+#[test]
+fn the_walk_names_the_rule_that_fired_its_stop() {
+    let by_ticker = vec![sold(1_500, 99.5), sold(2_500, 98.8), tick(5_000, 100.0)];
+    let w = walk(&deal(false), &by_ticker, fill(), 101.0, &bare_book_stop());
+    assert_eq!(w.stop_trigger, Some(StopTrigger::Ticker), "{w:?}");
+    let fast = ExitParams {
+        fast_stop_loss: true,
+        ..bare_book_stop()
+    };
+    let w = walk(&deal(false), &by_ticker, fill(), 101.0, &fast);
+    assert_eq!(w.stop_trigger, Some(StopTrigger::FastTick), "{w:?}");
+    // A lone print past the level at `StopLossEMA` 0: its series tick fires 2 s before the
+    // ticker's first arrival could.
+    let series = ExitParams {
+        stop_loss_ema: 0.0,
+        ..bare_book_stop()
+    };
+    let lone = vec![tick(1_000, 98.5), tick(5_000, 100.0)];
+    let w = walk(&deal(false), &lone, fill(), 101.0, &series);
+    assert_eq!(w.stop_trigger, Some(StopTrigger::Series), "{w:?}");
+    // No stop fired: nothing is named.
+    let w = walk(&deal(false), &lone, fill(), 101.0, &bare_book_stop());
+    assert_ne!(w.exit.kind, ExitKind::Stop, "{w:?}");
+    assert_eq!(w.stop_trigger, None);
+}

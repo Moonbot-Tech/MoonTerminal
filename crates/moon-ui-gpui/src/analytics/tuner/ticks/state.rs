@@ -369,6 +369,10 @@ impl Drop for TicksState {
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
+    /// The period `data`'s rows were read under, `(from, to)` in UTC seconds as the query holds
+    /// them — set with the rows they describe, so a report names the rows' period and not one a
+    /// pending reload will read.
+    pub(in crate::analytics::tuner) loaded_period: Option<(i64, i64)>,
     /// The variant column's edits (В1): field key to value in strategy spelling. An empty map is
     /// an untouched column, drawn as the base. One column: the second one went on 2026-09-25,
     /// its place in the grid taken by the search ranges.
@@ -489,6 +493,12 @@ pub(in crate::analytics) struct TicksState {
     /// the stage that re-judges it has folded.
     pub(in crate::analytics::tuner) judged_under:
         Option<moon_core::db::tuner::ticks::ModelSettings>,
+    /// The tape store's revision (`trade_cache::filed_since`) read when the published rows were
+    /// carried: a later reload re-reads a row refused as unservable whose market gained prints
+    /// after it (`refiled.rs`). Read before the tape stage asks the store, so a write landing in
+    /// between only costs one more ask, never a missed one. Moved with the rows of each stage B
+    /// that publishes, never before.
+    pub(in crate::analytics::tuner) tape_rev: u64,
     /// Whether the tape stage of a load is still reading the rows' tape off the worker: until
     /// it folds, every addressed row reads "missing" without meaning it.
     pub(in crate::analytics::tuner) tape_reading: bool,
@@ -523,6 +533,7 @@ impl Default for TicksState {
     fn default() -> Self {
         Self {
             data: LoadState::default(),
+            loaded_period: None,
             variant: HashMap::new(),
             var_stats: None,
             var_n: 0,
@@ -569,6 +580,7 @@ impl Default for TicksState {
             fetch_listening: Default::default(),
             tape_reading: false,
             judged_under: None,
+            tape_rev: 0,
             tape_seq: 0,
             trade: Default::default(),
             plan: HashMap::new(),

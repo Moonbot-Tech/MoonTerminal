@@ -12,6 +12,23 @@ fn verdict(entry: Option<bool>, exit: Option<bool>) -> Verdict {
         fill: None,
         exit_kind: None,
         line_points: None,
+        entry_finding: match entry {
+            None => moon_core::db::tuner::ticks::verify::EntryFinding::Fact,
+            Some(true) => moon_core::db::tuner::ticks::verify::EntryFinding::Hit,
+            Some(false) => moon_core::db::tuner::ticks::verify::EntryFinding::Off,
+        },
+        exit_finding: match exit {
+            None => moon_core::db::tuner::ticks::verify::ExitFinding::Unjudged(
+                moon_core::db::tuner::ticks::verify::Unjudged::OtherRule,
+            ),
+            Some(true) => moon_core::db::tuner::ticks::verify::ExitFinding::Hit,
+            Some(false) => moon_core::db::tuner::ticks::verify::ExitFinding::Miss(
+                moon_core::db::tuner::ticks::verify::ExitMiss::NoLevel,
+            ),
+        },
+        fill_clock_ms: None,
+        rules: moon_core::db::tuner::ticks::verify::RuleFlags::default(),
+        stop: moon_core::db::tuner::ticks::verify::StopFacts::default(),
     }
 }
 

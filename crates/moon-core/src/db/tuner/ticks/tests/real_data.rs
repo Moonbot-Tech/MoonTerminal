@@ -735,6 +735,39 @@ fn core_round_trips(deals: &[Deal]) -> HashMap<u64, f64> {
         .collect()
 }
 
+/// The axis's diagnostic report over the bench's covered deals — the same text the "Report"
+/// button writes, here over every deal the bench replays, to be held against the miss breakdown
+/// the bench's own lines give.
+fn print_report(items: &[(Deal, Verdict, String)], without_ms: usize) {
+    use super::super::diag::{ReportInput, ReportRow, TapeClass, render};
+    let rows = items
+        .iter()
+        .map(|(deal, verdict, venue)| ReportRow {
+            deal,
+            venue: Some(venue.clone()),
+            tape: TapeClass::Covered,
+            verdict: Some(verdict),
+            outside_model: &[],
+        })
+        .collect();
+    let input = ReportInput {
+        build: "real_data bench".to_string(),
+        period_days: None,
+        without_ms,
+        service: 0,
+        untunable: 0,
+        rows,
+        cores: HashMap::new(),
+        model: ModelSettings::default(),
+    };
+    eprintln!(
+        "
+----- diagnostic report -----
+{}",
+        render(&input)
+    );
+}
+
 fn round3(v: Option<f64>) -> Option<f64> {
     v.map(|d| (d * 1000.0).round() / 1000.0)
 }
@@ -916,6 +949,8 @@ fn real_data_reproduction() {
     let mut cross: Vec<CrossRow> = Vec::new();
     let partners = partners_of(&read.deals, &venue_of_core, &keys, &defaults);
     let mut partner_tally = PartnerTally::default();
+    // Every covered deal with its verdict and venue, for the diagnostic report at the end.
+    let mut report_items: Vec<(Deal, Verdict, String)> = Vec::new();
     let mut take_diag = TakeFillDiag::default();
     let mut stop_diag = StopSlipDiag::default();
     let mut late_diag = LateBookedDiag::default();
@@ -1409,6 +1444,7 @@ fn real_data_reproduction() {
             };
             *unfit.entry(why).or_default() += 1;
         }
+        report_items.push((deal.clone(), archived, venue.clone()));
         take_diag.add(&deal, &ticks, &exit, exit_points.as_deref());
         stop_diag.add(&deal, &ticks, &exit);
         late_diag.add(&deal, &exit, exit_points.as_deref(), fit);
@@ -1445,6 +1481,7 @@ fn real_data_reproduction() {
     if let Some(kind) = &search_kind {
         search::run(searched, kind, &defaults);
     }
+    print_report(&report_items, read.without_ms);
     eprintln!("kinds: {kinds_seen:?}");
     eprintln!(
         "with tape: {with_tape} · entry ✓ {entry_hits}/{entry_n} · exit ✓ {exit_hits}/{exit_n} · \

@@ -2139,7 +2139,13 @@ fn serve_ticks(
                     TileSource::Venue,
                 );
             }
+            let gained = !inside.is_empty();
             lock_tiles(tiles).insert(key.clone(), from_ms, to_ms, inside, TileSource::Venue);
+            // After the tiles hold them, whatever became of the file write: held queries read
+            // the tiles, so a reader that refused this market asks again (`filed_since`).
+            if gained {
+                super::trade_cache::note_filed(&request.address.exchange_key, &request.market);
+            }
         }
     }
     if ticks.is_empty() {
@@ -2496,7 +2502,13 @@ fn file_core_span(
             TileSource::Core,
         );
     }
+    let gained = !native.ticks.is_empty();
     lock_tiles(tiles).insert(key, from_ms, to_ms, native.ticks, TileSource::Core);
+    // After the tiles hold them, whatever became of the file write: held queries read the
+    // tiles, so a reader that refused this market asks again (`filed_since`).
+    if gained {
+        super::trade_cache::note_filed(&address.exchange_key, market);
+    }
     Some((from_ms, to_ms))
 }
 

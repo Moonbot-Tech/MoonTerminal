@@ -46,6 +46,8 @@ mod lags;
 mod load;
 pub(in crate::analytics) mod model_cfg;
 mod ranges;
+mod refiled;
+mod report;
 mod risk;
 pub(in crate::analytics::tuner) mod rows;
 mod sections;
@@ -269,6 +271,7 @@ impl AnalyticsView {
             t!("analytics.ticks.fetch_btn").to_string()
         };
         let model_settings = self.ticks_model_settings(p, window, cx);
+        let report = self.ticks_report_button(cx);
         v_flex()
             .w_full()
             .flex_1()
@@ -342,6 +345,14 @@ impl AnalyticsView {
                                     }))
                                     .render(),
                             ),
+                        )
+                    })
+                    .when_some(report, |el, report| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .font_family(design::ui_font())
+                                .child(report),
                         )
                     })
                     .child(

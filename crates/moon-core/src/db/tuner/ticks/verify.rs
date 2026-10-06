@@ -55,6 +55,15 @@ use super::{
 };
 use crate::feed::types::Tick;
 
+mod finding;
+mod stop_facts;
+
+pub use finding::{
+    EntryFinding, ExitFinding, ExitMiss, FILL_CLOCK_WINDOW_MS, MissParts, RULE_FLAG_COUNT,
+    RuleFlags, Unjudged, fill_clock_ms,
+};
+pub use stop_facts::{QuoteSide, StopFacts};
+
 /// How far apart a modelled and an archived replacement may be in time and still be the same
 /// move: the archive stamps the core's own moment, the model the print that triggered it.
 pub const POINT_TIME_TOLERANCE_MS: i64 = 1_000;
@@ -110,6 +119,16 @@ pub struct Verdict {
     /// Archived Exit points matched by the modelled line, as `(matched, archived)`; `None`
     /// when the archive holds no Exit line for the trade.
     pub line_points: Option<(usize, usize)>,
+    /// Why the entry group answered as it did; [`Self::entry`] is read off it.
+    pub entry_finding: EntryFinding,
+    /// Why the exit group answered as it did; [`Self::exit`] is read off it.
+    pub exit_finding: ExitFinding,
+    /// The report's fill stamp against the tape ([`fill_clock_ms`]).
+    pub fill_clock_ms: Option<i64>,
+    /// Which rules the trade's strategy ran with, for the report's per-segment counts.
+    pub rules: RuleFlags,
+    /// What the report reads about a stop the core fired, beside the verdict.
+    pub stop: StopFacts,
 }
 
 /// Relative deviation of `modelled` from `fact`, per cent of the fact.
@@ -144,13 +163,18 @@ pub fn verify(
     // fill) is the variants' to lean on, never the verdict's.
     let deal = &super::record::unanchored(deal);
     let outcome = simulate(deal, ticks, entry, exit, entry_line);
-    let (entry_ok, entry_dev) = match (entry, outcome.fill) {
-        (EntryParams::Fact, _) => (None, None),
-        (EntryParams::MoonShot(_), None) => (Some(false), None),
+    let (entry_finding, entry_dev) = match (entry, outcome.fill) {
+        (EntryParams::Fact, _) => (EntryFinding::Fact, None),
+        (EntryParams::MoonShot(_), None) => (EntryFinding::Unfilled, None),
         (EntryParams::MoonShot(params), Some(fill)) => {
             let dev = deviation_pct(fill.price, deal.buy_price);
             let ok = dev.is_some_and(|d| d.abs() <= entry_tolerance_pct(params, deal));
-            (Some(ok), dev)
+            let finding = if ok {
+                EntryFinding::Hit
+            } else {
+                EntryFinding::Off
+            };
+            (finding, dev)
         }
     };
     // The exit answers only where the model's rule and the core's were the same rule: a
@@ -258,31 +282,38 @@ pub fn verify(
         && closed.kind != ExitKind::Stop
         && (stop_pct(&fact_exit, deal, fact_fill.t_ms) != 0.0
             || (fact_exit.trailing_pct != 0.0 && trailing_can_be_it));
-    let (exit_ok, exit_dev, line_points) = if exit.unmodelled.is_some() {
+    let unjudged = |why: Unjudged| -> (ExitFinding, Option<f64>, Option<(usize, usize)>) {
+        (ExitFinding::Unjudged(why), None, None)
+    };
+    // The model's stop minus the core's activation, on a stop judged by its moment.
+    let mut stop_moment_ms = None;
+    let (exit_finding, exit_dev, line_points) = if let Some(rule) = exit.unmodelled {
         // A rule the model does not have was on: whatever the walk made of the trade is not
         // an answer about it (see `ExitParams::unmodelled`).
-        (None, None, None)
+        unjudged(Unjudged::Rule(rule))
     } else if closed.kind == ExitKind::InGap {
         // A rule of the trade follows the price through its tape's hole, or its stop is not
         // bounded by what the fact proves there: where the line or the stop stood at the close
         // is a function of prints nobody holds (`gap`).
-        (None, None, None)
+        unjudged(Unjudged::InGap)
     } else if missed_stop {
-        (Some(false), None, None)
+        (ExitFinding::Miss(ExitMiss::StopNotFired), None, None)
     } else if !take_known {
-        (None, None, None)
+        unjudged(Unjudged::TakeUnknown)
     } else if closed.kind == ExitKind::OpenAtWindowEnd {
         // No line stood at the close: a miss of the exit group, not an unanswered question.
-        (Some(false), None, None)
+        (ExitFinding::Miss(ExitMiss::NoLevel), None, None)
     } else if closed.kind == ExitKind::Stop && exit_rule_matches(closed.kind, &deal.sell_reason) {
-        verify_stop(
+        let (finding, dev, points, moment_ms) = verify_stop(
             deal,
             &fact_exit,
             &walked.points,
             closed,
             walked.stop_level,
             exit_points,
-        )
+        );
+        stop_moment_ms = moment_ms;
+        (finding, dev, points)
     } else if exit_rule_matches(closed.kind, &deal.sell_reason) {
         let dev = deviation_pct(closed.price, deal.sell_price);
         let tolerance = model.price_pct;
@@ -326,18 +357,40 @@ pub fn verify(
                 || (corroborated && improved(d))
                 || (level_reproduced && better_by(d) >= -tolerance)
         });
-        (Some(price_ok && line_ok), dev, points)
+        let finding = if price_ok && line_ok {
+            ExitFinding::Hit
+        } else {
+            ExitFinding::Miss(ExitMiss::Off(MissParts {
+                level: !price_ok,
+                late_ms: None,
+                first_unmatched: archive
+                    .as_ref()
+                    .and_then(|a| finding::first_unmatched(&walked.points, &a.moves, model)),
+            }))
+        };
+        (finding, dev, points)
     } else {
-        (None, None, None)
+        unjudged(Unjudged::OtherRule)
     };
     Verdict {
-        entry: entry_ok,
+        entry: entry_finding.verdict(),
         entry_dev_pct: entry_dev,
-        exit: exit_ok,
+        exit: exit_finding.verdict(),
         exit_dev_pct: exit_dev,
         fill: outcome.fill,
         exit_kind: Some(closed.kind),
         line_points,
+        entry_finding,
+        exit_finding,
+        fill_clock_ms: fill_clock_ms(deal, ticks, model.price_pct),
+        rules: RuleFlags::of(entry, exit, &deal.kind),
+        stop: StopFacts {
+            trigger: walked
+                .stop_trigger
+                .filter(|_| closed.kind == ExitKind::Stop),
+            moment_ms: stop_moment_ms,
+            ..stop_facts::quote_facts(deal, ticks, &fact_exit, exit_points)
+        },
     }
 }
 
@@ -517,6 +570,12 @@ fn is_fill_point(deal: &Deal, exit: &ExitParams, last: (i64, f64), prev: (i64, f
 /// A trailing stop's reason is timed with the book stop's tolerance whatever `FastStopLoss` says:
 /// the trailing fires on the ticker's arrivals, like the book stop.
 ///
+/// Returns the finding, the level's deviation, the archived points matched, and the model's stop
+/// minus the archived activation in ms — signed whether or not it fell inside the tolerance, for
+/// the report's moment over the judged stops ([`StopFacts::moment_ms`]); `None` when the archive
+/// holds no jump, where the verdict falls back to the close, which trails the activation by the
+/// sale and would read every such model stop as early.
+///
 /// Args:
 ///     deal: The report row.
 ///     exit: The parameters the fact is replayed with.
@@ -532,7 +591,12 @@ fn verify_stop(
     closed: Exit,
     stop_level: Option<f64>,
     exit_points: Option<&[(i64, f64)]>,
-) -> (Option<bool>, Option<f64>, Option<(usize, usize)>) {
+) -> (
+    ExitFinding,
+    Option<f64>,
+    Option<(usize, usize)>,
+    Option<i64>,
+) {
     let level = stop_level.unwrap_or_else(|| {
         level_off_buy(
             deal.buy_price,
@@ -543,12 +607,14 @@ fn verify_stop(
     let stated = stated_stop_level(&deal.sell_reason);
     let panic_at = stop_jump_level(deal, exit);
     let mut activation: Option<i64> = None;
+    let mut first_unmatched: Option<usize> = None;
     let points = exit_points.filter(|p| !p.is_empty()).map(|archived| {
         let mut moves = archived_replacements(archived);
         if let Some(i) = panic_at.and_then(|level| stop_jump(deal, &moves, level)) {
             activation = Some(moves[i].0);
             moves.truncate(i);
         }
+        first_unmatched = finding::first_unmatched(modelled, &moves, &exit.model);
         (matched_points(modelled, &moves, &exit.model), moves.len())
     });
     let line_ok = points.is_none_or(|(matched, total)| matched == total);
@@ -558,21 +624,26 @@ fn verify_stop(
     } else {
         exit.model.book_stop_time_ms
     };
-    let on_time = (closed.t_ms - activation.unwrap_or(deal.close_ms)).abs() <= tolerance_ms;
-    match stated {
-        Some(stated) => {
-            let dev = deviation_pct(level, stated);
-            let level_ok = dev.is_some_and(|d| d.abs() <= exit.model.stop_price_pct);
-            (Some(level_ok && on_time && line_ok), dev, points)
-        }
-        // No level on record — a book-watching stop whose stored reason cut it off (28 of 206
-        // live), or a market stop, whose reason never carries one: the sale is a panic sell or a
-        // market order swept through a book the tape does not carry, so what is left to judge
-        // is the moment and the line, never the price. On the live sample (2026-09-23) 18 market
-        // stops fired on time and failed on the sweep alone; a variant keeping the stop sells at
-        // the fact's own price (`record::StopAnchor`).
-        None => (Some(on_time && line_ok), None, points),
-    }
+    let late_ms = closed.t_ms - activation.unwrap_or(deal.close_ms);
+    let on_time = late_ms.abs() <= tolerance_ms;
+    // No level on record — a book-watching stop whose stored reason cut it off (28 of 206
+    // live), or a market stop, whose reason never carries one: the sale is a panic sell or a
+    // market order swept through a book the tape does not carry, so what is left to judge
+    // is the moment and the line, never the price. On the live sample (2026-09-23) 18 market
+    // stops fired on time and failed on the sweep alone; a variant keeping the stop sells at
+    // the fact's own price (`record::StopAnchor`).
+    let dev = stated.and_then(|stated| deviation_pct(level, stated));
+    let level_ok = stated.is_none() || dev.is_some_and(|d| d.abs() <= exit.model.stop_price_pct);
+    let finding = if level_ok && on_time && line_ok {
+        ExitFinding::Hit
+    } else {
+        ExitFinding::Miss(ExitMiss::Off(MissParts {
+            level: !level_ok,
+            late_ms: (!on_time).then_some(late_ms),
+            first_unmatched: if line_ok { None } else { first_unmatched },
+        }))
+    };
+    (finding, dev, points, activation.map(|at| closed.t_ms - at))
 }
 
 /// The level an archived line's jump into the panic sell is read against:

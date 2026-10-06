@@ -125,7 +125,9 @@ fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
 pub struct ExitParams {
     /// `SellPrice` — take-profit distance from the fill, per cent.
     pub sell_price_pct: f64,
-    /// `MShotSellAtLastPrice` — lift the take to the pre-spike price less the adjustment.
+    /// `MShotSellAtLastPrice` — lift the take to the pre-spike price less the adjustment. Read
+    /// for MoonShot alone (`sell_order::lifts_take_to_ask`): the core's schema defaults it on,
+    /// so strategies of every kind carry it.
     pub sell_at_last_price: bool,
     /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price.
     pub sell_price_adjust_pct: f64,
@@ -283,6 +285,19 @@ impl Default for ExitParams {
             model: ModelSettings::default(),
             take_from_archive: false,
         }
+    }
+}
+
+impl ExitParams {
+    /// Whether PriceDown steps the line at all: a timer and a step, as the walk arms it.
+    pub fn price_down_on(&self) -> bool {
+        self.price_down_timer_s > 0.0 && self.price_down_pct > 0.0
+    }
+
+    /// Whether SellLevel steps the line at all: a delay, a look-back and a count, as the walk
+    /// arms it. The count alone is set on strategies whose SellLevel is off.
+    pub fn sell_level_on(&self) -> bool {
+        self.sell_level_delay_s != 0.0 && self.sell_level_time_s > 0.0 && self.sell_level_count > 0
     }
 }
 

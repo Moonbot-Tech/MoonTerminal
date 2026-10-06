@@ -45,6 +45,22 @@ pub const TICKER_PERIOD_MS: i64 = 2_150;
 /// point is not. The fast stop reads the same tick, by its LAST price ([`FastStop`]).
 pub const SERIES_TICK_MS: i64 = 250;
 
+/// Which rule of the walk fired its stop — what the diagnostic report counts per segment, so a
+/// moment miss reads as the ticker proxy's or the series' without the trade in hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StopTrigger {
+    /// The book-watching stop's ticker proxy ([`TICKER_PERIOD_MS`]).
+    Ticker,
+    /// The core's 250 ms price series, at `StopLossEMA` 0 ([`SERIES_TICK_MS`]).
+    Series,
+    /// `FastStopLoss`: the last price of a series tick.
+    FastTick,
+    /// `UseTrailing`'s line.
+    Trailing,
+    /// The fact's own stop (`record::StopAnchor`) — never in a verdict, which runs unanchored.
+    Fact,
+}
+
 /// The stop distance of a trade, per cent: `StopLoss` adjusted by `StopLossModifier · Σ`.
 ///
 /// The sum is never negative (the core takes its magnitude, [`modifier_sum`]), so a positive
@@ -257,12 +273,16 @@ impl BookStop {
 
     /// Everything due before the print at `until` — the ticker's arrivals strictly before it,
     /// the series ticks closing at or before it — and the earliest that put the stop past its
-    /// level: the stop, at that moment and that price.
-    fn before(&mut self, until: i64) -> Option<Exit> {
-        let by_ticker = self.samples_before(until);
-        let by_series = self.series_before(until);
+    /// level: the stop, at that moment and that price, and which of the two fired it.
+    fn before(&mut self, until: i64) -> Option<(Exit, StopTrigger)> {
+        let by_ticker = self
+            .samples_before(until)
+            .map(|exit| (exit, StopTrigger::Ticker));
+        let by_series = self
+            .series_before(until)
+            .map(|exit| (exit, StopTrigger::Series));
         match (by_ticker, by_series) {
-            (Some(t), Some(s)) => Some(if s.t_ms < t.t_ms { s } else { t }),
+            (Some(t), Some(s)) => Some(if s.0.t_ms < t.0.t_ms { s } else { t }),
             (t, s) => t.or(s),
         }
     }
@@ -351,6 +371,8 @@ pub(super) struct Stops {
     trailing: Option<Trailing>,
     /// When and at what price the fact's own stop fired, when the walk runs the trade's own.
     fired: Option<(i64, f64)>,
+    /// Which rule fired the stop this walk closed on; `None` until one did.
+    fired_rule: Option<StopTrigger>,
 }
 
 impl Stops {
@@ -489,6 +511,7 @@ impl Stops {
             ladder,
             trailing,
             fired,
+            fired_rule: None,
         }
     }
 
@@ -500,6 +523,11 @@ impl Stops {
             Trigger::Fast(fast) => Some(fast.level),
             Trigger::Book(book) => Some(book.level),
         }
+    }
+
+    /// Which rule fired the stop the walk closed on; `None` when no stop fired.
+    pub(super) fn fired_trigger(&self) -> Option<StopTrigger> {
+        self.fired_rule
     }
 
     /// Up to when the fact proves this stop quiet (`record::StopAnchor`): `i64::MIN` when the walk
@@ -539,6 +567,7 @@ impl Stops {
     pub(super) fn fired_by(&mut self, t_ms: i64) -> Option<Exit> {
         let (at, sold) = self.fired.filter(|(at, _)| t_ms >= *at)?;
         self.climb(at + 1);
+        self.fired_rule = Some(StopTrigger::Fact);
         Some(stop_exit(at, sold))
     }
 
@@ -567,14 +596,16 @@ impl Stops {
         }
         let by_book = match &mut self.trigger {
             Trigger::Book(book) => book.before(t_ms),
-            Trigger::Fast(_) => by_fast,
+            Trigger::Fast(_) => by_fast.map(|exit| (exit, StopTrigger::FastTick)),
             Trigger::Off => None,
         };
         let by_trailing = self
             .trailing
             .as_mut()
-            .and_then(|trailing| trailing.before(t_ms));
-        if let Some(exit) = earliest(by_book, by_trailing) {
+            .and_then(|trailing| trailing.before(t_ms))
+            .map(|exit| (exit, StopTrigger::Trailing));
+        if let Some((exit, by)) = earliest(by_book, by_trailing) {
+            self.fired_rule = Some(by);
             return Some(exit);
         }
         match &mut self.trigger {
@@ -600,6 +631,7 @@ impl Stops {
         // on the last bid the prints left.
         if let Some((at, sold)) = self.fired {
             self.climb(at + 1);
+            self.fired_rule = Some(StopTrigger::Fact);
             return Some(stop_exit(at, sold));
         }
         // The tape's last tick closes on its last print — nothing the tape holds follows it — and
@@ -611,21 +643,30 @@ impl Stops {
         self.climb(fast_closes_at.map_or(tail, |at| at.max(tail)) + 1);
         let by_book = match &mut self.trigger {
             Trigger::Book(book) => book.before(tail + 1),
-            Trigger::Fast(fast) => fast.before(i64::MAX),
+            Trigger::Fast(fast) => fast
+                .before(i64::MAX)
+                .map(|exit| (exit, StopTrigger::FastTick)),
             Trigger::Off => None,
         };
         let by_trailing = self
             .trailing
             .as_mut()
-            .and_then(|trailing| trailing.before(tail + 1));
-        earliest(by_book, by_trailing)
+            .and_then(|trailing| trailing.before(tail + 1))
+            .map(|exit| (exit, StopTrigger::Trailing));
+        let (exit, by) = earliest(by_book, by_trailing)?;
+        self.fired_rule = Some(by);
+        Some(exit)
     }
 }
 
-/// The earlier of the stop's and the trailing's exits; the stop on the same moment.
-fn earliest(stop: Option<Exit>, trailing: Option<Exit>) -> Option<Exit> {
+/// The earlier of the stop's and the trailing's exits, each with the rule that fired it; the
+/// stop on the same moment.
+fn earliest(
+    stop: Option<(Exit, StopTrigger)>,
+    trailing: Option<(Exit, StopTrigger)>,
+) -> Option<(Exit, StopTrigger)> {
     match (stop, trailing) {
-        (Some(stop), Some(trailing)) => Some(if trailing.t_ms < stop.t_ms {
+        (Some(stop), Some(trailing)) => Some(if trailing.0.t_ms < stop.0.t_ms {
             trailing
         } else {
             stop
