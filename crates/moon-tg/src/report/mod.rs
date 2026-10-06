@@ -319,6 +319,23 @@ fn read_page_with(
         TelegramReportAccess,
     ),
 ) -> db::ReadResult<Page> {
+    if request.daily
+        && let (Some(date), Some(end)) =
+            (display_time::date(from, zone), display_time::date(to, zone))
+    {
+        // A frozen range can cover additional partial days after a display-zone change.
+        // Validate rather than silently dropping dates from a complete-period headline.
+        let days = (end - date).num_days();
+        if !(0..370).contains(&days) {
+            return Err(db::ReadFail::failed(
+                db::FailKind::Other,
+                "telegram report calendar range is invalid",
+                moon_core::config::paths::reports_db_path(),
+                "telegram: calendar range",
+                db::FailCode::None,
+            ));
+        }
+    }
     request.window = Some((from, to));
     request.basis = Some(basis);
     let snap = db::read_snapshot(conn)?;
@@ -361,7 +378,12 @@ fn read_page_with(
         axis: db::ReportAxis::load(&snap, zone)?,
         ..Default::default()
     };
-    let total = db::query_totals(&snap, &filter)?.quotes;
+    // Slice dates replace the base dates, including for complete-period reads.
+    let whole = |core_uids: Option<Vec<u64>>| db::TotalsSlice {
+        core_uids,
+        date_from: Some(from),
+        date_to: Some(to),
+    };
     let by_core = !request.daily && !request.by_exchange;
     let mut rows_by = Vec::new();
     // The core of each row of the view by cores, by position.
@@ -370,18 +392,7 @@ fn read_page_with(
         if let (Some(mut date), Some(end)) =
             (display_time::date(from, zone), display_time::date(to, zone))
         {
-            // A frozen range can cover additional partial days after a display-zone change.
-            // Validate rather than silently dropping dates from a complete-period headline.
             let days = (end - date).num_days();
-            if !(0..370).contains(&days) {
-                return Err(db::ReadFail::failed(
-                    db::FailKind::Other,
-                    "telegram report calendar range is invalid",
-                    moon_core::config::paths::reports_db_path(),
-                    "telegram: calendar range",
-                    db::FailCode::None,
-                ));
-            }
             for _ in 0..=days {
                 let Some(next) = date.checked_add_days(Days::new(1)) else {
                     break;
@@ -390,9 +401,11 @@ fn read_page_with(
                     display_time::day_start(date, zone),
                     display_time::day_start(next, zone),
                 ) {
-                    let mut day = filter.clone();
-                    day.date_from = Some(start.max(from));
-                    day.date_to = Some((stop - 1).min(to));
+                    let day = db::TotalsSlice {
+                        core_uids: None,
+                        date_from: Some(start.max(from)),
+                        date_to: Some((stop - 1).min(to)),
+                    };
                     rows_by.push((date.to_string(), day));
                 }
                 date = next;
@@ -405,23 +418,25 @@ fn read_page_with(
                 .enumerate()
                 .map(|(index, (id, _))| (index, venues.get(id))),
         ) {
-            let mut group = filter.clone();
-            group.core_uids = members.iter().map(|&index| cores[index].0).collect();
+            let group = whole(Some(members.iter().map(|&index| cores[index].0).collect()));
             rows_by.push((section_label(venue), group));
         }
     } else {
         for (id, name) in cores {
-            let mut core = filter.clone();
-            core.core_uids = vec![id];
+            let core = whole(Some(vec![id]));
             rows_by.push((name, core));
             row_cores.push(id);
         }
     }
+    let mut slices = vec![whole(None)];
+    slices.extend(rows_by.iter().map(|(_, slice)| slice.clone()));
+    let mut totals = db::query_totals_sliced(&snap, &filter, &slices)?.into_iter();
+    let total = totals.next().unwrap_or_default().quotes;
     // Filter by actual activity before paging, retaining zero-PnL trades and native-only money.
     let mut active = Vec::new();
     let mut active_cores = Vec::new();
-    for (index, (name, filter)) in rows_by.into_iter().enumerate() {
-        let total = db::query_totals(&snap, &filter)?.quotes;
+    for (index, ((name, _), total)) in rows_by.into_iter().zip(totals).enumerate() {
+        let total = total.quotes;
         if total.orders > 0 {
             active.push(Row::Line(name, total));
             active_cores.extend(row_cores.get(index).copied());
@@ -429,6 +444,20 @@ fn read_page_with(
     }
     let active = match sections::sections(&active_cores, groups).filter(|_| by_core) {
         Some(sections) => {
+            let slices = sections
+                .iter()
+                .filter(|section| section.members.len() >= 2)
+                .map(|section| {
+                    whole(Some(
+                        section
+                            .members
+                            .iter()
+                            .map(|&index| active_cores[index])
+                            .collect(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            let mut subtotals = db::query_totals_sliced(&snap, &filter, &slices)?.into_iter();
             let mut rows = Vec::new();
             let mut listed = std::collections::HashSet::new();
             for section in sections {
@@ -439,11 +468,7 @@ fn read_page_with(
                 // A group of one core totals that core's own row; no second read.
                 let subtotal = match section.members.as_slice() {
                     [only] => active[*only].total().clone(),
-                    members => {
-                        let mut read = filter.clone();
-                        read.core_uids = members.iter().map(|&index| active_cores[index]).collect();
-                        db::query_totals(&snap, &read)?.quotes
-                    }
+                    _ => subtotals.next().unwrap_or_default().quotes,
                 };
                 rows.push(Row::Group(name, subtotal));
                 for &index in &section.members {
@@ -1328,17 +1353,27 @@ fn exchange_drilldowns(
     venues: &std::collections::HashMap<u64, moon_core::venue::CoreVenue>,
     filter: &ReportFilter,
 ) -> db::ReadResult<Vec<(String, ReportScope)>> {
-    let mut drilldowns = Vec::new();
-    for (venue, members) in core_order::exchange_sections(
+    let mut base = filter.clone();
+    // Buttons cover every accessible exchange, including outside the current scoped view.
+    base.core_uids = Vec::new();
+    let sections = core_order::exchange_sections(
         cores
             .iter()
             .enumerate()
             .map(|(index, (id, _))| (index, venues.get(id))),
-    ) {
-        let mut group = filter.clone();
-        group.core_uids = members.iter().map(|&index| cores[index].0).collect();
-        let total = db::query_totals(snap, &group)?.quotes;
-        if total.orders > 0 {
+    );
+    let slices = sections
+        .iter()
+        .map(|(_, members)| db::TotalsSlice {
+            core_uids: Some(members.iter().map(|&index| cores[index].0).collect()),
+            date_from: filter.date_from,
+            date_to: filter.date_to,
+        })
+        .collect::<Vec<_>>();
+    let totals = db::query_totals_sliced(snap, &base, &slices)?;
+    let mut drilldowns = Vec::new();
+    for ((venue, _), total) in sections.into_iter().zip(totals) {
+        if total.quotes.orders > 0 {
             drilldowns.push((section_label(venue), scope_of(venue)));
         }
     }
