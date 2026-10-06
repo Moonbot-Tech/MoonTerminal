@@ -175,7 +175,7 @@ pub fn prepare_deal(
     lines: OwnLines<'_>,
     covered: &Coverage,
 ) {
-    deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, deal.is_short);
+    deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, &deal.kind, deal.is_short);
     deal.archived_take = archived_take(lines.exit);
     // Before the core's sum, which is read against the take this depth places.
     if let Some(depth) = placed_hook_depth(deal, exit) {

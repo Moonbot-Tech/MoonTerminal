@@ -125,7 +125,9 @@ fn due_by(next: Option<i64>, t_ms: i64) -> Option<i64> {
 pub struct ExitParams {
     /// `SellPrice` — take-profit distance from the fill, per cent.
     pub sell_price_pct: f64,
-    /// `MShotSellAtLastPrice` — lift the take to the pre-spike price less the adjustment.
+    /// `MShotSellAtLastPrice` — lift the take to the pre-spike price less the adjustment. Read
+    /// for MoonShot alone (`sell_order::lifts_take_to_ask`): the core's schema defaults it on,
+    /// so strategies of every kind carry it.
     pub sell_at_last_price: bool,
     /// `MShotSellPriceAdjust` — per cent SUBTRACTED from the pre-spike price.
     pub sell_price_adjust_pct: f64,

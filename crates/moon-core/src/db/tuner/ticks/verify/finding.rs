@@ -138,7 +138,8 @@ pub struct RuleFlags {
     pub pump_move: bool,
     /// `SellDelay` holds the sell back.
     pub sell_delay: bool,
-    /// MoonShot lifts the take to the pre-spike price (`MShotSellAtLastPrice`).
+    /// MoonShot lifts the take to the pre-spike price (`MShotSellAtLastPrice`) — counted on the
+    /// kinds that read the field only (`lifts_take_to_ask`).
     pub sell_at_last: bool,
     /// `SellModifier` moves the sell by the delta sum.
     pub sell_modifier: bool,
@@ -158,7 +159,8 @@ impl RuleFlags {
     /// Args:
     ///     entry: The entry parameters the trade ran with.
     ///     exit: The sell-line parameters the trade ran with.
-    pub fn of(entry: &EntryParams, exit: &ExitParams) -> Self {
+    ///     kind: The trade's strategy kind — a field read only by some kinds counts only there.
+    pub fn of(entry: &EntryParams, exit: &ExitParams, kind: &str) -> Self {
         use super::super::exit::delta_mods::has_delta_terms;
         let stop = exit.stop_loss_pct != 0.0;
         // MoonShot's corridor modifiers; no other kind has an entry model to carry them.
@@ -175,7 +177,7 @@ impl RuleFlags {
             sell_level: exit.sell_level_on(),
             pump_move: exit.pump_move_timer_s > 0.0,
             sell_delay: exit.sell_delay_ms > 0.0,
-            sell_at_last: exit.sell_at_last_price,
+            sell_at_last: super::super::exit::sell_order::lifts_take_to_ask(exit, kind),
             sell_modifier: exit.sell_modifier != 0.0,
             stop_modifier: exit.stop_loss_modifier != 0.0,
             delta_terms: has_delta_terms(&exit.sell_mods),

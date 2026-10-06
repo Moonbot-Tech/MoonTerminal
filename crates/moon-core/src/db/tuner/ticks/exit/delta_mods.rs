@@ -256,7 +256,7 @@ fn take_reading(
 ) -> Option<Reading> {
     let model = ExitModel::new(params);
     if params.sell_modifier == 0.0
-        || params.sell_at_last_price
+        || super::sell_order::lifts_take_to_ask(params, &deal.kind)
         || take_is_recorded(&deal.kind)
         || !model.take_known(deal)
     {

@@ -19,8 +19,13 @@ fn the_archived_ask_sets_the_take_where_the_core_placed_it() {
         ..params()
     };
     // GSTOCKBSC, 2026-09-21: the take as placed, 0.031603, is the ask 0.0316663 less 0.2 %.
-    let ask = archived_pre_spike_ask(Some(&[(0, 0.031603), (1_266, 0.030910)]), &p, false)
-        .expect("the rule was on");
+    let ask = archived_pre_spike_ask(
+        Some(&[(0, 0.031603), (1_266, 0.030910)]),
+        &p,
+        "MoonShot",
+        false,
+    )
+    .expect("the rule was on");
     assert!((ask - 0.031603 / 0.998).abs() < 1e-12);
     let mut d = deal(false);
     d.buy_price = 0.029292;
@@ -42,14 +47,41 @@ fn the_archived_ask_sets_the_take_where_the_core_placed_it() {
         ..p.clone()
     };
     assert_eq!(
-        archived_pre_spike_ask(Some(&[(0, 0.031603)]), &off, false),
+        archived_pre_spike_ask(Some(&[(0, 0.031603)]), &off, "MoonShot", false),
         None
     );
-    assert_eq!(archived_pre_spike_ask(None, &p, false), None);
+    assert_eq!(archived_pre_spike_ask(None, &p, "MoonShot", false), None);
     // A short's take is the ask adjusted UP toward the entry, `ask / (1 − 0.2 %)`: the ask is
     // the take times 0.998.
-    let short_ask = archived_pre_spike_ask(Some(&[(0, 0.031603)]), &p, true).expect("on");
+    let short_ask =
+        archived_pre_spike_ask(Some(&[(0, 0.031603)]), &p, "MoonShot", true).expect("on");
     assert!((short_ask - 0.031603 * 0.998).abs() < 1e-12);
+}
+
+/// `MShotSellAtLastPrice` is MoonShot's: the core's schema defaults it on for every strategy, and
+/// a MoonHook carrying it keeps its own `HookSellLevel` take — no lift to the pre-spike print, no
+/// ask read back off its archive. With the lift, take-closed hooks matched the sale on 5 of 128
+/// (the `real_data` bench, 2026-10-06).
+#[test]
+fn a_hook_take_is_not_lifted_to_the_ask() {
+    let p = ExitParams {
+        sell_at_last_price: true,
+        sell_price_adjust_pct: 0.2,
+        hook_sell_level_pct: 50.0,
+        ..params()
+    };
+    let mut hook = deal(false);
+    hook.kind = "MoonHook".into();
+    hook.hook_depth_pct = Some(4.0);
+    // A print far above the hook's 2 % take, where a lift would carry it.
+    let ticks = tape(&[(-5_000, 110.0), (1_000, 100.0)]);
+    let take = ExitModel::new(&p).take_level(&hook, &ticks, fill());
+    assert!((take - 102.0).abs() < 1e-9, "{take}");
+    assert!(ExitModel::new(&p).take_known(&hook));
+    assert_eq!(
+        archived_pre_spike_ask(Some(&[(0, 102.0)]), &p, "MoonHook", false),
+        None
+    );
 }
 
 /// A short's take is divided off the fill, `fill / (1 + SellPrice/100)`, for every kind, and a

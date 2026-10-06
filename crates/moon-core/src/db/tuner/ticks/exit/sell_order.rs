@@ -5,8 +5,9 @@
 //!   take replaces it with `HookSellLevel` per cent of the trade's own detect depth
 //!   ([`crate::db::tuner::ticks::hook`]), and Spread, whose take is the edge of the spread it
 //!   detected — a level, not a rule, taken as the core recorded it ([`take_is_recorded`]). The
-//!   Delta-Modifier family moves it ([`super::delta_mods`]). It is raised by
-//!   `MShotSellAtLastPrice` to the pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the
+//!   Delta-Modifier family moves it ([`super::delta_mods`]). A MoonShot's take is raised by
+//!   `MShotSellAtLastPrice` — read for MoonShot alone ([`lifts_take_to_ask`]) — to the
+//!   pre-spike price less `MShotSellPriceAdjust` (the FAQ: "the
 //!   4-second-old ASK, i.e. before the spike"; the model takes the ask the caller recovered from
 //!   the order archive (`Deal::pre_spike_ask`), else reads the last taker buy at least
 //!   `ModelSettings::pre_spike_lookback_ms` ([`crate::db::tuner::ticks::mshot::PRE_SPIKE_LOOKBACK_MS`]
@@ -40,9 +41,10 @@ use crate::db::tuner::ticks::{Deal, Fill};
 use crate::feed::types::Tick;
 
 impl ExitModel<'_> {
-    /// The take-profit level for a fill: `SellPrice` off the fill, lifted to the pre-spike
-    /// ask (the archive's, else the tape's last taker buy, [`pre_spike_price`]) less the adjustment when
-    /// `MShotSellAtLastPrice` is on. Long above, short below.
+    /// The take-profit level for a fill: the kind's take off the fill, a MoonShot's lifted to the
+    /// pre-spike ask (the archive's, else the tape's last taker buy, [`pre_spike_price`]) less the
+    /// adjustment when `MShotSellAtLastPrice` is on ([`lifts_take_to_ask`]). Long above, short
+    /// below.
     pub fn take_level(&self, deal: &Deal, ticks: &[Tick], fill: Fill) -> f64 {
         // A kind whose take rule the model does not have starts where the core's line did —
         // when the fact is being judged; a variant computes the take from the rules for every
@@ -63,7 +65,7 @@ impl ExitModel<'_> {
             self.base_take_pct(deal).max(0.0),
             deal.is_long(),
         );
-        if self.params.sell_at_last_price {
+        if lifts_take_to_ask(self.params, &deal.kind) {
             let pre = deal
                 .pre_spike_ask
                 .filter(|p| p.is_finite() && *p > 0.0)
@@ -147,7 +149,7 @@ impl ExitModel<'_> {
         if take_is_recorded(&deal.kind) {
             return positive(deal.archived_take);
         }
-        if take_model_for(&deal.kind) && self.params.sell_at_last_price {
+        if lifts_take_to_ask(self.params, &deal.kind) {
             return positive(deal.pre_spike_ask);
         }
         true
@@ -181,6 +183,18 @@ pub fn take_model_for(kind: &str) -> bool {
     crate::db::tuner::ticks::entry::entry_model_for(kind)
 }
 
+/// Whether `MShotSellAtLastPrice` lifts this trade's take to the pre-spike ask: the field is
+/// MoonShot's, and only a kind whose take is MoonShot's rule ([`take_model_for`]) reads it.
+///
+/// The core's schema defaults the field on, so a strategy of every kind carries it, and the
+/// terminal reads that default. Lifting a MoonHook's take by it put the take 2–3 % past the
+/// core's: on the `real_data` bench run with the schema's default (2026-10-06), take-closed
+/// hooks on Gate Futures reproduced 3 of 61 and 2 of 67 with the lift, 53 of 61 and 58 of 68
+/// without, the sale on `HookSellLevel` of the depth to a median −0.004 %.
+pub fn lifts_take_to_ask(params: &ExitParams, kind: &str) -> bool {
+    params.sell_at_last_price && take_model_for(kind)
+}
+
 /// The take as an archived Exit line records it: its first point, when it is a price.
 pub fn archived_take(exit_points: Option<&[(i64, f64)]>) -> Option<f64> {
     let (_, take) = exit_points?.first().copied()?;
@@ -204,8 +218,9 @@ pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
 /// placed it, the ask times [`ask_take_factor`] when `MShotSellAtLastPrice` placed it, so the
 /// ask is that point with the factor divided out. The ask's branch carries no delta modifier
 /// (the core developer, 2026-09-23), so the ask read back is the core's own, to the price step.
-/// `None` when the rule was off (the take came from `SellPrice`, and the archive says nothing
-/// about the ask), when the archive holds no Exit line, or when the first point is not a price.
+/// `None` when the rule was off or is not the kind's ([`lifts_take_to_ask`] — the take came from
+/// the kind's own rule, and the archive says nothing about the ask), when the archive holds no
+/// Exit line, or when the first point is not a price.
 ///
 /// When `SellPrice` alone set the take farther than the ask would have, the division reads a
 /// slightly high ask back — and the same `max` (a long) or `min` (a short, whose take sits
@@ -216,13 +231,15 @@ pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
 /// Args:
 ///     exit_points: The archived Exit line's `(t_ms, price)` points, in the archive's order.
 ///     params: The sell-line parameters as of the trade.
+///     kind: The trade's strategy kind — whether the rule is its at all.
 ///     is_short: The trade's side — which way the adjustment went.
 pub fn archived_pre_spike_ask(
     exit_points: Option<&[(i64, f64)]>,
     params: &ExitParams,
+    kind: &str,
     is_short: bool,
 ) -> Option<f64> {
-    if !params.sell_at_last_price {
+    if !lifts_take_to_ask(params, kind) {
         return None;
     }
     let factor = ask_take_factor(params, is_short)?;

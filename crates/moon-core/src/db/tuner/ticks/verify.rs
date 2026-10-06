@@ -375,7 +375,7 @@ pub fn verify(
         entry_finding,
         exit_finding,
         fill_clock_ms: fill_clock_ms(deal, ticks, model.price_pct),
-        rules: RuleFlags::of(entry, exit),
+        rules: RuleFlags::of(entry, exit, &deal.kind),
     }
 }
 
