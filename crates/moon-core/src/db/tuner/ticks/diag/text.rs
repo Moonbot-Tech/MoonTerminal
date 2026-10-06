@@ -255,15 +255,11 @@ fn segment(out: &mut String, seg: &Segment) {
         ));
     }
     if !x.late.is_empty() {
-        misses.push(format!(
-            "moment {}{}",
-            x.late.len(),
-            match (quantile_i(&x.late, 0.5), quantile_i(&x.late, 0.9)) {
-                (Some(med), Some(p90)) =>
-                    format!(" (model − core med {med:+} ms · p90 {p90:+} ms)"),
-                _ => String::new(),
-            }
-        ));
+        let sides: Vec<String> = [moment_side(&x.late, true), moment_side(&x.late, false)]
+            .into_iter()
+            .flatten()
+            .collect();
+        misses.push(format!("moment {} ({})", x.late.len(), sides.join("; ")));
     }
     if x.line_at_take + x.line_later > 0 {
         misses.push(format!(
@@ -309,6 +305,29 @@ fn quantile_f(values: &[f64], q: f64) -> Option<f64> {
     let mut sorted: Vec<f64> = values.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(f64::total_cmp);
     quantile_index(sorted.len(), q).map(|i| sorted[i])
+}
+
+/// One side of a segment's moment misses — the model firing `early` (model − core below zero)
+/// or late — as `early N: med X ms · tail Y ms`, the tail being the 90th percentile of the
+/// distance from the core on that side, signed (for early, the signed tenth percentile); `None`
+/// when no miss fell on that side.
+///
+/// Printed per side because one median over both hides a skew: on the developer's bench
+/// (2026-10-06) a segment whose misses split 10 early and 3 late read "med −6.3 s", and a side
+/// rule was suspected that the whole sample did not show (longs 26 early, 26 late).
+fn moment_side(late_ms: &[i64], early: bool) -> Option<String> {
+    let side: Vec<i64> = late_ms
+        .iter()
+        .copied()
+        .filter(|&ms| (ms < 0) == early)
+        .collect();
+    let (tail_q, label) = if early { (0.1, "early") } else { (0.9, "late") };
+    let med = quantile_i(&side, 0.5)?;
+    let tail = quantile_i(&side, tail_q)?;
+    Some(format!(
+        "{label} {}: med {med:+} ms · tail {tail:+} ms",
+        side.len()
+    ))
 }
 
 /// The `q` quantile, read at [`quantile_index`]; `None` for no values.

@@ -199,3 +199,63 @@ fn the_close_class_follows_the_verdicts_reading_of_the_reason() {
     );
     assert_eq!(CloseClass::of("Global PanicSell"), CloseClass::Other);
 }
+
+/// The report over stop trades on two venues, one moment miss per entry of `misses`: the
+/// venue's name and the miss's model − core ms.
+fn moment_report(misses: &[(&str, i64)]) -> String {
+    let deals: Vec<Deal> = misses
+        .iter()
+        .map(|_| private_deal(11, "StopLoss AutoActivated"))
+        .collect();
+    let verdicts: Vec<Verdict> = misses
+        .iter()
+        .map(|&(_, late_ms)| {
+            verdict(
+                EntryFinding::Fact,
+                ExitFinding::Miss(ExitMiss::Off(MissParts {
+                    level: false,
+                    late_ms: Some(late_ms),
+                    first_unmatched: None,
+                })),
+            )
+        })
+        .collect();
+    let rows = misses
+        .iter()
+        .zip(deals.iter().zip(&verdicts))
+        .map(|(&(venue, _), (deal, verdict))| ReportRow {
+            deal,
+            venue: Some(venue.into()),
+            tape: TapeClass::Covered,
+            verdict: Some(verdict),
+            outside_model: &[],
+        })
+        .collect();
+    render(&input(rows, ModelSettings::default()))
+}
+
+#[test]
+fn moment_misses_are_split_by_side_each_with_its_own_median() {
+    let text = moment_report(&[
+        ("Gate-Futures", -6_000),
+        ("Gate-Futures", -4_000),
+        ("Gate-Futures", 3_000),
+        ("Gate-Futures", 5_000),
+        ("Gate-Futures", 9_000),
+        ("Bybit-Futures", -2_500),
+        ("Bybit-Futures", -3_500),
+    ]);
+    // One median over the five would read +3000 and hide the early two; each side keeps its own
+    // median and its own far tail — the most negative miss early, the largest late.
+    assert!(
+        text.contains(
+            "moment 5 (early 2: med -4000 ms · tail -6000 ms; late 3: med +5000 ms · tail +9000 ms)"
+        ),
+        "{text}"
+    );
+    // A side with no miss is left out, not printed empty.
+    assert!(
+        text.contains("moment 2 (early 2: med -2500 ms · tail -3500 ms)"),
+        "{text}"
+    );
+}

@@ -34,7 +34,7 @@ mod text;
 mod tests;
 
 /// The report format's version, printed in its first line; raised when a line changes meaning.
-pub const REPORT_VERSION: u32 = 1;
+pub const REPORT_VERSION: u32 = 2;
 
 /// Which rule closed the fact, by the core's `sellreason` — the segment's last key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
