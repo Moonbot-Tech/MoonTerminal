@@ -3,11 +3,9 @@
 _version: 1
 
 assets.window_title: "MoonTerminal — Tài sản"
-assets.show_all: "hiện tất cả"
 # Hint for the top-bar dust-threshold slider; 0 shows everything.
 assets.min_value_hint: "Ẩn tài sản trị giá dưới N $ (0 — hiện tất cả; con lăn chuột đổi)"
 assets.cores_free_total: "Core · khả dụng/tổng"
-assets.cores_count: "%{n} core"
 assets.no_cores: "không có core"
 assets.empty: "không có tài sản"
 # Futures balances are quote-denominated and absent from the table, so its empty state describes
@@ -54,12 +52,7 @@ assets.cores_n: "%{n} core"
 assets.col.core: "Core"
 assets.col.coin: "Tài sản"
 assets.col.qty: "Lượng"
-assets.col.price: "Giá"
 assets.col.value: "Giá trị $"
-assets.col.pos: "Vị thế"
-assets.col.pos_price: "Giá vị thế"
-assets.col.profit: "Lãi"
-assets.col.kind: "Thị trường"
 # Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
 # price of each leg. "PnL" is a trading term kept untranslated across the terminal.
 assets.col.pnl: "PnL"

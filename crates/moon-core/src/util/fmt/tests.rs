@@ -1,5 +1,60 @@
 use super::*;
 
+/// Removing decimal-comma normalization or changing a policy admits invalid wire thresholds.
+#[test]
+fn decimal_policies_preserve_syntax_and_value_boundaries() {
+    for policy in [
+        DecimalPolicy::Any,
+        DecimalPolicy::Finite,
+        DecimalPolicy::FinitePositive,
+    ] {
+        assert_eq!(parse_decimal("1,5", policy), Some(1.5));
+        assert_eq!(parse_decimal(" 2.25 ", policy), Some(2.25));
+        assert_eq!(parse_decimal("x", policy), None);
+    }
+    assert!(
+        parse_decimal("nan", DecimalPolicy::Any)
+            .expect("valid float syntax")
+            .is_nan()
+    );
+    assert_eq!(
+        parse_decimal("inf", DecimalPolicy::Any),
+        Some(f64::INFINITY)
+    );
+    for policy in [DecimalPolicy::Finite, DecimalPolicy::FinitePositive] {
+        assert_eq!(parse_decimal("nan", policy), None);
+        assert_eq!(parse_decimal("inf", policy), None);
+    }
+    for policy in [DecimalPolicy::Any, DecimalPolicy::Finite] {
+        assert_eq!(parse_decimal("0", policy), Some(0.0));
+        assert_eq!(parse_decimal("-1", policy), Some(-1.0));
+        let zero = parse_decimal("-0", policy).expect("signed zero is allowed");
+        assert_eq!(zero, 0.0);
+        assert!(zero.is_sign_negative());
+    }
+    for text in ["0", "-1", "-0"] {
+        assert_eq!(parse_decimal(text, DecimalPolicy::FinitePositive), None);
+    }
+}
+
+/// Trimming integer zeros or changing precision corrupts seeded prices and displayed sizes.
+#[test]
+fn fixed_trimming_preserves_integer_zeros_and_micro_prices() {
+    for (value, places, expected) in [
+        (1.5, 8, "1.5"),
+        (2.0, 8, "2"),
+        (-0.0, 2, "-0"),
+        (330.0, 0, "330"),
+        (1000.0, 0, "1000"),
+        (0.000123450, 9, "0.00012345"),
+    ] {
+        assert_eq!(fixed_trimmed(value, places), expected);
+    }
+    assert_eq!(trim_fraction("100"), "100");
+    assert_eq!(trim_fraction("100.000"), "100");
+    assert_eq!(trim_fraction("1.2300"), "1.23");
+}
+
 /// Regression guard: in `fmt.rs:compact`, removing the `!s.contains('.')` early-return guard makes
 /// the 330 and 1000 assertions fail by truncating user-visible integers to "33" and "1".
 #[test]
@@ -7,6 +62,7 @@ fn compact_keeps_integer_zeros() {
     assert_eq!(compact(330.0, 0), "330");
     assert_eq!(compact(1000.0, 0), "1000");
     assert_eq!(compact(0.0, 0), "0");
+    assert_eq!(compact(-0.0, 2), "-0");
     assert_eq!(compact(-500.0, 0), "-500");
     // Fractional trailing zeros are trimmed.
     assert_eq!(compact(1.5, 6), "1.5");

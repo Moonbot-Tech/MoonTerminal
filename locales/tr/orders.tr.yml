@@ -3,13 +3,8 @@
 # Intentionally untranslated: Buy · Sell.
 _version: 1
 
-# --- Right order pane ---
-order.title: "Emir"
-order.size: "büyüklük %{n}"
-order.settings: "Emir ayarları…"
 
 # --- Bottom dock: Orders table ---
-orders.title: "Grubun açık emirleri (%{count})"
 orders.empty: "açık emir yok"
 orders.col.core: "Çekirdek"
 orders.col.side: "Yön"
@@ -19,7 +14,6 @@ orders.col.tp_price: "TP fiyatı"
 orders.col.pnl_tp: "PNL TP"
 # Strategy user-assigned name column, distinct from the Strat (kind) column.
 orders.col.strat_name: "Ad"
-orders.open_hint: "Grafiği Main'de aç (bu çekirdek)"
 orders.all_cores: "Tüm çekirdekler"
 orders.cores_n: "Çekirdek: %{n}"
 orders.columns: "Alanlar"

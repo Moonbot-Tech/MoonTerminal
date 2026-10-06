@@ -1012,8 +1012,7 @@ impl AppConfig {
         let mut names = HashSet::new();
         let mut keys = HashSet::new();
         for s in &self.servers {
-            // The core is i18n-agnostic, so validation uses plain text. This previously called
-            // t!("err.dup_name"/"err.dup_key"); the UI may localize it if needed.
+            // The core is i18n-agnostic, so validation uses plain text.
             if !names.insert(s.name.to_lowercase()) {
                 anyhow::bail!("duplicate server name: {}", s.name);
             }

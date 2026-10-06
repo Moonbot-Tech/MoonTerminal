@@ -1,5 +1,12 @@
 use super::*;
 
+/// Removing the day modulo changes quiet settings' displayed boundaries after midnight.
+#[test]
+fn quiet_time_formatter_wraps_at_midnight() {
+    assert_eq!(fmt_hhmm(1440), "00:00");
+    assert_eq!(fmt_hhmm(1501), "01:01");
+}
+
 /// Minutes since midnight for readable fixtures.
 fn hm(h: u16, m: u16) -> u16 {
     h * 60 + m

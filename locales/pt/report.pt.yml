@@ -76,8 +76,6 @@ report.search_strategies: "Buscar estratégias..."
 # !word = exclude; see common.strategy_query_syntax).
 report.filter.strategy_mask_ph: "Máscara da estratégia"
 report.filter.strategy_mask_tip: "Filtra o relatório pelo nome da estratégia."
-report.filter.core: "Núcleo:"
-report.filter.side: "Lado:"
 report.filter.from: "De:"
 report.filter.to: "Até:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
@@ -200,7 +198,6 @@ report.valuation_current_progress: "cotação atual: %{ready}/%{total}"
 report.valuation_current_unavailable: "cotação atual indisponível: %{n}"
 report.shown_top: "mostradas: %{n}"
 
-report.filter.emu: "Emulador"
 # Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
 # naming that timestamp on the period preset.
 report.period_basis.close: "Pela data de fechamento"

@@ -97,13 +97,6 @@ pub struct Tick {
     pub side: Side,
 }
 
-/// Retained price-line source kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PriceLineKind {
-    Last,
-    Mark,
-}
-
 /// Retained LastPrice or MarkPrice line point with time already converted to Unix milliseconds.
 #[derive(Debug, Clone, Copy)]
 pub struct PricePoint {

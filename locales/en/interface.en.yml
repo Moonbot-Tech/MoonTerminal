@@ -2,7 +2,6 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-iface.sec_theme: "Theme"
 iface.theme_mode: "Interface theme"
 iface.light_theme: "Light theme"
 iface.graphite_theme: "Graphite"

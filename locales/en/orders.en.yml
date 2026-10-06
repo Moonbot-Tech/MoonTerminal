@@ -3,13 +3,8 @@
 # Intentionally untranslated: Buy · Sell.
 _version: 1
 
-# --- Right order pane ---
-order.title: "Order"
-order.size: "size %{n}"
-order.settings: "Order settings…"
 
 # --- Bottom dock: Orders table ---
-orders.title: "Open group orders (%{count})"
 orders.empty: "no open orders"
 orders.col.core: "Core"
 orders.col.side: "Side"
@@ -19,7 +14,6 @@ orders.col.tp_price: "TP price"
 orders.col.pnl_tp: "PNL TP"
 # Strategy user-assigned name column, distinct from the Strat (kind) column.
 orders.col.strat_name: "Name"
-orders.open_hint: "Open chart on Main (this core)"
 orders.all_cores: "All cores"
 orders.cores_n: "Cores: %{n}"
 orders.columns: "Fields"

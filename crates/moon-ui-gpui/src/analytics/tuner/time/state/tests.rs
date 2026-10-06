@@ -1,6 +1,29 @@
 //! Generation tests for By-time scope and report invalidation.
 
 use super::TimeTunerState;
+use super::{fmt_min, fmt_week_ep};
+
+/// A day wrap or symmetric endpoint shortening changes the strategy schedule input text.
+#[test]
+fn time_inputs_keep_unwrapped_hours_and_asymmetric_week_boundaries() {
+    for (minutes, expected) in [
+        (0, "00:00"),
+        (61, "01:01"),
+        (1439, "23:59"),
+        (1440, "24:00"),
+    ] {
+        assert_eq!(fmt_min(minutes), expected);
+    }
+    for (minute, is_end, expected) in [
+        (0, false, "1"),
+        (1439, true, "1"),
+        (1424, false, "1.23:44"),
+        (10079, true, "7"),
+        (1440, true, "2.00:00"),
+    ] {
+        assert_eq!(fmt_week_ep(minute, is_end), expected);
+    }
+}
 
 /// `time/state.rs:TimeTunerState::invalidate` must advance both request generations; removing the
 /// `seq` bump lets a pre-scope profile completion clear `dirty` under the newly selected strategy.

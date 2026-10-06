@@ -3,7 +3,6 @@
 # Table columns use short labels; translations should remain short as well.
 _version: 1
 
-conn.servers_heading: "Cores (servers)"
 conn.market_src: "Market data source"
 conn.market_src_tip: "Where crosses and the order book come from. Dedup: one provider core per exchange serves the market for all (cheap with many cores). Per-core: each chart reads the market from its own core (no dedup)."
 conn.market_dedup: "Shared data — one core per exchange"
@@ -13,7 +12,6 @@ conn.core_sort_tip: "The order cores appear in across EVERY list in the app: hea
 conn.core_sort.name: "By name — alphabetical"
 conn.core_sort.added: "By insertion — oldest first"
 conn.core_sort.added_newest: "By insertion — newest first"
-conn.groups_heading: "Groups"
 conn.no_groups: "add a core above and give it a “Group” — a group branch will appear"
 conn.show_group: "Show group window"
 # The + glyph is prepended in code; the locale entry contains only text.
@@ -30,8 +28,6 @@ conn.icon_btn: "Icon"
 conn.bulk_mode_btn: "Mode"
 conn.bulk_mode_tip: "Set the MoonProto transport mode for every core in this group at once, instead of one row at a time. Applied on Save: each changed core reconnects by itself."
 conn.icon_for: "Icon for “%{name}”"
-conn.pick: "pick"
-conn.delete: "Del"
 conn.reconnect: "Reconnect"
 conn.filter_note: "client-side filter"
 
@@ -64,17 +60,7 @@ conn.col.group: "Group"
 conn.col.bundle: "Charts"
 conn.col.color: "Color"
 conn.col.data: "Data"
-conn.col.orders: "Ord"
-conn.col.detects: "Det"
-conn.col.reports: "Rep"
-conn.col.balance: "Bal"
-conn.col.strat: "Str"
-conn.col.log: "Log"
-conn.col.alerts: "Alr"
-conn.col.arb: "Arb"
 
-# Group-table column headings.
-conn.gcol.ico: "Ico"
 
 # Tooltips.
 conn.tip.act: "Connect to the core"
@@ -85,7 +71,6 @@ conn.key_unreadable: "This is not a MoonBot key — the terminal cannot read it.
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
 conn.bundle_ph: "bundle name"
-conn.paste_key: "Paste"
 conn.paste_key_tip: "Paste the key from the clipboard"
 conn.tip.color: "Core color: it tints this core's trades and chart marks."
 conn.tip.flags: "Data received from the core. Gray = all on; colored = some categories off. Click to configure."

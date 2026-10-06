@@ -66,7 +66,6 @@ telegram_core.proxy_actual_unknown: "ще не відомо"
 
 telegram_core.proxy_error: "Помилка проксі"
 
-telegram_core.proxy_password_set: "пароль задано"
 
 telegram_core.phone: "Телефон"
 

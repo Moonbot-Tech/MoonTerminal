@@ -3,7 +3,6 @@
 # Table columns use short labels; translations should remain short as well.
 _version: 1
 
-conn.servers_heading: "Çekirdekler (sunucular)"
 conn.market_src: "Piyasa verisi kaynağı"
 conn.market_src_tip: "Artılar ve emir defteri nereden gelir. Tekilleştirme: borsa başına bir sağlayıcı çekirdek piyasayı herkes için çeker (çok çekirdekte ucuz). Çekirdek başına: her grafik piyasayı kendi çekirdeğinden okur (tekilleştirme yok)."
 conn.market_dedup: "Ortak veri — borsa başına bir çekirdek"
@@ -13,7 +12,6 @@ conn.core_sort_tip: "Çekirdeklerin uygulamanın HER listesindeki sırası: baş
 conn.core_sort.name: "Ada göre — alfabetik"
 conn.core_sort.added: "Eklenmeye göre — önce eskiler"
 conn.core_sort.added_newest: "Eklenmeye göre — önce yeniler"
-conn.groups_heading: "Gruplar"
 conn.no_groups: "yukarıya bir çekirdek ekleyin ve ona bir “Grup” verin — bir grup dalı görünür"
 conn.show_group: "Grup penceresini göster"
 # The + glyph is prepended in code; the locale entry contains only text.
@@ -30,8 +28,6 @@ conn.icon_btn: "Simge"
 conn.bulk_mode_btn: "Kip"
 conn.bulk_mode_tip: "Bu gruptaki her çekirdeğin MoonProto taşıma kipini tek seferde ayarlar, satır satır değil. Kaydet'te uygulanır: değişen her çekirdek kendisi yeniden bağlanır."
 conn.icon_for: "“%{name}” için simge"
-conn.pick: "seç"
-conn.delete: "Sil"
 conn.reconnect: "Yeniden bağlan"
 conn.filter_note: "istemci filtresi"
 
@@ -64,17 +60,7 @@ conn.col.group: "Grup"
 conn.col.bundle: "Grafikler"
 conn.col.color: "Renk"
 conn.col.data: "Veri"
-conn.col.orders: "Emr"
-conn.col.detects: "Tsp"
-conn.col.reports: "Rap"
-conn.col.balance: "Bak"
-conn.col.strat: "Str"
-conn.col.log: "Kayıt"
-conn.col.alerts: "Uyr"
-conn.col.arb: "Arb"
 
-# Group-table column headings.
-conn.gcol.ico: "Ico"
 
 # Tooltips.
 conn.tip.act: "Çekirdeğe bağlan"
@@ -85,7 +71,6 @@ conn.key_unreadable: "Bu bir MoonBot anahtarı değil — terminal okuyamıyor. 
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
 conn.bundle_ph: "bağ adı"
-conn.paste_key: "Yapıştır"
 conn.paste_key_tip: "Anahtarı panodan yapıştır"
 conn.tip.color: "Çekirdek rengi: bu çekirdeğin işlemlerini ve grafik işaretlerini boyar."
 conn.tip.flags: "Çekirdekten gelen veri. Gri = hepsi açık; renkli = bazı kategoriler kapalı. Yapılandırmak için tıklayın."

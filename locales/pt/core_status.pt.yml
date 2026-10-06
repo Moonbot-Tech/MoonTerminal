@@ -32,16 +32,6 @@ core_status.ip_unknown: "O terminal ainda não tem endereço deste servidor"
 core_status.cpu_load: "%{value} (%{n})"
 core_status.mem_free: "%{pct}% (%{gb} GB)"
 core_status.unknown_server: "IP desconhecido: %{core}"
-core_status.online: "Online"
-core_status.degraded: "Degradado"
-core_status.offline: "Offline"
-core_status.ready_count: "núcleos: %{ready}/%{total}"
-core_status.hide_server: "Ocultar processos do servidor"
-core_status.show_server: "Mostrar processos do servidor"
-core_status.system_cpu: "CPU do sistema %{value}"
-core_status.process_cpu: "CPU %{value}"
-core_status.process_memory: "RAM %{value}"
-core_status.process_memory_total: "RAM do processo %{value}"
 
 # --- Table columns ---
 core_status.col.server: "Servidor"
@@ -54,7 +44,6 @@ core_status.col.free_phys: "Fís. livre"
 core_status.col.cpus: "CPUs lógicas"
 core_status.col.ping: "Ping do núcleo"
 core_status.col.ping_exch: "Ping corr."
-core_status.col.updated: "Atualizado"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
 # MoonBot build the core reported. The product noun IS the heading, so the cells hold

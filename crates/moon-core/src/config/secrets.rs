@@ -23,11 +23,6 @@ impl Secret {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
-    /// Mutable buffer for a password input field in the UI.
-    pub fn buffer_mut(&mut self) -> &mut String {
-        &mut self.0
-    }
 }
 
 impl fmt::Debug for Secret {

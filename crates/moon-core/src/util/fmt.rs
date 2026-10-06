@@ -1,21 +1,51 @@
 //! Number formatting for the UI and feed.
 
+/// Validation applied after parsing a decimal input with optional whitespace and comma decimals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecimalPolicy {
+    /// Accept every parsed float, including non-finite values.
+    Any,
+    /// Accept only finite values, including zero and negatives.
+    Finite,
+    /// Accept only finite values strictly greater than zero.
+    FinitePositive,
+}
+
+/// Parse a trimmed decimal input, accepting commas as points and applying the caller's policy.
+/// Invalid syntax or a value refused by `policy` returns `None`; signed zero is preserved.
+pub fn parse_decimal(s: &str, policy: DecimalPolicy) -> Option<f64> {
+    s.trim()
+        .replace(',', ".")
+        .parse::<f64>()
+        .ok()
+        .filter(|v| match policy {
+            DecimalPolicy::Any => true,
+            DecimalPolicy::Finite => v.is_finite(),
+            DecimalPolicy::FinitePositive => v.is_finite() && *v > 0.0,
+        })
+}
+
+/// Trim fractional trailing zeros and a bare decimal point, preserving integer trailing zeros.
+pub fn trim_fraction(s: &str) -> &str {
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.')
+    } else {
+        s
+    }
+}
+
+/// Format at the requested fixed precision and trim only fractional trailing zeros.
+pub fn fixed_trimmed(v: f64, decimals: usize) -> String {
+    trim_fraction(&format!("{v:.decimals$}")).to_string()
+}
+
 /// Format a compact number to `decimals` places, trimming trailing fractional zeros and the point
 /// ("1.500000" → "1.5", "2.000000" → "2"). Zeros are trimmed ONLY from the fractional
 /// part: with `decimals=0`, the string has no point, and blindly trimming zeros used to corrupt
 /// integers
 /// ("330" → "33", "1000" → "1").
 pub fn compact(v: f64, decimals: usize) -> String {
-    let s = format!("{v:.decimals$}");
-    if !s.contains('.') {
-        return s;
-    }
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s.is_empty() {
-        "0".to_string()
-    } else {
-        s.to_string()
-    }
+    fixed_trimmed(v, decimals)
 }
 
 /// Format a compact number with an SI suffix (K/M/B/T): 1_500 → "1.5K", 2_300_000 → "2.3M".

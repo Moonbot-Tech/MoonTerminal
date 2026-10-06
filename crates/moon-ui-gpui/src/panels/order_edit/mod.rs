@@ -8,9 +8,10 @@
 use gpui::*;
 use moon_core::feed::{OrderRow, OrderStopsForm, StopGroupEdit, TakeProfitEdit, VStopEdit};
 use moon_core::session::CoreId;
+use moon_core::util::fmt::{DecimalPolicy, fixed_trimmed, parse_decimal};
 use moon_ui::{
-    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonNotification,
-    MoonPalette, MoonTone, MoonWindowExt as _, h_flex, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDialog, MoonInput, MoonInputState,
+    MoonNotification, MoonPalette, MoonTone, MoonWindowExt as _, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -80,16 +81,13 @@ fn fmt_edit(v: f64) -> String {
     if !v.is_finite() || v == 0.0 {
         return String::new();
     }
-    format!("{v:.8}")
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    fixed_trimmed(v, 8)
 }
 
 /// Parses an input as `f64` after accepting commas as decimal points. Invalid syntax returns `None`;
 /// callers apply any required positivity and finiteness checks.
 fn parse_num(s: &str) -> Option<f64> {
-    s.trim().replace(',', ".").parse::<f64>().ok()
+    parse_decimal(s, DecimalPolicy::Any)
 }
 
 /// Compares numeric edits with a relative epsilon suitable for both large and micro prices.
@@ -105,6 +103,45 @@ fn side_label(r: &OrderRow, executed: bool) -> (&'static str, MoonTone) {
         (true, false) => ("Short-S", MoonTone::Negative),
         (true, true) => ("Short-B", MoonTone::Info),
     }
+}
+
+/// Apply the modal frame shared by active-order and spot-order dialogs.
+/// The caller supplies its width and localized title; palette and dismissal rules stay identical.
+///
+/// Args:
+///     dialog: Dialog under construction.
+///     width: Fixed width in logical pixels.
+///     title: Localized header text.
+///     cx: Context supplying the active palette and container radius.
+///
+/// Returns:
+///     The dialog with its shared frame, header, and cancel policy applied.
+pub(crate) fn order_dialog_chrome(
+    dialog: MoonDialog,
+    width: f32,
+    title: String,
+    cx: &App,
+) -> MoonDialog {
+    let p = MoonPalette::active(cx);
+    dialog
+        .w(px(width))
+        .close_button(true)
+        .overlay(true)
+        .overlay_closable(true)
+        .bg(moon(p.shell_high))
+        .border_color(moon(p.border))
+        .rounded(design::r_container(cx))
+        .text_color(moon(p.text))
+        .header(
+            div()
+                .w_full()
+                .py_2()
+                .border_b_1()
+                .border_color(moon(p.border))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .on_cancel(|_, _, _| true)
 }
 
 /// Open the unique order editor for one live order in the current window.
@@ -218,25 +255,7 @@ pub(crate) fn open_order_edit(
             let (side, _) = side_label(&s.row, s.executed);
             format!("{} — {token} ({side})", t!("orders.edit.title"))
         };
-        dialog
-            .w(px(470.0))
-            .close_button(true)
-            .overlay(true)
-            .overlay_closable(true)
-            .bg(moon(p.shell_high))
-            .border_color(moon(p.border))
-            .rounded(design::r_container(cx))
-            .text_color(moon(p.text))
-            .header(
-                div()
-                    .w_full()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(moon(p.border))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            )
-            .on_cancel(|_, _, _| true)
+        order_dialog_chrome(dialog, 470.0, title, cx)
             .content(move |content, _window, cx| content.child(dialog_body(&content_state, cx)))
             .footer(dialog_footer(footer_state, p))
     });

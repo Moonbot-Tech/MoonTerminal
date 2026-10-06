@@ -32,16 +32,6 @@ core_status.ip_unknown: "Терминал ещё не получил адрес 
 core_status.cpu_load: "%{value} (%{n})"
 core_status.mem_free: "%{pct}% (%{gb} ГБ)"
 core_status.unknown_server: "IP неизвестен: %{core}"
-core_status.online: "Онлайн"
-core_status.degraded: "Частично"
-core_status.offline: "Офлайн"
-core_status.ready_count: "%{ready}/%{total} ядер"
-core_status.hide_server: "Скрыть процессы сервера"
-core_status.show_server: "Показать процессы сервера"
-core_status.system_cpu: "CPU системы %{value}"
-core_status.process_cpu: "CPU %{value}"
-core_status.process_memory: "RAM %{value}"
-core_status.process_memory_total: "RAM процессов %{value}"
 
 # --- Table columns ---
 core_status.col.server: "Сервер"
@@ -54,7 +44,6 @@ core_status.col.free_phys: "Своб. физ."
 core_status.col.cpus: "Логич. CPU"
 core_status.col.ping: "Пинг ядра"
 core_status.col.ping_exch: "Пинг биржи"
-core_status.col.updated: "Обновлено"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
 # MoonBot build the core reported. The product noun IS the heading, so the cells hold

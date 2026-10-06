@@ -7,6 +7,23 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Format minutes as zero-padded `HH:MM` without wrapping at midnight.
+/// Callers that display a time of day apply their own day modulo before calling.
+pub fn format_hhmm(minutes: u16) -> String {
+    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+}
+
+/// Format a week-minute bound as `day.HH:MM`, shortening a full-day boundary to its day.
+/// Starts at minute zero and ends at minute 1439 omit the time; days wrap to Monday through Sunday.
+pub fn format_week_endpoint(week_minute: u16, is_end: bool) -> String {
+    let (day, tod) = ((week_minute / 1440) % 7 + 1, week_minute % 1440);
+    if (!is_end && tod == 0) || (is_end && tod == 1439) {
+        day.to_string()
+    } else {
+        format!("{day}.{}", format_hhmm(tod))
+    }
+}
+
 /// Current Unix time in whole seconds (`u64`) for absolute network scheduling deadlines.
 /// Returns `0` if the system clock precedes the Unix epoch.
 pub fn now_unix_secs() -> u64 {

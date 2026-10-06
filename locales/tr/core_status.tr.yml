@@ -32,16 +32,6 @@ core_status.ip_unknown: "Terminalin bu sunucu için henüz adresi yok"
 core_status.cpu_load: "%{value} (%{n})"
 core_status.mem_free: "%{pct}% (%{gb} GB)"
 core_status.unknown_server: "Bilinmeyen IP: %{core}"
-core_status.online: "Çevrimiçi"
-core_status.degraded: "Kısmi"
-core_status.offline: "Çevrimdışı"
-core_status.ready_count: "%{ready}/%{total} çekirdek"
-core_status.hide_server: "Sunucu süreçlerini gizle"
-core_status.show_server: "Sunucu süreçlerini göster"
-core_status.system_cpu: "Sistem CPU %{value}"
-core_status.process_cpu: "CPU %{value}"
-core_status.process_memory: "RAM %{value}"
-core_status.process_memory_total: "Süreç RAM %{value}"
 
 # --- Table columns ---
 core_status.col.server: "Sunucu"
@@ -54,7 +44,6 @@ core_status.col.free_phys: "Boş fiz."
 core_status.col.cpus: "Mantıksal CPU"
 core_status.col.ping: "Çekirdek ping"
 core_status.col.ping_exch: "Borsa ping"
-core_status.col.updated: "Güncellendi"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
 # MoonBot build the core reported. The product noun IS the heading, so the cells hold

@@ -78,7 +78,7 @@ pub(super) enum AcquireOutcome {
 
 /// Take one slot, waiting up to `wait` if none are free.
 ///
-/// Held for the sibling test the prover adds; production waits go through
+/// Used by sibling tests; production waits go through
 /// [`acquire_with_cancellation`].
 ///
 /// Args:
@@ -86,7 +86,7 @@ pub(super) enum AcquireOutcome {
 ///
 /// Returns:
 ///     A permit when a slot was taken, or `None` on timeout.
-#[allow(dead_code)]
+#[cfg(test)]
 pub(super) fn acquire(wait: Duration) -> Option<ReaderPermit> {
     match acquire_with_cancellation(wait, &|| false) {
         AcquireOutcome::Permit(permit) => Some(permit),
@@ -139,8 +139,8 @@ pub(super) fn acquire_with_cancellation(
     AcquireOutcome::Timeout
 }
 
-/// Slots still free. Observable for the sibling test the prover adds.
-#[allow(dead_code)]
+/// Slots still free, observed by sibling tests to verify permit accounting.
+#[cfg(test)]
 pub(super) fn available() -> usize {
     *lock_slots()
 }

@@ -1,7 +1,3 @@
 # Error messages for settings validation and GPU failures.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
-
-err.dup_name: "Nombre de servidor duplicado: «%{name}»"
-err.dup_key: "Clave duplicada en el servidor «%{name}» (ese núcleo ya existe)"
-err.no_gpu: "no hay adaptador de GPU adecuado"

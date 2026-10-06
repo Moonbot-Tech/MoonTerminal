@@ -15,6 +15,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::session::CoreId;
+use moon_core::util::fmt::{DecimalPolicy, fixed_trimmed, parse_decimal};
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonInput, MoonInputState, MoonNotification, MoonPalette,
     MoonWindowExt as _, h_flex, v_flex,
@@ -70,21 +71,14 @@ fn fmt_seed(v: f64) -> String {
     } else {
         8
     };
-    let text = format!("{v:.decimals$}")
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string();
+    let text = fixed_trimmed(v, decimals);
     // Below the cap the decimal prints as "0": still not a seed.
     if text == "0" { String::new() } else { text }
 }
 
 /// Parses a typed number, accepting a comma as the decimal point; only finite positives count.
 fn parse_positive(s: &str) -> Option<f64> {
-    s.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite() && *v > 0.0)
+    parse_decimal(s, DecimalPolicy::FinitePositive)
 }
 
 /// The LIVE quote-denominated price of the market, as the market-sell path reads it: a
@@ -179,31 +173,12 @@ pub(super) fn open_spot_order(
         price_input,
     });
     window.open_unique_moon_dialog("assets-spot-order", app, move |dialog, _window, cx| {
-        let p = MoonPalette::active(cx);
         let body_draft = draft.clone();
         let body_view = view.clone();
         let ok_draft = draft.clone();
         let ok_view = view.clone();
         let title = t!("assets.order_dialog.title", coin = draft.coin.as_str()).to_string();
-        dialog
-            .w(px(380.0))
-            .close_button(true)
-            .overlay(true)
-            .overlay_closable(true)
-            .bg(moon(p.shell_high))
-            .border_color(moon(p.border))
-            .rounded(design::r_container(cx))
-            .text_color(moon(p.text))
-            .header(
-                div()
-                    .w_full()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(moon(p.border))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            )
-            .on_cancel(|_, _, _| true)
+        crate::panels::order_dialog_chrome(dialog, 380.0, title, cx)
             .content(move |content, _window, cx| {
                 content.child(dialog_body(&body_draft, &body_view, cx))
             })

@@ -76,8 +76,6 @@ report.search_strategies: "Пошук стратегії..."
 # !word = exclude; see common.strategy_query_syntax).
 report.filter.strategy_mask_ph: "Маска стратегії"
 report.filter.strategy_mask_tip: "Фільтр звіту за назвою стратегії."
-report.filter.core: "Ядро:"
-report.filter.side: "Сторона:"
 report.filter.from: "Від:"
 report.filter.to: "До:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
@@ -200,7 +198,6 @@ report.valuation_current_progress: "поточний курс: %{ready}/%{total}
 report.valuation_current_unavailable: "немає поточного курсу: %{n}"
 report.shown_top: "показано: %{n}"
 
-report.filter.emu: "Емулятор"
 # Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
 # naming that timestamp on the period preset.
 report.period_basis.close: "За датою закриття"

@@ -1,6 +1,20 @@
 //! Dispatch-authority regressions for the active-order editor.
 
 use super::submit::order_edit_core_is_authorized;
+use super::{fmt_edit, parse_num};
+
+/// Changing fixed precision or removing the empty-value guard changes the editor's seeded text.
+#[test]
+fn numeric_editor_preserves_seed_text_and_decimal_comma() {
+    for value in [0.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(fmt_edit(value), "");
+    }
+    for (value, expected) in [(1.23, "1.23"), (-0.5, "-0.5"), (123456.0, "123456")] {
+        assert_eq!(fmt_edit(value), expected);
+    }
+    assert_eq!(parse_num("1,5"), Some(1.5));
+    assert!(parse_num("nan").expect("accepted numeric syntax").is_nan());
+}
 
 /// `submit.rs:order_edit_core_is_authorized` must require the captured core only while Auto owns
 /// the originating group; Classic and global/chart authority keep their prior behavior.

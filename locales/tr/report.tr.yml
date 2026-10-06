@@ -76,8 +76,6 @@ report.search_strategies: "Strateji ara..."
 # !word = exclude; see common.strategy_query_syntax).
 report.filter.strategy_mask_ph: "Strateji maskesi"
 report.filter.strategy_mask_tip: "Raporu strateji adına göre süzer."
-report.filter.core: "Çekirdek:"
-report.filter.side: "Yön:"
 report.filter.from: "Başlangıç:"
 report.filter.to: "Bitiş:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
@@ -200,7 +198,6 @@ report.valuation_current_progress: "güncel kur: %{ready}/%{total}"
 report.valuation_current_unavailable: "güncel kur yok: %{n}"
 report.shown_top: "gösterilen: %{n}"
 
-report.filter.emu: "Emülatör"
 # Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
 # naming that timestamp on the period preset.
 report.period_basis.close: "Kapanış tarihine göre"

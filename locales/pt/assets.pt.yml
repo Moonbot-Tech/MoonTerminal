@@ -3,11 +3,9 @@
 _version: 1
 
 assets.window_title: "MoonTerminal — Ativos"
-assets.show_all: "mostrar tudo"
 # Hint for the top-bar dust-threshold slider; 0 shows everything.
 assets.min_value_hint: "Ocultar ativos abaixo de N $ (0 — mostrar tudo; a roda do mouse muda)"
 assets.cores_free_total: "Núcleos · livres/total"
-assets.cores_count: "Núcleos (%{n})"
 assets.no_cores: "sem núcleos"
 assets.empty: "sem ativos"
 # Futures balances are quote-denominated and absent from the table, so its empty state describes
@@ -54,12 +52,7 @@ assets.cores_n: "Núcleos: %{n}"
 assets.col.core: "Núcleo"
 assets.col.coin: "Ativo"
 assets.col.qty: "Qtd"
-assets.col.price: "Preço"
 assets.col.value: "Valor $"
-assets.col.pos: "Pos."
-assets.col.pos_price: "Preço pos."
-assets.col.profit: "Lucro"
-assets.col.kind: "Mercado"
 # Unrealized PnL of the row's position, computed by the feed from the mark price and the entry
 # price of each leg. "PnL" is a trading term kept untranslated across the terminal.
 assets.col.pnl: "PnL"

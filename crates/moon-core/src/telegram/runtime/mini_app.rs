@@ -4,14 +4,13 @@
 //! relayed to Backend without being blocked behind Telegram long polling. Stop drops the tunnel
 //! and loopback listener before the owning service joins this worker.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::config::Secret;
-use crate::telegram::TelegramStatus;
 use crate::telegram::tunnel::TunnelProcess;
 use crate::telegram::web::{MiniAppApiRequest, MiniAppServer, MiniAppServerConfig};
 
@@ -255,16 +254,6 @@ impl MiniAppOwner {
         self.status = status.clone();
         let _ = self.events_tx.try_send(MiniAppEvent::Status(status));
     }
-}
-
-/// Path helper so callers can pass a verified binary without importing `config::paths` here.
-pub fn default_cloudflared_path() -> PathBuf {
-    crate::config::paths::cloudflared_executable_path()
-}
-
-/// Project a failed start into Telegram health for existing consumers.
-pub fn failed_telegram_status() -> TelegramStatus {
-    TelegramStatus::Unavailable
 }
 
 /// Own acquisition, tunnel URL observation, and bounded API relay independently of long polling.

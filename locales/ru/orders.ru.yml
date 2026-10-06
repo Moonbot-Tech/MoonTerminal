@@ -3,13 +3,8 @@
 # Intentionally untranslated: Buy · Sell.
 _version: 1
 
-# --- Right order pane ---
-order.title: "Ордер"
-order.size: "размер %{n}"
-order.settings: "Настройки ордера…"
 
 # --- Bottom dock: Orders table ---
-orders.title: "Открытые ордера группы (%{count})"
 orders.empty: "нет открытых ордеров"
 orders.col.core: "Ядро"
 orders.col.side: "Сторона"
@@ -19,7 +14,6 @@ orders.col.tp_price: "Цена TP"
 orders.col.pnl_tp: "PNL TP"
 # Strategy user-assigned name column, distinct from the Strat (kind) column.
 orders.col.strat_name: "Имя"
-orders.open_hint: "Открыть чарт на Main (это ядро)"
 orders.all_cores: "Все ядра"
 orders.cores_n: "Ядер: %{n}"
 orders.columns: "Поля"

@@ -66,7 +66,6 @@ telegram_core.proxy_actual_unknown: "aún desconocido"
 
 telegram_core.proxy_error: "Error de proxy"
 
-telegram_core.proxy_password_set: "contraseña definida"
 
 telegram_core.phone: "Teléfono"
 

@@ -73,27 +73,6 @@ impl LogLine {
             msg,
         }
     }
-
-    /// Heuristically identifies an error line for the quick errors-only filter.
-    /// Matches Warn/Error levels OR error-like words in the text, since level-less core
-    /// logs must be filtered by content.
-    pub fn is_errorish(&self) -> bool {
-        if matches!(self.level, log::Level::Error | log::Level::Warn) {
-            return true;
-        }
-        let m = self.msg.to_lowercase();
-        [
-            "error",
-            "ошиб",
-            "fail",
-            "warn",
-            "panic",
-            "exception",
-            "critical",
-        ]
-        .iter()
-        .any(|k| m.contains(k))
-    }
 }
 
 /// The Log tab's shared buffer: the lines it can still show, and how many have ever been added.
