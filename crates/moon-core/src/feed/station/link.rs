@@ -26,6 +26,19 @@ use crate::config::ServerConfig;
 /// How long the transport handshake may take.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// The core's host is a name its own feed has not resolved yet: not a failure of the core, so
+/// the tape recorder waits for `FeedMsg::Endpoint` instead of shunning it.
+#[derive(Debug)]
+pub struct NotResolvedYet;
+
+impl std::fmt::Display for NotResolvedYet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("core address not resolved yet")
+    }
+}
+
+impl std::error::Error for NotResolvedYet {}
+
 /// A station-mode client of one core.
 pub struct StationLink {
     client: MoonClient,
@@ -34,7 +47,19 @@ pub struct StationLink {
 impl StationLink {
     /// Connect to `server` in the station's mode. Returns at once; Init finishes in the
     /// background and announces itself as [`LifecycleEvent::Ready`].
-    pub fn connect(server: &ServerConfig) -> anyhow::Result<Self> {
+    ///
+    /// `resolved` is the endpoint the core's own feed resolved for this configuration
+    /// (`FeedMsg::Endpoint`). A host NAME is dialed through it rather than resolved here: the
+    /// resolver blocks, and the caller is the tape recorder's one thread, which every exchange's
+    /// recording shares. The literal also keeps MoonProto's socket family right for an IPv6 answer
+    /// (`config::CoreTarget::resolve`).
+    ///
+    /// Errors:
+    ///     An unreadable key or override, or a host name the feed has not resolved yet.
+    pub fn connect(
+        server: &ServerConfig,
+        resolved: Option<crate::feed::CoreEndpoint>,
+    ) -> anyhow::Result<Self> {
         let info = moonproto::parse_key_info(server.key.expose())
             .ok_or_else(|| anyhow::anyhow!("key unreadable"))?;
         let endpoint_override =
@@ -45,19 +70,21 @@ impl StationLink {
             server.transport,
             endpoint_override.as_ref(),
         );
-        let resolved = target.resolve()?;
-        let cfg = ClientConfig::new(
-            resolved.client_host,
-            resolved.endpoint.port,
-            info.keys.master_key,
-            info.keys.mac_key,
-        )
-        .with_transport_mode(transport)
-        .with_market_history(MarketHistorySizing::Compact)
-        .with_refresh(RefreshConfig {
-            update_markets_every: None,
-            check_tags_every: None,
-        });
+        let host = match &target.host {
+            crate::config::CoreHost::Ip(ip) => ip.to_string(),
+            // The feed's answer is fixed for its attempt: after a dynamic-DNS change a donor dials
+            // the old address until the core's feed reconnects and reports the new one.
+            crate::config::CoreHost::Name(_) => resolved
+                .map(|endpoint| endpoint.address.to_string())
+                .ok_or(NotResolvedYet)?,
+        };
+        let cfg = ClientConfig::new(host, target.port, info.keys.master_key, info.keys.mac_key)
+            .with_transport_mode(transport)
+            .with_market_history(MarketHistorySizing::Compact)
+            .with_refresh(RefreshConfig {
+                update_markets_every: None,
+                check_tags_every: None,
+            });
         // No subscriptions at Init; the strategies list is required or Init never completes.
         let init = InitConfig {
             initial_strategies: Some(InitialStrategies::new(0, Vec::new())),

@@ -31,7 +31,8 @@ pub struct CoreKeyEntry {
     pub uid: u64,
     pub name: String,
     pub key: super::Secret,
-    /// The hand-typed endpoint kept beside the credential in servers.enc.
+    /// The hand-typed endpoint for the STATION: the core's override where the user ticked it for
+    /// the station, empty otherwise (`config::station_endpoint`).
     pub endpoint_override: String,
     /// The terminal's transport override from settings.toml; `None` = the key's own mode.
     pub transport: Option<super::TransportVersion>,
@@ -74,7 +75,11 @@ pub fn read_core_keys() -> anyhow::Result<Vec<CoreKeyEntry>> {
                 uid: entry.uid,
                 name: entry.name,
                 key: entry.key,
-                endpoint_override: entry.endpoint_override,
+                endpoint_override: super::station_endpoint(
+                    &entry.endpoint_override,
+                    entry.endpoint_to_station,
+                )
+                .to_owned(),
             }
         })
         .collect())

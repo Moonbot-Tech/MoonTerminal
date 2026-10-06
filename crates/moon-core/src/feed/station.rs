@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use moonproto::Event;
 
 mod link;
-pub use link::StationLink;
+pub use link::{NotResolvedYet, StationLink};
 
 /// What a station runs besides its reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

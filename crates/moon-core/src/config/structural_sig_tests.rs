@@ -21,6 +21,21 @@ fn server(id: u64, name: &str) -> ServerConfig {
     }
 }
 
+/// The station tick changes only what the STATION is sent (#616): toggling it must not reconnect
+/// a core or rebuild a window here.
+#[test]
+fn the_station_tick_is_not_structural() {
+    let mut ticked = server(1, "Alpha");
+    ticked.endpoint_override = "core.example.net".into();
+    let mut unticked = ticked.clone();
+    ticked.endpoint_to_station = true;
+    unticked.endpoint_to_station = false;
+    assert_eq!(
+        config(CoreSortMode::Name, vec![ticked]).structural_sig(),
+        config(CoreSortMode::Name, vec![unticked]).structural_sig(),
+    );
+}
+
 /// Protect `AppConfig::structural_sig`: changing presentation order must not reconnect cores
 /// or rebuild group windows.
 #[test]

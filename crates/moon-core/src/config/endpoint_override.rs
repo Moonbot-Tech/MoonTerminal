@@ -105,6 +105,22 @@ pub fn parse_endpoint_override(text: &str) -> Result<Option<EndpointOverride>, I
     }))
 }
 
+/// The override a core hands the STATION: its own, only where the user ticked it for the station
+/// (`ServerConfig::endpoint_to_station`); otherwise empty, so the station dials the key's address.
+/// The one definition every station-side view reads — the push (`config::read_core_keys`) and the
+/// terminal's address matching against the station's cores — so they cannot disagree about which
+/// address the station has.
+///
+/// Args:
+///     endpoint_override: The row's override as stored.
+///     to_station: Whether the row is ticked for the station.
+///
+/// Returns:
+///     The override text for the station, or `""` when the station follows the key.
+pub fn station_endpoint(endpoint_override: &str, to_station: bool) -> &str {
+    if to_station { endpoint_override } else { "" }
+}
+
 /// Parse a port: ASCII digits only (`u16::from_str` would also take a leading `+`), 1..=65535.
 fn parse_port(text: &str) -> Result<u16, InvalidEndpoint> {
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {

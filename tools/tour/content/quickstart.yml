@@ -144,6 +144,13 @@ steps:
         yellow), or your ISP changed the IP: type an address, address:port, <code>:port</code> or a DDNS
         name. A new key does not overwrite the field, and its cross returns to the key''s address.'
       html: true
+  - note:
+      ru: Станция по умолчанию подключается к ядру по адресу из ключа. Значок облака рядом с заполненным
+        полем передаёт ей вписанный адрес — включайте его для исправленного внешнего адреса или
+        DDNS-имени, но не для локального адреса вашей сети, до которого сервер станции не достанет.
+      en: By default the station connects to the core on the key's address. The cloud glyph beside a
+        filled field hands it the typed address — turn it on for a corrected public address or a DDNS
+        name, not for an address of your local network, which the station's server cannot reach.
 - title:
     ru: Отметьте, что принимать
     en: Choose what to accept

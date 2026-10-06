@@ -89,7 +89,9 @@ pub use detect_view::{
     DETECT_RAIL_MAX, DETECT_SIZE_LARGE, DETECT_SIZE_MEDIUM, DETECT_SIZE_MINI, DetectChart,
     DetectField, DetectSizeCfg, DetectSlot, DetectViewCfg, DetectViewFile, detect_slot_count,
 };
-pub use endpoint_override::{CoreHost, EndpointOverride, InvalidEndpoint, parse_endpoint_override};
+pub use endpoint_override::{
+    CoreHost, EndpointOverride, InvalidEndpoint, parse_endpoint_override, station_endpoint,
+};
 pub use groups::{
     DEFAULT_ORDER_SIZES_USD, GroupConfig, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
@@ -793,6 +795,7 @@ impl AppConfig {
                 feed: FeedFlags::default(),
                 key: Secret::new(key.clone()),
                 endpoint_override: String::new(),
+                endpoint_to_station: false,
                 group: group.clone(),
                 market: market.clone(),
                 color: servers::default_color(),
@@ -889,6 +892,7 @@ impl AppConfig {
                         name: server.name.clone(),
                         key: server.key.clone(),
                         endpoint_override: server.endpoint_override.clone(),
+                        endpoint_to_station: server.endpoint_to_station,
                     })
                     .collect(),
                 telegram: self.telegram.clone(),
@@ -1048,6 +1052,9 @@ impl AppConfig {
                 trade: None,
                 workspace_membership: WorkspaceMembership::default(),
                 total_mode: TotalMode::default(),
+                // Whether the STATION follows the override: it changes nothing this terminal
+                // connects to or shows, so it must not reconnect or rebuild anything here.
+                endpoint_to_station: false,
                 ..s.clone()
             })
             .collect();

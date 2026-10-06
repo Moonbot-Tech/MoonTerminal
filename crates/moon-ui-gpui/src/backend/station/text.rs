@@ -134,6 +134,9 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
                     Step::ChatsDropped => t!("station.progress.ChatsDropped"),
                     Step::CoreWritten => t!("station.progress.CoreWritten"),
                     Step::CoreDropped => t!("station.progress.CoreDropped"),
+                    Step::EndpointNotSent => {
+                        t!("station.progress.EndpointNotSent", name = diagnostic)
+                    }
                     Step::Status => t!("station.progress.Status"),
                     Step::Update => t!("station.progress.Update"),
                     Step::NoNewRelease => t!("station.progress.NoNewRelease"),

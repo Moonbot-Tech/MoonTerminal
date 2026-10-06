@@ -179,6 +179,7 @@ pub fn merge(sf: ServersFile, meta: SettingsFile, uid_floor: Option<u64>) -> Mer
                 feed: m.map(|m| m.feed).unwrap_or_default(),
                 key: e.key,
                 endpoint_override: e.endpoint_override,
+                endpoint_to_station: e.endpoint_to_station,
                 group: m
                     .map(|m| m.group.clone())
                     .unwrap_or_else(servers::default_group),
@@ -271,6 +272,7 @@ pub fn split(
                 name: s.name.clone(),
                 key: s.key.clone(),
                 endpoint_override: s.endpoint_override.clone(),
+                endpoint_to_station: s.endpoint_to_station,
             })
             .collect(),
         telegram,

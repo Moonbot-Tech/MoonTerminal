@@ -14,6 +14,7 @@ fn server(id: CoreId, mode: Option<TransportVersion>) -> ServerConfig {
         feed: FeedFlags::default(),
         key: Secret::new(""),
         endpoint_override: String::new(),
+        endpoint_to_station: false,
         group: "fleet".to_string(),
         market: "BTCUSDT".to_string(),
         color: [0, 0, 0],

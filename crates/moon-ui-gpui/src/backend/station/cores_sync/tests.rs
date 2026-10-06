@@ -368,6 +368,26 @@ fn local_comparison_only_includes_active_real_credentials() {
     );
 }
 
+/// The station is matched by the address IT dials (#616): an override the user did not tick for
+/// the station must leave the comparison on the key's address, or a LAN override would show every
+/// core as changed and offer to push an address the station's server cannot reach.
+#[test]
+fn only_an_override_ticked_for_the_station_moves_its_address() {
+    let key = "sX85BQAAAAD4HMdln7gLXlN0DqD1Qs810ml1VLTx0vkRfwzU9VrjS+XMkD1SzrhZWGd2JDVy92AArwH8gJLfmM/47yuKci+sFrrtNibJShbRnc1HGycnqLRazhICIMdoPAhGryNcv1KZClUCEhH6mRG/Np81EodJlA=="; // gitleaks:allow
+    let mut server: ServerConfig = serde_json::from_str("{\"id\":1}").unwrap();
+    server.uid = 3;
+    server.active = true;
+    server.key = Secret::new(key);
+    server.endpoint_override = "192.168.1.5:5020".into();
+    let unticked = local_cores(&AppConfig::headless(vec![server.clone()]));
+    assert_eq!(unticked[0].address.as_deref(), Some("198.51.100.42:4321"));
+    assert_eq!(unticked[0].endpoint_override, "");
+    server.endpoint_to_station = true;
+    let ticked = local_cores(&AppConfig::headless(vec![server]));
+    assert_eq!(ticked[0].address.as_deref(), Some("192.168.1.5:5020"));
+    assert_eq!(ticked[0].endpoint_override, "192.168.1.5:5020");
+}
+
 /// Guessing before the first status read can request another core's history on a new station.
 #[test]
 fn unread_trace_listing_never_maps_a_request() {

@@ -219,6 +219,10 @@ pub struct ServerEntry {
     /// and whenever the row follows its key.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub endpoint_override: String,
+    /// Whether the station gets `endpoint_override` too; see `ServerConfig::endpoint_to_station`.
+    /// Beside the override it qualifies, so the station push reads both from one file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub endpoint_to_station: bool,
 }
 
 /// Telegram bot credentials, pairing, and preferences stored only in `servers.enc`.

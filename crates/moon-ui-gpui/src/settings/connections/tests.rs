@@ -18,6 +18,24 @@ fn venue(code: u8) -> CoreVenue {
     CoreVenue::identify(code, "", None)
 }
 
+/// The station tick belongs to the address it was given for (#616): typing over, editing or
+/// clearing a ticked address must not send the new one to the station unasked, while writing the
+/// same text back (the field echoing its own value) keeps it.
+#[test]
+fn any_address_change_drops_the_station_tick() {
+    let mut row = server("g");
+    row.endpoint_override = "core.example.net:5017".into();
+    row.endpoint_to_station = true;
+    super::set_endpoint_override(&mut row, "core.example.net:5017".into());
+    assert!(row.endpoint_to_station, "an unchanged value keeps the tick");
+    super::set_endpoint_override(&mut row, "192.168.1.5".into());
+    assert!(!row.endpoint_to_station, "a replaced address loses it");
+    assert_eq!(row.endpoint_override, "192.168.1.5");
+    row.endpoint_to_station = true;
+    super::set_endpoint_override(&mut row, String::new());
+    assert!(!row.endpoint_to_station, "a cleared field loses it");
+}
+
 /// `connections/tab.rs:apply_group_transport` must update every selected group member only.
 ///
 /// Breakage: narrowing the group filter or removing it leaves a core unchanged or changes another group's core, so one bulk selection no longer produces the requested reconnections on Save.
@@ -83,6 +101,7 @@ fn server(group: &str) -> ServerConfig {
         feed: FeedFlags::default(),
         key: Secret::new(""),
         endpoint_override: String::new(),
+        endpoint_to_station: false,
         group: group.to_string(),
         market: "BTCUSDT".to_string(),
         color: [1, 2, 3],

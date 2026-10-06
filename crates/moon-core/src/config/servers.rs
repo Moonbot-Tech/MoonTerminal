@@ -181,6 +181,13 @@ pub struct ServerConfig {
     /// `settings.toml`: the feed keeps core addresses out of even its own log.
     #[serde(default)]
     pub endpoint_override: String,
+    /// Whether the station dials [`ServerConfig::endpoint_override`] too, instead of the key's
+    /// address. Off by default and per core: a LAN address typed for this terminal is exactly what
+    /// a station on a VPS cannot reach, while a corrected public address is what it needs. Read
+    /// wherever the terminal models what the station dials (`config::station_endpoint`); it never
+    /// touches this terminal's own connection.
+    #[serde(default)]
+    pub endpoint_to_station: bool,
     /// Group is the name of the window containing the core. Color/icon belong to GroupConfig.
     #[serde(default = "default_group")]
     pub group: String,

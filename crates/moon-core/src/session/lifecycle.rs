@@ -559,6 +559,15 @@ impl SessionManager {
                             stats.report_traces = true;
                         }
                     }
+                    FeedMsg::Endpoint(endpoint) => {
+                        // The tape recorder's donor dials the address this feed resolved, so the
+                        // recorder's one thread never waits on DNS (`StationLink::connect`).
+                        crate::market::tape_recorder::core_endpoint(sess.id, endpoint);
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            core.apply(FeedMsg::Endpoint(endpoint));
+                            stats.ui_state = true;
+                        }
+                    }
                     other => {
                         if let Some(core) = self.store.core_mut(sess.id) {
                             core.apply(other);
