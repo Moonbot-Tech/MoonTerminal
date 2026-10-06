@@ -243,8 +243,9 @@ pub struct Deal {
     pub tick: Option<f64>,
     /// The book's ASK the core read `MShotSellAtLastPrice` off — "the 4-second-old ASK, before
     /// the spike" — when the caller could recover it: the archived Exit line's first point is
-    /// the take as placed, and dividing out the trade's own `MShotSellPriceAdjust` gives the
-    /// ask back. `None` leaves the model to its own reading of the tape (the last taker buy at
+    /// the take as placed, and dividing out the trade's delta-modifier shift and its own
+    /// `MShotSellPriceAdjust` gives the ask back (`exit::sell_order::archived_pre_spike_ask`).
+    /// `None` leaves the model to its own reading of the tape (the last taker buy at
     /// least [`mshot::PRE_SPIKE_LOOKBACK_MS`] before the fill, `exit::sell_order::pre_spike_price`),
     /// within 0.05 % of the ask on under half the trades — the last print of either side it read
     /// before sat below the ask on a dump by 0.1–0.5 % (B2/CELR 2026-09-20, GSTOCKBSC 2026-09-21)

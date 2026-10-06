@@ -175,7 +175,6 @@ pub fn prepare_deal(
     lines: OwnLines<'_>,
     covered: &Coverage,
 ) {
-    deal.pre_spike_ask = archived_pre_spike_ask(lines.exit, exit, &deal.kind, deal.is_short);
     deal.archived_take = archived_take(lines.exit);
     // Before the core's sum, which is read against the take this depth places.
     if let Some(depth) = placed_hook_depth(deal, exit) {
@@ -183,6 +182,11 @@ pub fn prepare_deal(
     }
     // Before the stop anchor: the fact's stop distance is spent from this sum.
     deal.fact_modifier = FactModifier::of(deal, exit, lines.exit);
+    // After the core's sum: the ask is read back with the same shift divided out that the take
+    // rule then puts back on, and both read it through `fact_modifier`. Before the stop anchor,
+    // which walks the take.
+    let ask = archived_pre_spike_ask(lines.exit, exit, deal);
+    deal.pre_spike_ask = ask;
     deal.entry_placed = entry_placement(deal, lines);
     deal.stop_anchor = Some(StopAnchor::of(deal, exit, lines.exit));
     deal.own_entry = Some(entry.clone());

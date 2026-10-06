@@ -215,9 +215,23 @@ pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
 }
 
 /// The pre-spike ask behind an archived Exit line: its first point is the take as the core
-/// placed it, the ask times [`ask_take_factor`] when `MShotSellAtLastPrice` placed it, so the
-/// ask is that point with the factor divided out. The ask's branch carries no delta modifier
-/// (the core developer, 2026-09-23), so the ask read back is the core's own, to the price step.
+/// placed it — the ask times [`ask_take_factor`] when `MShotSellAtLastPrice` placed it, then
+/// shifted by the delta modifiers (`SellModifier · Σ`, the same shift [`ExitModel::take_level`]
+/// applies after the lift) — so the ask is that point with the shift and the factor divided out,
+/// on the clock the take rule shifts it on (`verify::fact_sell_start`).
+///
+/// The shift is the core's: measured 2026-10-06 against the tape's own pre-spike print, the
+/// ask read back without it sat a median +8.56 % above the tape on the 96 MoonShot longs that
+/// run `SellModifier` (the model's own shift there: +8.42 %), and +0.006 % on the 1 240 that do
+/// not. Read back without it, the take rule shifted it a second time and missed the archived take
+/// on 95 of the 96 — an earlier answer of the core developer (2026-09-23, "the ask's branch
+/// carries no modifier") the data does not bear out.
+///
+/// The take rule holds a shift that would carry the take through the fill at the fill; that hold
+/// is not inverted here. A take the core held there reads back an ask the shift inflates: the
+/// fact's own replay still lands on the archived take (the rule holds it at the fill again), a
+/// variant with another `SellModifier` starts from the inflated ask. No live trade has reached
+/// the hold (`take_level`).
 /// `None` when the rule was off or is not the kind's ([`lifts_take_to_ask`] — the take came from
 /// the kind's own rule, and the archive says nothing about the ask), when the archive holds no
 /// Exit line, or when the first point is not a price.
@@ -231,20 +245,31 @@ pub fn ask_take_factor(params: &ExitParams, is_short: bool) -> Option<f64> {
 /// Args:
 ///     exit_points: The archived Exit line's `(t_ms, price)` points, in the archive's order.
 ///     params: The sell-line parameters as of the trade.
-///     kind: The trade's strategy kind — whether the rule is its at all.
-///     is_short: The trade's side — which way the adjustment went.
+///     deal: The trade — its kind (whether the rule is its at all), its side (which way the
+///         adjustment and the shift went) and the deltas the shift is summed over, with the
+///         core's own sum (`Deal::fact_modifier`) already read.
 pub fn archived_pre_spike_ask(
     exit_points: Option<&[(i64, f64)]>,
     params: &ExitParams,
-    kind: &str,
-    is_short: bool,
+    deal: &Deal,
 ) -> Option<f64> {
-    if !lifts_take_to_ask(params, kind) {
+    if !lifts_take_to_ask(params, &deal.kind) {
         return None;
     }
-    let factor = ask_take_factor(params, is_short)?;
+    let factor = ask_take_factor(params, deal.is_short)?;
     let (_, take) = exit_points?.first().copied()?;
-    (take.is_finite() && take > 0.0).then_some(take / factor)
+    if !(take.is_finite() && take > 0.0) {
+        return None;
+    }
+    let at_ms = crate::db::tuner::ticks::verify::fact_sell_start(deal, params, exit_points).t_ms;
+    let shift = ExitModel::new(params).modifier_pct(deal, at_ms);
+    // The inverse of the shift `take_level` applies: a long's multiplied, a short's divided.
+    let unshifted = if shift.is_finite() && shift != 0.0 {
+        level_off_buy(take, shift.max(-99.0), !deal.is_long())
+    } else {
+        take
+    };
+    Some(unshifted / factor)
 }
 
 /// How far before the cutoff [`pre_spike_price`] still takes a taker buy for the ask. On a tape of

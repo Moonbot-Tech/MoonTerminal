@@ -247,8 +247,10 @@ const HALF_STEP_SHARE: f64 = 0.49;
 /// MoonHook's off the depth its take was placed at (`record::placed_hook_depth`).
 ///
 /// `None` without `SellModifier`, for a take the rule does not place (MoonShot's lift to the
-/// ask carries no modifier; Spread's level is recorded, not computed; a hook without its detect
-/// depth), and without a reading.
+/// ask: one archived point holds both the ask and the core's shift, so the shift cannot be read
+/// off it — `sell_order::archived_pre_spike_ask` divides the model's own sum out instead;
+/// Spread's level is recorded, not computed; a hook without its detect depth), and without a
+/// reading.
 fn take_reading(
     deal: &Deal,
     params: &ExitParams,
