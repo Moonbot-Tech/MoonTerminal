@@ -299,7 +299,7 @@ pub(super) struct PriceDown<'a> {
 
 impl<'a> PriceDown<'a> {
     pub(super) fn new(params: &'a ExitParams, deal: &Deal, fill: Fill, side: Side) -> Self {
-        let pd_on = params.price_down_timer_s > 0.0 && params.price_down_pct > 0.0;
+        let pd_on = params.price_down_on();
         Self {
             params,
             fill,
@@ -365,9 +365,7 @@ pub(super) struct SellLevel<'a> {
 impl<'a> SellLevel<'a> {
     pub(super) fn new(params: &'a ExitParams, deal: &'a Deal, fill: Fill, side: Side) -> Self {
         let floor_ms = params.model.step_floor_ms;
-        let sl_on = params.sell_level_delay_s != 0.0
-            && params.sell_level_time_s > 0.0
-            && params.sell_level_count > 0;
+        let sl_on = params.sell_level_on();
         let sl_first_ms = if params.sell_level_delay_s < 0.0 {
             floor_ms
         } else {

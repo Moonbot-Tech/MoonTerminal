@@ -369,6 +369,10 @@ impl Drop for TicksState {
 /// State of the "Entry/Exit" mode.
 pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) data: LoadState<TicksData>,
+    /// The period `data`'s rows were read under, `(from, to)` in UTC seconds as the query holds
+    /// them — set with the rows they describe, so a report names the rows' period and not one a
+    /// pending reload will read.
+    pub(in crate::analytics::tuner) loaded_period: Option<(i64, i64)>,
     /// The variant column's edits (В1): field key to value in strategy spelling. An empty map is
     /// an untouched column, drawn as the base. One column: the second one went on 2026-09-25,
     /// its place in the grid taken by the search ranges.
@@ -523,6 +527,7 @@ impl Default for TicksState {
     fn default() -> Self {
         Self {
             data: LoadState::default(),
+            loaded_period: None,
             variant: HashMap::new(),
             var_stats: None,
             var_n: 0,

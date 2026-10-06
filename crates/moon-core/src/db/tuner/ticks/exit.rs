@@ -286,6 +286,19 @@ impl Default for ExitParams {
     }
 }
 
+impl ExitParams {
+    /// Whether PriceDown steps the line at all: a timer and a step, as the walk arms it.
+    pub fn price_down_on(&self) -> bool {
+        self.price_down_timer_s > 0.0 && self.price_down_pct > 0.0
+    }
+
+    /// Whether SellLevel steps the line at all: a delay, a look-back and a count, as the walk
+    /// arms it. The count alone is set on strategies whose SellLevel is off.
+    pub fn sell_level_on(&self) -> bool {
+        self.sell_level_delay_s != 0.0 && self.sell_level_time_s > 0.0 && self.sell_level_count > 0
+    }
+}
+
 /// A sell rule the strategy can switch on that the model does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnmodelledRule {

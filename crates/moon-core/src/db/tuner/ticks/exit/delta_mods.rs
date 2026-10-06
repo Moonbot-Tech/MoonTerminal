@@ -98,6 +98,12 @@ fn weight(mods: &Modifiers) -> f64 {
     weights(mods).iter().sum()
 }
 
+/// Whether a family sets any delta term ([`weights`]) — the price-bug term, capped and read off
+/// the snapshot, is a rule of its own and left out.
+pub fn has_delta_terms(mods: &Modifiers) -> bool {
+    weight(mods) > 0.0
+}
+
 /// The core's own delta-modifier sum on one trade, read back off its record, kept as what the
 /// model's deltas miss of it — see the module doc.
 ///

@@ -28,6 +28,7 @@ use crate::market::trade_replay::{Coverage, ReplayWindow, replay_window_ms};
 pub mod calibrate;
 pub mod deals;
 pub mod deltas;
+pub mod diag;
 pub mod entry;
 pub mod exit;
 pub mod gap;

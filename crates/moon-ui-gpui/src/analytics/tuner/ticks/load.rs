@@ -63,9 +63,11 @@ type StageA = (
     Arc<HashMap<&'static str, FieldSpan>>,
 );
 
-/// What stage B publishes beside the rows: the strategies' values, the grid's layout and the
-/// search ranges' spans and integer fields.
+/// What stage B publishes beside the rows: the strategies' values, the grid's layout, the
+/// search ranges' spans and integer fields, and the period the rows were read under.
 struct ScopeView {
+    /// `(from, to)` of the load's query, UTC seconds (`TicksState::loaded_period`).
+    period: (i64, i64),
     now: HashMap<String, NowValue>,
     own: OwnValues,
     unmodelled: Arc<UnmodelledMap>,
@@ -120,6 +122,7 @@ impl AnalyticsView {
         let req = self.ticks.seq;
         let report_req = self.current_report_generation();
         let q = self.tuner_query();
+        let period = (q.from, q.to);
         let targets: Vec<(i64, Option<u64>)> = self.visible_target_keys(self.read_core_ids());
         // The models' fields, and every field the grid's sections draw fixed beside them, so
         // those rows show the strategies' values too. The models read theirs by name; the extra
@@ -244,6 +247,7 @@ impl AnalyticsView {
                     after_report,
                     read,
                     ScopeView {
+                        period,
                         now,
                         own,
                         unmodelled,
@@ -294,6 +298,7 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) {
         let model = super::model_cfg::current();
+        let period = scope.period;
         let judged: HashMap<i64, DealRow> = if self.ticks.judged_under == Some(model) {
             self.ticks
                 .data
@@ -380,6 +385,7 @@ impl AnalyticsView {
                 this.ticks.dirty =
                     report_result_is_stale(report_req, this.current_report_generation(), false);
                 this.ticks.publish(Ok(data), false);
+                this.ticks.loaded_period = Some(period);
                 // The fetch job runs on across reloads and windows: a window that finds a batch
                 // running listens to it from here on.
                 if super::fetch::job::progress().active {
