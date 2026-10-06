@@ -382,7 +382,8 @@ fn terminal_windows_use_closed_window_frame_api() {
         for (line_ix, line) in text.lines().enumerate() {
             let trimmed = line.trim();
             let is_windowing = rel_text == "window/windowing.rs";
-            let is_design = rel_text == "design.rs";
+            let is_design = rel_text == "design.rs"
+                || (rel_text.starts_with("design/") && rel_text != "design/tests.rs");
             // The ONE screen allowed to place a brand mark by hand: the main header, because
             // `MoonWindowFrame` draws MoonUI's own Moonbot lockup and the product ships the
             // MoonTerminal one. See `docs/WINDOWING.md`; everywhere else the frame still chooses.

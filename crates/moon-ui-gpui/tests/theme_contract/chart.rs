@@ -1302,7 +1302,7 @@ fn empty_chart_stack_keeps_its_localized_size_probed_hint() {
 /// The suggestion cache would keep serving the previous core's markets for its full lifetime.
 #[test]
 fn coin_search_never_post_filters_a_wide_result_set() {
-    let coin_search = read_src("controls/coin_search.rs");
+    let coin_search = read_unsplit("controls/coin_search.rs");
     let popup = code_only(braced_body(
         &coin_search,
         "pub(crate) fn render_popup<F, G, H, E>(",
@@ -1760,7 +1760,7 @@ fn chart_panel_pushes_compare_lock_shown_every_render() {
 /// resized button reopens the overlap while every other test stays green.
 #[test]
 fn chart_strip_button_geometry_matches_the_caption_reservation() {
-    let design = read_src("design.rs");
+    let design = read_unsplit("design.rs");
     assert_eq!(parse_f32_const(&design, "CHART_CORNER_BTN_TOP"), Some(3.0));
     assert_eq!(
         parse_f32_const(&design, "CHART_CORNER_BTN_SIZE"),

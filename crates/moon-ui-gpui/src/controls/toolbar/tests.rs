@@ -9,7 +9,7 @@ use moon_core::config::UiThemeMode;
 use moon_ui::MoonButtonSize;
 
 #[test]
-/// Regression target: `controls/toolbar.rs:label_ladder` changing an inclusive boundary to a
+/// Regression target: `controls/toolbar/fit.rs:label_ladder` changing an inclusive boundary to a
 /// strict comparison hides a complete caption that exactly fits or retains it after clipping.
 ///
 /// The user-visible consequence is a toolbar caption disappearing at its exact fit width or
@@ -63,7 +63,7 @@ fn hovered_chart_core_controls_manual_strategy_applicability() {
     assert_eq!(manual_strategy_core(None, Some(2), true), Some(2));
 }
 
-/// `controls/toolbar.rs:launcher_label_width` must budget the same tier font and gap it draws.
+/// `controls/toolbar/fit.rs:launcher_label_width` must budget the same tier font and gap it draws.
 ///
 /// Breakage: measuring launcher text with the old font channel or a stale icon gap makes the
 /// window buttons overlap their labels before row-fit can shed a caption.
@@ -102,7 +102,7 @@ const FOLD_WIDTHS: LauncherFoldWidths = LauncherFoldWidths {
     overflow: 30.0,
 };
 
-/// Regression target: `controls/toolbar.rs:launcher_fold` folding while the icon-only row still
+/// Regression target: `controls/toolbar/fit.rs:launcher_fold` folding while the icon-only row still
 /// fits would hide a launcher behind a menu for no reason, and draw an overflow button that
 /// competes with the label ladder the row is still shedding.
 #[test]

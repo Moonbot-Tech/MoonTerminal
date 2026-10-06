@@ -277,7 +277,7 @@ Direct uses in the terminal UI are forbidden:
 - `titlebar_double_click`;
 - `logo_sized` / `logo_mark` outside the brand/helper layer itself;
 - `design::header_logo` outside `chrome/terminal_chrome.rs` and opening a file by the
-  `assets/brand/` path outside `design.rs` (naming the folder in a comment is allowed) — the logo
+  `assets/brand/` path outside `design.rs`/`design/` (naming the folder in a comment is allowed) — the logo
   is taken from `MoonWindowFrame`, and the only exception is described above;
 - `WindowOptions { ... }` outside `windowing.rs`.
 

@@ -960,7 +960,7 @@ fn auto_header_core_is_a_passive_overview_aware_indicator() {
 fn fixed_header_rows_cannot_flex_shrink_between_modes() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
     let header = code_only(braced_body(&chrome, "pub fn header("));
-    let toolbar_src = code_only(&read_src("controls/toolbar.rs"));
+    let toolbar_src = code_only(&read_unsplit("controls/toolbar.rs"));
     let toolbar = code_only(braced_body(&toolbar_src, "pub fn toolbar("));
     assert!(
         header.contains(".h(design::header_height_px(cx))\n        .flex_none()"),
@@ -1033,7 +1033,7 @@ fn configured_workspace_scope_is_derived_from_configuration_not_sessions() {
 /// `.flex_shrink(design::RAIL_ALARM_SHRINK)` call / raise the constant to `1.0`.
 #[test]
 fn rail_summary_problem_segment_alarms_in_danger_colour_and_resists_truncation() {
-    let design = read_src("design.rs");
+    let design = read_unsplit("design.rs");
     let alarm_shrink = parse_f32_const(&design, "RAIL_ALARM_SHRINK")
         .expect("design.rs must define RAIL_ALARM_SHRINK as a goal-B token");
     assert!(
@@ -1131,7 +1131,7 @@ fn rail_core_name_is_never_recoloured_by_status() {
 /// outside `.when(selectable, ..)` so a disabled row also highlights.
 #[test]
 fn rail_hover_alpha_sits_strictly_between_zero_and_selected_and_stays_selectable_gated() {
-    let design = read_src("design.rs");
+    let design = read_unsplit("design.rs");
     let hover = parse_f32_const(&design, "RAIL_ROW_HOVER_ALPHA")
         .expect("design.rs must define RAIL_ROW_HOVER_ALPHA as a goal-B token");
     let selected = parse_f32_const(&design, "RAIL_ROW_SELECTED_ALPHA")

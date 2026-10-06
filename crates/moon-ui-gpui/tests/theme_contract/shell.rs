@@ -20,17 +20,7 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
     let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap();
     let ingest = fs::read_to_string(root.join("chart_tabs").join("ingest.rs")).unwrap();
     let windows = fs::read_to_string(root.join("chart_tabs").join("windows.rs")).unwrap();
-    let layout = fs::read_to_string(
-        root.parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("moon-core")
-            .join("src")
-            .join("config")
-            .join("layout.rs"),
-    )
-    .unwrap();
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     let production = format!("{main}\n{startup}\n{backend}\n{chrome}");
 
     assert!(
@@ -203,7 +193,7 @@ fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
     );
 
     let toolbar = code_only(braced_body(
-        &read_src("controls/toolbar.rs"),
+        &read_unsplit("controls/toolbar.rs"),
         "pub fn toolbar(",
     ));
     assert!(
@@ -619,7 +609,7 @@ fn assets_wallet_grouping_owns_one_layout_key_and_one_writer() {
     let settings = read_src("panels/assets/settings.rs");
     let table = read_src("panels/assets/table.rs");
     let view = read_src("panels/assets/mod.rs");
-    let layout = read_src("../../moon-core/src/config/layout.rs");
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     for key in [
         "assets.settings.title",
         "assets.settings.display",
@@ -1096,7 +1086,7 @@ fn toolbar_row_budget_counts_every_rule_it_draws() {
     //
     // Static, because this harness has no gpui `App` and cannot lay a row out; it pins the COUPLING
     // rather than any pixel value, the same way the header ticker's popup test does.
-    let text = read_src("controls/toolbar.rs");
+    let text = read_unsplit("controls/toolbar.rs");
     let drawn = fn_body(&text, "pub fn toolbar(")
         .matches("design::chrome_divider(cx, p)")
         .count();
@@ -1167,7 +1157,7 @@ fn leverage_presets_only_stage_values_until_apply() {
 /// Main-window widths.
 #[test]
 fn toolbar_budget_includes_every_singleton_launcher() {
-    let text = read_src("controls/toolbar.rs");
+    let text = read_unsplit("controls/toolbar.rs");
     let budget = fn_body(&text, "fn row_fit(");
     let toolbar = fn_body(&text, "pub fn toolbar(");
     // Each launcher is described once, as a `LaunchTarget`, and drawn or folded from there.
@@ -1189,7 +1179,7 @@ fn toolbar_budget_includes_every_singleton_launcher() {
 /// changes the operator's stable target sequence even though every destination still opens.
 #[test]
 fn toolbar_orders_launchers_around_one_semantic_divider() {
-    let text = read_src("controls/toolbar.rs");
+    let text = read_unsplit("controls/toolbar.rs");
     let toolbar = code_only(fn_body(&text, "pub fn toolbar("));
     let ids = [
         "toolbar-profit-monitor",
@@ -1257,7 +1247,7 @@ fn toolbar_orders_launchers_around_one_semantic_divider() {
 /// Reintroducing a fixed width or an always-present text segment clips translations at font scale.
 #[test]
 fn toolbar_launcher_labels_are_measured_and_all_or_none() {
-    let text = read_src("controls/toolbar.rs");
+    let text = read_unsplit("controls/toolbar.rs");
     let fit = fn_body(&text, "fn row_fit(");
     let measure = fn_body(&text, "fn launcher_label_width(");
     let toolbar = fn_body(&text, "pub fn toolbar(");
@@ -1446,7 +1436,7 @@ fn core_status_throttles_repaints_and_averages_cpu() {
 /// build.
 #[test]
 fn market_popups_occlude_the_wheel_from_the_surface_behind() {
-    let coin_search = read_src("controls/coin_search.rs");
+    let coin_search = read_unsplit("controls/coin_search.rs");
     let ticker = read_src("shell/ticker.rs");
 
     let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H, E>(");
@@ -1674,7 +1664,7 @@ fn every_main_chart_removal_goes_through_the_shared_teardown() {
 /// folds — and nothing else in the popup would fail if it folded.
 #[test]
 fn the_multi_select_hint_clips_instead_of_wrapping() {
-    let coin_search = read_src("controls/coin_search.rs");
+    let coin_search = read_unsplit("controls/coin_search.rs");
     let popup = braced_body(&coin_search, "pub(crate) fn render_popup<F, G, H, E>(");
     let hint = chain_between(
         popup,
@@ -1698,7 +1688,7 @@ fn the_multi_select_hint_clips_instead_of_wrapping() {
 /// the popup context.
 #[test]
 fn single_server_auto_search_names_the_server_once() {
-    let coin_search = read_src("controls/coin_search.rs");
+    let coin_search = read_unsplit("controls/coin_search.rs");
     let context = code_only(braced_body(
         &coin_search,
         "pub(crate) fn single_server_context(",
@@ -1765,7 +1755,7 @@ fn single_server_auto_search_names_the_server_once() {
 /// repeated down the entire list, which is what the section is for reading past.
 #[test]
 fn the_movers_suggestion_offers_each_market_once() {
-    let coin_search = read_src("controls/coin_search.rs");
+    let coin_search = read_unsplit("controls/coin_search.rs");
     let suggest = braced_body(&coin_search, "pub(crate) fn suggest_volatile(");
     let code: String = suggest
         .lines()

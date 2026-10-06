@@ -1263,17 +1263,7 @@ fn analytics_reopen_state_is_process_lifetime_only() {
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
     let tuner = fs::read_to_string(root.join("analytics").join("tuner").join("mod.rs")).unwrap();
     let ui_session = fs::read_to_string(root.join("ui_session.rs")).unwrap();
-    let layout = fs::read_to_string(
-        root.parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("moon-core")
-            .join("src")
-            .join("config")
-            .join("layout.rs"),
-    )
-    .unwrap();
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
 
     assert!(
         main.contains("ui_session: UiSessionState,")
@@ -1370,17 +1360,7 @@ fn liquidation_attribution_has_no_user_switch() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let toolbar = fs::read_to_string(root.join("analytics").join("toolbar.rs")).unwrap();
     let analytics = fs::read_to_string(root.join("analytics").join("mod.rs")).unwrap();
-    let layout = fs::read_to_string(
-        root.parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("moon-core")
-            .join("src")
-            .join("config")
-            .join("layout.rs"),
-    )
-    .unwrap();
+    let layout = read_unsplit("../../moon-core/src/config/layout.rs");
     assert!(
         !toolbar.contains("an-attr-liq") && !toolbar.contains("attr_liq"),
         "the Analytics toolbar must carry no liquidation-attribution switch"
