@@ -280,7 +280,7 @@ fn the_holdout_is_scored_but_never_fitted_on() {
     assert!(result.holdout_loses);
 }
 
-/// search.rs `VariantScore::push`: a deal the variant bought and left open, or never traded, is
+/// search/scoring.rs `VariantScore::push`: a deal the variant bought and left open, or never traded, is
 /// counted beside the tally instead of silently dropping out — dropping it would let a variant
 /// that leaves its losers open read better than the fact over fewer deals.
 #[test]
@@ -311,7 +311,7 @@ fn a_variant_accounts_for_every_deal_the_fact_is_tallied_over() {
     );
 }
 
-/// search.rs `default_min_n`: the floor is half the train deals, never under one — at a tenth
+/// search/tally.rs `default_min_n`: the floor is half the train deals, never under one — at a tenth
 /// a point could keep a handful of trades and read as the best.
 #[test]
 fn the_default_trade_floor_is_half_the_train_deals() {

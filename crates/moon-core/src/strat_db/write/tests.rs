@@ -1,5 +1,145 @@
 use super::*;
 
+/// Frozen pre-optimization strip and hash encoding, preserving insertion order and clone behavior.
+fn old_hash_of(m: &Map<String, Value>, ignore: &HashSet<String>) -> i64 {
+    let stripped: Map<String, Value> = m
+        .iter()
+        .filter(|(k, _)| !k.starts_with("__") && !ignore.contains(k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let s = serde_json::to_string(&Value::Object(stripped.clone())).unwrap_or_default();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish() as i64
+}
+
+/// Changing the hash encoder's order or filtering must not rewrite persisted strategy history.
+#[test]
+fn content_hash_matches_previous_encoding() {
+    let mut fields = Map::new();
+    fields.insert(
+        "zeta".into(),
+        Value::from("\u{041f}\u{0440}\u{0438}\u{0432}\u{0435}\u{0442} \u{1f680}"),
+    );
+    fields.insert(
+        "alpha".into(),
+        serde_json::json!({"z": [null, true, {"nested": "\u{00e9}"}], "a": 1}),
+    );
+    fields.insert("float".into(), Value::from(1.23456789));
+    fields.insert("negative_zero".into(), Value::from(-0.0));
+    fields.insert("tiny".into(), Value::from(1e-30));
+    fields.insert("huge".into(), Value::from(1e30));
+    fields.insert(
+        "__metadata".into(),
+        serde_json::json!(["ignored", {"x": 2}]),
+    );
+    fields.insert("Comment".into(), Value::from("cosmetic"));
+    fields.insert("StrategyName".into(), Value::from("presentation"));
+    let reversed = fields
+        .iter()
+        .rev()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let ignored_only = Map::from_iter([
+        ("__x".into(), Value::from(1)),
+        ("Comment".into(), Value::from("ignored")),
+    ]);
+    let cases = [Map::new(), fields, reversed, ignored_only];
+    for ignore in [
+        HashSet::new(),
+        HashSet::from(["Comment".into(), "StrategyName".into()]),
+    ] {
+        for fields in &cases {
+            assert_eq!(
+                old_hash_of(fields, &ignore),
+                hash_of(&strip(fields, &ignore))
+            );
+            assert_eq!(
+                serde_json::to_string(fields).unwrap(),
+                serde_json::to_string(&Value::Object(fields.clone())).unwrap()
+            );
+        }
+    }
+}
+
+/// Measure the echoed full-set cost separately from first-set insertion and fixture creation.
+#[test]
+#[ignore = "synthetic release benchmark"]
+fn bench_full_set_unchanged() {
+    let (conn, mut st) = setup();
+    let dumps = benchmark_dumps();
+    assert_eq!(
+        apply_full_set(&conn, &mut st, 7, "core", true, &dumps).unwrap(),
+        2_000
+    );
+    let mut timings = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        let changed = apply_full_set(&conn, &mut st, 7, "core", false, &dumps).unwrap();
+        timings.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(changed, 0, "an echoed full set must not create history");
+    }
+    let versions: i64 = conn
+        .query_row("SELECT COUNT(*) FROM strategy_versions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(versions, 2_000);
+    timings.sort_by(f64::total_cmp);
+    println!("[BENCH] full_set_unchanged median_ms={:.3}", timings[2]);
+}
+
+/// The common 2,000-strategy, 300-field workload for echoed and changed full sets.
+fn benchmark_dumps() -> Vec<StratDump> {
+    (1..=2_000)
+        .map(|id| {
+            let mut d = dump(id, "synthetic", 5, "cosmetic");
+            d.fields = (0..300)
+                .map(|field| (format!("Field{field:03}"), Value::from(id * 300 + field)))
+                .collect();
+            d
+        })
+        .collect()
+}
+
+/// Measure version creation when one field changes in 200 of the 2,000 strategies.
+#[test]
+#[ignore = "synthetic release benchmark"]
+fn bench_full_set_one_changed() {
+    let mut timings = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let (conn, mut st) = setup();
+        let mut dumps = benchmark_dumps();
+        assert_eq!(
+            apply_full_set(&conn, &mut st, 7, "core", true, &dumps).unwrap(),
+            2_000
+        );
+        for d in &mut dumps[..200] {
+            d.fields.insert("Field000".into(), Value::from(-1));
+        }
+        let start = std::time::Instant::now();
+        let changed = apply_full_set(&conn, &mut st, 7, "core", false, &dumps).unwrap();
+        timings.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(changed, 200);
+        let versions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM strategy_versions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(versions, 2_200);
+        let changed_fields: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM strategy_versions WHERE change_kind='params' AND n_changed=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(changed_fields, 200);
+    }
+    timings.sort_by(f64::total_cmp);
+    println!("[BENCH] full_set_one_changed median_ms={:.3}", timings[2]);
+}
+
 fn cfg() -> StrategiesStoreCfg {
     StrategiesStoreCfg::default()
 }

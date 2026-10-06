@@ -10,6 +10,95 @@ const DAY: i64 = 86_400;
 /// First day of the fixture period, true UTC.
 const START: i64 = 1_790_000_000 - 1_790_000_000 % DAY;
 
+/// Measure the Telegram slice shape before changing its row-to-slice dispatch.
+#[test]
+#[ignore = "synthetic release benchmark"]
+fn bench_sliced_totals_tg_shape() {
+    let conn = fixture();
+    conn.execute("DELETE FROM orders_rep", []).unwrap();
+    let tx = conn.unchecked_transaction().unwrap();
+    {
+        let mut insert = tx
+            .prepare(
+                "INSERT INTO orders_rep VALUES
+                 (?1, 'core', ?2, 'COIN', '', 1, ?3, ?3 - 300,
+                  1.0, 100.0, 1.0, 100.0, 101.0, 'Sell', 0, 0)",
+            )
+            .unwrap();
+        for rec in 0..300_000_i64 {
+            let close = START + rec * (365 * DAY) / 300_000;
+            insert
+                .execute(rusqlite::params![rec % 200 + 1, rec, close])
+                .unwrap();
+        }
+    }
+    tx.commit().unwrap();
+    let to = START + 365 * DAY - 1;
+    let whole = |core_uids| TotalsSlice {
+        core_uids,
+        date_from: Some(START),
+        date_to: Some(to),
+    };
+    let mut slices = vec![whole(None)];
+    // Four synthetic exchanges partition the 200 cores, as Telegram's exchange sections do.
+    for exchange in 0..4_u64 {
+        slices.push(whole(Some(
+            (1..=200)
+                .filter(|core| (core - 1) % 4 == exchange)
+                .collect(),
+        )));
+    }
+    for core in 1..=200 {
+        slices.push(whole(Some(vec![core])));
+    }
+    for day in 0..365 {
+        slices.push(TotalsSlice {
+            core_uids: None,
+            date_from: Some(START + day * DAY),
+            date_to: Some(START + (day + 1) * DAY - 1),
+        });
+    }
+    let base = ReportFilter {
+        date_from: Some(START),
+        date_to: Some(to),
+        emulator: Some(false),
+        rows: RowScope::Closed,
+        ..ReportFilter::default()
+    };
+    let mut timings = Vec::with_capacity(5);
+    assert!(super::one_pass_serves(&base, &slices));
+    let pass = one_pass(&conn, &base, &slices).expect("benchmark must not fall back");
+    assert_eq!(pass.len(), slices.len());
+    assert!(
+        pass.iter().all(Option::is_some),
+        "benchmark must refuse no slice"
+    );
+    drop(pass);
+    for _ in 0..5 {
+        let start = std::time::Instant::now();
+        let totals = query_totals_sliced(&conn, &base, &slices).unwrap();
+        timings.push(start.elapsed().as_secs_f64() * 1_000.0);
+        assert_eq!(totals.len(), 570);
+        assert_eq!(totals[0].quotes.orders, 300_000);
+        for total in &totals[1..5] {
+            assert_eq!(total.quotes.orders, 75_000);
+        }
+        for total in &totals[5..205] {
+            assert_eq!(total.quotes.orders, 1_500);
+        }
+        assert_eq!(
+            totals[205..]
+                .iter()
+                .map(|total| total.quotes.orders)
+                .sum::<i64>(),
+            300_000
+        );
+        std::hint::black_box(totals);
+    }
+    timings.sort_by(f64::total_cmp);
+    println!("[BENCH] sliced_totals median_ms={:.3}", timings[2]);
+}
+
 /// A replica with the money columns the totals read: three cores (two on measured clocks one
 /// either side of UTC, one never measured), three quotes, reals across magnitudes and signs,
 /// Funding and liquidation rows, and closes on both edges of every day.

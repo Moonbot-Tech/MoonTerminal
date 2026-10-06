@@ -303,7 +303,7 @@ fn the_reported_stall_is_the_oldest_failing_stage() {
 
 /// A run only waiting out the clock must still report when it will cross the threshold.
 ///
-/// Breakage: `next_stall_ms` returning `None` for an open run, or `worker.rs:until_stall` omitting
+/// Breakage: `next_stall_ms` returning `None` for an open run, or `worker/schedule.rs:until_stall` omitting
 /// its deadline cap. The backoff reaches 300 seconds while the threshold is 180, so the
 /// worker would sleep straight through the moment its own definition became true and the footer
 /// would keep saying "retrying" for minutes after that stopped being the honest word.

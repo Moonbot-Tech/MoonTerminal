@@ -107,7 +107,7 @@ fn status_sink() -> (
 
 /// A failing run must reach the handle, and a retry that changes nothing must not wake the UI.
 ///
-/// Breakage: `worker.rs:note_failure` bumping `sink.revision` unconditionally instead of through
+/// Breakage: `worker/schedule.rs:note_failure` bumping `sink.revision` unconditionally instead of through
 /// `StatusSink::publish`'s signature comparison. A permanently unreachable provider retries for as
 /// long as the terminal runs, so the report panel and the Analytics window would take a fresh
 /// status snapshot and repaint every 30 seconds forever for a chip whose text never changes.
@@ -199,7 +199,7 @@ fn progress_publishes_and_is_scoped_to_its_own_stage() {
 
 /// A turn the stage could not act on must not clear an unresolved failing run.
 ///
-/// Breakage: `worker.rs:attempt` calling `record_progress` for every `Ok` instead of gating on
+/// Breakage: `worker/schedule.rs:attempt` calling `record_progress` for every `Ok` instead of gating on
 /// `StageTurn::is_progress`. `reports.sqlite` being absent is a healthy startup state that the
 /// reconcile or outbox stage can report, so a provider outage the user is already being warned
 /// about would be silently retracted when either stage found the replica missing — and the retry
@@ -296,7 +296,7 @@ fn seed_value(store: &Connection, source: TradeSource, core_uid: i64, row_id: i6
         .expect("seed prepared value");
 }
 
-/// `worker.rs:process_event` must invalidate exactly the source/core partition named by reset or
+/// `worker/reconcile.rs:process_event` must invalidate exactly the source/core partition named by reset or
 /// legacy-purge events; widening either delete would discard unrelated cached history, while
 /// narrowing it would leave stale prepared rows visible after a report database replacement.
 #[test]
@@ -394,7 +394,7 @@ fn partition_events_delete_only_the_named_source_and_core() {
     );
 }
 
-/// `worker.rs:process_event` must remove one exact prepared identity on a hard delete; retaining it
+/// `worker/reconcile.rs:process_event` must remove one exact prepared identity on a hard delete; retaining it
 /// would let a deleted report row reappear in coverage if that identity were later reused.
 #[test]
 fn hard_delete_removes_one_exact_prepared_identity() {
@@ -497,7 +497,7 @@ fn row_event_replaces_a_stale_deferred_copy() {
 }
 
 /// A drained reconciliation must restart only after an event that invalidates an entire prepared
-/// partition. Breakage: `worker.rs:outbox_activity_should_rearm_reconciliation` always returning
+/// partition. Breakage: `worker/reconcile.rs:outbox_activity_should_rearm_reconciliation` always returning
 /// `false` leaves rows deleted by a rescan or legacy purge without a value until a future manual
 /// rebuild, so recent profit figures remain blank.
 #[test]
@@ -532,7 +532,7 @@ fn partition_invalidation_rearms_a_drained_reconciliation_only() {
 }
 
 /// Event-aligned observations must let a later missing row delete the value prepared by an earlier
-/// observation. Breakage: `worker.rs:consume_outbox` retaining only `Some` observations would
+/// observation. Breakage: `worker/reconcile.rs:consume_outbox` retaining only `Some` observations would
 /// preserve a stale figure after a same-key row is removed, so the user could read deleted profit.
 #[test]
 fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
@@ -616,7 +616,7 @@ fn a_later_missing_row_observation_deletes_the_earlier_prepared_value() {
 }
 
 /// Deferred-minute wakeups must be capped at the next boundary without shortening unrelated
-/// backoff. Breakage: `worker.rs:park_delay` omitting `until_next_minute` lets an eligible candle
+/// backoff. Breakage: `worker/schedule.rs:park_delay` omitting `until_next_minute` lets an eligible candle
 /// wait for a multi-minute retry, while applying it without deferred work turns recovery into a
 /// needless one-minute loop.
 #[test]
@@ -829,7 +829,7 @@ fn due_retry_values_the_row_when_a_successor_appears() {
     );
 }
 
-/// Removing the error-side publication from `worker.rs:settle_prefetch` would leave earlier
+/// Removing the error-side publication from `worker/trades.rs:settle_prefetch` would leave earlier
 /// prepared rows invisible while a later provider retry keeps failing.
 #[test]
 fn partial_prefetch_failure_publishes_committed_progress() {
@@ -907,7 +907,7 @@ fn reconciliation_restores_pending_rows_without_bypassing_the_retry_boundary() {
     std::fs::remove_dir_all(&dir).expect("remove reconciliation fixture directory");
 }
 
-/// Adding an empty-outbox early return to `worker.rs:reconciliation_batch` would strand historical
+/// Adding an empty-outbox early return to `worker/trades.rs:reconciliation_batch` would strand historical
 /// rows whose events were acknowledged before cache quarantine; reconciliation must discover them
 /// independently of durable change notifications.
 #[test]
@@ -959,7 +959,7 @@ fn empty_replacement_reconciles_rows_after_outbox_acknowledgement() {
     std::fs::remove_dir_all(&dir).expect("remove acknowledged reconciliation fixture");
 }
 
-/// Changing `worker.rs:reset_after_recovery` to leave reconciliation as `None` or retain the old
+/// Changing `worker/stage.rs:reset_after_recovery` to leave reconciliation as `None` or retain the old
 /// in-flight ACK would omit acknowledged historical trades or skip work tied to the retired cache.
 #[test]
 fn recovery_resets_the_full_reconciliation_cursor() {
@@ -985,7 +985,7 @@ fn recovery_resets_the_full_reconciliation_cursor() {
     assert_eq!(pending_ack, None);
 }
 
-/// Changing `worker.rs:unacknowledged_events` to return the full batch would process and enqueue
+/// Changing `worker/stage.rs:unacknowledged_events` to return the full batch would process and enqueue
 /// the same 512-event prefix repeatedly while the report writer is still applying its first ACK.
 #[test]
 fn in_flight_ack_filters_the_same_durable_prefix() {
@@ -1057,7 +1057,7 @@ fn report_fixture(rows: &[(i64, i64, i64)]) -> (std::path::PathBuf, Connection) 
 }
 
 /// Restoring the ascending `ORDER BY r.core_uid, r.{id_column}` in
-/// `worker.rs:reconciliation_batch` would value the oldest trades of the lowest-numbered core
+/// `worker/trades.rs:reconciliation_batch` would value the oldest trades of the lowest-numbered core
 /// first, so a user watching today's report waits out the entire history before their rows carry a
 /// USDT value — the 47-minute, 539k-row backfill this ordering exists to avoid.
 #[test]
@@ -1090,7 +1090,7 @@ fn reconciliation_values_the_newest_trades_before_older_ones() {
     std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
 }
 
-/// Dropping `core_uid`/`row_id` from the descending keyset in `worker.rs:reconciliation_batch`
+/// Dropping `core_uid`/`row_id` from the descending keyset in `worker/trades.rs:reconciliation_batch`
 /// would leave the cursor unable to separate rows that share a `closedate`: the walk either
 /// re-reads a tied group forever or steps over its remainder. Both are silent — the first spins the
 /// worker, the second permanently leaves those trades unvalued.
@@ -1147,7 +1147,7 @@ fn reconciliation_visits_every_row_once_when_close_dates_tie() {
     std::fs::remove_dir_all(&dir).expect("remove reconciliation order fixture directory");
 }
 
-/// Lowering `worker.rs:reconciliation_batch`'s `(i64::MAX, i64::MAX, i64::MAX)` seed to any value
+/// Lowering `worker/trades.rs:reconciliation_batch`'s `(i64::MAX, i64::MAX, i64::MAX)` seed to any value
 /// at or below a real key — the plausible shape being a leftover ascending `(-1, -1, -1)` — makes a
 /// restart resume below the newest rows instead of above them. Trades that arrived while the app
 /// was closed then stay unvalued until the whole remaining backlog drains, which is the very wait
@@ -1335,7 +1335,7 @@ fn scoped_pass(ordinals: &[i64]) -> CurrentRateState {
 
 /// The refresh throttle must be read in the unit its operands actually carry.
 ///
-/// Breakage: `worker.rs::refresh_is_due` comparing `minute - armed` against
+/// Breakage: `worker/live_rates.rs::refresh_is_due` comparing `minute - armed` against
 /// `CURRENT_REFRESH_MINUTES` without the `* 60`. `current_minute_utc` returns Unix SECONDS rounded
 /// to a minute, so adjacent minutes differ by 60 and `60 >= 5` holds immediately — the five-minute
 /// throttle silently becomes a one-minute one, and both the provider traffic and the requery of
@@ -1369,7 +1369,7 @@ fn the_refresh_throttle_counts_seconds_not_minutes() {
 
 /// A cold refresh of K currencies must cost K turns, not one turn of K sequential network waits.
 ///
-/// Breakage: `worker.rs::resolve_next_rate` draining `state.pending` in a loop instead of taking
+/// Breakage: `worker/live_rates.rs::resolve_next_rate` draining `state.pending` in a loop instead of taking
 /// one entry per call. Each currency costs up to four sequential provider routes at a fifteen
 /// second timeout, so a batched turn would park reconciliation and the outbox behind minutes of
 /// network wait while the user watches an unmoving backfill.
@@ -1396,7 +1396,7 @@ fn a_refresh_pass_asks_one_provider_per_turn() {
     assert!(dirty.load(Ordering::Relaxed));
 }
 
-/// Breakage: changing `worker.rs::resolve_next_rate` back to an exact `minute - 60` request would
+/// Breakage: changing `worker/live_rates.rs::resolve_next_rate` back to an exact `minute - 60` request would
 /// leave a sparse USDC rate unavailable, preventing Analytics from aggregating current PnL even
 /// though a closed candle still exists inside freshness.
 #[test]
@@ -1426,7 +1426,7 @@ fn a_current_refresh_requests_the_full_closed_freshness_window() {
 
 /// A drained pass must issue no further requests until the refresh gate arms another one.
 ///
-/// Breakage: `worker.rs::resolve_next_rate` refilling `pending` when it empties. The worker
+/// Breakage: `worker/live_rates.rs::resolve_next_rate` refilling `pending` when it empties. The worker
 /// re-runs every stage each 25 ms while reconciling, so that would hammer the exchange
 /// continuously and get the user's address rate-limited.
 ///
@@ -1461,7 +1461,7 @@ fn a_drained_pass_stops_asking_within_the_same_minute() {
 
 /// A currency whose routes have all gone permanently absent must lose its cached price.
 ///
-/// Breakage: `worker.rs::resolve_next_rate` inserting into `missing` without removing from
+/// Breakage: `worker/live_rates.rs::resolve_next_rate` inserting into `missing` without removing from
 /// `rates` — a delisted market's last price would keep rendering as the current rate forever,
 /// because nothing else would ever refresh it away.
 #[test]
@@ -1487,7 +1487,7 @@ fn a_permanently_missing_route_drops_the_price_it_used_to_have() {
 
 /// A transient provider failure must leave the currency queued rather than silently skipped.
 ///
-/// Breakage: `worker.rs::resolve_next_rate` popping `pending` before the request rather than after
+/// Breakage: `worker/live_rates.rs::resolve_next_rate` popping `pending` before the request rather than after
 /// it resolves — one connection reset would drop that currency until a later refresh pass, and its
 /// trades would read as permanently unconvertible rather than as still being fetched.
 #[test]
@@ -1514,7 +1514,7 @@ fn a_transient_failure_leaves_the_currency_queued() {
 
 /// A rate that ages past the window must be dropped even when nothing new can be fetched.
 ///
-/// Breakage: `worker.rs::refresh_current_rates` checking freshness only on the success path, or
+/// Breakage: `worker/live_rates.rs::refresh_current_rates` checking freshness only on the success path, or
 /// dropping the `CurrentRateState::expire_stale` call before the provider request. Freshness is evaluated when
 /// SQL is built, and SQL is only rebuilt when the data generation moves — so during a provider
 /// outage longer than the window nothing would ever move it, and an expired rate would keep
@@ -1550,7 +1550,7 @@ fn an_expired_rate_is_dropped_even_while_the_provider_is_unreachable() {
 
 /// The wake deadline must be the EARLIEST expiry, not the latest.
 ///
-/// Breakage: `worker.rs::CurrentRateState::next_expiry_ms` using `.max()` instead of `.min()`, or
+/// Breakage: `worker/live_rates.rs::CurrentRateState::next_expiry_ms` using `.max()` instead of `.min()`, or
 /// the park cap in `run_worker` reading it without one. The worker evaluates expiry when its loop
 /// turns, so a deadline taken from the freshest rate would let the stalest one sit on screen past
 /// the cutoff for as long as the difference between them — and during a provider outage the park
@@ -1586,7 +1586,7 @@ fn the_wake_deadline_follows_the_rate_that_expires_first() {
 
 /// The scan must return the currencies needing a rate, and only those.
 ///
-/// Breakage: `worker.rs::report_quote_ordinals` dropping the identity-USDT exclusion or the
+/// Breakage: `worker/live_rates.rs::report_quote_ordinals` dropping the identity-USDT exclusion or the
 /// storage-class guard — every quote scan would schedule needless provider requests for USDT and
 /// placeholder values that decode to no currency at all.
 #[test]
@@ -1610,7 +1610,7 @@ fn the_quote_scan_returns_only_currencies_that_need_a_rate() {
 
 /// Re-fetching prices that have not moved must wake nobody, while the snapshot itself is stored.
 ///
-/// Breakage: `worker.rs::CurrentRateState::publish_snapshot` bumping the generation
+/// Breakage: `worker/live_rates.rs::CurrentRateState::publish_snapshot` bumping the generation
 /// unconditionally, or `renders_differently` folding `fetched_at_ms` into the comparison — every
 /// open Report host and the Analytics window requery on that generation and reload their whole
 /// tree, so a refresh that changed no figure redraws every surface for nothing. The refresh
@@ -1701,7 +1701,7 @@ fn republishing_the_same_prices_costs_no_requery() {
 
 /// A pass that outlived the freshness window must reach the screen even at an unchanged price.
 ///
-/// Breakage: `worker.rs::CurrentRateState::renders_differently` comparing only prices, provenance
+/// Breakage: `worker/live_rates.rs::CurrentRateState::renders_differently` comparing only prices, provenance
 /// and the missing set. The snapshot is published once the pass DRAINS, and a pass can outlive the
 /// window it refreshes: each currency permits four
 /// sequential provider routes, and a transient failure adds the stage's 30-300 s backoff. In that

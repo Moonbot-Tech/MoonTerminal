@@ -4,7 +4,7 @@ use super::*;
 use rusqlite::types::Value;
 use std::cell::Cell;
 
-/// Splitting `db/mod.rs:save_sort` back into two independent `meta_set` calls must fail this test:
+/// Splitting `db/report_meta.rs:save_sort` back into two independent `meta_set` calls must fail this test:
 /// a failure on the direction write would persist the new column beside the previous direction.
 #[test]
 fn report_sort_key_and_direction_commit_atomically() {
@@ -29,7 +29,7 @@ fn report_sort_key_and_direction_commit_atomically() {
     );
 }
 
-/// `db/mod.rs:tune_reader` must actually raise the page-cache budget it is handed.
+/// `db/reader_open.rs:tune_reader` must actually raise the page-cache budget it is handed.
 ///
 /// Dropping its `pragma_update` line leaves every report reader on SQLite's ~2 MiB default
 /// against a replica of hundreds of MB: a period scan then evicts its own pages inside one
@@ -63,7 +63,7 @@ fn a_report_reader_gets_a_larger_page_cache_than_the_default() {
     );
 }
 
-/// `db/mod.rs:tune_reader` must leave `temp_store` and `mmap_size` at their defaults.
+/// `db/reader_open.rs:tune_reader` must leave `temp_store` and `mmap_size` at their defaults.
 ///
 /// Setting `temp_store = MEMORY` can turn a successful sorter spill into an OOM once several
 /// readers scan at once. Setting `mmap_size` can make a truncated replica surface as an OS fault
@@ -109,7 +109,7 @@ fn reader_tuning_stays_behaviour_neutral() {
     test_support::remove_db(&path);
 }
 
-/// `db/mod.rs:publish_report_commit` must set one bounded background edge after each generation
+/// `db/report_writer.rs:publish_report_commit` must set one bounded background edge after each generation
 /// bump; removing that store leaves catch-up data stale, while incrementing per observer wake turns
 /// a coalesced edge back into unbounded revision churn.
 #[test]
@@ -137,7 +137,7 @@ fn committed_batch_publication_is_bounded_and_advances_generation() {
     assert!(!background.swap(false, Ordering::Acquire));
 }
 
-/// `db/mod.rs:publish_report_commit` must never clear the opposite class's dirty edge; adding a
+/// `db/report_writer.rs:publish_report_commit` must never clear the opposite class's dirty edge; adding a
 /// convenient reset before either store loses an unconsumed earlier batch during the writer/UI
 /// hand-off race.
 #[test]
@@ -167,7 +167,7 @@ fn publishing_one_report_class_preserves_the_other_pending_edge() {
     assert!(background.load(Ordering::Acquire));
 }
 
-/// `db/mod.rs:publish_after_generation` must advance the generation before invoking
+/// `db/report_writer.rs:publish_after_generation` must advance the generation before invoking
 /// the edge publisher; swapping those statements lets the UI consume an edge while
 /// still observing the previous report revision.
 #[test]
@@ -182,7 +182,7 @@ fn committed_batch_publishes_only_after_generation_advance() {
     assert_eq!(observed.get(), 42);
 }
 
-/// Removing valuation staging from `db/mod.rs:apply_msg` for hard deletes or completed legacy
+/// Removing valuation staging from `db/report_writer.rs:apply_msg` for hard deletes or completed legacy
 /// migration would leave stale prepared rows after the report mutation committed.
 #[test]
 fn production_report_messages_stage_matching_valuation_outbox_actions() {
@@ -289,7 +289,7 @@ fn production_report_messages_stage_matching_valuation_outbox_actions() {
     );
 }
 
-/// `db/mod.rs:apply_msg` -- replacing `== Some(*offset_secs)` with `.is_some()` would swallow a
+/// `db/report_writer.rs:apply_msg` -- replacing `== Some(*offset_secs)` with `.is_some()` would swallow a
 /// genuinely changed core clock offset after its first segment. The Report would then retain
 /// USDT money values calculated for the wrong minute because neither the axis generation nor the
 /// core-wide valuation rescan would advance.
@@ -357,14 +357,14 @@ fn changed_core_offset_appends_a_segment_advances_the_axis_and_rescans_valuation
     test_support::remove_db(&path);
 }
 
-/// `db/mod.rs:apply_msg` must classify `DbMsg::Page` as background; changing its constructor to
+/// `db/report_writer.rs:apply_msg` must classify `DbMsg::Page` as background; changing its constructor to
 /// `ApplyEffect::immediate(true)` restores the five-to-ten-second UI freeze throughout catch-up.
 #[test]
 fn catch_up_pages_use_background_report_publication() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("report_writer.rs");
     let apply_msg = source
         .split_once("fn apply_msg(")
-        .expect("db/mod.rs must contain apply_msg")
+        .expect("db/report_writer.rs must contain apply_msg")
         .1;
     let page_arm = apply_msg
         .split_once("DbMsg::Page {")
@@ -383,10 +383,10 @@ fn catch_up_pages_use_background_report_publication() {
 /// publishing inside the loop increments generation more than once for one transaction.
 #[test]
 fn writer_batch_uses_the_ordered_publication_aggregator_once() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("report_writer.rs");
     let writer = source
         .split_once("pub fn spawn_writer(")
-        .expect("db/mod.rs must contain spawn_writer")
+        .expect("db/report_writer.rs must contain spawn_writer")
         .1
         .split_once("struct ApplyEffect")
         .expect("writer must precede ApplyEffect")
@@ -405,7 +405,7 @@ fn writer_batch_uses_the_ordered_publication_aggregator_once() {
 /// The full-history re-declaration after a replica wipe must be sent AFTER the page
 /// acknowledgements, and the post-commit publications must be replayed in ONE ordered pass.
 ///
-/// Breaks on: `db/mod.rs:spawn_writer` moving the `recreated_resyncs` drain above the
+/// Breaks on: `db/report_writer.rs:spawn_writer` moving the `recreated_resyncs` drain above the
 /// `page_applied` loop — the natural tidy-up that groups "everything the reset needs" together.
 /// A page-detected recreation makes moonproto restart catch-up itself on `page_applied`, reusing
 /// the `ServerDefault` history depth `sync_from` resumed at; our `fresh(All)` must land BEHIND
@@ -420,10 +420,10 @@ fn writer_batch_uses_the_ordered_publication_aggregator_once() {
 /// outside moonproto. Same technique, and same limitation, as the two contract tests above.
 #[test]
 fn a_replica_wipe_redeclares_full_history_after_the_acknowledgements() {
-    let source = include_str!("mod.rs");
+    let source = include_str!("report_writer.rs");
     let writer = source
         .split_once("pub fn spawn_writer(")
-        .expect("db/mod.rs must contain spawn_writer")
+        .expect("db/report_writer.rs must contain spawn_writer")
         .1
         .split_once("struct ApplyEffect")
         .expect("writer must precede ApplyEffect")
@@ -445,7 +445,7 @@ fn a_replica_wipe_redeclares_full_history_after_the_acknowledgements() {
     assert_eq!(writer.matches("PostCommit::ReplicaReset").count(), 1);
 }
 
-/// `db/mod.rs:commit_stateful_batch` must retry the same owned work with a fresh
+/// `db/report_writer.rs:commit_stateful_batch` must retry the same owned work with a fresh
 /// candidate state; returning after the first failed commit loses the batch, while
 /// reusing its candidate applies in-memory effects twice.
 #[test]
@@ -480,7 +480,7 @@ fn failed_commit_retries_without_leaking_candidate_state() {
     );
 }
 
-/// `db/mod.rs:commit_stateful_batch_until_success` must begin a new retry round after the
+/// `db/report_writer.rs:commit_stateful_batch_until_success` must begin a new retry round after the
 /// transaction-level allowance is exhausted; returning the first error closes the sole writer
 /// and makes every later live report event disappear until process restart.
 #[test]
@@ -521,7 +521,7 @@ fn exhausted_retry_round_keeps_the_owned_batch() {
     );
 }
 
-/// `db/mod.rs:commit_stateful_batch_until_success` must abort a corruption-class owned batch.
+/// `db/report_writer.rs:commit_stateful_batch_until_success` must abort a corruption-class owned batch.
 ///
 /// Replacing the production abort predicate with `false` invokes the wait callback below after the
 /// transaction retry allowance and loops forever in production, so the named zero-wait assertion
@@ -564,7 +564,7 @@ fn corruption_aborts_the_owned_batch_without_entering_backoff() {
     integrity::reset_test_state();
 }
 
-/// `db/mod.rs:commit_stateful_batch_until_success` must bound non-corruption retry rounds.
+/// `db/report_writer.rs:commit_stateful_batch_until_success` must bound non-corruption retry rounds.
 ///
 /// Raising `REPORT_BATCH_MAX_FAILED_ROUNDS` by one makes the independent attempt-count assertion
 /// fail; without any ceiling, one permanent I/O or permission error wedges the bounded producer
@@ -603,7 +603,7 @@ fn permanent_non_corruption_failure_closes_the_writer_after_the_bound() {
     assert_eq!(state, 0);
 }
 
-/// `db/mod.rs:passive_wal_checkpoint` must return SQLite's progress tuple; replacing
+/// `db/report_writer.rs:passive_wal_checkpoint` must return SQLite's progress tuple; replacing
 /// it with an ignored row hides the pinned reader that prevents full checkpointing.
 #[test]
 fn passive_checkpoint_reports_a_pinned_reader() {
@@ -640,7 +640,7 @@ fn passive_checkpoint_reports_a_pinned_reader() {
     let _ = std::fs::remove_file(path);
 }
 
-/// `db/mod.rs:with_read_snapshot` must keep the transaction around the whole callback; replacing
+/// `db/reader_open.rs:with_read_snapshot` must keep the transaction around the whole callback; replacing
 /// it with `read(conn)` lets the second statement observe a WAL commit that the first did not,
 /// producing internally inconsistent compound Analytics results.
 #[test]
@@ -1509,7 +1509,7 @@ fn seed_test_valuation_store() -> std::path::PathBuf {
     path
 }
 
-/// `db/mod.rs::attach_databases` must attach valuation only when the set asks for it.
+/// `db/reader_open.rs::attach_databases` must attach valuation only when the set asks for it.
 ///
 /// Dropping or inverting `if attach.valuation()` either skips valuation on `AttachSet::ALL`
 /// (silent native-money totals) or attaches it on `STRATEGIES_ONLY`. Observed via

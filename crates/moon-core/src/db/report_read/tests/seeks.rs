@@ -187,7 +187,7 @@ fn two_offset_axis() -> ReportAxis {
     )
 }
 
-/// `report_read.rs::append_row_scope` (the `OpenIfCurrent` hoist) and
+/// `report_read/scope.rs::append_row_scope` (the `OpenIfCurrent` hoist) and
 /// `append_open_basis_scope` must spell every open-row read with ONE top-level open test.
 ///
 /// Breakage: folding the open test back into each offset group's branch
@@ -269,7 +269,7 @@ fn open_row_reads_seek_the_open_partial_index() {
     }
 }
 
-/// `report_read.rs::build_where` (exact ticker) and chart history must seek
+/// `report_read/scope.rs::build_where` (exact ticker) and chart history must seek
 /// `idx_rep_coin_close`.
 ///
 /// Breakage: dropping the NOCASE range around the exact-ticker test, or a core-filter rewrite
@@ -341,7 +341,7 @@ fn multi_coin_chart_history_seeks_the_coin_index() {
     }
 }
 
-/// `report_read.rs::append_strategy_name_mask` must resolve the mask once, not per row.
+/// `report_read/strategy_mask.rs::append_strategy_name_mask` must resolve the mask once, not per row.
 ///
 /// Breakage: restoring the correlated `EXISTS (SELECT .. FROM strat.strategies ..)` re-runs the
 /// name matcher for every report row the period holds.
@@ -544,7 +544,7 @@ fn oracle(conn: &Connection, predicate: &str, params: &[&str]) -> BTreeSet<i64> 
     out
 }
 
-/// `report_read.rs::append_strategy_name_mask` must select exactly what the replaced per-row
+/// `report_read/strategy_mask.rs::append_strategy_name_mask` must select exactly what the replaced per-row
 /// `EXISTS` / `NOT EXISTS` subqueries did, for positive, exclusion-only and mixed masks.
 ///
 /// Breakage: dropping the exclusion arm's null-safe wrapper (`NOT COALESCE((..), 0)` ->
@@ -598,7 +598,7 @@ fn name_mask_selects_what_the_replaced_subquery_did() {
     }
 }
 
-/// `report_read.rs::build_where` (exact ticker) and the open/closed split must select exactly
+/// `report_read/scope.rs::build_where` (exact ticker) and the open/closed split must select exactly
 /// what the replaced SQL did.
 ///
 /// Breakage: an upper bound of `{ticker}_` instead of `` {ticker}` `` loses `SOL_RP` (`'_'`
