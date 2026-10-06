@@ -53,11 +53,6 @@ impl LineKind {
             LineKind::DashDotDot => "DashDotDot",
         }
     }
-
-    /// Whether the line is solid, used to map horizontal lines to `LineInstance.style` 0/1.
-    pub fn is_solid(self) -> bool {
-        self == LineKind::Solid
-    }
 }
 
 /// Current drawing style (color, thickness, line style and fill), applied to NEW figures and

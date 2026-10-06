@@ -76,8 +76,6 @@ report.search_strategies: "Tìm chiến lược..."
 # !word = exclude; see common.strategy_query_syntax).
 report.filter.strategy_mask_ph: "Mặt nạ chiến lược"
 report.filter.strategy_mask_tip: "Lọc báo cáo theo tên chiến lược."
-report.filter.core: "Core:"
-report.filter.side: "Chiều:"
 report.filter.from: "Từ:"
 report.filter.to: "Đến:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
@@ -200,7 +198,6 @@ report.valuation_current_progress: "tỷ giá hiện tại: %{ready}/%{total}"
 report.valuation_current_unavailable: "không có tỷ giá hiện tại: %{n}"
 report.shown_top: "đang hiện: %{n}"
 
-report.filter.emu: "Giả lập"
 # Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
 # naming that timestamp on the period preset.
 report.period_basis.close: "Theo ngày đóng"

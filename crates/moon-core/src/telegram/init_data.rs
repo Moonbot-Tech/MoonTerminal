@@ -248,30 +248,6 @@ pub fn authorize_paired_identity(
     }
 }
 
-/// Verify `initData` and authorize the signed identity in one step.
-///
-/// Args:
-///     init_data: Raw `Telegram.WebApp.initData` query string.
-///     bot_token: Bot token used for HMAC verification.
-///     now_unix: Current Unix seconds.
-///     authorized_chat_ids: Chat ids stored after a successful `/pair`.
-///
-/// Returns:
-///     The verified payload and the paired chat id.
-///
-/// Errors:
-///     HMAC, freshness, or pairing failures from [`InitDataError`].
-pub fn verify_and_authorize(
-    init_data: &str,
-    bot_token: &str,
-    now_unix: u64,
-    authorized_chat_ids: &[i64],
-) -> Result<(SignedInitData, i64), InitDataError> {
-    let signed = verify_init_data(init_data, bot_token, now_unix)?;
-    let chat_id = authorize_paired_identity(&signed, authorized_chat_ids)?;
-    Ok((signed, chat_id))
-}
-
 /// Strictly form-decode `application/x-www-form-urlencoded` and reject duplicate keys.
 fn decode_unique_form(input: &str) -> Result<Vec<(String, String)>, InitDataError> {
     if input.is_empty() {

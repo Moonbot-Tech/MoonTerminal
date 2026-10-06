@@ -3,13 +3,8 @@
 # Intentionally untranslated: Buy · Sell.
 _version: 1
 
-# --- Right order pane ---
-order.title: "Lệnh"
-order.size: "số lượng %{n}"
-order.settings: "Cài đặt lệnh…"
 
 # --- Bottom dock: Orders table ---
-orders.title: "Lệnh đang mở của nhóm (%{count})"
 orders.empty: "không có lệnh đang mở"
 orders.col.core: "Core"
 orders.col.side: "Chiều"
@@ -19,7 +14,6 @@ orders.col.tp_price: "Giá TP"
 orders.col.pnl_tp: "PNL TP"
 # Strategy user-assigned name column, distinct from the Strat (kind) column.
 orders.col.strat_name: "Tên"
-orders.open_hint: "Mở biểu đồ trên Main (core này)"
 orders.all_cores: "Mọi core"
 orders.cores_n: "%{n} core"
 orders.columns: "Trường"

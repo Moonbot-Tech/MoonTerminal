@@ -13,6 +13,7 @@ use gpui::*;
 use moon_ui::{MoonInputState, MoonSliderState};
 
 use moon_core::feed::{CoreConfig, FieldMask};
+use moon_core::util::fmt::{DecimalPolicy, parse_decimal};
 
 use moon_core::session::CoreId;
 
@@ -44,11 +45,7 @@ const MAX_FIX_LEVERAGE: i32 = 125;
 /// turns a panic-sell or a watchdog off while the checkbox beside it still reads as on. There is no
 /// second finiteness check between here and the wire.
 pub(crate) fn parse_num(s: &str) -> Option<f64> {
-    s.trim()
-        .replace(',', ".")
-        .parse::<f64>()
-        .ok()
-        .filter(|v| v.is_finite())
+    parse_decimal(s, DecimalPolicy::Finite)
         // Canonical zero. "-0" parses to `-0.0`, which the projection's `total_cmp` equality orders
         // BELOW `0.0` — so a core echoing a plain zero would never match the draft, and every OK on
         // that page would burn its retry budget. One place, rather than a special case in each of
@@ -69,7 +66,7 @@ pub(crate) fn parse_hhmm(s: &str) -> Option<u16> {
 
 /// Format minutes since midnight as `HH:MM`.
 pub(crate) fn fmt_hhmm(minutes: u16) -> String {
-    format!("{:02}:{:02}", minutes / 60, minutes % 60)
+    moon_core::util::time::format_hhmm(minutes)
 }
 
 impl Shell {

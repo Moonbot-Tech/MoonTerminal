@@ -76,8 +76,6 @@ report.search_strategies: "Search strategies..."
 # !word = exclude; see common.strategy_query_syntax).
 report.filter.strategy_mask_ph: "Strategy mask"
 report.filter.strategy_mask_tip: "Filter the report by strategy name."
-report.filter.core: "Core:"
-report.filter.side: "Side:"
 report.filter.from: "From:"
 report.filter.to: "To:"
 # Doubles as the field's caption: there is no label beside it, so the placeholder names it.
@@ -200,7 +198,6 @@ report.valuation_current_progress: "current rate: %{ready}/%{total}"
 report.valuation_current_unavailable: "current rate unavailable: %{n}"
 report.shown_top: "shown: %{n}"
 
-report.filter.emu: "Emulator"
 # Which timestamp the period bounds apply to: a section of the scope menu, and the tooltip
 # naming that timestamp on the period preset.
 report.period_basis.close: "By close date"

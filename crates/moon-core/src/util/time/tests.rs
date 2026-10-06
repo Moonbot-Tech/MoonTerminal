@@ -1,6 +1,35 @@
 //! Contract for compact UTC timestamps used in snapshot directory names.
 
-use super::{STAMP_MAX, STAMP_MIN, local_utc_offset_ms, utc_stamp_compact};
+use super::{
+    STAMP_MAX, STAMP_MIN, format_hhmm, format_week_endpoint, local_utc_offset_ms, utc_stamp_compact,
+};
+
+/// Wrapping at midnight would change draft and tuner labels for unrestricted minute values.
+#[test]
+fn minute_formatting_keeps_hours_beyond_midnight() {
+    for (minutes, expected) in [
+        (0, "00:00"),
+        (61, "01:01"),
+        (1439, "23:59"),
+        (1440, "24:00"),
+    ] {
+        assert_eq!(format_hhmm(minutes), expected);
+    }
+}
+
+/// Shortening both kinds of boundary identically changes the strategy schedule's encoded range.
+#[test]
+fn week_endpoint_shortening_depends_on_start_or_end() {
+    for (minute, is_end, expected) in [
+        (0, false, "1"),
+        (1439, true, "1"),
+        (1424, false, "1.23:44"),
+        (10079, true, "7"),
+        (1440, true, "2.00:00"),
+    ] {
+        assert_eq!(format_week_endpoint(minute, is_end), expected);
+    }
+}
 
 /// The timestamp has fixed width and a separator at a fixed offset.
 ///

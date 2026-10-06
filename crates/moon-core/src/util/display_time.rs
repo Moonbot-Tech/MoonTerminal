@@ -4,7 +4,7 @@
 //! shared seam for UI dates and analytical grouping that must follow one selected IANA zone,
 //! including historical daylight-saving transitions.
 
-use chrono::{DateTime, Datelike, Days, Duration, LocalResult, NaiveDate, NaiveDateTime, Offset};
+use chrono::{DateTime, Datelike, Days, Duration, LocalResult, NaiveDate, NaiveDateTime};
 use chrono::{TimeZone as _, Timelike as _, Utc};
 use chrono_tz::Tz;
 
@@ -236,20 +236,6 @@ pub fn prev_and_cur_month_start(today: NaiveDate) -> (NaiveDate, NaiveDate) {
 ///     Local civil date, or `None` outside chrono's representable range.
 pub fn date(secs: i64, zone: Tz) -> Option<NaiveDate> {
     at(secs, zone).map(|value| value.date_naive())
-}
-
-/// Return the current offset for one historical instant rather than for process launch time.
-///
-/// Args:
-///     secs: UTC Unix timestamp in seconds.
-///     zone: Selected display zone.
-///
-/// Returns:
-///     Signed seconds east of UTC, or zero outside chrono's representable range.
-pub fn offset_seconds(secs: i64, zone: Tz) -> i32 {
-    at(secs, zone)
-        .map(|value| value.offset().fix().local_minus_utc())
-        .unwrap_or(0)
 }
 
 /// Format UTC Unix seconds as `YYYY-MM-DD HH:MM` in the selected zone.

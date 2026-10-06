@@ -247,11 +247,6 @@ pub fn ensure_verified_cloudflared() -> Result<PathBuf, CloudflaredUnavailable> 
     download_verified_cloudflared(&client, &asset)
 }
 
-/// Construct the production GitHub client for Cloudflare releases.
-pub fn cloudflared_github_client() -> GitHubReleaseClient {
-    GitHubReleaseClient::for_github_releases(CLOUDFLARED_RELEASES_URL)
-}
-
 /// Parse Cloudflare's published `SHA256 Checksums` block from a release body.
 ///
 /// Args:

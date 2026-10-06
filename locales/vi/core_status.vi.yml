@@ -32,16 +32,6 @@ core_status.ip_unknown: "Terminal chưa có địa chỉ của máy chủ này"
 core_status.cpu_load: "%{value} (%{n})"
 core_status.mem_free: "%{pct}% (%{gb} GB)"
 core_status.unknown_server: "IP không rõ: %{core}"
-core_status.online: "Online"
-core_status.degraded: "Suy giảm"
-core_status.offline: "Ngoại tuyến"
-core_status.ready_count: "%{ready}/%{total} core"
-core_status.hide_server: "Ẩn tiến trình máy chủ"
-core_status.show_server: "Hiện tiến trình máy chủ"
-core_status.system_cpu: "CPU hệ thống %{value}"
-core_status.process_cpu: "CPU %{value}"
-core_status.process_memory: "RAM %{value}"
-core_status.process_memory_total: "RAM tiến trình %{value}"
 
 # --- Table columns ---
 core_status.col.server: "Máy chủ"
@@ -54,7 +44,6 @@ core_status.col.free_phys: "RAM trống"
 core_status.col.cpus: "CPU logic"
 core_status.col.ping: "Ping core"
 core_status.col.ping_exch: "Ping sàn"
-core_status.col.updated: "Đã cập nhật"
 # Exchange API-key lifetime column (flat table). The unit is in the heading, so the cells hold a
 # bare number.
 # MoonBot build the core reported. The product noun IS the heading, so the cells hold

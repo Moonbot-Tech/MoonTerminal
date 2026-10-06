@@ -3,7 +3,6 @@
 # Table columns use short labels; translations should remain short as well.
 _version: 1
 
-conn.servers_heading: "Ядра (сервери)"
 conn.market_src: "Джерело ринкових даних"
 conn.market_src_tip: "Звідки беруться хрестики і стакан. Дедуп: одне ядро-провайдер на біржу тягне ринок за всіх (економно, коли ядер багато). По ядрах: кожен графік читає ринок зі свого ядра (без дедупа)."
 conn.market_dedup: "Спільні дані — одне ядро на біржу"
@@ -13,7 +12,6 @@ conn.core_sort_tip: "Порядок ядер в УСІХ списках заст
 conn.core_sort.name: "За іменем — за абеткою"
 conn.core_sort.added: "За додаванням — спершу старі"
 conn.core_sort.added_newest: "За додаванням — спершу нові"
-conn.groups_heading: "Групи"
 conn.no_groups: "додай ядро вище і впиши йому “Групу” — з'явиться гілка групи"
 conn.show_group: "Показати вікно групи"
 # The + glyph is prepended in code; the locale entry contains only text.
@@ -30,8 +28,6 @@ conn.icon_btn: "Іконка"
 conn.bulk_mode_btn: "Режим"
 conn.bulk_mode_tip: "Поставити режим транспорту MoonProto всім ядрам групи одразу, а не рядок за рядком. Застосовується після Зберегти: кожне змінене ядро перепідключиться саме."
 conn.icon_for: "Іконка для “%{name}”"
-conn.pick: "вибір"
-conn.delete: "Видал"
 conn.reconnect: "Перепідключити"
 conn.filter_note: "фільтр на клієнті"
 
@@ -64,17 +60,7 @@ conn.col.group: "Група"
 conn.col.bundle: "Графіки"
 conn.col.color: "Колір"
 conn.col.data: "Дані"
-conn.col.orders: "Орд"
-conn.col.detects: "Дет"
-conn.col.reports: "Звіт"
-conn.col.balance: "Бал"
-conn.col.strat: "Стр"
-conn.col.log: "Лог"
-conn.col.alerts: "Алр"
-conn.col.arb: "Арб"
 
-# Group-table column headings.
-conn.gcol.ico: "Ico"
 
 # Tooltips.
 conn.tip.act: "Підключатися до ядра"
@@ -85,7 +71,6 @@ conn.key_unreadable: "Це не ключ MoonBot — термінал не мо�
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
 conn.bundle_ph: "ім'я зв'язки"
-conn.paste_key: "Вставити"
 conn.paste_key_tip: "Вставити ключ із буфера обміну"
 conn.tip.color: "Колір ядра: ним підсвічуються його угоди і мітки на графіку."
 conn.tip.flags: "Прийом даних від ядра. Сіра = приймаємо все; кольорова = частину категорій вимкнено. Клік — налаштувати."

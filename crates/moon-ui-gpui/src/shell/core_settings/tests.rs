@@ -5,7 +5,24 @@
 
 use moon_core::session::CoreId;
 
+use super::draft::{fmt_hhmm, parse_num};
 use super::resolve_core_settings_write;
+
+/// Dropping finite filtering or zero normalization changes the draft's wire comparisons.
+#[test]
+fn numeric_draft_rejects_infinity_and_canonicalizes_zero() {
+    assert_eq!(parse_num("inf"), None);
+    let zero = parse_num("-0").expect("zero is a valid threshold");
+    assert_eq!(zero, 0.0);
+    assert!(zero.is_sign_positive());
+    assert_eq!(parse_num(" 1,5 "), Some(1.5));
+}
+
+/// Wrapping at midnight would change the existing draft formatter's unrestricted hours.
+#[test]
+fn draft_time_formatter_keeps_hours_beyond_one_day() {
+    assert_eq!(fmt_hhmm(1500), "25:00");
+}
 
 /// A core that has never been seen as `seeded` or `active` in any case below, so a wrongly
 /// permissive guard returning it would be visible rather than accidentally matching a fixture.

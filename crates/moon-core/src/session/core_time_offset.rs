@@ -202,14 +202,6 @@ impl OffsetEstimator {
     pub fn samples(&self) -> u32 {
         self.window.len() as u32
     }
-
-    /// Discard the window WITHOUT discarding the adopted value.
-    ///
-    /// Returns:
-    ///     Nothing; the currently adopted offset remains in force.
-    pub fn clear_window(&mut self) {
-        self.window.clear();
-    }
 }
 
 /// Round a raw millisecond difference to the nearest [`BUCKET_SECS`] index.

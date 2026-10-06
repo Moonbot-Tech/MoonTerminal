@@ -57,6 +57,7 @@ pub(crate) use common::{
 };
 pub(crate) use label_edit::open_label_edit;
 pub(crate) use order_edit::open_order_edit;
+pub(crate) use order_edit::order_dialog_chrome;
 /// The Report's own cell formatting, for surfaces that list report rows outside the Report: one
 /// formatter, so a trade reads the same wherever it is shown.
 pub(crate) use report::columns::{

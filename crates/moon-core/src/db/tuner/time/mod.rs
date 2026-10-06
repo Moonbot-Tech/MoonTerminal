@@ -23,30 +23,24 @@ pub enum TimeWindow {
 /// through Fri 23:59, while `1.23:44-6.22:22` includes explicit times. The caller does not
 /// write a full week because it means no restriction.
 pub fn format_week_span((f, t): (u16, u16)) -> String {
-    let ends = |m: u16, at_end: bool| {
-        let (day, tod) = ((m / 1440) % 7 + 1, m % 1440);
-        // Omit the time for a start at minute 0 or an end at minute 1439.
-        if (!at_end && tod == 0) || (at_end && tod == 1439) {
-            day.to_string()
-        } else {
-            format!("{day}.{}", fmt_min(tod))
-        }
-    };
-    format!("{}-{}", ends(f, false), ends(t, true))
+    format!(
+        "{}-{}",
+        crate::util::time::format_week_endpoint(f, false),
+        crate::util::time::format_week_endpoint(t, true)
+    )
 }
 
 /// Convert `TimeWindow` into a `WorkingTime` field string. `Day` becomes "hh:mm-hh:mm";
 /// `Hour` becomes "N-M" (MoonBot identifies minutes within each hour by the absence of ":").
 pub fn format_working_time(tw: TimeWindow) -> String {
     match tw {
-        TimeWindow::Day(f, t) => format!("{}-{}", fmt_min(f), fmt_min(t)),
+        TimeWindow::Day(f, t) => format!(
+            "{}-{}",
+            crate::util::time::format_hhmm(f),
+            crate::util::time::format_hhmm(t)
+        ),
         TimeWindow::Hour(f, t) => format!("{f}-{t}"),
     }
-}
-
-/// Convert minutes of the day to "hh:mm".
-fn fmt_min(m: u16) -> String {
-    format!("{:02}:{:02}", m / 60, m % 60)
 }
 
 /// Automatic-suggestion result for the "By time" axis: two independent strategy fields.

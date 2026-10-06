@@ -6,8 +6,6 @@
 
 /// `--bg`: panel, toolbar, chart, and order-book background.
 pub const BG: [u8; 3] = [0x13, 0x14, 0x16];
-/// `--surface-1`: window and closed-container background.
-pub const SURFACE_1: [u8; 3] = [0x1a, 0x1c, 0x1f];
 /// Subtle chart grid.
 pub const GRID: [u8; 3] = [0x17, 0x18, 0x1a];
 
@@ -17,15 +15,9 @@ pub const TEXT: [u8; 3] = [0xe8, 0xe4, 0xdc];
 pub const TEXT_2: [u8; 3] = [0x97, 0x92, 0x8a];
 /// `--text-3`: dimmest text.
 pub const TEXT_3: [u8; 3] = [0x5e, 0x5a, 0x53];
-/// `--hairline-strong`: emphasized hairline border.
-pub const HAIRLINE_STRONG: [u8; 3] = [0x3a, 0x3e, 0x45];
 
 /// Approximately `--lift`: idle button background.
 pub const LIFT: [u8; 3] = [0x1d, 0x1f, 0x22];
-/// Approximately `--lift-hover`: hovered button background.
-pub const LIFT_HOVER: [u8; 3] = [0x26, 0x28, 0x2d];
-/// `--lift-active`: pressed button background.
-pub const LIFT_ACTIVE: [u8; 3] = [0x2c, 0x2f, 0x35];
 
 /// `--accent`: amber accent and default server color.
 pub const ACCENT: [u8; 3] = [0xff, 0xb3, 0x47];

@@ -281,8 +281,7 @@ pub fn parse_hhmm(text: &str) -> Option<u16> {
 
 /// Render minutes since midnight as `HH:MM` for the settings fields.
 pub fn fmt_hhmm(minute_of_day: u16) -> String {
-    let m = minute_of_day % DAY_MINUTES;
-    format!("{:02}:{:02}", m / 60, m % 60)
+    crate::util::time::format_hhmm(minute_of_day % DAY_MINUTES)
 }
 
 /// Parse an operator-typed `AddToChart` bypass list such as `3, 5`.

@@ -343,18 +343,13 @@ impl TimeTunerState {
 
 /// Minutes of the day → "hh:mm".
 pub(in crate::analytics::tuner) fn fmt_min(m: u16) -> String {
-    format!("{:02}:{:02}", m / 60, m % 60)
+    moon_core::util::time::format_hhmm(m)
 }
 
 /// One edge of a week span `(from, to)` as the input string "day.hh:mm" (or just "day" on a
 /// day boundary): the start of the week/day for "from" and the end for "to" — short, no time.
 pub(in crate::analytics::tuner) fn fmt_week_ep(wm: u16, is_to: bool) -> String {
-    let (day, tod) = (wm / 1440 % 7 + 1, wm % 1440);
-    if (!is_to && tod == 0) || (is_to && tod == 1439) {
-        day.to_string()
-    } else {
-        format!("{day}.{}", fmt_min(tod))
-    }
+    moon_core::util::time::format_week_endpoint(wm, is_to)
 }
 
 /// Parse one edge of a week span from the field: "day" or "day.hh:mm" (day 1..7) →

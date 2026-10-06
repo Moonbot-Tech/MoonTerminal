@@ -3,7 +3,6 @@
 # Table columns use short labels; translations should remain short as well.
 _version: 1
 
-conn.servers_heading: "Core (máy chủ)"
 conn.market_src: "Nguồn dữ liệu thị trường"
 conn.market_src_tip: "Chữ thập và sổ lệnh lấy từ đâu. Dedup: mỗi sàn một core nguồn lấy dữ liệu thị trường cho tất cả (tiết kiệm khi nhiều core). Theo core: mỗi biểu đồ đọc thị trường từ core của nó (không dedup)."
 conn.market_dedup: "Dữ liệu chung — một core mỗi sàn"
@@ -13,7 +12,6 @@ conn.core_sort_tip: "Thứ tự core xuất hiện trong MỌI danh sách của 
 conn.core_sort.name: "Theo tên — bảng chữ cái"
 conn.core_sort.added: "Theo lúc thêm — cũ trước"
 conn.core_sort.added_newest: "Theo lúc thêm — mới trước"
-conn.groups_heading: "Nhóm"
 conn.no_groups: "thêm một core ở trên và ghi “Nhóm” — nhánh nhóm sẽ hiện"
 conn.show_group: "Hiện cửa sổ nhóm"
 # The + glyph is prepended in code; the locale entry contains only text.
@@ -30,8 +28,6 @@ conn.icon_btn: "Icon"
 conn.bulk_mode_btn: "Chế độ"
 conn.bulk_mode_tip: "Đặt chế độ vận chuyển MoonProto cho mọi core trong nhóm này cùng lúc, thay vì từng dòng. Áp dụng khi Lưu: mỗi core đã đổi tự kết nối lại."
 conn.icon_for: "Biểu tượng cho “%{name}”"
-conn.pick: "chọn"
-conn.delete: "Xóa"
 conn.reconnect: "Kết nối lại"
 conn.filter_note: "lọc phía client"
 
@@ -64,17 +60,7 @@ conn.col.group: "Nhóm"
 conn.col.bundle: "Biểu đồ"
 conn.col.color: "Màu"
 conn.col.data: "Dữ liệu"
-conn.col.orders: "Lệnh"
-conn.col.detects: "Tín"
-conn.col.reports: "Báo"
-conn.col.balance: "Dư"
-conn.col.strat: "CL"
-conn.col.log: "Log"
-conn.col.alerts: "CB"
-conn.col.arb: "Arb"
 
-# Group-table column headings.
-conn.gcol.ico: "Ico"
 
 # Tooltips.
 conn.tip.act: "Kết nối tới core"
@@ -85,7 +71,6 @@ conn.key_unreadable: "Đây không phải khóa MoonBot — terminal không đ�
 # Placeholder of the "Charts" cell. The field holds a bundle NAME, not a count (see
 # `conn.tip.bundle` and `ServerConfig::chart_bundle`), so the placeholder has to say "name".
 conn.bundle_ph: "tên liên kết"
-conn.paste_key: "Dán"
 conn.paste_key_tip: "Dán khóa từ clipboard"
 conn.tip.color: "Màu core: dùng để tô giao dịch và dấu trên biểu đồ của core này."
 conn.tip.flags: "Dữ liệu nhận từ core. Xám = bật hết; có màu = một số mục tắt. Nhấn để cấu hình."

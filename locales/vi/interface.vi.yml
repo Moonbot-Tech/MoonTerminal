@@ -2,7 +2,6 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-iface.sec_theme: "Chủ đề"
 iface.theme_mode: "Chủ đề giao diện"
 iface.light_theme: "Chủ đề sáng"
 iface.graphite_theme: "Than chì"

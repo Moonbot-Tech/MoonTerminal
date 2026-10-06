@@ -50,6 +50,15 @@ pub fn usable_time_ms(item: &NewsItem, now_ms: i64) -> Option<i64> {
 /// When the news became actionable, if that time is usable at all — the chart's clock, where a gem
 /// is drawn.
 ///
+/// Prefer the service's send time, then its receive time, then publication: this matches MoonBot,
+/// which marks news when the bot received it. Publication is when the world learned; delivery is
+/// the earliest a client here could act. Drawing at that later moment makes the delivery delay
+/// visible as the distance between the start of the move and the gem.
+///
+/// The terminal's own receipt (`recv_terminal_ms`) is deliberately absent, even as a last fallback:
+/// it uses this PC's clock, and backfill from the core's ring is received when the terminal connects,
+/// which would park a mark hours away from its candle.
+///
 /// The guard is applied to each CANDIDATE, not to the winner: a service that rescaled only its send
 /// stamp should cost the item its precision, not its place on the chart, so the next stamp in the
 /// chain takes over. Same [`FUTURE_SKEW_MS`] as the feed's clock, so a stamp centuries ahead is
@@ -77,23 +86,6 @@ pub fn mark_time_ms(item: &NewsItem) -> Option<i64> {
     .into_iter()
     .flatten()
     .find(|&t| t > 0)
-}
-
-/// When the news became ACTIONABLE — the moment the service sent it out, Unix ms.
-///
-/// This is where the chart marks it, matching MoonBot, which marks news at the moment the bot got
-/// it. Publication is when the world learned; this is the earliest a client here could have. The
-/// gap between the two is the delivery delay, and drawing the mark at the later moment is what
-/// makes that gap visible: the move starts left of the gem, and the distance is what the delay cost.
-///
-/// The terminal's own receipt is deliberately NOT in the chain, even last: it is stamped by this
-/// PC's clock, and for news backfilled from the core's ring on connect it is the moment of connect,
-/// which would park a mark hours away from its candle.
-pub fn delivery_time_ms(item: &NewsItem) -> Option<i64> {
-    [item.send_time_ms, item.recv_time_ms, Some(item.time_ms)]
-        .into_iter()
-        .flatten()
-        .find(|&t| t > 0)
 }
 
 /// Whether an item passes the persisted tag filter: a tagged item shows unless EVERY one of its tags
