@@ -108,7 +108,7 @@ fn saved_auto_dock_json_contains_only_name_topology() {
 #[test]
 fn programmatic_auto_reconciliation_keeps_invalid_persistence_locked() {
     let persistence = include_str!("../auto_dock_persist.rs");
-    let backend = include_str!("../../backend/mod.rs");
+    let backend = include_str!("../../backend/workspace_entities.rs");
     let shell_init = include_str!("../../shell/init.rs");
     let shell_workspace = include_str!("../../shell/workspace.rs");
 

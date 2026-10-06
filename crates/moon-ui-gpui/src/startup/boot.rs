@@ -27,6 +27,39 @@ use moon_core::config::{AppConfig, WindowLayout};
 use moon_core::metrics::MetricsSnapshot;
 use moon_core::session::{CoreId, SessionManager};
 
+/// Coalesces streamed edits while bounding the pending write window to one second.
+const SAVE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Leading-edge admission that leaves pending edits dirty until the next write window.
+struct SaveGate {
+    /// Monotonic time of the last admitted write.
+    last_write: Option<Instant>,
+    /// Minimum spacing between admitted writes.
+    min: Duration,
+}
+
+impl SaveGate {
+    /// Starts without a prior write so the first edit is persisted immediately.
+    fn new(min: Duration) -> Self {
+        Self {
+            last_write: None,
+            min,
+        }
+    }
+
+    /// Admits a write at `now` only when the previous write's window has elapsed.
+    fn admit(&mut self, now: Instant) -> bool {
+        if self
+            .last_write
+            .is_some_and(|last| now.duration_since(last) < self.min)
+        {
+            return false;
+        }
+        self.last_write = Some(now);
+        true
+    }
+}
+
 /// Startup state gathered before the configuration was available.
 pub(super) struct BootInput {
     /// Whether boot should show the one-time recovery notification.
@@ -259,6 +292,7 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         order_size_edit_req: None,
         sell_edit_req: None,
         group_exit_sync: HashMap::new(),
+        live_core_scratch: Vec::new(),
         ignore_sell_local: HashMap::new(),
         fav_local: HashMap::new(),
         fav_rev: 0,
@@ -667,6 +701,8 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         let mut frame_timings = gpui::FrameTimingCollector::new();
         // Sum of assets_rev across all cores in the previous sample, used for assets_apply delta.
         let mut last_assets_rev_sum: u64 = 0;
+        let mut chart_gate = SaveGate::new(SAVE_INTERVAL);
+        let mut config_gate = SaveGate::new(SAVE_INTERVAL);
         loop {
             // How late this wake-up lands is the measurement, not an implementation detail: the
             // timer is a BACKGROUND one, but this task runs on the foreground executor, so
@@ -872,9 +908,13 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                             let _persist_us = crate::diag::scope(&crate::diag::PERSIST_DISPATCH_US);
                             dispatch_live_persistence(b, &mut coord_persistence.borrow_mut());
                         }
+                        let now = Instant::now();
                         if b.chart_specs_dirty {
-                            chart_persist::save_all(&b.chart_specs);
-                            b.chart_specs_dirty = false;
+                            let admitted = chart_gate.admit(now);
+                            if admitted {
+                                chart_persist::save_all(&b.chart_specs);
+                                b.chart_specs_dirty = false;
+                            }
                         }
                         if b.tab_badges_dirty {
                             b.tab_badges.save();
@@ -896,9 +936,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
                         if b.figures.borrow().dirty {
                             b.figures.borrow_mut().save();
                         }
-                        if b.config_dirty {
-                            // Debounce config saves: mouse-wheel resizing updates memory frequently,
-                            // but writes to disk once per drain tick rather than on every wheel tick.
+                        if b.config_dirty && config_gate.admit(now) {
+                            // Resizing can dirty config every tick; retain the last edit until the
+                            // next admitted write, while isolated edits write on their first tick.
                             if let Err(e) = b.config.save() {
                                 log::warn!("config save (debounced) failed: {e}");
                             }

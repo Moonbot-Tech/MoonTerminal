@@ -111,6 +111,45 @@ pub fn read_unsplit(rel: &str) -> String {
     }
 }
 
+/// Read the backend root and moved item families in their original order, normalized to LF.
+///
+/// Keeping family order preserves cross-item source contracts after the pure module split.
+pub fn read_backend() -> String {
+    [
+        "backend/mod.rs",
+        "backend/warn_slices.rs",
+        "backend/chart_consumers.rs",
+        "backend/main_targets.rs",
+        "backend/workspace_scope.rs",
+        "backend/request_routing.rs",
+        "backend/workspace_entities.rs",
+        "backend/header_coins.rs",
+        "backend/report_adapters.rs",
+        "backend/chart_refs.rs",
+        "backend/warnings.rs",
+        "backend/notify.rs",
+        "backend/strategy_watch.rs",
+    ]
+    .map(read_src)
+    .join("\n")
+}
+
+/// Read the workspace root and moved families in contract order, normalized to LF.
+///
+/// The combined source preserves cross-family counts and bans while methods stay at pinned seams.
+pub fn read_shell_workspace() -> String {
+    [
+        "shell/workspace.rs",
+        "shell/workspace/topology.rs",
+        "shell/workspace/rail_model.rs",
+        "shell/workspace/window_sync.rs",
+        "shell/workspace/rail_item.rs",
+        "shell/workspace/status.rs",
+    ]
+    .map(read_src)
+    .join("\n")
+}
+
 /// Codes of `moon_core::config::Language::ALL`, in dropdown order.
 ///
 /// `languages_match_language_all` reads `crates/moon-core/src/config/lang.rs` as text and

@@ -152,7 +152,7 @@ fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
         ),
         ("panels/news/mod.rs", "crate::controls::venue_label(venue)"),
         (
-            "shell/workspace.rs",
+            "shell/workspace/rail_item.rs",
             "crate::controls::venue_section_label(venue.as_ref())",
         ),
         ("panels/detects/cards.rs", "crate::controls::venue_label("),

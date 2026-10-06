@@ -175,9 +175,13 @@ impl Render for Shell {
             let mut conn = b.session.conn_summary_group(&self.group);
             // The disconnected-cores tooltip is a core list like any other — rank it the same
             // way, or it reads in a different order than the header pill right above it.
-            let order = moon_core::session::core_order::CoreOrder::new(&b.config);
-            order.sort_by(&mut conn.down, |row| row.id);
-            order.sort_by(&mut conn.report_sync, |row| row.id);
+            super::workspace::sort_status_lists(
+                &mut conn.down,
+                &mut conn.report_sync,
+                |row| row.id,
+                |row| row.id,
+                || moon_core::session::core_order::CoreOrder::new(&b.config),
+            );
             let license = b.session.license_summary_group(&self.group);
             let snap = b.snap;
             // The status bar needs only the order-book level count for the current Main chart.
@@ -196,20 +200,15 @@ impl Render for Shell {
                     .core(id)
                     .is_some_and(|core| core.status == moon_core::feed::ConnStatus::Ready)
             };
-            let mode_suggestions = conn
-                .down
-                .iter()
-                .map(|row| {
-                    (
-                        row.id,
-                        crate::conn_diag::fleet_mode_suggestion(
-                            row.id,
-                            &b.config.servers,
-                            is_ready,
-                        ),
-                    )
-                })
-                .collect::<std::collections::HashMap<_, _>>();
+            let mode_suggestions = if conn.down.is_empty() {
+                std::collections::HashMap::new()
+            } else {
+                let index = crate::conn_diag::FleetModeIndex::new(&b.config.servers, is_ready);
+                conn.down
+                    .iter()
+                    .map(|row| (row.id, index.suggestion(row.id)))
+                    .collect()
+            };
             (conn, license, snap, book_levels, mode_suggestions)
         };
         let chrome_width = f32::from(window.viewport_size().width);

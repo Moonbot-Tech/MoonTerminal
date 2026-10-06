@@ -117,7 +117,7 @@ fn core_status_flat_visibility_contract_has_one_shared_visible_key_projection() 
 /// replacement preference.
 #[test]
 fn core_status_hidden_api_sort_contract_falls_back_without_erasing_preference() {
-    let panel = read_src("panels/core_status/mod.rs");
+    let panel = read_src("panels/core_status/render.rs");
     let render = code_only(braced_body(&panel, "fn render("));
 
     assert!(

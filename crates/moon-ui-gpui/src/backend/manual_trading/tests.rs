@@ -2,18 +2,68 @@
 
 use std::time::{Duration, Instant};
 
+/// Roster churn must retain exactly the same cores as set membership, including duplicates.
+#[test]
+fn live_id_scratch_reuses_its_buffer_and_matches_hashset() {
+    let mut live = Vec::new();
+    super::strategy_state::refresh_live_ids(&mut live, 0..200);
+    let capacity = live.capacity();
+    let pointer = live.as_ptr();
+    for refresh in 0..100 {
+        let ids: Vec<moon_core::session::CoreId> =
+            (0..200).rev().map(|id| (id + refresh) % 173).collect();
+        let expected: std::collections::HashSet<_> = ids.iter().copied().collect();
+        super::strategy_state::refresh_live_ids(&mut live, ids.into_iter());
+        assert_eq!(live.capacity(), capacity);
+        assert_eq!(live.as_ptr(), pointer);
+        for id in 0..250 {
+            assert_eq!(live.binary_search(&id).is_ok(), expected.contains(&id));
+        }
+    }
+    super::strategy_state::refresh_live_ids(&mut live, std::iter::empty());
+    assert!(live.is_empty());
+    assert_eq!(live.capacity(), capacity);
+    assert_eq!(live.as_ptr(), pointer);
+}
+
+/// Measure roster refresh plus four bookkeeping membership passes for 200 synthetic cores.
+#[test]
+#[ignore]
+fn bench_live_id_refresh_200_cores() {
+    let iterations = 100_000;
+    let mut live = Vec::new();
+    super::strategy_state::refresh_live_ids(&mut live, 0..200);
+    let start = Instant::now();
+    let mut matches = 0;
+    for _ in 0..iterations {
+        super::strategy_state::refresh_live_ids(&mut live, std::hint::black_box(0..200));
+        for _ in 0..4 {
+            for id in 0..250 {
+                matches += usize::from(live.binary_search(std::hint::black_box(&id)).is_ok());
+            }
+        }
+    }
+    assert_eq!(matches, iterations * 4 * 200);
+    println!(
+        "live_id_refresh: {} ns/iter",
+        start.elapsed().as_nanos() / iterations as u128
+    );
+}
+
 use moon_core::config::{
     DEFAULT_ORDER_SIZES_USD, GroupExitSettings, GroupTradeSettings, TakeProfitMode,
 };
 use moon_core::feed::{ClientSettingsEdit, ConnStatus, OrderRow, StrategyRow};
 
-use super::{
+use super::selectors::{cancel_all_buys_markets, ready_cores};
+use super::terms::{
+    apply_group_exit_edit, effective_ignore_sell, effective_manual_strat_state, exit_source,
+    manual_selection_is_broken, manual_strat_seed, manual_strategy_id, planned_sell_price,
+    resolve_manual_selection, stop_write_is_redundant, update_group_trade_pair, usd_to_base_amount,
+};
+use super::types::{
     HOOK_STRATEGY_KIND, IGNORE_SELL_LOCAL_TTL, MANUAL_STRATEGY_KIND, PANIC_TOGGLE_DEBOUNCE,
-    apply_group_exit_edit, cancel_all_buys_markets, effective_ignore_sell,
-    effective_manual_strat_state, exit_source, manual_selection_is_broken, manual_strat_seed,
-    manual_strategy_id, panic_press_absorbed, planned_sell_price, ready_cores,
-    resolve_manual_selection, seed_on_enable, stop_price, stop_write_is_redundant,
-    update_group_trade_pair, usd_to_base_amount,
+    panic_press_absorbed, seed_on_enable, stop_price,
 };
 
 /// Regression target, three times over in one session: the rule deciding whether the per-order stop
@@ -216,7 +266,7 @@ fn the_seed_settles_a_core_that_selected_nothing() {
     let rows = [strategy(11, MANUAL_STRATEGY_KIND - 1)];
     assert_eq!(
         manual_strat_seed(false, 0, &rows),
-        Some(super::ManualStratState::default()),
+        Some(ManualStratState::default()),
         "a resolved 'nothing to select' is an answer, not a reason to wait"
     );
 }
@@ -614,7 +664,7 @@ fn panic_hotkey_bursts_restart_the_debounce_window_after_every_press() {
         "the exact debounce boundary remains an intentional reversal"
     );
 
-    let source = include_str!("../manual_trading.rs");
+    let source = include_str!("panic.rs");
     let hotkey = source
         .split("fn panic_sell_hotkey(")
         .nth(1)
@@ -637,7 +687,7 @@ fn panic_hotkey_bursts_restart_the_debounce_window_after_every_press() {
 /// settle rule itself is `moon_core::session::panic_override`'s, tested there.
 #[test]
 fn panic_reconciliation_repaints_from_the_slow_tick() {
-    let source = include_str!("../manual_trading.rs");
+    let source = include_str!("panic.rs");
     let tick = source
         .split("fn tick_panic_local(")
         .nth(1)

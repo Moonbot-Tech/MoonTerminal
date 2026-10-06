@@ -70,7 +70,7 @@ fn report_axis_observation_uses_writer_refresh_while_valuation_mode_reloads() {
 
 #[test]
 fn selected_display_zone_reaches_every_cached_time_surface() {
-    let backend = read_src("backend/mod.rs");
+    let backend = read_backend();
     let setter = code_only(braced_body(
         &backend,
         "pub(crate) fn set_header_clock_zone(",
@@ -2221,7 +2221,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     // A mode switch changes no rows, so neither generation moves and no open window would learn
     // about it on its own. Applying the saved mode must both aim the worker and publish the
     // revision every surface observes.
-    let backend = read_src("backend/mod.rs");
+    let backend = read_backend();
     let apply = braced_body(&backend, "pub(crate) fn apply_valuation_mode(");
     for needle in [
         "set_current_wanted(",

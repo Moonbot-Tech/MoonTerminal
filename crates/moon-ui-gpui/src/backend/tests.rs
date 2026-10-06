@@ -5,11 +5,23 @@ use moon_core::config::WorkspaceMode;
 use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr};
 
-use super::{
-    Backend, ChartHistoryScope, OpenCompareRequest, OpenMainRequest,
-    finalize_recent_warning_episodes,
-};
+use super::warn_slices::finalize_recent_warning_episodes;
+use super::{ChartHistoryScope, OpenCompareRequest, OpenMainRequest};
+use crate::Backend;
 use crate::backend::core_warn::{WarnAxis, WarnEnabled, WarnEpisode, WarnSnapshot};
+
+/// Eager sampling in the Backend would bypass the engine's tested due gate on every observation.
+#[test]
+fn backend_warning_samples_are_built_inside_lazy_tick() {
+    let source: String = include_str!("warnings.rs")
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<String>()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    assert!(source.contains("letresult=self.warn.tick_with_samples(now_ms,||{letstore=self.session.store();self.session.sessions().iter().filter_map("));
+}
 
 /// Build one warning episode for scope/ordering regressions.
 ///

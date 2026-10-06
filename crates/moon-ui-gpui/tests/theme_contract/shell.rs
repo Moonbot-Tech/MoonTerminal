@@ -14,7 +14,7 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let main = fs::read_to_string(root.join("main.rs")).unwrap();
     let startup = read_startup();
-    let backend = fs::read_to_string(root.join("backend").join("mod.rs")).unwrap();
+    let backend = read_backend();
     let chrome = fs::read_to_string(root.join("chrome").join("terminal_chrome.rs")).unwrap();
     let chart_tabs = fs::read_to_string(root.join("chart_tabs").join("mod.rs")).unwrap();
     let main_stack = fs::read_to_string(root.join("chart_tabs").join("main_stack.rs")).unwrap();
@@ -295,7 +295,7 @@ fn shared_core_selectors_batch_exchange_changes_once() {
         ),
         (
             "Core Status",
-            "panels/core_status/mod.rs",
+            "panels/core_status/core_bar.rs",
             "fn core_bar(",
             "t.toggle_exchange_cores(exchange_cores, c);",
         ),

@@ -4,6 +4,51 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 
+/// Moving the sample factory outside the throttle would restore ten builds per second.
+#[test]
+fn tick_due_agrees_with_tick_throttle() {
+    let mut engine = CoreWarnEngine::default();
+    for now_ms in [-1000, 0, 1000, 1100, 999, 2000, 1000, 2999, 3000] {
+        let previous = engine.last_sec;
+        let due = engine.tick_due(now_ms);
+        engine.tick(&[], now_ms);
+        assert_eq!(due, engine.last_sec != previous);
+    }
+    let mut engine = CoreWarnEngine::default();
+    let mut builds = 0;
+    for tick in 0..600 {
+        engine.tick_with_samples(1000 + tick * 100, || {
+            builds += 1;
+            vec![sample(1, [10, 0, 0, 1], None, None)]
+        });
+    }
+    assert_eq!(builds, 60);
+    assert_eq!(engine.last_sec, 60);
+}
+
+/// Measure the production sampling boundary over a synthetic 200-core, 10 Hz stream.
+#[test]
+#[ignore]
+fn bench_warning_sampling_200_cores() {
+    let iterations = 6000;
+    let mut engine = CoreWarnEngine::default();
+    let mut builds = 0;
+    let start = std::time::Instant::now();
+    for tick in 0..iterations {
+        std::hint::black_box(engine.tick_with_samples(1000 + tick * 100, || {
+            builds += 1;
+            (1..=200)
+                .map(|id| sample(id, [10, 0, 0, 1], None, None))
+                .collect()
+        }));
+    }
+    assert_eq!(builds, 600);
+    println!(
+        "warning_sampling: {} ns/iter; {builds} sample builds",
+        start.elapsed().as_nanos() / iterations as u128
+    );
+}
+
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreSysStatus};
 

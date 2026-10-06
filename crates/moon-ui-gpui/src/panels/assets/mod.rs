@@ -117,11 +117,14 @@ pub struct AssetsView {
     gate: RenderGate,
     /// Inputs represented by the current caches: data revisions and the dust threshold.
     cache_sig: Option<(u64, u64)>,
+    /// Order revisions represented by the cached sale markers.
+    sale_sig: Option<u64>,
+    /// Effective cores represented by the current rows and sale markers.
     cached_cores: Vec<(CoreId, String)>,
     cached_entries: Rc<Vec<AssetEntry>>,
     /// `(core, uppercase coin)` pairs with an active `SellSet` or `SellAlmostDone` order. Their rows
-    /// are marked as currently for sale. Rebuilt by `rebuild_cache`; the signature includes each
-    /// core's `orders_table_rev`.
+    /// are marked as currently for sale. Full rebuilds and order-only refreshes replace these
+    /// markers; `sale_sig` tracks each cached core's `orders_table_rev`.
     pub(super) sell_marked: Rc<std::collections::HashSet<(CoreId, String)>>,
     /// Per-core balance figures and their trust classifications for the current scope.
     cached_aggs: Rc<Vec<CoreAgg>>,
@@ -219,17 +222,28 @@ impl AssetsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // Rebuild after an asset-related signature change or the gate's once-per-second refresh.
+        // Refresh sale markers independently between full rebuilds and periodic transfer retries.
         cx.observe(&backend, |this, backend, cx| {
             let now = moon_chart::paint::now_unix_ms();
             let b = backend.read(cx);
             let sig = this.assets_sig(b);
             let key = this.cache_key(sig);
-            let changed = this.cache_sig != Some(key);
-            let due = this.gate.should_notify(sig, now);
-            if changed || due {
-                this.rebuild_cache(b);
-                cx.notify();
+            let sale = cache::sale_sig(b, &this.cached_cores);
+            let gate_due = this.gate.should_notify(cache::mix(sig, sale), now);
+            let (refresh, cache_sig, sale_sig) =
+                cache::assets_observe_step(this.cache_sig, key, this.sale_sig, sale, gate_due);
+            this.cache_sig = cache_sig;
+            this.sale_sig = sale_sig;
+            match refresh {
+                cache::AssetsRefresh::Full => {
+                    this.rebuild_cache(b);
+                    cx.notify();
+                }
+                cache::AssetsRefresh::SaleOnly => {
+                    this.sell_marked = Rc::new(this.collect_sell_marked(b));
+                    cx.notify();
+                }
+                cache::AssetsRefresh::None => {}
             }
         })
         .detach();
@@ -380,6 +394,7 @@ impl AssetsView {
             transfer_input: None,
             gate: RenderGate::default(),
             cache_sig: None,
+            sale_sig: None,
             cached_cores: Vec::new(),
             cached_entries: Rc::new(Vec::new()),
             sell_marked: Rc::new(std::collections::HashSet::new()),
