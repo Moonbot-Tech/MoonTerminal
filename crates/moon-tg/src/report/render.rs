@@ -305,7 +305,7 @@ pub(super) fn row_html(row: &Row, by_core: bool, layout: &ReportLayout) -> Strin
     let name = escape(&name);
     let name = if bold { format!("<b>{name}</b>") } else { name };
     let mut html = format!("<tr><{cell}{lead}>{name}</{cell}>");
-    html.push_str(&value_cells(total, layout, cell, bold));
+    html.push_str(&value_cells(total, layout, cell, bold, false));
     html.push_str("</tr>");
     html
 }
@@ -315,23 +315,37 @@ fn total_html(total: &QuoteBreakdown, layout: &ReportLayout) -> String {
     format!(
         "<tr><th align=\"left\"><b>{}</b></th>{}</tr>",
         escape(&t!("telegram.report_total")),
-        value_cells(total, layout, "th", true)
+        value_cells(total, layout, "th", true, true)
     )
 }
 
 /// Emit shared typed column values as escaped HTML in their saved order.
-fn value_cells(total: &QuoteBreakdown, layout: &ReportLayout, cell: &str, bold: bool) -> String {
-    column_values(total, layout)
+fn value_cells(
+    total: &QuoteBreakdown,
+    layout: &ReportLayout,
+    cell: &str,
+    bold: bool,
+    total_row: bool,
+) -> String {
+    column_values(total, layout, total_row)
         .into_iter()
         .map(|mut span| {
-            span.bold = bold;
+            // An empty cell stays empty rather than carrying a bare `<b></b>`.
+            span.bold = bold && !span.text.is_empty();
             format!("<{cell} align=\"right\">{}</{cell}>", span.html())
         })
         .collect()
 }
 
 /// Share column formatting with previews; native volume requires a complete single-currency scope.
-fn column_values(total: &QuoteBreakdown, layout: &ReportLayout) -> Vec<crate::preview::Span> {
+///
+/// `total_row` blanks the native-currency cell: the report's total mixes cores of different
+/// quote currencies, and a list of per-currency sums there is not a total the reader can use.
+fn column_values(
+    total: &QuoteBreakdown,
+    layout: &ReportLayout,
+    total_row: bool,
+) -> Vec<crate::preview::Span> {
     use crate::preview::{Span, Tone};
     layout
         .drawable_columns()
@@ -377,6 +391,24 @@ fn column_values(total: &QuoteBreakdown, layout: &ReportLayout) -> Vec<crate::pr
                         .unwrap_or_else(|| t!("telegram.report_unvalued").to_string()),
                     None,
                 ),
+                ReportColumn::Native if total_row => (String::new(), None),
+                // One currency colours by its sign; a mixed row lists its sums uncoloured.
+                // A row with no trades reads 0 rather than a blank; trades of an unknown
+                // currency alone stay unvalued. Amount and ticker never wrap apart.
+                ReportColumn::Native => (
+                    match (total.totals.is_empty(), total.orders) {
+                        (true, 0) => "0".to_string(),
+                        (true, _) => t!("telegram.report_unvalued").to_string(),
+                        _ => native(total)
+                            .replace(' ', "\u{a0}")
+                            .replace(";\u{a0}", "; "),
+                    },
+                    match total.totals.as_slice() {
+                        [part] => fmt::signed_fixed(part.profit, part.currency.display_decimals())
+                            .map(|(_, sign)| sign),
+                        _ => None,
+                    },
+                ),
                 ReportColumn::Other(_) => return None,
             };
             Some(Span {
@@ -400,6 +432,7 @@ fn column_headers(layout: &ReportLayout) -> Vec<String> {
                 ReportColumn::Trades => "telegram.report_trades",
                 ReportColumn::Average => "telegram.report_average_col",
                 ReportColumn::Volume => "telegram.report_volume_col",
+                ReportColumn::Native => "telegram.report_native_col",
                 ReportColumn::Other(_) => return None,
             };
             Some(t!(key).to_string())
@@ -502,7 +535,11 @@ pub(super) fn preview_table(page: &Page) -> crate::preview::PreviewTable {
                 }
             };
             let mut cells = vec![Span::plain(name)];
-            cells.extend(column_values(total, &page.layout));
+            cells.extend(column_values(
+                total,
+                &page.layout,
+                kind == PreviewRowKind::Total,
+            ));
             for cell in &mut cells {
                 cell.bold = bold;
             }

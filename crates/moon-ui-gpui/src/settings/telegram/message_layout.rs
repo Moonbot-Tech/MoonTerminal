@@ -834,7 +834,7 @@ impl SettingsView {
             .child(t!("telegram.layout.columns").to_string())
             .child(columns)
             .child(tray)
-            .when(known_count == 4, |editor| {
+            .when(known_count >= 4, |editor| {
                 editor.child(
                     div()
                         .text_color(rgba_from(p.text_muted, 1.0))

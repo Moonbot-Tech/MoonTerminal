@@ -2,6 +2,7 @@ _version: 1
 telegram.report_title: "Report"
 telegram.report_average_col: "Avg %"
 telegram.report_volume_col: "Volume"
+telegram.report_native_col: "Quote"
 
 telegram.help_hour: "This hour"
 

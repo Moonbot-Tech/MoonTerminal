@@ -2,6 +2,7 @@ _version: 1
 telegram.report_title: "Báo cáo"
 telegram.report_average_col: "TB %"
 telegram.report_volume_col: "Khối lượng"
+telegram.report_native_col: "Tiền gốc"
 
 telegram.help_hour: "Giờ này"
 
