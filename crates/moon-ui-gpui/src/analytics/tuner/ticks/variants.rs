@@ -30,8 +30,9 @@ use moon_core::db::tuner::threshold_search::SearchHandle;
 use moon_core::db::tuner::ticks::params::range::Grids;
 use moon_core::db::tuner::ticks::params::{self, ParamGroup};
 use moon_core::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, MIN_HOLDOUT, MIN_SEARCH_DEALS, SearchMiss, SearchParams, check_corridors,
-    comparable, default_min_n, sample_floor, suggest, train_len, variant_tally_by_deal,
+    DEFAULT_MAX_PASSES, MIN_HOLDOUT, MIN_SEARCH_DEALS, SearchMiss, SearchParams, Suggested,
+    check_corridors, comparable, default_min_n, sample_floor, suggest_with_candidate, train_len,
+    variant_tally_by_deal,
 };
 use moon_core::db::tuner::ticks::{fact_stats, stats_of};
 
@@ -610,13 +611,20 @@ impl AnalyticsView {
                 let searching = std::time::Instant::now();
                 // The floor holds over the set the search scored: the deals the strategies as
                 // they stand leave open are cut from it first.
-                let result = suggest(&deals, &params, &handle).and_then(|found| {
+                let Suggested {
+                    result,
+                    candidate,
+                    searched,
+                } = suggest_with_candidate(&deals, &params, &handle);
+                let result = result.and_then(|found| {
                     sample_floor(deals.len().saturating_sub(found.stats.left_open))
                         .map(|()| found)
                 });
-                (result, searching.elapsed())
+                // A candidate is laid over В1 only beside a result the sample may be searched for.
+                let candidate = candidate.filter(|_| !matches!(result, Err(SearchMiss::TooFew { .. })));
+                (result, candidate, searched, searching.elapsed())
             },
-            move |this, (result, searched_for), cx| {
+            move |this, (result, candidate, searched, searched_for), cx| {
                 log::info!(
                     target: moon_core::diagnostics::TICKS_AXIS_TARGET,
                     "[x] ticks search: #{seq} answered after {} ms ({}), current #{}",
@@ -639,6 +647,10 @@ impl AnalyticsView {
                     return;
                 }
                 this.ticks.sugg = SuggState::Idle;
+                // В1 as the search found it: a candidate is laid over this, never over the
+                // answer, whose completed values (a `TakeProfit` its `UseTakeProfit` brought) sit
+                // outside the searched fields and would stay behind in the candidate's column.
+                let before = this.ticks.variant.clone();
                 match result {
                     Ok(result) => {
                         this.ticks_take_search_cost(
@@ -647,12 +659,15 @@ impl AnalyticsView {
                             result.stats.evaluations,
                             result.stats.fills_reused,
                         );
-                        land_answer(&mut this.ticks.variant, &result.searched, &result.values);
-                        this.ticks_reset_variant_inputs();
+                        // The answer's own В1: what its holdout verdict speaks for
+                        // (`current_result`). A candidate laid over В1 below is another point, so
+                        // the verdict stays off the column while it holds the candidate.
+                        let mut answered = this.ticks.variant.clone();
+                        land_answer(&mut answered, &result.searched, &result.values);
+                        this.ticks.result_variant = super::state::changes_of(&answered);
+                        this.ticks.variant = answered;
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
-                        this.ticks.result_variant = this.ticks.variant_changes();
-                        this.arm_ticks_variants(cx);
                     }
                     // Why nothing: the floor no point kept — the typed one, or the search's own
                     // half of the training slice (`default_min_n`) —, the corridor none kept, no
@@ -663,6 +678,19 @@ impl AnalyticsView {
                         let floor = min_n.unwrap_or_else(|| default_min_n(train_n));
                         this.ticks.sugg_note = Some(miss_note(miss, floor));
                     }
+                }
+                // The point that earns more on the deals it closed but leaves some open goes
+                // into В1 in place of the answer (LinKvo, 2026-10-07): its values in the cells,
+                // and the column scores it like any variant — the trades it closed, "by N of M",
+                // the deals it left open and what they make at the tape's end.
+                if let Some(candidate) = &candidate {
+                    let mut laid = before;
+                    land_answer(&mut laid, &searched, &candidate.values);
+                    this.ticks.variant = laid;
+                }
+                if this.ticks.last_result.is_some() || candidate.is_some() {
+                    this.ticks_reset_variant_inputs();
+                    this.arm_ticks_variants(cx);
                 }
                 cx.notify();
             },

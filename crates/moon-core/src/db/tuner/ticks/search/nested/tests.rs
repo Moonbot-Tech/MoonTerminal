@@ -62,7 +62,7 @@ fn the_nested_descent_reaches_an_entry_that_pays_only_with_its_own_exit() {
         screen: false,
         same_entry: &|a: &Point, b: &Point| a == b,
     };
-    let walked = descend_nested(Point::new(), &nested, &evaluate).expect("not stopped");
+    let walked = descend_nested(Point::new(), &nested, &evaluate, &evaluate).expect("not stopped");
     let at = (
         grid_index(legacy(), entry, &walked.point, &start),
         grid_index(legacy(), exit, &walked.point, &start),
@@ -125,7 +125,8 @@ fn the_screened_descent_still_reaches_the_entry_with_its_own_exit() {
             screen,
             same_entry: &|a: &Point, b: &Point| a == b,
         };
-        let walked = descend_nested(Point::new(), &nested, &evaluate).expect("not stopped");
+        let walked =
+            descend_nested(Point::new(), &nested, &evaluate, &evaluate).expect("not stopped");
         (walked, searched.load(std::sync::atomic::Ordering::Relaxed))
     };
     let (screened, screened_n) = walk(true);
@@ -142,6 +143,50 @@ fn the_screened_descent_still_reaches_the_entry_with_its_own_exit() {
         screened_n < whole_n,
         "screened {screened_n} against {whole_n}"
     );
+}
+
+/// The entry points are ranked by the outer score of the point the exit descent stopped on, not
+/// by the score that descent walked by: an outer score that pays most on an entry the inner walk
+/// rates like any other takes the outer descent there, and the walk answers that score.
+#[test]
+fn an_entry_point_is_ranked_by_the_outer_score() {
+    let entry = field("MShotPrice");
+    let exit = field("SellPrice");
+    let start: HashMap<&'static str, usize> = [(entry.key, 10), (exit.key, 5)].into();
+    let inner = objective(entry, exit, &start);
+    let outer = |point: &Point| {
+        let mut tally = Tally::default();
+        let at = grid_index(legacy(), entry, point, &start).expect("entry");
+        tally.push(if at == 13 { 100.0 } else { 1.0 });
+        Some(tally)
+    };
+    let handle = SearchHandle::new();
+    let none = coupled::Coupling::none();
+    let searched = std::sync::atomic::AtomicUsize::new(0);
+    let nested = Nested {
+        grids: legacy(),
+        start: &start,
+        entry: &[entry],
+        exit: &[exit],
+        pairs: &[],
+        entry_coupling: &none,
+        exit_coupling: &none,
+        min_n: 1,
+        max_passes: DEFAULT_MAX_PASSES,
+        handle: &handle,
+        refused: &|_: &Point| false,
+        searched: &searched,
+        screen: false,
+        same_entry: &|a: &Point, b: &Point| a == b,
+    };
+    let walked = descend_nested(Point::new(), &nested, &inner, &outer).expect("not stopped");
+    assert_eq!(
+        grid_index(legacy(), entry, &walked.point, &start),
+        Some(13),
+        "{:?}",
+        walked.point
+    );
+    assert!((walked.score.expect("scored").profit - 100.0).abs() < 1e-9);
 }
 
 /// A stop inside the inner search stops the whole descent: nothing is answered.
@@ -170,5 +215,5 @@ fn a_stopped_nested_descent_answers_nothing() {
         screen: false,
         same_entry: &|a: &Point, b: &Point| a == b,
     };
-    assert!(descend_nested(Point::new(), &nested, &evaluate).is_none());
+    assert!(descend_nested(Point::new(), &nested, &evaluate, &evaluate).is_none());
 }

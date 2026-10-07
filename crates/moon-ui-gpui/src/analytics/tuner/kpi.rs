@@ -82,8 +82,10 @@ pub(super) struct OpenTail {
 }
 
 /// The profit cell of a column with deals left open: the closed deals' profit, then the open
-/// ones' estimate and their count in brackets — `-4.94 (+1.20 (5))`. The colour stays the
-/// closed profit's; the tooltip spells every part out.
+/// ones' estimate in brackets — `-4.94 (+1.20)`. Their count is not in the cell: the narrow
+/// column cut `-4.94 (+1.20 (5))` off (2026-10-07), and the heading's line already says how many
+/// are open. The colour stays the closed profit's; the tooltip spells every part out, the count
+/// included.
 ///
 /// Args:
 ///     closed: The column's profit figure, from [`figure_of`].
@@ -106,7 +108,7 @@ fn with_open_tail(closed: Figure, tail: OpenTail) -> Figure {
     .to_string();
     Figure {
         text: KpiCellText {
-            display: format!("{} ({open} ({}))", closed.text.display, tail.n),
+            display: format!("{} ({open})", closed.text.display),
             tooltip: Some(tooltip),
         },
         ..closed

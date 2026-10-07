@@ -134,11 +134,13 @@ fn pool() -> Option<&'static rayon::ThreadPool> {
     .as_ref()
 }
 
-/// Run one parallel section inside the tuner's own worker pool.
+/// Run one parallel section inside the tuner's search pool.
 ///
 /// The single entry point to that pool, so no fan-out can reach rayon's global one by accident and
 /// take the core the window repaints on. Nesting is expected and harmless: an inner call from a
-/// pool thread runs its closure right there rather than handing it to a second pool.
+/// pool thread runs its closure right there rather than handing it to a second pool. The variant
+/// columns have a pool of their own ([`install_column`]); a search-pool thread that called it
+/// would leave this pool and wait on two threads, so the search's own replays never do.
 ///
 /// Args:
 ///     f: The parallel section.
@@ -149,6 +151,47 @@ pub(crate) fn install<R: Send>(f: impl FnOnce() -> R + Send) -> R {
     match pool() {
         Some(pool) => pool.install(f),
         None => f(),
+    }
+}
+
+/// Threads of the pool the variant columns are scored on ([`install_column`]): a column is one
+/// replay of the sample, a fraction of a second on two threads, and a pool this small takes
+/// little from a machine whose search pool already holds most of it.
+const COLUMN_THREADS: usize = 2;
+
+/// Worker pool for scoring the variant columns, apart from the search's ([`pool`]), or `None`
+/// when one could not be built.
+///
+/// A column scored in the search's pool waits behind every restart a running search has queued
+/// there: В1 read as the fact for the whole run of a search started seconds after the rows were
+/// reloaded (2026-10-07). Its own pool scores it while the search runs.
+fn column_pool() -> Option<&'static rayon::ThreadPool> {
+    static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(COLUMN_THREADS.min(logical_cores()).max(1))
+            .thread_name(|i| format!("moon-tuner-column-{i}"))
+            .build()
+            .inspect_err(|e| {
+                log::warn!("tuner: variant columns fall back to the search's pool — {e}")
+            })
+            .ok()
+    })
+    .as_ref()
+}
+
+/// Run one variant column's scoring — a column, its per-deal share, the cut it is compared over
+/// — in the columns' own pool ([`column_pool`]), so it never queues behind a running search.
+///
+/// Args:
+///     f: The parallel section.
+///
+/// Returns:
+///     Whatever `f` returns.
+pub(crate) fn install_column<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    match column_pool() {
+        Some(pool) => pool.install(f),
+        None => install(f),
     }
 }
 
