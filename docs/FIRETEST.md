@@ -26,7 +26,7 @@ is deterministic: the same candles, the same trades and the same figures on ever
 
 ```powershell
 $env:MOON_FIRETEST_MARKET = "ACEUSDT"
-.	arget_64-pc-windows-msvc\debug\moonterminal.exe --fixture --debug-script chart-smoke
+.\target\x86_64-pc-windows-msvc\debug\moonterminal.exe --fixture --debug-script chart-smoke
 ```
 
 The `--fixture [name]` flag is standalone and is not tied to FireTest: without `--debug-script` it simply
