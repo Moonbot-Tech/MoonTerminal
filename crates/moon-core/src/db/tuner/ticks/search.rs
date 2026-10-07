@@ -23,8 +23,12 @@
 //! by the profit factor — `metrics::Tally`, the same figures the KPI matrix prints. A deal the
 //! variant never fills is not a trade and drops out of `n`; the caller prints "by N of M" beside
 //! the column so a variant that wins by trading less is visible as such. A point that buys a deal and does not close it inside its tape, or leaves a strategy
-//! with nothing standing to close a trade, is refused outright ([`closing`], the developer,
-//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. So is one
+//! with nothing standing to close a trade, is never the answer ([`closing`], the developer,
+//! 2026-09-24): dropping the deal would reward the loss it carries past the tape. A search of the
+//! Entry group still steers by such a point — by what it makes on the deals it closed — and walks
+//! the exit under it to close the rest; the best one that leaves deals open is handed back beside
+//! the answer, for the axis to lay over В1 with its open deals counted ([`candidate`], LinKvo,
+//! 2026-10-07). A point that closes every deal is refused outright
 //! whose max drawdown or win rate on the fitted deals is worse than the fact's there by more
 //! than the risk limits allow ([`risk`]). A switch the point turns on brings the values it
 //! needs ([`deps`]).
@@ -56,15 +60,15 @@ use super::{
     simulate_from,
 };
 use crate::db::metrics::Tally;
-use crate::db::tuner::threshold_search::search::{install, restart_seed};
+use crate::db::tuner::threshold_search::search::{install, install_column, restart_seed};
 use crate::db::tuner::threshold_search::{SearchHandle, train_split};
 use crate::feed::types::Tick;
 
 /// types items for tick searches.
 mod types;
 pub use types::{
-    DEFAULT_MAX_PASSES, PreparedDeal, SearchMiss, SearchParams, SearchResult, SearchStats,
-    clip_to_horizon, common_horizon_ms,
+    Candidate, DEFAULT_MAX_PASSES, PreparedDeal, SearchMiss, SearchParams, SearchResult,
+    SearchStats, clip_to_horizon, common_horizon_ms,
 };
 
 /// descent items for tick searches.
@@ -100,6 +104,49 @@ pub fn suggest(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
     handle: &SearchHandle,
+) -> Result<SearchResult, SearchMiss> {
+    suggest_with_candidate(deals, params, handle).result
+}
+
+/// What a search answers, and the point beside it that leaves deals open.
+#[derive(Debug)]
+pub struct Suggested {
+    /// The answer, or why there is none — as [`suggest`].
+    pub result: Result<SearchResult, SearchMiss>,
+    /// The best point a search of the Entry group met that leaves deals of the training slice
+    /// open inside the tape, when it earns more on the deals it closed than the answer — or
+    /// when there is no answer ([`candidate`]). Never [`Self::result`]: what its open deals make
+    /// is on no record, so a caller that shows it says how many it left open.
+    pub candidate: Option<Candidate>,
+    /// The fields the search varied, sorted — as [`SearchResult::searched`], and there too when
+    /// the search has no answer, so a candidate can be laid over them.
+    pub searched: Vec<String>,
+}
+
+/// Run the search, and keep the point that leaves deals open beside its answer
+/// ([`Suggested::candidate`]); arguments as for [`suggest`].
+pub fn suggest_with_candidate(
+    deals: &[PreparedDeal],
+    params: &SearchParams<'_>,
+    handle: &SearchHandle,
+) -> Suggested {
+    let mut candidate = None;
+    let result = search(deals, params, handle, &mut candidate);
+    let mut searched: Vec<String> = varied(params).iter().map(|f| f.key.to_string()).collect();
+    searched.sort();
+    Suggested {
+        result,
+        candidate,
+        searched,
+    }
+}
+
+/// The search itself; `candidate_out` takes the point beside the answer ([`Suggested`]).
+fn search(
+    deals: &[PreparedDeal],
+    params: &SearchParams<'_>,
+    handle: &SearchHandle,
+    candidate_out: &mut Option<Candidate>,
 ) -> Result<SearchResult, SearchMiss> {
     let fields = varied(params);
     // A searched field starts from the strategies (or its grid step, `pinned`), never from what
@@ -205,21 +252,26 @@ pub fn suggest(
     // The fills of the entries scored lately: most points share their entry with the point
     // before (`fills`).
     let fill_cache = fills::FillCache::default();
-    let score_point = |point: &Point| -> Option<Tally> {
+    // A point's replay of the training slice, or `None` where it cannot trade at all: a corridor
+    // rule refuses it, or a strategy is left with nothing standing to close a trade (`closing`).
+    let replay_point = |point: &Point| -> Option<closing::Replayed> {
         let per_base = per_base_at(point);
         if corridor_refuses(&per_base) {
             return None;
         }
         // Counted here, past the refusals: what the stats call a scored point is a replay.
         evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        // A trade must be closed while it lasts: something that can close it stands on every
-        // strategy, and none of the deals it bought is left open (`closing`).
-        let closed = closing::protected(&per_base)
-            .then(|| {
-                let fills = fill_cache.fills(train, train_of, &per_base);
-                closing::closed_tally(train, train_of, &per_base, &fills)
-            })
-            .flatten();
+        if !closing::protected(&per_base) {
+            unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return None;
+        }
+        let fills = fill_cache.fills(train, train_of, &per_base);
+        Some(closing::replay(train, train_of, &per_base, &fills))
+    };
+    // A point the search may answer: one that closes every deal it bought (`closing`).
+    let score_point = |point: &Point| -> Option<Tally> {
+        let replayed = replay_point(point)?;
+        let closed = replayed.closed_all().cloned();
         if closed.is_none() {
             unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -233,13 +285,53 @@ pub fn suggest(
     // to (`risk`).
     let fact_train = fact_tally(train);
     let risky = std::sync::atomic::AtomicUsize::new(0);
+    let within_risk = |tally: &Tally| {
+        let allowed = params.risk.allows(tally, &fact_train);
+        if !allowed {
+            risky.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        allowed
+    };
     let evaluate = |point: &Point| -> Option<Tally> {
         let tally = score_point(point)?;
-        if params.risk.allows(&tally, &fact_train) {
-            Some(tally)
+        within_risk(&tally).then_some(tally)
+    };
+    // The best points the restarts met: the one to answer, and the one beside it that leaves
+    // deals open (`candidate`).
+    let tracker = candidate::Tracker::default();
+    // How a restart scores a point, offering it to the tracker on the way. An exit search walks
+    // by the answer's own score; a search of the Entry group steers by what a point makes on the
+    // deals it closed (`Steer::Closed`) and, under an entry point, walks the exit to close its
+    // deals first (`Steer::Closing`).
+    let scored_in = |restart: usize, steer: Steer, point: &Point| -> Option<Tally> {
+        let replayed = replay_point(point)?;
+        if replayed.open > 0 {
+            unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // An exit search answers or refuses; nothing else is made of an open point.
+            if steer == Steer::Answer {
+                return None;
+            }
+        }
+        // The risk limits refuse what may be answered — a point that closes every deal, as they
+        // always did. A point that leaves deals open is not refused by them: they would read a
+        // curve with holes in it, and refuse the very points the exit walk passes through on its
+        // way to closing them. It is held to them on the deals it closed only to be shown as the
+        // candidate, uncounted, since nothing was refused.
+        let within = if replayed.open == 0 {
+            if !within_risk(&replayed.closed) {
+                return None;
+            }
+            true
         } else {
-            risky.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            None
+            params.risk.allows(&replayed.closed, &fact_train)
+        };
+        if within {
+            tracker.offer(point, &replayed, restart, min_n);
+        }
+        match steer {
+            Steer::Answer => replayed.closed_all().cloned(),
+            Steer::Closed => Some(replayed.closed),
+            Steer::Closing => Some(candidate::closing_score(&replayed)),
         }
     };
     // The fields that move in pairs: the Entry group's numbers, where a corridor's distance is
@@ -312,8 +404,17 @@ pub fn suggest(
                         screen: params.screen_entry,
                         same_entry: &same_entry,
                     };
-                    nested::descend_nested(point, &walk, &evaluate)
+                    let inner = |p: &Point| scored_in(restart, Steer::Closing, p);
+                    let outer = |p: &Point| scored_in(restart, Steer::Closed, p);
+                    nested::descend_nested(point, &walk, &inner, &outer)
                 } else {
+                    // An entry search steers by the deals a point closes; an exit search by the
+                    // answer's own score, as it always did.
+                    let steer = if params.vary_entry && !entry_fields.is_empty() {
+                        Steer::Closed
+                    } else {
+                        Steer::Answer
+                    };
                     descend(
                         point,
                         params.grids,
@@ -321,7 +422,7 @@ pub fn suggest(
                         &pairs,
                         &coupling,
                         &start,
-                        &evaluate,
+                        &|p: &Point| scored_in(restart, steer, p),
                         None,
                         min_n,
                         max_passes,
@@ -358,25 +459,38 @@ pub fn suggest(
     }
     let distinct = ends.len();
     let restarts_done = runs.len();
-    let refused = runs.iter().filter(|run| run.score.is_none()).count();
-    let best = runs
-        .into_iter()
-        .reduce(|a, b| {
-            if better_score(&b.score, &a.score, min_n) {
-                b
-            } else {
-                a
-            }
-        })
-        .ok_or(SearchMiss::Nothing)?;
-    // What the descents refused, read before the trim's own trials add to it.
+    if runs.is_empty() {
+        return Err(SearchMiss::Nothing);
+    }
+    // What the descents refused, read before the counts below and the trim add to it.
     let load = |c: &std::sync::atomic::AtomicUsize| c.load(std::sync::atomic::Ordering::Relaxed);
     let (cornered_n, unclosed_n, risky_n) = (load(&cornered), load(&unclosed), load(&risky));
-    let (best_restart, passes, converged) = (best.restart, best.passes, best.converged);
-    let (point, score) =
-        drop_passengers(best.point, best.score, &pinned, &evaluate, min_n, &|| {
-            handle.is_cancelled()
+    // A restart steered by the deals a point closes can end on one that leaves some open: it is
+    // refused all the same, read the answer's way.
+    let refused = runs
+        .iter()
+        .filter(|run| run.score.is_none() || (params.vary_entry && evaluate(&run.point).is_none()))
+        .count();
+    // The answer is the best point that closes every deal, met anywhere in any restart — a
+    // descent steered by the deals closed need not stand on it at its end.
+    let answer = tracker.answer();
+    let (best_restart, passes, converged) = answer
+        .as_ref()
+        .and_then(|met| runs.iter().find(|run| run.restart == met.restart))
+        .map_or((0, 0, false), |run| {
+            (run.restart, run.passes, run.converged)
         });
+    let (point, score) = match answer {
+        Some(met) => drop_passengers(
+            met.point,
+            Some(met.score),
+            &pinned,
+            &evaluate,
+            min_n,
+            &|| handle.is_cancelled(),
+        ),
+        None => (Point::new(), None),
+    };
     // Every point scored, the trim's trials included.
     let stats = SearchStats {
         restarts: restarts_done,
@@ -430,14 +544,49 @@ pub fn suggest(
         stats.fills_reused,
         stats.evaluations
     );
-    // The answer as it was scored — every field it switched on at a value, the passengers already
-    // dropped — less what is in effect on no strategy.
-    let point = deps.prune(
-        &deps.complete(&point, &bases.owns, params.held, params.defaults),
-        &bases.owns,
-        params.held,
-        params.defaults,
-    );
+    // A point as scored — every field it switched on at a value — less what is in effect on no
+    // strategy, and the fields of it that moved: a field every deal's base already spells so is
+    // not a change, and a value one strategy holds and another does not is a change for the
+    // other.
+    let spelled = |point: &Point| -> (Point, Vec<(String, String)>) {
+        let point = deps.prune(
+            &deps.complete(point, &bases.owns, params.held, params.defaults),
+            &bases.owns,
+            params.held,
+            params.defaults,
+        );
+        let mut values: Vec<(String, String)> = point
+            .iter()
+            .filter(|(key, value)| bases.moves(params.held, key, value))
+            .map(|(key, value)| ((*key).to_string(), value.clone()))
+            .collect();
+        values.sort();
+        (point, values)
+    };
+    // The answer, the passengers already dropped.
+    let (point, values) = spelled(&point);
+    // The best point that leaves deals open, when it earns more on the deals it closed than the
+    // answer does on all of them — or when there is no answer at all: handed back beside the
+    // answer, or beside why there is none, never as it (`candidate`).
+    *candidate_out = tracker
+        .candidate()
+        .filter(|met| better_score(&Some(met.score.clone()), &score, min_n))
+        .map(|met| Candidate {
+            values: spelled(&met.point).1,
+            train: met.score,
+            open: met.open,
+            deals: train_n,
+        });
+    if let Some(c) = candidate_out.as_ref() {
+        log::info!(
+            target: crate::diagnostics::TICKS_AXIS_TARGET,
+            "[x] ticks search: candidate (closed n, profit) {:?}, {} left open, against the answer's {:?}: {:?}",
+            brief(&Some(c.train.clone())),
+            c.open,
+            brief(&score),
+            c.values
+        );
+    }
     // `better_score` ranks a refused point below every other, and `better` one under the floor
     // below any above it: a best refused or under the floor means no point held either.
     let Some(train_tally) = score else {
@@ -454,14 +603,6 @@ pub fn suggest(
     if train_tally.n < min_n {
         return Err(SearchMiss::Floor);
     }
-    // A field every deal's base already spells so is not a change; only what moved is
-    // reported — a value one strategy holds and another does not is a change for the other.
-    let mut values: Vec<(String, String)> = point
-        .iter()
-        .filter(|(key, value)| bases.moves(params.held, key, value))
-        .map(|(key, value)| ((*key).to_string(), value.clone()))
-        .collect();
-    values.sort();
     let (holdout, holdout_open, holdout_open_profit) = if train_n < deals.len() {
         let per_base = bases.params(params.held, params.defaults, &point, params.kind, model);
         let held_back = self::score(&deals[train_n..], &bases.of_deal[train_n..], &per_base);
@@ -491,6 +632,8 @@ pub fn suggest(
     })
 }
 
+mod candidate;
+use self::candidate::Steer;
 mod closing;
 pub use self::closing::unguarded_strategies;
 mod coupled;

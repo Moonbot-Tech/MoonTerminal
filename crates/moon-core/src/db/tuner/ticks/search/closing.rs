@@ -50,28 +50,44 @@ fn guarded(exit: &ExitParams) -> bool {
         || (exit.trailing_pct != 0.0 && exit.trailing_take_profit_pct.is_none())
 }
 
-/// The tally of a point that closes every deal it buys inside the tape — by its stop or its
-/// sell — else `None`: a point that leaves one open is not one the search may pick, since the
-/// loss it would carry past the tape is on no record and dropping the deal would only reward it
-/// (the developer, 2026-09-24).
-///
-/// `fills` are each deal's entry fill under `params` ([`super::fills::FillCache`]).
-pub(super) fn closed_tally(
+/// One point's replay of a slice, read the two ways the search needs it: the trades it closed
+/// inside the tape, and how many deals it bought and left open there.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Replayed {
+    /// The deals the point bought and closed inside the tape, in order.
+    pub(super) closed: Tally,
+    /// The deals the point bought and closed neither inside the tape nor provably in a hole of
+    /// it ([`crate::db::tuner::ticks::Outcome::left_open`]).
+    pub(super) open: usize,
+}
+
+impl Replayed {
+    /// The tally of a point that closes every deal it buys inside the tape — by its stop or its
+    /// sell — else `None`: such a point is the only one the search may ANSWER, since the loss an
+    /// open deal would carry past the tape is on no record and dropping the deal would only
+    /// reward it (the developer, 2026-09-24).
+    pub(super) fn closed_all(&self) -> Option<&Tally> {
+        (self.open == 0).then_some(&self.closed)
+    }
+}
+
+/// Replay `deals` under `params` on the entry `fills` read for them
+/// ([`super::fills::FillCache`]).
+pub(super) fn replay(
     deals: &[PreparedDeal],
     of_deal: &[usize],
     params: &[(EntryParams, ExitParams)],
     fills: &[Option<Fill>],
-) -> Option<Tally> {
-    let mut tally = Tally::default();
+) -> Replayed {
+    let mut replayed = Replayed::default();
     for (result, open, _) in results(deals, of_deal, params, Some(fills)) {
         if open {
-            return None;
-        }
-        if let Some((money, _)) = result {
-            tally.push(money);
+            replayed.open += 1;
+        } else if let Some((money, _)) = result {
+            replayed.closed.push(money);
         }
     }
-    Some(tally)
+    replayed
 }
 
 /// The sample less the deals the strategies as they stand leave open inside the tape — the
@@ -84,7 +100,7 @@ pub(super) fn closed_tally(
 /// sample it would refuse every point, the strategy itself among them, and the search could not
 /// move even the one field it was asked about (LinKvo, 2026-09-24: "the stops are in the strategy
 /// and must stay; only the selected field is searched"). A point is still refused when it leaves
-/// open a deal the strategies as they stand close ([`closed_tally`]).
+/// open a deal the strategies as they stand close ([`Replayed::closed_all`]).
 ///
 /// Args:
 ///     deals: The sample, cut at its horizon.

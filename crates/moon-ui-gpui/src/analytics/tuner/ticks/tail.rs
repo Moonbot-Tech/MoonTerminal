@@ -5,7 +5,8 @@
 //!
 //! One deal with a 30 s tail cut every variant's exit 30 s past its close: a variant that fills a
 //! hair off the fact's price reaches its take or its Price Down line later than the fact did, is
-//! left open at the cut, and refuses the whole point (`search::closing`). The tape of an older
+//! left open at the cut, and the point is never the answer (`search::closing`) — an exit search
+//! refuses it outright, an entry search can only steer through it. The tape of an older
 //! trade cannot be fetched again — its exchange no longer serves it — so the deal is left out
 //! instead (LinKvo, 2026-09-24).
 //!

@@ -23,7 +23,7 @@ pub fn fact_tally(deals: &[PreparedDeal]) -> Tally {
 /// Returns:
 ///     The kept deals, in order, and how many the base leaves open.
 pub fn comparable(deals: &[PreparedDeal], params: &SearchParams<'_>) -> (Vec<PreparedDeal>, usize) {
-    let cut = install(|| cut(deals, params));
+    let cut = install_column(|| cut(deals, params));
     (cut.kept, cut.left_open.len())
 }
 
@@ -104,6 +104,20 @@ pub fn variant_tally(
     values: &[(String, String)],
     model: ModelSettings,
 ) -> VariantScore {
+    install_column(|| variant_tally_here(deals, defaults, kind, values, model))
+}
+
+/// [`variant_tally`] in whatever pool the caller runs in — for [`super::point_cost`], which
+/// measures a replay the way a search runs it, on the search's own pool: through the columns'
+/// pool every replay of its batch would queue on two threads, and the time it reports would be
+/// that queue's.
+pub(super) fn variant_tally_here(
+    deals: &[PreparedDeal],
+    defaults: &HashMap<String, f64>,
+    kind: &str,
+    values: &[(String, String)],
+    model: ModelSettings,
+) -> VariantScore {
     let bases = Bases::of(deals);
     let per_base = bases.params(
         &HashMap::new(),
@@ -112,7 +126,7 @@ pub fn variant_tally(
         kind,
         model.sanitized(),
     );
-    install(|| score(deals, &bases.of_deal, &per_base))
+    score(deals, &bases.of_deal, &per_base)
 }
 
 /// One variant on one deal, as the tuner's trade pane draws it.
@@ -221,7 +235,7 @@ pub fn variant_tally_by_deal(
         kind,
         model.sanitized(),
     );
-    install(|| {
+    install_column(|| {
         let scored: Vec<_> = deals
             .par_iter()
             .zip(bases.of_deal.par_iter())

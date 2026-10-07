@@ -163,8 +163,9 @@ fn break_even_profit_factor_is_a_dash_and_all_winners_stay_99() {
     set_pnl_unit(None);
 }
 
-/// A column with deals left open shows its closed profit, then their tape-end estimate and
-/// count in brackets, coloured by the closed profit alone — the estimate never joins the total.
+/// A column with deals left open shows its closed profit, then their tape-end estimate in
+/// brackets, coloured by the closed profit alone — the estimate never joins the total. Their
+/// count is the tooltip's: the narrow column cut it off the cell (2026-10-07).
 #[test]
 fn an_open_tail_follows_the_closed_profit_in_brackets() {
     let _locale = crate::test_locale::force("en");
@@ -176,8 +177,12 @@ fn an_open_tail_follows_the_closed_profit_in_brackets() {
     };
     let tail = OpenTail { profit: 20.0, n: 5 };
     let figure = with_open_tail(figure_of(MetricKind::Profit, &stats), tail);
-    assert_eq!(figure.text.display, "-4.94 (+20 (5))");
-    assert!(figure.text.tooltip.is_some());
+    assert_eq!(figure.text.display, "-4.94 (+20)");
+    let tooltip = figure
+        .text
+        .tooltip
+        .expect("the tooltip spells the tail out");
+    assert!(tooltip.contains('5'), "{tooltip}");
     assert_eq!(figure.tone, FigureTone::Signed);
     assert!((figure.signed + 4.94).abs() < 1e-12);
 }

@@ -153,8 +153,9 @@ pub struct SearchStats {
     pub distinct: usize,
     /// Points scored over the whole run, each a replay of the training slice.
     pub evaluations: usize,
-    /// Restarts that ended on a point the corridor rules or the closing rule (`closing`) refuse
-    /// — none of their moves reached an allowed one.
+    /// Restarts that ended on a point the search may not answer — one the corridor rules, the
+    /// risk limits or the closing rule (`closing`) refuse. A search of the Entry group steers by
+    /// points that leave deals open ([`candidate`]), so its restarts can end on one.
     pub refused: usize,
     /// Deals the strategies as they stand leave open inside the tape, taken out of the sample
     /// before the search (`closing::closable_at_base`).
@@ -198,4 +199,21 @@ pub struct SearchResult {
     pub seed: u64,
     /// How the run went.
     pub stats: SearchStats,
+}
+
+/// A point that leaves deals open inside the tape — an entry whose exits the tape is too short to
+/// judge whole — and earns more on the deals it closes than the answer, or stands where the
+/// search has no answer ([`candidate`], [`super::Suggested::candidate`]).
+#[derive(Clone, Debug)]
+pub struct Candidate {
+    /// Its values, in strategy spelling — only the fields that moved off the base of at least
+    /// one deal, as [`SearchResult::values`].
+    pub values: Vec<(String, String)>,
+    /// What it makes on the training deals it closed; an open deal is no trade and not in `n`.
+    pub train: Tally,
+    /// Training deals it bought and left open inside the tape.
+    pub open: usize,
+    /// Training deals the search was fitted on — those it closed, those it left open and those
+    /// it never bought: what its closed share is of.
+    pub deals: usize,
 }

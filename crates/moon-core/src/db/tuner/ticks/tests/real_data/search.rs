@@ -24,8 +24,9 @@ use crate::db::tuner::ticks::params::range::{
 };
 pub(super) use crate::db::tuner::ticks::search::PreparedDeal;
 use crate::db::tuner::ticks::search::{
-    DEFAULT_MAX_PASSES, SearchParams, check_corridors, clip_to_horizon, common_horizon_ms,
-    point_cost, search_size, suggest, train_len, variant_picture, variant_tally,
+    DEFAULT_MAX_PASSES, SearchParams, Suggested, check_corridors, clip_to_horizon,
+    common_horizon_ms, point_cost, search_size, suggest, suggest_with_candidate, train_len,
+    variant_picture, variant_tally,
 };
 use crate::db::tuner::ticks::{Deal, ModelSettings, TICK_PARAMS};
 use crate::feed::types::Tick;
@@ -64,6 +65,13 @@ pub(super) fn run(deals: Vec<PreparedDeal>, kind: &str, defaults: &HashMap<Strin
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(5);
+    // `MOON_TICKS_SEARCH_POOL=1`: the `top` strategies searched together, as the axis searches a
+    // selection of several — the sample where one deal of hundreds left open refused nearly every
+    // point (2026-10-07).
+    if std::env::var_os("MOON_TICKS_SEARCH_POOL").is_some() {
+        let pooled: Vec<PreparedDeal> = groups.into_iter().take(top).flatten().collect();
+        return run_one(pooled, kind, defaults);
+    }
     for group in groups.into_iter().take(top) {
         run_one(group, kind, defaults);
     }
@@ -345,8 +353,18 @@ fn search_groups(
         return (Err(crate::db::tuner::ticks::search::SearchMiss::Nothing), 0);
     }
     let started = Instant::now();
-    let answer = suggest(deals, &params, &SearchHandle::new());
+    let Suggested {
+        result: answer,
+        candidate,
+        ..
+    } = suggest_with_candidate(deals, &params, &SearchHandle::new());
     let ms = started.elapsed().as_millis();
+    if let Some(c) = &candidate {
+        eprintln!(
+            "    candidate {:?}: closed n {} of {} deals, {} left open, profit {:.3}",
+            c.values, c.train.n, c.deals, c.open, c.train.profit
+        );
+    }
     if let Ok(found) = &answer {
         let replays = crate::db::tuner::ticks::search::full_replays(
             found.stats.evaluations as f64,

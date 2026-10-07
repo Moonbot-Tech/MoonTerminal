@@ -16,6 +16,11 @@
 //! what that start could reach. An entry point the corridor rules refuse is refused before its exit
 //! is searched: those rules read the entry alone. With the screen on ([`super::screen`]), only the
 //! few entry moves of each step that score best under the exit found so far get an exit descent.
+//!
+//! The two descents walk by different scores ([`super::candidate`]): the exit under an entry point
+//! by one that closes deals first and earns second, so it can walk the deals an entry leaves open
+//! back inside the tape; the entry points, and the screen among them, by what entry and exit make
+//! together on the deals they closed.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -100,15 +105,18 @@ pub(super) struct Nested<'a, 'c> {
 ///     point: The restart's start — its entry fields start the outer descent, its exit fields
 ///         the first inner one.
 ///     nested: What to walk and how.
-///     evaluate: The score of a whole point, entry and exit.
+///     inner: The score the exit descent under an entry point walks by, of a whole point.
+///     outer: The score an entry point is ranked by — the outer descent's and the screen's — of
+///         the whole point, the entry with the exit found under it.
 ///
 /// Returns:
-///     Where it stopped — the entry and the exit found under it — or `None` when the run was
-///     stopped.
+///     Where it stopped — the entry and the exit found under it, with the entry's `outer`
+///     score — or `None` when the run was stopped.
 pub(super) fn descend_nested(
     point: Point,
     nested: &Nested<'_, '_>,
-    evaluate: &(dyn Fn(&Point) -> Option<Tally> + Sync),
+    inner: &(dyn Fn(&Point) -> Option<Tally> + Sync),
+    outer: &(dyn Fn(&Point) -> Option<Tally> + Sync),
 ) -> Option<Walked> {
     let is_exit = |key: &str| nested.exit.iter().any(|f| f.key == key);
     let (exit, entry): (Point, Point) = point.into_iter().partition(|(key, _)| is_exit(key));
@@ -151,7 +159,7 @@ pub(super) fn descend_nested(
             &[],
             nested.exit_coupling,
             nested.start,
-            evaluate,
+            inner,
             None,
             nested.min_n,
             nested.max_passes,
@@ -159,14 +167,17 @@ pub(super) fn descend_nested(
         )?;
         nested.searched.fetch_add(1, Ordering::Relaxed);
         nested.handle.record_point();
+        // The entry is ranked by the whole point the exit descent stopped on, read the outer way:
+        // the inner score is a walk's, not a result.
+        let score = outer(&walked.point);
         let found: Point = walked
             .point
             .into_iter()
             .filter(|(key, _)| is_exit(key))
             .collect();
-        keep_if_best(&walked.score, &found, entry);
-        cache.put(key, (walked.score.clone(), found));
-        walked.score
+        keep_if_best(&score, &found, entry);
+        cache.put(key, (score.clone(), found));
+        score
     };
     // The screen's score of an entry point: one replay under the exit of the best entry point so
     // far, the exit the point the descent stands on was scored with. A point the corridor refuses
@@ -190,7 +201,7 @@ pub(super) fn descend_nested(
             .1
             .clone();
         start.extend(entry.iter().map(|(k, v)| (*k, v.clone())));
-        Screened::Scored(evaluate(&start))
+        Screened::Scored(outer(&start))
     };
     let screen: Option<&Screen<'_>> = nested.screen.then_some(&quick_entry);
     let walked = descend(

@@ -616,6 +616,20 @@ pub(in crate::analytics::tuner) struct CutCache {
     pub(in crate::analytics::tuner) fact: VarStats,
 }
 
+/// A variant's changes over the base as `(key, value)` pairs, sorted, blanks left out — what Save
+/// writes and what the KPI is computed for ([`TicksState::variant_changes`]).
+pub(in crate::analytics::tuner) fn changes_of(
+    variant: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = variant
+        .iter()
+        .filter(|(_, v)| !v.trim().is_empty())
+        .map(|(k, v)| (k.clone(), v.trim().to_string()))
+        .collect();
+    out.sort();
+    out
+}
+
 impl TicksState {
     /// The group gate as a fraction: the typed per cent, else [`DEFAULT_GATE_PCT`], within 0–100.
     pub(in crate::analytics::tuner) fn gate(&self) -> f64 {
@@ -764,14 +778,7 @@ impl TicksState {
     /// The variant's changes over the base as `(key, value)` pairs, sorted — what Save writes
     /// and what the KPI is computed for.
     pub(in crate::analytics::tuner) fn variant_changes(&self) -> Vec<(String, String)> {
-        let mut out: Vec<(String, String)> = self
-            .variant
-            .iter()
-            .filter(|(_, v)| !v.trim().is_empty())
-            .map(|(k, v)| (k.clone(), v.trim().to_string()))
-            .collect();
-        out.sort();
-        out
+        changes_of(&self.variant)
     }
 
     /// The last search's answer while the variant column still is its point — a hand edit since

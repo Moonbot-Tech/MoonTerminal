@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
-use super::{PreparedDeal, SearchParams, train_len, variant_tally, varied};
+use super::tally::variant_tally_here;
+use super::{PreparedDeal, SearchParams, train_len, varied};
 use crate::db::tuner::threshold_search::search::install;
 use crate::db::tuner::ticks::params::{ParamGroup, ParamKind};
 use crate::db::tuner::ticks::settings::ModelSettings;
@@ -168,7 +169,7 @@ pub fn point_cost(
     let started = Instant::now();
     install(|| {
         (0..runs).into_par_iter().for_each(|_| {
-            let _ = variant_tally(train, defaults, kind, &[], model);
+            let _ = variant_tally_here(train, defaults, kind, &[], model);
         })
     });
     started.elapsed() / runs as u32

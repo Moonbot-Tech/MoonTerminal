@@ -1105,3 +1105,58 @@ fn bench_threshold_search() {
         None => println!("[bench] MOON_TUNER_BENCH_DB unset - real-data rows skipped"),
     }
 }
+
+/// A variant column is scored while a search holds every thread of the tuner's pool: the
+/// column's work must not queue behind the search's restarts. It did (2026-10-07): В1 read as the
+/// fact for the whole run of a search started seconds after a reload, its rescore waiting in the
+/// same pool behind a hundred restarts.
+///
+/// The test holds the shared search pool whole while it runs: tests beside it that use the pool
+/// wait that long — milliseconds while the column's pool answers, five seconds if it regressed.
+#[test]
+fn a_column_is_scored_while_a_search_holds_the_pool() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::Duration;
+    let Some(pool) = pool() else {
+        return;
+    };
+    let threads = pool.current_num_threads();
+    let release = Arc::new(AtomicBool::new(false));
+    let busy = Arc::new(AtomicUsize::new(0));
+    // Every thread of the search's pool held until released, as a running search holds them.
+    let holder = {
+        let (release, busy) = (release.clone(), busy.clone());
+        std::thread::spawn(move || {
+            install(|| {
+                rayon::scope(|s| {
+                    for _ in 0..threads {
+                        let (release, busy) = (release.clone(), busy.clone());
+                        s.spawn(move |_| {
+                            busy.fetch_add(1, Ordering::SeqCst);
+                            while !release.load(Ordering::SeqCst) {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                        });
+                    }
+                });
+            });
+        })
+    };
+    // Another test in the pool can delay the hold; it cannot make this one hang.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while busy.load(Ordering::SeqCst) < threads {
+        if std::time::Instant::now() > deadline {
+            release.store(true, Ordering::SeqCst);
+            panic!("the search's pool was never held whole");
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(install_column(|| (0..64).into_par_iter().sum::<i32>()));
+    });
+    let scored = rx.recv_timeout(Duration::from_secs(5));
+    release.store(true, Ordering::SeqCst);
+    holder.join().expect("the holder ends once released");
+    assert_eq!(scored, Ok(2016), "the column waited for the search's pool");
+}

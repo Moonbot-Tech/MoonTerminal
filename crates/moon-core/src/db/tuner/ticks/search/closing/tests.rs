@@ -33,7 +33,7 @@ fn a_stop_or_a_bare_trailing_guards_a_trade() {
 }
 
 /// Turning the stop off leaves the falling deals open past the tape — a loss on no record — and
-/// such a point is refused rather than scored on the deals it did close (the developer,
+/// a search of the exit refuses such a point rather than scoring it on the deals it did close (the developer,
 /// 2026-09-24): the search keeps the stop.
 #[test]
 fn a_point_that_leaves_a_deal_open_is_refused() {
