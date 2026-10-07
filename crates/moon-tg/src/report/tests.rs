@@ -283,6 +283,34 @@ fn report_average_column_shows_percent_and_missing_values_stay_unvalued() {
     );
 }
 
+/// The native column shows a row's own quote currency and leaves the mixed-currency total empty.
+#[test]
+fn report_native_column_shows_quote_currency_and_blank_total() {
+    let _locale = crate::test_locale::force("en");
+    let page = layout_page(ReportLayout {
+        columns: vec![ReportColumn::Native, ReportColumn::Trades],
+        ..Default::default()
+    });
+    assert_eq!(
+        super::render::row_html(&page.rows[0], true, &page.layout),
+        "<tr><td>Fixture</td><td align=\"right\">+20.00000000\u{a0}BTC</td><td align=\"right\">2</td></tr>"
+    );
+    let empty = super::Row::Line("Empty".into(), QuoteBreakdown::default());
+    assert_eq!(
+        super::render::row_html(&empty, true, &page.layout),
+        "<tr><td>Empty</td><td align=\"right\">0</td><td align=\"right\">0</td></tr>"
+    );
+    let html = super::report_html(&page);
+    let table = html.split("</table>").next().unwrap();
+    assert!(table.contains(&format!(
+        "<th align=\"right\">{}</th><th align=\"right\">Trades</th></tr>",
+        crate::t!("telegram.report_native_col")
+    )));
+    assert!(table.contains(
+        "<tr><th align=\"left\"><b>Total</b></th><th align=\"right\"></th><th align=\"right\"><b>2</b></th></tr>"
+    ));
+}
+
 /// Total placement and spacer rows must follow the saved layout without losing band shading.
 #[test]
 fn report_total_band_and_gap_follow_saved_placement() {

@@ -189,7 +189,8 @@ fn report_edits_preserve_one_known_column() {
         vec![
             ReportColumn::Profit,
             ReportColumn::Average,
-            ReportColumn::Volume
+            ReportColumn::Volume,
+            ReportColumn::Native
         ]
     );
     report.restore_column(&ReportColumn::Profit);

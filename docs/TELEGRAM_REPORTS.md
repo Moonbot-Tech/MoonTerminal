@@ -200,8 +200,10 @@ Saved hashtag choices stay unchanged. The switches affect cards only: core down/
 always keep their hashtags.
 
 The Report tab keeps the first column fixed and lets you reorder or hide Profit, Trades,
-Average % and Volume. At least one of these columns stays visible; all four may not fit a phone.
-Volume shows a native amount only for a complete single-currency scope.
+Average %, Volume and Quote (profit in each core's own quote currency). At least one of these
+columns stays visible; four or more may not fit a phone, and the editor says so.
+Volume shows a native amount only for a complete single-currency scope. Quote lists one sum per
+currency on a mixed row and leaves the total cell empty: totals across currencies are not added.
 The total goes at the Bottom by default, or at the Top. Separation is Band by default, a shaded
 row with bold text and values; Spacer + band adds an empty row beside it. There is no line option
 because Telegram rich tables cannot draw a rule inside a table. Group rows use Band by default,

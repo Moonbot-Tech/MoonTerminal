@@ -70,6 +70,8 @@ pub enum ReportColumn {
     Trades,
     Average,
     Volume,
+    /// Profit in each core's own quote currency; the total row leaves it empty.
+    Native,
     Other(String),
 }
 
@@ -88,7 +90,7 @@ macro_rules! open_ids {
     };
 }
 open_ids!(CardField, 8, Mark => "mark", Coin => "coin", Profit => "profit", Volume => "volume", Duration => "duration", Core => "core", Strategy => "strategy", Prices => "prices");
-open_ids!(ReportColumn, 4, Profit => "profit", Trades => "trades", Average => "average", Volume => "volume");
+open_ids!(ReportColumn, 5, Profit => "profit", Trades => "trades", Average => "average", Volume => "volume", Native => "native");
 
 /// Generate closed appearance choices using the menu's shared tolerant serde.
 macro_rules! choices {

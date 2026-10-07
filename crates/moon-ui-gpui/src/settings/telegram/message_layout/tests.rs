@@ -18,7 +18,11 @@ fn editor_normalizes_saved_layout_before_first_edit() {
     );
     assert_eq!(
         view.report.hidden_columns(),
-        vec![ReportColumn::Average, ReportColumn::Volume]
+        vec![
+            ReportColumn::Average,
+            ReportColumn::Volume,
+            ReportColumn::Native
+        ]
     );
     apply_action(&mut draft, LayoutAction::CoreHashtag(false));
     assert_eq!(draft.card.lines, view.card.lines);
