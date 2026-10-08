@@ -111,9 +111,10 @@ Three kinds of test, three homes. The toolchain dictates this, not taste:
   not need the optional `private/uidoc` overlay to pass; `cargo fmt` must (and does) work without
   it. Blame history across the tree-wide reformat is preserved by `.git-blame-ignore-revs` —
   enable it locally with `git config blame.ignoreRevsFile .git-blame-ignore-revs`.
-- Six CI gates, all on every PR and all meant to be green before you merge: the Windows
+- Seven CI gates, all on every PR and all meant to be green before you merge: the Windows
   `.exe` job (~15 min), `Tests (x86_64-msvc)` running `cargo test --workspace`,
   `Clippy (x86_64-msvc)` running `cargo clippy --workspace --all-targets --locked -- -D warnings`,
+  `Station (x86_64-linux-musl)` building, testing and linting `moon-station` for Linux musl,
   `Dependency audit (cargo-deny)`, `Tour` building the knowledge site, and `Fmt` running
   `cargo fmt --all -- --check`. They run in parallel. The macOS job is diagnostic
   (`continue-on-error`) — read its log, but it does not block. "Gate" is a convention here, not
