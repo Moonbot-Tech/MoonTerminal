@@ -43,10 +43,10 @@ strings:
     ru: Быстрый старт
     en: Quick start
   qs.lead:
-    ru: 'Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока
-      настройки не сохранены.'
-    en: 'Five steps from an empty window to a green indicator. Order matters: the terminal does not connect
-      until settings are saved.'
+    ru: 'Пять шагов от пустого окна до зелёного индикатора, затем как включить Mini App. Порядок важен:
+      терминал не подключается, пока настройки не сохранены.'
+    en: 'Five steps from an empty window to a green indicator, then how to turn the Mini App on. Order
+      matters: the terminal does not connect until settings are saved.'
   qs.note:
     ru: Важно
     en: Note
