@@ -363,7 +363,22 @@ pub enum FeedMsg {
     /// two different clocks (see `session::core_update`'s counter-not-timestamp design), so this
     /// message exists purely as a tick for a monotonic counter on `CoreData`.
     CoreUpdateRejected,
+    /// Whether this core ignores the request to stop its log (`FeedFlags::log_delivery` off).
+    ///
+    /// The request is local intent with no acknowledgement (MoonProto), and a core older than it
+    /// simply keeps sending, so the only evidence is the stream itself: `true` once a log line
+    /// still arrives [`crate::feed::LOG_DELIVERY_GRACE`] after Ready, `false` at the start of
+    /// every connection so a stale verdict never outlives the feed that reached it.
+    LogDeliveryIgnored(bool),
 }
+
+/// How long after Ready a log line may still arrive from a core asked not to send its log before
+/// the core counts as ignoring the request (`FeedMsg::LogDeliveryIgnored`).
+///
+/// MoonProto says lines already sent, and the startup lines, may still arrive after the request:
+/// they ride the same connection that carried it. Thirty seconds is far past that burst and short
+/// enough that the Connections menu says so while the user still looks at it.
+pub const LOG_DELIVERY_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[cfg(test)]
 mod tests;

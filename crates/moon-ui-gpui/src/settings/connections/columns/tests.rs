@@ -249,11 +249,11 @@ fn data_trigger_fits_every_count_at_each_zoom() {
         let fitting_font = tokens.font(reference_font);
         let rendered_font = tokens.ui(reference_font);
         let trigger_width = ConnColId::Data.spec().basis * fitting_font / reference_font;
-        for on in 0..=8 {
-            let label = format!("{on}/8 \u{25be}");
+        for on in 0..=9 {
+            let label = format!("{on}/9 \u{25be}");
             let required = label.chars().count() as f32 * 0.6 * fitting_font.max(rendered_font)
                 + tokens.ui(14.0);
-            assert!(trigger_width >= required, "{on}/8 clipped at zoom {zoom}");
+            assert!(trigger_width >= required, "{on}/9 clipped at zoom {zoom}");
         }
     }
 }

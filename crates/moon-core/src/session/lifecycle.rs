@@ -203,7 +203,12 @@ impl SessionManager {
                     observed_at_utc: segment.from_utc.saturating_mul(1_000),
                     // A seeded value has no live samples behind it and must not claim any.
                     samples: 0,
-                    source: OffsetSource::Log,
+                    // The estimator that stored the segment in force. The writer stores only a
+                    // CHANGED offset, so a core whose offset has not moved since the log era is
+                    // seeded with the log's label; the first connection's Ping confirmation then
+                    // replaces this status with a live one (`PingOffset::Confirmed`).
+                    source: crate::db::latest_offset_source(&conn, core_uid)
+                        .map_or(OffsetSource::None, |label| OffsetSource::from_label(&label)),
                 }));
             }
         }

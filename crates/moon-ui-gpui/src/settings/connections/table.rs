@@ -30,7 +30,9 @@ use moon_core::config::{
 use moon_core::feed::ConnStatus;
 use moon_core::session::CoreId;
 
-/// Eight flags controlling incoming core data, each with a label key, getter, and setter.
+/// The eight client-side filters on incoming core data, each with a label key, getter, and
+/// setter. The ninth item of the menu, `FeedFlags::log_delivery`, is a request to the core and is
+/// built apart from these (`feed_popover`).
 ///
 /// `feed_popover` localizes each `conn.tip.*` key and appends the localized client-side-filter
 /// note from `conn.filter_note`. The constant stores static keys rather than rendered labels.
@@ -642,7 +644,7 @@ impl SettingsView {
 /// Wrap one control in an interactive div carrying a wrapping tooltip.
 ///
 /// Used where the control itself has no tooltip prop -- `MoonDropdown` has none -- and where a
-/// cryptic label (`V0`, `8/8`) would otherwise be decodable only by finding its column heading.
+/// cryptic label (`V0`, `9/9`) would otherwise be decodable only by finding its column heading.
 /// gpui needs an id on an interactive element, so the caller supplies one from [`ConnRowIds`].
 ///
 /// Args:
@@ -668,11 +670,11 @@ fn with_tip(
         .child(control)
 }
 
-/// Build the `Data n/8` dropdown ported from egui's `feed_button`.
+/// Build the `Data n/9` dropdown ported from egui's `feed_button`.
 ///
-/// The trigger reports enabled feed flags; its eight checkbox items update the draft.
+/// The trigger reports enabled feed flags; its nine checkbox items update the draft.
 ///
-/// The menu is CONTROLLED through `SettingsView::feed_open` so the eight items exist only for
+/// The menu is CONTROLLED through `SettingsView::feed_open` so the items exist only for
 /// the row whose menu is actually open. MoonUI cannot do this for us: `MoonDropdown::items`
 /// consumes the whole `Vec<MoonMenuItem>` into `MoonMenuLevel::from_parts` before it ever looks
 /// at the open flag, so there is no lazy-item API to reach for.
@@ -695,13 +697,16 @@ fn feed_popover(
     ids: &ConnRowIds,
     cx: &App,
 ) -> impl IntoElement {
-    let feed = {
+    let (feed, core_id) = {
         let b = view.backend.read(cx);
         let s = b.preview.as_ref().unwrap_or(&b.config).servers.get(i);
-        s.map(|s| s.feed).unwrap_or_default()
+        (s.map(|s| s.feed).unwrap_or_default(), s.map(|s| s.id))
     };
-    let on = FEED_FLAGS.iter().filter(|(_, g, _)| g(&feed)).count();
-    let tinted = on < FEED_FLAGS.len();
+    // The eight client-side filters plus the one request to the core, `log_delivery`.
+    let on =
+        FEED_FLAGS.iter().filter(|(_, g, _)| g(&feed)).count() + usize::from(feed.log_delivery);
+    let total = FEED_FLAGS.len() + 1;
+    let tinted = on < total;
     let open = view.feed_open == Some(row_key);
 
     // Only the OPEN row pays for menu items. Everything below this point is skipped 55 times
@@ -719,7 +724,7 @@ fn feed_popover(
                 .checked(cur)
                 // Make states explicit: enabled items are green and checked, while disabled
                 // items are muted and unchecked, so the user need not infer the missing flag
-                // from a count such as `7/8`.
+                // from a count such as `8/9`.
                 .tone(if cur {
                     MoonTone::Positive
                 } else {
@@ -737,16 +742,63 @@ fn feed_popover(
                 }),
             );
         }
+        // The one item that is not a client-side filter: it asks the core to stop the stream, so
+        // its section label says what goes quiet with it, and once the feed has seen an older core
+        // keep sending anyway the item says so too, rather than letting the unchecked box read as
+        // "stopped".
+        let cur = feed.log_delivery;
+        let ignored = !cur
+            && core_id.is_some_and(|id| {
+                view.backend
+                    .read(cx)
+                    .session
+                    .store()
+                    .core(id)
+                    .is_some_and(|c| c.log_delivery_ignored)
+            });
+        // Its own section, under a label that says what goes quiet with it, so the item line stays
+        // short enough for the menu width and the verdict is never the part cut off.
+        items.push(MoonMenuItem::separator());
+        items.push(MoonMenuItem::label(t!("conn.log_delivery_section")));
+        let label = if ignored {
+            format!(
+                "{} ({})",
+                t!("conn.tip.log_delivery"),
+                t!("conn.log_delivery_ignored")
+            )
+        } else {
+            t!("conn.tip.log_delivery").to_string()
+        };
+        let backend = view.backend.clone();
+        items.push(
+            MoonMenuItem::with_key(format!("feed-{row_key}-log-delivery"), label)
+                .checked(cur)
+                .tone(if cur {
+                    MoonTone::Positive
+                } else {
+                    MoonTone::Muted
+                })
+                .on_click(move |_, _, cx| {
+                    backend.update(cx, |b, bcx| {
+                        if let Some(p) = b.preview.as_mut()
+                            && let Some(s) = p.servers.get_mut(i)
+                        {
+                            s.feed.log_delivery = !cur;
+                            bcx.notify();
+                        }
+                    });
+                }),
+        );
     }
 
     // WEAK, not a strong entity: `on_open_change` takes a plain `Fn(bool, &mut Window, &mut App)`
     // that MoonUI stores for the life of the element, and a strong handle there would close
     // SettingsView -> element -> closure -> SettingsView and keep the window alive forever.
     let view_weak = weak.clone();
-    // `8/8` is a count with no visible denominator meaning: the column tooltip already explains
-    // what the eight categories are and what the amber tint means, so reuse it on the cell.
+    // `9/9` is a count with no visible denominator meaning: the column tooltip already explains
+    // what the categories are and what the amber tint means, so reuse it on the cell.
     let dropdown = MoonDropdown::new(ids.feed.clone())
-        .label(format!("{on}/8"))
+        .label(format!("{on}/{total}"))
         .trigger_caret(true)
         .trigger_variant(if tinted {
             MoonButtonVariant::Amber

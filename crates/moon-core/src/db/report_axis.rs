@@ -444,7 +444,10 @@ impl ReportAxis {
     /// A window predicate is built one branch per group, each branch naming its cores and the
     /// bounds already converted for them, so every branch still leads with `core_uid, closedate`
     /// and stays index-eligible. A fleet on one offset — the common case — collapses to a single
-    /// branch identical in shape to the uncorrected query.
+    /// branch identical in shape to the uncorrected query. Offsets are whole seconds, but a value
+    /// within `ZONE_SNAP_SECS` of a whole zone is adopted as the zone
+    /// (`session::core_time_offset`), so NTP-synced cores in one zone still share one offset; only
+    /// a core whose clock is genuinely seconds off adds a branch of its own.
     ///
     /// Args:
     ///     cores: Core uids in scope for this read.

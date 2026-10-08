@@ -222,6 +222,7 @@ core_status.tz_off.f.source: "Источник"
 # Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
 core_status.tz_off.f.unmeasured: "Ещё не измерено"
 core_status.tz_off.source.log: "Лог ядра"
+core_status.tz_off.source.ping: "Пинг ядра"
 core_status.tz_off.source.replica: "Данные реплики"
 core_status.tz_off.source.skew: "Коррекция скью"
 core_status.tz_off.source.none: "—"

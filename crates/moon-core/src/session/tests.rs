@@ -68,3 +68,30 @@ fn a_presentation_field_does_not_reconnect() {
         "name and colour are updated in place, never by reconnecting"
     );
 }
+
+/// `FeedFlags::log_delivery` is sent to the core when the client is built, so turning it off must
+/// respawn the feed — left out of the signature the checkbox would change nothing until the next
+/// restart. A config saved before the flag existed must read it as on: the core kept sending its
+/// log to every terminal until now, and an upgrade must not silently stop it.
+#[test]
+fn log_delivery_defaults_on_and_toggling_it_requires_a_reconnect() {
+    let before = server(None);
+    assert!(
+        before.feed.log_delivery,
+        "an old config without the field asks for the log as before"
+    );
+    let mut off = server(None);
+    off.feed.log_delivery = false;
+    assert_ne!(conn_sig(&before), conn_sig(&off));
+}
+
+/// Breakage guarded: the field-level default on `FeedFlags::log_delivery` lost, so a config saved
+/// with a `[feed]` table from before the flag existed — every config written by an older build —
+/// loads with the core's log switched off.
+#[test]
+fn an_old_feed_table_keeps_the_log_coming() {
+    let old: ServerConfig = toml::from_str("id = 0\n[feed]\nlog = true\norders = false\n")
+        .expect("an old [feed] table");
+    assert!(old.feed.log_delivery);
+    assert!(!old.feed.orders, "the stored choices themselves are kept");
+}

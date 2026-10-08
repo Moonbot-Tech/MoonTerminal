@@ -45,8 +45,9 @@ pub(super) fn tz_offset_cell(s: &CoreTimeOffsetStatus) -> TzOffsetCell {
 /// Render the tz-offset cell as text.
 ///
 /// A measured value renders as `UTC+02:00` / `UTC+00:00` / `UTC-04:00`: ASCII sign, two-digit
-/// hours, two-digit minutes, always both, so a quarter-hour zone (the estimator buckets at 900 s)
-/// renders correctly rather than losing its minutes.
+/// hours, two-digit minutes, always both, so a quarter-hour zone renders correctly rather than
+/// losing its minutes. The estimator adopts whole seconds, so a clock that runs off by seconds
+/// adds them: `UTC+03:00:40` — the correction the report rows actually get, not a rounder one.
 ///
 /// Args:
 ///     cell: The decision from [`tz_offset_cell`].
@@ -57,10 +58,13 @@ pub(super) fn tz_offset_cell_text(cell: TzOffsetCell) -> String {
     match cell {
         TzOffsetCell::Measured { offset_secs } => {
             let sign = if offset_secs < 0 { '-' } else { '+' };
-            let total_minutes = offset_secs.unsigned_abs() / 60;
-            let hours = total_minutes / 60;
-            let minutes = total_minutes % 60;
-            format!("UTC{sign}{hours:02}:{minutes:02}")
+            let abs = offset_secs.unsigned_abs();
+            let hours = abs / 3_600;
+            let minutes = abs / 60 % 60;
+            match abs % 60 {
+                0 => format!("UTC{sign}{hours:02}:{minutes:02}"),
+                seconds => format!("UTC{sign}{hours:02}:{minutes:02}:{seconds:02}"),
+            }
         }
         TzOffsetCell::Unknown => t!("core_status.tz_off.unknown").to_string(),
     }
@@ -100,6 +104,7 @@ pub(super) fn tz_offset_facts(s: &CoreTimeOffsetStatus) -> TzOffsetFacts {
 /// Localized name of one offset source.
 fn source_label(source: OffsetSource) -> String {
     match source {
+        OffsetSource::Ping => t!("core_status.tz_off.source.ping"),
         OffsetSource::Log => t!("core_status.tz_off.source.log"),
         OffsetSource::Replica => t!("core_status.tz_off.source.replica"),
         OffsetSource::Skew => t!("core_status.tz_off.source.skew"),

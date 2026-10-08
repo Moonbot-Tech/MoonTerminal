@@ -27,8 +27,8 @@ fn a_negative_offset_renders_utc_minus_two_digits() {
     assert_eq!(text, "UTC-04:00");
 }
 
-/// A quarter-hour offset (the estimator buckets at 900 s) keeps its minutes rather than rounding
-/// to the hour.
+/// A quarter-hour offset (UTC+5:45 and its kind are real zones) keeps its minutes rather than
+/// rounding to the hour.
 #[test]
 fn a_quarter_hour_offset_keeps_its_minutes() {
     let text = tz_offset_cell_text(TzOffsetCell::Measured {
@@ -118,4 +118,19 @@ fn the_tooltip_is_built_from_the_facts_not_restated() {
         ..base
     };
     assert_ne!(tz_offset_tooltip(&other_source), base_tooltip);
+}
+
+/// Breakage guarded: a core whose clock runs off by seconds shown as a round offset while its
+/// report rows are corrected by the exact one — the column must state what the axis applies.
+/// Seconds appear only when there are any, in both directions.
+#[test]
+fn an_offset_with_seconds_renders_them() {
+    let fast = tz_offset_cell_text(TzOffsetCell::Measured {
+        offset_secs: 10_840,
+    });
+    assert_eq!(fast, "UTC+03:00:40");
+    let slow = tz_offset_cell_text(TzOffsetCell::Measured {
+        offset_secs: -18_012,
+    });
+    assert_eq!(slow, "UTC-05:00:12");
 }

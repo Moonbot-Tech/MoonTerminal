@@ -207,6 +207,10 @@ pub struct CoreData {
     /// clearing it on a reconnect blip would lose a rejection observed just before the blip and
     /// silently regress that attempt back to the 180s `NeverDropped` stall it exists to avoid.
     pub update_rejects: u64,
+    /// The core keeps sending its log although this connection asked it not to
+    /// (`FeedMsg::LogDeliveryIgnored`): an older core. Connections says so beside the flag rather
+    /// than letting it read as though the stream had stopped.
+    pub log_delivery_ignored: bool,
     /// Unshown Engine action results for toasts. The active window's shell drains them through
     /// [`CoreData::take_engine_actions`].
     engine_actions: VecDeque<EngineActionResult>,
@@ -518,6 +522,7 @@ impl CoreData {
             server_version: None,
             conn_epoch: 0,
             update_rejects: 0,
+            log_delivery_ignored: false,
             engine_actions: VecDeque::new(),
             chart_alerts: HashMap::new(),
             chart_text: HashMap::new(),
@@ -1405,6 +1410,9 @@ impl CoreData {
             }
             FeedMsg::CoreUpdateRejected => {
                 self.update_rejects = self.update_rejects.wrapping_add(1);
+            }
+            FeedMsg::LogDeliveryIgnored(ignored) => {
+                self.log_delivery_ignored = ignored;
             }
             // Identity, base-currency, and market wake-up messages are not routed into this store.
             // The build number above IS, which is why it sits in an arm of its own: it belongs to

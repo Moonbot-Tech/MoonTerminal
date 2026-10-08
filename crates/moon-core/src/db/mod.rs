@@ -53,6 +53,7 @@ pub use quote::{
 pub use read_cancel::{ReadCancellation, current_is_cancelled, with_read_cancellation};
 pub use read_fail::{FailCode, FailKind, ReadFail, ReadResult};
 pub use reader_budget::ReportReader;
+pub(crate) use rep::core_offset::{latest_segment, latest_source as latest_offset_source};
 pub use rep::{DbMsg, ReportSink};
 pub(crate) use rep::{OPEN_ROWS_PAGE, ReportStart};
 pub use report_axis::{MAX_OFFSET_SECS, MIN_OFFSET_SECS, OffsetSegment, ReportAxis, ReportStamp};

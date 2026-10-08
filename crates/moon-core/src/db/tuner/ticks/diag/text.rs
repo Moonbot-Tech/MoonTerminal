@@ -140,6 +140,18 @@ fn cores(out: &mut String, input: &ReportInput, report: &Report) {
     }
 }
 
+/// A core's clock offset as `+03:00`, or `+03:00:40` for a clock that runs off by seconds — the
+/// adopted offset is whole seconds, so a fraction of an hour would print as `+3.0111h`.
+fn tz_offset(secs: i32) -> String {
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    let (hours, minutes, seconds) = (abs / 3_600, abs / 60 % 60, abs % 60);
+    match seconds {
+        0 => format!("{sign}{hours:02}:{minutes:02}"),
+        _ => format!("{sign}{hours:02}:{minutes:02}:{seconds:02}"),
+    }
+}
+
 /// A core's line, after its number.
 fn core_line(core: &CoreLine, input: &ReportInput) -> String {
     let mut parts = vec![core.venue.clone().unwrap_or_else(|| "?".to_string())];
@@ -147,7 +159,7 @@ fn core_line(core: &CoreLine, input: &ReportInput) -> String {
         Some(facts) if !facts.connected => {
             parts.push("offline".to_string());
             if let Some(secs) = facts.tz_offset_secs {
-                parts.push(format!("tz {:+}h", f64::from(secs) / 3600.0));
+                parts.push(format!("tz {}", tz_offset(secs)));
             }
         }
         Some(facts) => {
@@ -156,7 +168,7 @@ fn core_line(core: &CoreLine, input: &ReportInput) -> String {
                 None => "build not reported".to_string(),
             });
             parts.push(match facts.tz_offset_secs {
-                Some(secs) => format!("tz {:+}h", f64::from(secs) / 3600.0),
+                Some(secs) => format!("tz {}", tz_offset(secs)),
                 None => "tz not adopted".to_string(),
             });
         }

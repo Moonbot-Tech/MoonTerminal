@@ -222,6 +222,7 @@ core_status.tz_off.f.source: "Source"
 # Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
 core_status.tz_off.f.unmeasured: "Not measured yet"
 core_status.tz_off.source.log: "Core log"
+core_status.tz_off.source.ping: "Core ping"
 core_status.tz_off.source.replica: "Replica data"
 core_status.tz_off.source.skew: "Skew correction"
 core_status.tz_off.source.none: "—"
