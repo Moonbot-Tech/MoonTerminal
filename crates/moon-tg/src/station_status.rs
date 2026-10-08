@@ -364,7 +364,11 @@ fn tape_section(tape: TapeWindow) -> Section {
 }
 
 /// The server's measurements as one section, the data root's largest files as another, and
-/// actionable guidance when a reading is missing.
+/// one note when a reading is missing.
+///
+/// In the first minute, with no completed CPU window yet, the note says the service just
+/// started and the load lines come after that minute. After the minute, no memory means the
+/// unit hides the readings; that note keeps its own meaning and the two never stack.
 fn host_sections(host: &Host, sections: &mut Vec<Section>, notes: &mut Vec<String>) {
     let mut rows = Vec::new();
     for window in &host.cpu {
@@ -390,9 +394,12 @@ fn host_sections(host: &Host, sections: &mut Vec<Section>, notes: &mut Vec<Strin
             load(window.machine_avg_permille, window.machine_peak_permille),
         ));
     }
-    // No reading at all: a unit that hides the machine's /proc from the station (set up before
-    // `status` read it) — the setup run again replaces it.
-    if host.memory.is_none() && host.uptime_s >= 60 {
+    // Averages stay completed minutes only, so the first minute has no load lines yet.
+    // Say the service just started. After that minute, no memory means the unit hides
+    // /proc — the setup run again replaces it. The two notes never stack.
+    if host.cpu.is_empty() && host.uptime_s < 60 {
+        notes.push(t!("telegram.station.just_started").to_string());
+    } else if host.memory.is_none() && host.uptime_s >= 60 {
         notes.push(t!("telegram.station.no_readings").to_string());
     }
     if let Some(memory) = host.memory {

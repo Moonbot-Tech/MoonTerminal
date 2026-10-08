@@ -336,6 +336,84 @@ fn automatic_rollback_verdict_describes_the_restored_service() {
     }
 }
 
+/// Dropping the first-minute line, or showing "the service cannot see them" beside it, makes a
+/// restart look like the CPU meters failed. A station that already has a CPU window keeps the
+/// lines it shows today, and after a minute the old note still means the meters are unavailable.
+#[test]
+fn the_first_minute_without_a_cpu_window_says_the_load_lines_are_coming() {
+    let _locale = crate::test_locale::force("en");
+    let mut fresh = host(vec![file("telegram.json", 10)]);
+    fresh.uptime_s = 12;
+    fresh.cpu.clear();
+    fresh.memory = None;
+    let text = station_status_text(&status(Some(fresh.clone())));
+    assert!(text.contains("Station 0.1.0 — up 0 min\n"), "{text}");
+    assert!(text.contains("  Cores: 26 of 27 ready\n"), "{text}");
+    assert!(text.contains("  telegram.json: 0 KB\n"), "{text}");
+    assert!(
+        text.contains(
+            "The service just started. Processor load lines appear after the first full minute."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("cannot see them"), "{text}");
+    assert!(!text.contains("Station CPU"), "{text}");
+
+    let Response::Rich { html, .. } = station_status_reply(
+        &status(Some(fresh)),
+        &ReleaseCheck::Current,
+        crate::station_owner_navigation(&moon_core::config::TelegramConfig::default()),
+        false,
+    ) else {
+        panic!("the status is a rich message");
+    };
+    assert!(html.contains(
+        "<p>The service just started. Processor load lines appear after the first full minute.</p>"
+    ));
+    assert!(!html.contains("cannot see them"));
+
+    let settled = station_status_text(&status(Some(host(vec![
+        file("telegram.json", 10),
+        file("reports.sqlite", 609 * MIB),
+    ]))));
+    assert_eq!(
+        settled.lines().collect::<Vec<_>>(),
+        [
+            "Station 0.1.0 — up 3 h 12 min",
+            "Service",
+            "  Cores: 26 of 27 ready",
+            "Tape",
+            "  Around a trade: 3 min",
+            "  Long trade from: 10 min",
+            "Server",
+            "  Station CPU, hour: 12.3 % (peak 87.0 %)",
+            "  Server CPU, hour: 15.0 % (peak 100.0 %)",
+            "  Station CPU, 192 min: 0.5 % (peak 87.0 %)",
+            "  Server CPU, 192 min: 9.0 % (peak 100.0 %)",
+            "  Station memory: 420.0 MB (peak 520.0 MB)",
+            "  Server memory: 300.0 MB free of 955.0 MB",
+            "  Disk: 15.50 GB free of 23.00 GB",
+            "Largest files",
+            "  reports.sqlite: 609.0 MB",
+            "  telegram.json: 0 KB",
+        ]
+    );
+
+    let mut early = host(Vec::new());
+    early.uptime_s = 30;
+    let early_text = station_status_text(&status(Some(early)));
+    assert!(early_text.contains("Station CPU, hour:"), "{early_text}");
+    assert!(!early_text.contains("just started"), "{early_text}");
+
+    let mut blind = host(Vec::new());
+    blind.uptime_s = 120;
+    blind.cpu.clear();
+    blind.memory = None;
+    let blind_text = station_status_text(&status(Some(blind)));
+    assert!(blind_text.contains("cannot see them"), "{blind_text}");
+    assert!(!blind_text.contains("just started"), "{blind_text}");
+}
+
 /// The Service section says whether the station updates itself; a station older than the switch
 /// shows no row rather than a guess.
 #[test]
