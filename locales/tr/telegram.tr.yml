@@ -275,6 +275,7 @@ telegram.server.cores_renamed: "%{name}: istasyondaki ad güncellendi (önceki a
 telegram.server.cores_key_sent: "%{name}: yeni anahtar gönderildi."
 telegram.server.cores_removed: "%{name}: anahtar istasyondan kaldırıldı; bu çekirdeğin istasyondaki raporları korundu."
 telegram.server.cores_pushed: "İstasyona gönderilen: %{n}. İstasyon yeniden başlatıldı; çekirdekler bağlanıyor."
+telegram.server.install_partial: "İstasyon kuruldu. Yapılandırılan çekirdekler: %{n}. Atlanan çekirdekler (anahtar yok): %{names}."
 telegram.server.cores_unsupported: "İstasyon henüz çekirdeklerini bildirmiyor — terminalle karşılaştırmak için güncelleyin."
 telegram.server.bot_no_api: "İstasyon yanıtlamıyor: başlıyor veya hizmeti bu terminalden eski — «Hizmeti güncelle»ye basın."
 telegram.server.cores_hint: "Her aktif çekirdeğin anahtarı sunucuya şifreli gider; sunucu onlarla işlem yapabilir."

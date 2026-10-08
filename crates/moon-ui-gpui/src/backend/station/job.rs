@@ -172,6 +172,14 @@ impl Job {
 
 /// What a finished job reports.
 pub(crate) enum Done {
+    /// A completed installation retains skipped core names through the shared outcome channel.
+    Installed {
+        transferred: bool,
+        bot: Option<BotState>,
+        bot_off: bool,
+        configured: usize,
+        skipped: Vec<String>,
+    },
     /// The station stopped polling and removed its bot; recovered data may be saved locally.
     BotOff { returned: Option<bot::ReturnedBot> },
     /// The destination fingerprint awaits an explicit confirmation in the Station tab.
@@ -315,7 +323,7 @@ fn run(
             let target = setup.target.clone();
             // Read before the server changes: a terminal without a core key has nothing to
             // install a station for.
-            let keys = core_keys(&cores)?;
+            let (keys, skipped) = core_keys(&cores)?;
             setup::run(&setup, say)?;
             // Before the first start: the station opens the cache as its own.
             send_valuation(&target, say);
@@ -352,7 +360,14 @@ fn run(
                     say,
                 )?;
             }
-            set_bot(&target, bot, say)
+            let (transferred, bot) = set_bot(&target, bot, say)?;
+            Ok(Done::Installed {
+                transferred,
+                bot,
+                bot_off: false,
+                configured: keys.len(),
+                skipped,
+            })
         }
         Job::Resetup { setup } => {
             setup::run(&setup, say)?;
@@ -494,7 +509,14 @@ fn run(
                 bot_off: false,
             })
         }
-        Job::Bot { target, bot } => set_bot(&target, bot, say),
+        Job::Bot { target, bot } => {
+            let (transferred, bot) = set_bot(&target, bot, say)?;
+            Ok(Done::Ok {
+                transferred,
+                bot,
+                bot_off: false,
+            })
+        }
         Job::BotOff {
             target,
             restore,
@@ -657,25 +679,21 @@ fn show_journal(text: &str, say: &mut dyn FnMut(Progress)) {
     }
 }
 
-/// Apply the selected bot plan without changing ownership decisions.
-fn set_bot(target: &Target, plan: BotPlan, say: &mut dyn FnMut(Progress)) -> anyhow::Result<Done> {
+/// Apply a bot plan, returning ownership and observed state for either install or bot completion.
+fn set_bot(
+    target: &Target,
+    plan: BotPlan,
+    say: &mut dyn FnMut(Progress),
+) -> anyhow::Result<(bool, Option<BotState>)> {
     match plan {
-        BotPlan::Keep => Ok(Done::Ok {
-            transferred: false,
-            bot: None,
-            bot_off: false,
-        }),
+        BotPlan::Keep => Ok((false, None)),
         BotPlan::Transfer {
             token,
             pairing,
             change,
         } => {
             let state = bot::transfer_bot(target, &token, &pairing, &change, say)?;
-            Ok(Done::Ok {
-                transferred: true,
-                bot: Some(state),
-                bot_off: false,
-            })
+            Ok((true, Some(state)))
         }
     }
 }
@@ -717,14 +735,48 @@ fn older_service(station_version: &str) -> Option<String> {
     })
 }
 
-/// The picked cores' keys from the terminal's `servers.enc`, read here — never held by the view.
-fn core_keys(picked: &[u64]) -> anyhow::Result<Vec<CoreKey>> {
+/// Select enabled saved keys before remote work, retaining keyless names for the outcome.
+fn core_keys(picked: &[u64]) -> anyhow::Result<(Vec<CoreKey>, Vec<String>)> {
     anyhow::ensure!(!picked.is_empty(), StationError::NoCorePicked);
     let all = moon_core::config::read_core_keys()?;
-    picked
-        .iter()
-        .map(|uid| picked_core_key(&all, *uid))
-        .collect()
+    install_core_keys(all, picked)
+}
+
+/// Refuse stale picks and all-keyless selections before setup, while allowing partial installs.
+fn install_core_keys(
+    all: Vec<moon_core::config::CoreKeyEntry>,
+    picked: &[u64],
+) -> anyhow::Result<(Vec<CoreKey>, Vec<String>)> {
+    for uid in picked {
+        anyhow::ensure!(
+            all.iter().any(|entry| entry.uid == *uid),
+            StationError::CoreMissing(*uid)
+        );
+    }
+    let selected = moon_core::config::select_station_cores(
+        all.into_iter()
+            .filter(|entry| picked.contains(&entry.uid))
+            .collect(),
+    );
+    if selected.keyed.is_empty() {
+        return Err(match selected.skipped.first() {
+            Some(name) => StationError::CoreWithoutKey(name.clone()),
+            None => StationError::NoCorePicked,
+        }
+        .into());
+    }
+    let keys = selected
+        .keyed
+        .into_iter()
+        .map(|entry| CoreKey {
+            uid: entry.uid,
+            name: entry.name,
+            key: entry.key,
+            transport: entry.transport,
+            endpoint_override: entry.endpoint_override,
+        })
+        .collect();
+    Ok((keys, selected.skipped))
 }
 
 /// Reinstallation updates address matches and adds unmatched picks without removing remote cores.

@@ -502,7 +502,7 @@ impl Backend {
         if kind == Kind::Zone {
             // A zone push refreshes bot state and core identities; its line says what happened.
             match done {
-                job::Done::Ok { bot, .. } => {
+                job::Done::Ok { bot, .. } | job::Done::Installed { bot, .. } => {
                     if let Some(bot) = bot {
                         self.station.observe_bot(bot);
                         self.station.bot_error = None;
@@ -527,11 +527,13 @@ impl Backend {
             // A quiet read refreshes bot state and core identities while preserving the user's
             // outcome; a failed read records its error instead.
             match done {
-                job::Done::Ok { bot: Some(bot), .. } => {
+                job::Done::Ok { bot: Some(bot), .. }
+                | job::Done::Installed { bot: Some(bot), .. } => {
                     self.station.observe_bot(bot);
                     self.station.bot_error = None;
                 }
                 job::Done::Ok { .. }
+                | job::Done::Installed { .. }
                 | job::Done::BotOff { .. }
                 | job::Done::AddressProbed(_)
                 | job::Done::InstallProbed(_)
@@ -551,6 +553,14 @@ impl Backend {
         let mut transferred = false;
         let mut station_polls = false;
         let mut said_bot = false;
+        let completion = match &done {
+            job::Done::Installed {
+                configured,
+                skipped,
+                ..
+            } => text::install_result(*configured, skipped),
+            _ => t!("telegram.server.done").to_string(),
+        };
         match done {
             job::Done::BotOff { returned } => {
                 self.station.returned = returned;
@@ -583,6 +593,12 @@ impl Backend {
                 transferred: t,
                 bot,
                 bot_off,
+            }
+            | job::Done::Installed {
+                transferred: t,
+                bot,
+                bot_off,
+                ..
             } => {
                 transferred = t;
                 // A terminal bot held down after an undo that failed runs again once the station
@@ -598,7 +614,7 @@ impl Backend {
                     said_bot = true;
                 }
                 if kind == Kind::User {
-                    self.station.outcome = Some(Ok(t!("telegram.server.done").to_string()));
+                    self.station.outcome = Some(Ok(completion));
                 }
             }
             job::Done::NeedsAdminPassword => {

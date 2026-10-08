@@ -9,6 +9,62 @@ use moon_core::station_api::ListedCore;
 use moon_remote::error::StationError;
 use moon_remote::station::bot::BotState;
 
+/// Create saved credentials without reading the vault or contacting a server.
+fn install_entry(uid: u64, name: &str, active: bool, key: &str) -> CoreKeyEntry {
+    CoreKeyEntry {
+        uid,
+        name: name.into(),
+        active,
+        key: Secret::new(key),
+        transport: None,
+        endpoint_override: String::new(),
+    }
+}
+
+/// A keyless pick must not block a keyed pick; disabled and unpicked cores must never be sent.
+#[test]
+fn install_selection_sends_enabled_keys_and_retains_skipped_names() {
+    let (keys, skipped) = super::install_core_keys(
+        vec![
+            install_entry(3, "Ready", true, "synthetic-key"),
+            install_entry(5, "Needs key", true, ""),
+            install_entry(7, "Disabled", false, "synthetic-disabled-key"),
+            install_entry(9, "Not picked", true, "synthetic-unpicked-key"),
+        ],
+        &[3, 5, 7],
+    )
+    .unwrap();
+    assert_eq!(keys.iter().map(|key| key.uid).collect::<Vec<_>>(), [3]);
+    assert_eq!(skipped, ["Needs key"]);
+}
+
+/// An all-keyless install must refuse before setup with the missing core's typed name.
+#[test]
+fn all_keyless_install_refuses_before_remote_work() {
+    let error = super::install_core_keys(vec![install_entry(3, "Needs key", true, "")], &[3])
+        .err()
+        .unwrap();
+    assert_eq!(
+        error.downcast_ref::<StationError>(),
+        Some(&StationError::CoreWithoutKey("Needs key".into()))
+    );
+}
+
+/// Missing picks must remain a stale-selection error rather than silently installing a subset.
+#[test]
+fn missing_install_pick_keeps_its_typed_failure() {
+    let error = super::install_core_keys(
+        vec![install_entry(3, "Ready", true, "synthetic-key")],
+        &[3, 5],
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error.downcast_ref::<StationError>(),
+        Some(&StationError::CoreMissing(5))
+    );
+}
+
 /// Losing the persisted override in picked/upsert projections would make preview and push disagree.
 #[test]
 fn persisted_override_survives_station_uid_translation() {

@@ -425,14 +425,14 @@ impl SettingsView {
         })
     }
 
-    /// Every active core with a uid: the station gets them all.
+    /// Pick enabled real identities; the job rechecks saved keys and names keyless omissions.
     fn server_bot_cores(&self, cx: &App) -> Vec<u64> {
         self.backend
             .read(cx)
             .config
             .servers
             .iter()
-            .filter(|s| s.active && s.uid != 0)
+            .filter(|s| s.active && !s.synthetic && s.uid != 0)
             .map(|s| s.uid)
             .collect()
     }
@@ -476,7 +476,7 @@ impl SettingsView {
             .map_err(|e| crate::backend::station::text::error(&e))
     }
 
-    /// "Install": prepare the server, install the station, send every active core, move the bot.
+    /// "Install": prepare the server, send enabled keyed cores, name omissions and move the bot.
     /// `host_key` is the fingerprint the user confirmed after the probe.
     fn server_bot_install_job(&self, host_key: String, cx: &App) -> Result<Job, String> {
         let ed = &self.telegram.server;

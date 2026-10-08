@@ -275,6 +275,7 @@ telegram.server.cores_renamed: "%{name}: đã cập nhật tên trên trạm (tr
 telegram.server.cores_key_sent: "%{name}: đã gửi khóa mới."
 telegram.server.cores_removed: "%{name}: đã xóa khóa khỏi trạm; báo cáo của lõi này trên trạm được giữ lại."
 telegram.server.cores_pushed: "Đã gửi lên trạm: %{n}. Trạm đã khởi động lại; các lõi đang kết nối."
+telegram.server.install_partial: "Đã cài trạm. Số lõi đã cấu hình: %{n}. Các lõi bị bỏ qua (không có khóa): %{names}."
 telegram.server.cores_unsupported: "Trạm chưa báo cáo các lõi — hãy cập nhật để so sánh với thiết bị đầu cuối."
 telegram.server.bot_no_api: "Trạm không trả lời: nó đang khởi động, hoặc dịch vụ cũ hơn terminal này — nhấn «Cập nhật dịch vụ»."
 telegram.server.cores_hint: "Khóa của mọi core đang bật được gửi lên máy chủ đã mã hóa; với chúng máy chủ có thể giao dịch."
