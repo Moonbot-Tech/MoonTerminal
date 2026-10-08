@@ -13,6 +13,7 @@ pub mod news_marks;
 mod order_edit;
 pub mod order_math;
 pub mod report_traces;
+mod retry;
 pub mod station;
 mod strategies;
 pub mod strategy_deps;
@@ -253,7 +254,7 @@ pub fn stop_inherited_from_strategy(entry_filled: bool, strat_on: bool) -> bool 
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// Order stop flag toggled by clicking a cell in the Orders table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -903,6 +904,9 @@ pub struct FeedHandle {
     pub rx: FeedRx,
     pub cmd_tx: CoreCmdTx,
     pub client: SharedMoonClient,
+    /// Sole owner of the backoff lifetime signal. Reconnect replaces this handle;
+    /// shutdown drops it. Neither operation depends on command-sender clones.
+    _stop: Sender<()>,
     _join: std::thread::JoinHandle<()>,
 }
 
@@ -954,6 +958,7 @@ pub fn spawn(
     let tx = FeedTx::new(data_tx, wake);
     let (cmd_data_tx, cmd_rx) = std::sync::mpsc::channel::<QueuedCmd>();
     let (run_wake_tx, run_wake_rx) = std::sync::mpsc::channel::<()>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let latest_market_role = LatestMarketRole::default();
     let cmd_tx = CoreCmdTx::new(cmd_data_tx, run_wake_tx.clone(), latest_market_role.clone());
     let client = SharedMoonClient::default();
@@ -970,20 +975,18 @@ pub fn spawn(
                 let _ = synth::run(&server, &tx, &cmd_rx, market.as_ref());
                 return;
             }
-            let mut backoff = BACKOFF_MIN;
             let mut client_settings_sequence = live::ClientSettingsSequence::new();
             let mut shared_config_sequence = live::SharedConfigSequence::new();
             let mut market_role = live::MarketRoleState::default();
             let mut chart_text = live::ChartTextWanted::default();
-            loop {
-                let started = Instant::now();
+            retry::run(&server, &tx, &stop_rx, || {
                 // A new connection: an order still waiting from the previous one goes, said out
                 // loud (`live::stale`). The run also drops it the moment the connection stops
                 // being operational; this covers a run that ended first.
                 client_settings_sequence.drop_orders_of_lost_connection(server.id);
                 client_settings_sequence.prepare_reconnect();
                 shared_config_sequence.prepare_reconnect();
-                match live::run(
+                live::run(
                     &server,
                     chart_memory_percent,
                     &tx,
@@ -997,89 +1000,15 @@ pub fn spawn(
                     &mut market_role,
                     &latest_market_role,
                     &mut chart_text,
-                ) {
-                    Ok(()) => break,
-                    Err(e) => {
-                        // A long-lived connection is not a repeatedly failing host, so reset its
-                        // backoff before reconnecting.
-                        //
-                        // A run that never finished initialization is the exception, however long
-                        // it lasted: the startup watchdog gives up well past `STABLE_AFTER`, so
-                        // without this a permanently stuck core would reset the backoff on every
-                        // single attempt and rebuild its client on a fixed cadence forever, never
-                        // escalating. Lifetime alone cannot tell "connected for an hour" from
-                        // "spent three minutes failing to come up".
-                        let never_worked = e.downcast_ref::<live::NeverOperational>().is_some();
-                        if !never_worked && started.elapsed() >= STABLE_AFTER {
-                            backoff = BACKOFF_MIN;
-                        }
-                        let can_retry = retry_can_help(&e);
-                        let wait = jittered(backoff);
-                        if can_retry {
-                            log::error!(
-                                "live backend «{}» упал: {e:#}; реконнект через {:?}",
-                                server.name,
-                                wait
-                            );
-                        } else {
-                            log::error!(
-                                "live backend «{}» упал: {e:#}; попытки остановлены, возобновятся после правки и сохранения ключа",
-                                server.name
-                            );
-                        }
-                        // No "reconnecting" suffix here: this crate cannot localize. The UI derives
-                        // whether another attempt is active from the retained `ConnFault` and the
-                        // latest lifecycle status, then words that conditional fact through
-                        // `core_status.fault.retrying`.
-                        // The WHOLE chain, not just the outermost message: a run that never became
-                        // operational is wrapped in a marker the reconnect rule above reads, and
-                        // printing only that layer would replace the actual reason with the generic
-                        // sentence. This payload is the honest "could not determine" fallback the
-                        // verdict falls back to when no typed fault was retained, so it has to keep
-                        // whatever detail there is.
-                        if tx
-                            .send(FeedMsg::Status(ConnStatus::Failed(format!("{e:#}"))))
-                            .is_err()
-                        {
-                            break; // The UI is closed.
-                        }
-                        // No attempt can succeed until the key field is edited, and every edit path builds a NEW feed
-                        // thread (Save -> `structural_sig` -> `reconcile` -> `respawn_session`; the Reconnect button
-                        // takes the same path). Waiting here would only burn a backoff on a fact that cannot change.
-                        if !can_retry {
-                            break;
-                        }
-                        // Drop tokens left over from the attempt that just died BEFORE waiting on
-                        // them. The dying client's event sink wakes this same channel, so its
-                        // shutdown events reliably leave one queued — and a stale token would end
-                        // the wait immediately, making the backoff computed above a number nobody
-                        // ever honours. Only a token that arrives from here on is a real "retry
-                        // now" from the coordinator.
-                        //
-                        // The accepted cost: a coordinator command queued in the moment the run was
-                        // dying loses its nudge and waits out the backoff. Desired state is safe in
-                        // `cmd_rx` and runs when the next attempt starts; a live action, including
-                        // an order already in the settings sequence, is dropped instead
-                        // (`live::stale`). The window is the
-                        // teardown itself, and the wait it falls into is `BACKOFF_MIN` until a core
-                        // has failed repeatedly — which is exactly when an instant retry is the
-                        // wrong answer anyway.
-                        while run_wake_rx.try_recv().is_ok() {}
-                        match run_wake_rx.recv_timeout(wait) {
-                            Ok(()) => while run_wake_rx.try_recv().is_ok() {},
-                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                        }
-                        backoff = (backoff * 2).min(BACKOFF_MAX);
-                    }
-                }
-            }
+                )
+            });
         })
         .expect("spawn feed thread");
     FeedHandle {
         rx,
         cmd_tx,
         client,
+        _stop: stop_tx,
         _join: join,
     }
 }
@@ -1090,10 +1019,12 @@ pub(crate) fn trade_sound_test_feed() -> (FeedTx, FeedHandle) {
     let (data, rx) = std::sync::mpsc::channel();
     let (commands, _commands_rx) = std::sync::mpsc::channel();
     let (wake, _wake_rx) = std::sync::mpsc::channel();
+    let (stop, _stop_rx) = std::sync::mpsc::channel();
     let handle = FeedHandle {
         rx,
         cmd_tx: CoreCmdTx::new(commands, wake, LatestMarketRole::default()),
         client: SharedMoonClient::default(),
+        _stop: stop,
         _join: std::thread::spawn(|| {}),
     };
     (FeedTx::new(data, None), handle)

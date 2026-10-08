@@ -9,6 +9,44 @@ use crate::market::{MarketDataMode, MarketDataSource, MarketStore};
 use crate::session::CoreStore;
 use crate::session::store::CoreData;
 
+/// Retaining the old handle during reconnect would leave its retry loop sleeping or retrying
+/// beside the replacement feed. Exercise the same public entry point used by update respawns.
+#[test]
+fn backoff_explicit_reconnect_stops_the_old_retry_loop() {
+    let server: crate::config::ServerConfig = serde_json::from_str(
+        r#"{"id":91003,"uid":91003,"name":"reconnect fixture","synthetic":true}"#,
+    )
+    .unwrap();
+    let config = crate::config::AppConfig::headless(vec![server.clone()]);
+    let (handle, attempts, done) = crate::feed::tests::backoff_feed(server.clone());
+    let commands = handle.cmd_tx.clone();
+    attempts
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert!(matches!(
+        handle.rx.recv_timeout(std::time::Duration::from_secs(2)),
+        Ok(FeedMsg::Status(ConnStatus::Failed(_)))
+    ));
+    let mut manager = manager();
+    manager.sessions.push(crate::session::CoreSession {
+        id: server.id,
+        name: server.name.clone(),
+        group: server.group.clone(),
+        conn_sig: crate::session::conn_sig(&server),
+        handle,
+    });
+    assert!(manager.reconnect(server.id, &config, None));
+    done.recv_timeout(std::time::Duration::from_millis(500))
+        .unwrap();
+    assert!(
+        attempts.try_recv().is_err(),
+        "old feed retried after reconnect"
+    );
+    assert_eq!(manager.sessions.len(), 1);
+    drop(commands);
+    drop(manager);
+}
+
 /// Build a manager with no feed threads, so queue transitions can be driven by retained store data.
 fn manager() -> SessionManager {
     let market = MarketStore::shared(0.0);
