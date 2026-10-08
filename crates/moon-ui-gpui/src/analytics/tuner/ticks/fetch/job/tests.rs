@@ -1,13 +1,14 @@
 // Explicit imports, never `use super::*`: the crate's views import `gpui::*`, whose own
 // `test` shadows the built-in attribute and makes `#[test]` expand recursively.
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use super::super::super::state::TapeStatus;
 use super::{
     ClusterKey, FlightSnap, KeptFlight, MAX_CONTINUATIONS, MAX_IN_FLIGHT, ReturnedRow, RowOrigin,
     TaggedRow, adopt_booked_row, adopt_origin, cancel_autoload_rows, continues, pick_cluster,
     pick_dispatchable, release_booked_uid, requeued_origin, retain_flight, retry_wait,
-    returned_row, rows_leaving_total, rows_still_dropping, split_by_key,
+    returned_row, rows_leaving_total, rows_still_dropping, soonest_venue_wait, split_by_key,
 };
 use moon_core::market::trade_replay::TickStatus;
 
@@ -431,4 +432,34 @@ fn a_filed_row_is_not_subtracted_from_the_total_again() {
     assert_eq!(rows_leaving_total(&[1, 2, 2, 3], &done), 2);
     assert_eq!(rows_leaving_total(&[1], &done), 0);
     assert_eq!(rows_leaving_total(&[], &done), 0);
+}
+
+/// Naming a later host, or a wait while a walk is still out, would tell the user the next
+/// try is further away than the dispatcher will wait — or hide the market the batch is on.
+/// Treating a deadline that has already passed as "not waiting" drops the number in the
+/// moment before the thread resumes, and the caption goes back to a bare "waiting".
+#[test]
+fn the_caption_wait_is_the_soonest_idle_host() {
+    let now = Instant::now();
+    let soon = now + Duration::from_secs(30);
+    let later = now + Duration::from_secs(600);
+    assert_eq!(
+        soonest_venue_wait(false, [later, soon], now),
+        Some(Duration::from_secs(30)),
+        "two hosts waiting: the sooner deadline is the one the next try honours"
+    );
+    assert_eq!(
+        soonest_venue_wait(true, [later, soon], now),
+        None,
+        "a walk still out is the progress line, not a wait"
+    );
+    assert_eq!(soonest_venue_wait(false, None, now), None);
+    assert_eq!(
+        soonest_venue_wait(
+            false,
+            [now.checked_sub(Duration::from_secs(5)).unwrap()],
+            now
+        ),
+        Some(Duration::ZERO)
+    );
 }
