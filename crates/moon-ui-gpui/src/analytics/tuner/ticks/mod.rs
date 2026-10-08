@@ -17,6 +17,8 @@
 //! The model itself is `moon_core::db::tuner::ticks`; this module only feeds it and draws
 //! what it says.
 
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
@@ -182,7 +184,9 @@ impl AnalyticsView {
         // The batch is the process's (`fetch::job`), not this window's: the caption reads its
         // progress, and says what it is doing right now, not only how far it is — one walk can
         // take minutes on a slow venue, and a batch asleep on a venue's backoff has nothing in
-        // flight at all; a bare "N/M" reads as stuck in both cases.
+        // flight at all. That pause names how long is left until the soonest host may be asked
+        // again, read here so the next repaint shows less of it. No timer: this window's render
+        // root schedules none (`theme_contract`).
         let progress = fetch::job::progress();
         let fetch_active = progress.active;
         // A batch this window did not start — the startup autoload, or one left by a previous
@@ -211,12 +215,23 @@ impl AnalyticsView {
             )
             .to_string()
         } else if fetch_active {
-            t!(
-                "analytics.ticks.fetch_waiting",
-                done = progress.done,
-                total = progress.total
-            )
-            .to_string()
+            match progress.venue_wait {
+                // The venue asked for this pause. The figure is the same deadline the next
+                // try will honour, the soonest host when several are waiting.
+                Some(wait) => t!(
+                    "analytics.ticks.fetch_venue_wait",
+                    done = progress.done,
+                    total = progress.total,
+                    left = fetch_wait_text(wait)
+                )
+                .to_string(),
+                None => t!(
+                    "analytics.ticks.fetch_waiting",
+                    done = progress.done,
+                    total = progress.total
+                )
+                .to_string(),
+            }
         } else if self.ticks.tape_reading {
             t!("analytics.ticks.fetch_reading").to_string()
         } else {
@@ -898,6 +913,27 @@ impl PlanCell {
 /// Height of one deal row, in base px — the single pitch the list and the row share.
 fn deal_row_h(cx: &App) -> f32 {
     design::fit_h_value(cx, 24.0, 14.0, 5.0)
+}
+
+/// The remaining venue pause as the fetch caption prints it.
+///
+/// Short waits stay in seconds through 90s, so a 30s backoff still counts in seconds. Past
+/// that the figure is the search estimate's ([`estimate::duration_text`]): minutes, then
+/// hours and minutes. A fraction of a second rounds up, so the caption does not claim the
+/// try is due before the deadline the dispatcher will honour.
+///
+/// Args:
+///     wait: Time until the soonest waiting host's deadline.
+///
+/// Returns:
+///     Localized figure. Zero is "0 s", not the estimate helper's one-second floor.
+fn fetch_wait_text(wait: Duration) -> String {
+    let secs = wait.as_secs() + u64::from(wait.subsec_nanos() != 0);
+    if secs <= 90 {
+        t!("analytics.ticks.dur_s", s = secs).to_string()
+    } else {
+        estimate::duration_text(Duration::from_secs(secs))
+    }
 }
 
 /// A duration in the shortest unit that keeps it readable.

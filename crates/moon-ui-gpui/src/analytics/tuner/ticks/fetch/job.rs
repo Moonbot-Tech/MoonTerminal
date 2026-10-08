@@ -141,6 +141,12 @@ pub(in crate::analytics::tuner) struct Progress {
     /// The requests out, in the order they went out: the ids of the rows each one serves, and
     /// its market.
     pub(in crate::analytics::tuner) in_flight: Vec<(Vec<i64>, String)>,
+    /// Time until the soonest waiting host may be asked again.
+    ///
+    /// `None` while a walk is out, or while no host is waiting: the caption then names the
+    /// markets in flight, or the bare waiting line. When present it is the same deadline the
+    /// dispatcher wakes on, read at paint time so a later repaint shows less of it.
+    pub(in crate::analytics::tuner) venue_wait: Option<Duration>,
 }
 
 /// A row set aside until its venue's wait is out.
@@ -553,27 +559,65 @@ pub(in crate::analytics::tuner) fn attach() -> mpsc::Receiver<JobEvent> {
     rx
 }
 
+/// Time until the soonest waiting host may be asked again.
+///
+/// Each host contributes the deadline its deferred rows share (`State::defer`). The
+/// dispatcher wakes at the earliest of those instants, so the caption names the same wait
+/// the next try will honour. A walk still out is the progress line: a wait beside it would
+/// hide the market the batch is on.
+///
+/// Args:
+///     in_flight: Whether any walk is out.
+///     hosts: Deadline of each host that is waiting. Empty when nothing is waiting.
+///     now: The instant the caption is read.
+///
+/// Returns:
+///     Time until the soonest deadline. `Some(Duration::ZERO)` when that deadline has
+///     already passed and the next try is due. `None` when a walk is out, or when no host
+///     is waiting.
+pub(super) fn soonest_venue_wait(
+    in_flight: bool,
+    hosts: impl IntoIterator<Item = Instant>,
+    now: Instant,
+) -> Option<Duration> {
+    if in_flight {
+        return None;
+    }
+    let earliest = hosts.into_iter().min()?;
+    Some(earliest.saturating_duration_since(now))
+}
+
 /// The job as the caption reads it.
 pub(in crate::analytics::tuner) fn progress() -> Progress {
     let st = lock(job());
+    let now = Instant::now();
+    let in_flight: Vec<(Vec<i64>, String)> = st
+        .in_flight
+        .iter()
+        .map(|flight| {
+            let uids = flight
+                .uids
+                .iter()
+                .zip(flight.dropped.iter())
+                .filter(|(_, dropped)| !**dropped)
+                .map(|(uid, _)| *uid)
+                .collect();
+            (uids, flight.market.clone())
+        })
+        .collect();
+    // One deadline per deferred row. Rows of one host share the deadline `defer` wrote, so
+    // the minimum is the soonest host — the same instant `run` waits for.
+    let venue_wait = soonest_venue_wait(
+        !in_flight.is_empty(),
+        st.deferred.iter().map(|row| row.due),
+        now,
+    );
     Progress {
         active: st.active(),
         done: st.done,
         total: st.total,
-        in_flight: st
-            .in_flight
-            .iter()
-            .map(|flight| {
-                let uids = flight
-                    .uids
-                    .iter()
-                    .zip(flight.dropped.iter())
-                    .filter(|(_, dropped)| !**dropped)
-                    .map(|(uid, _)| *uid)
-                    .collect();
-                (uids, flight.market.clone())
-            })
-            .collect(),
+        in_flight,
+        venue_wait,
     }
 }
 

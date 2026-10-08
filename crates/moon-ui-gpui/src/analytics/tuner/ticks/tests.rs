@@ -1,4 +1,6 @@
-use super::holdout_part;
+use std::time::Duration;
+
+use super::{fetch_wait_text, holdout_part};
 use moon_core::db::tuner::ticks::SearchResult;
 use moon_core::db::tuner::ticks::search::MIN_HOLDOUT;
 
@@ -59,4 +61,22 @@ fn order_wait_needs_a_placement_before_the_fill() {
     assert_eq!(order_wait_ms(10_000, Some(-5)), None);
     assert_eq!(order_wait_ms(10_000, Some(12_000)), None);
     assert_eq!(order_wait_ms(10_000, Some(10_000)), None);
+}
+
+/// Printing a 90s pause as minutes would hide the seconds the next try honours, and printing
+/// a 10 minute pause as raw seconds would read as a stuck counter. The one-second floor of
+/// the search estimate must not turn a deadline that has just passed into "1 s".
+#[test]
+fn a_venue_wait_stays_in_seconds_through_ninety_then_reads_as_minutes() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(fetch_wait_text(Duration::from_secs(0)), "0 s");
+    assert_eq!(fetch_wait_text(Duration::from_secs(30)), "30 s");
+    assert_eq!(fetch_wait_text(Duration::from_secs(90)), "90 s");
+    assert_eq!(fetch_wait_text(Duration::from_secs(91)), "2 min");
+    assert_eq!(fetch_wait_text(Duration::from_secs(600)), "10 min");
+    assert_eq!(
+        fetch_wait_text(Duration::from_secs(3 * 3600 + 5 * 60)),
+        "3 h 5 min"
+    );
+    assert_eq!(fetch_wait_text(Duration::from_millis(500)), "1 s");
 }
