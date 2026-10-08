@@ -156,5 +156,19 @@ pub(crate) fn progress(event: Progress) -> Option<String> {
     }
 }
 
+/// Report selected keyed cores, including unchanged matches, and secret-free skipped names.
+pub(super) fn install_result(configured: usize, skipped: &[String]) -> String {
+    if skipped.is_empty() {
+        t!("telegram.server.done").to_string()
+    } else {
+        t!(
+            "telegram.server.install_partial",
+            n = configured,
+            names = skipped.join(", ")
+        )
+        .to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests;

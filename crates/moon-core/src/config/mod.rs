@@ -18,6 +18,7 @@
 //! - `uid_counter` requires every counter construction path to name the optional store floor;
 //! - `endpoint_override` parses the hand-typed address that overrides a core's key (#616);
 //! - `key_endpoint` resolves a core's connection target for draft display and live connections.
+//! - `station_cores` selects enabled credentials and names keyless omissions before installation.
 
 pub mod arb_view;
 pub mod badges;
@@ -55,6 +56,7 @@ mod key_endpoint;
 mod migrate;
 mod reconcile;
 mod schema;
+mod station_cores;
 mod store;
 mod tolerant;
 pub(crate) mod toml_io;
@@ -121,6 +123,7 @@ pub use servers::{
     ChartBucket, CoreSortMode, FeedFlags, MANUAL_STRAT_SLOTS, ManualStratState, ServerConfig,
     StratSlot, TotalMode, TransportVersion, WorkspaceMembership, key_is_readable, seeded_transport,
 };
+pub use station_cores::{StationCoreSelection, select_station_cores};
 pub use store::{CoreKeyEntry, read_core_keys};
 pub use tab_badges::TabBadgeSettings;
 pub use telegram_layout::{

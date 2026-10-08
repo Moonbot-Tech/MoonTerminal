@@ -6,6 +6,20 @@ use moon_remote::progress::{Progress, Step};
 use moon_remote::ssh::OpenError;
 use moon_remote::station::bot::StationMayStillPoll;
 
+/// Falling back to generic Done would hide omitted cores beside the install button.
+#[test]
+fn installation_outcome_names_every_skipped_core() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(
+        super::install_result(2, &["Needs key".into(), "Also keyless".into()]),
+        "Station installed. Cores configured: 2. Skipped cores (no key): Needs key, Also keyless."
+    );
+    assert_eq!(
+        super::install_result(2, &[]),
+        rust_i18n::t!("telegram.server.done").to_string()
+    );
+}
+
 /// Flattening anyhow context into English hides the action in Russian and Spanish Settings.
 #[test]
 fn typed_context_keeps_the_localized_action_first() {

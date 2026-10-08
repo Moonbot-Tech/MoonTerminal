@@ -275,6 +275,7 @@ telegram.server.cores_renamed: "%{name}: station name updated (was “%{was}”)
 telegram.server.cores_key_sent: "%{name}: new key sent."
 telegram.server.cores_removed: "%{name}: key removed from the station; its reports on the station are preserved."
 telegram.server.cores_pushed: "Sent to station: %{n}. The station restarted; cores are connecting."
+telegram.server.install_partial: "Station installed. Cores configured: %{n}. Skipped cores (no key): %{names}."
 telegram.server.cores_unsupported: "The station does not report its cores yet — update it to compare them with the terminal."
 telegram.server.bot_no_api: "The station does not answer: it is starting, or its service is older than this terminal — press «Update the service»."
 telegram.server.cores_hint: "The keys of every active core go to the server encrypted; with them the server can trade."

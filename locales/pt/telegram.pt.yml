@@ -275,6 +275,7 @@ telegram.server.cores_renamed: "%{name}: nome na estação atualizado (era “%{
 telegram.server.cores_key_sent: "%{name}: nova chave enviada."
 telegram.server.cores_removed: "%{name}: chave removida da estação; seus relatórios na estação foram preservados."
 telegram.server.cores_pushed: "Enviados à estação: %{n}. A estação reiniciou; os núcleos estão conectando."
+telegram.server.install_partial: "Estação instalada. Núcleos configurados: %{n}. Núcleos ignorados (sem chave): %{names}."
 telegram.server.cores_unsupported: "A estação ainda não informa seus núcleos — atualize-a para compará-los com o terminal."
 telegram.server.bot_no_api: "A estação não responde: está iniciando, ou o serviço é mais velho que este terminal — pressione «Atualizar o serviço»."
 telegram.server.cores_hint: "As chaves de cada núcleo ativo vão ao servidor criptografadas; com elas o servidor pode operar."
