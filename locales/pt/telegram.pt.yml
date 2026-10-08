@@ -220,7 +220,7 @@ telegram.mini_orders_n_many: "ordens: {n}"
 
 # Settings -> Telegram -> the bot's segment -> "Station on a Linux server".
 telegram.server.section: "Estação num servidor Linux"
-telegram.server.intro: "O bot, o Mini App e os relatórios rodam no seu próprio servidor Linux o tempo todo, mesmo com o terminal fechado. O terminal configura o servidor por SSH: fecha logins por senha, instala o serviço, entrega as chaves de cada núcleo ativo e move o bot."
+telegram.server.intro: "O bot, o Mini App e os relatórios rodam no seu próprio servidor Linux o tempo todo, mesmo com o terminal fechado. O terminal configura o servidor por SSH: fecha logins por senha, instala o serviço, entrega as chaves de cada núcleo ativo e move o bot. Cerca de 25 núcleos pedem mais ou menos um terço de uma máquina inteira sem crédito burstable e algumas centenas de MB livres num servidor de 1 GB. A linha de base de 10% de um t3.micro burstable fica abaixo disso; se o status voltar com \"0 min\", confira CPUCreditBalance (AWS) e killed / oom no journal do serviço."
 telegram.server.host: "IP do servidor"
 telegram.server.login: "Login"
 telegram.server.by_key: "Entrar com uma chave SSH"

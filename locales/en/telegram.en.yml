@@ -220,7 +220,7 @@ telegram.mini_orders_n_many: "{n} orders"
 
 # Settings -> Telegram -> the bot's segment -> "Station on a Linux server".
 telegram.server.section: "Station on a Linux server"
-telegram.server.intro: "The bot, the Mini App and the reports run on your own Linux server around the clock, even while the terminal is off. The terminal sets the server up over SSH: closes password logins, installs the service, hands it the keys of every active core and moves the bot."
+telegram.server.intro: "The bot, the Mini App and the reports run on your own Linux server around the clock, even while the terminal is off. The terminal sets the server up over SSH: closes password logins, installs the service, hands it the keys of every active core and moves the bot. About 25 cores want roughly a third of a whole non-burstable machine and a few hundred MB free on a 1 GB box. A burstable t3.micro's 10% baseline is below that; if status comes back with \"0 min\", check CPUCreditBalance (AWS) and killed / oom in the service journal."
 telegram.server.host: "Server IP"
 telegram.server.login: "Login"
 telegram.server.by_key: "Log in with an SSH key"

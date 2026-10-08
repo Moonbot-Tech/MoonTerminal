@@ -220,7 +220,7 @@ telegram.mini_orders_n_many: "{n} emir"
 
 # Settings -> Telegram -> the bot's segment -> "Station on a Linux server".
 telegram.server.section: "Linux sunucusundaki istasyon"
-telegram.server.intro: "Bot, Mini App ve raporlar kendi Linux sunucunuzda gece gündüz çalışır, terminal kapalıyken de. Terminal sunucuyu SSH ile kurar: parola girişlerini kapatır, hizmeti kurar, her aktif çekirdeğin anahtarını verir ve botu taşır."
+telegram.server.intro: "Bot, Mini App ve raporlar kendi Linux sunucunuzda gece gündüz çalışır, terminal kapalıyken de. Terminal sunucuyu SSH ile kurar: parola girişlerini kapatır, hizmeti kurar, her aktif çekirdeğin anahtarını verir ve botu taşır. Yaklaşık 25 çekirdek, burstable olmayan bir makinenin kabaca üçte birini ve 1 GB'lık bir sunucuda birkaç yüz MB boş alan ister. Burstable bir t3.micro'nun %10 taban çizgisi bunun altındadır; durum \"0 dk\" ile dönerse CPUCreditBalance (AWS) değerine ve hizmet günlüğündeki killed / oom satırlarına bakın."
 telegram.server.host: "Sunucu IP"
 telegram.server.login: "Kullanıcı adı"
 telegram.server.by_key: "SSH anahtarıyla gir"

@@ -38,5 +38,5 @@ windows:
     ru: Настройки
     en: Settings
   body:
-    ru: 'Пять вкладок: Подключения, Telegram, Хоткеи, Интерфейс (внутри — Линии и Бейджи), Общие (внутри — Хранилище и Звуки сделок).'
-    en: 'Five tabs: Connections, Telegram, Hotkeys, Interface (holding Lines and Badges), General (holding Storage and Trade sounds).'
+    ru: 'Шесть вкладок: Подключения, Telegram, Станция, Хоткеи, Интерфейс (внутри — Линии и Бейджи), Общие (внутри — Хранилище и Звуки сделок). Станцию ставят кнопкой «Установить» на вкладке «Станция».'
+    en: 'Six tabs: Connections, Telegram, Station, Hotkeys, Interface (holding Lines and Badges), General (holding Storage and Trade sounds). The station is installed with Install on the Station tab.'
