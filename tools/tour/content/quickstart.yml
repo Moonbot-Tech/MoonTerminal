@@ -1,4 +1,5 @@
-# Five steps from download to a connected core. Each step is a title, a short
+# Steps from download to a connected core, then how to turn the Mini App on.
+# Each step is a title, a short
 # body and optional `blocks` — one-key mappings rendered in order:
 #   group        a sub-heading naming WHERE the user acts
 #   sub          one numbered sub-step (3.1, 3.2, ... across the whole step)
@@ -192,4 +193,96 @@ steps:
   - p:
       ru: Ключи уезжают в <code>servers.enc</code>, зашифрованные ключом из хранилища ОС.
       en: Keys go into <code>servers.enc</code>, encrypted with a key from the OS keyring.
+      html: true
+- title:
+    ru: Включите Mini App
+    en: Turn on the Mini App
+  body:
+    ru: 'Mini App не ставится отдельно: оно выключено, пока вы его не включите. Адрес веб-приложения в
+      @BotFather вставлять не нужно — терминал публикует кнопку сам.'
+    en: 'Mini App is not a separate install: it stays off until you turn it on. Do not paste a web-app
+      address into @BotFather — the terminal publishes the button itself.'
+    html: true
+  blocks:
+  - group:
+      ru: На этом компьютере
+      en: On this computer
+  - path:
+    - ru: <code>Настройки</code>
+      en: <code>Settings</code>
+      html: true
+    - ru: <code>Telegram</code>
+      en: <code>Telegram</code>
+      html: true
+    - ru: <code>Бот Telegram</code>
+      en: <code>Telegram bot</code>
+      html: true
+    - ru: <code>Mini App</code>
+      en: <code>Mini App</code>
+      html: true
+  - sub:
+      ru: 'Поставьте галку <code>Включить Mini App</code> и нажмите <code>Сохранить</code> в окне настроек.
+        Пока не сохраните, строка: <code>Есть изменения. Нажмите «Сохранить», чтобы применить их.</code>'
+      en: 'Tick <code>Enable Mini App</code> and press <code>Save</code> in the settings window. Until you
+        save, the line is <code>Changes pending. Press Save to apply them.</code>'
+      html: true
+  - status:
+    - ru: Подготавливаем Mini App. Дождитесь готовности, затем нажмите «Открыть» в боте.
+      en: Preparing Mini App. Once ready, press Open in the bot.
+    - ru: Готово. Откройте Mini App кнопкой в своём боте.
+      en: Ready. Open Mini App using the button in your bot.
+  - note:
+      ru: 'Если не вышло, строка остаётся <code>Не удалось открыть доступ к Mini App. Проверьте интернет;
+        повторная попытка выполняется автоматически.</code> Повтор идёт сам. Туннель ставить не нужно.'
+      en: 'If it fails, the line stays <code>Could not make Mini App available. Check your internet
+        connection; retrying automatically.</code> The retry runs by itself. There is no tunnel to install.'
+      html: true
+  - p:
+      ru: 'Бота ещё нет: отправьте <code>/newbot</code> в @BotFather, вставьте <code>Токен бота</code> и
+        нажмите <code>Сохранить</code>. Дождитесь <code>Бот подключён</code>, нажмите
+        <code>Получить код привязки</code> и отправьте команду <code>/pair</code> боту в личном чате.
+        Код действует 10 минут и только один раз.'
+      en: 'No bot yet: send <code>/newbot</code> to @BotFather, paste the <code>Bot token</code> and press
+        <code>Save</code>. Wait for <code>Bot connected</code>, press <code>Get pairing code</code> and
+        send the <code>/pair</code> command to the bot in a private chat. The code works once and expires
+        after 10 minutes.'
+      html: true
+  - p:
+      ru: 'Терминал сам ставит кнопку меню <code>Открыть</code> рядом с полем сообщения, в каждом
+        привязанном личном чате. Кнопка может отстать примерно на полминуты после строки готовности.
+        <code>/miniapp</code> отвечает сразу той же кнопкой <code>Открыть</code> под сообщением.
+        Терминал должен оставаться запущенным.'
+      en: 'The terminal itself sets the menu button <code>Open</code> beside the message field, in each
+        paired private chat. The button can lag by about half a minute after the ready line.
+        <code>/miniapp</code> answers at once with the same <code>Open</code> button under the message.
+        Keep the terminal running.'
+      html: true
+  - note:
+      ru: '<code>Скопировать адрес Mini App</code>, открытый в обычном браузере, загружает страницу и
+        затем показывает <code>Терминал недоступен. Туннель или сам терминал выключен.</code> Группе
+        приходит <code>Доступ запрещён.</code> Один токен работает в одном месте: строка конфликта
+        называет другой терминал или станцию.'
+      en: '<code>Copy Mini App address</code> opened in an ordinary browser loads the page and then shows
+        <code>The terminal could not be reached. The tunnel or the terminal is down.</code> A group gets
+        <code>Access denied.</code> One token runs in one place: the conflict line names the other
+        terminal or the station.'
+      html: true
+  - group:
+      ru: Когда станция уже настроена
+      en: When a station is already set up
+  - p:
+      ru: 'Галки на этом компьютере больше нет. Та же вкладка пишет: <code>Бот работает на станции на
+        сервере Linux. Установка, состояние и действия станции — во вкладке «Станция».</code> Блок Mini
+        App называется <code>Mini App на сервере</code> — он виден, когда станция уже сообщила бота.
+        Переключение применяется сразу и перезапускает станцию. Подсказка говорит, что вход идёт через
+        туннель Cloudflare и Mini App не откроется там, где Cloudflare заблокирован. Круглосуточно без
+        этого терминала — вкладка <code>Станция</code>, кнопка <code>Установить</code>. Экран
+        подтверждения уже перечисляет, что установка меняет на сервере.'
+      en: 'The checkbox on this computer is gone. The same tab says <code>The bot runs on the station on a
+        Linux server. The station''s install, status and actions are in the Station tab.</code> The Mini
+        App box is <code>Mini App on the server</code>, shown once the station has reported the bot. It
+        applies at once and restarts the station. Its hint says the entrance is a Cloudflare tunnel and
+        the Mini App will not open where Cloudflare is blocked. Round the clock without this terminal is
+        the <code>Station</code> tab, button <code>Install</code>. The confirm screen already lists what
+        the install changes on the server.'
       html: true

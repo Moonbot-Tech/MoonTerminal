@@ -1080,8 +1080,8 @@ const T = {
     "en": "Quick start"
   },
   "qs.lead": {
-    "ru": "Пять шагов от пустого окна до зелёного индикатора. Порядок важен: терминал не подключается, пока настройки не сохранены.",
-    "en": "Five steps from an empty window to a green indicator. Order matters: the terminal does not connect until settings are saved."
+    "ru": "Пять шагов от пустого окна до зелёного индикатора, затем как включить Mini App. Порядок важен: терминал не подключается, пока настройки не сохранены.",
+    "en": "Five steps from an empty window to a green indicator, then how to turn the Mini App on. Order matters: the terminal does not connect until settings are saved."
   },
   "qs.note": {
     "ru": "Важно",
@@ -2141,6 +2141,116 @@ const STEPS = [
         [
           "p",
           "Keys go into <code>servers.enc<\/code>, encrypted with a key from the OS keyring."
+        ]
+      ]
+    ]
+  },
+  {
+    "ru": [
+      "Включите Mini App",
+      "Mini App не ставится отдельно: оно выключено, пока вы его не включите. Адрес веб-приложения в @BotFather вставлять не нужно — терминал публикует кнопку сам.",
+      [
+        [
+          "group",
+          "На этом компьютере"
+        ],
+        [
+          "path",
+          [
+            "<code>Настройки<\/code>",
+            "<code>Telegram<\/code>",
+            "<code>Бот Telegram<\/code>",
+            "<code>Mini App<\/code>"
+          ]
+        ],
+        [
+          "sub",
+          "Поставьте галку <code>Включить Mini App<\/code> и нажмите <code>Сохранить<\/code> в окне настроек. Пока не сохраните, строка: <code>Есть изменения. Нажмите «Сохранить», чтобы применить их.<\/code>"
+        ],
+        [
+          "status",
+          [
+            "Подготавливаем Mini App. Дождитесь готовности, затем нажмите «Открыть» в боте.",
+            "Готово. Откройте Mini App кнопкой в своём боте."
+          ]
+        ],
+        [
+          "note",
+          "Если не вышло, строка остаётся <code>Не удалось открыть доступ к Mini App. Проверьте интернет; повторная попытка выполняется автоматически.<\/code> Повтор идёт сам. Туннель ставить не нужно."
+        ],
+        [
+          "p",
+          "Бота ещё нет: отправьте <code>/newbot<\/code> в @BotFather, вставьте <code>Токен бота<\/code> и нажмите <code>Сохранить<\/code>. Дождитесь <code>Бот подключён<\/code>, нажмите <code>Получить код привязки<\/code> и отправьте команду <code>/pair<\/code> боту в личном чате. Код действует 10 минут и только один раз."
+        ],
+        [
+          "p",
+          "Терминал сам ставит кнопку меню <code>Открыть<\/code> рядом с полем сообщения, в каждом привязанном личном чате. Кнопка может отстать примерно на полминуты после строки готовности. <code>/miniapp<\/code> отвечает сразу той же кнопкой <code>Открыть<\/code> под сообщением. Терминал должен оставаться запущенным."
+        ],
+        [
+          "note",
+          "<code>Скопировать адрес Mini App<\/code>, открытый в обычном браузере, загружает страницу и затем показывает <code>Терминал недоступен. Туннель или сам терминал выключен.<\/code> Группе приходит <code>Доступ запрещён.<\/code> Один токен работает в одном месте: строка конфликта называет другой терминал или станцию."
+        ],
+        [
+          "group",
+          "Когда станция уже настроена"
+        ],
+        [
+          "p",
+          "Галки на этом компьютере больше нет. Та же вкладка пишет: <code>Бот работает на станции на сервере Linux. Установка, состояние и действия станции — во вкладке «Станция».<\/code> Блок Mini App называется <code>Mini App на сервере<\/code> — он виден, когда станция уже сообщила бота. Переключение применяется сразу и перезапускает станцию. Подсказка говорит, что вход идёт через туннель Cloudflare и Mini App не откроется там, где Cloudflare заблокирован. Круглосуточно без этого терминала — вкладка <code>Станция<\/code>, кнопка <code>Установить<\/code>. Экран подтверждения уже перечисляет, что установка меняет на сервере."
+        ]
+      ]
+    ],
+    "en": [
+      "Turn on the Mini App",
+      "Mini App is not a separate install: it stays off until you turn it on. Do not paste a web-app address into @BotFather — the terminal publishes the button itself.",
+      [
+        [
+          "group",
+          "On this computer"
+        ],
+        [
+          "path",
+          [
+            "<code>Settings<\/code>",
+            "<code>Telegram<\/code>",
+            "<code>Telegram bot<\/code>",
+            "<code>Mini App<\/code>"
+          ]
+        ],
+        [
+          "sub",
+          "Tick <code>Enable Mini App<\/code> and press <code>Save<\/code> in the settings window. Until you save, the line is <code>Changes pending. Press Save to apply them.<\/code>"
+        ],
+        [
+          "status",
+          [
+            "Preparing Mini App. Once ready, press Open in the bot.",
+            "Ready. Open Mini App using the button in your bot."
+          ]
+        ],
+        [
+          "note",
+          "If it fails, the line stays <code>Could not make Mini App available. Check your internet connection; retrying automatically.<\/code> The retry runs by itself. There is no tunnel to install."
+        ],
+        [
+          "p",
+          "No bot yet: send <code>/newbot<\/code> to @BotFather, paste the <code>Bot token<\/code> and press <code>Save<\/code>. Wait for <code>Bot connected<\/code>, press <code>Get pairing code<\/code> and send the <code>/pair<\/code> command to the bot in a private chat. The code works once and expires after 10 minutes."
+        ],
+        [
+          "p",
+          "The terminal itself sets the menu button <code>Open<\/code> beside the message field, in each paired private chat. The button can lag by about half a minute after the ready line. <code>/miniapp<\/code> answers at once with the same <code>Open<\/code> button under the message. Keep the terminal running."
+        ],
+        [
+          "note",
+          "<code>Copy Mini App address<\/code> opened in an ordinary browser loads the page and then shows <code>The terminal could not be reached. The tunnel or the terminal is down.<\/code> A group gets <code>Access denied.<\/code> One token runs in one place: the conflict line names the other terminal or the station."
+        ],
+        [
+          "group",
+          "When a station is already set up"
+        ],
+        [
+          "p",
+          "The checkbox on this computer is gone. The same tab says <code>The bot runs on the station on a Linux server. The station's install, status and actions are in the Station tab.<\/code> The Mini App box is <code>Mini App on the server<\/code>, shown once the station has reported the bot. It applies at once and restarts the station. Its hint says the entrance is a Cloudflare tunnel and the Mini App will not open where Cloudflare is blocked. Round the clock without this terminal is the <code>Station<\/code> tab, button <code>Install<\/code>. The confirm screen already lists what the install changes on the server."
         ]
       ]
     ]
