@@ -434,35 +434,84 @@ fn a_blank_or_bare_command_is_not_a_build_name() {
     assert_eq!(super::normalize_named_build("  installtestversion  "), None);
 }
 
-/// `BGF-SUB4` counts only when the next character ends the token.
+/// The refusal is the error code, a colon, and text — not a longer sibling token.
 ///
 /// A longer sibling (`BGF-SUB40`), an underscore join, and a hyphen join are different tokens.
-/// The match is case-sensitive. Breaks when the trailing-boundary check is dropped: `BGF-SUB40`
-/// then frees the update lane while a different code was logged.
+/// The match is case-sensitive, and the bare code is not a refusal. Breaks when the trailing
+/// check accepts `BGF-SUB40:` or the bare token `BGF-SUB4`: a different code, or a core of that
+/// name, then closes a named install as refused.
 #[test]
 fn a_longer_reject_token_is_not_the_code() {
-    assert!(super::is_core_update_rejection("BGF-SUB4"));
+    assert!(!super::is_core_update_rejection("BGF-SUB4"));
     assert!(super::is_core_update_rejection(
         "refused BGF-SUB4: try another"
     ));
     assert!(!super::is_core_update_rejection("BGF-SUB40"));
+    assert!(!super::is_core_update_rejection("BGF-SUB40: try another"));
     assert!(!super::is_core_update_rejection("BGF-SUB4_foo"));
+    assert!(!super::is_core_update_rejection(
+        "BGF-SUB4_foo: try another"
+    ));
     assert!(!super::is_core_update_rejection("BGF-SUB4-extra"));
+    assert!(!super::is_core_update_rejection(
+        "BGF-SUB4-extra: try another"
+    ));
     assert!(!super::is_core_update_rejection("bgf-sub4"));
+    assert!(!super::is_core_update_rejection("bgf-sub4: try another"));
     assert!(!super::is_core_update_rejection(""));
+    assert!(!super::is_core_update_rejection("BGF-SUB4:"));
+    assert!(!super::is_core_update_rejection("BGF-SUB4:   "));
 }
 
-/// The character before the code has to end a token too. `XBGF-SUB4` is not `BGF-SUB4`.
+/// The character before the code has to end a token too. `XBGF-SUB4:` is not the refusal.
 ///
 /// Breaks when the leading-boundary check is dropped: a longer token that happens to end in
-/// the code is read as a refusal.
+/// the code is read as a refusal and closes an update that is still running.
 #[test]
 fn a_reject_code_must_start_on_a_token_boundary() {
     assert!(!super::is_core_update_rejection("XBGF-SUB4"));
     assert!(!super::is_core_update_rejection("XBGF-SUB4:"));
+    assert!(!super::is_core_update_rejection("XBGF-SUB4: try another"));
     assert!(!super::is_core_update_rejection("foo-BGF-SUB4"));
-    assert!(super::is_core_update_rejection("(BGF-SUB4)"));
-    assert!(super::is_core_update_rejection("XBGF-SUB4 then BGF-SUB4"));
+    assert!(!super::is_core_update_rejection(
+        "foo-BGF-SUB4: try another"
+    ));
+    assert!(!super::is_core_update_rejection("(BGF-SUB4)"));
+    assert!(super::is_core_update_rejection("(BGF-SUB4: try another)"));
+    assert!(!super::is_core_update_rejection("XBGF-SUB4 then BGF-SUB4"));
+    assert!(super::is_core_update_rejection(
+        "XBGF-SUB4 then BGF-SUB4: try another"
+    ));
+}
+
+/// A folder path or the core's own name is not the refusal line.
+///
+/// The real refusal stays `BGF-SUB4: Wrong version name!`. `BGF-SUB3` and `BGF-SUB40` stay
+/// non-matches, with or without a colon. Breaks when a `\BGF-SUB4\` path segment, or a line
+/// that only names the core `BGF-SUB4`, is read as the error code: the install lands and the
+/// row stays painted refused for the rest of the session.
+#[test]
+fn a_core_name_or_install_path_is_not_a_refusal() {
+    assert!(super::is_core_update_rejection(
+        "BGF-SUB4: Wrong version name!"
+    ));
+    assert!(!super::is_core_update_rejection(
+        r"Updater prepared: C:\MoonBot\BGF-SUB4\updater.exe"
+    ));
+    assert!(!super::is_core_update_rejection(r"\BGF-SUB4\"));
+    assert!(!super::is_core_update_rejection(
+        "Updater prepared: /opt/BGF-SUB4/updater.exe"
+    ));
+    assert!(!super::is_core_update_rejection("BGF-SUB4"));
+    assert!(!super::is_core_update_rejection("core BGF-SUB4 ready"));
+    assert!(!super::is_core_update_rejection("BGF-SUB3"));
+    assert!(!super::is_core_update_rejection(
+        "BGF-SUB3: Wrong version name!"
+    ));
+    assert!(!super::is_core_update_rejection("BGF-SUB40"));
+    assert!(!super::is_core_update_rejection(
+        "BGF-SUB40: Wrong version name!"
+    ));
 }
 
 /// Testers paste the Telegram broadcast form `InstallTestVersion MoonBot-R2 ALL`; the trailing

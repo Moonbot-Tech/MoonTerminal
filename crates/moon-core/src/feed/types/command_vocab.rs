@@ -113,15 +113,22 @@ pub fn normalize_named_build(raw: &str) -> Option<String> {
     }
 }
 
-/// Whether a raw `ServerLogEvent.msg` line names [`CORE_UPDATE_REJECT_CODE`], bounded on BOTH
-/// sides so neither a longer sibling code sharing the prefix (`BGF-SUB40`), a longer token this
-/// code is merely a substring of (`XBGF-SUB4:`), nor an underscore-joined token (`BGF-SUB4_foo`)
-/// can match: the character immediately before and immediately after the code must each be either
-/// absent (start/end of the line) or NOT ASCII-alphanumeric, `-`, or `_`. Case-sensitive, and
-/// deliberately blind to the English sentence that rides beside the code in the core's log line —
-/// that prose is copy a core build can reword, the code is not. The input is arbitrary decoded
-/// core text, so both boundaries matter equally; only checking the trailing one would still let
-/// `XBGF-SUB4:` free a lane while an update is genuinely running.
+/// Whether a raw `ServerLogEvent.msg` line is the core refusing a named build.
+///
+/// `msg` is arbitrary decoded core text. Returns true only when
+/// [`CORE_UPDATE_REJECT_CODE`] is written as an error code: its own token, then
+/// `:`, then the refusal text, as in `BGF-SUB4: Wrong version name!`. A line
+/// where those letters are only the core's name (`BGF-SUB4`) or a folder
+/// (`Updater prepared: C:\...\BGF-SUB4\updater.exe`) returns false — that token
+/// standing alone is how a core of this name used to close a real install as
+/// refused. The prose after the colon is not compared; a core build can reword
+/// it, and a colon with no text is not a refusal.
+///
+/// The character before the code must be absent or outside an identifier (ASCII
+/// alphanumeric, `-`, or `_`). Case-sensitive. A longer sibling (`BGF-SUB40:`),
+/// a prefixed token (`XBGF-SUB4:`), and an underscore or hyphen join
+/// (`BGF-SUB4_foo:`, `foo-BGF-SUB4:`) do not match. Checking only the colon
+/// would still let `XBGF-SUB4:` free a lane while an update is running.
 pub fn is_core_update_rejection(msg: &str) -> bool {
     let code = CORE_UPDATE_REJECT_CODE;
     let is_token_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
@@ -131,8 +138,14 @@ pub fn is_core_update_rejection(msg: &str) -> bool {
             .chars()
             .next_back()
             .is_none_or(|c| !is_token_char(c));
-        let after_ok = msg[end..].chars().next().is_none_or(|c| !is_token_char(c));
-        if before_ok && after_ok {
+        if !before_ok {
+            continue;
+        }
+        // The code is the line's error code only when `:` introduces the refusal text.
+        let Some(rest) = msg[end..].strip_prefix(':') else {
+            continue;
+        };
+        if rest.chars().any(|c| !c.is_whitespace()) {
             return true;
         }
     }

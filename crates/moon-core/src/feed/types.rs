@@ -354,7 +354,9 @@ pub enum FeedMsg {
     /// The core answered a `request_version_update` with [`CORE_UPDATE_REJECT_CODE`].
     ///
     /// `request_version_update` is fire-and-forget (moonproto `send_no_reply`, no ack exists), so
-    /// a `ServerLog` line naming the code is the ONLY reply channel for a refused target. Published
+    /// a `ServerLog` line carrying the code as its error code (`BGF-SUB4:` plus the
+    /// refusal text) is the ONLY reply channel for a refused target. A line that
+    /// only names the core or a folder with those letters is not one. Published
     /// from the feed's UNCONDITIONAL `ServerLog` ingestion loop — ahead of `want_log` — so a core
     /// with logging disabled in the UI still surfaces the refusal. Carries NO payload and
     /// deliberately no timestamp: a consumer comparing it against a `sent_at_ms` would be mixing
