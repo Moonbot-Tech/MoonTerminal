@@ -222,6 +222,7 @@ core_status.tz_off.f.source: "Kaynak"
 # Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
 core_status.tz_off.f.unmeasured: "Henüz ölçülmedi"
 core_status.tz_off.source.log: "Çekirdek günlüğü"
+core_status.tz_off.source.ping: "Çekirdek ping"
 core_status.tz_off.source.replica: "Kopya verisi"
 core_status.tz_off.source.skew: "Kayma düzeltmesi"
 core_status.tz_off.source.none: "—"

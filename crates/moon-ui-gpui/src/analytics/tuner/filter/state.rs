@@ -633,8 +633,8 @@ impl TunerState {
     /// own on [`TunerState`], so it cannot outlive what it describes — the same reasoning
     /// [`Self::compose_support`] gives. The run is kept: its query bounds were snapshotted when
     /// the search started, and the rows of that in-memory sample do not change while it runs;
-    /// the axis shift is a core-time-offset nudge at 15-minute bucket granularity against a
-    /// fitting window of weeks to months; and [`Self::mark_report_stale`] already decided that
+    /// the axis shift is a core-time-offset nudge of seconds to hours against a fitting window
+    /// of weeks to months; and [`Self::mark_report_stale`] already decided that
     /// a committed report row — a strictly larger change — must not retire a manually started
     /// search.
     ///

@@ -120,6 +120,58 @@ pub fn latest_offset(conn: &Connection, core_uid: u64) -> Option<i32> {
     .and_then(|value| i32::try_from(value).ok())
 }
 
+/// Read the segment in force for one core: the newest one's offset and start.
+///
+/// Fail-open like [`latest_offset`]: the feed seeds its estimator from it once per connection, and
+/// a failed read only means the first adoption is compared with nothing — the writer still skips a
+/// value equal to the stored one.
+///
+/// Args:
+///     conn: Open writer connection or report reader.
+///     core_uid: Stable uid of the core to read.
+///
+/// Returns:
+///     `(offset_secs, from_utc)` of the newest segment — `from_utc` in seconds — or `None` when
+///     there is none or it cannot be read.
+pub fn latest_segment(conn: &Connection, core_uid: u64) -> Option<(i32, i64)> {
+    conn.query_row(
+        &format!(
+            "SELECT offset_secs, from_utc FROM {TABLE} WHERE core_uid=?1 \
+             ORDER BY from_utc DESC LIMIT 1"
+        ),
+        rusqlite::params![core_uid as i64],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .ok()
+    .and_then(|(offset, from_utc)| Some((i32::try_from(offset).ok()?, from_utc)))
+}
+
+/// Read which estimator stored the offset in force for one core: the newest segment's `source`.
+///
+/// Fail-open like [`latest_offset`] and for the same reason in a milder form: the answer only
+/// labels a seeded status for the Core Status hover, never moves the axis. It names the estimator
+/// that STORED the segment: a re-confirmation stores nothing, so an unchanged offset keeps the
+/// label of whichever estimator first adopted it.
+///
+/// Args:
+///     conn: Open writer connection or report reader.
+///     core_uid: Stable uid of the core to read.
+///
+/// Returns:
+///     The newest segment's label (`OffsetSource::label`), or `None` when the table is absent,
+///     holds no segment for this core, or cannot be read.
+pub fn latest_source(conn: &Connection, core_uid: u64) -> Option<String> {
+    conn.query_row(
+        &format!(
+            "SELECT source FROM {TABLE} WHERE core_uid=?1 \
+             ORDER BY from_utc DESC LIMIT 1"
+        ),
+        rusqlite::params![core_uid as i64],
+        |row| row.get::<_, String>(0),
+    )
+    .ok()
+}
+
 /// Load every core's offset segments, sorted ascending by `from_utc` as
 /// [`crate::db::report_axis::ReportAxis::from_measured`] expects.
 ///

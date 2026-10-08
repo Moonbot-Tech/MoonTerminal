@@ -40,6 +40,8 @@ mod deadline;
 mod dirty;
 mod identity_refresh;
 mod market_role;
+mod pc_clock;
+mod ping_clock;
 mod report_sync;
 mod shared_config;
 mod stale;
@@ -78,7 +80,7 @@ use super::{
 use crate::config::{ServerConfig, TransportVersion};
 use crate::db::order_traces::{AskSink, TraceDbMsg};
 use crate::db::{DbMsg, ReportStart, ReportTx};
-use crate::session::core_time_offset::{OffsetEstimator, OffsetSource};
+use crate::session::core_time_offset::OffsetSource;
 use crate::util::{now_unix_ms as now_ms, now_unix_ms_i64 as now_ms_i64};
 
 /// How often a still-starting core's startup snapshot is read.
@@ -239,8 +241,13 @@ pub(super) fn run(
     //    core per exchange calls subscribe_all_trades; the others publish account data only. This
     //    fetches exchange trades once instead of once from each of up to 200 cores.
     //    initial_strategies IS REQUIRED, or initialization hangs after Connected.
+    //    Whether the core sends its log at all is the user's `log_delivery` (Connections). The
+    //    station never asks for it — the clock offset comes from the Ping (`ping_clock`) and it
+    //    keeps no journal; a core older than the request keeps sending, and its event filter
+    //    drops the lines.
     let init = InitConfig {
         initial_strategies: Some(InitialStrategies::new(0, Vec::new())),
+        subscribe_logs: server.feed.log_delivery && station.is_none(),
         ..Default::default()
     };
 
@@ -437,9 +444,30 @@ pub(super) fn run(
     // in the command queue must pass (`stale`) so one that waited out an outage is not delivered.
     let mut ready_since: Option<Instant> = None;
     let mut api_expiry_failed_before = false;
-    // Per-connection clock-offset estimator, fed every `Event::ServerLog` this connection
-    // receives regardless of `feed.log`; see the sampling loop below and `note_ready` at Ready.
-    let mut offset_estimator = OffsetEstimator::new();
+    // Per-connection clock offset, sampled from the core's Ping on its own deadline whatever the
+    // feed's flags say; see the sampling step at the end of the loop and `note_ready` at Ready.
+    // A verdict about the log request belongs to the connection that reached it: cleared here and
+    // again at every Ready, since an in-run reconnect may land on a core that was upgraded.
+    let _ = tx.send(FeedMsg::LogDeliveryIgnored(false));
+    let log_delivery_off = !server.feed.log_delivery && station.is_none();
+    let mut log_delivery_ignored = false;
+    let mut ping_clock = ping_clock::PingClock::new(Instant::now());
+    // The offset in force, read once per connection: one indexed row from the replica the writer
+    // keeps. Without a report sink nothing is stored for this core and nothing would be adopted
+    // into the axis anyway (the adoption below is gated on the same sink). A read that fails
+    // starts from `None`, which only means the first adoption is compared with nothing — the
+    // writer still skips a value equal to the stored one.
+    // The segment's start rides along: a confirmation re-publishes it unchanged, so the report axis
+    // the UI builds from this status (`report_axis`, whose segment starts at `observed_at_utc`)
+    // does not move — a moved axis re-queries the Report and resets Analytics.
+    let mut segment_start_ms: Option<i64> = None;
+    if reports.is_some() {
+        let stored = crate::db::open_reader()
+            .ok()
+            .and_then(|conn| crate::db::latest_segment(&conn, server.uid));
+        ping_clock.seed(stored.map(|(offset, _)| offset));
+        segment_start_ms = stored.map(|(_, from_utc)| from_utc.saturating_mul(1_000));
+    }
     // Startup telemetry is POLLED, not pushed: MoonProto publishes it as a passive snapshot behind
     // a lock at its own bounded rate, so nothing wakes us when it advances. `startup_sent` is the
     // last snapshot that actually left, so the send gate compares against what the store holds
@@ -676,9 +704,12 @@ pub(super) fn run(
                     // subscriptions and indexes, so waiting for an event that will never arrive
                     // would leave the status stuck at "reconnected" (0/N) forever while data flows.
                     if reconnect_is_operational(fresh, init_completed) {
-                        // A reconnect replays a backlog of old log lines under fresh receipt
-                        // times — exactly the burst the estimator's quarantine must discard.
-                        offset_estimator.note_ready(now_ms_i64());
+                        // The first Pings after a reconnect carry its largest delay — the stretch
+                        // the estimator's quarantine keeps out.
+                        ping_clock.note_ready(now_ms_i64());
+                        if std::mem::take(&mut log_delivery_ignored) {
+                            let _ = tx.send(FeedMsg::LogDeliveryIgnored(false));
+                        }
                         ConnStatus::Ready
                     } else {
                         ConnStatus::Stage("connected, init…".into())
@@ -699,7 +730,10 @@ pub(super) fn run(
                     // and nothing clears it: a client whose init completed never runs init again,
                     // and a client that is rebuilt gets a fresh `run` with a fresh latch.
                     init_completed = true;
-                    offset_estimator.note_ready(now_ms_i64());
+                    ping_clock.note_ready(now_ms_i64());
+                    if std::mem::take(&mut log_delivery_ignored) {
+                        let _ = tx.send(FeedMsg::LogDeliveryIgnored(false));
+                    }
                     ConnStatus::Ready
                 }
                 LifecycleEvent::Reconnecting => ConnStatus::Stage("reconnecting…".into()),
@@ -1778,17 +1812,25 @@ pub(super) fn run(
                 ));
             }
         }
-        // `want_log` gates only UI/disk PUBLICATION further below — the core sends
-        // `Event::ServerLog` regardless, so a core with reports enabled and the log stream
-        // disabled still needs every sample to correct its report rows' times. Sample
-        // unconditionally, ahead of and independent from the publication-gated block below, so
-        // no flag combination can leave this core with reports to correct and no source to
-        // measure them from. This loop now carries TWO unconditional consumers of the same raw
-        // line for the same reason: a rejected `request_version_update` is fire-and-forget, so
-        // `ServerLog` is the only reply channel, and `feed.log = false` must not be able to hide
-        // it from the update state machine any more than from the clock-offset estimator above.
+        // `want_log` gates only UI/disk PUBLICATION further below. A rejected
+        // `request_version_update` is fire-and-forget, so `ServerLog` is its only reply channel,
+        // and `feed.log = false` must not be able to hide it from the update state machine: read
+        // it here, ahead of and independent from the publication-gated block.
         for ev in &events {
             if let Event::ServerLog(l) = ev {
+                // Asked not to send its log, the core still does, well after the lines a core
+                // flushes around Ready: it does not understand the request.
+                if log_delivery_off
+                    && !log_delivery_ignored
+                    && ready_since.is_some_and(|t| t.elapsed() >= crate::feed::LOG_DELIVERY_GRACE)
+                {
+                    log_delivery_ignored = true;
+                    log::info!(
+                        "[{}] the core keeps sending its log after it was asked to stop",
+                        server.name
+                    );
+                    let _ = tx.send(FeedMsg::LogDeliveryIgnored(true));
+                }
                 if crate::feed::is_core_update_rejection(&l.msg) {
                     log::warn!(
                         "[{}] core update refused: {}",
@@ -1796,37 +1838,6 @@ pub(super) fn run(
                         crate::applog::redact::addresses(&l.msg)
                     );
                     let _ = tx.send(FeedMsg::CoreUpdateRejected);
-                }
-                let core_time_ms = l.unix_millis();
-                let recv_ms = now_ms_i64();
-                if let Some(offset_secs) = offset_estimator.observe(core_time_ms, recv_ms) {
-                    // Durability-first ORDERING, not a durability GUARANTEE: this loop cannot
-                    // observe the writer thread's own commit, so the DbMsg is only QUEUED ahead
-                    // of the FeedMsg, on the writer's one ordered channel, rather than waited on
-                    // through an acknowledgement path that does not exist. The writer still
-                    // applies its messages strictly in send order, so nothing this loop sends
-                    // afterwards can reach the report table ahead of this segment.
-                    // The screen only ever learns about an offset the WRITER was told about. With
-                    // no report sink this core replicates nothing, so the segment would never
-                    // reach the table, the report reader would keep running on the uncorrected
-                    // axis, and Core Status would stand there claiming a correction nothing
-                    // applies — and it would vanish on the next restart, since the seed reads that
-                    // same table. Staying silent is the honest outcome: the core genuinely has no
-                    // measured offset as far as anything downstream is concerned.
-                    if let Some(sink) = reports {
-                        sink.send(DbMsg::CoreTimeOffset {
-                            core_uid: server.uid,
-                            offset_secs,
-                            observed_at_utc: recv_ms,
-                            source: "log".into(),
-                        });
-                        let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
-                            offset_secs: Some(offset_secs),
-                            observed_at_utc: recv_ms,
-                            samples: offset_estimator.samples(),
-                            source: OffsetSource::Log,
-                        }));
-                    }
                 }
             }
         }
@@ -2599,6 +2610,64 @@ pub(super) fn run(
         }
         force_market_sample = false;
 
+        // The clock offset, on its own deadline: nothing announces a new Ping, so this runs on
+        // every pass and `ping_clock` decides whether a reading is due — and counts one only while
+        // Ready, since the getter holds the previous connection's last Ping through a reconnect.
+        let recv_ms = now_ms_i64();
+        // This PC's own clock error comes first: until its first SNTP round ends (seconds, inside
+        // the quarantine) a sample could be corrected while its neighbours are not.
+        let pc = pc_clock::read();
+        let reading = ping_clock.poll(
+            Instant::now(),
+            recv_ms,
+            client.server_time_delta_ms(),
+            pc.error_ms(),
+            is_ready && pc.settled(),
+        );
+        // A confirmation stores nothing — the offset in force is already the newest segment — but
+        // tells Core Status the value is live: the samples and the Ping as its source. Its instant
+        // stays the segment's own start, so the axis built from this status is the same axis.
+        if let (Some(ping_clock::PingOffset::Confirmed(offset_secs)), Some(_)) = (reading, reports)
+        {
+            let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
+                offset_secs: Some(offset_secs),
+                observed_at_utc: segment_start_ms.unwrap_or(recv_ms),
+                samples: ping_clock.samples(),
+                source: OffsetSource::Ping,
+            }));
+        }
+        if let Some(ping_clock::PingOffset::Adopted(offset_secs)) = reading {
+            // The writer opens the new segment at this instant (`DbMsg::CoreTimeOffset`).
+            segment_start_ms = Some(recv_ms);
+            // Durability-first ORDERING, not a durability GUARANTEE: this loop cannot observe the
+            // writer thread's own commit, so the DbMsg is only QUEUED ahead of the FeedMsg, on the
+            // writer's one ordered channel, rather than waited on through an acknowledgement path
+            // that does not exist. The writer still applies its messages strictly in send order,
+            // so nothing this loop sends afterwards can reach the report table ahead of this
+            // segment.
+            // The screen only ever learns about an offset the WRITER was told about. With no
+            // report sink this core replicates nothing, so the segment would never reach the
+            // table, the report reader would keep running on the uncorrected axis, and Core Status
+            // would stand there claiming a correction nothing applies — and it would vanish on the
+            // next restart, since the seed reads that same table. Staying silent is the honest
+            // outcome: the core genuinely has no measured offset as far as anything downstream is
+            // concerned.
+            if let Some(sink) = reports {
+                sink.send(DbMsg::CoreTimeOffset {
+                    core_uid: server.uid,
+                    offset_secs,
+                    observed_at_utc: recv_ms,
+                    source: OffsetSource::Ping.label().into(),
+                });
+                let _ = tx.send(FeedMsg::TimeOffset(CoreTimeOffsetStatus {
+                    offset_secs: Some(offset_secs),
+                    observed_at_utc: recv_ms,
+                    samples: ping_clock.samples(),
+                    source: OffsetSource::Ping,
+                }));
+            }
+        }
+
         if !command_drain.may_wait() {
             continue;
         }
@@ -2637,6 +2706,7 @@ pub(super) fn run(
             startup_wait,
             strat_edit_wait,
             trace_wait,
+            Some(ping_clock.wait(wait_now)),
         ]
         .into_iter()
         .flatten()

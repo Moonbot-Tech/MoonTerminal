@@ -97,12 +97,17 @@ impl Default for ManualStratState {
     }
 }
 
-/// Core-data reception flags, implemented entirely as a client-side filter.
+/// Core-data reception flags, implemented as a client-side filter — all but one.
 ///
 /// IMPORTANT: the core always sends these domain events. A cleared flag means do not read,
 /// store, or draw them, saving CPU, database work, and windows, but it does NOT save network
 /// traffic because these categories have no server-side opt-out. The order book and tape are
 /// not included: they are chart-only and exist only while a window is open.
+///
+/// The exception is [`Self::log_delivery`], a request to the core itself (MoonProto
+/// `InitConfig::subscribe_logs`, cores from 2026-10): it does stop the log stream, on a core that
+/// understands it. [`Self::log`] stays the client-side filter — "do not show the journal here" —
+/// so the two can be told apart.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct FeedFlags {
     /// Open core orders in the bottom dock.
@@ -129,6 +134,13 @@ pub struct FeedFlags {
     /// Arbitrage (`Arb`).
     #[serde(default = "default_true")]
     pub arb: bool,
+    /// Ask the core to send its log at all. Off, a core that supports the request stops the
+    /// stream: the Log panel stays empty for it and a refused named-build update has no channel
+    /// to say so (that refusal arrives only as a log line). The report clock does not depend on
+    /// it — it comes from the Ping. A core older than the request keeps sending; the feed notices
+    /// and says so (`FeedMsg::LogDeliveryIgnored`). Absent from an older config: on, as before.
+    #[serde(default = "default_true")]
+    pub log_delivery: bool,
 }
 
 impl Default for FeedFlags {
@@ -143,6 +155,7 @@ impl Default for FeedFlags {
             log: true,
             alerts: true,
             arb: true,
+            log_delivery: true,
         }
     }
 }

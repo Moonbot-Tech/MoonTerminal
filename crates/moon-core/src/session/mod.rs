@@ -77,6 +77,9 @@ fn conn_sig(server: &ServerConfig) -> u64 {
         f.log,
         f.alerts,
         f.arb,
+        // A request MoonProto sends at connect (`InitConfig::subscribe_logs`): a fresh feed
+        // applies it, exactly like every other flag here.
+        f.log_delivery,
     ]
     .hash(&mut h);
     server.synthetic.hash(&mut h);

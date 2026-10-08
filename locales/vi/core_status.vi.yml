@@ -222,6 +222,7 @@ core_status.tz_off.f.source: "Nguồn"
 # Hover line for a core nothing has been measured on yet, ahead of the sample count behind it.
 core_status.tz_off.f.unmeasured: "Chưa đo"
 core_status.tz_off.source.log: "Nhật ký core"
+core_status.tz_off.source.ping: "Ping core"
 core_status.tz_off.source.replica: "Dữ liệu bản sao"
 core_status.tz_off.source.skew: "Hiệu chỉnh lệch"
 core_status.tz_off.source.none: "—"

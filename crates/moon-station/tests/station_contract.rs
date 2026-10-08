@@ -428,9 +428,9 @@ fn each_station_profile_keeps_its_own_events_alone() {
     let (light, _) = kept_by(&code, "keeps_reports");
     assert_eq!(
         light,
-        BTreeSet::from(["Detect", "MarketHistory", "Report", "ServerLog"].map(String::from)),
-        "the light station keeps reports, archive answers, the log (for the clock offset) and \
-         detects (judged for the bot's Telegram events, never stored) — nothing else"
+        BTreeSet::from(["Detect", "MarketHistory", "Report"].map(String::from)),
+        "the light station keeps reports, archive answers and detects (judged for the bot's \
+         Telegram events, never stored) — nothing else; the clock offset comes from the Ping"
     );
     let (account, body) = kept_by(&code, "keeps_account");
     assert!(

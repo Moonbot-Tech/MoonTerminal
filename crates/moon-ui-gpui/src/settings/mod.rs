@@ -226,10 +226,10 @@ pub struct SettingsView {
     icons: IconSet,
     /// Group whose icon picker is open, or `None` when closed; ported from egui's `picking`.
     picking: Option<String>,
-    /// `ConnRow::row_key` of the row whose feed `n/8` menu is open, or `None` when every menu is
+    /// `ConnRow::row_key` of the row whose feed `n/9` menu is open, or `None` when every menu is
     /// shut.
     ///
-    /// The dropdown is CONTROLLED from here so its eight menu items are built for the open row
+    /// The dropdown is CONTROLLED from here so its menu items are built for the open row
     /// alone. Built unconditionally they cost eight `MoonMenuItem`, sixteen locale lookups and
     /// sixteen formatted strings PER ROW PER FRAME while the menu is closed -- and a wheel notch
     /// over the Settings body rebuilds every row, so at 56 cores that was the single largest block
@@ -687,6 +687,7 @@ fn settings_sig(b: &Backend) -> u64 {
         s.feed.log.hash(&mut h);
         s.feed.alerts.hash(&mut h);
         s.feed.arb.hash(&mut h);
+        s.feed.log_delivery.hash(&mut h);
         // Key input and Paste callbacks explicitly refresh draft endpoint cells.
         // Keep secret contents out of this broader settings signature.
         s.key.is_empty().hash(&mut h);

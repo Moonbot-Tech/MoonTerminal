@@ -186,8 +186,8 @@ struct CoreEntry {
 
 /// What the light station reads from a core: its reports alone (`STATION.md` §3.2). Above all no
 /// `log`: with it the feed writes every core's log to the data root, and the station keeps no
-/// logs. The clock offset still samples `ServerLog` — that pass ignores this flag — and stores
-/// nothing but the offset.
+/// logs. It does not even ask the core for its log (`log_delivery`): the clock offset comes from
+/// the core's Ping.
 const STATION_FEED: FeedFlags = FeedFlags {
     orders: false,
     detects: false,
@@ -197,6 +197,7 @@ const STATION_FEED: FeedFlags = FeedFlags {
     log: false,
     alerts: false,
     arb: false,
+    log_delivery: false,
 };
 
 /// What the Mini App's station reads besides: the account its tabs show — orders, balances,

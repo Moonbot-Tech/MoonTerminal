@@ -319,7 +319,7 @@ fn the_mini_app_turns_the_account_feed_on() {
     let feed = mini.config.servers[0].feed;
     assert!(feed.orders && feed.balance && feed.strategies && feed.reports);
     assert!(
-        !feed.log && !feed.detects && !feed.alerts && !feed.arb,
+        !feed.log && !feed.detects && !feed.alerts && !feed.arb && !feed.log_delivery,
         "the Mini App shows none of these"
     );
     let telegram = mini.telegram.as_ref().unwrap();

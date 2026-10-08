@@ -63,7 +63,7 @@ const ENDPOINT_CONTENT: f32 = ENDPOINT_TEXT + ENDPOINT_INPUT_CHROME;
 /// wide window hands the rest to the name column.
 const ENDPOINT_CONTENT_CAP: f32 = ENDPOINT_CONTENT + 2.0;
 
-/// Five glyphs (`8/8`, space and caret) at MoonUI's 16px `Md` reference font — a ceiling above
+/// Five glyphs (`9/9`, space and caret) at MoonUI's 16px `Md` reference font — a ceiling above
 /// the design's own control font — MoonUI's 14px trigger padding and 2px rounding room. The
 /// trigger scales this budget itself.
 const DATA_TRIGGER_BASIS: f32 = 5.0 * 0.6 * 16.0 + 14.0 + 2.0;
