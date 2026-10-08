@@ -1964,6 +1964,10 @@ const STEPS = [
         [
           "note",
           "Станция по умолчанию подключается к ядру по адресу из ключа. Значок облака рядом с заполненным полем передаёт ей вписанный адрес — включайте его для исправленного внешнего адреса или DDNS-имени, но не для локального адреса вашей сети, до которого сервер станции не достанет."
+        ],
+        [
+          "p",
+          "Около 25 ядер хотят примерно треть целой машины без режима burstable и несколько сотен МБ свободно на сервере в 1 ГБ. Базовые 10% у burstable t3.micro ниже этого. Если статус станции снова показывает <code>0 мин<\/code>, проверьте <code>CPUCreditBalance<\/code> (AWS) и <code>killed<\/code> / <code>oom<\/code> в журнале службы."
         ]
       ]
     ],
@@ -2063,6 +2067,10 @@ const STEPS = [
         [
           "note",
           "By default the station connects to the core on the key's address. The cloud glyph beside a filled field hands it the typed address — turn it on for a corrected public address or a DDNS name, not for an address of your local network, which the station's server cannot reach."
+        ],
+        [
+          "p",
+          "About 25 cores want roughly a third of a whole non-burstable machine and a few hundred MB free on a 1 GB box. A burstable t3.micro's 10% baseline is below that. If the station status comes back with <code>0 min<\/code>, check <code>CPUCreditBalance<\/code> (AWS) and <code>killed<\/code> / <code>oom<\/code> in the service journal."
         ]
       ]
     ]
@@ -2248,11 +2256,11 @@ const WINDOWS = [
   {
     "ru": [
       "Настройки",
-      "Пять вкладок: Подключения, Telegram, Хоткеи, Интерфейс (внутри — Линии и Бейджи), Общие (внутри — Хранилище и Звуки сделок)."
+      "Шесть вкладок: Подключения, Telegram, Станция, Хоткеи, Интерфейс (внутри — Линии и Бейджи), Общие (внутри — Хранилище и Звуки сделок). Станцию ставят кнопкой «Установить» на вкладке «Станция»."
     ],
     "en": [
       "Settings",
-      "Five tabs: Connections, Telegram, Hotkeys, Interface (holding Lines and Badges), General (holding Storage and Trade sounds)."
+      "Six tabs: Connections, Telegram, Station, Hotkeys, Interface (holding Lines and Badges), General (holding Storage and Trade sounds). The station is installed with Install on the Station tab."
     ]
   }
 ];

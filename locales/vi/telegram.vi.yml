@@ -220,7 +220,7 @@ telegram.mini_orders_n_many: "{n} lệnh"
 
 # Settings -> Telegram -> the bot's segment -> "Station on a Linux server".
 telegram.server.section: "Trạm trên máy chủ Linux"
-telegram.server.intro: "Bot, Mini App và báo cáo chạy trên máy chủ Linux của bạn suốt ngày đêm, kể cả khi terminal tắt. Terminal tự dựng máy chủ qua SSH: đóng đăng nhập bằng mật khẩu, cài dịch vụ, giao khóa của mọi core đang bật và chuyển bot."
+telegram.server.intro: "Bot, Mini App và báo cáo chạy trên máy chủ Linux của bạn suốt ngày đêm, kể cả khi terminal tắt. Terminal tự dựng máy chủ qua SSH: đóng đăng nhập bằng mật khẩu, cài dịch vụ, giao khóa của mọi core đang bật và chuyển bot. Khoảng 25 core cần chừng một phần ba máy không burst và vài trăm MB trống trên máy 1 GB. Mức nền 10% của t3.micro burstable thấp hơn mức đó; nếu trạng thái trở lại với \"0 phút\", hãy xem CPUCreditBalance (AWS) và killed / oom trong nhật ký dịch vụ."
 telegram.server.host: "IP máy chủ"
 telegram.server.login: "Tên đăng nhập"
 telegram.server.by_key: "Đăng nhập bằng khóa SSH"
