@@ -43,7 +43,7 @@ fn layout_page(layout: ReportLayout) -> Page {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![super::Row::Line("Fixture".into(), total)],
+        rows: vec![super::Row::Line(None, "Fixture".into(), total)],
         pages: 1,
         drilldowns: vec![],
         scope_label: None,
@@ -271,6 +271,7 @@ fn report_average_column_shows_percent_and_missing_values_stay_unvalued() {
         "<tr><td>Fixture</td><td align=\"right\">+20.0%</td><td align=\"right\">1 234$</td></tr>"
     );
     page.rows = vec![super::Row::Line(
+        None,
         "Missing".into(),
         QuoteBreakdown::default(),
     )];
@@ -295,7 +296,7 @@ fn report_native_column_shows_quote_currency_and_blank_total() {
         super::render::row_html(&page.rows[0], true, &page.layout),
         "<tr><td>Fixture</td><td align=\"right\">+20.00000000\u{a0}BTC</td><td align=\"right\">2</td></tr>"
     );
-    let empty = super::Row::Line("Empty".into(), QuoteBreakdown::default());
+    let empty = super::Row::Line(None, "Empty".into(), QuoteBreakdown::default());
     assert_eq!(
         super::render::row_html(&empty, true, &page.layout),
         "<tr><td>Empty</td><td align=\"right\">0</td><td align=\"right\">0</td></tr>"
@@ -398,7 +399,7 @@ fn report_volume_falls_back_to_one_native_quote_only() {
         total.traded_volume.eligible_orders = buckets.len() as i64;
         total.traded_volume.reconstructed_orders = buckets.len() as i64;
         total.traded_volume.totals = buckets;
-        let row = super::Row::Line("Native".into(), total);
+        let row = super::Row::Line(None, "Native".into(), total);
         assert_eq!(
             super::render::row_html(&row, true, &page.layout),
             format!("<tr><td>Native</td><td align=\"right\">{expected}</td></tr>")
@@ -433,7 +434,7 @@ fn report_native_volume_requires_complete_scope() {
             unknown_orders: unknown,
             ..Default::default()
         };
-        let row = super::Row::Line("Native".into(), total);
+        let row = super::Row::Line(None, "Native".into(), total);
         assert_eq!(
             super::render::row_html(&row, true, &page.layout),
             format!("<tr><td>Native</td><td align=\"right\">{expected}</td></tr>")
@@ -683,6 +684,7 @@ fn full_total_is_the_tables_last_row_under_column_titles() {
         zone: chrono_tz::UTC,
         total: total.clone(),
         rows: vec![super::Row::Line(
+            None,
             "Visible row".into(),
             QuoteBreakdown::from_groups([(Some(0), 1.0, 1)]),
         )],
@@ -798,7 +800,7 @@ fn unavailable_average_keeps_nonzero_exclusion_disclosure() {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![super::Row::Line("Fixture".into(), total)],
+        rows: vec![super::Row::Line(None, "Fixture".into(), total)],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
@@ -1203,7 +1205,7 @@ fn native_average_keeps_small_btc_amount_visible() {
         to: 1,
         zone: chrono_tz::UTC,
         total: total.clone(),
-        rows: vec![super::Row::Line("Fixture".into(), total)],
+        rows: vec![super::Row::Line(None, "Fixture".into(), total)],
         pages: 1,
         drilldowns: Vec::new(),
         scope_label: None,
@@ -1390,6 +1392,7 @@ fn rich_report_escapes_names_and_bounds_long_labels() {
         zone: chrono_tz::UTC,
         total: total.clone(),
         rows: vec![super::Row::Line(
+            None,
             format!("<b>&{}", "x".repeat(50_000)),
             total,
         )],
@@ -1562,8 +1565,8 @@ fn a_core_is_one_row_with_its_full_name_in_details() {
         zone: chrono_tz::UTC,
         total: QuoteBreakdown::default(),
         rows: vec![
-            super::Row::Line(name.into(), QuoteBreakdown::default()),
-            super::Row::Line("Short".into(), QuoteBreakdown::default()),
+            super::Row::Line(None, name.into(), QuoteBreakdown::default()),
+            super::Row::Line(None, "Short".into(), QuoteBreakdown::default()),
         ],
         pages: 1,
         drilldowns: Vec::new(),
@@ -2066,7 +2069,11 @@ fn a_days_report_is_compact() {
             to: 8 * 3600 + 59 * 60,
             zone: chrono_tz::UTC,
             total: QuoteBreakdown::default(),
-            rows: vec![super::Row::Line("Core".into(), QuoteBreakdown::default())],
+            rows: vec![super::Row::Line(
+                None,
+                "Core".into(),
+                QuoteBreakdown::default(),
+            )],
             pages: 1,
             drilldowns: Vec::new(),
             scope_label: None,
@@ -2270,10 +2277,10 @@ fn a_page_cut_inside_a_group_keeps_its_header() {
     let total = QuoteBreakdown::default;
     let rows = vec![
         Group("a".into(), total()),
-        Line("1".into(), total()),
-        Line("2".into(), total()),
+        Line(Some(1), "1".into(), total()),
+        Line(Some(2), "2".into(), total()),
         Group("b".into(), total()),
-        Line("3".into(), total()),
+        Line(Some(3), "3".into(), total()),
     ];
     let names = |page: Vec<super::Row>| {
         page.iter()
@@ -2287,7 +2294,10 @@ fn a_page_cut_inside_a_group_keeps_its_header() {
     assert_eq!(names(super::page_rows(&rows, 3, 2)), ["b", "3"]);
     assert_eq!(names(super::page_rows(&rows, 4, 2)), ["b", "3"]);
     assert_eq!(names(super::page_rows(&rows, 0, 5)), names(rows.clone()));
-    let flat = vec![Line("x".into(), total()), Line("y".into(), total())];
+    let flat = vec![
+        Line(Some(4), "x".into(), total()),
+        Line(Some(5), "y".into(), total()),
+    ];
     assert_eq!(names(super::page_rows(&flat, 1, 1)), ["y"]);
 }
 
@@ -2320,14 +2330,14 @@ fn a_repeat_alone_on_its_page_keeps_its_details() {
     };
     let alone = details(vec![
         Group("margo".into(), QuoteBreakdown::default()),
-        Repeat("Bcore".into(), QuoteBreakdown::default()),
+        Repeat(Some(6), "Bcore".into(), QuoteBreakdown::default()),
     ]);
     assert_eq!(alone.matches("<b>Bcore</b>").count(), 1, "{alone}");
     let both = details(vec![
         Group("main".into(), QuoteBreakdown::default()),
-        Line("Bcore".into(), QuoteBreakdown::default()),
+        Line(Some(6), "Bcore".into(), QuoteBreakdown::default()),
         Group("margo".into(), QuoteBreakdown::default()),
-        Repeat("Bcore".into(), QuoteBreakdown::default()),
+        Repeat(Some(6), "Bcore".into(), QuoteBreakdown::default()),
     ]);
     assert_eq!(both.matches("<b>Bcore</b>").count(), 1, "{both}");
 }
@@ -2508,7 +2518,7 @@ fn per_row_page_with(
     for (index, (name, filter)) in rows_by.into_iter().enumerate() {
         let total = db::query_totals(&snap, &filter)?.quotes;
         if total.orders > 0 {
-            active.push(Row::Line(name, total));
+            active.push(Row::Line(row_cores.get(index).copied(), name, total));
             active_cores.extend(row_cores.get(index).copied());
         }
     }
@@ -2533,7 +2543,9 @@ fn per_row_page_with(
                 rows.push(Row::Group(name, subtotal));
                 for &index in &section.members {
                     rows.push(match active[index].clone() {
-                        Row::Line(name, total) if !listed.insert(index) => Row::Repeat(name, total),
+                        Row::Line(uid, name, total) if !listed.insert(index) => {
+                            Row::Repeat(uid, name, total)
+                        }
                         row => row,
                     });
                 }
@@ -2781,5 +2793,93 @@ fn chat_report_sliced_bench() {
         "chat_report_sliced_bench before_ms={} after_ms={}",
         before.as_millis(),
         after.as_millis()
+    );
+}
+
+/// Archived core names can be reused: each distinct uid on a page needs its own native details.
+/// Core 1 earned 11 BTC and core 101 earned 41 BTC, independently inserted into the replica.
+#[test]
+fn paged_details_preserve_distinct_archived_cores_with_the_same_name() {
+    let _locale = crate::test_locale::force("en");
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE orders_rep (core_uid INTEGER,core_name TEXT,newrecid INTEGER,closedate INTEGER,profitbtc REAL,spentbtc REAL,basecurrency INTEGER);").unwrap();
+    for id in 1..=200 {
+        let name = if id == 1 || id == 101 {
+            "Reused name".to_string()
+        } else {
+            format!("Core {id} {}", "x".repeat(180))
+        };
+        let profit = if id == 1 {
+            11.0
+        } else if id == 101 {
+            41.0
+        } else {
+            1.0
+        };
+        conn.execute(
+            "INSERT INTO orders_rep VALUES (?1,?2,1,150,?3,100,0)",
+            rusqlite::params![id, name, profit],
+        )
+        .unwrap();
+    }
+    let groups = vec![
+        moon_core::config::CoreGroup {
+            name: "A".into(),
+            cores: (1..=100).collect(),
+        },
+        moon_core::config::CoreGroup {
+            name: "B".into(),
+            cores: std::iter::once(1).chain(101..=200).collect(),
+        },
+    ];
+    let mut checked = false;
+    for index in 0..200 {
+        let mut request = ReportRequest::new(Period::Today, false);
+        request.by_exchange = false;
+        request.page = index;
+        let page = super::read_page_with(
+            &conn,
+            request,
+            100,
+            200,
+            chrono_tz::UTC,
+            ReportBasis::Close,
+            Default::default(),
+            &Default::default(),
+            &groups,
+            |cores| {
+                cores.sort_by_key(|(id, _)| *id);
+                (Default::default(), super::TelegramReportAccess::Owner)
+            },
+        )
+        .unwrap();
+        let repeated = page
+            .rows
+            .iter()
+            .any(|row| matches!(row, super::Row::Repeat(_, name, _) if name == "Reused name"));
+        let first = page
+            .rows
+            .iter()
+            .any(|row| matches!(row, super::Row::Line(_, name, _) if name == "Reused name"));
+        if repeated && first {
+            checked = true;
+            let html = super::render::report_html(&page);
+            let details = &html[html.find("<details>").unwrap()..];
+            assert_eq!(
+                details.matches("<b>Reused name</b>").count(),
+                2,
+                "page {} of {} must include both archived core uids, not deduplicate their shared name",
+                index + 1,
+                page.pages
+            );
+            break;
+        }
+        if index + 1 >= page.pages {
+            break;
+        }
+    }
+    assert!(
+        checked,
+        "fixture must put the two distinct core uids on one production page"
     );
 }

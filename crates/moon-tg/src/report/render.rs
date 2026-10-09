@@ -209,20 +209,20 @@ pub(super) fn report_html(page: &Page) -> String {
     }
     html.push_str("</table>");
     // The details name each core of the page once, however many groups list it: a repeat counts
-    // only when its first listing is on another page.
-    let mut lines: Vec<(&String, &QuoteBreakdown)> = page
+    // only when its first listing is on another page. Core UIDs distinguish reused names.
+    let mut lines: Vec<(Option<u64>, &String, &QuoteBreakdown)> = page
         .rows
         .iter()
         .filter_map(|row| match row {
-            Row::Line(name, total) => Some((name, total)),
+            Row::Line(uid, name, total) => Some((*uid, name, total)),
             Row::Repeat(..) | Row::Group(..) => None,
         })
         .collect();
     for row in &page.rows {
-        if let Row::Repeat(name, total) = row
-            && !lines.iter().any(|(listed, _)| *listed == name)
+        if let Row::Repeat(uid, name, total) = row
+            && !lines.iter().any(|(listed, _, _)| listed == uid)
         {
-            lines.push((name, total));
+            lines.push((*uid, name, total));
         }
     }
     html.push_str(&format!(
@@ -230,7 +230,7 @@ pub(super) fn report_html(page: &Page) -> String {
         escape(&t!("telegram.report_details")),
         escape(&t!("telegram.report_average"))
     ));
-    for &(name, total) in &lines {
+    for &(_, name, total) in &lines {
         let label = plain_label(name);
         let average = total
             .average_order_return()
@@ -254,7 +254,7 @@ pub(super) fn report_html(page: &Page) -> String {
         ));
     }
     html.push_str("</table>");
-    for &(name, total) in &lines {
+    for &(_, name, total) in &lines {
         let (counted, excluded) = total
             .average_order_return()
             .map(|value| (value.counted, value.excluded))
@@ -469,10 +469,10 @@ fn ordered_rows(page: &Page) -> Vec<OrderedRow<'_>> {
 /// Share core-name compaction and group labels with production cells.
 fn row_label(row: &Row, by_core: bool) -> (String, &QuoteBreakdown) {
     match row {
-        Row::Line(name, total) | Row::Repeat(name, total) if by_core => {
+        Row::Line(_, name, total) | Row::Repeat(_, name, total) if by_core => {
             (compact_label(name), total)
         }
-        Row::Line(name, total) | Row::Repeat(name, total) | Row::Group(name, total) => {
+        Row::Line(_, name, total) | Row::Repeat(_, name, total) | Row::Group(name, total) => {
             (plain_label(name), total)
         }
     }
