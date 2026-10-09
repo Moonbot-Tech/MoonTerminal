@@ -75,6 +75,7 @@ MoonTerminal — виртуальный workspace на Rust: UI-независи
 |---|---|
 | [`moon-core`](crates/moon-core) | UI-независимое ядро — подключения, конфиг, сессии, market state, отчёты. |
 | [`moon-chart`](crates/moon-chart) | Математика графика — time/price view, дефолтный масштаб, pan/zoom, оси (без wgpu). |
+| [`moon-tg`](crates/moon-tg) | Telegram-бот и Mini App — общие для десктопного терминала и станции. |
 | [`moon-ui-gpui`](crates/moon-ui-gpui) | Бинарь `moonterminal` — GPUI shell, панели, debug-инструменты, интеграция графика. |
 | [`moon-station`](crates/moon-station) | Серверный бинарь без окна — реплика отчётов, трассы ордеров и лента сделок. |
 | [`moon-remote`](crates/moon-remote) | Готовит Linux-сервер для `moon-station` по SSH, с машины терминала. |
