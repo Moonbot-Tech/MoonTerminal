@@ -30,13 +30,13 @@ mod sections;
 pub(crate) use render::{escape, help, rich_message_fits};
 use render::{render, report_html};
 
-/// One row of a report table.
+/// One report row, retaining core identity because archived names can be reused.
 #[derive(Clone, Debug)]
 pub(super) enum Row {
-    /// An exchange, a core or a day, with its money.
-    Line(String, QuoteBreakdown),
-    /// A core already listed under an earlier group: in the table again, not in the details.
-    Repeat(String, QuoteBreakdown),
+    /// An exchange, a core or a day, with its money and a UID only for a core.
+    Line(Option<u64>, String, QuoteBreakdown),
+    /// A core listed under an earlier group; Details includes it once on each page.
+    Repeat(Option<u64>, String, QuoteBreakdown),
     /// A saved core group's header above its cores, or the header of the cores in none, with the
     /// group's own total: the database's sum over its cores.
     Group(String, QuoteBreakdown),
@@ -47,14 +47,14 @@ impl Row {
     #[cfg(test)]
     pub(super) fn name(&self) -> &str {
         match self {
-            Self::Line(name, _) | Self::Repeat(name, _) | Self::Group(name, _) => name,
+            Self::Line(_, name, _) | Self::Repeat(_, name, _) | Self::Group(name, _) => name,
         }
     }
 
     /// The row's money.
     pub(super) fn total(&self) -> &QuoteBreakdown {
         match self {
-            Self::Line(_, total) | Self::Repeat(_, total) | Self::Group(_, total) => total,
+            Self::Line(_, _, total) | Self::Repeat(_, _, total) | Self::Group(_, total) => total,
         }
     }
 }
@@ -122,8 +122,8 @@ pub(crate) fn preview_table(layout: &ReportLayout) -> crate::preview::PreviewTab
         total: money(12.40, 250.0, 2),
         rows: vec![
             Row::Group("Margo".into(), money(12.40, 250.0, 2)),
-            Row::Line("Binance-2".into(), money(8.40, 150.0, 1)),
-            Row::Line("Spot-7".into(), money(4.0, 100.0, 1)),
+            Row::Line(Some(1), "Binance-2".into(), money(8.40, 150.0, 1)),
+            Row::Line(Some(2), "Spot-7".into(), money(4.0, 100.0, 1)),
         ],
         pages: 1,
         drilldowns: vec![],
@@ -438,7 +438,7 @@ fn read_page_with(
     for (index, ((name, _), total)) in rows_by.into_iter().zip(totals).enumerate() {
         let total = total.quotes;
         if total.orders > 0 {
-            active.push(Row::Line(name, total));
+            active.push(Row::Line(row_cores.get(index).copied(), name, total));
             active_cores.extend(row_cores.get(index).copied());
         }
     }
@@ -473,7 +473,9 @@ fn read_page_with(
                 rows.push(Row::Group(name, subtotal));
                 for &index in &section.members {
                     rows.push(match active[index].clone() {
-                        Row::Line(name, total) if !listed.insert(index) => Row::Repeat(name, total),
+                        Row::Line(uid, name, total) if !listed.insert(index) => {
+                            Row::Repeat(uid, name, total)
+                        }
                         row => row,
                     });
                 }
