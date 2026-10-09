@@ -25,6 +25,13 @@ feature — a row in the map, a new user word — a row in the dictionary.
 - `crates/moon-core` — data and state: config, themes, report and
   analytics DBs, figures, venue, market/source (order books, ticks).
 - `crates/moon-chart` — chart drawing (layers, figures, volumes).
+- `crates/moon-tg` — Telegram bot reports, navigation and Mini App routes,
+  shared by the terminal and the station through `TgHost`; transport stays in
+  `moon-core::telegram`.
+- `crates/moon-station` — headless server: report replication, order traces,
+  trade tape recording and optional Telegram bot/Mini App hosting.
+- `crates/moon-remote` — Linux server setup and station administration over SSH,
+  used by the terminal and the `moon-remote` command-line tool.
 - `crates/moon-ui-gpui` — panels and windows: chartdx (render state, shaders
   DX11/native/Metal, texts), panels/, settings/, analytics/, strategies/,
   chart_tabs/.
