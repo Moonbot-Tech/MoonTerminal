@@ -10,7 +10,7 @@
 
 `node tools/miniapp_preview/preview.mjs [--out <dir>] [--locale ru|en|es|uk|tr|pt|vi] [--only <screen>]`
 renders every Mini App screen from the synthetic payloads in `miniapp_preview/fixtures/` (shaped
-like `crates/moon-core/src/telegram/web/dto.rs`) at 421x900 and 390x844, light and dark, into
+like `crates/moon-core/src/telegram/web/dto.rs`) at 421x900, 390x844, 320x740 and 1024x768, light and dark, into
 `<dir>` (default `tools/miniapp_preview/out/`, ignored), then checks the owner commands the page
 sends and exits non-zero on a failure or a page error. No core or bot is needed. Install its two
 packages once with `npm install` run inside `tools/miniapp_preview` (`playwright-core`, `js-yaml`;
