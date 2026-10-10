@@ -4,6 +4,7 @@ _version: 1
 analytics.integrity_time_limit: "Denetim süre sınırında (2 dakika) durduruldu. Kopyada hasar doğrulanmadı."
 analytics.col.worst_tip: "Etkin filtrelerle, geçerli strateji seçimi ve Ayarlama dönemi içindeki en kötü tek kapanmış işlemin sonucu; toplam değildir. Kâr ile aynı birimdedir. Pozitif değer, gruptaki tüm kapanmış işlemlerin kârlı olduğu anlamına gelir."
 analytics.col.best_tip: "Etkin filtrelerle, geçerli strateji seçimi ve Ayarlama dönemi içindeki en iyi tek kapanmış işlemin sonucu; toplam değildir. Kâr ile aynı birimdedir. Negatif değer, gruptaki tüm kapanmış işlemlerin zarar ettiği anlamına gelir."
+analytics.col.lastedit_tip: "Strateji parametrelerinin en son değiştiği zaman. Emir boyutu, ad, durdur/başlat ve görünüm (renkler, sesler, yorum) bu tarihi hareket ettirmez."
 
 # Independent desktop Profit Monitor.
 profit_monitor.window_title: "MoonTerminal — Kâr izleyici"

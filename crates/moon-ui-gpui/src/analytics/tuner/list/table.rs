@@ -623,7 +623,9 @@ impl AnalyticsView {
                             SORT_LASTEDIT,
                             Some((LASTEDIT_W, LASTEDIT_MIN_W)),
                             false,
-                            None,
+                            // Current-version LastEditDate. Order size, name, stop/start and
+                            // cosmetics do not open a version, so the hover says what does.
+                            Some(t!("analytics.col.lastedit_tip").to_string()),
                         )
                     })),
             )

@@ -16,6 +16,32 @@ fn comparison_headers_explain_single_trade_extremes() {
     assert!(tips.contains("t!(\"analytics.col.best_tip\")"));
 }
 
+/// Clearing the Changed header's tooltip makes a frozen date look like a bug.
+///
+/// Order size, the name, stop/start and cosmetic settings do not create a strategy version,
+/// so the date stays put. The plausible edit is passing no tooltip on `an-hdr-le` again, or
+/// moving the tip onto another column: the hover then vanishes or explains the wrong heading,
+/// and a user who changed the order size cannot tell why the date did not move.
+#[test]
+fn the_changed_column_header_explains_what_moves_its_date() {
+    let list = read_src("analytics/tuner/list/table.rs");
+    let header = braced_body(&list, "fn header_row(");
+    let lastedit = code_only(chain_between(
+        header,
+        "\"an-hdr-le\"",
+        "})),",
+        "the Changed column header",
+    ));
+    assert!(
+        lastedit.contains("t!(\"analytics.col.lastedit_tip\")"),
+        "the Changed header must show analytics.col.lastedit_tip"
+    );
+    assert!(
+        !lastedit.contains("None"),
+        "the Changed header must keep its tooltip"
+    );
+}
+
 /// `analytics/tuner/shared.rs::collapse_caret` must pass the `DownUp` pose explicitly, ON the
 /// `MoonDisclosure` chain it builds.
 ///
