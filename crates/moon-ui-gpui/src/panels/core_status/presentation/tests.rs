@@ -4,10 +4,11 @@
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
 
 use super::{
-    LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, cpu_level, free_mem_level,
-    status_level, update_tooltip, version_text,
+    BuildParts, LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, build_parts,
+    cpu_level, free_mem_level, group_build_parts, status_level, update_tooltip, version_text,
 };
 use crate::panels::core_status::model::ApiKeyState;
+use crate::panels::core_status::model::GroupVersion;
 use moon_core::feed::ConnStatus;
 use moon_core::feed::UpdateTarget;
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
@@ -256,4 +257,84 @@ fn version_text_appends_a_named_letter() {
     assert_eq!(version_text(Some(771), Some("")), "7.71");
     assert_eq!(version_text(Some(771), None), "7.71");
     assert_eq!(version_text(None, Some("R3")), "-");
+}
+
+/// Joining the letter back onto the number would shift a named row's digits off the column
+/// again. A release, a blank letter and an older core must not grow a tag, and a letter that
+/// arrived without a number must not paint one.
+#[test]
+fn build_parts_keeps_the_number_and_lifts_only_a_real_letter() {
+    assert_eq!(
+        build_parts(Some(771), Some("R3")),
+        BuildParts {
+            number: "7.71".to_string(),
+            tag: Some("R3".to_string()),
+        }
+    );
+    assert_eq!(
+        build_parts(Some(771), Some(" R3 ")),
+        BuildParts {
+            number: "7.71".to_string(),
+            tag: Some("R3".to_string()),
+        }
+    );
+    for suffix in [Some(""), Some("   "), None] {
+        assert_eq!(
+            build_parts(Some(771), suffix),
+            BuildParts {
+                number: "7.71".to_string(),
+                tag: None,
+            },
+            "a release, a blank letter and a missing letter are the bare number"
+        );
+    }
+    assert_eq!(
+        build_parts(None, Some("R3")),
+        BuildParts {
+            number: "-".to_string(),
+            tag: None,
+        }
+    );
+}
+
+/// Tagging a collapsed server that does not agree would claim one core's letter for the
+/// whole machine. Only a uniform named build wears the tag; mixed and absent stay unmarked.
+#[test]
+fn group_build_parts_tags_only_an_agreed_letter() {
+    assert_eq!(
+        group_build_parts(&GroupVersion::Uniform {
+            number: 771,
+            suffix: Some("R3".to_string()),
+        }),
+        BuildParts {
+            number: "7.71".to_string(),
+            tag: Some("R3".to_string()),
+        }
+    );
+    for suffix in [Some(String::new()), None] {
+        assert_eq!(
+            group_build_parts(&GroupVersion::Uniform {
+                number: 771,
+                suffix,
+            }),
+            BuildParts {
+                number: "7.71".to_string(),
+                tag: None,
+            }
+        );
+    }
+    assert_eq!(
+        group_build_parts(&GroupVersion::Mixed),
+        BuildParts {
+            number: "\u{2026}".to_string(),
+            tag: None,
+        }
+    );
+    assert_eq!(
+        group_build_parts(&GroupVersion::Absent),
+        BuildParts {
+            number: "-".to_string(),
+            tag: None,
+        }
+    );
 }

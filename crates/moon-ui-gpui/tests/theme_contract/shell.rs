@@ -1371,17 +1371,17 @@ fn core_status_table_binds_scoped_telemetry_columns() {
     for (body, binding, row) in [
         (
             version_cell,
-            "version_text(r.server_version, r.server_version_suffix.as_deref())",
+            "build_parts(r.server_version, r.server_version_suffix.as_deref())",
             "Flat",
         ),
         (
             server_row,
-            "version_group_text(&group.version)",
+            "group_build_parts(&group.version)",
             "By IP server",
         ),
         (
             process_row,
-            "version_text(core.server_version, core.server_version_suffix.as_deref())",
+            "build_parts(core.server_version, core.server_version_suffix.as_deref())",
             "By IP core",
         ),
     ] {
@@ -1390,6 +1390,17 @@ fn core_status_table_binds_scoped_telemetry_columns() {
             "the {row} row lost the Core Status build binding `{binding}`"
         );
     }
+    let mark = code_only(braced_body(&server, "fn version_mark("));
+    assert!(
+        mark.contains("MoonBadge::new(")
+            && mark.contains(".font_family(design::mono())")
+            && mark.contains(".invisible()"),
+        "the build letter must stay a mono number plus a reserved MoonBadge slot"
+    );
+    assert!(
+        code_only(version_cell).contains("version_mark("),
+        "the Flat build cell must paint the same number-and-tag mark as By IP"
+    );
 }
 
 /// `core_status/server_view.rs:grouped_server_view` must not capture a strong

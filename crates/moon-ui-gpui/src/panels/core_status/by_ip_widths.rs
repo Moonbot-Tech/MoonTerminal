@@ -283,9 +283,10 @@ impl ByIpWidths {
         exch: 64.0,
         api: 84.0,
         cores: 40.0,
-        // Seven Geist Mono characters at the default 15 px font need 63 px, plus the
-        // 18 px update arrow and 4 px gap; leave room for a trailing update badge as well.
-        version: 104.0,
+        // "7.71" at the default 15 px mono face, plus an Xs letter badge (two glyphs and the
+        // badge's own horizontal pad), the 18 px update arrow and the phase glyph. The letter
+        // used to be two more characters inside the number; the badge is wider than that.
+        version: 128.0,
         startup: 84.0,
         tz_off: 84.0,
         icon: 12.0,

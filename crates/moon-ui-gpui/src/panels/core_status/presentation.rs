@@ -211,17 +211,84 @@ pub(super) fn api_quota_level(quota: Option<u64>, warn: bool) -> LoadLevel {
     }
 }
 
-/// Format one core's reported MoonBot build for its column.
+/// The dotted build number and the letter that sits beside it, already split.
+///
+/// The column paints [`Self::number`] in one slot and [`Self::tag`] in the next, so a letter
+/// cannot shove the digits sideways. Hovers still name the joined string through [`version_text`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BuildParts {
+    /// Dotted number, the group's ellipsis, or the panel's ASCII unavailable marker.
+    pub(super) number: String,
+    /// Trimmed letter. Absent for a missing number, a release, an older core, and a blank letter.
+    pub(super) tag: Option<String>,
+}
+
+/// Split one core's reported build into the number slot and the optional letter tag.
+///
+/// The dotted number comes from [`moon_core::util::fmt::core_build`]. The letter is the same
+/// trim [`moon_core::util::fmt::core_build_named`] applies before it joins the two for a hover:
+/// `None`, `Some("")` and a whitespace-only letter are all "no tag", and a missing number stays
+/// the dash with the letter dropped. This does not re-derive the dotted form.
+///
+/// Args:
+///     version: The build this core reported, when it reported one.
+///     suffix: The letter reported with that build.
+///
+/// Returns:
+///     The number text and, when the core reported a real letter, that letter.
+pub(super) fn build_parts(version: Option<u32>, suffix: Option<&str>) -> BuildParts {
+    let Some(version) = version else {
+        return BuildParts {
+            number: "-".to_string(),
+            tag: None,
+        };
+    };
+    let trimmed = suffix.unwrap_or("").trim();
+    BuildParts {
+        number: moon_core::util::fmt::core_build(version),
+        tag: (!trimmed.is_empty()).then(|| trimmed.to_string()),
+    }
+}
+
+/// Split a server row's rolled-up build the same way [`build_parts`] splits one core.
+///
+/// `Mixed` is an ellipsis rather than a number or a dash: it carries exactly one instruction to the
+/// user — expand the group — and neither a number nor a blank would. The glyph lives here rather
+/// than in the dictionaries, per `locales/README.md`, the same reason `∞` lives in
+/// [`api_expiry_text`]. A mixed or absent group has no letter to agree on, so it gets no tag.
+///
+/// Args:
+///     version: The group's agreement state.
+///
+/// Returns:
+///     The agreed number plus its letter when every core agreed on one, otherwise the ellipsis
+///     or the unavailable marker and no tag.
+pub(super) fn group_build_parts(version: &GroupVersion) -> BuildParts {
+    match version {
+        GroupVersion::Uniform { number, suffix } => build_parts(Some(*number), suffix.as_deref()),
+        GroupVersion::Mixed => BuildParts {
+            number: "\u{2026}".to_string(),
+            tag: None,
+        },
+        GroupVersion::Absent => BuildParts {
+            number: "-".to_string(),
+            tag: None,
+        },
+    }
+}
+
+/// Format one core's reported MoonBot build as the single string a hover names.
 ///
 /// No noun — that lives in the column heading, exactly as [`api_expiry_text`] drops "дн" and
 /// [`ping_plain`] drops "ms"; the fault tooltip spells out "MoonBot %{server}" because that one is
-/// a sentence and a column is not.
+/// a sentence and a column is not. The column itself does not paint this string: it paints
+/// [`build_parts`], so the digits stay put and the letter is a tag.
 ///
-/// The number ITSELF is dotted, through [`moon_core::util::fmt::core_build`]: the wire payload is a
-/// flat `u32`, but the product names its builds `7.69` and `7.70`, so printing the raw `769` makes
-/// the reader convert. That convention is the formatter's to state and is documented there — do not
-/// re-derive it here. The terminal's own `vX.Y.Z` release version is real SemVer and a different
-/// fact entirely.
+/// The number ITSELF is dotted, through [`moon_core::util::fmt::core_build_named`]: the wire
+/// payload is a flat `u32`, but the product names its builds `7.69` and `7.70`, so printing the
+/// raw `769` makes the reader convert. That convention is the formatter's to state and is
+/// documented there — do not re-derive it here. The terminal's own `vX.Y.Z` release version is
+/// real SemVer and a different fact entirely.
 ///
 /// Args:
 ///     version: The build this core reported, when it reported one.
@@ -238,32 +305,9 @@ pub(super) fn version_text(version: Option<u32>, suffix: Option<&str>) -> String
         .unwrap_or_else(|| "-".to_string())
 }
 
-/// Format a server row's rolled-up build.
-///
-/// `Mixed` is an ellipsis rather than a number or a dash: it carries exactly one instruction to the
-/// user — expand the group — and neither a number nor a blank would. The glyph lives here rather
-/// than in the dictionaries, per `locales/README.md`, the same reason `∞` lives in
-/// [`api_expiry_text`].
-///
-/// Args:
-///     version: The group's agreement state.
-///
-/// Returns:
-///     The agreed build, with its letter when the group agreed on one, an ellipsis, or the
-///     unavailable marker.
-pub(super) fn version_group_text(version: &GroupVersion) -> String {
-    match version {
-        GroupVersion::Uniform { number, suffix } => {
-            moon_core::util::fmt::core_build_named(*number, suffix.as_deref())
-        }
-        GroupVersion::Mixed => "\u{2026}".to_string(),
-        GroupVersion::Absent => "-".to_string(),
-    }
-}
-
 /// Format a server row's rolled-up clock offset.
 ///
-/// `Mixed` is the same ellipsis [`version_group_text`] uses for a disagreeing build: it carries
+/// `Mixed` is the same ellipsis [`group_build_parts`] uses for a disagreeing build: it carries
 /// exactly one instruction — expand the group — and neither a number nor the never-measured marker
 /// would say that. `Absent` reuses the never-measured cell text: no core on the server has ever
 /// measured an offset, which is exactly what a lone `Unknown` core also means.
