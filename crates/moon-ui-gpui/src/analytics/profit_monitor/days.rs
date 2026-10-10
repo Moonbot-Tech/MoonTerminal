@@ -1,20 +1,28 @@
-//! The transient month-by-days surface, sharing the monitor's serialized refresh gate.
+//! The transient newest-first day surface, with a separate total and the shared table typography.
 
 use super::*;
 use crate::load_state::LoadState;
 use days_model::{DayReport, DayRow, current_month, period_label, step_month};
 use moon_core::db::{QuoteBreakdown, ReportFilter, RowScope};
 use moon_core::util::fmt;
-use moon_ui::{MoonButton, MoonDisclosure, MoonDisclosureDirection};
+use moon_ui::MoonButton;
+
+/// Measure tier-derived text in the same family as the rendered value or header caption.
+fn table_text_width(cx: &App, text: &str, weight: f32, heading: bool) -> f32 {
+    if heading {
+        design::ui_caption_text_width(cx, text, weight)
+    } else {
+        design::mono_body_text_width(cx, text, weight)
+    }
+}
 
 impl ProfitMonitorView {
-    /// Toggle the third body view; each opening resets its independent month and disclosure.
+    /// Toggle the third body view; each opening resets its independent month.
     pub(super) fn toggle_days(&mut self, cx: &mut Context<Self>) {
         self.busy_retries.reset();
         self.days_open = !self.days_open;
         if self.days_open {
             self.days_month = current_month(now_utc(), self.zone);
-            self.days_extra = false;
         }
         self.reload(false, cx);
         self.invalidate_content(cx);
@@ -186,62 +194,7 @@ impl ProfitMonitorView {
             LoadState::Ready(report)
             | LoadState::Loading {
                 stale: Some(report),
-            } => {
-                let owner = view.clone();
-                let label = t!("profit_monitor.days.details").to_string();
-                let toggle = move |_: &ClickEvent, _: &mut Window, app: &mut App| {
-                    owner.update(app, |this, cx| {
-                        this.days_extra = !this.days_extra;
-                        this.invalidate_content(cx);
-                        cx.notify();
-                    })
-                };
-                let caret_owner = view.clone();
-                v_flex()
-                    .w_full()
-                    .gap(design::ui_px(cx, 6.0))
-                    .child(day_table(
-                        report,
-                        self.days_extra,
-                        width,
-                        self.zone,
-                        palette,
-                        cx,
-                    ))
-                    .when(self.days_extra, |el| {
-                        el.child(currency_facts(report, palette, cx))
-                    })
-                    .child(
-                        h_flex()
-                            .gap(design::ui_px(cx, 4.0))
-                            .child(
-                                MoonDisclosure::button(
-                                    "profit-monitor-days-disclosure",
-                                    self.days_extra,
-                                )
-                                .direction(MoonDisclosureDirection::DownUp)
-                                .tooltip(label.clone())
-                                .on_toggle(
-                                    move |expanded, _, app| {
-                                        caret_owner.update(app, |this, cx| {
-                                            this.days_extra = *expanded;
-                                            this.invalidate_content(cx);
-                                            cx.notify();
-                                        })
-                                    },
-                                ),
-                            )
-                            .child(
-                                MoonButton::new("profit-monitor-days-details-label")
-                                    .label(label)
-                                    .variant(MoonButtonVariant::Ghost)
-                                    .size(MoonButtonSize::density(cx))
-                                    .on_click(toggle)
-                                    .render(),
-                            ),
-                    )
-                    .into_any_element()
-            }
+            } => day_table(report, width, self.zone, palette, cx),
         };
         v_flex()
             .size_full()
@@ -293,11 +246,11 @@ pub(super) fn day_header(
     let count_label = core_count_noun(count);
     let navigation_width = design::ui_value(cx, 26.0);
     let gap = design::ui_value(cx, 6.0);
-    let side_width = design::mono_caption_text_width(cx, &count.to_string(), 400.0)
-        + design::ui_caption_text_width(cx, &count_label, 400.0)
+    let side_width = table_text_width(cx, &count.to_string(), 400.0, false)
+        + table_text_width(cx, &count_label, 400.0, false)
         + design::ui_value(cx, 4.0);
-    let period_width = design::mono_caption_text_width(cx, &label, 600.0);
-    let title_width = design::ui_caption_text_width(cx, &title, 600.0);
+    let period_width = table_text_width(cx, &label, 600.0, false);
+    let title_width = table_text_width(cx, &title, 600.0, false);
     let available = width - design::ui_value(cx, 24.0);
     // Reserve equal side slots from actual text, rather than dropping labels at a zoom-sensitive tier.
     let full_group = 2.0 * navigation_width + 3.0 * gap + period_width + title_width;
@@ -327,7 +280,7 @@ pub(super) fn day_header(
             el.child(
                 div()
                     .flex_none()
-                    .font_family(design::ui_font())
+                    .font_family(design::mono())
                     .debug_selector(|| "days-header-title".into())
                     .child(title),
             )
@@ -357,7 +310,8 @@ pub(super) fn day_header(
         .py(design::ui_px(cx, 8.0))
         .px(design::ui_px(cx, 12.0))
         .debug_selector(|| "days-header".into())
-        .text_size(design::t_caption(cx))
+        .text_size(design::t_body(cx))
+        .font_family(design::mono())
         .font_weight(FontWeight::SEMIBOLD)
         .child(div().flex_1().min_w_0())
         .child(group)
@@ -373,7 +327,7 @@ pub(super) fn day_header(
                             .debug_selector(|| "days-core-count".into())
                             .flex_none()
                             .gap(design::ui_px(cx, 4.0))
-                            .font_family(design::ui_font())
+                            .font_family(design::mono())
                             .font_weight(FontWeight::NORMAL)
                             .text_color(moon(palette.text_muted))
                             .tooltip(crate::panels::common::text_tooltip(
@@ -398,28 +352,17 @@ pub(super) fn day_profit(quotes: &QuoteBreakdown) -> (String, Option<fmt::DeltaS
         )
 }
 
-/// Format exactly the bot's average-order amount, leaving unsupported scopes explicitly unvalued.
-pub(super) fn day_average(quotes: &QuoteBreakdown) -> String {
-    quotes.average_order_return().map_or_else(
-        || t!("telegram.report_unvalued").to_string(),
-        |value| {
-            format!(
-                "{} {}",
-                fmt::group_decimal(&if value.avg_order < 1.0 {
-                    fmt::adaptive(value.avg_order)
-                } else {
-                    fmt::compact(value.avg_order, 2)
-                }),
-                value.currency.ticker()
-            )
-        },
-    )
+/// Order only the displayed rows, preserving the shared reader's money and snapshot semantics.
+fn newest_rows(report: &DayReport) -> Vec<&DayRow> {
+    let mut rows: Vec<_> = report.rows.iter().collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.date));
+    rows
 }
 
-/// Render measured columns and a bold snapshot total; insufficient widths use vertical rows.
+/// Render a separate period total above measured day columns; narrow hosts use vertical rows.
+/// The custom rows retain the measured narrow layout and today's tint while sharing table bands.
 pub(super) fn day_table(
     report: &DayReport,
-    extra: bool,
     width: f32,
     zone: Tz,
     palette: MoonPalette,
@@ -429,20 +372,19 @@ pub(super) fn day_table(
         t!("profit_monitor.days.date").to_string(),
         t!("profit_monitor.days.result").to_string(),
         t!("profit_monitor.days.trades").to_string(),
-        t!("profit_monitor.days.average").to_string(),
     ];
-    let mut values: Vec<[String; 4]> = report
-        .rows
+    let rows = newest_rows(report);
+    let mut values: Vec<[String; 3]> = rows
         .iter()
         .map(|row| day_cells(row.date.to_string(), &row.quotes))
         .collect();
     values.push(total_cells(&report.total));
-    let columns = if extra { 4 } else { 3 };
-    let mut widths = [0.0_f32; 4];
+    let columns = 3;
+    let mut widths = [0.0_f32; 3];
     for col in 0..columns {
-        widths[col] = design::ui_caption_text_width(cx, &headings[col], 600.0);
+        widths[col] = table_text_width(cx, &headings[col], 400.0, true);
         for row in &values {
-            widths[col] = widths[col].max(design::mono_caption_text_width(cx, &row[col], 600.0));
+            widths[col] = widths[col].max(table_text_width(cx, &row[col], 700.0, false));
         }
         widths[col] += design::ui_value(cx, 4.0);
     }
@@ -458,16 +400,12 @@ pub(super) fn day_table(
         .border_1()
         .border_color(moon(palette.border))
         .rounded(design::ui_px(cx, 4.0));
-    let layout = DayColumns {
-        widths,
-        count: columns,
-        stacked,
-    };
+    let layout = DayColumns { widths, stacked };
     table = table.child(day_table_row(
         &headings, layout, "head", true, None, palette, cx,
     ));
     let today = now_utc().with_timezone(&zone).date_naive();
-    for (index, row) in report.rows.iter().enumerate() {
+    for (index, row) in rows.iter().enumerate() {
         let sign = day_profit(&row.quotes).1;
         table = table.child(
             day_table_row(
@@ -484,7 +422,9 @@ pub(super) fn day_table(
             }),
         );
     }
-    table
+    v_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 8.0))
         .child(
             day_table_row(
                 values.last().expect("total cell exists"),
@@ -496,24 +436,24 @@ pub(super) fn day_table(
                 cx,
             )
             .font_weight(FontWeight::BOLD)
+            .border_1()
+            .border_color(moon(palette.border))
+            .rounded(design::ui_px(cx, 4.0))
+            .debug_selector(|| "days-total".into())
             .bg(moon(palette.shell_high)),
         )
+        .child(table.debug_selector(|| "days-table".into()))
         .into_any_element()
 }
 
-/// Build the table's date, profit, count and average cells from one shared breakdown.
-fn day_cells(date: String, quotes: &QuoteBreakdown) -> [String; 4] {
-    [
-        date,
-        day_profit(quotes).0,
-        quotes.orders.to_string(),
-        day_average(quotes),
-    ]
+/// Build the table's date, profit and count cells from one shared breakdown.
+fn day_cells(date: String, quotes: &QuoteBreakdown) -> [String; 3] {
+    [date, day_profit(quotes).0, quotes.orders.to_string()]
 }
 
-/// Build the actual total cells with the bot's localized, approved total caption.
-fn total_cells(quotes: &QuoteBreakdown) -> [String; 4] {
-    day_cells(t!("telegram.report_total").to_string(), quotes)
+/// Build the separate summary cells with the approved period-total caption.
+fn total_cells(quotes: &QuoteBreakdown) -> [String; 3] {
+    day_cells(t!("profit_monitor.days.total").to_string(), quotes)
 }
 
 /// Keep the current month visible during writer catch-up, but clear it for a different query.
@@ -538,14 +478,13 @@ fn core_count_noun(count: usize) -> String {
 /// Measured widths and the narrow-host degradation shared by every row.
 #[derive(Clone, Copy)]
 struct DayColumns {
-    widths: [f32; 4],
-    count: usize,
+    widths: [f32; 3],
     stacked: bool,
 }
 
 /// Lay out a row without shrinking its measured text; a narrow host stacks the cells vertically.
 fn day_table_row(
-    values: &[String; 4],
+    values: &[String; 3],
     layout: DayColumns,
     id: &str,
     heading: bool,
@@ -553,34 +492,45 @@ fn day_table_row(
     palette: MoonPalette,
     cx: &App,
 ) -> Div {
-    let DayColumns {
-        widths,
-        count: columns,
-        stacked,
-    } = layout;
+    let DayColumns { widths, stacked } = layout;
     let mut row = div()
         .flex()
         .when(stacked, |el| el.flex_col())
+        .when(!stacked, |el| {
+            el.h(px(if heading {
+                design::table_head_h(cx)
+            } else {
+                design::table_row_h(cx)
+            }))
+            .items_center()
+        })
         .w_full()
         .px(design::ui_px(cx, 10.0))
-        .py(design::ui_px(cx, 4.0))
+        .when(stacked, |el| el.py(design::ui_px(cx, 4.0)))
         .gap(design::ui_px(cx, 8.0))
         .border_t_1()
         .border_color(moon_alpha(palette.border, 0.4))
-        .text_size(design::t_caption(cx))
+        .text_size(if heading {
+            design::t_caption(cx)
+        } else {
+            design::t_body(cx)
+        })
+        .when(heading, |el| {
+            el.bg(moon(design::table_style(palette).header_bg))
+        })
         .font_family(if heading {
             design::ui_font()
         } else {
             design::mono()
         });
-    for col in 0..columns {
+    for col in 0..3 {
         let selector = format!("days-cell-{id}-{col}");
         let color = if col == 1 && !heading {
             sign.map_or(palette.text_muted, |sign| {
                 sign.pick(palette.green, palette.red, palette.text)
             })
-        } else if heading || col == 3 {
-            palette.text_muted
+        } else if heading {
+            design::table_style(palette).header_text
         } else {
             palette.text
         };
@@ -589,74 +539,12 @@ fn day_table_row(
                 .flex_none()
                 .when(!stacked, |el| el.w(px(widths[col])))
                 .when(col > 0 && !stacked, |el| el.text_right())
-                .when(id == "total" && col == 0, |el| {
-                    el.font_family(design::ui_font())
-                })
                 .debug_selector(move || selector)
                 .text_color(moon(color))
                 .child(values[col].clone()),
         );
     }
     row
-}
-
-/// Expose the bot's native currency amounts and partial average coverage, without new metrics.
-fn currency_facts(report: &DayReport, palette: MoonPalette, cx: &App) -> AnyElement {
-    let mut facts = v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 4.0))
-        .font_family(design::ui_font())
-        .text_size(design::t_caption(cx))
-        .text_color(moon(palette.text_muted));
-    for DayRow { date, quotes } in &report.rows {
-        let native = quotes
-            .totals
-            .iter()
-            .map(|part| {
-                format!(
-                    "{} {}",
-                    fmt::signed_fixed(part.profit, part.currency.display_decimals()).map_or_else(
-                        || t!("telegram.report_unvalued").to_string(),
-                        |value| value.0
-                    ),
-                    part.currency.ticker()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
-        facts = facts.child(
-            v_flex()
-                .w_full()
-                .child(
-                    h_flex()
-                        .gap(design::ui_px(cx, 6.0))
-                        .child(div().font_family(design::mono()).child(date.to_string()))
-                        .child(t!("profit_monitor.days.currency").to_string()),
-                )
-                .child(div().w_full().font_family(design::mono()).child(native)),
-        );
-        let (counted, excluded) = quotes.average_order_return().map_or_else(
-            || {
-                let counted = quotes
-                    .entry_spend
-                    .counted_orders
-                    .clamp(0, quotes.orders.max(0));
-                (counted, quotes.orders.saturating_sub(counted))
-            },
-            |value| (value.counted, value.excluded),
-        );
-        if excluded > 0 {
-            facts = facts.child(
-                t!(
-                    "telegram.report_average_coverage",
-                    counted = counted,
-                    excluded = excluded
-                )
-                .to_string(),
-            );
-        }
-    }
-    facts.into_any_element()
 }
 
 #[cfg(test)]
