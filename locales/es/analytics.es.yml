@@ -4,6 +4,7 @@ _version: 1
 analytics.integrity_time_limit: "La comprobación se detuvo al alcanzar el límite de tiempo (2 minutos). No se confirmó ningún daño en la réplica."
 analytics.col.worst_tip: "Resultado de una sola operación cerrada, la peor, no una suma, en la selección actual de estrategias y el periodo de Ajuste, con los filtros activos. Misma unidad que Beneficio. Un valor positivo significa que todas las operaciones cerradas del grupo fueron rentables."
 analytics.col.best_tip: "Resultado de una sola operación cerrada, la mejor, no una suma, en la selección actual de estrategias y el periodo de Ajuste, con los filtros activos. Misma unidad que Beneficio. Un valor negativo significa que todas las operaciones cerradas del grupo tuvieron pérdidas."
+analytics.col.lastedit_tip: "Cuando se cambiaron por última vez los parámetros de la estrategia. El tamaño de la orden, el nombre, detener/iniciar y el aspecto (colores, sonidos, comentario) no mueven esta fecha."
 
 # Independent desktop Profit Monitor.
 profit_monitor.window_title: "MoonTerminal — Monitor de beneficios"

@@ -4,6 +4,7 @@ _version: 1
 analytics.integrity_time_limit: "The check was stopped at its time limit (2 minutes). Replica damage was not confirmed."
 analytics.col.worst_tip: "The result of one worst closed trade, not a sum, within the current strategy selection and Tuning period, with the active filters. Same unit as Profit. A positive value means every closed trade in the group was profitable."
 analytics.col.best_tip: "The result of one best closed trade, not a sum, within the current strategy selection and Tuning period, with the active filters. Same unit as Profit. A negative value means every closed trade in the group lost money."
+analytics.col.lastedit_tip: "When the strategy's parameters were last changed. Order size, name, stop/start and cosmetic settings (colours, sounds, comment) do not move this date."
 
 # Independent desktop Profit Monitor.
 profit_monitor.window_title: "MoonTerminal — Profit Monitor"
