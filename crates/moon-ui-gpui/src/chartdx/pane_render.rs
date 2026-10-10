@@ -446,6 +446,8 @@ pub(in crate::chartdx) struct PaneRender {
     /// Stable priority order for `order_labels`, rebuilt together with order labels.
     /// Cursor-only text frames must not allocate/sort it again.
     pub(in crate::chartdx) order_label_order: Vec<usize>,
+    /// Reused CPU caption bands so row arbitration allocates only when the order count grows.
+    pub(in crate::chartdx) order_caption_scratch: Vec<text::OrderCaption>,
     /// Order-book volume labels on sell lines, matching Moonbot `LastSellOrderPriceVol`: the order
     /// provides the target and the current CPU order-book copy provides actual volume.
     pub(in crate::chartdx) orderbook_labels: Vec<OrderBookLabel>,
@@ -669,6 +671,7 @@ impl PaneRender {
             order_labels: Vec::new(),
             figure_labels: Vec::new(),
             order_label_order: Vec::new(),
+            order_caption_scratch: Vec::new(),
             orderbook_labels: Vec::new(),
             prospective_usd: None,
             label_placed: Vec::new(),

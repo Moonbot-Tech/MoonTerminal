@@ -1,10 +1,13 @@
-//! Geometry of the chart's corner caption — the coin and the core name drawn over the order book.
+//! Shared caption geometry: the corner zone and order-caption row occupancy at the book edge.
 //!
 //! This module is the ONE home for that arithmetic. `prepare.rs` asks it where the caption goes,
 //! draws the text there and publishes the finished plate rectangles; `render_state.rs` draws those
 //! rectangles verbatim and computes nothing. Keep it that way: a second copy of the geometry cannot
 //! be kept in step with this one by hand, and the plate silently drifting out from under the text
 //! is what that costs.
+
+// Order captions share this geometry home; their row decision has no GPU dependency.
+pub(super) mod order_rows;
 
 /// Where the corner caption may draw, in LOGICAL pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]

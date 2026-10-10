@@ -321,12 +321,8 @@ impl RenderState {
             let label_x = zone_left - READOUT_PAD_X;
 
             // Order-line labels form a separate column left of the separator and align their
-            // right edge to it. Draw ALL labels even when they overlap, in ascending priority,
-            // so the higher-priority one (SELL/STOP > BUY) is drawn LAST. Its text and semi-opaque
-            // badge cover the lower-priority label, which remains ~15% visible underneath rather
-            // than disappearing. Offset labels by LABEL_LINE_GAP so badges do not cover the order
-            // line. Draw `force` labels (drag/hover) last, above everything. A per-tab "line labels"
-            // checkbox in the settings popup disables the entire column.
+            // right edge to it. Resolve chart and book caption rows together before drawing,
+            // so hidden captions produce neither text nor translucent backing plates.
             // Label row height follows the font size configured by the theme slider. Shared by
             // the order-label column and the figure readouts below it.
             let label_line_h = self.label_font_px() + 4.0;
@@ -356,7 +352,9 @@ impl RenderState {
                 // Captions already placed on each edge, so the two an order carries stack inward
                 // instead of printing over each other on the boundary.
                 let mut pinned_rows = [0usize; 2];
-                let mut force_items: Vec<(f32, f32, &OrderLabel)> = Vec::new();
+                use super::caption::order_rows::{OrderCaption, layout_order_captions};
+                let mut captions = std::mem::take(&mut self.panes[idx].order_caption_scratch);
+                captions.clear();
                 for &li in &self.panes[idx].order_label_order {
                     let order_labels = &self.panes[idx].order_labels;
                     if li >= order_labels.len() {
@@ -406,10 +404,102 @@ impl RenderState {
                         None if label.above => (y - LABEL_LINE_GAP, 1.0),
                         None => (y + LABEL_LINE_GAP, 0.0),
                     };
-                    if label.force {
-                        force_items.push((dy, ay, label));
+                    let metrics = measure_label_text_run(
+                        &mut self.text_runs,
+                        self.text_run_cursor,
+                        ctx,
+                        self.label_font_delta,
+                        &label.text,
+                    );
+                    captions.push(OrderCaption {
+                        source: li,
+                        book: false,
+                        uid: label.uid,
+                        secondary: label.priority == PRIO_SELL_SIZE,
+                        interacting: label.interacting,
+                        pinned: pin.is_some(),
+                        distance: cached_last_price
+                            .map_or(0.0, |current| (label.price - current).abs()),
+                        top: Some(dy - ay * label_line_h - READOUT_PAD_Y),
+                        x: [
+                            label_x - metrics.width.as_f32() - READOUT_PAD_X,
+                            label_x + READOUT_PAD_X,
+                        ],
+                        height: label_line_h + READOUT_PAD_Y * 2.0,
+                    });
+                }
+                if orderbook_enabled {
+                    for (li, label) in self.panes[idx].orderbook_labels.iter().enumerate() {
+                        let y = line_y(label.price);
+                        let Some(q) = label.notional else { continue };
+                        if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
+                            continue;
+                        }
+                        let metrics = measure_label_text_run(
+                            &mut self.text_runs,
+                            self.text_run_cursor,
+                            ctx,
+                            self.label_font_delta,
+                            &fmt_amount(q),
+                        );
+                        captions.push(OrderCaption {
+                            source: li,
+                            book: true,
+                            uid: label.uid,
+                            secondary: true,
+                            interacting: label.interacting,
+                            pinned: false,
+                            distance: cached_last_price
+                                .map_or(0.0, |current| (label.price - current).abs()),
+                            top: Some(y - 2.0 - label_line_h - READOUT_PAD_Y),
+                            x: [
+                                zone_left,
+                                zone_left + metrics.width.as_f32() + READOUT_PAD_X * 2.0,
+                            ],
+                            height: label_line_h + READOUT_PAD_Y * 2.0,
+                        });
+                    }
+                }
+                layout_order_captions(&mut captions, [plot_top, plot_bottom]);
+                // Interacting captions paint last if two protected rows still intersect.
+                captions.sort_unstable_by_key(|caption| caption.interacting);
+                for caption in &captions {
+                    let Some(top) = caption.top else { continue };
+                    let dy = top + READOUT_PAD_Y;
+                    if caption.book {
+                        let label = &self.panes[idx].orderbook_labels[caption.source];
+                        let Some(q) = label.notional else { continue };
+                        let text = fmt_amount(q);
+                        let fg = if q <= 1e-6 {
+                            color(self.label_positive)
+                        } else {
+                            color(self.label_negative)
+                        };
+                        let x = zone_left + READOUT_PAD_X;
+                        let m = draw_label_text_run(
+                            &mut self.text_runs,
+                            &mut self.text_run_cursor,
+                            ctx,
+                            self.label_font_delta,
+                            &text,
+                            x,
+                            dy,
+                            0.0,
+                            0.0,
+                            fg,
+                        )?;
+                        placed.push(PlacedLabel {
+                            x,
+                            y: dy,
+                            ax: 0.0,
+                            ay: 0.0,
+                            w: m.width.as_f32(),
+                            h: m.line_height.as_f32(),
+                            solid: false,
+                        });
                         continue;
                     }
+                    let label = &self.panes[idx].order_labels[caption.source];
                     let fg = if label.color == ORDER_LABEL_NEUTRAL {
                         label_neutral
                     } else {
@@ -424,47 +514,20 @@ impl RenderState {
                         label_x,
                         dy,
                         1.0,
-                        ay,
+                        0.0,
                         fg,
                     )?;
                     placed.push(PlacedLabel {
                         x: label_x,
                         y: dy,
                         ax: 1.0,
-                        ay,
+                        ay: 0.0,
                         w: m.width.as_f32(),
                         h: m.line_height.as_f32(),
                         solid: false,
                     });
                 }
-                for (dy, ay, label) in force_items {
-                    let fg = if label.color == ORDER_LABEL_NEUTRAL {
-                        label_neutral
-                    } else {
-                        color(label.color)
-                    };
-                    let m = draw_label_text_run(
-                        &mut self.text_runs,
-                        &mut self.text_run_cursor,
-                        ctx,
-                        self.label_font_delta,
-                        &label.text,
-                        label_x,
-                        dy,
-                        1.0,
-                        ay,
-                        fg,
-                    )?;
-                    placed.push(PlacedLabel {
-                        x: label_x,
-                        y: dy,
-                        ax: 1.0,
-                        ay,
-                        w: m.width.as_f32(),
-                        h: m.line_height.as_f32(),
-                        solid: false,
-                    });
-                }
+                self.panes[idx].order_caption_scratch = captions;
             }
 
             // Figure readouts: a price at the right edge for a full-width line, the move a trend
@@ -615,57 +678,6 @@ impl RenderState {
                     h: m.line_height.as_f32(),
                     solid: false,
                 });
-            }
-
-            // Moonbot `LastSellOrderPriceVol`: a separate order-book depth label at the sell line.
-            // This is NOT order text, but cumulative book notional up to the close price: asks
-            // below sell for a long, bids above sell for a short. Draw it in the order-book zone;
-            // the cursor readout below covers it when the user points at the same location.
-            // Visibility follows the FIGURE, not the camera: the label is drawn wherever it was
-            // measured. Gating it on visible book levels, as it once was, hid a valid figure the
-            // moment the glass around price panned off screen.
-            if orderbook_enabled && self.line_labels {
-                let right_x = zone_left + READOUT_PAD_X;
-                let label_line_h = self.label_font_px() + 4.0;
-                for label in &self.panes[idx].orderbook_labels {
-                    let y = line_y(label.price);
-                    if y < plot_top - label_line_h || y > plot_bottom + label_line_h {
-                        continue;
-                    }
-                    // Never measured against a book: draw nothing rather than a green "0", which
-                    // would read as "no glass to clear" at a line nobody has measured.
-                    let Some(q) = label.notional else {
-                        continue;
-                    };
-                    let text = fmt_amount(q);
-                    let col = if q <= 1e-6 {
-                        color(self.label_positive)
-                    } else {
-                        color(self.label_negative)
-                    };
-                    let dy = y - 2.0;
-                    let m = draw_label_text_run(
-                        &mut self.text_runs,
-                        &mut self.text_run_cursor,
-                        ctx,
-                        self.label_font_delta,
-                        &text,
-                        right_x,
-                        dy,
-                        0.0,
-                        1.0,
-                        col,
-                    )?;
-                    placed.push(PlacedLabel {
-                        x: right_x,
-                        y: dy,
-                        ax: 0.0,
-                        ay: 1.0,
-                        w: m.width.as_f32(),
-                        h: m.line_height.as_f32(),
-                        solid: false,
-                    });
-                }
             }
 
             // Sells-to-zone mode marker: a badge riding the crosshair while the mode is armed,
