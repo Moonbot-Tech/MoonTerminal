@@ -116,9 +116,16 @@ pub enum FeedMsg {
     /// Deliberately its own message rather than a field on [`FeedMsg::Identity`]: that variant is
     /// scoped to a core's VENUE and is published only when the core also reported an exchange
     /// code, so riding it would silently withhold the build number from every core that reports no
-    /// venue.
+    /// venue. `suffix` is the letter from that same handshake, so it cannot be stale relative
+    /// to `version`.
     CoreVersion {
         version: u32,
+        /// Build letter from the same handshake as `version`.
+        ///
+        /// `None` means the core did not send a letter (an older core, not a release).
+        /// `Some("")` is a release. `Some("R3")` is a named build. An empty string is never
+        /// normalized to `None`.
+        suffix: Option<String>,
     },
     /// Notify that the market read model changed. This lightweight wake-up makes
     /// `SessionManager` mark particular markets dirty while visible charts pull the snapshots they

@@ -120,12 +120,17 @@ pub struct ReportRow<'a> {
 }
 
 /// What the terminal knows of a core beyond its rows.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CoreFacts {
     /// Whether the core is connected and ready now; an offline core reports no build.
     pub connected: bool,
     /// The Moonbot build the core reported (`770` = 7.70).
     pub version: Option<u32>,
+    /// The letter reported with [`Self::version`].
+    ///
+    /// `None` is an older core that sent no letter. `Some("")` is a release. `Some("R3")` is a
+    /// named build. Empty is never folded into `None`.
+    pub version_suffix: Option<String>,
     /// The core's adopted time zone, seconds east of UTC — the report axis is corrected by it,
     /// and a wrong one shifts every trade off its tape by hours.
     pub tz_offset_secs: Option<i32>,

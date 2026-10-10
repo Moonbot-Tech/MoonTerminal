@@ -77,6 +77,12 @@ pub(super) struct CoreStatusRow {
     /// an age claim; the one age claim the terminal makes is `Diagnosis::legacy_core`, which is
     /// about a missing PROTOCOL version and lives in the fault tooltip.
     pub(super) server_version: Option<u32>,
+    /// Build letter reported with [`Self::server_version`].
+    ///
+    /// `None` is an older core that sent no letter. `Some("")` is a release. `Some("R3")` is a
+    /// named build. Empty is never folded into `None`. [`Self::version_behind`] reads the number
+    /// only: a build letter never makes a core behind (user decision).
+    pub(super) server_version_suffix: Option<String>,
     /// The newest build seen across the whole fleet, when THIS core is behind it; `None` when it is
     /// current, or when it reported nothing (an absence is never an age claim -- see
     /// `server_version`).
@@ -198,10 +204,13 @@ impl ApiKeyState {
 /// [`soonest_key`]. Those need an ordering in which one value is WORSE; there is none here, because
 /// no minimum-version constant exists anywhere in this workspace and inventing one was specifically
 /// rejected (`moon_core::feed::conn_verdict`). A build number is a fact, not a severity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum GroupVersion {
-    /// Every core on the server reported, and all reported the same build.
-    Uniform(u32),
+    /// Every core on the server reported, and all reported the same number and the same letter.
+    ///
+    /// `suffix: None` is an older core that sent no letter. `Some("")` is a release. Those stay
+    /// distinct here; only the formatter collapses them to the bare number.
+    Uniform { number: u32, suffix: Option<String> },
     /// At least one core reported, but they do not all agree — INCLUDING the case where one
     /// reported and a sibling is silent. A collapsed group must not assert a build on behalf of a
     /// process nobody could ask, which is `soonest_key`'s own discipline applied here.
@@ -216,27 +225,58 @@ pub(super) enum GroupVersion {
 ///     cores: The group's core rows, already collected.
 ///
 /// Returns:
-///     `Uniform` only when every core reported and all agree, `Mixed` on any disagreement or any
-///     silent sibling beside a reporting one, `Absent` when nothing was reported at all.
+///     `Uniform` only when every core reported and all agree on the number and the letter,
+///     compared as-is (`None` != `Some("")` != `Some("R3")`). `Mixed` on any disagreement or
+///     any silent sibling beside a reporting one. `Absent` when nothing was reported at all.
 pub(super) fn group_version(cores: &[CoreStatusRow]) -> GroupVersion {
-    let mut reported: Option<u32> = None;
+    let mut agreed: Option<(u32, Option<String>)> = None;
     let mut any_silent = false;
     for core in cores {
         match core.server_version {
-            None => any_silent = true,
-            Some(version) => match reported {
-                Some(seen) if seen != version => return GroupVersion::Mixed,
-                _ => reported = Some(version),
-            },
+            None => {
+                if agreed.is_some() {
+                    return GroupVersion::Mixed;
+                }
+                any_silent = true;
+            }
+            Some(number) => {
+                if any_silent {
+                    return GroupVersion::Mixed;
+                }
+                match &agreed {
+                    Some((seen, seen_suffix))
+                        if *seen != number || seen_suffix != &core.server_version_suffix =>
+                    {
+                        return GroupVersion::Mixed;
+                    }
+                    None => agreed = Some((number, core.server_version_suffix.clone())),
+                    Some(_) => {}
+                }
+            }
         }
     }
-    match (reported, any_silent) {
+    match agreed {
         // Nothing was reported at all — including the empty group, which must not panic.
-        (None, _) => GroupVersion::Absent,
-        // A silent sibling beside a reporting core: the group agrees on nothing it can vouch for.
-        (Some(_), true) => GroupVersion::Mixed,
-        (Some(version), false) => GroupVersion::Uniform(version),
+        None => GroupVersion::Absent,
+        Some((number, suffix)) => GroupVersion::Uniform { number, suffix },
     }
+}
+
+/// Newest fleet build when this core's number is strictly older, else `None`.
+///
+/// Number only: a build letter never makes a core behind (user decision). The letter is not
+/// an argument, so a named build on the fleet's newest number is current.
+///
+/// Args:
+///     have: This core's reported build number, or `None` when it reported nothing.
+///     fleet_newest: The newest number reported anywhere in the fleet.
+///
+/// Returns:
+///     The fleet's newest number when `have` is strictly below it, else `None`.
+pub(super) fn version_behind_of(have: Option<u32>, fleet_newest: Option<u32>) -> Option<u32> {
+    have.zip(fleet_newest)
+        .filter(|(mine, newest)| mine < newest)
+        .map(|(_, newest)| newest)
 }
 
 /// What one server's cores agree on about their measured clock offset.
@@ -422,10 +462,10 @@ pub(super) struct ServerStatusGroup {
     /// What this server's cores agree on about their MoonBot build — see [`group_version`]. A
     /// collapsed group shows this, so it must never speak for a core that reported nothing.
     pub(super) version: GroupVersion,
-    /// `(this server's agreed build, the fleet's newest)`, when EVERY core here agrees on a build
-    /// and that build is behind the fleet's newest. `Mixed` and `Absent` stay neutral: a collapsed
-    /// row may only be marked about the build it actually displays, and only a `Uniform` group has
-    /// one.
+    /// `(this server's agreed build number, the fleet's newest)`, when EVERY core here agrees on a
+    /// build and that number is behind the fleet's newest. `Mixed` and `Absent` stay neutral: a
+    /// collapsed row may only be marked about the build it actually displays, and only a `Uniform`
+    /// group has one. Number only: a build letter never makes a core behind (user decision).
     ///
     /// BOTH builds, as one indivisible value, for the same reason [`CoreStatusRow::version_behind`]
     /// carries the target rather than a bare `bool`: the hover names both numbers, and a shape that
@@ -639,10 +679,11 @@ fn finish_group(group: &mut ServerStatusGroup, fleet_newest: Option<u32>) {
     // ellipsis and `Absent` a dash: both are "no answer", and colouring either would turn a
     // fact this row cannot state into an accusation -- the same discipline `version_slot` already
     // applies to `text_muted`. Only a group whose cores all agree has a build to be behind WITH.
-    group.version_behind = match group.version {
-        GroupVersion::Uniform(have) => fleet_newest
-            .filter(|newest| have < *newest)
-            .map(|newest| (have, newest)),
+    // number only: a build letter never makes a core behind (user decision)
+    group.version_behind = match &group.version {
+        GroupVersion::Uniform { number, .. } => fleet_newest
+            .filter(|newest| *number < *newest)
+            .map(|newest| (*number, newest)),
         GroupVersion::Mixed | GroupVersion::Absent => None,
     };
     group.update = group_update(&group.cores);

@@ -115,6 +115,7 @@ fn moved_in_flight_core_blocks_a_ready_sibling_on_its_new_ip() {
         CoreUpdatePhase::Sent {
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             epoch0: 0,
             sent_at_ms: 0,
             rejects0: 0,
@@ -143,6 +144,7 @@ fn moved_in_flight_core_blocks_a_ready_sibling_on_its_new_ip() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             restarts0: 0,
         },
     );
@@ -181,6 +183,7 @@ fn unchanged_connection_epoch_keeps_a_sent_update_out_of_waiting() {
         CoreUpdatePhase::Sent {
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             epoch0: 41,
             sent_at_ms: 0,
             rejects0: 0,
@@ -222,6 +225,7 @@ fn verifying_waits_for_a_fresh_connection_before_accepting_a_build() {
         CoreUpdatePhase::Verifying {
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             epoch1,
             sent_at_ms: 0,
             left_at_ms: 1,
@@ -290,7 +294,8 @@ fn verifying_waits_for_a_fresh_connection_before_accepting_a_build() {
             manager.core_update_phase(core),
             Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded {
                 from: Some(100),
-                to: 101
+                to: 101,
+                to_suffix: None
             }))
         ),
         "the fresh connection and fresh build must settle verification as the observed update"
@@ -314,6 +319,7 @@ fn verifying_core_blocks_a_ready_sibling_on_its_new_ip() {
         CoreUpdatePhase::Verifying {
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             epoch1: 12,
             sent_at_ms: 0,
             left_at_ms: 1,
@@ -343,6 +349,7 @@ fn verifying_core_blocks_a_ready_sibling_on_its_new_ip() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             restarts0: 0,
         },
     );
@@ -384,6 +391,7 @@ fn settled_verifying_core_releases_its_lane_to_a_ready_sibling() {
         CoreUpdatePhase::Verifying {
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             epoch1: 12,
             sent_at_ms: 0,
             left_at_ms: 1,
@@ -405,6 +413,7 @@ fn settled_verifying_core_releases_its_lane_to_a_ready_sibling() {
             core_name: "queued".to_string(),
             target: UpdateTarget::Release,
             from: Some(100),
+            from_suffix: None,
             restarts0: 0,
         },
     );
@@ -463,6 +472,7 @@ fn departed_named_update_enters_waiting_before_a_later_rejection_is_considered()
         CoreUpdatePhase::Sent {
             target: UpdateTarget::Named("MoonBot-F8".to_string()),
             from: Some(100),
+            from_suffix: None,
             epoch0: 42,
             sent_at_ms: 0,
             rejects0: 7,
@@ -519,6 +529,7 @@ fn rejection_finishes_named_updates_but_leaves_release_updates_sent() {
             CoreUpdatePhase::Sent {
                 target,
                 from: Some(100),
+                from_suffix: None,
                 epoch0: 50,
                 sent_at_ms: 0,
                 rejects0: 3,
@@ -573,26 +584,28 @@ fn reconnect_backoff_counts_as_one_connection_departure() {
     );
 }
 
-/// A test build can carry the release's own number, and the protocol reports no build name, so a
-/// Named attempt that restarted (it reached `Verifying`) onto the same number is installed.
+/// A test build can carry the release's own number. When the fresh client sends no letter, a
+/// Named attempt that restarted onto that number is still installed.
 ///
-/// Breaks when `verified_outcome` compares numbers alone for every target: the tester's
-/// campaign then reads "version did not change" on every core although the build was installed.
+/// Breaks when a missing letter is treated as a failed compare: every older core, which sends
+/// no letter, would read "version did not change" after a named install.
 #[test]
 fn a_named_build_on_the_same_number_is_installed() {
     let named = UpdateTarget::Named("MoonBot-R2".to_string());
     assert_eq!(
-        verified_outcome(&named, Some(771), 771, true),
+        verified_outcome(&named, Some(771), 771, None, true),
         CoreUpdateOutcome::Succeeded {
             from: Some(771),
-            to: 771
+            to: 771,
+            to_suffix: None,
         }
     );
     assert_eq!(
-        verified_outcome(&named, Some(770), 771, true),
+        verified_outcome(&named, Some(770), 771, None, true),
         CoreUpdateOutcome::Succeeded {
             from: Some(770),
-            to: 771
+            to: 771,
+            to_suffix: None,
         }
     );
 }
@@ -605,8 +618,11 @@ fn a_named_build_on_the_same_number_is_installed() {
 fn a_named_build_without_a_restart_proof_stays_unchanged() {
     let named = UpdateTarget::Named("MoonBot-R2".to_string());
     assert_eq!(
-        verified_outcome(&named, Some(771), 771, false),
-        CoreUpdateOutcome::Unchanged { version: 771 }
+        verified_outcome(&named, Some(771), 771, None, false),
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: None,
+        }
     );
 }
 
@@ -617,21 +633,221 @@ fn a_named_build_without_a_restart_proof_stays_unchanged() {
 fn a_release_on_the_same_number_stays_unchanged() {
     let release = UpdateTarget::Release;
     assert_eq!(
-        verified_outcome(&release, Some(771), 771, true),
-        CoreUpdateOutcome::Unchanged { version: 771 }
-    );
-    assert_eq!(
-        verified_outcome(&release, Some(770), 771, true),
-        CoreUpdateOutcome::Succeeded {
-            from: Some(770),
-            to: 771
+        verified_outcome(&release, Some(771), 771, Some("R3"), true),
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: Some("R3".to_string()),
         }
     );
     assert_eq!(
-        verified_outcome(&release, None, 771, true),
+        verified_outcome(&release, Some(770), 771, None, true),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(770),
+            to: 771,
+            to_suffix: None,
+        }
+    );
+    assert_eq!(
+        verified_outcome(&release, None, 771, None, true),
         CoreUpdateOutcome::Succeeded {
             from: None,
-            to: 771
+            to: 771,
+            to_suffix: None,
+        }
+    );
+}
+
+/// `verified_outcome` installs a named build only when the restarted core reports that letter.
+///
+/// Breaks when the letter is ignored: `MoonBot-R3` would count as installed on a core that came
+/// back as `R2`, as a release (`Some("")`), or without having restarted.
+#[test]
+fn a_named_build_is_installed_only_when_the_restarted_core_reports_its_letter() {
+    let named = UpdateTarget::Named("MoonBot-R3".to_string());
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771, Some("R3"), true),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(771),
+            to: 771,
+            to_suffix: Some("R3".to_string()),
+        }
+    );
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771, Some("r3"), true),
+        CoreUpdateOutcome::Succeeded {
+            from: Some(771),
+            to: 771,
+            to_suffix: Some("r3".to_string()),
+        }
+    );
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771, Some("R2"), true),
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: Some("R2".into()),
+        }
+    );
+    assert_eq!(
+        verified_outcome(&named, Some(771), 771, Some(""), true),
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: Some(String::new()),
+        }
+    );
+    assert!(
+        !matches!(
+            verified_outcome(&named, Some(771), 771, Some("R3"), false),
+            CoreUpdateOutcome::Succeeded { .. }
+        ),
+        "the expected letter without a process restart is not an install"
+    );
+    assert_eq!(
+        verified_outcome(&named, Some(770), 771, Some("R2"), true),
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: Some("R2".into()),
+        }
+    );
+}
+
+/// `core_update.rs` must not judge a named install from the pre-respawn letter.
+///
+/// Breaks when `Verifying` accepts `conn_epoch == epoch1`: the terminal would record `R2` from
+/// the process that was just replaced.
+#[test]
+fn verifying_reads_the_letter_only_from_the_fresh_connection() {
+    let ip = IpAddr::V4(Ipv4Addr::new(10, 0, 1, 9));
+    let core = 19;
+    let epoch1 = 41;
+    let mut manager = manager();
+    let mut data = ready_core(ip);
+    data.conn_epoch = epoch1;
+    data.server_version = Some(771);
+    data.server_version_suffix = Some("R2".to_string());
+    data.report_traces_epoch = 1;
+    insert_core(&mut manager, core, data);
+    manager.core_updates.phases.insert(
+        core,
+        CoreUpdatePhase::Verifying {
+            target: UpdateTarget::Named("MoonBot-R3".to_string()),
+            from: Some(771),
+            from_suffix: Some("R2".to_string()),
+            epoch1,
+            sent_at_ms: 0,
+            left_at_ms: 1,
+            verify_at_ms: 1,
+        },
+    );
+    manager.core_updates.attempts.insert(
+        core,
+        AttemptMeta {
+            started_ms: 0,
+            core_name: "named".to_string(),
+            target: UpdateTarget::Named("MoonBot-R3".to_string()),
+            from: Some(771),
+            from_suffix: Some("R2".to_string()),
+            restarts0: 0,
+        },
+    );
+    manager.core_updates.lanes.insert(
+        ip,
+        Lane {
+            order: VecDeque::new(),
+            active: Some(core),
+            stalled: false,
+        },
+    );
+
+    manager.advance_in_flight_updates(2);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Verifying { .. })
+        ),
+        "the pre-respawn R2 must not settle the attempt"
+    );
+
+    let data = manager
+        .store
+        .core_mut(core)
+        .expect("inserted core must remain in the retained store");
+    data.conn_epoch = epoch1 + 1;
+    data.server_version = Some(771);
+    data.server_version_suffix = Some("R3".to_string());
+    data.report_traces_epoch = 1;
+    manager.advance_in_flight_updates(3);
+
+    assert!(
+        matches!(
+            manager.core_update_phase(core),
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Succeeded {
+                from: Some(771),
+                to: 771,
+                to_suffix: Some(suffix),
+            })) if suffix == "R3"
+        ),
+        "the fresh connection's R3 is the install"
+    );
+    assert_eq!(
+        manager
+            .core_update_history()
+            .back()
+            .map(|row| row.from_suffix.clone()),
+        Some(Some("R2".to_string())),
+        "the history row keeps the letter captured before the install"
+    );
+}
+
+/// `cores_behind` compares build numbers. A letter must not split two cores on the same number.
+#[test]
+fn a_build_letter_does_not_put_a_core_behind() {
+    let mut manager = manager();
+    let mut named = ready_core(IpAddr::V4(Ipv4Addr::new(10, 1, 0, 1)));
+    named.server_version = Some(771);
+    named.server_version_suffix = Some("R3".to_string());
+    let mut release = ready_core(IpAddr::V4(Ipv4Addr::new(10, 1, 0, 2)));
+    release.server_version = Some(771);
+    release.server_version_suffix = Some(String::new());
+    insert_core(&mut manager, 1, named);
+    insert_core(&mut manager, 2, release);
+
+    assert!(manager.cores_behind().is_empty());
+    assert_eq!(manager.fleet_newest_version(), Some(771));
+}
+
+/// `core_updates.json` rows written before the letter fields still load, with those fields absent.
+#[test]
+fn an_old_core_update_record_deserializes_without_letter_fields() {
+    let raw = r#"{
+        "core": 7,
+        "core_name": "core-7",
+        "lane_addr": "10.0.0.7",
+        "from": 771,
+        "started_ms": 1,
+        "ended_ms": 2,
+        "target": "Release",
+        "outcome": {"Unchanged": {"version": 771}}
+    }"#;
+    let row: CoreUpdateRecord = serde_json::from_str(raw).expect("old row must parse");
+    assert_eq!(row.from, Some(771));
+    assert_eq!(row.from_suffix, None);
+    assert_eq!(
+        row.outcome,
+        CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: None,
+        }
+    );
+
+    let succeeded: CoreUpdateOutcome =
+        serde_json::from_str(r#"{"Succeeded":{"from":770,"to":771}}"#).expect("old outcome");
+    assert_eq!(
+        succeeded,
+        CoreUpdateOutcome::Succeeded {
+            from: Some(770),
+            to: 771,
+            to_suffix: None,
         }
     );
 }

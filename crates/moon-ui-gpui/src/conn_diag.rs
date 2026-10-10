@@ -388,6 +388,7 @@ pub(crate) fn fault_facts(
             match d.server_version {
                 // Same dotted build the Core-Status column prints. A fault hover that said "769"
                 // beside a column saying "7.69" would read as two different facts about one core.
+                // Legacy cores send no protocol version so never a letter.
                 Some(v) => t!(
                     "core_status.fault.core.legacy_named",
                     server = moon_core::util::fmt::core_build(v)

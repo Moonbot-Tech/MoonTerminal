@@ -29,6 +29,9 @@ pub(super) struct AttemptMeta {
     /// attempt that is closed out before ever reaching `Sent` (a `Queued` core abandoned at
     /// quit). Every other closure captures a fresher baseline at the moment it actually matters.
     pub(super) from: Option<u32>,
+    /// Letter paired with [`Self::from`]. The phase re-snapshots this at send; the value here
+    /// only covers an attempt closed before `Sent`.
+    pub(super) from_suffix: Option<String>,
     /// `CoreData::report_traces_epoch` at SEND time. That counter advances only on
     /// `FeedMsg::RunStateForgotten` -- a DIFFERENT MoonBot process answers the connection -- so a
     /// value past this snapshot is the one proof this attempt's core process actually restarted,
@@ -80,6 +83,7 @@ pub(super) enum Transition {
     ToWaiting {
         target: UpdateTarget,
         from: Option<u32>,
+        from_suffix: Option<String>,
         epoch0: u64,
         sent_at_ms: i64,
         left_at_ms: i64,
@@ -87,6 +91,7 @@ pub(super) enum Transition {
     ToVerifying {
         target: UpdateTarget,
         from: Option<u32>,
+        from_suffix: Option<String>,
         epoch1: u64,
         sent_at_ms: i64,
         left_at_ms: i64,
@@ -95,6 +100,7 @@ pub(super) enum Transition {
     Done {
         lane_addr: IpAddr,
         from: Option<u32>,
+        from_suffix: Option<String>,
         outcome: CoreUpdateOutcome,
         /// Whether the lane should stall (`true`) or advance (`false`).
         stall: bool,

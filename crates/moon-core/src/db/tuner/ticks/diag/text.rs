@@ -164,7 +164,10 @@ fn core_line(core: &CoreLine, input: &ReportInput) -> String {
         }
         Some(facts) => {
             parts.push(match facts.version {
-                Some(v) => format!("build {}", crate::util::fmt::core_build(v)),
+                Some(v) => format!(
+                    "build {}",
+                    crate::util::fmt::core_build_named(v, facts.version_suffix.as_deref())
+                ),
                 None => "build not reported".to_string(),
             });
             parts.push(match facts.tz_offset_secs {

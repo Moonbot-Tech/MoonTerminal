@@ -5,10 +5,31 @@
 
 use super::{
     LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, cpu_level, free_mem_level,
-    status_level,
+    status_level, update_tooltip, version_text,
 };
 use crate::panels::core_status::model::ApiKeyState;
 use moon_core::feed::ConnStatus;
+use moon_core::feed::UpdateTarget;
+use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
+
+/// Treating every Unchanged verdict as an unchanged version hides a refused named build.
+#[test]
+fn a_different_reported_build_names_the_expected_and_actual_letters() {
+    let _locale = crate::test_locale::force("en");
+    let target = UpdateTarget::Named("MoonBot-R3".into());
+    for (suffix, expected) in [
+        (Some("R2"), "Different build installed: R2 instead of R3"),
+        (Some(""), "Different build installed: Release instead of R3"),
+        (Some(" r3 "), "Version unchanged"),
+        (None, "Version unchanged"),
+    ] {
+        let phase = CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged {
+            version: 771,
+            to_suffix: suffix.map(str::to_string),
+        });
+        assert_eq!(update_tooltip(&phase, Some(&target)), expected);
+    }
+}
 
 /// The cell carries a BARE number — the unit lives in the column heading. A per-row "дн" would
 /// repeat itself down the whole column and push the heading's meaning into the data.
@@ -212,15 +233,27 @@ fn core_update_same_number_success_reads_installed() {
     assert_eq!(
         super::succeeded_locale_key(&CoreUpdateOutcome::Succeeded {
             from: Some(771),
-            to: 771
+            to: 771,
+            to_suffix: None,
         }),
         "core_update.phase.installed"
     );
     assert_eq!(
         super::succeeded_locale_key(&CoreUpdateOutcome::Succeeded {
             from: Some(770),
-            to: 771
+            to: 771,
+            to_suffix: None,
         }),
         "core_update.phase.succeeded"
     );
+}
+
+/// A named build prints its letter. A release and a core that sent no letter both print the
+/// bare number, and a missing number stays the dash.
+#[test]
+fn version_text_appends_a_named_letter() {
+    assert_eq!(version_text(Some(771), Some("R3")), "7.71 R3");
+    assert_eq!(version_text(Some(771), Some("")), "7.71");
+    assert_eq!(version_text(Some(771), None), "7.71");
+    assert_eq!(version_text(None, Some("R3")), "-");
 }

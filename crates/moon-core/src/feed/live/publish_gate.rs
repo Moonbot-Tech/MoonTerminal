@@ -1,4 +1,4 @@
-//! Order publication decisions and the retained-table throttle.
+//! Version-letter and order publication decisions and the retained-table throttle.
 
 use super::*;
 
@@ -53,3 +53,41 @@ impl OrdersPublish {
         }
     }
 }
+
+/// Whether `info_addr` is still the `ServerInfo` allocation observed at `ServerRestart`.
+///
+/// The caller holds the `Arc<MoonStateSnapshot>` captured at the restart (`PinnedRestartInfo`).
+/// That snapshot owns a clone of the inner `Arc<ServerInfo>`, so this address stays allocated
+/// and cannot be reused for the replacement process's BaseCheck while the mark is set. MoonProto
+/// can refresh before the restart event is drained, so the pin can also capture the new process.
+/// Withhold only its letter, never its number; the respawned client's run has no pin and supplies
+/// the fresh letter, which update judging reads only in the fresh epoch. A same-process reconnect
+/// passes `None` and is never stale, so it still republishes the retained snapshot.
+///
+/// Args:
+///     info_addr: Address of the `ServerInfo` inside the current snapshot. Compared, never
+///         dereferenced.
+///     restart_addr: Address captured when `ServerRestart` was observed, or `None` when this
+///         connection has not seen one since the last publication. The allocation behind
+///         this address is pinned by the snapshot the caller still holds.
+///
+/// Returns:
+///     `true` when the snapshot is the allocation observed at the restart.
+pub(super) fn server_info_predates_restart(info_addr: usize, restart_addr: Option<usize>) -> bool {
+    restart_addr == Some(info_addr)
+}
+
+/// Withhold an unconfirmed restart letter while preserving ordinary reported letters.
+///
+/// Args:
+///     suffix: Letter paired with the published number, including an explicit empty release.
+///     predates_restart: Whether the snapshot matches the allocation pinned at restart.
+///
+/// Returns:
+///     Unknown for the pinned allocation; otherwise the reported suffix unchanged.
+pub(super) fn letter_to_publish(suffix: Option<String>, predates_restart: bool) -> Option<String> {
+    if predates_restart { None } else { suffix }
+}
+
+#[cfg(test)]
+mod tests;

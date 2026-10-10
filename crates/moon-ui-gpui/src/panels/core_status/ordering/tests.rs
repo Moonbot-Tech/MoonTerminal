@@ -45,9 +45,41 @@ fn row_with_key(id: u64, days: Option<i32>) -> CoreStatusRow {
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        server_version_suffix: None,
         version_behind: None,
         update: None,
     }
+}
+
+/// Equal numbers order by the letter: missing, then a blank release letter, then a name.
+/// The number stays first, so `7.70 R3` stays before `7.71`.
+///
+/// Breaks when a blank letter collapses into a missing one: a release build and a core that
+/// sent no letter would sort as the same row.
+#[test]
+fn version_orders_the_letter_after_the_number() {
+    let mut bare = row_with_key(1, None);
+    bare.server_version = Some(771);
+    let mut release = row_with_key(4, None);
+    release.server_version = Some(771);
+    release.server_version_suffix = Some(String::new());
+    let mut named = row_with_key(2, None);
+    named.server_version = Some(771);
+    named.server_version_suffix = Some("R3".to_string());
+    let mut older = row_with_key(3, None);
+    older.server_version = Some(770);
+    older.server_version_suffix = Some("R3".to_string());
+
+    assert_eq!(
+        compare_flat_rows(&bare, &release, "version"),
+        Ordering::Less
+    );
+    assert_eq!(
+        compare_flat_rows(&release, &named, "version"),
+        Ordering::Less
+    );
+    assert_eq!(compare_flat_rows(&bare, &named, "version"), Ordering::Less);
+    assert_eq!(compare_flat_rows(&older, &bare, "version"), Ordering::Less);
 }
 
 /// Build a minimal server group with the fields the comparator reads; `rtts` sets each core's
@@ -89,6 +121,7 @@ fn group(
             startup: CoreStartupStatus::default(),
             time_offset: CoreTimeOffsetStatus::default(),
             server_version: None,
+            server_version_suffix: None,
             version_behind: None,
             update: None,
         })

@@ -283,7 +283,9 @@ impl ByIpWidths {
         exch: 64.0,
         api: 84.0,
         cores: 40.0,
-        version: 84.0,
+        // Seven Geist Mono characters at the default 15 px font need 63 px, plus the
+        // 18 px update arrow and 4 px gap; leave room for a trailing update badge as well.
+        version: 104.0,
         startup: 84.0,
         tz_off: 84.0,
         icon: 12.0,

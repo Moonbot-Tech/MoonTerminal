@@ -48,6 +48,35 @@ fn private_deal(core_uid: u64, sell_reason: &str) -> Deal {
     }
 }
 
+/// A connected core's line names its build, letter included.
+#[test]
+fn a_named_build_prints_its_letter() {
+    let deal = private_deal(11, "Sell Price");
+    let hit = verdict(EntryFinding::Hit, ExitFinding::Hit);
+    let rows = vec![ReportRow {
+        deal: &deal,
+        venue: Some("Binance-Futures".into()),
+        tape: TapeClass::Covered,
+        verdict: Some(&hit),
+        outside_model: &[],
+    }];
+    let mut report = input(rows, ModelSettings::default());
+    report.cores.insert(
+        11,
+        CoreFacts {
+            connected: true,
+            version: Some(771),
+            version_suffix: Some("R3".into()),
+            tz_offset_secs: Some(0),
+        },
+    );
+    let text = render(&report);
+    assert!(
+        text.contains("build 7.71 R3"),
+        "the core line dropped the letter:\n{text}"
+    );
+}
+
 fn input<'a>(rows: Vec<ReportRow<'a>>, model: ModelSettings) -> ReportInput<'a> {
     ReportInput {
         build: "v0.0.0 (test)".into(),

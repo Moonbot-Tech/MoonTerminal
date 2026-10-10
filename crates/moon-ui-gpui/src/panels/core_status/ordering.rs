@@ -189,7 +189,7 @@ pub(super) fn compare_groups(
         // heading here. Not Ready-gated: the store already drops a build the moment its core leaves
         // Ready, so a stale one cannot reach this comparison.
         GroupSortField::Version => {
-            version_group_rank(a.version).cmp(&version_group_rank(b.version))
+            version_group_rank(&a.version).cmp(&version_group_rank(&b.version))
         }
         // Ranks the SAME rolled-up value the server row displays, by the same rule the per-core
         // column sorts by, so the two modes cannot disagree about which core sits where.
@@ -222,7 +222,9 @@ fn startup_rank(cell: Option<StartupCell>) -> (u8, i64, i64) {
 }
 
 /// Rank one core's reported build for sorting: reported builds first, ascending, then the rows
-/// with nothing to show.
+/// with nothing to show. The letter is the third key, so equal numbers order `None` < `""` < a
+/// name. The number stays first, so `7.70 R3` sorts before `7.71`. A missing number drops the
+/// letter: an unreported row has nothing to order by.
 ///
 /// A tagged tuple rather than the bare `Option`, for [`ApiKeyState::urgency`]'s stated reason:
 /// `None` sorts FIRST as an `Option`, which is the opposite of what this column is scanned for.
@@ -231,21 +233,34 @@ fn startup_rank(cell: Option<StartupCell>) -> (u8, i64, i64) {
 /// KNOWN AND ACCEPTED: `sorted_flat_rows` reverses the whole comparator, so descending leads with
 /// the blanks. `api_key` behaves identically for the same reason, and matching it keeps one rule in
 /// the panel rather than making this the single column that behaves differently.
-fn version_rank(version: Option<u32>) -> (u8, u32) {
+///
+/// Args:
+///     version: The build this core reported, when it reported one.
+///     suffix: The letter reported with that build.
+///
+/// Returns:
+///     Sort category, build number, then the letter. The letter is `None` when the number is.
+fn version_rank(version: Option<u32>, suffix: Option<&str>) -> (u8, u32, Option<&str>) {
     match version {
-        Some(version) => (0, version),
-        None => (1, 0),
+        Some(version) => (0, version, suffix),
+        None => (1, 0, None),
     }
 }
 
 /// Rank a server's rolled-up build: an agreed build first, ascending, then disagreement, then
-/// nothing reported.
+/// nothing reported. The number is the only key: a letter never reorders a server row.
 ///
 /// `Mixed` outranks `Absent` because a mixed group has something to look at — expanding it shows
 /// real numbers — while an absent one does not.
-fn version_group_rank(version: GroupVersion) -> (u8, u32) {
+///
+/// Args:
+///     version: The group's agreement state.
+///
+/// Returns:
+///     Sort category and the agreed number within the uniform category.
+fn version_group_rank(version: &GroupVersion) -> (u8, u32) {
     match version {
-        GroupVersion::Uniform(version) => (0, version),
+        GroupVersion::Uniform { number, .. } => (0, *number),
         GroupVersion::Mixed => (1, 0),
         GroupVersion::Absent => (2, 0),
     }
@@ -426,7 +441,11 @@ pub(super) fn compare_flat_rows(a: &CoreStatusRow, b: &CoreStatusRow, key: &str)
             .cmp(&startup_rank(Some(startup_cell(&b.status, &b.startup)))),
         // The reported build, numerically rather than lexically, with the blanks kept off the head
         // of the ascending scan — see `version_rank`.
-        "version" => version_rank(a.server_version).cmp(&version_rank(b.server_version)),
+        // `Option<&str>` orders `None` < `Some("")` < `Some("R3")`. Both rows share this
+        // function's lifetime, so the rank tuples compare directly.
+        "version" => version_rank(a.server_version, a.server_version_suffix.as_deref()).cmp(
+            &version_rank(b.server_version, b.server_version_suffix.as_deref()),
+        ),
         // Same rank the By-IP column sorts by, over the per-core cell, so the two modes cannot
         // disagree about which core is ahead of or behind UTC.
         "tz_off" => tz_offset_rank(tz_offset_cell(&a.time_offset))

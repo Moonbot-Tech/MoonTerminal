@@ -12,6 +12,7 @@ use moon_core::feed::{
 };
 use moon_core::session::balances::{BalanceFigures, aggregate_account_figures};
 use moon_core::session::core_order::{CoreOrder, exchange_sections};
+use moon_core::session::store::CoreData;
 use moon_core::session::{BalanceState, CoreRunState};
 use moon_core::telegram::report::ReportRequest;
 use moon_core::telegram::web::MiniAppApiError;
@@ -351,6 +352,19 @@ fn prune_mini_strategy_wanted(host: &mut dyn TgHost) {
     host.state_mut().mini_strategy_wanted = wanted;
 }
 
+/// The core-list version cell: the dotted build, plus a non-empty letter.
+///
+/// Args:
+///     core: The store record for one core.
+///
+/// Returns:
+///     `Some("7.71 R3")` when the core reported a number, else `None`. A release (`Some("")`)
+///     and an older core (`None`) both print the bare number.
+pub(super) fn core_list_version(core: &CoreData) -> Option<String> {
+    core.server_version
+        .map(|v| fmt::core_build_named(v, core.server_version_suffix.as_deref()))
+}
+
 /// Core status in canonical order, limited to the chat's cores, with each core's balance.
 ///
 /// The grand total and each exchange section use [`aggregate_account_figures`] over those same
@@ -414,9 +428,7 @@ pub(super) fn mini_cores(host: &dyn TgHost, chat_id: i64) -> Result<CoresDto, Mi
                 .map(|fault| fault_keys::fault_kind(&fault.kind).to_string()),
             trading: run.trading,
             auto_detect: run.auto_detect,
-            version: data
-                .and_then(|core| core.server_version)
-                .map(fmt::core_build),
+            version: data.and_then(core_list_version),
             mem_mb: sys.used_memory_mb.map(u32::from),
             free_mem_mb: sys.free_physical_memory_mb.map(u32::from),
             balance: core_balance_figure(reading),

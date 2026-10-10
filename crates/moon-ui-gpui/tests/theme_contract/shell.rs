@@ -1369,15 +1369,19 @@ fn core_status_table_binds_scoped_telemetry_columns() {
         );
     }
     for (body, binding, row) in [
-        (version_cell, "version_text(r.server_version)", "Flat"),
+        (
+            version_cell,
+            "version_text(r.server_version, r.server_version_suffix.as_deref())",
+            "Flat",
+        ),
         (
             server_row,
-            "version_group_text(group.version)",
+            "version_group_text(&group.version)",
             "By IP server",
         ),
         (
             process_row,
-            "version_text(core.server_version)",
+            "version_text(core.server_version, core.server_version_suffix.as_deref())",
             "By IP core",
         ),
     ] {

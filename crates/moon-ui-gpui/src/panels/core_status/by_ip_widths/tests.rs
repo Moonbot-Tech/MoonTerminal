@@ -16,6 +16,16 @@ fn none() -> HashMap<String, f32> {
     HashMap::new()
 }
 
+/// Reverting to the number-only width clips a named build beside its hover update arrow.
+#[test]
+fn version_design_width_fits_a_named_build_and_update_controls() {
+    let named_build_w = 7.0 * 0.6 * REM;
+    let arrow_w = 18.0;
+    let badge_w = 0.6 * REM;
+    let gaps_w = 2.0 * 4.0;
+    assert!(ByIpWidths::BASE.version >= named_build_w + arrow_w + badge_w + gaps_w);
+}
+
 /// An unmeasured view keeps its design widths.
 ///
 /// The plausible edit: dropping the `available <= 0.0` guard. The first frame reports no width, so
