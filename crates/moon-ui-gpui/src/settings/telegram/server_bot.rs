@@ -1418,7 +1418,15 @@ impl SettingsView {
             .min_w(px(0.0))
             .gap(design::ui_px(cx, 8.0))
             .when(st.busy(), |s| {
-                s.child(div().child(t!("telegram.server.running").to_string()))
+                let job = st
+                    .running_label
+                    .map(|label| label.text())
+                    .unwrap_or_default();
+                s.child(
+                    div()
+                        .font_family(design::ui_font())
+                        .child(t!("telegram.server.running", job = job).to_string()),
+                )
             })
             .when_some(outcome, |s, (text, color)| {
                 s.child(div().text_color(color).child(text))

@@ -255,3 +255,317 @@ fn install_reconciles_existing_addresses_and_preserves_station_only_cores() {
         }]
     );
 }
+
+fn synthetic_target() -> moon_remote::ssh::Target {
+    moon_remote::ssh::Target {
+        host: "synthetic.invalid".into(),
+        port: 22,
+    }
+}
+
+fn synthetic_host() -> moon_remote::hosts::Host {
+    moon_remote::hosts::Host {
+        addr: "synthetic.invalid:22".into(),
+        fingerprint: "SHA256:synthetic".into(),
+        admin: Some("moon".into()),
+    }
+}
+
+fn synthetic_setup() -> moon_remote::setup::Setup {
+    moon_remote::setup::Setup {
+        target: synthetic_target(),
+        first: moon_remote::setup::FirstAccess::Password {
+            user: "root".into(),
+            password: zeroize::Zeroizing::new("synthetic".into()),
+        },
+        legacy_admin_password: None,
+        station: moon_remote::setup::StationBinary::Keep,
+        host_key: None,
+    }
+}
+
+/// Pointing a job at another control's label would tell the user the wrong button is running:
+/// "Status" while the service update holds every button, or "Revoke all chats" while a
+/// notification save does.
+#[test]
+fn station_tape_job_button_names_the_control_that_starts_it() {
+    use std::collections::BTreeMap;
+
+    use moon_core::config::Secret;
+    use moon_core::station_api::{Access, ChatNotifyRow, TapeWindow};
+    use moon_remote::station::BotChange;
+
+    use super::{BotPlan, CoreStart, Job, JobButton};
+
+    let target = synthetic_target();
+    let tape = TapeWindow {
+        margin_s: 30,
+        long_position_min: 5,
+    };
+    let upsert = |add: bool| cores_sync::Upsert {
+        terminal_uid: 1,
+        station_uid: 2,
+        add,
+    };
+    let mut notify = BTreeMap::new();
+    notify.insert(7, ChatNotifyRow::default());
+    let cases = [
+        (
+            Job::Update {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.update"),
+        ),
+        (
+            Job::Status {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.status"),
+        ),
+        (
+            Job::Resetup {
+                setup: synthetic_setup(),
+            },
+            false,
+            JobButton::Key("telegram.server.resetup"),
+        ),
+        (
+            Job::Logs {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.logs"),
+        ),
+        (
+            Job::Tape {
+                target: target.clone(),
+                tape,
+            },
+            false,
+            JobButton::Key("telegram.server.tape_set"),
+        ),
+        (
+            Job::InstallProbe {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.install"),
+        ),
+        (
+            Job::Install {
+                setup: synthetic_setup(),
+                cores: vec![1],
+                bot: BotPlan::Keep,
+            },
+            false,
+            JobButton::Key("telegram.server.install_confirm"),
+        ),
+        (
+            Job::AddressProbe {
+                source: synthetic_host(),
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.address_probe"),
+        ),
+        (
+            Job::AddressChange {
+                change: moon_remote::station::access::AddressChange {
+                    source: synthetic_host(),
+                    target: target.clone(),
+                    fingerprint: "SHA256:synthetic".into(),
+                },
+            },
+            false,
+            JobButton::Key("telegram.server.address_confirm"),
+        ),
+        (
+            Job::Remove {
+                source: synthetic_host(),
+            },
+            false,
+            JobButton::Key("telegram.server.remove"),
+        ),
+        (
+            Job::Bot {
+                target: target.clone(),
+                bot: BotPlan::Keep,
+            },
+            false,
+            JobButton::Key("telegram.server.move_bot"),
+        ),
+        (
+            Job::BotOff {
+                target: target.clone(),
+                restore: false,
+                recovered: None,
+            },
+            false,
+            JobButton::Key("telegram.server.bot_off"),
+        ),
+        (
+            Job::ServerToken {
+                target: target.clone(),
+                token: Secret::new("synthetic-token"),
+                change: BotChange::default(),
+            },
+            false,
+            JobButton::Key("telegram.server.token_set"),
+        ),
+        (
+            Job::ServerToken {
+                target: target.clone(),
+                token: Secret::new("synthetic-token"),
+                change: BotChange::default(),
+            },
+            true,
+            JobButton::Key("telegram.server.token_replace"),
+        ),
+        (
+            Job::BotState {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.server.refresh"),
+        ),
+        (
+            Job::PairIssue {
+                target: target.clone(),
+            },
+            false,
+            JobButton::Key("telegram.pair_new"),
+        ),
+        (
+            Job::Access {
+                target: target.clone(),
+                base: Access::default(),
+                access: Access::default(),
+                edits: true,
+            },
+            false,
+            JobButton::Key("telegram.server.access_apply"),
+        ),
+        (
+            Job::Access {
+                target: target.clone(),
+                base: Access::default(),
+                access: Access {
+                    notify: Some(notify),
+                    ..Access::default()
+                },
+                edits: false,
+            },
+            false,
+            JobButton::Key("telegram.notify_editor.save"),
+        ),
+        (
+            Job::Access {
+                target: target.clone(),
+                base: Access::default(),
+                access: Access::default(),
+                edits: false,
+            },
+            false,
+            JobButton::Key("telegram.pair_reset"),
+        ),
+        (
+            Job::MiniApp {
+                target: target.clone(),
+                on: true,
+            },
+            false,
+            JobButton::Key("telegram.server.mini_app"),
+        ),
+        (
+            Job::AutoUpdate {
+                target: target.clone(),
+                on: false,
+            },
+            false,
+            JobButton::Key("telegram.server.auto_update"),
+        ),
+        (
+            Job::Groups {
+                target: target.clone(),
+                groups: Vec::new(),
+            },
+            false,
+            JobButton::Key("telegram.server.groups_send"),
+        ),
+        (
+            Job::Cores {
+                target: target.clone(),
+                upsert: vec![upsert(true)],
+                eligible: vec![1],
+                started: CoreStart::Add,
+            },
+            false,
+            JobButton::Key("telegram.server.cores_add"),
+        ),
+        (
+            Job::Cores {
+                target: target.clone(),
+                upsert: vec![upsert(false)],
+                eligible: vec![1],
+                started: CoreStart::Name,
+            },
+            false,
+            JobButton::Key("telegram.server.cores_name"),
+        ),
+        (
+            Job::Cores {
+                target: target.clone(),
+                upsert: vec![upsert(false)],
+                eligible: vec![1],
+                started: CoreStart::Key,
+            },
+            false,
+            JobButton::Key("telegram.server.cores_key"),
+        ),
+        (
+            Job::Cores {
+                target: target.clone(),
+                upsert: vec![upsert(true)],
+                eligible: vec![1],
+                started: CoreStart::Bulk,
+            },
+            false,
+            JobButton::CoresAll(1),
+        ),
+        (
+            Job::Cores {
+                target: target.clone(),
+                upsert: vec![upsert(false), upsert(true)],
+                eligible: vec![1],
+                started: CoreStart::Bulk,
+            },
+            false,
+            JobButton::CoresAll(2),
+        ),
+        (
+            Job::CoresRemove {
+                target: target.clone(),
+                uids: vec![2],
+                names: vec!["Synthetic".into()],
+                addresses: vec![None],
+                eligible: vec![1],
+            },
+            false,
+            JobButton::Key("telegram.server.cores_remove_confirm"),
+        ),
+        (
+            Job::Zone {
+                target: target.clone(),
+                zone: "UTC".into(),
+            },
+            false,
+            JobButton::Background,
+        ),
+    ];
+    for (job, has_token, expected) in cases {
+        assert_eq!(JobButton::of(&job, has_token), expected);
+    }
+    assert_eq!(JobButton::Background.text(), "");
+}
