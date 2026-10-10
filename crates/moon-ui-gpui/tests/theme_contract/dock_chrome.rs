@@ -226,6 +226,11 @@ fn every_data_table_applies_the_chrome_header_style() {
     );
     let table_count: usize = sources
         .iter()
+        // Sibling layout probes use real tables without adding a production table surface.
+        .filter(|path| {
+            path.file_name().is_none_or(|name| name != "tests.rs")
+                && !path.components().any(|part| part.as_os_str() == "tests")
+        })
         .map(|path| {
             let source = fs::read_to_string(path)
                 .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
