@@ -84,16 +84,27 @@ impl ProfitMonitorView {
             backend.layout.profit_monitor_period = Some(period.id().to_string());
             backend.layout_dirty = true;
         });
-        self.reload(false, cx);
+        if !self.days_open {
+            self.reload(false, cx);
+        } else {
+            // The preset still updates its trigger, but cannot replace the independently loaded month.
+            cx.notify();
+        }
         self.start_clock_refresh(cx);
     }
 
-    /// Select and persist one grouping axis without touching the database.
+    /// Select and persist one grouping axis, returning from the day report to the monitor table.
     ///
     /// Args:
     ///     group: New grouping axis.
     ///     cx: View context used to persist and repaint.
     pub(super) fn set_group(&mut self, group: GroupMode, cx: &mut Context<Self>) {
+        if self.days_open {
+            self.days_open = false;
+            self.reload(false, cx);
+            self.invalidate_content(cx);
+            cx.notify();
+        }
         if self.group == group {
             return;
         }

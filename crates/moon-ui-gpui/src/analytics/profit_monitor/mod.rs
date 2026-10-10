@@ -18,6 +18,10 @@ use context::*;
 use header::*;
 
 mod broadcast;
+/// Month report loading and presentation.
+mod days;
+/// Render-free civil month and day aggregation helpers.
+mod days_model;
 mod format;
 mod line;
 mod model;
@@ -100,6 +104,14 @@ pub(crate) struct ProfitMonitorView {
     valuation: ValuationMode,
     live: LiveContext,
     data: ProfitLoadState<ProfitMonitorSummary>,
+    /// Transient third view; reopening always selects the current month.
+    days_open: bool,
+    /// First civil date of the independently selected report month.
+    days_month: chrono::NaiveDate,
+    /// Classified day read, kept separate from the existing core/exchange snapshot.
+    days_data: super::LoadState<days_model::DayReport>,
+    /// Whether the bot's currency and average-order facts are visible.
+    days_extra: bool,
     /// Native partitions published atomically with a split-currency snapshot.
     currencies: Vec<ProfitMonitorCurrency>,
     /// Cores the last SUCCESSFUL read actually named, kept apart from [`Self::data`].
@@ -309,6 +321,10 @@ impl ProfitMonitorView {
             valuation,
             live,
             data: ProfitLoadState::default(),
+            days_open: false,
+            days_month: days_model::current_month(now_utc(), zone),
+            days_data: super::LoadState::default(),
+            days_extra: false,
             currencies: Vec::new(),
             seen_data_cores: Vec::new(),
             refresh_error: None,
