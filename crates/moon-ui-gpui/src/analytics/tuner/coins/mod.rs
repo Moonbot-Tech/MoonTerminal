@@ -225,13 +225,13 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// Sortable heading of the coin table, aligned column-for-column with [`coin_row`].
+    /// Sortable heading aligned with [`coin_row`], with shared single-trade metric tooltips.
     fn coin_header(&self, p: MoonPalette, cx: &Context<Self>) -> impl IntoElement + use<> {
         let scale = design::font_scale(cx);
         let sortable =
             |id: SharedString, title: String, key: &'static str, w: Option<(f32, f32)>| {
                 let arrow = sort_arrow_of(&self.coins.sort, key);
-                let d = div()
+                let mut d = div()
                     .id(id)
                     .flex_none()
                     .truncate()
@@ -265,6 +265,9 @@ impl AnalyticsView {
                         );
                         cx.notify();
                     }));
+                if let Some(tip) = super::columns::metric_header_tooltip(key) {
+                    d = d.tooltip(crate::panels::common::text_tooltip(tip));
+                }
                 match w {
                     // Shrinks with its body cell, floor included, or the heading leaves the
                     // column it labels as soon as the panel narrows.
