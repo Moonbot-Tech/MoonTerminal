@@ -3,6 +3,19 @@
 
 use super::support::*;
 
+/// Removing either header's tooltip wiring silently restores unexplained trade extremes.
+#[test]
+fn comparison_headers_explain_single_trade_extremes() {
+    let list = read_src("analytics/tuner/list/table.rs");
+    let coins = read_src("analytics/tuner/coins/mod.rs");
+    assert!(braced_body(&list, "fn header_row(").contains("metric_header_tooltip(c.key)"));
+    assert!(braced_body(&coins, "fn coin_header(").contains("metric_header_tooltip(key)"));
+    let columns = read_src("analytics/tuner/columns.rs");
+    let tips = braced_body(&columns, "fn metric_header_tooltip(");
+    assert!(tips.contains("t!(\"analytics.col.worst_tip\")"));
+    assert!(tips.contains("t!(\"analytics.col.best_tip\")"));
+}
+
 /// `analytics/tuner/shared.rs::collapse_caret` must pass the `DownUp` pose explicitly, ON the
 /// `MoonDisclosure` chain it builds.
 ///

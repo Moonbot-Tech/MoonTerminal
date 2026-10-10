@@ -1,6 +1,8 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.col.worst_tip: "Resultado de una sola operación cerrada, la peor, no una suma, en la selección actual de estrategias y el periodo de Ajuste, con los filtros activos. Misma unidad que Beneficio. Un valor positivo significa que todas las operaciones cerradas del grupo fueron rentables."
+analytics.col.best_tip: "Resultado de una sola operación cerrada, la mejor, no una suma, en la selección actual de estrategias y el periodo de Ajuste, con los filtros activos. Misma unidad que Beneficio. Un valor negativo significa que todas las operaciones cerradas del grupo tuvieron pérdidas."
 
 # Independent desktop Profit Monitor.
 profit_monitor.window_title: "MoonTerminal — Monitor de beneficios"

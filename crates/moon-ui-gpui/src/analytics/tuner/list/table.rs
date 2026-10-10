@@ -612,7 +612,7 @@ impl AnalyticsView {
                                     c.key,
                                     Some((metric_widths[i] / scale, metric_widths[i] / scale)),
                                     true,
-                                    None,
+                                    super::super::columns::metric_header_tooltip(c.key),
                                 )
                             }),
                     )

@@ -11,6 +11,7 @@
 
 use gpui::*;
 use moon_ui::MoonPalette;
+use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, sign_color};
 use crate::design::moon;
@@ -148,6 +149,17 @@ pub(super) const COL_WORST: MetricCol = MetricCol {
     signed: Some(|g| g.worst),
     sort: |g| g.worst,
 };
+
+/// Explain single-trade extremes without widening either comparison table's headings.
+///
+/// Returns the localized hover text for an extreme column, or no tooltip for other metrics.
+pub(super) fn metric_header_tooltip(key: &str) -> Option<String> {
+    match key {
+        "analytics.col.worst" => Some(t!("analytics.col.worst_tip").to_string()),
+        "analytics.col.best" => Some(t!("analytics.col.best_tip").to_string()),
+        _ => None,
+    }
+}
 
 /// Format active-lens profit with its exact quote ticker in the raw-money lens.
 ///
