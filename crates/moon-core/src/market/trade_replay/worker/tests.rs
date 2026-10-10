@@ -230,7 +230,7 @@ fn core_series(partial: bool) -> TradeReplaySeries {
         identity: 42,
         tick_status: TickStatus::Served,
         side_slots: Vec::new(),
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial,
         covered: Coverage::one(if partial {
             (60_000, 120_000)

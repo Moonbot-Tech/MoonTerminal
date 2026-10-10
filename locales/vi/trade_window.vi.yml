@@ -59,8 +59,12 @@ trade_window.source.core_ticks_bucketed: "tick từ core, bước %{secs} giây"
 
 trade_window.source.ticks_bucketed: "tick từ sàn, bước %{secs} giây"
 
-# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
-# словаре не хранится.
+trade_window.source.core_ticks_edges_bucketed: "tick từ core, bước %{secs} giây ở hai rìa"
+
+trade_window.source.ticks_edges_bucketed: "tick từ sàn, bước %{secs} giây ở hai rìa"
+
+# Joined to any of the tick captions above with " - " in code — the separator glyph never
+# lives in the dictionary.
 trade_window.source.ticks_edges: "hai mép được lấp bằng nến %{min} phút"
 
 # Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.

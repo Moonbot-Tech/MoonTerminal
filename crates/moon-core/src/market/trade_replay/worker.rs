@@ -57,9 +57,9 @@ use super::gate::ReplayGate;
 use super::tick_tiles::{TickTileStore, TileKey, TileSource, residual_plan};
 use super::venue_caps::{TradeRoute, bybit_category, kline_route, trade_route};
 use super::{
-    Coverage, ReplayIntent, ReplayWindow, TickPlan, TickStatus, TradeReplayEmpty,
-    TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, fit_ticks, pages,
-    rest, tick_plan,
+    Coverage, ReplayIntent, ReplayWindow, TickPlan, TickStatus, TickThinning, TradeReplayEmpty,
+    TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, fit_ticks_around,
+    pages, rest, tick_plan,
 };
 use crate::feed::types::Tick;
 use crate::market::candles::ChartCandle;

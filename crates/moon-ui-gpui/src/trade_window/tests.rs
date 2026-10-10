@@ -6,13 +6,14 @@ use moon_core::config::layout::GeomRect;
 fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
     use super::{TradeWindowState, fold_outcome};
     use moon_core::market::trade_replay::{
-        TickStatus, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource, replay_window_ms,
+        TickStatus, TickThinning, TradeReplayOutcome, TradeReplaySeries, TradeReplaySource,
+        replay_window_ms,
     };
     let state = TradeWindowState::Ready {
         source: TradeReplaySource::Ticks,
         tf_min: 1,
         tick_status: TickStatus::Streaming,
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial: true,
         ends: false,
         brand: moon_core::venue::Brand::Binance,
@@ -31,7 +32,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         }],
         identity: 42,
         tick_status: TickStatus::Streaming,
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial: true,
         side_slots: Vec::new(),
         covered: moon_core::market::trade_replay::Coverage::one((99_700_000, 100_000_000)),
@@ -50,7 +51,7 @@ fn progressive_trade_ticks_preserve_view_and_accept_core_completion() {
         source: TradeReplaySource::Klines1m,
         tf_min: 1,
         tick_status: TickStatus::AwaitingCore,
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial: false,
         ends: false,
         brand: moon_core::venue::Brand::Bybit,
@@ -350,5 +351,32 @@ mod strategy_version_line {
     #[test]
     fn no_history_has_no_line() {
         assert!(version_line(VersionAt::NoHistory, chrono_tz::UTC, NOW).is_none());
+    }
+}
+
+/// The caption names how the ticks were fitted, and who answered.
+mod tick_caption {
+    use super::super::render::tick_caption;
+    use moon_core::market::trade_replay::TickThinning;
+
+    /// Each fitting has its own sentence: swapping the edges and the whole-run keys, or the core
+    /// and the venue ones, would tell the reader the entry is every print when it is not.
+    #[test]
+    fn every_fitting_names_its_own_caption() {
+        let _locale = crate::test_locale::force("en");
+        let edges = TickThinning::Edges { bucket_ms: 2_000 };
+        let whole = TickThinning::Whole { bucket_ms: 5_000 };
+        assert_eq!(tick_caption(TickThinning::Raw, false), "exchange ticks");
+        assert_eq!(tick_caption(TickThinning::Raw, true), "core ticks");
+        assert_eq!(
+            tick_caption(edges, false),
+            "exchange ticks, 2 s step at the edges"
+        );
+        assert_eq!(
+            tick_caption(edges, true),
+            "core ticks, 2 s step at the edges"
+        );
+        assert_eq!(tick_caption(whole, false), "exchange ticks, 5 s step");
+        assert_eq!(tick_caption(whole, true), "core ticks, 5 s step");
     }
 }

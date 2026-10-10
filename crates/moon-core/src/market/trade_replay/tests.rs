@@ -467,7 +467,7 @@ fn bars_only_series() -> TradeReplaySeries {
         identity: 42,
         tick_status: TickStatus::Pending,
         side_slots: Vec::new(),
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial: false,
         covered: Coverage::none(),
     }
@@ -1241,5 +1241,137 @@ fn replay_with_split_coverage_keeps_the_middle_bars() {
         out.candle_tf_ms,
         vec![0.0],
         "a minute that sits wholly in the gap keeps the series width"
+    );
+}
+
+/// Prints at `per_s` a second across `span`, the price wobbling inside every second so that
+/// thinning a second down to its first/high/low/last really drops prints.
+fn dense_prints(span: (i64, i64), per_s: i64) -> Vec<Tick> {
+    let step = (1_000 / per_s).max(1);
+    (span.0..=span.1)
+        .step_by(step as usize)
+        .enumerate()
+        .map(|(index, time_ms)| Tick {
+            time_ms: time_ms as f64,
+            price: 100.0 + (index % 7) as f32,
+            qty: 1.0,
+            side: crate::feed::types::Side::Buy,
+        })
+        .collect()
+}
+
+/// A pump around a 63 ms scalp: the margins overflow the budget, and the trade's own
+/// neighbourhood used to be thinned with them — the window drew the entry at four points a
+/// second while the terminal held every print of it (#938).
+#[test]
+fn a_dense_window_keeps_the_trade_neighbourhood_raw() {
+    let open = 1_791_000_000_000;
+    let window = replay_window_ms(open, open + 63, 180_000).expect("a valid window");
+    let ticks = dense_prints(window.focus(), 300);
+    assert!(
+        ticks.len() > worker::TICK_BUDGET,
+        "the fixture must overflow"
+    );
+    let (served, thinning) =
+        fit_ticks_around(ticks.clone(), worker::TICK_BUDGET, &window.raw_spans());
+    let near = |tick: &&Tick| {
+        let at = tick.time_ms as i64;
+        (open - 30_000..=open + 63 + 30_000).contains(&at)
+    };
+    assert!(served.len() <= worker::TICK_BUDGET);
+    assert_eq!(
+        served.iter().filter(near).count(),
+        ticks.iter().filter(near).count(),
+        "every print within 30 s of the trade reaches the chart"
+    );
+    assert!(
+        served
+            .windows(2)
+            .all(|pair| pair[0].time_ms <= pair[1].time_ms),
+        "the kept and the thinned prints merge back in time order"
+    );
+    assert!(
+        served.iter().any(|tick| !near(&tick)),
+        "the margins are thinned, not dropped"
+    );
+    assert!(
+        matches!(thinning, TickThinning::Edges { bucket_ms } if bucket_ms > 0),
+        "the caption must say only the edges were thinned, got {thinning:?}"
+    );
+}
+
+/// The neighbourhood alone fills the budget: there is nothing left to spend the margins on, so
+/// the whole run is thinned and the caption says so — never a series over budget.
+#[test]
+fn a_neighbourhood_over_the_budget_thins_the_whole_run() {
+    let open = 1_791_000_000_000;
+    let window = replay_window_ms(open, open + 63, 180_000).expect("a valid window");
+    let ticks = dense_prints(window.focus(), 300);
+    let kept = ticks
+        .iter()
+        .filter(|tick| window.raw_spans().contains_ms(tick.time_ms as i64))
+        .count();
+    let (served, thinning) = fit_ticks_around(ticks, kept, &window.raw_spans());
+    assert!(!served.is_empty() && served.len() <= kept);
+    assert!(
+        served
+            .windows(2)
+            .all(|pair| pair[0].time_ms <= pair[1].time_ms)
+    );
+    assert!(matches!(thinning, TickThinning::Whole { bucket_ms } if bucket_ms > 0));
+}
+
+/// Nothing inside the neighbourhood: the margins are the whole run, so thinning them is a
+/// whole-run thinning and the caption must not say the trade was kept raw.
+#[test]
+fn an_empty_neighbourhood_reports_a_whole_run_thinning() {
+    let ticks = dense_prints((0, 60_000), 300);
+    let (served, thinning) = fit_ticks_around(ticks, 1_000, &Coverage::none());
+    assert!(!served.is_empty() && served.len() <= 1_000);
+    assert!(
+        matches!(thinning, TickThinning::Whole { .. }),
+        "got {thinning:?}"
+    );
+}
+
+/// A long position asks for ticks around each end, and each end keeps its own neighbourhood
+/// whole: a keep that collapsed to the position's hull would hold the hour between the ends
+/// and leave both ends to the thinning budget.
+#[test]
+fn a_long_position_keeps_both_ends_raw() {
+    let open = 1_791_000_000_000;
+    let close = open + 60 * MINUTE_MS;
+    let window = ReplayWindow {
+        long_position_ms: 5 * MINUTE_MS,
+        ..replay_window_ms(open, close, 180_000).expect("a valid window")
+    };
+    assert!(
+        window.raw_spans().is_split(),
+        "a long position keeps two ends"
+    );
+    let ticks: Vec<Tick> = window
+        .focus_spans()
+        .spans()
+        .iter()
+        .flat_map(|&span| dense_prints(span, 300))
+        .collect();
+    assert!(
+        ticks.len() > worker::TICK_BUDGET,
+        "the fixture must overflow"
+    );
+    let (served, thinning) =
+        fit_ticks_around(ticks.clone(), worker::TICK_BUDGET, &window.raw_spans());
+    for end in [open, close] {
+        let near = |tick: &&Tick| (end - 30_000..=end + 30_000).contains(&(tick.time_ms as i64));
+        assert_eq!(
+            served.iter().filter(near).count(),
+            ticks.iter().filter(near).count(),
+            "every print within 30 s of the end at {end} reaches the chart"
+        );
+    }
+    assert!(served.len() <= worker::TICK_BUDGET);
+    assert!(
+        matches!(thinning, TickThinning::Edges { .. }),
+        "got {thinning:?}"
     );
 }

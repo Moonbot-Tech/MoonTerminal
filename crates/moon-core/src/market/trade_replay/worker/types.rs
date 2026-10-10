@@ -38,7 +38,8 @@ pub(super) const OUTCOME_CACHE_LEN: usize = 8;
 /// it feeds. This bounds the ring independently of its entry count: eviction runs oldest-first,
 /// exactly as the entry-count eviction does, and never touches the entry that was just inserted,
 /// so one huge series is held rather than immediately discarded and re-fetched. Sized for the two
-/// trade windows that can be open at once to both stay remembered, slots included.
+/// trade windows that can be open at once to both stay remembered, slots included — about 9 MB
+/// at 24 bytes a tick when both are pumps at the full budget, and far less on an ordinary trade.
 pub(super) const OUTCOME_CACHE_MAX_TICKS: usize = 4 * TICK_BUDGET;
 
 /// Bounds the COMPOSED series and the outcome ring for one tick series — never the in-flight
@@ -47,9 +48,12 @@ pub(super) const OUTCOME_CACHE_MAX_TICKS: usize = 4 * TICK_BUDGET;
 /// discarding it (see the module header's degrade ladder), so this constant ceilings what gets
 /// drawn and remembered, not what a stage may fetch before giving up.
 ///
-/// Sits under the live chart's default `trades_limit` of 50 000 (`candles.rs:93`), so a tick
-/// replay never asks the point ring for more than the main chart already draws.
-pub(crate) const TICK_BUDGET: usize = 40_000;
+/// An emergency bound, not a working one: the largest trade ring moonproto gives the live
+/// chart (`futures_trades_capacity`, capped at 98 000), so a replay never draws more points than
+/// the main chart already does. It was 40 000, justified by a live-chart limit that had already
+/// been removed, and on a pump it thinned prints the terminal had fetched and stored whole (#938).
+/// Crossing it now thins the margins first ([`super::fit_ticks_around`]).
+pub(crate) const TICK_BUDGET: usize = 98_000;
 
 /// Bounds WALL TIME on the single worker thread for one tick stage.
 ///

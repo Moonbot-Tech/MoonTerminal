@@ -223,7 +223,8 @@ pub(super) fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySerie
     // own band values `price × qty` unconverted; that is its inconsistency to keep, not this
     // window's.)
     let side_slots = crate::market::source::side_slots_of_ticks(&native.ticks, request.tick_value);
-    let (ticks, bucket_ms) = fit_ticks(native.ticks, TICK_BUDGET);
+    let (ticks, thinning) =
+        fit_ticks_around(native.ticks, TICK_BUDGET, &request.window.raw_spans());
     if ticks.is_empty() {
         return None;
     }
@@ -231,7 +232,7 @@ pub(super) fn read_core(request: &TradeReplayRequest) -> Option<TradeReplaySerie
         request,
         request.address.venue,
         ticks,
-        bucket_ms,
+        thinning,
         side_slots,
         native.covered != (request.window.from_ms, request.window.to_ms),
         Coverage::one(native.covered),

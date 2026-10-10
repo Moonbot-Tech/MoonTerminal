@@ -121,6 +121,34 @@ const THIN_LADDER_MS: [i64; 9] = [
     1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ];
 
+/// How far around the entry and the exit a thinned replay still keeps every print.
+///
+/// The stretch a reader zooms into to see how the trade itself printed — Moonbot's own trade
+/// chart shows about this much around the fill, at full density. When the budget forces
+/// thinning, [`fit_ticks_around`] spends the margins beyond it first (#938): before, one bucket
+/// width ran over the whole series, and a pump in the margins thinned the entry it surrounded.
+const KEEP_RAW_MS: i64 = 30_000;
+
+/// How a served tick series was fitted into [`worker::TICK_BUDGET`] — what the window's caption
+/// names, since a thinned chart must say so and say where.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickThinning {
+    /// Every print, as the source answered it.
+    Raw,
+    /// Every print within [`KEEP_RAW_MS`] of the entry and the exit; only the margins beyond it
+    /// were thinned, to buckets of `bucket_ms`.
+    Edges {
+        /// The [`THIN_LADDER_MS`] rung the margins were thinned to.
+        bucket_ms: i64,
+    },
+    /// The whole run was thinned to buckets of `bucket_ms`: the trade's own neighbourhood alone
+    /// filled the budget, or held no print to keep.
+    Whole {
+        /// The [`THIN_LADDER_MS`] rung the run was thinned to.
+        bucket_ms: i64,
+    },
+}
+
 /// How the tick stage for one window ended — the thing the window's caption NAMES.
 ///
 /// Each variant is a DIFFERENT sentence to show the user, and two of them (`NoRoute`,
@@ -420,6 +448,17 @@ impl ReplayWindow {
             self.close_ms.saturating_add(margin),
         ));
         spans
+    }
+
+    /// The stretches a thinned replay keeps whole ([`fit_ticks_around`]): [`Self::focus_spans`]
+    /// with the margin cut to [`KEEP_RAW_MS`] — the position plus that much on each side on a
+    /// short trade, each end plus or minus that much on a long one.
+    pub(crate) fn raw_spans(self) -> Coverage {
+        Self {
+            margin_ms: self.margin_ms.clamp(0, KEEP_RAW_MS),
+            ..self
+        }
+        .focus_spans()
     }
 
     /// Detailed points cover only [`Self::focus`]; context stays bars.
@@ -769,6 +808,57 @@ pub(crate) fn fit_ticks(ticks: Vec<Tick>, budget: usize) -> (Vec<Tick>, i64) {
     (strided, bucket_ms)
 }
 
+/// Fit a served tick run into `budget`, keeping the trade's own neighbourhood whole.
+///
+/// The prints inside `keep` ([`ReplayWindow::raw_spans`]) pass untouched and [`fit_ticks`]
+/// thins only the rest into what they leave of the budget, so a pump in the margins no longer
+/// coarsens the entry and the exit it surrounds. Only when the neighbourhood alone fills the
+/// budget, or holds no print at all, does the whole run go through [`fit_ticks`], as every run
+/// did before. The contract is
+/// [`fit_ticks`]'s: `result.len() <= budget`, every point a real print, ascending.
+///
+/// Args:
+///     ticks: Ascending by time.
+///     budget: Largest tick count the caller will draw or remember.
+///     keep: The stretches whose prints are kept whole while anything else can give way.
+///
+/// Returns:
+///     The fitted run and how it was fitted.
+pub(crate) fn fit_ticks_around(
+    ticks: Vec<Tick>,
+    budget: usize,
+    keep: &Coverage,
+) -> (Vec<Tick>, TickThinning) {
+    if ticks.len() <= budget {
+        return (ticks, TickThinning::Raw);
+    }
+    let inside = |tick: &Tick| keep.contains_ms(tick.time_ms as i64);
+    // No print in the neighbourhood means there is nothing to keep: thinning the rest IS
+    // thinning the whole run, and the caption must not claim the trade itself was kept raw.
+    let kept_len = ticks.iter().filter(|tick| inside(tick)).count();
+    if kept_len == 0 || kept_len >= budget {
+        let (ticks, bucket_ms) = fit_ticks(ticks, budget);
+        return (ticks, TickThinning::Whole { bucket_ms });
+    }
+    let (kept, rest): (Vec<Tick>, Vec<Tick>) = ticks.into_iter().partition(|tick| inside(tick));
+    // The run overflows and `kept` does not fill the budget, so `rest` overflows what is left:
+    // it is always thinned, and `bucket_ms` is always a real rung.
+    let (rest, bucket_ms) = fit_ticks(rest, budget - kept.len());
+    let mut merged = Vec::with_capacity(kept.len() + rest.len());
+    let (mut kept, mut rest) = (kept.into_iter().peekable(), rest.into_iter().peekable());
+    loop {
+        let next = match (kept.peek(), rest.peek()) {
+            (Some(a), Some(b)) if a.time_ms <= b.time_ms => kept.next(),
+            (Some(_), Some(_)) => rest.next(),
+            (Some(_), None) => kept.next(),
+            (None, Some(_)) => rest.next(),
+            (None, None) => break,
+        };
+        merged.extend(next);
+    }
+    (merged, TickThinning::Edges { bucket_ms })
+}
+
 /// Whether cached rows already cover a window densely enough to skip the network.
 ///
 /// COVERAGE, not presence, is the question. A partial prefix is exactly what a previously
@@ -905,9 +995,9 @@ pub struct TradeReplaySeries {
     /// series; every other variant is a reason the bar layer is all the window has, and the
     /// window PRINTS it.
     pub tick_status: TickStatus,
-    /// Bucket the points were thinned to, in ms; `0` means raw, untouched ticks. Meaningless (and
-    /// always `0`) on a [`TradeReplaySource::Klines1m`] series.
-    pub bucket_ms: i64,
+    /// How the points were fitted into the tick budget ([`fit_ticks_around`]). Always
+    /// [`TickThinning::Raw`] on a [`TradeReplaySource::Klines1m`] series, which has none.
+    pub thinning: TickThinning,
     /// Whether [`Self::ticks`] covers only PART of [`Self::window`] — the bars always cover all
     /// of it. Always `false` on a [`TradeReplaySource::Klines1m`] series.
     pub partial: bool,
