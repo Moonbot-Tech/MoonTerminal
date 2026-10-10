@@ -118,7 +118,9 @@ deleted, comments, the core log for a trade.
 
 **Analytics**: KPI summary, profit calendar (year in GitHub style / month),
 live Profit Monitor (by cores/groups, start/stop cores right
-from the table), Tuner: “what-if” on report fields, Beam search over combinations,
+from the table; a calendar button switches it to a month by days for the same cores —
+period total on top, newest day first, arrows step through months — read from the same totals as
+the Telegram bot's Days report), Tuner: “what-if” on report fields, Beam search over combinations,
 By coin and By time axes (heatmap sliders for week/day/hour), an Entry/Exit
 axis that replays every closed trade on its recorded tape of prints and searches
 the strategy's entry and exit fields (MoonShot corridor, MoonHook take, sell line,
