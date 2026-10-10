@@ -2,8 +2,8 @@
 
 use super::super::days_model::{DayReport, DayRow};
 use super::{
-    DayHeader, begin_days_read, core_count_noun, day_average, day_header, day_profit, day_table,
-    total_cells,
+    DayHeader, begin_days_read, core_count_noun, day_header, day_profit, day_table, newest_rows,
+    table_text_width, total_cells,
 };
 use crate::design;
 use crate::load_state::LoadState;
@@ -35,10 +35,6 @@ fn incomplete_money_never_becomes_zero_and_sign_follows_rounding() {
         day_profit(&QuoteBreakdown::from_groups([(Some(0), 25.0, 1)])).0,
         rust_i18n::t!("telegram.report_unvalued").to_string()
     );
-    assert_eq!(
-        day_average(&QuoteBreakdown::default()),
-        rust_i18n::t!("telegram.report_unvalued").to_string()
-    );
 }
 
 /// A misspelled translation key must fail against the mockup's approved Russian total caption.
@@ -46,10 +42,41 @@ fn incomplete_money_never_becomes_zero_and_sign_follows_rounding() {
 fn total_cells_use_the_approved_caption_instead_of_a_raw_translation_key() {
     {
         let _locale = crate::test_locale::force("ru");
-        assert_eq!(total_cells(&quotes(12.0, 3))[0], "Итого");
+        assert_eq!(total_cells(&quotes(12.0, 3))[0], "Итого за период");
     }
     let _locale = crate::test_locale::force("en");
-    assert_eq!(total_cells(&quotes(12.0, 3))[0], "Total");
+    assert_eq!(total_cells(&quotes(12.0, 3))[0], "Total for period");
+}
+
+/// Ascending reader order must not put old days above today's closes or a past month's last day.
+#[test]
+fn current_and_past_months_display_newest_first_without_changing_money() {
+    for dates in [["2024-03-01", "2024-03-10"], ["2024-02-01", "2024-02-29"]] {
+        let report = DayReport {
+            refreshed: Utc.with_ymd_and_hms(2024, 3, 10, 17, 16, 0).unwrap(),
+            rows: dates
+                .iter()
+                .enumerate()
+                .map(|(index, date)| DayRow {
+                    date: date.parse().unwrap(),
+                    quotes: quotes(if index == 0 { 12.0 } else { -7.0 }, index as i64 + 1),
+                })
+                .collect(),
+            total: quotes(5.0, 3),
+        };
+        let displayed = newest_rows(&report);
+        assert_eq!(
+            displayed
+                .iter()
+                .map(|row| row.date.to_string())
+                .collect::<Vec<_>>(),
+            [dates[1], dates[0]]
+        );
+        assert_eq!(day_profit(&displayed[0].quotes).0, "-7.00$");
+        assert_eq!(displayed[0].quotes.orders, 2);
+        assert_eq!(day_profit(&report.total).0, "+5.00$");
+        assert_eq!(report.rows[0].date.to_string(), dates[0]);
+    }
 }
 
 /// Resetting background reads like month navigation would hide figures on every new close.
@@ -129,10 +156,9 @@ fn core_captions_use_real_count_grammar_instead_of_empty_templates() {
     }
 }
 
-/// A backend-free host renders the production header and table, including the expanded column.
+/// A backend-free host renders the production header, separate total and day table.
 struct DaysLayoutProbe {
     report: DayReport,
-    extra: bool,
 }
 
 impl Render for DaysLayoutProbe {
@@ -157,7 +183,6 @@ impl Render for DaysLayoutProbe {
             ))
             .child(div().px(px(12.0)).child(day_table(
                 &self.report,
-                self.extra,
                 width,
                 chrono_tz::Europe::Warsaw,
                 palette,
@@ -183,7 +208,7 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         for zoom in [1.0, 1.25] {
-            for extra in [false, true] {
+            for viewport in [720.0, 400.0] {
                 let report = DayReport {
                     refreshed: Utc.with_ymd_and_hms(2024, 3, 10, 17, 16, 0).unwrap(),
                     rows: vec![DayRow {
@@ -194,14 +219,13 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
                 };
                 let measured = cx.update(|cx| {
                     [
-                        design::mono_caption_text_width(cx, "2024-03-10", 600.0),
-                        design::mono_caption_text_width(cx, "-412.60$", 600.0),
-                        design::mono_caption_text_width(cx, "140", 600.0),
-                        design::mono_caption_text_width(cx, &day_average(&report.total), 600.0),
+                        table_text_width(cx, "2024-03-10", 400.0, false),
+                        table_text_width(cx, "-412.60$", 400.0, false),
+                        table_text_width(cx, "140", 400.0, false),
                     ]
                 });
-                let window = cx.open_window(gpui::size(px(720.0), px(520.0)), move |_, _| {
-                    DaysLayoutProbe { report, extra }
+                let window = cx.open_window(gpui::size(px(viewport), px(520.0)), move |_, _| {
+                    DaysLayoutProbe { report }
                 });
                 let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
                 visual.update(|window, cx| {
@@ -214,19 +238,13 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
                 }
                 let row = visual.debug_bounds("days-header").expect("header laid out");
                 assert!(
-                    (f32::from(row.size.width) - 720.0 / zoom).abs() < 1.0,
+                    (f32::from(row.size.width) - viewport / zoom).abs() < 1.0,
                     "probe must use the zoomed default viewport"
                 );
                 let group = visual
                     .debug_bounds("days-header-group")
                     .expect("period group laid out");
                 let period = visual.debug_bounds("days-period").expect("period laid out");
-                let title = visual
-                    .debug_bounds("days-header-title")
-                    .expect("title laid out");
-                let count = visual
-                    .debug_bounds("days-core-count")
-                    .expect("scope count laid out");
                 assert!(
                     group.origin.x >= row.origin.x && group.right() <= row.right(),
                     "centred header group escaped the row"
@@ -241,39 +259,48 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
                         < 1.0,
                     "period group is not centred"
                 );
-                let period_width = visual.update(|_, cx| {
-                    design::mono_caption_text_width(cx, "01.03 — 10.03 18:16", 600.0)
-                });
+                let period_width = visual
+                    .update(|_, cx| table_text_width(cx, "01.03 — 10.03 18:16", 600.0, false));
                 assert!(
                     f32::from(period.size.width) + 0.1 >= period_width,
                     "period text truncated"
                 );
                 assert!(f32::from(group.size.height) < 40.0, "header wrapped");
                 let title_width = visual.update(|_, cx| {
-                    design::ui_caption_text_width(
+                    table_text_width(
                         cx,
                         &rust_i18n::t!("profit_monitor.days.title"),
                         600.0,
+                        false,
                     )
                 });
+                if let Some(title) = visual.debug_bounds("days-header-title") {
+                    assert!(
+                        f32::from(title.size.width) + 0.1 >= title_width,
+                        "header title truncated"
+                    );
+                } else {
+                    assert!(viewport < 720.0, "default window must retain the title");
+                }
+                if let Some(count) = visual.debug_bounds("days-core-count") {
+                    assert!(
+                        count.origin.x >= group.right() && count.right() <= row.right(),
+                        "scope count overlaps centred group or escapes row"
+                    );
+                }
+                let summary = visual
+                    .debug_bounds("days-total")
+                    .expect("separate total laid out");
+                let table = visual
+                    .debug_bounds("days-table")
+                    .expect("day table laid out");
                 assert!(
-                    f32::from(title.size.width) + 0.1 >= title_width,
-                    "header title truncated"
+                    summary.origin.y >= row.bottom() && summary.bottom() <= table.origin.y,
+                    "total must be between header and day table"
                 );
-                assert!(
-                    count.origin.x >= group.right() && count.right() <= row.right(),
-                    "scope count overlaps centred group or escapes row"
-                );
-                for col in 0..if extra { 4 } else { 3 } {
+                for col in 0..3 {
                     let cell = visual
-                        .debug_bounds(
-                            [
-                                "days-cell-0-0",
-                                "days-cell-0-1",
-                                "days-cell-0-2",
-                                "days-cell-0-3",
-                            ][col],
-                        )
+                        .debug_bounds(["days-cell-0-0", "days-cell-0-1", "days-cell-0-2"][col])
                         .expect("day cell laid out");
                     assert!(
                         f32::from(cell.size.width) + 0.1 >= measured[col],
@@ -285,26 +312,48 @@ fn every_locale_lays_out_the_header_and_cells_inside_the_default_window(
                     );
                     let heading = visual
                         .debug_bounds(
-                            [
-                                "days-cell-head-0",
-                                "days-cell-head-1",
-                                "days-cell-head-2",
-                                "days-cell-head-3",
-                            ][col],
+                            ["days-cell-head-0", "days-cell-head-1", "days-cell-head-2"][col],
                         )
                         .expect("heading laid out");
                     assert!(heading.right() <= row.right(), "heading escaped window");
+                    let heading_width = visual.update(|_, cx| {
+                        let key = [
+                            "profit_monitor.days.date",
+                            "profit_monitor.days.result",
+                            "profit_monitor.days.trades",
+                        ][col];
+                        table_text_width(cx, &rust_i18n::t!(key), 400.0, true)
+                    });
+                    assert!(
+                        f32::from(heading.size.width) + 0.1 >= heading_width,
+                        "heading narrower than its text"
+                    );
                     let total = visual
                         .debug_bounds(
                             [
                                 "days-cell-total-0",
                                 "days-cell-total-1",
                                 "days-cell-total-2",
-                                "days-cell-total-3",
                             ][col],
                         )
                         .expect("total laid out");
                     assert!(total.right() <= row.right(), "total escaped window");
+                    assert!(
+                        (f32::from(total.origin.x - cell.origin.x)).abs() < 1.0,
+                        "total column is not aligned with the table"
+                    );
+                    let total_width = visual.update(|_, cx| {
+                        let text = match col {
+                            0 => rust_i18n::t!("profit_monitor.days.total").to_string(),
+                            1 => "-412.60$".to_string(),
+                            _ => "140".to_string(),
+                        };
+                        table_text_width(cx, &text, 700.0, false)
+                    });
+                    assert!(
+                        f32::from(total.size.width) + 0.1 >= total_width,
+                        "total cell narrower than its text"
+                    );
                 }
             }
         }
