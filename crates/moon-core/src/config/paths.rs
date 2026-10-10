@@ -621,13 +621,14 @@ pub fn hotkeys_path() -> PathBuf {
 /// Returns:
 ///     The same path [`db_dir`] would return, without touching the filesystem.
 pub fn db_dir_path() -> PathBuf {
+    let root = data_dir_raw();
     #[cfg(windows)]
     {
-        data_dir().join("data")
+        root.join("data")
     }
     #[cfg(not(windows))]
     {
-        data_dir()
+        root
     }
 }
 
@@ -670,6 +671,19 @@ pub fn db_dir() -> PathBuf {
 ///     Canonical main report-replica path.
 pub fn reports_db_path() -> PathBuf {
     db_dir().join(REPORTS_DB_FILE_NAMES[0])
+}
+
+/// Report-replica path for a diagnostic that only names the file.
+///
+/// [`reports_db_path`] creates the database directory and latches [`db_dir`]'s
+/// one-time layout migration on the first data root it sees. Classifying a
+/// failure against an in-memory connection must not do that: a later
+/// [`set_data_dir_override`] would open a folder this process never created.
+///
+/// Returns:
+///     The same path [`reports_db_path`] would return, without touching the filesystem.
+pub fn reports_db_path_no_create() -> PathBuf {
+    db_dir_path().join(REPORTS_DB_FILE_NAMES[0])
 }
 
 /// Station-owned allocation watermark, independent of terminal-pushed configuration and reports.

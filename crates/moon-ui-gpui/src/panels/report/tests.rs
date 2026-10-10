@@ -44,7 +44,16 @@ fn csv_export_uses_parallel_core_uid_without_correcting_terminal_utc_stamps() {
         "this test binary must install its isolated data root before resolving report paths"
     );
 
-    let reports = Connection::open(paths::reports_db_path()).expect("open reports fixture");
+    // `db_dir`'s migration runs once, on the first data root it sees. Create the
+    // directory this override's own path names so a previous latch cannot make the open fail.
+    let reports_path = paths::reports_db_path();
+    std::fs::create_dir_all(
+        reports_path
+            .parent()
+            .expect("reports database path has a parent"),
+    )
+    .expect("create the reports database directory");
+    let reports = Connection::open(&reports_path).expect("open reports fixture");
     reports
         .execute_batch(&format!(
             "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

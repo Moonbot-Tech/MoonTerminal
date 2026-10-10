@@ -218,6 +218,12 @@ static WARN_SEEN: OnceLock<Mutex<HashMap<(&'static str, FailKind), (Option<Insta
 /// dated log file carry the line even when the Analytics window is closed.
 /// `ctx` names the query that failed (e.g. `"analytics: scan_period prepare"`).
 ///
+/// The stamped path comes from [`paths::reports_db_path_no_create`]. Naming the
+/// replica must not create the database directory or latch [`paths::db_dir`]'s
+/// migration: an in-memory fixture that fails would otherwise freeze the first
+/// data root, and a later override would open a folder that was never created.
+/// Callers that already hold the file they opened pass that path to [`read_fail_at`].
+///
 /// Corruption also latches the shared integrity failure so the sole writer stops
 /// before another batch and the Analytics warning reflects damage found after
 /// the one-shot background scan.
@@ -231,7 +237,7 @@ static WARN_SEEN: OnceLock<Mutex<HashMap<(&'static str, FailKind), (Option<Insta
 /// Returns:
 ///     Classified failure suitable for propagation to the UI.
 pub(crate) fn read_fail(ctx: &'static str, error: rusqlite::Error) -> ReadFail {
-    read_fail_at(ctx, &paths::reports_db_path(), error)
+    read_fail_at(ctx, &paths::reports_db_path_no_create(), error)
 }
 
 /// Classify a SQLite error against a known file path.
