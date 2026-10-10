@@ -35,7 +35,8 @@ Current factories:
 Auto is a full workspace inside an already existing group window, not a new kind of
 OS-window. Each active group keeps its own `Shell`, its own single `DockArea` and its
 local panel instances.
-The left `MoonVirtualList` rail shows every configured application core as an exchange tree.
+The left `MoonVirtualList` rail shows configured application cores whose `workspace_membership`
+allows Auto (`Both` or `AutoOnly`) as an exchange tree; `ClassicOnly` cores are filtered out.
 Exchange headings follow alphabetical live market metadata order, with unknown exchange first;
 their core leaves retain canonical `core_order::CoreOrder`. Known brand logos appear on exchange
 headings only, never on core rows. Core names do not infer exchange identity. Disabled or
