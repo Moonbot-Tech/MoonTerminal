@@ -1184,25 +1184,27 @@ const LETTER_SLOT: &str = "R3";
 ///     p: Active Moon palette. The badge reads it directly so a behind-coloured parent cannot
 ///         repaint the tag.
 ///     app: Application context for the number's tier size and the badge's density tokens.
-///     end: Pack the pair to the right edge of the free space. The Flat column is right-aligned;
-///         the By-IP cell keeps the pair on the left, under its caption.
+///     end: The Flat cell: the mark sizes to its content and the centred cell places it. Without
+///         it the mark fills the By-IP slot's free width, keeping the pair under its caption.
 ///
 /// Returns:
 ///     A row of the number and the letter slot, filling the free width the caller gives it.
 pub(super) fn version_mark(parts: BuildParts, p: MoonPalette, app: &App, end: bool) -> Div {
     let shown = parts.tag.is_some();
     let label = parts.tag.as_deref().unwrap_or(LETTER_SLOT);
+    // The Flat cell sizes to its content, so a growing mark there collapses to zero and squeezes
+    // the number into an ellipsis; only the fixed-width By-IP slot may let the mark grow. The
+    // number never truncates: a clipped build reads as a different build.
     div()
-        .flex_1()
-        .min_w_0()
+        .when(end, |row| row.flex_none().justify_end())
+        .when(!end, |row| row.flex_1().min_w_0())
         .flex()
         .items_center()
         .gap(px(CELL_GAP_W))
-        .when(end, |row| row.justify_end())
         .child(
             div()
-                .min_w_0()
-                .truncate()
+                .flex_none()
+                .whitespace_nowrap()
                 .font_family(design::mono())
                 .text_size(design::t_body(app))
                 .child(parts.number),

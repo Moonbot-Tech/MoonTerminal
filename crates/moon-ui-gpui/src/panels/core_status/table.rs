@@ -96,12 +96,15 @@ pub(super) fn visible_column_keys(rows: &[CoreStatusRow]) -> Vec<&'static str> {
 ///     keys: Canonically ordered visible-column keys.
 ///
 /// Returns:
-///     Left-aligned identity columns followed by the right-aligned build and numeric telemetry
+///     Left-aligned identity columns followed by the centred build and numeric telemetry
 ///     columns.
 fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
     let numeric = |key: &'static str, title: String, w: f32| {
+        // Centred, header and value alike: a wide numeric column read a right-flush header far
+        // from a left-flush neighbour's, and the build cell's reserved letter slot keeps the
+        // digits on one line whatever the edge.
         MoonDataTableColumn::new(key, title, w)
-            .right()
+            .center()
             .sortable(true)
     };
     keys.iter()
@@ -118,8 +121,8 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
                 MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 110.0)
                     .sortable(true)
             }
-            // Right-aligned like the metrics: the number sits on one edge and the letter tag
-            // takes a reserved slot to its right, so a named build does not shift the digits.
+            // Centred like the metrics: the letter tag takes a reserved slot to the number's
+            // right on every row, so a named build does not shift the digits.
             // Wide enough for that slot plus the update glyph and the hover button. It follows
             // `status` because it completes the identity block — what this core IS — rather than
             // reporting how it is doing. Mid-list insertion costs nothing: persisted widths are
@@ -685,15 +688,15 @@ fn version_hover_cell(
         .group(hover_group)
         .flex()
         .items_center()
-        .justify_end()
+        .justify_center()
         .gap_1()
         .text_color(rgb(version_color(
             r.version_behind.is_some(),
             r.server_version.is_some(),
             p,
         )))
-        // The column is right-aligned. Packing the mark to that edge, with the letter slot
-        // always reserved, keeps every row's digits on the same line.
+        // The column is centred. The mark keeps its letter slot reserved on every row, so it has
+        // one width everywhere and every row's digits land on the same line.
         .child(version_mark(parts, p, app, true))
         .when_some(badge, |c, badge| {
             // The badge is its OWN stateful child, carrying its own tooltip, exactly as
