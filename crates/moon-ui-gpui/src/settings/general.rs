@@ -187,11 +187,14 @@ impl SettingsView {
         large: i32,
         adjust: fn(&mut Self, i32, &mut Context<Self>),
     ) -> impl IntoElement {
-        self.stepper_controls_styled(cx, id, enabled, value_text, small, large, adjust, false)
+        self.stepper_controls_styled(
+            cx, id, enabled, value_text, small, large, adjust, false, false,
+        )
     }
 
     /// Reuse the Settings counter idiom with optional visible, tier-sized buttons for Station.
     /// Visible controls wrap within narrow forms; other callers keep their existing geometry.
+    /// `caution` tints the number when the user changed it and has not sent it.
     pub(super) fn stepper_controls_styled(
         &self,
         cx: &Context<Self>,
@@ -202,9 +205,12 @@ impl SettingsView {
         large: i32,
         adjust: fn(&mut Self, i32, &mut Context<Self>),
         visible: bool,
+        caution: bool,
     ) -> Div {
         let p = MoonPalette::active(cx);
-        let color = if enabled {
+        let color = if caution {
+            rgba_from(p.amber, 1.0)
+        } else if enabled {
             rgba_from(p.text, 1.0)
         } else {
             rgba_from(p.text_muted, 1.0)
@@ -241,6 +247,11 @@ impl SettingsView {
                     .font_family(design::mono())
                     .text_center()
                     .text_color(color)
+                    .when(caution, |value| {
+                        value
+                            .rounded(design::ui_px(cx, 4.0))
+                            .bg(design::moon_alpha(p.amber, 0.16))
+                    })
                     .child(value_text),
             )
             .child(btn("+small", ">", small))

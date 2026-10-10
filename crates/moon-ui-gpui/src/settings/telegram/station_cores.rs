@@ -10,7 +10,7 @@ use rust_i18n::t;
 use super::super::SettingsView;
 use crate::backend::station::{
     cores_sync::{self, Counts, Row, RowState},
-    job::Job,
+    job::{CoreStart, Job},
 };
 use crate::design;
 use crate::panels::common::text_tooltip;
@@ -408,6 +408,7 @@ impl SettingsView {
                             target: target.clone(),
                             upsert: upsert.clone(),
                             eligible: eligible.clone(),
+                            started: CoreStart::Bulk,
                         }),
                         cx,
                     );
@@ -462,12 +463,12 @@ impl SettingsView {
             .map(|core| core.uid)
             .collect();
         let action = match row.state {
-            RowState::OnlyHere => Some("telegram.server.cores_add"),
-            RowState::NameDiffers => Some("telegram.server.cores_name"),
-            RowState::KeyDiffers => Some("telegram.server.cores_key"),
+            RowState::OnlyHere => Some(("telegram.server.cores_add", CoreStart::Add)),
+            RowState::NameDiffers => Some(("telegram.server.cores_name", CoreStart::Name)),
+            RowState::KeyDiffers => Some(("telegram.server.cores_key", CoreStart::Key)),
             _ => None,
         };
-        if let Some(key) = action {
+        if let Some((key, started)) = action {
             let target = target.clone();
             actions = actions.child(
                 MoonButton::new(SharedString::from(format!("station-core-send-{id}")))
@@ -480,6 +481,7 @@ impl SettingsView {
                                 target: target.clone(),
                                 upsert: changes.clone(),
                                 eligible: eligible.clone(),
+                                started,
                             }),
                             cx,
                         );

@@ -11,6 +11,7 @@ use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
 use moon_remote::ssh::Target;
 use moon_remote::station::bot::{self, BotState};
 use moon_remote::station::{self, BotChange, CoreKey, TapeWindow};
+use rust_i18n::t;
 use zeroize::Zeroizing;
 
 use super::cores_sync::{self, Upsert};
@@ -54,6 +55,21 @@ pub(crate) enum BotPlan {
     },
 }
 
+/// The control that starts a core push. One upsert cannot say this: a single new
+/// core is either the row's "Add" or the bulk "Send changes (1)", and a single
+/// update is either "Send name", "Send key", or that same bulk button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoreStart {
+    /// The row button that adds one core missing on the station.
+    Add,
+    /// The row button that sends one differing name.
+    Name,
+    /// The row button that sends one differing key.
+    Key,
+    /// The bulk button, including when it sends a single core.
+    Bulk,
+}
+
 /// One unit of work on the server.
 pub(crate) enum Job {
     /// Read the destination fingerprint without authenticating or changing the saved host.
@@ -86,6 +102,8 @@ pub(crate) enum Job {
         target: Target,
         upsert: Vec<Upsert>,
         eligible: Vec<u64>,
+        /// The button the user pressed. The upsert list does not name it.
+        started: CoreStart,
     },
     /// Explicitly remove selected station identities, preserving their report history.
     CoresRemove {
@@ -166,6 +184,85 @@ impl Job {
                 bot: BotPlan::Transfer { .. },
             } => Some(target),
             _ => None,
+        }
+    }
+}
+
+/// The control that starts a job, so a busy line can name that job instead of "working".
+///
+/// A zone push has no button and does not hold the buttons. Every other variant maps to the
+/// locale key of the control that starts it. Where one variant has several controls, the payload
+/// picks the one the user pressed: one added core, a chat-notification save, a token replacement.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JobButton {
+    /// A locale key with no placeholders.
+    Key(&'static str),
+    /// `telegram.server.cores_send_all`, whose label carries how many cores are sent.
+    CoresAll(usize),
+    /// Not a button. The running line does not show it.
+    Background,
+}
+
+impl JobButton {
+    /// The control that starts `job`.
+    ///
+    /// Args:
+    /// * `job`: The station job about to run.
+    /// * `has_token`: Whether the station already holds a bot token, which chooses
+    ///   "Replace" over "Set" for [`Job::ServerToken`].
+    ///
+    /// Returns:
+    /// The button to name in the busy line.
+    pub(crate) fn of(job: &Job, has_token: bool) -> Self {
+        match job {
+            Job::AddressProbe { .. } => Self::Key("telegram.server.address_probe"),
+            Job::AddressChange { .. } => Self::Key("telegram.server.address_confirm"),
+            Job::InstallProbe { .. } => Self::Key("telegram.server.install"),
+            // The shared "Confirm" button also forgets a server locally. Name the action.
+            Job::Remove { .. } => Self::Key("telegram.server.remove"),
+            Job::Install { .. } => Self::Key("telegram.server.install_confirm"),
+            Job::Resetup { .. } => Self::Key("telegram.server.resetup"),
+            Job::Update { .. } => Self::Key("telegram.server.update"),
+            Job::Cores {
+                upsert, started, ..
+            } => match started {
+                CoreStart::Add => Self::Key("telegram.server.cores_add"),
+                CoreStart::Name => Self::Key("telegram.server.cores_name"),
+                CoreStart::Key => Self::Key("telegram.server.cores_key"),
+                CoreStart::Bulk => Self::CoresAll(upsert.len()),
+            },
+            // The second press, "Yes, remove from the station", is what starts the job.
+            Job::CoresRemove { .. } => Self::Key("telegram.server.cores_remove_confirm"),
+            Job::Tape { .. } => Self::Key("telegram.server.tape_set"),
+            Job::AutoUpdate { .. } => Self::Key("telegram.server.auto_update"),
+            Job::Bot { .. } => Self::Key("telegram.server.move_bot"),
+            Job::BotOff { .. } => Self::Key("telegram.server.bot_off"),
+            Job::ServerToken { .. } if has_token => Self::Key("telegram.server.token_replace"),
+            Job::ServerToken { .. } => Self::Key("telegram.server.token_set"),
+            Job::BotState { .. } => Self::Key("telegram.server.refresh"),
+            Job::PairIssue { .. } => Self::Key("telegram.pair_new"),
+            Job::Access { edits: true, .. } => Self::Key("telegram.server.access_apply"),
+            Job::Access { access, .. } if access.notify.is_some() => {
+                Self::Key("telegram.notify_editor.save")
+            }
+            Job::Access { .. } => Self::Key("telegram.pair_reset"),
+            Job::MiniApp { .. } => Self::Key("telegram.server.mini_app"),
+            Job::Zone { .. } => Self::Background,
+            Job::Groups { .. } => Self::Key("telegram.server.groups_send"),
+            Job::Status { .. } => Self::Key("telegram.server.status"),
+            Job::Logs { .. } => Self::Key("telegram.server.logs"),
+        }
+    }
+
+    /// The button's label in the active locale.
+    ///
+    /// Returns:
+    /// Translated control text. Empty for [`JobButton::Background`], which the running line skips.
+    pub(crate) fn text(self) -> String {
+        match self {
+            Self::Key(key) => t!(key).to_string(),
+            Self::CoresAll(n) => t!("telegram.server.cores_send_all", n = n).to_string(),
+            Self::Background => String::new(),
         }
     }
 }
@@ -389,6 +486,7 @@ fn run(
             target,
             upsert,
             eligible,
+            ..
         } => {
             // Do not reinstall credentials after a remote removal or failed local forget.
             let conn = station::admin_conn(&target)?;

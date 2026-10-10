@@ -69,6 +69,10 @@ pub(crate) struct StationJobs {
     /// Bumped per line, so a view follows the newest one even once the list is full.
     pub(crate) line_seq: u64,
     pub(crate) running: bool,
+    /// The control that started the running job, so the busy lines can name it.
+    /// A quiet read and a zone push record one too; [`Self::busy`] is false for them,
+    /// so those lines stay hidden. Cleared when the job ends.
+    pub(crate) running_label: Option<job::JobButton>,
     /// The last job's end: `Ok(summary)` or `Err(reason)`.
     pub(crate) outcome: Option<Result<String, String>>,
     pub(crate) bot: Option<BotState>,
@@ -380,8 +384,11 @@ impl Backend {
             self.telegram.suspend();
         }
         let applying = matches!(job, job::Job::Access { edits: true, .. });
+        let has_token = self.station.bot.as_ref().is_some_and(|bot| bot.has_token);
+        let running_label = job::JobButton::of(&job, has_token);
         let st = &mut self.station;
         st.running = true;
+        st.running_label = Some(running_label);
         st.applying = applying;
         st.cores_job = matches!(job, job::Job::Cores { .. } | job::Job::CoresRemove { .. });
         if st.cores_job {
@@ -494,6 +501,7 @@ impl Backend {
         let handing_over = std::mem::take(&mut self.station.handing_over);
         let kind = self.station.kind;
         self.station.running = false;
+        self.station.running_label = None;
         self.station.cores_job = false;
         if kind == Kind::Recovery {
             self.station_apply_recovery(done);
