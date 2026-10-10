@@ -936,6 +936,10 @@ impl AnalyticsView {
             Integrity::CheckFailed(msg) => {
                 Some((t!("analytics.integrity_unchecked").to_string(), msg.clone()))
             }
+            Integrity::TimeLimitExceeded => Some((
+                t!("analytics.integrity_unchecked").to_string(),
+                t!("analytics.integrity_time_limit").to_string(),
+            )),
             Integrity::Ok | Integrity::NotPresent => recovered,
         }
     }

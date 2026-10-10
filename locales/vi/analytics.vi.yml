@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.integrity_time_limit: "Kiểm tra đã dừng khi hết giới hạn thời gian (2 phút). Chưa xác nhận bản sao bị hỏng."
 analytics.col.worst_tip: "Kết quả của một giao dịch đã đóng tệ nhất, không phải tổng, trong lựa chọn chiến lược và kỳ Tinh chỉnh hiện tại, với các bộ lọc đang bật. Cùng đơn vị với Lợi nhuận. Giá trị dương nghĩa là mọi giao dịch đã đóng trong nhóm đều có lãi."
 analytics.col.best_tip: "Kết quả của một giao dịch đã đóng tốt nhất, không phải tổng, trong lựa chọn chiến lược và kỳ Tinh chỉnh hiện tại, với các bộ lọc đang bật. Cùng đơn vị với Lợi nhuận. Giá trị âm nghĩa là mọi giao dịch đã đóng trong nhóm đều bị lỗ."
 

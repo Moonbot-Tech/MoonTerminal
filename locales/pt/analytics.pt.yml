@@ -1,6 +1,7 @@
 # Analytics window: tabs, periods, KPI summaries, rankings, and insights.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+analytics.integrity_time_limit: "A verificação foi interrompida ao atingir o limite de tempo (2 minutos). Não foi confirmado dano na réplica."
 analytics.col.worst_tip: "Resultado de uma única operação fechada, a pior, e não uma soma, na seleção atual de estratégias e no período de Ajuste, com os filtros ativos. Mesma unidade que Lucro. Um valor positivo significa que todas as operações fechadas do grupo deram lucro."
 analytics.col.best_tip: "Resultado de uma única operação fechada, a melhor, e não uma soma, na seleção atual de estratégias e no período de Ajuste, com os filtros ativos. Mesma unidade que Lucro. Um valor negativo significa que todas as operações fechadas do grupo deram prejuízo."
 

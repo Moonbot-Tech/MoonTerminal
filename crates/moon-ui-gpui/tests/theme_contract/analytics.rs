@@ -3,6 +3,20 @@
 
 use super::support::*;
 
+/// Dropping the typed timeout branch must not restore an untranslated SQLite banner detail.
+#[test]
+fn integrity_timeout_uses_localized_unchecked_banner() {
+    let toolbar = read_src("analytics/toolbar.rs");
+    let note = braced_body(&toolbar, "fn integrity_note(");
+    let timeout = note
+        .split("Integrity::TimeLimitExceeded =>")
+        .nth(1)
+        .unwrap();
+    let timeout = timeout.split("Integrity::Ok").next().unwrap();
+    assert!(timeout.contains("t!(\"analytics.integrity_unchecked\")"));
+    assert!(timeout.contains("t!(\"analytics.integrity_time_limit\")"));
+}
+
 /// `analytics/observe.rs:observe_report_axis` must refresh through the Writer path and must call
 /// `TunerState::invalidate_for_axis` and `TicksState::invalidate_for_axis`, while
 /// `observe_valuation_mode` remains a real scope reload.
