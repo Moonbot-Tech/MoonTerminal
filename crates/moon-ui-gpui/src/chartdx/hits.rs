@@ -169,8 +169,8 @@ pub(crate) const ORDER_LABEL_NEUTRAL: u32 = u32::MAX;
 pub(crate) const GRID_N_VERT: f32 = 60.0;
 pub(crate) const GRID_N_HORIZ: f32 = 10.0;
 
-// Order-line label overlap priorities: higher values place first and win overlaps. SELL and STOP,
-// which show current position PnL or stop percentages, take precedence over BUY entry and size.
+// Caption categories also determine the legacy pinned-edge stack order. On-screen secondary
+// captions are arbitrated by interaction and distance; percentages and order numbers survive.
 pub(crate) const PRIO_BUY: u8 = 10;
 pub(crate) const PRIO_SELL_SIZE: u8 = 20;
 pub(crate) const PRIO_SELL_PCT: u8 = 30;
@@ -181,6 +181,8 @@ pub(crate) const PRIO_STOP_PCT: u8 = 40;
 /// where `session` is available, and drawn by `prepare_text`.
 #[derive(Clone)]
 pub(crate) struct OrderLabel {
+    /// Order identity shared by its chart and book captions.
+    pub uid: u64,
     /// Line price converted to Y through `view` each frame.
     pub price: f32,
     pub text: String,
@@ -188,15 +190,16 @@ pub(crate) struct OrderLabel {
     pub above: bool,
     /// Line color as `0xRRGGBB`, also used for the label.
     pub color: u32,
-    /// Draw-order priority at intersections: lower values draw first and higher values on top.
-    /// A true Moonbot-style Y bucket for secondary captions still requires a separate pass.
+    /// Caption category and stable ordering for the existing pinned-edge stack.
     pub priority: u8,
     /// Whether a DRAG label must render on top without overlap suppression. Hover does not set it —
     /// hovering feeds `order_highlight`, and [`OrderLabel::highlighted`] is that half.
     pub force: bool,
+    /// On-screen row arbitration preserves every caption of the hovered or dragged order.
+    pub interacting: bool,
     /// Whether this label belongs to the order under the pointer.
     ///
-    /// Only the pinned column reads it, and only to keep the caption: several exits pinned to one
+    /// The pinned column keeps the caption: several exits pinned to one
     /// edge are thinned down to the nearest one's captions, and the painter puts the HIGHLIGHTED
     /// order's line on top of that pile — thinning its caption away would leave the highlighted
     /// line labelled with a stranger's numbers.
@@ -209,8 +212,13 @@ pub(crate) struct OrderLabel {
     pub pinned: bool,
 }
 
+/// Prepared sell-depth caption with the same interaction identity as its chart captions.
 #[derive(Clone)]
 pub(crate) struct OrderBookLabel {
+    /// Order identity used to preserve its own pair across the book edge.
+    pub uid: u64,
+    /// Dragging or hovering keeps this order's depth caption visible.
+    pub interacting: bool,
     /// Sell-line price; the label is drawn in the orderbook zone at this Y.
     pub price: f32,
     pub short: bool,

@@ -633,7 +633,8 @@ impl ChartDataState {
 /// Builds market order-line labels for the text layer: size at the buy line, percentage from entry
 /// plus sell quantity at the sell line, and stop percentage at the stop line. Long versus short
 /// determines whether labels appear above or below the line, matching Moonbot category E. Only
-/// open orders receive labels; closed or completed orders do not.
+/// open orders receive labels; closed or completed orders do not. Order identity and interaction
+/// flags let the CPU text pass preserve the active order's captions during row arbitration.
 // Eight arguments, and they are eight separate facts a label needs: the two sinks, the store and
 // market it reads, the theme it colours from, the rate it converts with, and the two pointer states
 // (`drag_preview`, `highlight_uid`) that decide which labels are privileged. Bundling them would
@@ -675,12 +676,14 @@ fn build_order_labels(
             |kind: LineKind, price: f32, text: String, above: bool, color: u32, priority: u8| {
                 if price.is_finite() && price > 0.0 && !text.is_empty() {
                     out.push(OrderLabel {
+                        uid: o.uid,
                         price,
                         text,
                         above,
                         color,
                         priority,
                         force: line_forced(kind),
+                        interacting: preview.is_some() || highlight_uid == Some(o.uid),
                         highlighted: highlight_uid == Some(o.uid),
                         pinned: moon_chart::order_geometry::line_is_pinned(o, kind),
                     });
@@ -732,6 +735,8 @@ fn build_order_labels(
         if let Some(sp) = sell {
             if sp.is_finite() && sp > 0.0 {
                 book_out.push(OrderBookLabel {
+                    uid: o.uid,
+                    interacting: preview.is_some() || highlight_uid == Some(o.uid),
                     price: sp,
                     short,
                     notional: None,
