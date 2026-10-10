@@ -1,12 +1,17 @@
 //! Explicit imports (no `use super::*`) per the crate's test convention: the panel's parent module
 //! re-exports `gpui::*`, whose own `test` would shadow the built-in attribute.
 
+use std::collections::HashMap;
+
+use moon_core::config::TableSortPreference;
 use moon_core::feed::{CoreProblem, CoreProblemCategory};
+use moon_core::util::display_time::format_minute;
 use rust_i18n::t;
 
 use super::{
-    ActionGate, ProblemRow, ProblemsScope, category_label, details_text, drawn_kinds, empty_text,
-    fleet_refusal, mark_signature, notice_text,
+    ActionGate, ORDER_KEYS, ProblemRef, ProblemRow, ProblemsScope, category_label, core_label,
+    details_text, drawn_kinds, empty_text, fleet_refusal, mark_signature, notice_text,
+    order_and_cap, restore_problems_sort, shown_sort,
 };
 
 /// A scope with nothing truncated, which is every case but the cap's own test.
@@ -331,4 +336,444 @@ fn the_mark_signature_moves_whenever_the_drawn_set_does() {
         mark_signature(&[row(1, 10), row(3, 11)])
     );
     assert_ne!(mark_signature(&base), mark_signature(&[]));
+}
+
+/// One synthetic finding. `kind` is the identity the assertions read back.
+fn problem(
+    kind: u8,
+    kind_name: &str,
+    category: CoreProblemCategory,
+    title: &str,
+    confirmed_ms: Option<i64>,
+    first_seen_ms: Option<i64>,
+) -> CoreProblem {
+    CoreProblem {
+        kind,
+        kind_name: kind_name.to_string(),
+        category,
+        title: title.to_string(),
+        message: String::new(),
+        technical_details: String::new(),
+        first_seen_ms,
+        confirmed_ms,
+        confirmations: 0,
+    }
+}
+
+/// Run the production sort-then-cut and report `(core, kind)` in display order.
+fn sorted_pairs(
+    owned: &[(u64, CoreProblem)],
+    key: &str,
+    ascending: bool,
+    names: &HashMap<u64, String>,
+) -> (Vec<(u64, u8)>, bool) {
+    let mut refs: Vec<ProblemRef<'_>> = owned
+        .iter()
+        .map(|(core, problem)| ProblemRef {
+            core: *core,
+            problem,
+        })
+        .collect();
+    let truncated = order_and_cap(&mut refs, key, ascending, names, chrono_tz::UTC);
+    (
+        refs.iter()
+            .map(|row| (row.core, row.problem.kind))
+            .collect(),
+        truncated,
+    )
+}
+
+/// Opening Problems with nothing saved leads with the newest confirmation.
+///
+/// Mutation: default the flag to `true`, or default the column to the core name. The tab would
+/// open oldest-first, or grouped by core, which is the layout the request asks to leave behind.
+#[test]
+fn an_unsaved_problems_sort_is_newest_confirmation_first() {
+    assert_eq!(shown_sort(None), ("time".to_string(), false));
+    let saved = restore_problems_sort(Some(TableSortPreference {
+        column: "time".to_string(),
+        ascending: false,
+    }));
+    assert_eq!(shown_sort(saved.as_ref()), ("time".to_string(), false));
+}
+
+/// A saved column survives only when the table still draws it.
+///
+/// Mutation: drop a key from the allow-list, or accept a key the table does not have. A restart
+/// would forget a real choice, or a hand-edited severity entry would invent a ranking.
+#[test]
+fn a_saved_problems_sort_round_trips_only_for_a_real_column() {
+    for key in ORDER_KEYS {
+        let restored = restore_problems_sort(Some(TableSortPreference {
+            column: (*key).to_string(),
+            ascending: false,
+        }));
+        assert_eq!(
+            restored
+                .as_ref()
+                .map(|(column, ascending)| (column.as_str(), *ascending)),
+            Some((*key, false)),
+            "{key} must restore with its direction"
+        );
+    }
+    assert_eq!(
+        restore_problems_sort(Some(TableSortPreference {
+            column: "severity".to_string(),
+            ascending: true,
+        })),
+        None,
+        "severity is not a column the core sends"
+    );
+    let saved = restore_problems_sort(Some(TableSortPreference {
+        column: "kind".to_string(),
+        ascending: true,
+    }));
+    assert_eq!(shown_sort(saved.as_ref()), ("kind".to_string(), true));
+}
+
+/// A missing confirmation sorts by first-seen, including when confirmation is unprintable.
+///
+/// Mutation: ignore `first_seen_ms`, or treat a non-positive confirmation as an instant of zero.
+/// The row the cell times from first-seen would sink under every confirmed row, or sort as if it
+/// were the oldest possible fact.
+#[test]
+fn a_missing_confirmation_sorts_by_first_seen() {
+    let older = problem(
+        1,
+        "older",
+        CoreProblemCategory::Machine,
+        "older",
+        Some(1_700_000_040_100),
+        None,
+    );
+    let via_first = problem(
+        2,
+        "first",
+        CoreProblemCategory::Machine,
+        "first",
+        None,
+        Some(1_700_000_080_900),
+    );
+    let fallback = problem(
+        3,
+        "fallback",
+        CoreProblemCategory::Machine,
+        "fallback",
+        Some(0),
+        Some(1_700_000_090_900),
+    );
+    let owned = [(1, older), (1, via_first), (1, fallback)];
+    let (pairs, truncated) = sorted_pairs(&owned, "time", false, &HashMap::new());
+    assert!(!truncated);
+    assert_eq!(
+        pairs.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![3, 2, 1],
+        "newest instant first, whether it came from confirmation or first-seen"
+    );
+}
+
+/// A dash sorts last when the newest confirmation leads, and first when that column is reversed.
+///
+/// Mutation: always pin dashes to the tail, or sort them as zero. Reversing Time would still hide
+/// the dashes, or a non-positive stamp would lead the newest-first view.
+#[test]
+fn a_dash_sorts_last_when_newest_confirmation_leads() {
+    let dash = problem(1, "dash", CoreProblemCategory::Machine, "dash", None, None);
+    let zero = problem(
+        2,
+        "zero",
+        CoreProblemCategory::Machine,
+        "zero",
+        Some(0),
+        None,
+    );
+    let real = problem(
+        3,
+        "real",
+        CoreProblemCategory::Machine,
+        "real",
+        Some(1_700_000_040_000),
+        None,
+    );
+    // Dash first in the input, so a sort that ignores it keeps the dash on top.
+    let owned = [(1, dash), (1, zero), (1, real)];
+    let (newest, _) = sorted_pairs(&owned, "time", false, &HashMap::new());
+    assert_eq!(
+        newest.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![3, 1, 2],
+        "the real instant leads; the two dashes keep their incoming order behind it"
+    );
+    let (oldest, _) = sorted_pairs(&owned, "time", true, &HashMap::new());
+    assert_eq!(
+        oldest.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![1, 2, 3],
+        "reversing the column reverses the dash, it does not pin the dash"
+    );
+}
+
+/// Two rows that print as the same minute stay ordered by the underlying millisecond.
+///
+/// Mutation: compare `format_minute`'s text, or the timestamp truncated to the minute. The later
+/// event inside that minute would stay under the earlier one whenever it was listed second.
+#[test]
+fn rows_in_the_same_printed_minute_keep_timestamp_order() {
+    let zone = chrono_tz::UTC;
+    let early_ms = 1_700_000_040_100_i64;
+    let late_ms = 1_700_000_080_900_i64;
+    let early_text = format_minute(early_ms / 1000, zone);
+    let late_text = format_minute(late_ms / 1000, zone);
+    assert_eq!(
+        early_text, late_text,
+        "the fixture must share one printed minute"
+    );
+    assert!(!early_text.is_empty(), "the fixture must be a real minute");
+
+    let owned = [
+        (
+            1,
+            problem(
+                1,
+                "early",
+                CoreProblemCategory::Machine,
+                "early",
+                Some(early_ms),
+                None,
+            ),
+        ),
+        (
+            1,
+            problem(
+                2,
+                "late",
+                CoreProblemCategory::Machine,
+                "late",
+                Some(late_ms),
+                None,
+            ),
+        ),
+    ];
+    let (pairs, truncated) = sorted_pairs(&owned, "time", false, &HashMap::new());
+    assert!(!truncated);
+    assert_eq!(
+        pairs.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![2, 1],
+        "the later instant leads even though both cells print the same minute"
+    );
+}
+
+/// The 500-row cut keeps the rows the sort put first, not the head of the scope walk.
+///
+/// Mutation: truncate before sorting. The newest finding, appended by a core that sorts late,
+/// would fall off the bottom, and the unseen badge would count the old row that remained.
+#[test]
+fn the_row_cap_is_applied_after_the_sort() {
+    let limit = super::PROBLEM_LIST_LIMIT;
+    let owned: Vec<(u64, CoreProblem)> = (0..limit + 1)
+        .map(|index| {
+            let kind = if index == 0 {
+                1
+            } else if index == limit {
+                9
+            } else {
+                2
+            };
+            (
+                1,
+                problem(
+                    kind,
+                    "paging",
+                    CoreProblemCategory::Machine,
+                    "t",
+                    Some((index as i64 + 1) * 60_000),
+                    None,
+                ),
+            )
+        })
+        .collect();
+    let (pairs, truncated) = sorted_pairs(&owned, "time", false, &HashMap::new());
+    assert!(truncated, "one row past the cap must be stated as a cut");
+    assert_eq!(pairs.len(), limit);
+    assert_eq!(
+        pairs[0].1, 9,
+        "the newest row was last in scope order and must lead"
+    );
+    assert!(
+        pairs.iter().all(|pair| pair.1 != 1),
+        "the oldest row is the one the cap drops, so the badge must not count it"
+    );
+    let kept_unseen = pairs.iter().filter(|pair| pair.1 == 9).count();
+    assert_eq!(
+        kept_unseen, 1,
+        "the badge's row set is this capped list: the new finding is on it, the old one is not"
+    );
+}
+
+/// The heading column groups the text the core sent, not the finding key.
+///
+/// Mutation: sort Problem by `kind_name`. Two cores that title one finding differently would
+/// sit together, and one finding titled alike in two languages would split.
+#[test]
+fn the_problem_column_sorts_by_the_heading_the_core_sent() {
+    let owned = [
+        (
+            1,
+            problem(
+                1,
+                "paging",
+                CoreProblemCategory::Machine,
+                "zeta",
+                None,
+                None,
+            ),
+        ),
+        (
+            1,
+            problem(
+                2,
+                "region-blocked",
+                CoreProblemCategory::Machine,
+                "alpha",
+                None,
+                None,
+            ),
+        ),
+        (
+            2,
+            problem(
+                3,
+                "paging",
+                CoreProblemCategory::Exchange,
+                "alpha",
+                None,
+                None,
+            ),
+        ),
+    ];
+    let (pairs, _) = sorted_pairs(&owned, "title", true, &HashMap::new());
+    assert_eq!(
+        pairs.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![2, 3, 1],
+        "identical headings stay together, in the order the cores listed them"
+    );
+}
+
+/// The sign column groups the stable key, not the heading.
+///
+/// Mutation: sort Sign by `title`. Two cores that name `paging` in different languages would
+/// split, which is the case the column exists to survive.
+#[test]
+fn the_sign_column_sorts_by_the_finding_key() {
+    let owned = [
+        (
+            1,
+            problem(
+                1,
+                "paging",
+                CoreProblemCategory::Machine,
+                "zeta",
+                None,
+                None,
+            ),
+        ),
+        (
+            1,
+            problem(
+                2,
+                "region-blocked",
+                CoreProblemCategory::Machine,
+                "alpha",
+                None,
+                None,
+            ),
+        ),
+        (
+            2,
+            problem(
+                3,
+                "paging",
+                CoreProblemCategory::Exchange,
+                "alpha",
+                None,
+                None,
+            ),
+        ),
+    ];
+    let (pairs, _) = sorted_pairs(&owned, "kind", true, &HashMap::new());
+    assert_eq!(
+        pairs.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![1, 3, 2],
+        "paging from both cores stays together ahead of region-blocked"
+    );
+}
+
+/// The core column follows the displayed name, case-insensitively, in plain string order.
+///
+/// Mutation: use a numeric-natural comparison, or the raw core id. `core 2` would then precede
+/// `core 10`, disagreeing with alphabetical core order, or an unnamed core would leave the dash
+/// the cell prints.
+#[test]
+fn the_core_column_sorts_by_displayed_name() {
+    assert_eq!(core_label(&HashMap::new(), 5), "—");
+    let mut names = HashMap::new();
+    names.insert(1, "core 2".to_string());
+    names.insert(2, "core 10".to_string());
+    names.insert(3, "Alpha".to_string());
+    names.insert(4, "beta".to_string());
+    let row = |kind: u8| problem(kind, "k", CoreProblemCategory::Machine, "t", None, None);
+    let owned = [
+        (1, row(1)),
+        (2, row(2)),
+        (3, row(3)),
+        (4, row(4)),
+        (5, row(5)),
+    ];
+    let (pairs, _) = sorted_pairs(&owned, "core", true, &names);
+    assert_eq!(
+        pairs.iter().map(|pair| pair.0).collect::<Vec<_>>(),
+        vec![3, 4, 2, 1, 5],
+        "Alpha, beta, core 10, core 2, then the unnamed dash"
+    );
+    let (reversed, _) = sorted_pairs(&owned, "core", false, &names);
+    assert_eq!(
+        reversed.iter().map(|pair| pair.0).collect::<Vec<_>>(),
+        vec![5, 1, 2, 4, 3],
+        "the other header direction reverses the same names"
+    );
+}
+
+/// Category follows the label the cell prints, not the enum declaration order.
+///
+/// Mutation: sort by the category discriminant. Machine would lead Exchange, and an unknown
+/// category byte would trail every known one instead of sitting with the `#` the cell shows.
+#[test]
+fn the_category_column_sorts_by_the_printed_label() {
+    let _locale = crate::test_locale::force("en");
+    let owned = [
+        (
+            1,
+            problem(1, "k", CoreProblemCategory::Machine, "t", None, None),
+        ),
+        (
+            1,
+            problem(2, "k", CoreProblemCategory::Exchange, "t", None, None),
+        ),
+        (
+            1,
+            problem(3, "k", CoreProblemCategory::Other, "t", None, None),
+        ),
+        (
+            1,
+            problem(4, "k", CoreProblemCategory::Network, "t", None, None),
+        ),
+        (
+            1,
+            problem(5, "k", CoreProblemCategory::Unknown(3), "t", None, None),
+        ),
+    ];
+    let (pairs, _) = sorted_pairs(&owned, "category", true, &HashMap::new());
+    assert_eq!(
+        pairs.iter().map(|pair| pair.1).collect::<Vec<_>>(),
+        vec![5, 2, 1, 4, 3],
+        "#3, Exchange, Machine, Network, Other"
+    );
 }

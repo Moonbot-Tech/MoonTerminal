@@ -1,5 +1,7 @@
 //! Core Status scope resolution and problem read tracking.
 
+use std::collections::HashMap;
+
 use super::{CoreStatusView, problems};
 use crate::Backend;
 use crate::workspace::scope_marker::ScopeMarker;
@@ -56,37 +58,40 @@ impl CoreStatusView {
     ///     b: Backend snapshot holding the store and the persisted sets.
     ///
     /// Returns:
-    ///     How many findings in scope have not been looked at.
+    ///     How many findings on the sorted, capped list have not been looked at. Rows the cap
+    ///     dropped are not counted: the badge and the table describe the same set.
     pub(super) fn count_unseen_problems(&self, b: &Backend) -> usize {
         if !b.tab_badges.counters_visible(self.panel_name()) {
             return 0;
         }
-        // Walked with the SAME budget the render arm truncates to, in the same order. Counting the
-        // uncapped store instead would light a badge whose tail cores are never drawn, and which
-        // could therefore never reach zero.
-        let mut budget = problems::PROBLEM_LIST_LIMIT;
-        let mut unseen = 0usize;
+        // Same order and the same cut as the Problems render arm. Counting the pre-sort head
+        // would light the badge for a row newest-first has dropped, and stay dark for the new
+        // confirmation that view puts on top.
+        let (key, ascending) = problems::shown_sort(self.problems_sort.as_ref());
+        let zone = moon_core::util::display_time::zone_or_utc(b.header_clock_zone());
+        let core_names: HashMap<CoreId, String> = b
+            .config
+            .servers
+            .iter()
+            .map(|server| (server.id, server.name.clone()))
+            .collect();
+        let mut refs = Vec::new();
         for core in self.effective_scope(b).ids().iter().copied() {
-            if budget == 0 {
-                break;
-            }
-            let Some(data) = b.session.store().core(core) else {
-                continue;
-            };
-            if !data.problems.supported {
-                continue;
-            }
-            for problem in data.problems.items.iter().take(budget) {
-                budget -= 1;
-                if !b
-                    .tab_badges
-                    .core_kind_seen(self.panel_name(), &self.group, core, problem.kind)
-                {
-                    unseen += 1;
-                }
+            if let Some(data) = b.session.store().core(core) {
+                problems::extend_supported(&mut refs, core, &data.problems);
             }
         }
-        unseen
+        problems::order_and_cap(&mut refs, &key, ascending, &core_names, zone);
+        refs.iter()
+            .filter(|row| {
+                !b.tab_badges.core_kind_seen(
+                    self.panel_name(),
+                    &self.group,
+                    row.core,
+                    row.problem.kind,
+                )
+            })
+            .count()
     }
 
     /// Record the findings on screen as looked at.
