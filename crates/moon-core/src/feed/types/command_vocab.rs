@@ -64,6 +64,45 @@ pub enum UpdateTarget {
     Named(String),
 }
 
+impl UpdateTarget {
+    /// Letter a named install must report, or `None` for a release.
+    ///
+    /// Strips a case-insensitive `MoonBot-` prefix and keeps the remainder as written
+    /// (`MoonBot-R3` -> `R3`, `moonbot-r3` -> `r3`). A prefix that leaves nothing, or a name
+    /// with no such prefix, is the whole name. [`UpdateTarget::Release`] has no letter.
+    ///
+    /// Args:
+    ///     self: The install target whose name, if any, is read.
+    ///
+    /// Returns:
+    ///     The expected handshake letter, or `None` when the target is a release.
+    pub fn expected_suffix(&self) -> Option<&str> {
+        match self {
+            UpdateTarget::Release => None,
+            UpdateTarget::Named(name) => Some(named_build_label(name)),
+        }
+    }
+}
+
+/// Letter of a named build: the part after a case-insensitive `MoonBot-` prefix, or the whole
+/// name when that prefix is absent or leaves nothing.
+///
+/// `MoonBot-R3` is `R3` and `moonbot-r3` is `r3`. The remainder keeps the case it was written in.
+///
+/// Args:
+///     name: Build name as stored on [`UpdateTarget::Named`], not a display string.
+///
+/// Returns:
+///     A subslice of `name`.
+pub fn named_build_label(name: &str) -> &str {
+    const PREFIX: &str = "MoonBot-";
+    name.get(..PREFIX.len())
+        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
+        .map(|_| &name[PREFIX.len()..])
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(name)
+}
+
 /// Leading command word accepted in the [`UpdateTarget::Named`] field when a tester pastes a
 /// complete install command. Keep it here so the normalizer, placeholder, and hint share one
 /// spelling rather than drifting from the protocol convention.
@@ -151,3 +190,6 @@ pub fn is_core_update_rejection(msg: &str) -> bool {
     }
     false
 }
+
+#[cfg(test)]
+mod tests;

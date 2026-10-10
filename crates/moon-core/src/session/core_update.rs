@@ -84,7 +84,11 @@ impl SessionManager {
             .find(|s| s.id == core)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let from = self.store.core(core).and_then(|d| d.server_version);
+        let (from, from_suffix) = self
+            .store
+            .core(core)
+            .map(|d| (d.server_version, d.server_version_suffix.clone()))
+            .unwrap_or((None, None));
         let held = self
             .core_updates
             .lanes
@@ -105,6 +109,7 @@ impl SessionManager {
                 core_name,
                 target,
                 from,
+                from_suffix,
                 // Re-snapshotted at send; this value only covers an attempt never sent.
                 restarts0: self.store.core(core).map_or(0, |d| d.report_traces_epoch),
             },
@@ -218,6 +223,8 @@ impl SessionManager {
     }
 
     /// Every core whose reported build is older than the newest build anywhere in the fleet.
+    ///
+    /// Number only — a build letter never makes a core behind (user decision).
     ///
     /// Computes [`Self::fleet_newest_version`] internally rather than taking a caller-supplied
     /// basis: an earlier draft took `newest` as a parameter, which let a caller hand this
@@ -355,11 +362,14 @@ impl SessionManager {
     ///     touch the update queue.
     pub fn note_update_respawn_refused(&mut self, core: CoreId, now_ms: i64) -> bool {
         let now_ms = self.core_updates.clamped_now(now_ms);
-        let Some(CoreUpdatePhase::Verifying { from, .. }) = self.core_updates.phases.get(&core)
+        let Some(CoreUpdatePhase::Verifying {
+            from, from_suffix, ..
+        }) = self.core_updates.phases.get(&core)
         else {
             return false;
         };
         let from = *from;
+        let from_suffix = from_suffix.clone();
         let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
             return false;
         };
@@ -367,6 +377,7 @@ impl SessionManager {
             core,
             lane_addr,
             from,
+            from_suffix,
             CoreUpdateOutcome::Unverified(UnverifiedReason::RespawnUnavailable),
             now_ms,
         );
@@ -427,6 +438,12 @@ impl SessionManager {
             let from = phase
                 .and_then(Self::active_from)
                 .unwrap_or_else(|| self.core_updates.attempts.get(&core).and_then(|m| m.from));
+            let from_suffix = phase.and_then(Self::active_from_suffix).unwrap_or_else(|| {
+                self.core_updates
+                    .attempts
+                    .get(&core)
+                    .and_then(|m| m.from_suffix.clone())
+            });
             let Some(lane_addr) = self.current_lane(core) else {
                 // Invariant violation: a tracked, non-`Done` phase with no lane this core could be
                 // resolved from. Log and skip rather than losing the core silently or panicking
@@ -440,6 +457,7 @@ impl SessionManager {
                 core,
                 lane_addr,
                 from,
+                from_suffix,
                 CoreUpdateOutcome::Failed(UpdateFailure::Abandoned),
                 now_ms,
             );
@@ -516,6 +534,24 @@ impl SessionManager {
         }
     }
 
+    /// Letter paired with [`Self::active_from`], under the same phase split.
+    ///
+    /// Args:
+    ///     phase: The attempt whose baseline letter is needed.
+    ///
+    /// Returns:
+    ///     `Some` of the captured letter for an in-flight phase, `None` when the phase has no
+    ///     baseline. The inner `Option` is the letter itself.
+    pub(super) fn active_from_suffix(phase: &CoreUpdatePhase) -> Option<Option<String>> {
+        match phase {
+            CoreUpdatePhase::Queued { .. } => None,
+            CoreUpdatePhase::Sent { from_suffix, .. }
+            | CoreUpdatePhase::Waiting { from_suffix, .. }
+            | CoreUpdatePhase::Verifying { from_suffix, .. } => Some(from_suffix.clone()),
+            CoreUpdatePhase::Done(_) => None,
+        }
+    }
+
     /// Resolve which lane a tracked core currently belongs to.
     ///
     /// A `Queued` phase carries its lane directly; every in-flight phase is recognized through
@@ -555,6 +591,7 @@ impl SessionManager {
     ///         since a history row must still say which server was affected.
     ///     from: Baseline build the core reported before this attempt; see
     ///         [`CoreUpdateRecord::from`].
+    ///     from_suffix: Letter paired with `from`.
     ///     outcome: How the attempt ended.
     ///     now_ms: Injected clock, used as `ended_ms`.
     fn finish_core(
@@ -562,6 +599,7 @@ impl SessionManager {
         core: CoreId,
         lane_addr: IpAddr,
         from: Option<u32>,
+        from_suffix: Option<String>,
         outcome: CoreUpdateOutcome,
         now_ms: i64,
     ) {
@@ -577,6 +615,7 @@ impl SessionManager {
                 core_name: meta.core_name.clone(),
                 lane_addr,
                 from,
+                from_suffix,
                 started_ms: meta.started_ms,
                 ended_ms: now_ms,
                 target: meta.target.clone(),
@@ -597,7 +636,7 @@ impl SessionManager {
     /// (removed from configuration), rather than in `lifecycle::drop_core` -- one owner of the
     /// rule, so `drop_core` never grows a dependency on this queue.
     fn reconcile_vanished_updates(&mut self, now_ms: i64) -> bool {
-        let vanished_active: Vec<(CoreId, IpAddr, Option<u32>)> = self
+        let vanished_active: Vec<(CoreId, IpAddr, Option<u32>, Option<String>)> = self
             .core_updates
             .phases
             .iter()
@@ -605,8 +644,10 @@ impl SessionManager {
                 if self.sessions.iter().any(|s| s.id == core) {
                     return None;
                 }
-                Self::active_from(phase)
-                    .and_then(|from| self.current_lane(core).map(|addr| (core, addr, from)))
+                let from = Self::active_from(phase)?;
+                let from_suffix = Self::active_from_suffix(phase).flatten();
+                self.current_lane(core)
+                    .map(|addr| (core, addr, from, from_suffix))
             })
             .collect();
         let vanished_queued: Vec<(CoreId, IpAddr)> = self
@@ -643,11 +684,12 @@ impl SessionManager {
         let changed =
             !vanished_active.is_empty() || !vanished_queued.is_empty() || !vanished_done.is_empty();
 
-        for (core, lane_addr, from) in vanished_active {
+        for (core, lane_addr, from, from_suffix) in vanished_active {
             self.finish_core(
                 core,
                 lane_addr,
                 from,
+                from_suffix,
                 CoreUpdateOutcome::Failed(UpdateFailure::Gone),
                 now_ms,
             );
@@ -680,6 +722,7 @@ impl SessionManager {
                 CoreUpdatePhase::Sent {
                     target,
                     from,
+                    from_suffix,
                     epoch0,
                     sent_at_ms,
                     rejects0,
@@ -700,6 +743,7 @@ impl SessionManager {
                             Transition::ToWaiting {
                                 target: target.clone(),
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 epoch0: *epoch0,
                                 sent_at_ms: *sent_at_ms,
                                 left_at_ms: now_ms,
@@ -727,6 +771,7 @@ impl SessionManager {
                             Transition::Done {
                                 lane_addr,
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 outcome: CoreUpdateOutcome::Failed(UpdateFailure::Rejected),
                                 stall: false,
                             },
@@ -740,6 +785,7 @@ impl SessionManager {
                             Transition::Done {
                                 lane_addr,
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 outcome: CoreUpdateOutcome::Failed(UpdateFailure::NeverDropped),
                                 stall: true,
                             },
@@ -749,6 +795,7 @@ impl SessionManager {
                 CoreUpdatePhase::Waiting {
                     target,
                     from,
+                    from_suffix,
                     sent_at_ms,
                     ..
                 } => {
@@ -773,6 +820,7 @@ impl SessionManager {
                             Transition::ToVerifying {
                                 target: target.clone(),
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 epoch1: data.conn_epoch,
                                 sent_at_ms: *sent_at_ms,
                                 left_at_ms: now_ms,
@@ -788,6 +836,7 @@ impl SessionManager {
                             Transition::Done {
                                 lane_addr,
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 outcome: CoreUpdateOutcome::Failed(UpdateFailure::Timeout),
                                 stall: true,
                             },
@@ -797,6 +846,7 @@ impl SessionManager {
                 CoreUpdatePhase::Verifying {
                     target,
                     from,
+                    from_suffix,
                     epoch1,
                     verify_at_ms,
                     ..
@@ -815,7 +865,13 @@ impl SessionManager {
                             .attempts
                             .get(&core)
                             .is_some_and(|meta| data.report_traces_epoch != meta.restarts0);
-                        let outcome = verified_outcome(target, *from, v, restarted);
+                        let outcome = verified_outcome(
+                            target,
+                            *from,
+                            v,
+                            data.server_version_suffix.as_deref(),
+                            restarted,
+                        );
                         let Some(lane_addr) = self.lane_or_skip(core, "Verifying") else {
                             continue;
                         };
@@ -824,6 +880,7 @@ impl SessionManager {
                             Transition::Done {
                                 lane_addr,
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 outcome,
                                 stall: false,
                             },
@@ -837,6 +894,7 @@ impl SessionManager {
                             Transition::Done {
                                 lane_addr,
                                 from: *from,
+                                from_suffix: from_suffix.clone(),
                                 outcome: CoreUpdateOutcome::Unverified(
                                     UnverifiedReason::RespawnTimedOut,
                                 ),
@@ -855,6 +913,7 @@ impl SessionManager {
                 Transition::ToWaiting {
                     target,
                     from,
+                    from_suffix,
                     epoch0,
                     sent_at_ms,
                     left_at_ms,
@@ -864,6 +923,7 @@ impl SessionManager {
                         CoreUpdatePhase::Waiting {
                             target,
                             from,
+                            from_suffix,
                             epoch0,
                             sent_at_ms,
                             left_at_ms,
@@ -873,6 +933,7 @@ impl SessionManager {
                 Transition::ToVerifying {
                     target,
                     from,
+                    from_suffix,
                     epoch1,
                     sent_at_ms,
                     left_at_ms,
@@ -883,6 +944,7 @@ impl SessionManager {
                         CoreUpdatePhase::Verifying {
                             target,
                             from,
+                            from_suffix,
                             epoch1,
                             sent_at_ms,
                             left_at_ms,
@@ -897,10 +959,11 @@ impl SessionManager {
                 Transition::Done {
                     lane_addr,
                     from,
+                    from_suffix,
                     outcome,
                     stall,
                 } => {
-                    self.finish_core(core, lane_addr, from, outcome, now_ms);
+                    self.finish_core(core, lane_addr, from, from_suffix, outcome, now_ms);
                     if let Some(lane) = self.core_updates.lanes.get_mut(&lane_addr) {
                         if stall {
                             lane.stalled = true;
@@ -953,6 +1016,7 @@ impl SessionManager {
             };
             let current_endpoint = data.endpoint;
             let from = data.server_version;
+            let from_suffix = data.server_version_suffix.clone();
             let epoch0 = data.conn_epoch;
             let rejects0 = data.update_rejects;
             let restarts0 = data.report_traces_epoch;
@@ -992,6 +1056,7 @@ impl SessionManager {
                                 core,
                                 addr,
                                 from,
+                                from_suffix.clone(),
                                 CoreUpdateOutcome::Failed(UpdateFailure::NotReady),
                                 now_ms,
                             );
@@ -1095,6 +1160,7 @@ impl SessionManager {
                                 CoreUpdatePhase::Sent {
                                     target,
                                     from,
+                                    from_suffix,
                                     epoch0,
                                     sent_at_ms: now_ms,
                                     rejects0,
@@ -1109,6 +1175,7 @@ impl SessionManager {
                                 core,
                                 addr,
                                 from,
+                                from_suffix,
                                 CoreUpdateOutcome::Failed(UpdateFailure::NotSent),
                                 now_ms,
                             );
@@ -1160,6 +1227,7 @@ impl SessionManager {
                         core,
                         addr,
                         from,
+                        from_suffix,
                         CoreUpdateOutcome::Failed(UpdateFailure::Gone),
                         now_ms,
                     );

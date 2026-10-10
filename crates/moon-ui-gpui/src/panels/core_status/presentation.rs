@@ -1,6 +1,6 @@
 //! Shared connection and metric presentation rules for both Core Status modes.
 
-use moon_core::feed::{ConnStatus, Diagnosis};
+use moon_core::feed::{ConnStatus, Diagnosis, UpdateTarget};
 use moon_core::session::core_update::{
     CoreUpdateOutcome, CoreUpdatePhase, UnverifiedReason, UpdateFailure,
 };
@@ -225,12 +225,16 @@ pub(super) fn api_quota_level(quota: Option<u64>, warn: bool) -> LoadLevel {
 ///
 /// Args:
 ///     version: The build this core reported, when it reported one.
+///     suffix: The letter reported with that build. `None` and an empty letter both print the
+///         bare number; a non-empty letter is appended. A missing number stays the dash, and
+///         the letter is ignored.
 ///
 /// Returns:
-///     Decimal text, or the panel's ASCII unavailable marker.
-pub(super) fn version_text(version: Option<u32>) -> String {
+///     Dotted build text, with a letter when one was reported, or the panel's ASCII
+///     unavailable marker.
+pub(super) fn version_text(version: Option<u32>, suffix: Option<&str>) -> String {
     version
-        .map(moon_core::util::fmt::core_build)
+        .map(|version| moon_core::util::fmt::core_build_named(version, suffix))
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -245,10 +249,13 @@ pub(super) fn version_text(version: Option<u32>) -> String {
 ///     version: The group's agreement state.
 ///
 /// Returns:
-///     The agreed build, an ellipsis, or the unavailable marker.
-pub(super) fn version_group_text(version: GroupVersion) -> String {
+///     The agreed build, with its letter when the group agreed on one, an ellipsis, or the
+///     unavailable marker.
+pub(super) fn version_group_text(version: &GroupVersion) -> String {
     match version {
-        GroupVersion::Uniform(version) => moon_core::util::fmt::core_build(version),
+        GroupVersion::Uniform { number, suffix } => {
+            moon_core::util::fmt::core_build_named(*number, suffix.as_deref())
+        }
         GroupVersion::Mixed => "\u{2026}".to_string(),
         GroupVersion::Absent => "-".to_string(),
     }
@@ -524,14 +531,19 @@ pub(super) fn version_color(behind: bool, reported: bool, p: MoonPalette) -> u32
 ///
 /// Args:
 ///     have: This core's own reported build, when it has one.
+///     suffix: The letter reported with `have`. The newest build stays a bare number.
 ///     newest: The newest build currently reported across the fleet.
 ///
 /// Returns:
 ///     Localized hover text naming both builds.
-pub(super) fn version_behind_tooltip(have: Option<u32>, newest: u32) -> String {
+pub(super) fn version_behind_tooltip(
+    have: Option<u32>,
+    suffix: Option<&str>,
+    newest: u32,
+) -> String {
     t!(
         "core_status.version_behind",
-        have = version_text(have),
+        have = version_text(have, suffix),
         newest = moon_core::util::fmt::core_build(newest)
     )
     .to_string()
@@ -547,15 +559,16 @@ pub(super) fn version_behind_tooltip(have: Option<u32>, newest: u32) -> String {
 /// instruction, and this is not that cell.
 ///
 /// Args:
-///     have: The build every core on this server reported.
+///     have: The build number every core on this server reported.
+///     suffix: The letter those cores agreed on. The newest build stays a bare number.
 ///     newest: The newest build currently reported across the fleet.
 ///
 /// Returns:
 ///     Localized hover text naming both builds.
-pub(super) fn version_behind_group_tooltip(have: u32, newest: u32) -> String {
+pub(super) fn version_behind_group_tooltip(have: u32, suffix: Option<&str>, newest: u32) -> String {
     t!(
         "core_status.version_behind_group",
-        have = moon_core::util::fmt::core_build(have),
+        have = moon_core::util::fmt::core_build_named(have, suffix),
         newest = moon_core::util::fmt::core_build(newest)
     )
     .to_string()
@@ -696,7 +709,7 @@ pub(super) fn update_badge_for_group(update: GroupUpdate) -> Option<UpdateBadge>
 /// "updated".
 fn succeeded_locale_key(outcome: &CoreUpdateOutcome) -> &'static str {
     match outcome {
-        CoreUpdateOutcome::Succeeded { from, to } if *from == Some(*to) => {
+        CoreUpdateOutcome::Succeeded { from, to, .. } if *from == Some(*to) => {
             "core_update.phase.installed"
         }
         _ => "core_update.phase.succeeded",
@@ -707,10 +720,11 @@ fn succeeded_locale_key(outcome: &CoreUpdateOutcome) -> &'static str {
 ///
 /// Args:
 ///     phase: This core's tracked phase.
+///     target: Attempt target when retained by the history record; `Done` has no target itself.
 ///
 /// Returns:
 ///     The phrase naming that phase, from the same locale keys [`update_badge`] points at.
-pub(super) fn update_tooltip(phase: &CoreUpdatePhase) -> String {
+pub(super) fn update_tooltip(phase: &CoreUpdatePhase, target: Option<&UpdateTarget>) -> String {
     match phase {
         CoreUpdatePhase::Queued { held: false, .. } => t!("core_update.phase.queued").to_string(),
         CoreUpdatePhase::Queued { held: true, .. } => t!("core_update.phase.held").to_string(),
@@ -719,6 +733,29 @@ pub(super) fn update_tooltip(phase: &CoreUpdatePhase) -> String {
         CoreUpdatePhase::Verifying { .. } => t!("core_update.phase.verifying").to_string(),
         CoreUpdatePhase::Done(outcome @ CoreUpdateOutcome::Succeeded { .. }) => {
             t!(succeeded_locale_key(outcome)).to_string()
+        }
+        CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged {
+            to_suffix: Some(got),
+            ..
+        }) if target
+            .and_then(UpdateTarget::expected_suffix)
+            .is_some_and(|expected| !got.trim().eq_ignore_ascii_case(expected.trim())) =>
+        {
+            let expected = target
+                .and_then(UpdateTarget::expected_suffix)
+                .unwrap_or_default()
+                .trim();
+            let got = if got.trim().is_empty() {
+                t!("core_update.target.release").to_string()
+            } else {
+                got.trim().to_string()
+            };
+            t!(
+                "core_update.phase.other_build",
+                got = got,
+                expected = expected
+            )
+            .to_string()
         }
         CoreUpdatePhase::Done(CoreUpdateOutcome::Unchanged { .. }) => {
             t!("core_update.phase.unchanged").to_string()

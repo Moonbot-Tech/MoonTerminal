@@ -676,6 +676,7 @@ fn version_hover_cell(
         p,
         app,
     );
+    let version = version_text(r.server_version, r.server_version_suffix.as_deref());
     div()
         .id(SharedString::from(format!("cs-version-{}", r.id)))
         .group(hover_group)
@@ -687,7 +688,7 @@ fn version_hover_cell(
             r.server_version.is_some(),
             p,
         )))
-        .child(version_text(r.server_version))
+        .child(version)
         .when_some(badge, |c, badge| {
             // The badge is its OWN stateful child, carrying its own tooltip, exactly as
             // `server_view.rs::version_slot` already does for its badge -- `tooltip` panics in
@@ -710,6 +711,7 @@ fn version_hover_cell(
         .when_some(r.version_behind, |c, newest| {
             c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
                 r.server_version,
+                r.server_version_suffix.as_deref(),
                 newest,
             )))
         })

@@ -57,6 +57,9 @@ pub enum CoreUpdatePhase {
         /// one -- captured fresh at the moment this command was sent, never at enqueue: a core can
         /// sit queued for a while, and the send is the instant this value actually describes.
         from: Option<u32>,
+        /// Letter paired with `from`, captured at the same instant. `None` when the core had
+        /// reported no letter. Not folded from `Some("")`.
+        from_suffix: Option<String>,
         /// `CoreData::conn_epoch` read at the same moment as `from`, above. The completion
         /// predicate proves the core actually departed by comparing against THIS baseline, not
         /// against whatever epoch happened to be current when the core was merely enqueued -- a
@@ -92,6 +95,8 @@ pub enum CoreUpdatePhase {
     Waiting {
         target: UpdateTarget,
         from: Option<u32>,
+        /// Letter paired with `from`, carried from `Sent`.
+        from_suffix: Option<String>,
         epoch0: u64,
         sent_at_ms: i64,
         left_at_ms: i64,
@@ -135,6 +140,8 @@ pub enum CoreUpdatePhase {
     Verifying {
         target: UpdateTarget,
         from: Option<u32>,
+        /// Letter paired with `from`, carried from `Waiting`.
+        from_suffix: Option<String>,
         /// `CoreData::conn_epoch` read at the instant this phase was entered, i.e. at the FIRST
         /// settle after the update. The respawn request emitted alongside it is what moves this
         /// counter; the completion predicate proves the fresh client exists by requiring
@@ -154,9 +161,18 @@ pub enum CoreUpdatePhase {
 /// How one update attempt ended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CoreUpdateOutcome {
-    /// The core came back on a different build than it left on, or -- for a named/test target --
-    /// restarted onto the same build number (see [`verified_outcome`]).
-    Succeeded { from: Option<u32>, to: u32 },
+    /// The core came back on a different build than it left on, or a named attempt whose fresh
+    /// client reported the expected letter (see [`verified_outcome`]).
+    Succeeded {
+        from: Option<u32>,
+        to: u32,
+        /// Letter the fresh client reported with `to`, if it reported one.
+        ///
+        /// `None` on a row written before this field existed, and when the client sent no letter.
+        /// `Some("")` is a release letter and stays distinct from `None`.
+        #[serde(default)]
+        to_suffix: Option<String>,
+    },
     /// A RELEASE attempt whose core came back on the SAME build it left on. This is a success for the queue --
     /// nothing is in flight on that IP once the core is back -- but a NEUTRAL outcome for the row,
     /// never rendered as a failure. It is also a deliberate, recorded deviation from a literal
@@ -165,7 +181,16 @@ pub enum CoreUpdateOutcome {
     /// whether the build changed. Stalling here would kill every bulk campaign at its first
     /// already-current core, and a fleet-relative "behind" predicate ([`SessionManager::cores_behind`])
     /// cannot avoid selecting those.
-    Unchanged { version: u32 },
+    ///
+    /// Also a named attempt whose fresh client reported a letter other than the one requested,
+    /// including when the number moved. That letter is `to_suffix`. There is no separate
+    /// variant: an unknown outcome in `core_updates.json` would wipe the retained ring.
+    Unchanged {
+        version: u32,
+        /// Letter the fresh client reported. `None` on a row written before this field existed.
+        #[serde(default)]
+        to_suffix: Option<String>,
+    },
     /// The core returned from the update, but the terminal could not establish which build it
     /// returned on. NOT a failure of the update (the core provably departed and returned, so
     /// nothing is in flight on that IP) and NOT `Unchanged` (which asserts a build; this asserts
@@ -195,21 +220,58 @@ pub enum CoreUpdateOutcome {
 /// Reaching `Verifying` proves only that the connection left and came back settled -- an
 /// ordinary network reconnect to the SAME process does that too. `restarted` is the stronger
 /// proof: a different MoonBot process was observed answering since the command was sent (see
-/// `AttemptMeta::restarts0`). A named/test build may carry the SAME number as the release it
-/// replaces (the protocol reports only `server_version`, no build name), so a Named attempt that
-/// provably restarted onto an equal number is `Succeeded { from == to }` -- installed. Without
-/// that proof, and for every Release attempt, an equal number stays `Unchanged`.
+/// `AttemptMeta::restarts0`).
+///
+/// A named build may carry the same number as the release it replaces. When the fresh client
+/// reports a letter (`Some`), a Named attempt is installed only when `restarted` and that
+/// letter equals [`UpdateTarget::expected_suffix`] (trimmed, ASCII case-insensitive). Anything
+/// else, including a moved number or `Some("")`, is `Unchanged` carrying `to_suffix`. A missing
+/// letter (`None`) keeps the older rule: a Named attempt that restarted onto an equal number is
+/// installed. A Release attempt ignores the letter and compares numbers.
+///
+/// Args:
+///     target: What this attempt asked the core to install.
+///     from: Build reported before the attempt.
+///     to: Build the fresh client reported.
+///     to_suffix: Letter the fresh client reported with `to`. `None` and `Some("")` stay distinct.
+///     restarted: Whether a different MoonBot process answered since the command was sent.
+///
+/// Returns:
+///     `Succeeded` when the attempt installed, otherwise `Unchanged` with the reported letter.
 pub fn verified_outcome(
     target: &UpdateTarget,
     from: Option<u32>,
     to: u32,
+    to_suffix: Option<&str>,
     restarted: bool,
 ) -> CoreUpdateOutcome {
+    let carried = to_suffix.map(str::to_string);
+    if let (UpdateTarget::Named(_), Some(reported)) = (target, to_suffix) {
+        let expected = target.expected_suffix().unwrap_or("");
+        if restarted && reported.trim().eq_ignore_ascii_case(expected) {
+            return CoreUpdateOutcome::Succeeded {
+                from,
+                to,
+                to_suffix: carried,
+            };
+        }
+        return CoreUpdateOutcome::Unchanged {
+            version: to,
+            to_suffix: carried,
+        };
+    }
     let installed_same_number = restarted && matches!(target, UpdateTarget::Named(_));
     if from == Some(to) && !installed_same_number {
-        CoreUpdateOutcome::Unchanged { version: to }
+        CoreUpdateOutcome::Unchanged {
+            version: to,
+            to_suffix: carried,
+        }
     } else {
-        CoreUpdateOutcome::Succeeded { from, to }
+        CoreUpdateOutcome::Succeeded {
+            from,
+            to,
+            to_suffix: carried,
+        }
     }
 }
 
@@ -287,6 +349,10 @@ pub struct CoreUpdateRecord {
     /// since there was no send to capture it at.
     #[serde(default)]
     pub from: Option<u32>,
+    /// Letter paired with [`Self::from`]. Captured at send, or at enqueue when the attempt never
+    /// reached `Sent`. `None` on a row written before this field existed.
+    #[serde(default)]
+    pub from_suffix: Option<String>,
     #[serde(default)]
     pub started_ms: i64,
     #[serde(default)]

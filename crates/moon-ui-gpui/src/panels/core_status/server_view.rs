@@ -578,8 +578,8 @@ fn server_row(
                         // collapsed server rows drawing this cell in one frame.
                         format!("core-status-version-group:{}", group.key.tree_id()),
                         SharedString::from(format!("core-update-hover:{}", group.key.tree_id())),
-                        version_group_text(group.version),
-                        matches!(group.version, GroupVersion::Uniform(_)),
+                        version_group_text(&group.version),
+                        matches!(group.version, GroupVersion::Uniform { .. }),
                         group.version_behind.is_some(),
                         update_badge_for_group(group.update),
                         group_update_btn,
@@ -587,8 +587,12 @@ fn server_row(
                         p,
                     )
                     .when_some(group.version_behind, |c, (have, newest)| {
+                        let suffix = match &group.version {
+                            GroupVersion::Uniform { suffix, .. } => suffix.as_deref(),
+                            GroupVersion::Mixed | GroupVersion::Absent => None,
+                        };
                         c.tooltip(crate::panels::common::text_tooltip(
-                            version_behind_group_tooltip(have, newest),
+                            version_behind_group_tooltip(have, suffix, newest),
                         ))
                     }),
                 )
@@ -838,7 +842,7 @@ fn core_row(
                         // rebuild, but from the core's own stable identity.
                         ("core-status-version", core.id),
                         SharedString::from(format!("core-update-hover:{}", core.id)),
-                        version_text(core.server_version),
+                        version_text(core.server_version, core.server_version_suffix.as_deref()),
                         core.server_version.is_some(),
                         core.version_behind.is_some(),
                         update_badge(core.update.as_ref()),
@@ -849,6 +853,7 @@ fn core_row(
                     .when_some(core.version_behind, |c, newest| {
                         c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
                             core.server_version,
+                            core.server_version_suffix.as_deref(),
                             newest,
                         )))
                     }),
@@ -1182,7 +1187,7 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
 ///
 /// Returns:
 ///     A compact build cell with a stable footprint, a trailing update-queue badge when one
-///     applies, and the hover-revealed update control.
+///     applies, and the hover-revealed update control. Only the label shrinks and truncates.
 fn version_slot(
     id: impl Into<ElementId>,
     hover_group: SharedString,
@@ -1199,7 +1204,13 @@ fn version_slot(
     // own hover independently of `version_behind`'s tooltip on the outer slot -- `tooltip` panics
     // in debug builds if called twice on the same element.
     let badge_id = (id.clone(), "update-badge");
-    plain_slot(id, text, value_w, version_color(behind, reported, p))
+    div()
+        .id(id)
+        .w(px(value_w))
+        .flex_none()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_color(rgb(version_color(behind, reported, p)))
         // The hover surface [`crate::controls::core_update::update_button`] reveals itself
         // against -- see that module's doc for why this rides GPUI's own group styling rather
         // than any state this panel owns.
@@ -1207,6 +1218,7 @@ fn version_slot(
         .flex()
         .items_center()
         .gap(px(CELL_GAP_W))
+        .child(div().flex_1().min_w_0().truncate().child(text))
         .when_some(badge, |slot, badge| {
             slot.child(
                 div()
@@ -1219,16 +1231,18 @@ fn version_slot(
                     )),
             )
         })
-        .when_some(update_btn, |slot, btn| slot.child(btn))
+        .when_some(update_btn, |slot, btn| {
+            slot.child(div().flex_none().child(btn))
+        })
 }
 
 /// A fixed-width text cell with NO warning-icon lead, for a column that has no `WarnAxis` behind
 /// it.
 ///
 /// Deliberately NOT [`metric_cell`]: that helper reserves a lead driven by a `*_warn` bool, and a
-/// column with no warning source would reserve space that can never light. The startup column, the
-/// per-core connection VERDICT that replaces it, and the reported build all render through this one
-/// owner, so their width, clipping and no-wrap behaviour cannot drift apart.
+/// column with no warning source would reserve space that can never light. The startup column and
+/// the per-core connection VERDICT that replaces it render through this owner. [`version_slot`]
+/// keeps the same outer footprint but truncates its label separately from its controls.
 ///
 /// The id is a PARAMETER because a row now draws more than one of these; two children sharing a
 /// stateful element id is a real GPUI hazard, not a style point. [`version_slot`] in particular

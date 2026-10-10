@@ -118,6 +118,40 @@ pub(in crate::feed) use shared_config::SharedConfigSequence;
 pub(crate) use shared_config::core_config_from_proto;
 use startup_watchdog::{StartupStalled, StartupWatchdog};
 
+/// `ServerInfo` allocation observed at `ServerRestart`, pinned until version publication.
+///
+/// `_snap` is the `Arc<MoonStateSnapshot>` from `client.snapshot()`. That snapshot owns a clone of
+/// the inner `Arc<ServerInfo>`, so `addr` stays allocated and cannot be handed to the replacement
+/// process's BaseCheck while this value is held. Dropping it releases the pin.
+struct PinnedRestartInfo {
+    _snap: Arc<MoonStateSnapshot>,
+    addr: usize,
+}
+
+impl PinnedRestartInfo {
+    /// Pin `snap` and record the address of its `ServerInfo`.
+    ///
+    /// Args:
+    ///     snap: Snapshot returned by `client.snapshot()` at `ServerRestart`.
+    ///
+    /// Returns:
+    ///     The pin. [`Self::addr`] is compared and never dereferenced.
+    fn pin(snap: Arc<MoonStateSnapshot>) -> Self {
+        Self {
+            addr: snap.server_info() as *const _ as usize,
+            _snap: snap,
+        }
+    }
+
+    /// Address of the pinned `ServerInfo`.
+    ///
+    /// Returns:
+    ///     The allocation address captured in [`Self::pin`]. Compared, never dereferenced.
+    fn addr(&self) -> usize {
+        self.addr
+    }
+}
+
 /// Run one core's live MoonProto event loop until shutdown or a terminal connection error.
 ///
 /// Publishes account snapshots and lifecycle state through `tx`, consumes commands from `cmd_rx`,
@@ -330,6 +364,10 @@ pub(super) fn run(
     // Tracked separately from `identity_sent`: the two facts come from one payload but are gated
     // on different fields, so one can be publishable while the other is not.
     let mut version_sent = false;
+    // Snapshot captured at the last `ServerRestart`, held so its `ServerInfo` address cannot
+    // be reused until publication. `None` after publication, so a same-process
+    // reconnect still republishes MoonProto's retained snapshot.
+    let mut version_restart_info: Option<PinnedRestartInfo> = None;
     // Which run-state halves the MoonBot instance CURRENTLY on the other end has reported.
     //
     // Not "has the terminal ever seen them": MoonProto keeps its retained state across a server
@@ -585,9 +623,12 @@ pub(super) fn run(
         // a core that reports no exchange code — which lands it in the unidentified group, the
         // rows an operator inspects most — would otherwise never report its build either.
         if !identity_sent || (is_ready && !version_sent) {
-            if let Some(info) = client.server_info() {
-                // Read before the identity block below, which moves `base_currency_name` out.
-                //
+            if let Some(snap) = client.snapshot() {
+                // Address of the Arc's `ServerInfo`, not of this clone. `set_session_identity`
+                // allocates a new Arc when the new process's BaseCheck lands, even if the bytes
+                // compare equal. Held only for the comparison below.
+                let info_addr = snap.server_info() as *const _ as usize;
+                let info = snap.server_info().clone();
                 // Gated on `is_ready`, which carries the last drained lifecycle batch's verdict.
                 // MoonProto sets the snapshot behind `server_info` ONCE, at the first Ready, and
                 // never clears it for an internal reconnect — so it keeps answering `Some` all
@@ -595,16 +636,34 @@ pub(super) fn run(
                 // republish the build on the very next pass and repopulate a store that had just
                 // cleared it, leaving a core displaying a build while it is visibly not connected.
                 //
-                // The flag itself latches on having EXAMINED the snapshot, not on having sent
-                // something: a core that honestly reports no build will not start reporting one
-                // later, and latching only inside the `Some` arm would re-clone `server_info` every
-                // iteration for the life of the connection — for exactly the absent case this
-                // column has to render.
+                // A `ServerRestart` withholds only the letter from the pinned snapshot: event
+                // draining and snapshot refresh are unordered, so the pin can already be fresh.
+                // Always publish the number so Waiting can advance. The respawned client's new
+                // run has no pin and publishes the fresh letter; judging requires that new epoch.
+                //
+                // The flag itself latches on having EXAMINED a snapshot, not on
+                // having sent something: a core that honestly reports no build will not start
+                // reporting one later, and latching only inside the `Some` arm would re-clone
+                // `server_info` every iteration for the life of the connection — for exactly the
+                // absent case this column has to render.
+                let predates_restart = publish_gate::server_info_predates_restart(
+                    info_addr,
+                    version_restart_info.as_ref().map(PinnedRestartInfo::addr),
+                );
                 if is_ready && !version_sent {
                     if let Some(version) = info.server_version {
-                        let _ = tx.send(FeedMsg::CoreVersion { version });
+                        // Outside the restart pin, preserve the snapshot's letter distinction:
+                        // `Some("")` is a release and `None` means no letter was reported.
+                        let _ = tx.send(FeedMsg::CoreVersion {
+                            version,
+                            suffix: publish_gate::letter_to_publish(
+                                info.version_suffix.clone(),
+                                predates_restart,
+                            ),
+                        });
                     }
                     version_sent = true;
+                    version_restart_info = None;
                 }
                 if !identity_sent {
                     if let Some(code) = info.exchange_code {
@@ -754,6 +813,10 @@ pub(super) fn run(
                     // moonproto drops its retained Telegram snapshot on a peer-token / ServerToken
                     // change with no event; a restart is the same hole. Nothing left to show muted.
                     let _ = tx.send(FeedMsg::Telegram(None));
+                    // Keep this snapshot alive. BaseCheck frees the old `Arc<ServerInfo>`, and the
+                    // replacement can be allocated at the same address; holding the snapshot pins
+                    // that allocation until its letter-publication decision is made.
+                    version_restart_info = client.snapshot().map(PinnedRestartInfo::pin);
                     ConnStatus::Stage("server restart…".into())
                 }
                 LifecycleEvent::ConnectFailed { error } => {

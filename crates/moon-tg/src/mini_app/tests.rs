@@ -33,6 +33,29 @@ use super::dto::{
 use super::reads::coin_rows;
 use super::{by_section, natural_cmp, scope_targets};
 
+/// The core list prints a named build as `7.71 R3`. `mini_cores` fills that cell through
+/// [`super::reads::core_list_version`].
+#[test]
+fn core_list_shows_a_named_build_letter() {
+    let mut core = moon_core::session::store::CoreData::new();
+    core.server_version = Some(771);
+    core.server_version_suffix = Some("R3".to_string());
+    assert_eq!(
+        super::reads::core_list_version(&core).as_deref(),
+        Some("7.71 R3")
+    );
+    core.server_version_suffix = Some(String::new());
+    assert_eq!(
+        super::reads::core_list_version(&core).as_deref(),
+        Some("7.71")
+    );
+    core.server_version_suffix = None;
+    assert_eq!(
+        super::reads::core_list_version(&core).as_deref(),
+        Some("7.71")
+    );
+}
+
 /// `mini_app/mod.rs:scope_targets` keeps only visible cores, in visible order, once each.
 ///
 /// Mutation: return the requested ids unfiltered or skip the dedupe. A mass

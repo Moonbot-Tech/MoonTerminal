@@ -7,6 +7,7 @@ use moon_core::session::{CoreStartupState, CoreStartupStatus, CoreSysStatus};
 
 use super::{
     CoreStatusRow, GroupVersion, ServerConnectivity, ServerKey, aggregate_servers, group_version,
+    version_behind_of,
 };
 
 /// Build one core snapshot for aggregation tests.
@@ -40,6 +41,7 @@ fn row(
         startup: CoreStartupStatus::default(),
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        server_version_suffix: None,
         version_behind: None,
         update: None,
     }
@@ -97,7 +99,10 @@ fn group_version_requires_every_core_to_report_the_same_build() {
 
     assert_eq!(
         group_version(&[v734.clone(), same_v734]),
-        GroupVersion::Uniform(734)
+        GroupVersion::Uniform {
+            number: 734,
+            suffix: None,
+        }
     );
     assert_eq!(group_version(&[v734.clone(), v735]), GroupVersion::Mixed);
     assert_eq!(group_version(&[v734, silent.clone()]), GroupVersion::Mixed);
@@ -132,6 +137,68 @@ fn only_uniform_groups_are_marked_behind_the_fleet() {
     let groups = aggregate_servers(&[older, newest], Some(735));
 
     assert_eq!(groups[0].version, GroupVersion::Mixed);
+    assert_eq!(groups[0].version_behind, None);
+}
+
+/// `group_version` agrees on the number and the letter together. `None`, `Some("")` and a
+/// name are different reports, so a collapsed row must not pick one of them.
+///
+/// A letter on the fleet's newest number is not behind: the behind mark reads the number only.
+#[test]
+fn group_version_treats_the_letter_as_part_of_the_build() {
+    let with = |id, suffix: Option<&str>| {
+        let mut core = row(
+            id,
+            Some([198, 51, 100, 7]),
+            3000 + id as u16,
+            ConnStatus::Ready,
+            CoreSysStatus::default(),
+        );
+        core.server_version = Some(771);
+        core.server_version_suffix = suffix.map(str::to_string);
+        core
+    };
+    let none = with(1, None);
+    let empty = with(2, Some(""));
+    let r2 = with(3, Some("R2"));
+    let r3 = with(4, Some("R3"));
+    let r3_again = with(5, Some("R3"));
+
+    assert_eq!(group_version(&[r2, r3.clone()]), GroupVersion::Mixed);
+    assert_eq!(
+        group_version(&[none.clone(), r3.clone()]),
+        GroupVersion::Mixed
+    );
+    assert_eq!(group_version(&[empty, none.clone()]), GroupVersion::Mixed);
+    assert_eq!(
+        group_version(&[none.clone(), with(6, None)]),
+        GroupVersion::Uniform {
+            number: 771,
+            suffix: None,
+        }
+    );
+    assert_eq!(
+        group_version(&[r3.clone(), r3_again.clone()]),
+        GroupVersion::Uniform {
+            number: 771,
+            suffix: Some("R3".to_string()),
+        }
+    );
+
+    // The row flag reads the number only, so 771 R3 against newest 771 is current. A lower
+    // number still is behind, which is what makes the equal case able to fail.
+    assert_eq!(r3.server_version_suffix.as_deref(), Some("R3"));
+    assert_eq!(version_behind_of(r3.server_version, Some(771)), None);
+    assert_eq!(version_behind_of(Some(770), Some(771)), Some(771));
+
+    let groups = aggregate_servers(&[r3, r3_again], Some(771));
+    assert_eq!(
+        groups[0].version,
+        GroupVersion::Uniform {
+            number: 771,
+            suffix: Some("R3".to_string()),
+        }
+    );
     assert_eq!(groups[0].version_behind, None);
 }
 
@@ -514,6 +581,7 @@ fn startup_row(status: ConnStatus, startup: CoreStartupStatus) -> CoreStatusRow 
         startup,
         time_offset: CoreTimeOffsetStatus::default(),
         server_version: None,
+        server_version_suffix: None,
         version_behind: None,
         update: None,
     }

@@ -444,5 +444,25 @@ pub fn core_build(build: u32) -> String {
     format!("{}.{:02}", build / 100, build % 100)
 }
 
+/// Render a Moonbot build with the letter from the same handshake: `771` + `R3` -> `7.71 R3`.
+///
+/// A missing letter and a blank letter both render as [`core_build`] alone. Stored data keeps
+/// `None` and `Some("")` distinct; only this formatter collapses them, after trimming.
+///
+/// Args:
+///     build: The build number exactly as the core reported it.
+///     suffix: The letter from the same handshake. `None` means the core sent none.
+///
+/// Returns:
+///     The dotted build, with one trimmed letter appended when the suffix is non-empty.
+pub fn core_build_named(build: u32, suffix: Option<&str>) -> String {
+    let trimmed = suffix.unwrap_or("").trim();
+    if trimmed.is_empty() {
+        core_build(build)
+    } else {
+        format!("{} {}", core_build(build), trimmed)
+    }
+}
+
 #[cfg(test)]
 mod tests;

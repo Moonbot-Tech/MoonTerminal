@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::rc::Rc;
 
-use moon_core::feed::UpdateTarget;
+use moon_core::feed::{UpdateTarget, named_build_label};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase, CoreUpdateRecord};
 use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
 
@@ -27,7 +27,7 @@ fn columns() -> Vec<MoonDataTableColumn> {
         MoonDataTableColumn::new("time", t!("core_update.col.time").to_string(), 150.0),
         MoonDataTableColumn::new("core", t!("core_update.col.core").to_string(), 130.0),
         MoonDataTableColumn::new("server", t!("core_update.col.server").to_string(), 110.0),
-        MoonDataTableColumn::new("from_to", t!("core_update.col.from_to").to_string(), 100.0),
+        MoonDataTableColumn::new("from_to", t!("core_update.col.from_to").to_string(), 170.0),
         MoonDataTableColumn::new("target", t!("core_update.col.target").to_string(), 90.0),
         MoonDataTableColumn::new("outcome", t!("core_update.col.outcome").to_string(), 220.0),
         MoonDataTableColumn::new("duration", t!("core_update.col.duration").to_string(), 80.0)
@@ -106,23 +106,26 @@ fn live_row(
     let Some(phase) = row.update.as_ref() else {
         return cells(ix, "—", core, server, "—", "—", "—", "—");
     };
-    let outcome = update_tooltip(phase);
+    let outcome = update_tooltip(phase, None);
     match phase {
         CoreUpdatePhase::Sent {
             target,
             from,
+            from_suffix,
             sent_at_ms,
             ..
         }
         | CoreUpdatePhase::Waiting {
             target,
             from,
+            from_suffix,
             sent_at_ms,
             ..
         }
         | CoreUpdatePhase::Verifying {
             target,
             from,
+            from_suffix,
             sent_at_ms,
             ..
         } => cells(
@@ -130,7 +133,7 @@ fn live_row(
             time_text(*sent_at_ms, zone),
             core,
             server,
-            format!("{} \u{2192} \u{2026}", number_or_dash(*from)),
+            live_from_to(*from, from_suffix.as_deref()),
             target_text(target),
             outcome,
             crate::panels::common::warn_duration_text(*sent_at_ms, Some(now_ms)),
@@ -158,7 +161,7 @@ fn history_row(
         .unwrap_or_else(|| "—".to_string());
     let to = match &record.outcome {
         CoreUpdateOutcome::Succeeded { to, .. } => Some(*to),
-        CoreUpdateOutcome::Unchanged { version } => Some(*version),
+        CoreUpdateOutcome::Unchanged { version, .. } => Some(*version),
         // THE WHOLE POINT of the variant: the cell must not claim a build the terminal never
         // actually confirmed.
         CoreUpdateOutcome::Unverified(_) => None,
@@ -172,7 +175,10 @@ fn history_row(
     // Reuses the same phase-to-word formatter the badge and hover tooltip already use, by
     // wrapping the closed outcome back into the `Done` phase it always closed from -- one
     // formatter, never a second match restating the same exhaustive phase/outcome cases.
-    let outcome = update_tooltip(&CoreUpdatePhase::Done(record.outcome.clone()));
+    let outcome = update_tooltip(
+        &CoreUpdatePhase::Done(record.outcome.clone()),
+        Some(&record.target),
+    );
     cells(
         ix,
         time_text(record.started_ms, zone),
@@ -180,7 +186,9 @@ fn history_row(
         server,
         from_to_text(
             record.from,
+            record.from_suffix.as_deref(),
             to,
+            reported_to_suffix(&record.outcome),
             matches!(record.outcome, CoreUpdateOutcome::Succeeded { .. }),
             &record.target,
         ),
@@ -192,11 +200,12 @@ fn history_row(
 
 /// Assemble the final row from resolved column text, in the fixed column order.
 ///
-/// `ix` is the table's row index, used only to give the outcome cell's tooltip host a stable,
+/// `ix` is the table's row index, used to give the build and outcome tooltip hosts stable,
 /// unique element id -- the row itself carries no other identity `MoonDataTable` addresses cells
 /// by (see `table.rs`'s own row-index-addressed cells for the same idiom).
 ///
 /// Args:
+///     from_to: Full reported builds, retained in the hover when the column clips them.
 ///     outcome: Full localized outcome text, shown as the cell's text AND its hover -- the
 ///         longest translations (`NotReady` in Spanish among them) are wider than the fixed
 ///         column and MoonUI clips rather than wraps, so the hover is the only place the full
@@ -213,11 +222,17 @@ fn cells(
     duration: impl Into<SharedString>,
 ) -> MoonDataRow {
     let outcome: SharedString = outcome.into();
+    let from_to: SharedString = from_to.into();
     MoonDataRow::new([
         MoonDataCell::text(time),
         MoonDataCell::text(core),
         MoonDataCell::text(server),
-        MoonDataCell::text(from_to),
+        MoonDataCell::element(
+            div()
+                .id(SharedString::from(format!("cs-update-from-to-{ix}")))
+                .child(from_to.clone())
+                .tooltip(crate::panels::common::text_tooltip(from_to)),
+        ),
         MoonDataCell::text(target),
         MoonDataCell::element(
             div()
@@ -229,42 +244,88 @@ fn cells(
     ])
 }
 
-/// `from → to`, followed by the short build label when a named/test build was confirmed.
+/// `from → to`, each side through [`moon_core::util::fmt::core_build_named`].
 ///
-/// A test build can carry the same number as the release, so `7.71 → 7.71` alone says nothing;
-/// `7.71 → 7.71 R2` names what was installed. Labelled only when the attempt `succeeded`: an
-/// `Unchanged` row confirmed a number, never that the requested build is what runs.
+/// A test build can carry the same number as the release, so `7.71 → 7.71` alone says nothing.
+/// When the outcome already carries a letter, that letter is the name (`7.71 → 7.71 R3`) and the
+/// target label is not appended again. A succeeded named attempt whose outcome has no letter
+/// still appends the short target label. An `Unchanged` row does not.
+///
+/// Args:
+///     from: Baseline build, or `None` when the core had never reported one.
+///     from_suffix: Letter paired with `from`.
+///     to: Build the outcome confirmed, or `None` when it confirmed none.
+///     to_suffix: Letter paired with `to`. `None` and a blank letter both count as no letter.
+///     succeeded: Whether the outcome is `Succeeded`.
+///     target: What the attempt asked the core to install.
+///
+/// Returns:
+///     The from-to cell text.
 fn from_to_text(
     from: Option<u32>,
+    from_suffix: Option<&str>,
     to: Option<u32>,
+    to_suffix: Option<&str>,
     succeeded: bool,
     target: &UpdateTarget,
 ) -> String {
-    let base = format!("{} \u{2192} {}", number_or_dash(from), number_or_dash(to));
+    let base = format!(
+        "{} \u{2192} {}",
+        build_text(from, from_suffix),
+        build_text(to, to_suffix)
+    );
+    let letter_shown = to_suffix.is_some_and(|suffix| !suffix.trim().is_empty());
     match target {
-        UpdateTarget::Named(name) if succeeded => format!("{base} {}", named_build_label(name)),
+        UpdateTarget::Named(name) if succeeded && !letter_shown => {
+            format!("{base} {}", named_build_label(name))
+        }
         _ => base,
     }
 }
 
-/// Short label of a named build: the part after a case-insensitive `MoonBot-` prefix
-/// (`MoonBot-R2` -> `R2`), or the whole name when it has no such prefix or nothing follows it.
-/// The one rule every cell of this list uses to show a named target.
-fn named_build_label(name: &str) -> &str {
-    const PREFIX: &str = "MoonBot-";
-    name.get(..PREFIX.len())
-        .filter(|head| head.eq_ignore_ascii_case(PREFIX))
-        .map(|_| &name[PREFIX.len()..])
-        .filter(|rest| !rest.is_empty())
-        .unwrap_or(name)
+/// In-flight from-to cell: the baseline build and its letter, then an ellipsis.
+///
+/// The core has not reported the post-update build yet, so the right side stays unfinished.
+///
+/// Args:
+///     from: Baseline build captured at send.
+///     from_suffix: Letter paired with `from`.
+///
+/// Returns:
+///     The from-to cell text.
+fn live_from_to(from: Option<u32>, from_suffix: Option<&str>) -> String {
+    format!("{} \u{2192} \u{2026}", build_text(from, from_suffix))
 }
 
-/// A reported build number, or a dash for "never reported".
-fn number_or_dash(v: Option<u32>) -> String {
+/// Letter the outcome stored for the confirmed build, when that outcome has one.
+///
+/// Args:
+///     outcome: Closed attempt outcome.
+///
+/// Returns:
+///     `to_suffix` for `Succeeded` and `Unchanged`, otherwise `None`.
+fn reported_to_suffix(outcome: &CoreUpdateOutcome) -> Option<&str> {
+    match outcome {
+        CoreUpdateOutcome::Succeeded { to_suffix, .. }
+        | CoreUpdateOutcome::Unchanged { to_suffix, .. } => to_suffix.as_deref(),
+        CoreUpdateOutcome::Unverified(_) | CoreUpdateOutcome::Failed(_) => None,
+    }
+}
+
+/// A reported build with its letter, or a dash when the core never reported a number.
+///
+/// Args:
+///     version: Build number, or `None` when the core never reported one.
+///     suffix: Letter from the same handshake. A blank letter renders as the number alone.
+///
+/// Returns:
+///     Dotted build text, or a dash.
+fn build_text(version: Option<u32>, suffix: Option<&str>) -> String {
     // The SAME formatter the MoonBot column uses (`presentation::version_text` ->
-    // `fmt::core_build`), so a build reads `7.69` here exactly as it does in the telemetry table.
-    // A raw `769` beside a `7.69` elsewhere reads as two different facts about one core.
-    v.map(moon_core::util::fmt::core_build)
+    // `fmt::core_build_named`), so a build reads `7.71 R3` here exactly as it does in the
+    // telemetry table. A raw `771` beside a `7.71` elsewhere reads as two different facts.
+    version
+        .map(|build| moon_core::util::fmt::core_build_named(build, suffix))
         .unwrap_or_else(|| "—".to_string())
 }
 

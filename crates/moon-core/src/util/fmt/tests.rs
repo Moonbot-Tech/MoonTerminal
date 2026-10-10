@@ -416,3 +416,15 @@ fn core_build_zero_pads_single_digit_minor_versions() {
     assert_eq!(core_build(707), "7.07");
     assert_eq!(core_build(710), "7.10");
 }
+
+/// `fmt.rs:core_build_named` must print `7.71 R3` and must collapse a missing or blank letter
+/// to the bare number. Keeping the spaces in ` R3 `, or printing a word for `None`, would show
+/// a different build than the one the core reported.
+#[test]
+fn core_build_named_appends_a_trimmed_letter() {
+    assert_eq!(core_build_named(771, Some("R3")), "7.71 R3");
+    assert_eq!(core_build_named(771, Some("")), "7.71");
+    assert_eq!(core_build_named(771, None), "7.71");
+    assert_eq!(core_build_named(771, Some(" R3 ")), "7.71 R3");
+    assert_eq!(core_build_named(770, None), "7.70");
+}

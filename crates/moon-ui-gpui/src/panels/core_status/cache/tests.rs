@@ -70,6 +70,7 @@ fn fixture() -> (Vec<CoreStatusRow>, Vec<ServerStatusGroup>) {
             api_quota: None,
             api_quota_warn: false,
             server_version: None,
+            server_version_suffix: None,
             version_behind: None,
             update: None,
         })

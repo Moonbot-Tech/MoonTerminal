@@ -187,6 +187,20 @@ pub struct CoreData {
     /// rebuilds on the backend observer rather than polling one, and a counter nothing reads is
     /// dead weight.
     pub server_version: Option<u32>,
+    /// Build letter paired with [`Self::server_version`] from the same handshake, or `None`.
+    ///
+    /// The `FeedMsg::Status` arm drops it on any non-Ready status, on the same line as
+    /// [`Self::server_version`], so a replacement feed cannot retain the previous host's letter.
+    /// `begin_connection_attempt` sends that same status itself, so the respawn path is covered
+    /// by the same line.
+    ///
+    /// `None` means the core did not send a letter (an older core, not a release). `Some("")`
+    /// is a release. `Some("R3")` is a named build. Empty is never stored as `None`.
+    ///
+    /// It has NO revision counter, for the reason [`Self::fault`] states: the Core Status panel
+    /// rebuilds on the backend observer rather than polling one, and a counter nothing reads is
+    /// dead weight.
+    pub server_version_suffix: Option<String>,
     /// Monotonic count of `Ready -> not-Ready` departures this core has made, wrapping on
     /// overflow.
     ///
@@ -520,6 +534,7 @@ impl CoreData {
             api_expiry: None,
             api_quota: None,
             server_version: None,
+            server_version_suffix: None,
             conn_epoch: 0,
             update_rejects: 0,
             log_delivery_ignored: false,
@@ -901,6 +916,7 @@ impl CoreData {
                         self.conn_epoch = self.conn_epoch.wrapping_add(1);
                     }
                     self.server_version = None;
+                    self.server_version_suffix = None;
                     if self.runtime_state_confirmed {
                         self.runtime_state_confirmed = false;
                         self.runtime_state_rev = self.runtime_state_rev.wrapping_add(1);
@@ -1405,8 +1421,9 @@ impl CoreData {
                     self.news_rev = self.news_rev.wrapping_add(1);
                 }
             }
-            FeedMsg::CoreVersion { version } => {
+            FeedMsg::CoreVersion { version, suffix } => {
                 self.server_version = Some(version);
+                self.server_version_suffix = suffix;
             }
             FeedMsg::CoreUpdateRejected => {
                 self.update_rejects = self.update_rejects.wrapping_add(1);

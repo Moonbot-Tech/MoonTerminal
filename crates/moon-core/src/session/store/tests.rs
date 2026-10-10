@@ -59,8 +59,12 @@ fn a_ready_status_erases_the_failure_that_preceded_it() {
 fn core_status_version_belongs_only_to_the_ready_connection_that_reported_it() {
     let mut core = CoreData::new();
 
-    core.apply(FeedMsg::CoreVersion { version: 734 });
+    core.apply(FeedMsg::CoreVersion {
+        version: 734,
+        suffix: None,
+    });
     assert_eq!(core.server_version, Some(734));
+    assert_eq!(core.server_version_suffix, None);
 
     core.apply(FeedMsg::Status(ConnStatus::Ready));
     assert_eq!(
@@ -68,6 +72,7 @@ fn core_status_version_belongs_only_to_the_ready_connection_that_reported_it() {
         Some(734),
         "Ready keeps the reported build"
     );
+    assert_eq!(core.server_version_suffix, None);
 
     for status in [
         ConnStatus::Stage("reconnecting".to_string()),
@@ -75,13 +80,111 @@ fn core_status_version_belongs_only_to_the_ready_connection_that_reported_it() {
         ConnStatus::Disconnected,
         ConnStatus::Failed("replacement failed".to_string()),
     ] {
-        core.apply(FeedMsg::CoreVersion { version: 735 });
+        core.apply(FeedMsg::CoreVersion {
+            version: 735,
+            suffix: None,
+        });
         core.apply(FeedMsg::Status(status));
         assert_eq!(
             core.server_version, None,
             "a non-Ready state must not speak for the previous connection"
         );
+        assert_eq!(core.server_version_suffix, None);
     }
+}
+
+/// `store.rs` must keep the handshake letter beside the build and drop both together.
+///
+/// Clearing only the number would leave the previous MoonBot's letter on the next connection.
+/// Folding `Some("")` into `None` would call a release an older core.
+#[test]
+fn core_status_version_suffix_follows_the_build_that_reported_it() {
+    let mut core = CoreData::new();
+
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some("R3".to_string()),
+    });
+    assert_eq!(core.server_version, Some(771));
+    assert_eq!(core.server_version_suffix.as_deref(), Some("R3"));
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    assert_eq!(core.server_version, Some(771));
+    assert_eq!(core.server_version_suffix.as_deref(), Some("R3"));
+
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some(String::new()),
+    });
+    assert_eq!(core.server_version_suffix.as_deref(), Some(""));
+
+    core.apply(FeedMsg::Status(ConnStatus::Disconnected));
+    assert_eq!(core.server_version, None);
+    assert_eq!(core.server_version_suffix, None);
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some("R3".to_string()),
+    });
+    core.begin_connection_attempt();
+    assert_eq!(core.server_version, None);
+    assert_eq!(core.server_version_suffix, None);
+}
+
+/// `store.rs:CoreData::apply` must replace a letter with `None` when the next handshake omits it.
+///
+/// Keeping the previous `Some("R3")` would show a letter the core no longer reports.
+#[test]
+fn a_later_handshake_without_a_letter_clears_the_previous_one() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some("R3".to_string()),
+    });
+
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: None,
+    });
+
+    assert_eq!(core.server_version, Some(771));
+    assert_eq!(core.server_version_suffix, None);
+}
+
+/// A non-Ready status, which is what `ServerRestart` publishes, drops the letter until a fresh
+/// `CoreVersion` arrives.
+///
+/// Breaks when the clear covers only `server_version`: the exited process's `R2` stays on screen.
+#[test]
+fn a_server_restart_clears_the_letter_until_a_fresh_core_version() {
+    let mut core = CoreData::new();
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some("R2".to_string()),
+    });
+
+    core.apply(FeedMsg::Status(ConnStatus::Stage(
+        "server restart…".to_string(),
+    )));
+
+    assert_eq!(core.server_version, None);
+    assert_eq!(core.server_version_suffix, None);
+
+    core.apply(FeedMsg::Status(ConnStatus::Ready));
+    assert_eq!(
+        core.server_version_suffix, None,
+        "Ready alone must not restore the letter the restart cleared"
+    );
+
+    core.apply(FeedMsg::CoreVersion {
+        version: 771,
+        suffix: Some("R3".to_string()),
+    });
+    assert_eq!(core.server_version, Some(771));
+    assert_eq!(core.server_version_suffix.as_deref(), Some("R3"));
 }
 
 /// No snapshot yet is UNKNOWN, never zero — the distinction the Assets panel exists to make.

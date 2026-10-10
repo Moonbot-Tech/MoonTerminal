@@ -160,6 +160,7 @@ fn core_facts(rows: &[DealRow], view: &AnalyticsView, cx: &App) -> HashMap<u64, 
                     // build on any status but Ready.
                     connected: core.status == moon_core::feed::ConnStatus::Ready,
                     version: core.server_version,
+                    version_suffix: core.server_version_suffix.clone(),
                     tz_offset_secs: core.time_offset.offset_secs,
                 },
             );

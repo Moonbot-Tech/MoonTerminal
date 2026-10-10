@@ -156,10 +156,12 @@ impl CoreStatusView {
             // this frame agrees about the same key -- the triangle as much as the colour, since both
             // read this state below.
             let api_key = model::ApiKeyState::of(api_expiry, now_ms);
-            // Straight off the same store record every other field above reads: the store drops it
-            // on any non-Ready status, so a row can never show a build the current connection did
-            // not report.
-            let server_version = core.and_then(|core| core.server_version);
+            // Straight off the same store record every other field above reads: the store drops
+            // the number and the letter together on any non-Ready status, so a row can never show
+            // a build the current connection did not report.
+            let (server_version, server_version_suffix) = core
+                .map(|core| (core.server_version, core.server_version_suffix.clone()))
+                .unwrap_or((None, None));
             out.push(CoreStatusRow {
                 id,
                 name,
@@ -189,10 +191,9 @@ impl CoreStatusView {
                 // landing in the store and the engine's next pass over it.
                 api_quota_warn: b.warn.core_api_quota_warn(id),
                 server_version,
-                version_behind: server_version
-                    .zip(fleet_newest)
-                    .filter(|(mine, newest)| mine < newest)
-                    .map(|(_, newest)| newest),
+                server_version_suffix,
+                // number only: a build letter never makes a core behind (user decision)
+                version_behind: model::version_behind_of(server_version, fleet_newest),
                 update: b.session.core_update_phase(id).cloned(),
             });
         }
