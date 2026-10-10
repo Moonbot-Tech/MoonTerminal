@@ -115,6 +115,10 @@ fn apia_skipped_date_is_not_a_second_slice_of_december_31() {
 }
 
 /// Losing the scope or loaded clock axis admits a hidden core or groups its close on the wrong day.
+///
+/// The broken-axis read fails inside `db::read_fail`. That classifier names the replica with
+/// `reports_db_path_no_create`: `reports_db_path` would latch `db_dir`'s migration on the real
+/// data folder, and a later report fixture would open a directory this process never created.
 #[test]
 fn shared_reader_scopes_corrected_days_and_total_on_one_synthetic_snapshot() {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
