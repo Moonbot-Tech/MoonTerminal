@@ -109,13 +109,13 @@ pub(super) fn serve_ticks(
             return Err(Some(none));
         }
         let partial = !covered.contains((request.window.from_ms, request.window.to_ms));
-        let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
+        let (ticks, thinning) = fit_ticks_around(ticks, TICK_BUDGET, &request.window.raw_spans());
         Ok((
             compose_ticks(
                 request,
                 request.address.venue,
                 ticks,
-                bucket_ms,
+                thinning,
                 side_slots,
                 partial,
                 covered,
@@ -226,12 +226,13 @@ pub(super) fn serve_ticks(
             if points.is_empty() {
                 return;
             }
-            let (points, bucket_ms) = fit_ticks(points, TICK_BUDGET);
+            let (points, thinning) =
+                fit_ticks_around(points, TICK_BUDGET, &request.window.raw_spans());
             let mut series = compose_ticks(
                 request,
                 request.address.venue,
                 points,
-                bucket_ms,
+                thinning,
                 side_slots,
                 true,
                 run.clone(),
@@ -494,12 +495,12 @@ pub(super) fn serve_ticks(
     // the walk even starts, so a retention-clipped plan that completes still leaves the served
     // ticks short of the requested window on one or both edges.
     let partial = !complete || !covered.contains((request.window.from_ms, request.window.to_ms));
-    let (ticks, bucket_ms) = fit_ticks(ticks, TICK_BUDGET);
+    let (ticks, thinning) = fit_ticks_around(ticks, TICK_BUDGET, &request.window.raw_spans());
     let mut series = compose_ticks(
         request,
         request.address.venue,
         ticks,
-        bucket_ms,
+        thinning,
         side_slots,
         partial,
         covered,

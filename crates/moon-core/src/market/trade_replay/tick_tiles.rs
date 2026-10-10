@@ -38,11 +38,13 @@ use crate::feed::types::Tick;
 
 /// Ceiling on raw ticks held across every tile.
 ///
-/// Eight tick budgets — twice the outcome ring's own ceiling, because a tile holds the raw run
-/// where the ring holds a thinned one. A `Tick` is 24 bytes, so this is about 8 MB: a busy
-/// perpetual prints 50–100 a second, a thin alt a handful, so this holds a few hours of the
-/// former or a day of the latter.
-pub(crate) const TILE_STORE_MAX_TICKS: usize = 8 * super::worker::TICK_BUDGET;
+/// A `Tick` is 24 bytes, so this is about 8 MB: a busy perpetual prints 50–100 a second, a thin
+/// alt a handful, so this holds a few hours of the former or a day of the latter. It was eight
+/// tick budgets while the budget was 40 000, and kept that absolute size when the serve budget
+/// grew (#938): the budget bounds what one window draws, not what the tiles hold, so the two
+/// need not move together. A run past this is not lost — eviction drops the oldest tiles, and
+/// `trades.sqlite` still holds them for the next hydrate.
+pub(crate) const TILE_STORE_MAX_TICKS: usize = 320_000;
 
 /// Ceiling on tile count, so a long run of EMPTY tiles — which cost no ticks — still cannot grow
 /// the store without bound.

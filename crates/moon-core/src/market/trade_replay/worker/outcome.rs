@@ -14,7 +14,7 @@ use super::*;
 ///     request: The request being served.
 ///     venue: Venue the ticks came from.
 ///     ticks: Trade points, ascending, already clipped to the harvest's covered range.
-///     bucket_ms: The bucket [`fit_ticks`] thinned the points to; `0` means raw.
+///     thinning: How [`fit_ticks_around`] fitted the points into the budget.
 ///     partial: Whether `ticks` covers only part of `request.window`.
 ///     covered: The walk's own exhaustive stretches, carried onto the series verbatim — the
 ///         chart withholds the bars lying inside them, and only this coverage knows that a
@@ -31,7 +31,7 @@ pub(super) fn compose_ticks(
     request: &TradeReplayRequest,
     venue: crate::venue::Venue,
     ticks: Vec<Tick>,
-    bucket_ms: i64,
+    thinning: TickThinning,
     side_slots: Vec<crate::market::source::SideSlot>,
     partial: bool,
     covered: Coverage,
@@ -46,7 +46,7 @@ pub(super) fn compose_ticks(
         ticks,
         identity: request.identity,
         tick_status: TickStatus::Served,
-        bucket_ms,
+        thinning,
         partial,
         side_slots,
         covered,
@@ -100,7 +100,7 @@ pub(super) fn compose(
         ticks: Vec::new(),
         identity: request.identity,
         tick_status: TickStatus::Pending,
-        bucket_ms: 0,
+        thinning: TickThinning::Raw,
         partial: false,
         side_slots: Vec::new(),
         // No tick walk ran, so nothing is covered and the chart keeps every bar.

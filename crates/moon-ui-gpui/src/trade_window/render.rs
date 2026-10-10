@@ -8,7 +8,7 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::market::trade_replay::{
-    TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
+    TickStatus, TickThinning, TradeReplayEmpty, TradeReplayFailure, TradeReplaySource,
 };
 use moon_ui::{MoonButton, MoonPalette, MoonWindowFrame, MoonWindowFrameControls, h_flex, v_flex};
 use rust_i18n::t;
@@ -16,6 +16,36 @@ use rust_i18n::t;
 use super::{TradeWindowState, TradeWindowView, figures, strategy, traces};
 use crate::design;
 use crate::design::moon;
+
+/// The tick part of the window's caption: who answered, and how the prints were fitted into the
+/// budget — a reader zooming into the entry must know whether what they see there is every print.
+///
+/// Args:
+///     thinning: How the series was fitted.
+///     core: Whether the core's archive answered, rather than the venue.
+pub(super) fn tick_caption(thinning: TickThinning, core: bool) -> String {
+    match (thinning, core) {
+        (TickThinning::Raw, true) => t!("trade_window.source.core_ticks"),
+        (TickThinning::Raw, false) => t!("trade_window.source.ticks"),
+        (TickThinning::Edges { bucket_ms }, true) => t!(
+            "trade_window.source.core_ticks_edges_bucketed",
+            secs = bucket_ms / 1_000
+        ),
+        (TickThinning::Edges { bucket_ms }, false) => t!(
+            "trade_window.source.ticks_edges_bucketed",
+            secs = bucket_ms / 1_000
+        ),
+        (TickThinning::Whole { bucket_ms }, true) => t!(
+            "trade_window.source.core_ticks_bucketed",
+            secs = bucket_ms / 1_000
+        ),
+        (TickThinning::Whole { bucket_ms }, false) => t!(
+            "trade_window.source.ticks_bucketed",
+            secs = bucket_ms / 1_000
+        ),
+    }
+    .to_string()
+}
 
 /// Width below which the figures rail moves from a side column to a wrapped header strip.
 ///
@@ -270,29 +300,13 @@ impl TradeWindowView {
                 TradeWindowState::Ready {
                     source: source @ (TradeReplaySource::Ticks | TradeReplaySource::CoreTicks),
                     tf_min,
-                    bucket_ms,
+                    thinning,
                     partial,
                     ends,
                     tick_status,
                     ..
                 } => {
-                    let base = if *source == TradeReplaySource::CoreTicks && *bucket_ms == 0 {
-                        t!("trade_window.source.core_ticks").to_string()
-                    } else if *source == TradeReplaySource::CoreTicks {
-                        t!(
-                            "trade_window.source.core_ticks_bucketed",
-                            secs = bucket_ms / 1_000
-                        )
-                        .to_string()
-                    } else if *bucket_ms == 0 {
-                        t!("trade_window.source.ticks").to_string()
-                    } else {
-                        t!(
-                            "trade_window.source.ticks_bucketed",
-                            secs = bucket_ms / 1_000
-                        )
-                        .to_string()
-                    };
+                    let base = tick_caption(*thinning, *source == TradeReplaySource::CoreTicks);
                     let base = if *tick_status == TickStatus::Streaming {
                         format!("{base}, {}", t!("trade_window.source.loading_more"))
                     } else {

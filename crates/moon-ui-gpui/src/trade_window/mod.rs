@@ -63,8 +63,8 @@ use gpui::*;
 use moon_core::db::{ChartTradeRecord, TradeMeta};
 use moon_core::market::trade_replay::worker::{self, TradeReplayRequest};
 use moon_core::market::trade_replay::{
-    TickStatus, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome, TradeReplaySeries,
-    TradeReplaySource, replay_window_ms,
+    TickStatus, TickThinning, TradeReplayEmpty, TradeReplayFailure, TradeReplayOutcome,
+    TradeReplaySeries, TradeReplaySource, replay_window_ms,
 };
 use moon_core::session::CoreId;
 use moon_core::venue::Brand;
@@ -120,9 +120,8 @@ pub(crate) enum TradeWindowState {
         /// How the tick attempt for this window ended — what a `Klines1m` caption NAMES as its
         /// reason. `Served` only ever rides a `Ticks` source.
         tick_status: TickStatus,
-        /// Bucket the `Ticks` points were thinned to, in ms; `0` means raw. Meaningless (and
-        /// always `0`) on `Klines1m`.
-        bucket_ms: i64,
+        /// How the `Ticks` points were fitted into the tick budget. Always `Raw` on `Klines1m`.
+        thinning: TickThinning,
         /// Whether the `Ticks` points cover only part of the window. Always `false` on
         /// `Klines1m`.
         partial: bool,
@@ -1005,7 +1004,7 @@ impl TradeWindowView {
                 // Same reasoning, same moment: the caption's four remaining facts are the series'
                 // alone to give.
                 let tick_status = series.tick_status;
-                let bucket_ms = series.bucket_ms;
+                let thinning = series.thinning;
                 let partial = series.partial;
                 let ends = series.window.focus_spans().is_split() && series.covered.is_split();
                 let brand = series.venue.brand;
@@ -1020,7 +1019,7 @@ impl TradeWindowView {
                     source,
                     tf_min,
                     tick_status,
-                    bucket_ms,
+                    thinning,
                     partial,
                     ends,
                     brand,

@@ -59,8 +59,12 @@ trade_window.source.core_ticks_bucketed: "core ticks, %{secs} s step"
 
 trade_window.source.ticks_bucketed: "exchange ticks, %{secs} s step"
 
-# Присоединяется к одной из двух строк выше через " - " прямо в коде — глиф-разделитель в
-# словаре не хранится.
+trade_window.source.core_ticks_edges_bucketed: "core ticks, %{secs} s step at the edges"
+
+trade_window.source.ticks_edges_bucketed: "exchange ticks, %{secs} s step at the edges"
+
+# Joined to any of the tick captions above with " - " in code — the separator glyph never
+# lives in the dictionary.
 trade_window.source.ticks_edges: "edges filled by %{min}-minute candles"
 
 # Долгая позиция: тики только вокруг входа и выхода, середина — свечи. Присоединяется так же.
