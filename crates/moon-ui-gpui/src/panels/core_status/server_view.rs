@@ -10,7 +10,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::feed::diagnose;
 use moon_ui::{
-    MoonButton, MoonDisclosure, MoonInput, MoonInputState, MoonListItem, MoonPalette, MoonTree,
+    MoonBadge, MoonBadgeSize, MoonBadgeVariant, MoonButton, MoonDisclosure, MoonInput,
+    MoonInputState, MoonListItem, MoonPalette, MoonSize, MoonTheme, MoonTone, MoonTree,
     MoonTreeItem, MoonTreeState, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -80,10 +81,10 @@ use super::model::{
 };
 use super::ordering::GroupSortField;
 use super::presentation::{
-    LoadLevel, UpdateBadge, api_expiry_level, api_expiry_text, cpu_level, cpu_load, free_mem_level,
-    lat_level, level_color, memory_free, memory_u16, percent, ping_plain, tz_offset_group_text,
-    update_badge, update_badge_for_group, version_behind_group_tooltip, version_behind_tooltip,
-    version_color, version_group_text, version_text,
+    BuildParts, LoadLevel, UpdateBadge, api_expiry_level, api_expiry_text, build_parts, cpu_level,
+    cpu_load, free_mem_level, group_build_parts, lat_level, level_color, memory_free, memory_u16,
+    percent, ping_plain, tz_offset_group_text, update_badge, update_badge_for_group,
+    version_behind_group_tooltip, version_behind_tooltip, version_color,
 };
 use super::startup::{
     StartupCell, problem_diagnostic_text, startup_cell, startup_cell_text, startup_facts,
@@ -578,13 +579,14 @@ fn server_row(
                         // collapsed server rows drawing this cell in one frame.
                         format!("core-status-version-group:{}", group.key.tree_id()),
                         SharedString::from(format!("core-update-hover:{}", group.key.tree_id())),
-                        version_group_text(&group.version),
+                        group_build_parts(&group.version),
                         matches!(group.version, GroupVersion::Uniform { .. }),
                         group.version_behind.is_some(),
                         update_badge_for_group(group.update),
                         group_update_btn,
                         w.version,
                         p,
+                        app,
                     )
                     .when_some(group.version_behind, |c, (have, newest)| {
                         let suffix = match &group.version {
@@ -842,13 +844,14 @@ fn core_row(
                         // rebuild, but from the core's own stable identity.
                         ("core-status-version", core.id),
                         SharedString::from(format!("core-update-hover:{}", core.id)),
-                        version_text(core.server_version, core.server_version_suffix.as_deref()),
+                        build_parts(core.server_version, core.server_version_suffix.as_deref()),
                         core.server_version.is_some(),
                         core.version_behind.is_some(),
                         update_badge(core.update.as_ref()),
                         core_update_btn,
                         w.version,
                         p,
+                        app,
                     )
                     .when_some(core.version_behind, |c, newest| {
                         c.tooltip(crate::panels::common::text_tooltip(version_behind_tooltip(
@@ -1161,6 +1164,64 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
     )
 }
 
+/// Two glyphs, the length of a product letter such as `R3`.
+///
+/// An empty letter slot paints a badge of this string invisibly. [`MoonBadge`] sizes itself
+/// from its label, so this is the width input — not a raw pixel width on the widget — and a
+/// release keeps the same footprint as a named build.
+const LETTER_SLOT: &str = "R3";
+
+/// The number and the letter slot, in that order, filling the free width the caller gives it.
+///
+/// The number is the value, so it is `design::mono` at the body tier. The letter is a
+/// `MoonBadge` at the dense-strip tier (`MoonSize::Xs`): `MoonTag` is the header chip, with a
+/// 22 px pill and 10 px of pad, which is too much chrome for a cell that also holds the update
+/// controls. The badge carries no raw width; an absent letter still occupies [`LETTER_SLOT`]
+/// so the digits on the next row do not slide.
+///
+/// Args:
+///     parts: Number text and optional letter from `build_parts` or `group_build_parts`.
+///     p: Active Moon palette. The badge reads it directly so a behind-coloured parent cannot
+///         repaint the tag.
+///     app: Application context for the number's tier size and the badge's density tokens.
+///     end: Pack the pair to the right edge of the free space. The Flat column is right-aligned;
+///         the By-IP cell keeps the pair on the left, under its caption.
+///
+/// Returns:
+///     A row of the number and the letter slot, filling the free width the caller gives it.
+pub(super) fn version_mark(parts: BuildParts, p: MoonPalette, app: &App, end: bool) -> Div {
+    let shown = parts.tag.is_some();
+    let label = parts.tag.as_deref().unwrap_or(LETTER_SLOT);
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(px(CELL_GAP_W))
+        .when(end, |row| row.justify_end())
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .font_family(design::mono())
+                .text_size(design::t_body(app))
+                .child(parts.number),
+        )
+        .child(
+            div()
+                .flex_none()
+                .when(!shown, |slot| slot.invisible())
+                .child(
+                    MoonBadge::new(label)
+                        .variant(MoonBadgeVariant::Soft)
+                        .tone(MoonTone::Info)
+                        .size(MoonBadgeSize::Tier(MoonSize::Xs))
+                        .mono(true)
+                        .render_with_theme(p, MoonTheme::active_tokens(app)),
+                ),
+        )
+}
+
 /// One reported-build cell, in the same slot chrome the startup column uses.
 ///
 /// A reported build is a frozen identity fact rather than a live measurement, so it is subordinate
@@ -1177,27 +1238,30 @@ fn tz_offset_text_cell(cell: TzOffsetCell, value_w: f32, p: MoonPalette) -> Stat
 ///         above [`plain_slot`] about a shared id migrating GPUI hover/press state between rows.
 ///     hover_group: Per-row hover-reveal group name for [`crate::controls::core_update`]'s button,
 ///         derived from the same identity as `id` rather than a literal shared across rows.
-///     text: The already-composed cell text.
+///     parts: The split number and letter. The number stays on the left of this cell; the
+///         letter slot to its right stays reserved when the letter is absent.
 ///     reported: Whether there is a build to show, as opposed to absence or disagreement.
 ///     behind: Whether this build is behind the fleet's newest reported build.
 ///     badge: This row's update-queue badge, when it has one.
 ///     update_btn: This row's hover-revealed update control, when its scope currently offers one.
 ///     value_w: Current column width from [`ByIpWidths`].
 ///     p: Active Moon palette.
+///     app: Application context for the number's tier size and the letter badge.
 ///
 /// Returns:
 ///     A compact build cell with a stable footprint, a trailing update-queue badge when one
-///     applies, and the hover-revealed update control. Only the label shrinks and truncates.
+///     applies, and the hover-revealed update control. Only the number shrinks and truncates.
 fn version_slot(
     id: impl Into<ElementId>,
     hover_group: SharedString,
-    text: String,
+    parts: BuildParts,
     reported: bool,
     behind: bool,
     badge: Option<UpdateBadge>,
     update_btn: Option<AnyElement>,
     value_w: f32,
     p: MoonPalette,
+    app: &App,
 ) -> Stateful<Div> {
     let id: ElementId = id.into();
     // The badge is its OWN stateful child, with an id derived from the slot's, so it can carry its
@@ -1218,7 +1282,10 @@ fn version_slot(
         .flex()
         .items_center()
         .gap(px(CELL_GAP_W))
-        .child(div().flex_1().min_w_0().truncate().child(text))
+        // `end` is false: the caption above this cell is left-aligned, so the digits stay on
+        // the left. The mark grows, which leaves the update glyph and the hover button on the
+        // right edge, where they already sat.
+        .child(version_mark(parts, p, app, false))
         .when_some(badge, |slot, badge| {
             slot.child(
                 div()

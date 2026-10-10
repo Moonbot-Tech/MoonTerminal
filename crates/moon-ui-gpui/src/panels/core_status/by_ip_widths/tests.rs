@@ -16,14 +16,23 @@ fn none() -> HashMap<String, f32> {
     HashMap::new()
 }
 
-/// Reverting to the number-only width clips a named build beside its hover update arrow.
+/// Dropping the letter badge's padding, or going back to the old seven-character string
+/// width, clips `7.71` plus its tag beside the hover update arrow.
+///
+/// The advance `0.6 * REM` is the same mono estimate the width comment uses. The pad is
+/// MoonBadge's Xs ratio (`line_height * 4/13` on each side, line height 16), not a render
+/// measurement. Three gaps: inside the mark, then between the mark, the phase glyph and the arrow.
 #[test]
 fn version_design_width_fits_a_named_build_and_update_controls() {
-    let named_build_w = 7.0 * 0.6 * REM;
+    let number_w = 4.0 * 0.6 * REM;
+    let letter_w = 2.0 * 0.6 * REM;
+    let badge_pad_w = 2.0 * 16.0 * 4.0 / 13.0;
     let arrow_w = 18.0;
-    let badge_w = 0.6 * REM;
-    let gaps_w = 2.0 * 4.0;
-    assert!(ByIpWidths::BASE.version >= named_build_w + arrow_w + badge_w + gaps_w);
+    let phase_w = 0.6 * REM;
+    let gaps_w = 3.0 * 4.0;
+    assert!(
+        ByIpWidths::BASE.version >= number_w + letter_w + badge_pad_w + arrow_w + phase_w + gaps_w
+    );
 }
 
 /// An unmeasured view keeps its design widths.

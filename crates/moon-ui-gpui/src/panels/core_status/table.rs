@@ -11,10 +11,11 @@ use super::model::{ApiKeyState, ServerKey};
 use super::ordering::{FlatLine, FlatSection};
 use super::presentation::{
     LoadLevel, api_expiry_level, api_expiry_text, api_expiry_tooltip, api_quota_level,
-    api_quota_text, connection_presentation, cpu_level, free_mem_level, lat_level, level_color,
-    memory_u16, percent, ping, status_level, update_badge, version_behind_tooltip, version_color,
-    version_text,
+    api_quota_text, build_parts, connection_presentation, cpu_level, free_mem_level, lat_level,
+    level_color, memory_u16, percent, ping, status_level, update_badge, version_behind_tooltip,
+    version_color,
 };
+use super::server_view::version_mark;
 use super::startup::{startup_cell, startup_cell_text, startup_facts, startup_tooltip};
 use super::time_offset::{tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip};
 use super::update_menu;
@@ -117,12 +118,13 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
                 MoonDataTableColumn::new("status", t!("core_status.col.status").to_string(), 110.0)
                     .sortable(true)
             }
-            // Right-aligned like the metrics: a column of 3-5 digit build numbers has to align on the
-            // digit, and the one word form ("-") is short enough to sit right. It follows `status`
-            // because it completes the identity block — what this core IS — rather than reporting how
-            // it is doing. Mid-list insertion costs nothing: persisted widths are keyed by column key,
-            // never by index.
-            "version" => numeric("version", t!("core_status.col.version").to_string(), 96.0),
+            // Right-aligned like the metrics: the number sits on one edge and the letter tag
+            // takes a reserved slot to its right, so a named build does not shift the digits.
+            // Wide enough for that slot plus the update glyph and the hover button. It follows
+            // `status` because it completes the identity block — what this core IS — rather than
+            // reporting how it is doing. Mid-list insertion costs nothing: persisted widths are
+            // keyed by column key, never by index.
+            "version" => numeric("version", t!("core_status.col.version").to_string(), 128.0),
             "cpu_proc" => numeric("cpu_proc", t!("core_status.col.cpu_proc").to_string(), 90.0),
             "cpu_sys" => numeric("cpu_sys", t!("core_status.col.cpu_sys").to_string(), 90.0),
             "mem_used" => numeric(
@@ -676,19 +678,23 @@ fn version_hover_cell(
         p,
         app,
     );
-    let version = version_text(r.server_version, r.server_version_suffix.as_deref());
+    let parts = build_parts(r.server_version, r.server_version_suffix.as_deref());
     div()
         .id(SharedString::from(format!("cs-version-{}", r.id)))
+        .w_full()
         .group(hover_group)
         .flex()
         .items_center()
+        .justify_end()
         .gap_1()
         .text_color(rgb(version_color(
             r.version_behind.is_some(),
             r.server_version.is_some(),
             p,
         )))
-        .child(version)
+        // The column is right-aligned. Packing the mark to that edge, with the letter slot
+        // always reserved, keeps every row's digits on the same line.
+        .child(version_mark(parts, p, app, true))
         .when_some(badge, |c, badge| {
             // The badge is its OWN stateful child, carrying its own tooltip, exactly as
             // `server_view.rs::version_slot` already does for its badge -- `tooltip` panics in
