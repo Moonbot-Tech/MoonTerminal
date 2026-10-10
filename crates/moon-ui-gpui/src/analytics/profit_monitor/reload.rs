@@ -210,6 +210,10 @@ impl ProfitMonitorView {
     ///     after_report: Whether an existing visible snapshot may remain until replacement.
     ///     cx: View context used to spawn and publish the read.
     pub(super) fn reload(&mut self, after_report: bool, cx: &mut Context<Self>) {
+        if self.days_open {
+            self.reload_days(after_report, cx);
+            return;
+        }
         if !after_report {
             self.rebaseline_arrivals();
             // Same boundary the arrivals memory is dropped on: a new period, valuation mode or

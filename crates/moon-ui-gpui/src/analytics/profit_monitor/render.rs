@@ -27,7 +27,7 @@ impl ProfitMonitorView {
                 // No tooltip: the segment already shows its own title in full.
                 MoonSegmentItem::new("", group_title(group))
                     .fit_width(cx, 58.0, 110.0)
-                    .selected(group == selected_group)
+                    .selected(!self.days_open && group == selected_group)
             }))
             .on_click(move |index, _, _, app| {
                 let Some(group) = groups.get(index).copied() else {
@@ -36,6 +36,22 @@ impl ProfitMonitorView {
                 view.update(app, |this, cx| this.set_group(group, cx));
             })
             .render();
+        let days_view = cx.entity();
+        let group_control = h_flex()
+            .gap(design::ui_px(cx, 4.0))
+            .child(group_control)
+            .child(
+                moon_ui::MoonButton::new("profit-monitor-days")
+                    .icon("icons/calendar.svg")
+                    .tooltip(t!("profit_monitor.days.tooltip").to_string())
+                    .variant(MoonButtonVariant::Soft)
+                    .size(MoonButtonSize::density(cx))
+                    .selected(self.days_open)
+                    .on_click(move |_, _, app| {
+                        days_view.update(app, |this, cx| this.toggle_days(cx))
+                    })
+                    .render(),
+            );
         let period = period_dropdown(self.period, cx.entity(), cx);
         let settings = self.settings_popover(settings_trigger(self.settings_open), palette, cx);
         let status_clock = h_flex()
@@ -50,7 +66,8 @@ impl ProfitMonitorView {
             ))
             .child(self.clock.clone())
             .child(settings);
-        let content = if layout.inline_controls {
+        // The third-view icon claims one extra button slot before the controls can share a row.
+        let content = if layout.inline_controls && width >= design::ui_value(cx, 500.0) {
             h_flex()
                 .justify_between()
                 .gap(design::ui_px(cx, 10.0))
@@ -151,6 +168,9 @@ impl ProfitMonitorView {
         view: Entity<Self>,
         cx: &App,
     ) -> AnyElement {
+        if self.days_open {
+            return self.days_body(width, palette, view, cx);
+        }
         // Hoisted above the match so every arm draws the SAME marker, built from the same facts
         // the scoped query used. `ProfitLoadState::Split` is matched here BEFORE where the marker
         // used to be constructed inline (inside the `Ready` arm below) — giving only `Ready` a
