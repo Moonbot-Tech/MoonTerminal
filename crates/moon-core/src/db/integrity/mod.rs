@@ -29,6 +29,8 @@ pub enum Integrity {
     Damaged(Vec<String>),
     /// No replica file exists; this is the only silent terminal state.
     NotPresent,
+    /// The watchdog stopped the scan at its time limit; damage was not confirmed.
+    TimeLimitExceeded,
     /// The check itself could not run or complete. Never silent: an
     /// auto-detector that fails quietly is worse than none.
     CheckFailed(String),
@@ -246,8 +248,10 @@ pub(crate) fn run(path: &Path) -> Integrity {
     // and a healthy sub-second scan is not followed by a poll-interval tail
     // before `join` returns.
     let done = Arc::new((Mutex::new(false), Condvar::new()));
+    let timed_out = Arc::new(AtomicBool::new(false));
     let watchdog = {
         let done = Arc::clone(&done);
+        let timed_out = Arc::clone(&timed_out);
         std::thread::Builder::new()
             .name("reports-integrity-watchdog".into())
             .spawn(move || {
@@ -260,6 +264,7 @@ pub(crate) fn run(path: &Path) -> Integrity {
                     log::warn!(
                         "отчёты(integrity): превышен лимит {MAX_SCAN_TIME:?} — проверка прервана"
                     );
+                    timed_out.store(true, Ordering::Release);
                     handle.interrupt();
                 }
             })
@@ -305,8 +310,23 @@ pub(crate) fn run(path: &Path) -> Integrity {
         }
         // Severe corruption can abort the pragma instead of producing diagnostic
         // rows, so corruption-class errors still map to `Damaged`.
-        Err(e) => classify_pragma_error(e, "проверка"),
+        Err(e) => classify_scan_error(e, timed_out.load(Ordering::Acquire)),
     }
+}
+
+/// Classify a scan error using the watchdog's fact, keeping corruption diagnostics intact.
+///
+/// Args:
+///     error: SQLite failure from the full scan.
+///     timed_out: Whether this scan's watchdog reached its unchanged deadline.
+///
+/// Returns:
+///     A typed timeout only for a watchdog interruption; otherwise the existing error verdict.
+fn classify_scan_error(error: rusqlite::Error, timed_out: bool) -> Integrity {
+    if timed_out && error.sqlite_error_code() == Some(rusqlite::ErrorCode::OperationInterrupted) {
+        return Integrity::TimeLimitExceeded;
+    }
+    classify_pragma_error(error, "проверка")
 }
 
 /// All diagnostic lines of `PRAGMA integrity_check`, flattened.

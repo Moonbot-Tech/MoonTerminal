@@ -364,6 +364,12 @@ fn decide_integrity(
 ) -> Decision {
     match verdict {
         Integrity::Ok | Integrity::NotPresent => Decision::Ready,
+        Integrity::TimeLimitExceeded => {
+            log::warn!(
+                "reports: startup integrity preflight hit its time limit; leaving the replica untouched"
+            );
+            Decision::Ready
+        }
         Integrity::CheckFailed(reason) => {
             log::warn!(
                 "reports: startup integrity preflight was inconclusive; leaving the replica \
