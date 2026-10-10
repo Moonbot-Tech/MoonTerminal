@@ -230,6 +230,37 @@ impl CoreStatusView {
         }
     }
 
+    /// Apply a Problems header sort from a column click and remember it the way Flat does.
+    ///
+    /// Args:
+    ///     key: Column key from the table header.
+    ///     ascending: Whether the click requested ascending order.
+    ///     cx: View context used to persist the choice and repaint.
+    ///
+    /// Returns:
+    ///     Nothing. An unknown key clears the saved sort back to newest-confirmation-first.
+    ///     A repeat of the current choice does not arm a layout flush.
+    pub(super) fn set_problems_sort(&mut self, key: &str, ascending: bool, cx: &mut Context<Self>) {
+        let next =
+            super::problems::restore_problems_sort(Some(moon_core::config::TableSortPreference {
+                column: key.to_string(),
+                ascending,
+            }));
+        if self.problems_sort != next {
+            self.problems_sort = next;
+            let preference = self.problems_sort.as_ref().map(|(column, ascending)| {
+                moon_core::config::TableSortPreference {
+                    column: column.clone(),
+                    ascending: *ascending,
+                }
+            });
+            let id =
+                crate::persistence::table_persist::ctx_id("core-status-problems", self.detached);
+            crate::persistence::table_persist::set_sort(&self.backend, &id, preference, cx);
+            cx.notify();
+        }
+    }
+
     /// Apply a By IP header sort from a column click: flip direction on the active column, else select
     /// the newly clicked column ascending. Warnings still pin to the top (enforced in `rebuild_cache`).
     ///

@@ -16,10 +16,11 @@
 //! would put an interval column beside rows that have no interval, and would quietly make our
 //! thresholds look like the core's findings.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use moon_core::feed::{CoreProblem, CoreProblemCategory};
+use moon_core::feed::{CoreProblem, CoreProblemCategory, CoreProblems};
 
 use crate::controls::ellipsize;
 use moon_core::session::CoreId;
@@ -122,7 +123,7 @@ pub(super) struct ProblemRow {
 /// Problems column ids in source order. A dragged order is stored under these ids.
 pub(super) const ORDER_KEYS: &[&str] = &["time", "core", "category", "kind", "title"];
 
-/// Build the unsortable Problems columns, with the finding's own heading taking the spare width.
+/// Build the Problems columns. Each header takes the same click Flat uses.
 ///
 /// There is deliberately NO body column. The core's `title` and `message` overlap almost entirely —
 /// measured on a live fleet, the heading read "На VDS работает Defender или…" beside a body of "На
@@ -130,9 +131,9 @@ pub(super) const ORDER_KEYS: &[&str] = &["time", "core", "category", "kind", "ti
 /// width on one sentence and truncated both halves of it. The heading gets that width instead, and
 /// the body plus the detector's evidence ride in the row's tooltip, where length costs nothing.
 ///
-/// Unsortable for the same reason the sibling logs are: the order is the merge's own — cores in
-/// scope order, findings in the order each core listed them — and a column sort would silently
-/// replace an ordering the core chose with one the table invented.
+/// The widget records the click and draws the arrow. [`order_and_cap`] orders the rows, and the
+/// 500-row cut happens after that sort. Warnings and Updates stay unsortable: their order is the
+/// merge's, including the open-episode pin on Warnings.
 ///
 /// Returns:
 ///     Ordered column descriptors whose non-resizable heading column absorbs spare table width.
@@ -142,24 +143,31 @@ fn columns() -> Vec<MoonDataTableColumn> {
         t!("core_status.col.problem_title").to_string(),
         260.0,
     )
-    .fill();
+    .fill()
+    .sortable(true);
     title.resizable = false;
 
     vec![
-        MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0).no_grow(),
-        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0).no_grow(),
+        MoonDataTableColumn::new("time", t!("core_status.col.time").to_string(), 150.0)
+            .no_grow()
+            .sortable(true),
+        MoonDataTableColumn::new("core", t!("core_status.col.core").to_string(), 130.0)
+            .no_grow()
+            .sortable(true),
         MoonDataTableColumn::new(
             "category",
             t!("core_status.col.problem_category").to_string(),
             110.0,
         )
-        .no_grow(),
+        .no_grow()
+        .sortable(true),
         MoonDataTableColumn::new(
             "kind",
             t!("core_status.col.problem_kind").to_string(),
             140.0,
         )
-        .no_grow(),
+        .no_grow()
+        .sortable(true),
         title,
     ]
 }
@@ -217,6 +225,168 @@ pub(super) fn mark_signature(rows: &[ProblemRow]) -> u64 {
 /// not a fleet worth scrolling.
 pub(super) const PROBLEM_LIST_LIMIT: usize = 500;
 
+/// One finding borrowed from the live store, in the order the scope walk produced.
+///
+/// Owned [`ProblemRow`] values are cloned only after [`order_and_cap`], so a core that listed
+/// more findings than the table can show does not pay for strings the cut throws away.
+pub(super) struct ProblemRef<'a> {
+    /// Core that confirmed the finding.
+    pub(super) core: CoreId,
+    /// The finding itself.
+    pub(super) problem: &'a CoreProblem,
+}
+
+/// Append one core's findings when that core has delivered a list.
+///
+/// Args:
+///     rows: Destination, already holding earlier cores in scope order.
+///     core: Core the findings belong to.
+///     problems: That core's current list. An unsupported core adds nothing.
+///
+/// Returns:
+///     Nothing. `rows` gains one entry per confirmed finding.
+pub(super) fn extend_supported<'a>(
+    rows: &mut Vec<ProblemRef<'a>>,
+    core: CoreId,
+    problems: &'a CoreProblems,
+) {
+    if !problems.supported {
+        return;
+    }
+    rows.extend(
+        problems
+            .items
+            .iter()
+            .map(|problem| ProblemRef { core, problem }),
+    );
+}
+
+/// Display name the Core column prints, including the dash for a core with no name.
+///
+/// Args:
+///     names: Configured core names keyed by id.
+///     core: Core to label.
+///
+/// Returns:
+///     The configured name, or an em dash when the config has none.
+pub(super) fn core_label(names: &HashMap<CoreId, String>, core: CoreId) -> String {
+    names.get(&core).cloned().unwrap_or_else(|| "—".to_string())
+}
+
+/// Column and direction used when the Problems table has no saved sort.
+///
+/// Newest confirmation first. The `false` is the table's ascending flag, the same flag a header
+/// click persists, so the arrow on first open matches a saved descending Time sort.
+pub(super) const DEFAULT_PROBLEM_SORT: (&str, bool) = ("time", false);
+
+/// Resolve the sort the table should show.
+///
+/// Args:
+///     saved: Validated preference, or `None` when nothing usable was stored.
+///
+/// Returns:
+///     Column key and whether the order is ascending.
+pub(super) fn shown_sort(saved: Option<&(String, bool)>) -> (String, bool) {
+    match saved {
+        Some((key, ascending)) => (key.clone(), *ascending),
+        None => (DEFAULT_PROBLEM_SORT.0.to_string(), DEFAULT_PROBLEM_SORT.1),
+    }
+}
+
+/// Accept a persisted Problems sort only for a column this table still has.
+///
+/// Args:
+///     preference: Value stored under this table's context id, if any.
+///
+/// Returns:
+///     The column and direction, or `None` when the column is not in [`ORDER_KEYS`]. `None`
+///     displays as [`shown_sort`] of nothing. The stored entry is left for the next click to
+///     replace, the same way Flat ignores a retired key.
+pub(super) fn restore_problems_sort(
+    preference: Option<moon_core::config::TableSortPreference>,
+) -> Option<(String, bool)> {
+    preference.and_then(|preference| {
+        ORDER_KEYS
+            .contains(&preference.column.as_str())
+            .then_some((preference.column, preference.ascending))
+    })
+}
+
+/// Sort findings for one header choice, then keep at most [`PROBLEM_LIST_LIMIT`].
+///
+/// The cut is applied after the sort. Capping the scope walk first would drop a new confirmation
+/// on a late core and keep an old one on an early core, which is the opposite of newest-first.
+///
+/// Equal keys keep the incoming order: scope order, then the order each core listed its findings.
+/// That tie-break is not a severity rank. The core does not send one.
+///
+/// Args:
+///     rows: Findings in scope order. Reordered and possibly shortened in place.
+///     key: Column id. Anything other than the text columns sorts by time.
+///     ascending: Table direction. `false` on Time is newest confirmation first.
+///     core_names: Display names for the Core column.
+///     zone: Zone the Time cell formats in, so an unprintable instant sorts as a dash.
+///
+/// Returns:
+///     `true` when the cap removed at least one row.
+pub(super) fn order_and_cap(
+    rows: &mut Vec<ProblemRef<'_>>,
+    key: &str,
+    ascending: bool,
+    core_names: &HashMap<CoreId, String>,
+    zone: chrono_tz::Tz,
+) -> bool {
+    rows.sort_by(|a, b| {
+        let ordering = compare_problem_refs(a, b, key, core_names, zone);
+        if ascending {
+            ordering
+        } else {
+            ordering.reverse()
+        }
+    });
+    let truncated = rows.len() > PROBLEM_LIST_LIMIT;
+    rows.truncate(PROBLEM_LIST_LIMIT);
+    truncated
+}
+
+/// Ascending comparison for one Problems column.
+///
+/// Time compares the underlying millisecond instant: confirmation when the cell can print it,
+/// otherwise first-seen, otherwise a dash. A dash is `None`, which precedes every instant, so the
+/// newest-first direction places dashes last. Text columns compare the string the cell shows.
+/// Core names fold case, matching alphabetical core order rather than a numeric-natural order.
+fn compare_problem_refs(
+    a: &ProblemRef<'_>,
+    b: &ProblemRef<'_>,
+    key: &str,
+    core_names: &HashMap<CoreId, String>,
+    zone: chrono_tz::Tz,
+) -> Ordering {
+    match key {
+        "title" => a.problem.title.cmp(&b.problem.title),
+        "kind" => a.problem.kind_name.cmp(&b.problem.kind_name),
+        "core" => core_label(core_names, a.core)
+            .to_lowercase()
+            .cmp(&core_label(core_names, b.core).to_lowercase()),
+        "category" => category_label(a.problem.category)
+            .to_lowercase()
+            .cmp(&category_label(b.problem.category).to_lowercase()),
+        _ => sort_time_ms(a.problem, zone).cmp(&sort_time_ms(b.problem, zone)),
+    }
+}
+
+/// Instant the Time column orders by, or `None` when the cell would print a dash.
+fn sort_time_ms(problem: &CoreProblem, zone: chrono_tz::Tz) -> Option<i64> {
+    printable_ms(problem.confirmed_ms, zone).or_else(|| printable_ms(problem.first_seen_ms, zone))
+}
+
+/// The millisecond instant when the Time cell would print it, otherwise `None`.
+fn printable_ms(ms: Option<i64>, zone: chrono_tz::Tz) -> Option<i64> {
+    let ms = ms?;
+    let text = moon_core::util::display_time::format_minute(ms / 1000, zone);
+    (!text.is_empty()).then_some(ms)
+}
+
 /// Render the Problems surface: the unknown-cores notice, then the findings table.
 ///
 /// The notice is a SIBLING of the table rather than its empty state, and that is the whole point.
@@ -226,7 +396,7 @@ pub(super) const PROBLEM_LIST_LIMIT: usize = 500;
 ///
 /// Args:
 ///     id: Stable table element identity.
-///     rows: Findings in display order, already scoped and capped by the caller.
+///     rows: Findings in display order, already scoped, sorted and capped by the caller.
 ///     core_names: Core display name per core id.
 ///     scope: What the scope could and could not report.
 ///     picked: Core the three actions are narrowed to, whose every row is drawn selected.
@@ -283,6 +453,16 @@ pub(super) fn problems_view(
                     };
                     let core = row.core;
                     view.update(cx, |this, cx| this.pick_problem_core(core, cx));
+                }
+            })
+            .on_sort({
+                let view = cx.entity().downgrade();
+                move |key, ascending, _window, cx| {
+                    let Some(view) = view.upgrade() else {
+                        return;
+                    };
+                    let key = key.to_string();
+                    view.update(cx, |this, cx| this.set_problems_sort(&key, ascending, cx));
                 }
             })
             .style(design::table_style(p)),
@@ -585,10 +765,7 @@ fn problem_row(
     picked: Option<CoreId>,
     zone: chrono_tz::Tz,
 ) -> MoonDataRow {
-    let core = core_names
-        .get(&row.core)
-        .cloned()
-        .unwrap_or_else(|| "—".to_string());
+    let core = core_label(core_names, row.core);
     // `format_minute` answers an EMPTY string for a time outside chrono's range, so the fallback
     // is driven by the FORMATTED result rather than by `Option`: a garbage `confirmed` would
     // otherwise blank the cell while a perfectly good `first_seen` sat unused.

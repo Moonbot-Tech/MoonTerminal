@@ -117,9 +117,10 @@ impl Render for CoreStatusView {
                 let (rows, core_names, scope, picked, zone) = {
                     let b = self.backend.read(cx);
                     let effective = self.effective_scope(b);
-                    // Scope order, then the core's own listing order inside each core. Neither is
-                    // re-sorted: the core chose the order of its findings, and inventing another one
-                    // here would present a ranking the core never made.
+                    // Scope order, then each core's own listing, is only the tie-break. The active
+                    // column sort — newest confirmation first, when nothing was saved — runs on the
+                    // whole list. The cap is applied after that sort, so a new confirmation on a
+                    // late core is not dropped in favour of an old one on an early core.
                     let scope_ids = effective.ids();
                     let core_names: HashMap<CoreId, String> = b
                         .config
@@ -127,7 +128,10 @@ impl Render for CoreStatusView {
                         .iter()
                         .map(|server| (server.id, server.name.clone()))
                         .collect();
-                    let mut rows: Vec<problems::ProblemRow> = Vec::new();
+                    let (sort_key, sort_ascending) =
+                        problems::shown_sort(self.problems_sort.as_ref());
+                    let zone = moon_core::util::display_time::zone_or_utc(b.header_clock_zone());
+                    let mut refs: Vec<problems::ProblemRef<'_>> = Vec::new();
                     let mut silent: Vec<String> = Vec::new();
                     // `matched` counts the cores in scope whatever their connection, `targets` only
                     // the reachable ones: the command channel outlives a disconnect, so a command
@@ -140,12 +144,7 @@ impl Render for CoreStatusView {
                     let mut targets = 0usize;
                     // The same dash the table uses for an unnamed core, so one core cannot appear
                     // under two different spellings on the one surface.
-                    let name_of = |core: CoreId| {
-                        core_names
-                            .get(&core)
-                            .cloned()
-                            .unwrap_or_else(|| "—".to_string())
-                    };
+                    let name_of = |core: CoreId| problems::core_label(&core_names, core);
                     for core in scope_ids.iter().copied() {
                         // Counted for EVERY core in scope, before anything can skip the rest of the
                         // body. A core with no store entry is still a core this panel covers, and
@@ -171,18 +170,25 @@ impl Render for CoreStatusView {
                             silent.push(name_of(core));
                             continue;
                         }
-                        rows.extend(data.problems.items.iter().map(|problem| {
-                            problems::ProblemRow {
-                                core,
-                                problem: problem.clone(),
-                            }
-                        }));
+                        problems::extend_supported(&mut refs, core, &data.problems);
                     }
-                    // Capped like the sibling lists: the per-core row count is wire-controlled, and
-                    // this arm clones every string it shows. A cut list is STATED in the notice rather
-                    // than silently shortened, for the same reason a silent core is.
-                    let truncated = rows.len() > problems::PROBLEM_LIST_LIMIT;
-                    rows.truncate(problems::PROBLEM_LIST_LIMIT);
+                    // Sort first, then cut. The notice states a cut list rather than shortening it
+                    // in silence, for the same reason a silent core is named. Only the rows that
+                    // survive the cut are cloned.
+                    let truncated = problems::order_and_cap(
+                        &mut refs,
+                        &sort_key,
+                        sort_ascending,
+                        &core_names,
+                        zone,
+                    );
+                    let rows: Vec<problems::ProblemRow> = refs
+                        .into_iter()
+                        .map(|row| problems::ProblemRow {
+                            core: row.core,
+                            problem: row.problem.clone(),
+                        })
+                        .collect();
                     // A CLICKED FINDING narrows all three actions to its core, and that pick is
                     // the operator's own — set by the click, held as a CORE, never re-derived from
                     // a row index into a list this arm rebuilds every repaint. No pick keeps the
@@ -227,13 +233,7 @@ impl Render for CoreStatusView {
                         picked: picked.is_some(),
                         targets,
                     };
-                    (
-                        rows,
-                        core_names,
-                        scope,
-                        picked,
-                        moon_core::util::display_time::zone_or_utc(b.header_clock_zone()),
-                    )
+                    (rows, core_names, scope, picked, zone)
                 };
                 // A pick whose core left the scope is dropped for good, not just for this frame:
                 // left behind, it would silently re-arm the moment that core came back.

@@ -111,6 +111,10 @@ pub struct CoreStatusView {
     /// Active flat-table sort as `(column key, ascending)`, or `None` for the default
     /// attention-first order.
     flat_sort: Option<(String, bool)>,
+    /// Active Problems sort as `(column key, ascending)`, or `None` for newest confirmation
+    /// first. `None` is not written on open. A header click persists through the same
+    /// `table_sorts` map Flat uses, under this table's own context id.
+    problems_sort: Option<(String, bool)>,
     /// Whether the exchange logos have finished decoding off-thread.
     ///
     /// The Flat view's exchange headings gate on this: drawing before the prewarm lands would make
@@ -374,13 +378,23 @@ impl CoreStatusView {
             "core-status-warnings",
             detached,
             warnings::ORDER_KEYS,
+            None,
         );
+        let problems_sort_id =
+            crate::persistence::table_persist::ctx_id("core-status-problems", detached);
+        let problems_sort = problems::restore_problems_sort(
+            crate::persistence::table_persist::saved_sort(backend.read(cx), &problems_sort_id),
+        );
+        // The arrow shows the saved choice, or newest-confirmation-first when nothing was saved.
+        // The default is not written here: opening the panel must not arm a layout flush.
+        let problems_arrow = problems::shown_sort(problems_sort.as_ref());
         let problems_table_state = ordered_log_state(
             cx,
             &backend,
             "core-status-problems",
             detached,
             problems::ORDER_KEYS,
+            Some((&problems_arrow.0, problems_arrow.1)),
         );
         let updates_table_state = ordered_log_state(
             cx,
@@ -388,6 +402,7 @@ impl CoreStatusView {
             "core-status-updates",
             detached,
             updates_list::ORDER_KEYS,
+            None,
         );
         let mut order_seen = HashMap::new();
         order_seen.insert(widths_id.clone(), flat_order_seen);
@@ -428,6 +443,7 @@ impl CoreStatusView {
             editing: None,
             edit_input: None,
             flat_sort,
+            problems_sort,
             exchange_logos_ready: false,
             group_sort,
             mode,

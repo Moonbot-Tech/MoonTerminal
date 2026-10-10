@@ -143,6 +143,9 @@ pub(super) fn mode_ctx_id(detached: bool) -> String {
 ///     base: Unqualified table id (`core-status-problems`, and the warnings and updates siblings).
 ///     detached: Whether this panel is a detached window.
 ///     keys: Column ids in source order, used to drop removed ids and append new ones.
+///     sort: Header sort to show on first paint. `None` leaves the arrow off, which is what
+///         Warnings and Updates want. Problems passes its saved choice, or the newest-first
+///         default. Seeding the arrow does not write the preference.
 ///
 /// Returns:
 ///     The table state, already observing itself for order changes.
@@ -152,12 +155,16 @@ pub(super) fn ordered_log_state(
     base: &str,
     detached: bool,
     keys: &[&str],
+    sort: Option<(&str, bool)>,
 ) -> Entity<MoonDataTableState> {
     let id = crate::persistence::table_persist::ctx_id(base, detached);
     let order = crate::persistence::table_persist::restored_order(backend.read(cx), &id, keys);
     let state = cx.new(|_| {
         let mut table = MoonDataTableState::new();
         table.column_order = order;
+        if let Some((key, ascending)) = sort {
+            table.set_sort(key.to_string(), ascending);
+        }
         table
     });
     cx.observe(&state, move |this, state, cx| {
