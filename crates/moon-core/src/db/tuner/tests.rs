@@ -786,3 +786,27 @@ fn by_time_projection_timing_probe() {
         );
     }
 }
+
+/// A bound already on the three-significant-digit grid comes back as that same value, and never
+/// crosses the sample it was taken from — `best_range` takes `from`/`to` straight off an observed
+/// value, and the filter keeps `from <= v <= to`.
+///
+/// By hand: `-63.9` has three significant digits (magnitude 1, step 0.1), so rounding it outward
+/// in either direction is `-63.9` itself; likewise `0.03` (magnitude -2, step 0.0001) and `1.6e-6`.
+/// Multiplying the grid index by an inexact step instead gives `-63.900000000000006` for the upper
+/// bound, one ULP below the sample, which the filter then drops.
+#[test]
+fn round_bound_keeps_a_value_already_on_its_grid() {
+    for v in [
+        -63.9, -0.03, 0.03, 1.6e-6, 0.013, 6.0e-2, 2.8e-8, 123.0, 4560.0, 1e-307,
+    ] {
+        assert_eq!(round_bound(v, true), v, "upper bound {v}");
+        assert_eq!(round_bound(v, false), v, "lower bound {v}");
+    }
+    // Off the grid it still rounds outward, never past the sample.
+    for i in -10_000i32..=10_000 {
+        let v = f64::from(i) / 100.0;
+        assert!(round_bound(v, true) >= v, "upper bound {v}");
+        assert!(round_bound(v, false) <= v, "lower bound {v}");
+    }
+}
