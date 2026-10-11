@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use super::{resolve_complete_target_cores, save_authority_matches};
+use super::{
+    InlineWriteDecision, inline_write_decision, resolve_complete_target_cores,
+    save_authority_matches,
+};
 use crate::analytics::tuner::shared::{SaveAuthority, SaveTarget};
 
 /// Build one concrete Save target without involving Analytics UI state.
@@ -111,4 +114,35 @@ fn missing_classic_aggregate_target_also_refuses_the_complete_batch() {
     let live = HashMap::from([(101, Vec::new()), (202, vec![22])]);
 
     assert_eq!(resolve_complete_target_cores(&targets, &live), None);
+}
+
+/// Removing either inline guard would allow stale authority or an edited V1 to be sent.
+#[test]
+fn ticks_inline_write_refuses_stale_authority_and_changed_v1_without_clearing_the_draft() {
+    let targets = vec![target(303, 33)];
+    let auth = authority(4, 8, vec![33], &targets);
+    let confirm = vec![("StopLoss".to_string(), "1.7".to_string())];
+    let mut draft = crate::analytics::tuner::ticks::state::TicksState::default();
+    draft.set_variant("StopLoss", "1.7".into());
+    let current = draft.variant_changes();
+    let stale = save_authority_matches(&auth, 4, Some(10), Some(&[33]), &targets);
+    assert_eq!(
+        inline_write_decision(&confirm, &current, stale),
+        InlineWriteDecision::Drop
+    );
+    assert_eq!(draft.variant_changes(), confirm);
+    let valid = save_authority_matches(&auth, 4, Some(8), Some(&[33]), &targets);
+    assert_eq!(
+        inline_write_decision(&confirm, &current, valid),
+        InlineWriteDecision::Send
+    );
+    draft.set_variant("StopLoss", "2.6".into());
+    assert_eq!(
+        inline_write_decision(&confirm, &draft.variant_changes(), valid),
+        InlineWriteDecision::Drop
+    );
+    assert_eq!(
+        draft.variant_changes(),
+        vec![("StopLoss".to_string(), "2.6".to_string())]
+    );
 }

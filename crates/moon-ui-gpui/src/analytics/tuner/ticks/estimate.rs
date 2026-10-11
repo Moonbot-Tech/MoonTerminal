@@ -1,5 +1,5 @@
 //! What "Search all" will cost before it runs (LinKvo, 2026-09-25): the points it scores and,
-//! at what one point costs on this sample, roughly how long — a line under the parameter grid,
+//! at what one point costs on this sample, roughly how long — inside the search button,
 //! and a question before a run longer than [`LONG_SEARCH`]. A search of both groups nests a whole
 //! exit search under the entry points it scores — every one, or the few the screen keeps
 //! (`moon_core::db::tuner::ticks::search`) — and its count is the product: minutes to hours where
@@ -25,7 +25,7 @@ use super::model_cfg;
 use super::tape::prepare_sample;
 use super::variants::{passes_of, restarts_of};
 use crate::design;
-use crate::design::{moon, moon_alpha};
+use crate::design::moon;
 use moon_core::db::tuner::ticks::params::ParamGroup;
 use moon_core::db::tuner::ticks::search::{
     SearchParams, SearchSize, full_replays, point_cost, search_size,
@@ -169,12 +169,16 @@ impl AnalyticsView {
         (at == key).then(|| size.time(cost))
     }
 
-    /// The line under the parameter grid: what "Search all" scores and roughly how long it
-    /// takes, amber past [`LONG_SEARCH`]. Nothing when no search could start.
-    pub(super) fn ticks_estimate_row(&self, p: MoonPalette, cx: &App) -> Option<AnyElement> {
+    /// Include time only after a point cost measured under the current settings exists.
+    pub(super) fn ticks_estimate_time_text(&self) -> Option<String> {
+        self.ticks_search_time(&self.ticks_search_size(None)?)
+            .map(duration_text)
+    }
+
+    /// Keep the point-count breakdown on hover instead of a separate clipped estimate row.
+    pub(super) fn ticks_estimate_tip(&self) -> Option<String> {
         let size = self.ticks_search_size(None)?;
-        let time = self.ticks_search_time(&size);
-        let time_text = time.map_or_else(
+        let time = self.ticks_search_time(&size).map_or_else(
             || t!("analytics.ticks.est_time_pending").to_string(),
             duration_text,
         );
@@ -183,54 +187,16 @@ impl AnalyticsView {
                 "analytics.ticks.est_nested",
                 points = count_text(size.points),
                 entry = count_text(size.entry_points),
-                time = time_text.clone()
+                time = time
             )
         } else {
             t!(
                 "analytics.ticks.est_line",
                 points = count_text(size.points),
-                time = time_text.clone()
+                time = time
             )
-        }
-        .to_string();
-        let short = if size.nested() {
-            t!("analytics.ticks.est_short_nested", time = time_text)
-        } else {
-            t!("analytics.ticks.est_short", time = time_text)
-        }
-        .to_string();
-        let long = time.is_some_and(|t| t > LONG_SEARCH);
-        let tone = if long { p.amber } else { p.text_muted };
-        // One compact tag. The nested count ("≈ 209 169 000 variants…") does not fit a pane;
-        // it stays in the tooltip with the rest of the breakdown.
-        Some(
-            h_flex()
-                .w_full()
-                .flex_none()
-                .px(design::ui_px(cx, 8.0))
-                .py(design::ui_px(cx, 4.0))
-                .border_t_1()
-                .border_color(moon(p.border))
-                .child(
-                    div()
-                        .id("an-ticks-estimate")
-                        .max_w_full()
-                        .px(design::ui_px(cx, 8.0))
-                        .py(design::ui_px(cx, 2.0))
-                        .rounded(design::ui_px(cx, 4.0))
-                        .bg(moon_alpha(tone, if long { 0.16 } else { 0.08 }))
-                        .text_size(design::t_caption(cx))
-                        .font_family(design::ui_font())
-                        .text_color(moon(tone))
-                        .truncate()
-                        .tooltip(crate::panels::common::text_tooltip(format!(
-                            "{text}\n\n{}",
-                            t!("analytics.ticks.est_tip")
-                        )))
-                        .child(short),
-                )
-                .into_any_element(),
-        )
+        };
+        Some(format!("{text}\n\n{}", t!("analytics.ticks.est_tip")))
     }
 
     /// Measure what a point costs under the settings as they stand, once they stop moving —
@@ -423,6 +389,14 @@ impl AnalyticsView {
                 )
         });
         true
+    }
+}
+
+/// Include a measured duration once; an unmeasured point never promises a completion time.
+pub(super) fn pick_all_label(time: Option<&str>) -> String {
+    match time {
+        Some(time) => t!("analytics.ticks.pick.all_est", time = time).to_string(),
+        None => t!("analytics.ticks.pick.all").to_string(),
     }
 }
 

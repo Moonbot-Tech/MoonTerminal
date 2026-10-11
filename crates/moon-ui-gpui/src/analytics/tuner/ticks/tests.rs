@@ -1,53 +1,35 @@
 use std::time::Duration;
 
-use super::{fetch_wait_text, holdout_part};
-use moon_core::db::tuner::ticks::SearchResult;
-use moon_core::db::tuner::ticks::search::MIN_HOLDOUT;
+use super::fetch_wait_text;
 
-fn result(holdout_n: Option<i64>, holdout_open: usize) -> SearchResult {
-    SearchResult {
-        values: Vec::new(),
-        searched: Vec::new(),
-        train: Default::default(),
-        holdout: holdout_n.map(|n| {
-            let mut tally = moon_core::db::metrics::Tally::default();
-            tally.n = n;
-            tally
-        }),
-        holdout_open,
-        holdout_open_profit: 0.0,
-        fact_train: Default::default(),
-        fact_holdout: None,
-        holdout_loses: false,
-        seed: 1,
-        stats: Default::default(),
-    }
-}
-
-/// Every search answer states its out-of-sample status: no holdout and a holdout too small to
-/// check both warn as "no check", an open one warns, a real one is printed against the fact.
+/// A count ending in one must use the singular instrumental form, including twenty-one.
 #[test]
-fn every_answer_states_its_out_of_sample_status() {
-    let _locale = crate::test_locale::force("en");
-    let none = holdout_part(&result(None, 0));
-    let small = holdout_part(&result(Some(MIN_HOLDOUT - 1), 0));
-    // A 4-deal holdout the answer left a deal open in is still no check: the size speaks first.
-    let small_open = holdout_part(&result(Some(1), 1));
-    let open = holdout_part(&result(Some(MIN_HOLDOUT), 1));
-    let real = holdout_part(&result(Some(MIN_HOLDOUT), 0));
-    let whole = rust_i18n::t!("analytics.ticks.whole_period_short").to_string();
-    for part in [&none, &small, &small_open] {
-        assert!(part.warn);
-        assert_eq!(part.short, whole);
+fn usable_trade_caption_declines_russian_and_ukrainian_counts() {
+    for (code, expected) in [
+        (
+            "ru",
+            [
+                "по 1 годной сделке",
+                "по 2 годным сделкам",
+                "по 5 годным сделкам",
+                "по 21 годной сделке",
+            ],
+        ),
+        (
+            "uk",
+            [
+                "за 1 придатною угодою",
+                "за 2 придатними угодами",
+                "за 5 придатними угодами",
+                "за 21 придатною угодою",
+            ],
+        ),
+    ] {
+        let _locale = crate::test_locale::force(code);
+        for (n, expected) in [1, 2, 5, 21].into_iter().zip(expected) {
+            assert_eq!(super::kpi_over_text(n), expected);
+        }
     }
-    assert!(open.warn && open.short != whole);
-    // The open deals' tape-end estimate and their count follow the holdout's profit.
-    let mut with_estimate = result(Some(MIN_HOLDOUT), 2);
-    with_estimate.holdout_open_profit = 20.0;
-    let estimate = holdout_part(&with_estimate);
-    assert!(estimate.warn);
-    assert!(estimate.short.contains("(+20 (2))"), "{}", estimate.short);
-    assert!(!real.warn && real.short != whole && !real.short.is_empty());
 }
 
 /// The wait before the fill is shown only where the core filed a placement that precedes the

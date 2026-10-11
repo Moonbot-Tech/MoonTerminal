@@ -90,6 +90,25 @@ impl GridSection {
     }
 }
 
+/// Count changed live ticked knobs of this section, excluding fixed and foreign fields.
+pub(super) fn changed_in(
+    section: &GridSection,
+    live_keys: &[&str],
+    changes: &[(String, String)],
+) -> (usize, usize) {
+    let keys: HashSet<&str> = section
+        .knobs()
+        .map(|k| k.key)
+        .filter(|k| live_keys.contains(k))
+        .collect();
+    let changed: HashSet<&str> = changes
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .filter(|key| keys.contains(key))
+        .collect();
+    (changed.len(), keys.len())
+}
+
 /// The knobs the scope's kinds understand — the union over the kinds present, in descriptor
 /// order.
 pub(in crate::analytics::tuner) fn scope_knobs(kinds: &[String]) -> Vec<&'static TickParam> {

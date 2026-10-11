@@ -1,6 +1,25 @@
 use super::*;
 use moon_core::feed::{SchemaField, SchemaFieldUi};
 
+/// Foreign, fixed and unticked fields must not inflate the section's changed count.
+#[test]
+fn changed_counts_only_the_sections_live_ticked_knobs() {
+    let knobs = scope_knobs(&["DropsDetection".to_string()]);
+    let sections = layout(&[], &knobs, &HashSet::new());
+    let group = sections
+        .iter()
+        .find(|s| s.knobs().count() >= 2)
+        .expect("two knobs");
+    let keys: Vec<_> = group.knobs().map(|k| k.key).collect();
+    let live = [keys[0], keys[1]];
+    let changes = vec![
+        (keys[0].to_string(), "1.3".to_string()),
+        ("foreign".to_string(), "2.7".to_string()),
+    ];
+    assert_eq!(changed_in(group, &live, &changes), (1, 2));
+    assert_eq!(changed_in(group, &live[1..], &changes), (0, 1));
+}
+
 fn section(title: &str, names: &[&str]) -> SchemaSection {
     SchemaSection {
         title: title.to_string(),

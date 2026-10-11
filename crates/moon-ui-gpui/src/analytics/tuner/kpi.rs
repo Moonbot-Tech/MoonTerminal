@@ -6,13 +6,14 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::summary::{fmt_signed, sign_color};
 use super::super::{AnalyticsView, LoadState};
-use super::shared::{card, collapse_caret};
+use super::shared::{card, card_with_wrapping_caption, collapse_caret};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 use moon_core::db::tuner::VarStats;
@@ -74,47 +75,44 @@ fn blank_figure() -> Figure {
     }
 }
 
-/// The deals a column bought and left open inside the tape: how many, and what they would make
-/// closed at the last print of their tapes — in the tally's metric, an estimate shown beside the
-/// column's profit and never added to it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct OpenTail {
-    pub(super) profit: f64,
-    pub(super) n: usize,
+/// Row labels remain shared unless an axis requests plain-language captions.
+#[derive(Clone, Copy, Default)]
+pub(super) enum KpiRows {
+    #[default]
+    Shared,
+    Plain,
 }
 
-/// The profit cell of a column with deals left open: the closed deals' profit, then the open
-/// ones' estimate in brackets — `-4.94 (+1.20)`. Their count is not in the cell: the narrow
-/// column cut `-4.94 (+1.20 (5))` off (2026-10-07), and the heading's line already says how many
-/// are open. The colour stays the closed profit's; the tooltip spells every part out, the count
-/// included.
-///
-/// Args:
-///     closed: The column's profit figure, from [`figure_of`].
-///     tail: The deals left open.
-///
-/// Returns:
-///     The cell with the bracket appended.
-fn with_open_tail(closed: Figure, tail: OpenTail) -> Figure {
-    let open = fmt_signed(tail.profit);
-    let tooltip = t!(
-        "analytics.tuner.kpi_open_tip",
-        closed = closed
-            .text
-            .tooltip
-            .clone()
-            .unwrap_or_else(|| closed.text.display.clone()),
-        open = open.clone(),
-        n = tail.n
+/// Axis-specific captions and a separate tape-end estimate, outside scored profit.
+#[derive(Default)]
+pub(super) struct KpiOpts {
+    pub(super) title: Option<(String, String)>,
+    pub(super) rows: KpiRows,
+    pub(super) unclosed: Option<(usize, f64)>,
+}
+
+/// Keep the Fact blank and the estimate separate from the closed-profit row.
+fn unclosed_cell(column: usize, n: usize, profit: f64) -> KpiCellText {
+    if column != 1 {
+        return blank_figure().text;
+    }
+    let value = format_kpi_cell(CellFormat::Profit, profit);
+    let count = format_kpi_cell(CellFormat::Integer, n as f64);
+    let display = t!(
+        "analytics.ticks.kpi.unclosed_val",
+        n = count.display,
+        profit = value.display
     )
     .to_string();
-    Figure {
-        text: KpiCellText {
-            display: format!("{} ({open})", closed.text.display),
-            tooltip: Some(tooltip),
-        },
-        ..closed
-    }
+    let tooltip = (count.tooltip.is_some() || value.tooltip.is_some()).then(|| {
+        t!(
+            "analytics.ticks.kpi.unclosed_val",
+            n = n,
+            profit = value.tooltip.unwrap_or_else(|| fmt_signed(profit))
+        )
+        .to_string()
+    });
+    KpiCellText { display, tooltip }
 }
 
 /// Paint one KPI from a column's stats.
@@ -302,9 +300,6 @@ pub(super) struct VarLabel {
     pub(super) tip: Option<String>,
     /// The second line is a warning, drawn in the warn colour.
     pub(super) sub_warn: bool,
-    /// Deals the column left open inside the tape; their estimate follows its profit
-    /// ([`with_open_tail`]).
-    pub(super) open: Option<OpenTail>,
     /// The column is scored on too few deals to recommend: its signed figures are drawn
     /// muted, never green as a gain.
     pub(super) muted: bool,
@@ -320,7 +315,6 @@ impl VarLabel {
             sub: None,
             tip: None,
             sub_warn: false,
-            open: None,
             muted: false,
             placeholder: false,
         }
@@ -332,7 +326,6 @@ impl VarLabel {
             sub: Some(sub),
             tip: None,
             sub_warn: false,
-            open: None,
             muted: false,
             placeholder: false,
         }
@@ -358,18 +351,6 @@ impl VarLabel {
     pub(super) fn sub_line(mut self, sub: String, warn: bool) -> Self {
         self.sub = Some(sub);
         self.sub_warn = warn;
-        self
-    }
-
-    /// Attach the deals the column left open: its profit cell carries their estimate.
-    ///
-    /// Args:
-    ///     tail: The deals left open.
-    ///
-    /// Returns:
-    ///     The same label with the open deals.
-    pub(super) fn with_open(mut self, tail: OpenTail) -> Self {
-        self.open = Some(tail);
         self
     }
 
@@ -429,14 +410,21 @@ pub(super) fn kpi_matrix_card(
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
     let fact = VarLabel::new(t!("analytics.tuner.fact").to_string());
-    kpi_matrix_card_over(stats, scope, &fact, var_labels, collapsed, p, cx)
+    kpi_matrix_card_with(
+        stats,
+        scope,
+        &fact,
+        var_labels,
+        collapsed,
+        p,
+        cx,
+        KpiOpts::default(),
+    )
 }
 
-/// [`kpi_matrix_card`] with column 0 headed `base` rather than "Fact" — for an axis whose
-/// baseline is not the whole fact (the Entry/Exit axis compares its variants with the trades the
-/// model reproduces). Every column uses the same sign colour; a variant is not tinted
-/// against column 0.
-pub(super) fn kpi_matrix_card_over(
+/// Bind collapse once for every axis while preserving its optional matrix presentation.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn kpi_matrix_card_with(
     stats: &LoadState<Vec<VarStats>>,
     scope: String,
     base: &VarLabel,
@@ -444,21 +432,39 @@ pub(super) fn kpi_matrix_card_over(
     collapsed: bool,
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
+    opts: KpiOpts,
 ) -> AnyElement {
     let view = cx.entity();
     let on_collapse: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, app| {
         view.update(app, |this, cx| this.toggle_kpi_collapsed(cx));
     });
-    kpi_matrix_body(
-        stats,
-        scope,
-        base,
-        var_labels,
-        collapsed,
-        on_collapse,
-        p,
-        cx,
-    )
+    match opts {
+        KpiOpts {
+            title: None,
+            rows: KpiRows::Shared,
+            unclosed: None,
+        } => kpi_matrix_body(
+            stats,
+            scope,
+            base,
+            var_labels,
+            collapsed,
+            on_collapse,
+            p,
+            cx,
+        ),
+        opts => kpi_matrix_body_with(
+            stats,
+            scope,
+            base,
+            var_labels,
+            collapsed,
+            on_collapse,
+            p,
+            cx,
+            opts,
+        ),
+    }
 }
 
 /// How many columns the matrix draws: one per stat, extended to every trailing placeholder
@@ -505,6 +511,40 @@ pub(super) fn kpi_matrix_body(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
+    kpi_matrix_body_with(
+        stats,
+        scope,
+        base,
+        var_labels,
+        collapsed,
+        on_collapse,
+        p,
+        cx,
+        KpiOpts::default(),
+    )
+}
+
+/// Render the shared matrix with optional axis captions, plain rows and an unclosed estimate.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn kpi_matrix_body_with(
+    stats: &LoadState<Vec<VarStats>>,
+    scope: String,
+    base: &VarLabel,
+    var_labels: &[VarLabel],
+    collapsed: bool,
+    on_collapse: Rc<dyn Fn(&mut Window, &mut App)>,
+    p: MoonPalette,
+    cx: &App,
+    opts: KpiOpts,
+) -> AnyElement {
+    let (title, caption) = opts
+        .title
+        .unwrap_or_else(|| (t!("analytics.tuner.kpi_title").to_string(), scope));
+    let card_el = if matches!(opts.rows, KpiRows::Plain) {
+        card_with_wrapping_caption
+    } else {
+        card
+    };
     // The collapse caret is part of the title bar in EVERY state — built up front so it does
     // not blink out while the matrix is loading or after a read error.
     let caret = collapse_caret(
@@ -520,9 +560,9 @@ pub(super) fn kpi_matrix_body(
     let stats = match stats.view(|_| false) {
         Ok(s) => s.clone(),
         Err(note) => {
-            return card(
-                t!("analytics.tuner.kpi_title").to_string(),
-                scope,
+            return card_el(
+                title,
+                caption,
                 super::super::note_el("an-tuner-kpi-note", note, 8.0, p, cx),
                 Some(caret),
                 p,
@@ -534,7 +574,7 @@ pub(super) fn kpi_matrix_body(
     // exactly these via `COLLAPSED_ROWS`. Keep them first if this vec is ever reordered.
     // Colour is the sign of the painted figure in every column — see [`figure_of`].
     const COLLAPSED_ROWS: usize = 2;
-    let rows: Vec<(String, MetricKind)> = vec![
+    let mut rows: Vec<(String, MetricKind)> = vec![
         (t!("analytics.kpi.trades").to_string(), MetricKind::Trades),
         (
             t!(
@@ -564,6 +604,21 @@ pub(super) fn kpi_matrix_body(
             MetricKind::MaxDrawdown,
         ),
     ];
+    if matches!(opts.rows, KpiRows::Plain) {
+        for (label, kind) in &mut rows {
+            let key = match kind {
+                MetricKind::Trades => "analytics.ticks.kpi.row.trades",
+                MetricKind::Profit => "analytics.ticks.kpi.row.profit",
+                MetricKind::Average => "analytics.ticks.kpi.row.avg",
+                MetricKind::Winrate => "analytics.ticks.kpi.row.winrate",
+                MetricKind::ProfitFactor => "analytics.ticks.kpi.row.pf",
+                MetricKind::AvgWin => "analytics.ticks.kpi.row.avg_win",
+                MetricKind::AvgLoss => "analytics.ticks.kpi.row.avg_loss",
+                MetricKind::MaxDrawdown => "analytics.ticks.kpi.row.maxdd",
+            };
+            *label = t!(key, unit = crate::analytics::pnl_unit_label()).to_string();
+        }
+    }
     let columns = kpi_columns(stats.len(), var_labels);
     let headings: Vec<VarLabel> = (0..columns)
         .map(|i| {
@@ -579,12 +634,40 @@ pub(super) fn kpi_matrix_body(
         .collect();
     // A second line only when some heading still carries one. A short title plus a tooltip
     // stays on one line, so a narrow pane does not wrap "2 of 2 with tape…" onto an ellipsis.
-    let open: Vec<Option<OpenTail>> = headings.iter().map(|label| label.open).collect();
-    // A profit cell with an open tail carries a bracket the usual width would cut.
-    let col_w = if open.iter().any(Option::is_some) {
-        128.0
+    let widths: Vec<Pixels> = (0..columns)
+        .map(|i| {
+            let mut width = f32::from(design::font_w_px(cx, 92.0));
+            if matches!(opts.rows, KpiRows::Shared) {
+                return px(width);
+            }
+            for (_, kind) in &rows {
+                if let Some(s) = stats.get(i) {
+                    width = width.max(design::mono_caption_text_width(
+                        cx,
+                        &figure_of(*kind, s).text.display,
+                        400.0,
+                    ));
+                }
+            }
+            if let Some((n, profit)) = opts.unclosed {
+                width = width.max(design::mono_caption_text_width(
+                    cx,
+                    &unclosed_cell(i, n, profit).display,
+                    400.0,
+                ));
+            }
+            px(width)
+        })
+        .collect();
+    let gap = if matches!(opts.rows, KpiRows::Plain) {
+        6.0
     } else {
-        92.0
+        8.0
+    };
+    let inset = if matches!(opts.rows, KpiRows::Plain) {
+        4.0
+    } else {
+        8.0
     };
     let muted: Vec<bool> = headings.iter().map(|label| label.muted).collect();
     let head_h = if headings.iter().any(|label| label.sub.is_some()) {
@@ -594,10 +677,10 @@ pub(super) fn kpi_matrix_body(
     };
     let mut head = h_flex()
         .w_full()
-        .px(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, inset))
         .h(design::fit_h_px(cx, head_h, 12.0, 5.0))
         .items_center()
-        .gap(design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, gap))
         .text_size(design::t_caption(cx))
         .font_family(design::ui_font())
         .text_color(moon(p.text_soft))
@@ -611,7 +694,7 @@ pub(super) fn kpi_matrix_body(
         let tip = label.tip.clone();
         let column = v_flex()
             .debug_selector(move || format!("kpi-head-{i}"))
-            .w(design::font_w_px(cx, col_w))
+            .w(widths[i])
             .flex_none()
             .items_end()
             .child(div().truncate().child(label.title))
@@ -645,31 +728,43 @@ pub(super) fn kpi_matrix_body(
     };
     let mut body = v_flex().w_full().child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
+        let plain = matches!(opts.rows, KpiRows::Plain);
+        let label_width = design::ui_caption_text_width(cx, &label, 400.0);
         let mut row = h_flex()
             .debug_selector(move || format!("kpi-row-{row_index}"))
             .w_full()
-            .px(design::ui_px(cx, 8.0))
-            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .px(design::ui_px(cx, inset))
+            .when(plain, |row| {
+                row.flex_wrap()
+                    .justify_end()
+                    .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            })
+            .when(!plain, |row| row.h(design::fit_h_px(cx, 24.0, 14.0, 5.0)))
             .items_center()
-            .gap(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, gap))
             .border_t_1()
             .border_color(moon_alpha(p.border, 0.5))
             .child(
                 div()
                     .flex_1()
+                    .when(matches!(opts.rows, KpiRows::Plain), |label| {
+                        label
+                            .min_w(px(label_width))
+                            .whitespace_nowrap()
+                            .text_size(design::t_caption(cx))
+                    })
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
                     .debug_selector(move || format!("kpi-metric-{row_index}"))
                     .child(label),
             );
-        for i in 0..columns {
-            let figure = match (stats.get(i), open.get(i).copied().flatten()) {
+        // Keep Fact and V1 together when a localized money label needs its own line.
+        let mut figures = h_flex().flex_none().gap(design::ui_px(cx, gap));
+        for (i, width) in widths.iter().enumerate() {
+            let figure = match stats.get(i) {
                 // A promised column without stats: every cell is the blank dash.
-                (None, _) => blank_figure(),
-                (Some(s), Some(tail)) if kind == MetricKind::Profit => {
-                    with_open_tail(figure_of(kind, s), tail)
-                }
-                (Some(s), _) => figure_of(kind, s),
+                None => blank_figure(),
+                Some(s) => figure_of(kind, s),
             };
             let color = match figure.tone {
                 FigureTone::Signed if muted.get(i).copied().unwrap_or(false) => p.text_muted,
@@ -685,12 +780,18 @@ pub(super) fn kpi_matrix_body(
                 .unwrap_or_else(|| figure.text.display.clone());
             let mut value = div()
                 .id(("an-tuner-kpi-value", row_index * columns + i))
+                .debug_selector(move || format!("kpi-value-{row_index}-{i}"))
                 .role(Role::Label)
                 .aria_label(accessibility_label)
-                .w(design::font_w_px(cx, col_w))
+                .w(*width)
                 .min_w_0()
                 .flex_none()
-                .truncate()
+                .when(matches!(opts.rows, KpiRows::Plain), |value| {
+                    value.whitespace_nowrap().text_size(design::t_caption(cx))
+                })
+                .when(matches!(opts.rows, KpiRows::Shared), |value| {
+                    value.truncate()
+                })
                 .text_right()
                 .font_family(design::mono())
                 .text_color(moon(color))
@@ -698,18 +799,60 @@ pub(super) fn kpi_matrix_body(
             if let Some(tooltip) = figure.text.tooltip {
                 value = value.tooltip(crate::panels::common::text_tooltip(tooltip));
             }
-            row = row.child(value);
+            if plain {
+                figures = figures.child(value);
+            } else {
+                row = row.child(value);
+            }
+        }
+        if plain {
+            row = row.child(figures);
         }
         body = body.child(row);
     }
-    card(
-        t!("analytics.tuner.kpi_title").to_string(),
-        scope,
-        body.into_any_element(),
-        Some(caret),
-        p,
-        cx,
-    )
+    if let Some((n, profit)) = opts.unclosed {
+        let mut row = h_flex()
+            .debug_selector(|| "kpi-unclosed".to_string())
+            .w_full()
+            .px(design::ui_px(cx, inset))
+            .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+            .items_center()
+            .gap(design::ui_px(cx, gap))
+            .border_t_1()
+            .border_color(moon_alpha(p.border, 0.5))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .debug_selector(|| "kpi-unclosed-label".to_string())
+                    .whitespace_nowrap()
+                    .text_size(design::t_caption(cx))
+                    .font_family(design::ui_font())
+                    .text_color(moon(p.text_soft))
+                    .child(t!("analytics.ticks.kpi.unclosed").to_string()),
+            );
+        for (i, width) in widths.iter().enumerate() {
+            let text = unclosed_cell(i, n, profit);
+            let mut cell = div()
+                .id(("an-tuner-kpi-unclosed", i))
+                .debug_selector(move || format!("kpi-unclosed-{i}"))
+                .w(*width)
+                .flex_none()
+                .min_w_0()
+                .text_right()
+                .whitespace_nowrap()
+                .text_size(design::t_caption(cx))
+                .font_family(design::mono())
+                .text_color(moon(p.text_muted))
+                .child(text.display);
+            if let Some(tip) = text.tooltip {
+                cell = cell.tooltip(crate::panels::common::text_tooltip(tip));
+            }
+            row = row.child(cell);
+        }
+        body = body.child(row);
+    }
+    card_el(title, caption, body.into_any_element(), Some(caret), p, cx)
 }
 
 #[cfg(test)]

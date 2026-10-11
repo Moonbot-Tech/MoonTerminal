@@ -1,5 +1,5 @@
-//! How far a search's answer can be trusted (LinKvo, 2026-09-25): under the parameter grid, once
-//! a search has run, the share of the tape the model reproduces — "entry 85.5 %, exit 54.4 %" —
+//! How far a search's answer can be trusted: the parameter grid's wrapping footer shows
+//! the share of the tape the model reproduces, even before the first search —
 //! said plainly, because the search learns on the reproduced trades only and a reader who sees
 //! its plan should know how much of the strategy's history stands behind it.
 //!
@@ -133,15 +133,8 @@ fn assumptions(model: &ModelSettings) -> String {
 }
 
 impl AnalyticsView {
-    /// The accuracy line under the parameter grid, once a search has run: the model's entry and
-    /// exit shares over the scope's trades with tape. Nothing before the first search, while
-    /// one runs, and with no trade with tape to count.
+    /// Show model coverage whenever tape exists, independently of search state.
     pub(super) fn ticks_accuracy_row(&self, p: MoonPalette, cx: &App) -> Option<AnyElement> {
-        if self.ticks.last_result.is_none()
-            || matches!(self.ticks.sugg, super::state::SuggState::Running { .. })
-        {
-            return None;
-        }
         let data = self.ticks.data.data()?;
         // Counted where the verdicts change (`TicksData::refresh_summary`), not per paint.
         let acc = data.accuracy;
@@ -149,33 +142,11 @@ impl AnalyticsView {
             return None;
         }
         let entry_modelled = data.entry_modelled();
-        let entry = if entry_modelled {
-            pct_text(acc.entry.pct())
-        } else {
-            t!("analytics.ticks.acc_entry_fact").to_string()
-        };
-        let text = t!(
-            "analytics.ticks.acc_line",
-            entry = entry,
-            exit = pct_text(acc.exit.pct()),
-            n = acc.n()
-        )
-        .to_string();
         let without_tape = data.rows.len().saturating_sub(acc.n());
         let fit = data.fit();
+        let text = accuracy_sentence(&acc, entry_modelled, fit);
         Some(
-            div()
-                .id("an-ticks-accuracy")
-                .w_full()
-                .flex_none()
-                .px(design::ui_px(cx, 12.0))
-                .py(design::ui_px(cx, 4.0))
-                .border_t_1()
-                .border_color(moon(p.border))
-                .truncate()
-                .text_size(design::t_caption(cx))
-                .font_family(design::ui_font())
-                .text_color(moon(p.text_muted))
+            accuracy_footer_el(text, p, cx)
                 // Built on hover only: the grid paints far more often than anyone reads it.
                 .tooltip(move |window, cx| {
                     crate::panels::common::text_tooltip(tooltip(
@@ -185,8 +156,48 @@ impl AnalyticsView {
                         fit,
                     ))(window, cx)
                 })
-                .child(text)
                 .into_any_element(),
         )
     }
+}
+
+/// Shared wrapping coverage footer, with hover content attached lazily by its host.
+pub(super) fn accuracy_footer_el(text: String, p: MoonPalette, cx: &App) -> Stateful<Div> {
+    div()
+        .id("an-ticks-accuracy")
+        .debug_selector(|| "an-ticks-accuracy".to_string())
+        .w_full()
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .py(design::ui_px(cx, 4.0))
+        .border_t_1()
+        .border_color(moon(p.border))
+        .min_w_0()
+        .min_h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
+        .text_size(design::t_caption(cx))
+        .font_family(design::ui_font())
+        .text_color(moon(p.text_muted))
+        .child(text)
+}
+
+/// Count every tape in the denominator while keeping the search's fit sample independent.
+pub(super) fn accuracy_sentence(acc: &Accuracy, entry_modelled: bool, fit: usize) -> String {
+    let entry = if entry_modelled {
+        pct_text(acc.entry.pct())
+    } else {
+        t!("analytics.ticks.pick.acc_entry_fact").to_string()
+    };
+    let pct = acc
+        .exit
+        .pct()
+        .map_or_else(|| "—".to_string(), |pct| format!("{pct:.1}"));
+    t!(
+        "analytics.ticks.pick.acc",
+        entry = entry,
+        hits = acc.exit.hits,
+        n = acc.n(),
+        pct = pct,
+        fit = fit
+    )
+    .to_string()
 }

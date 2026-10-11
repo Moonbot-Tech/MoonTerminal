@@ -1,6 +1,6 @@
 //! The settings of the "Entry/Exit" axis, laid out as "By filter" lays out its own: the search
-//! row keeps the restart count inline and puts the rest behind the ⚙ popover, with the live
-//! status on a band above it; the model's settings sit behind their own popover in the deal
+//! row keeps the restart count inline and puts the rest behind the settings popover; live
+//! status and Stop belong to the summary card. Model settings sit behind their own popover in the deal
 //! table's head, beside the ✓ column they decide.
 //!
 //! The split follows what each setting changes. A search setting changes what the search looks
@@ -55,9 +55,105 @@ fn method_keys(method: EntryMethod) -> (&'static str, &'static str) {
     }
 }
 
+/// Owned captions and availability for the view-free search controls.
+pub(super) struct PickBarModel {
+    pub one_enabled: bool,
+    pub all_enabled: bool,
+    pub one_tip: String,
+    pub all_tip: String,
+    pub all_label: String,
+}
+/// Search callbacks supplied by the host, without entity reads during paint.
+pub(super) struct PickBarActs {
+    pub one: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+    pub all: std::rc::Rc<dyn Fn(&mut Window, &mut App)>,
+}
+/// Draw wrapping controls from the same model used by the production view and layout probes.
+pub(super) fn pick_bar_el(
+    model: &PickBarModel,
+    input: Entity<MoonInputState>,
+    settings: AnyElement,
+    acts: &PickBarActs,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let one = acts.one.clone();
+    let all = acts.all.clone();
+    h_flex()
+        .id("an-ticks-pick-bar")
+        .debug_selector(|| "an-ticks-pick-bar".to_string())
+        .w_full()
+        .min_w_0()
+        .flex_none()
+        .flex_wrap()
+        .px(design::ui_px(cx, 12.0))
+        .pb(design::ui_px(cx, 6.0))
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .text_size(design::t_caption(cx))
+        .font_family(design::ui_font())
+        .child(
+            h_flex()
+                .flex_none()
+                .items_center()
+                .gap(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .text_color(moon(p.text_muted))
+                        .child(t!("analytics.ticks.pick.starts").to_string()),
+                )
+                .child(
+                    div()
+                        .w(design::font_w_px(cx, 46.0))
+                        .flex_none()
+                        .font_family(design::mono())
+                        .child(
+                            MoonInput::new("tun-cfg-it-x")
+                                .state(&input)
+                                .size(design::INPUT_SIZE),
+                        ),
+                )
+                .child(settings),
+        )
+        .child(
+            div()
+                .id("tun-suggest-one-x-box")
+                .debug_selector(|| "tun-suggest-one-x-box".to_string())
+                .flex_none()
+                .tooltip(crate::panels::common::text_tooltip(model.one_tip.clone()))
+                .child(
+                    MoonButton::new("tun-suggest-one-x")
+                        .size(MoonButtonSize::density(cx))
+                        .mono(false)
+                        .variant(MoonButtonVariant::Soft)
+                        .label(t!("analytics.ticks.pick.one").to_string())
+                        .disabled(!model.one_enabled)
+                        .on_click(move |_, window, app| one(window, app))
+                        .render(),
+                ),
+        )
+        .child(
+            div()
+                .id("tun-suggest-run-x-box")
+                .debug_selector(|| "tun-suggest-run-x-box".to_string())
+                .flex_none()
+                .tooltip(crate::panels::common::text_tooltip(model.all_tip.clone()))
+                .child(
+                    MoonButton::new("tun-suggest-run-x")
+                        .size(MoonButtonSize::density(cx))
+                        .mono(false)
+                        .variant(MoonButtonVariant::Blue)
+                        .label(model.all_label.clone())
+                        .disabled(!model.all_enabled)
+                        .on_click(move |_, window, app| all(window, app))
+                        .render(),
+                ),
+        )
+        .into_any_element()
+}
+
 impl AnalyticsView {
-    /// The search row of the axis: the status band, then restarts, the settings gear, Stop,
-    /// "Search" on the selected field and "Search all".
+    /// Bind the wrapping bar to the cached restart input and existing search operations.
     pub(in crate::analytics::tuner) fn ticks_config_row(
         &mut self,
         p: MoonPalette,
@@ -65,50 +161,9 @@ impl AnalyticsView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let running = matches!(self.ticks.sugg, SuggState::Running { .. });
-        let too_few = self.ticks.search_too_few();
-        let (status, status_color) = match &self.ticks.sugg {
-            // Counted against the restarts the run was launched with, not the box's current
-            // text.
-            SuggState::Running { handle, total } => {
-                let progress = t!(
-                    "analytics.tuner.sugg_progress",
-                    done = handle.completed(),
-                    total = total
-                )
-                .to_string();
-                // A search of both groups: its entry points, each with a whole exit search, move
-                // long before a restart ends.
-                let progress = match handle.points() {
-                    0 => progress,
-                    n => format!(
-                        "{progress} · {}",
-                        t!("analytics.ticks.stats_entry_points", n = n)
-                    ),
-                };
-                (progress, p.text_soft)
-            }
-            // A note first; else how the last search went, so a restart or pass count that
-            // changed nothing can be seen to have changed nothing.
-            SuggState::Idle => match (&self.ticks.sugg_note, too_few, &self.ticks.last_result) {
-                (Some(note), _, _) => (note.clone(), p.amber),
-                // Too few deals to search: the buttons are off, and this line says why.
-                (None, Some(n), _) => (
-                    super::variants::miss_note(
-                        moon_core::db::tuner::ticks::search::SearchMiss::TooFew { n },
-                        0,
-                    ),
-                    p.amber,
-                ),
-                (None, None, Some(result)) => (
-                    super::variants::search_stats_line(&result.stats),
-                    p.text_muted,
-                ),
-                (None, None, None) => (String::new(), p.text_muted),
-            },
-        };
-        super::variants::probe_painted(&status);
+        let too_few = self.ticks.search_too_few().is_some();
         let placeholder = super::variants::DEFAULT_RESTARTS.to_string();
-        let it_input = self.shell_cfg_input(
+        let input = self.shell_cfg_input(
             TunerKind::Ticks,
             CfgInput::Restarts,
             &placeholder,
@@ -116,103 +171,28 @@ impl AnalyticsView {
             cx,
         );
         let settings = self.ticks_search_settings(p, window, cx);
-        let (one_tip, all_tip) = self.ticks_search_tips();
-        let controls = h_flex()
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .pb(design::ui_px(cx, 6.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .font_family(design::ui_font())
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(moon(p.text_muted))
-                    .child(t!("analytics.tuner.iters").to_string()),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 46.0))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .child(
-                        MoonInput::new("tun-cfg-it-x")
-                            .state(&it_input)
-                            .size(design::INPUT_SIZE),
-                    ),
-            )
-            .child(settings)
-            .child(div().flex_1())
-            .when(running, |el| {
-                el.child(
-                    div().flex_none().child(
-                        MoonButton::new("tun-suggest-stop-x")
-                            .variant(MoonButtonVariant::Soft)
-                            .label(t!("analytics.tuner.stop").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| this.ticks_stop_suggest(cx)))
-                            .render(),
-                    ),
-                )
-            })
-            .child(
-                div()
-                    .id("tun-suggest-one-x-box")
-                    .flex_none()
-                    .tooltip(crate::panels::common::text_tooltip(one_tip))
-                    .child(
-                        MoonButton::new("tun-suggest-one-x")
-                            .variant(MoonButtonVariant::Soft)
-                            .label(t!("analytics.tuner.suggest_one").to_string())
-                            .disabled(
-                                running || too_few.is_some() || self.ticks.sel_field.is_none(),
-                            )
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.ticks_suggest_one(window, cx)
-                                }),
-                            )
-                            .render(),
-                    ),
-            )
-            .child(
-                div()
-                    .id("tun-suggest-run-x-box")
-                    .flex_none()
-                    .tooltip(crate::panels::common::text_tooltip(all_tip))
-                    .child(
-                        MoonButton::new("tun-suggest-run-x")
-                            .variant(MoonButtonVariant::Blue)
-                            .label(t!("analytics.tuner.suggest_run").to_string())
-                            .disabled(running || too_few.is_some())
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.ticks_suggest(window, cx)),
-                            )
-                            .render(),
-                    ),
-            );
-        v_flex()
-            .w_full()
-            .flex_none()
-            .when(!status.is_empty(), |el| {
-                el.child(
-                    div()
-                        .id("tun-suggest-status-x")
-                        .w_full()
-                        .min_w_0()
-                        .px(design::ui_px(cx, 12.0))
-                        .pb(design::ui_px(cx, 4.0))
-                        .truncate()
-                        .text_size(design::t_caption(cx))
-                        .font_family(design::ui_font())
-                        .text_color(moon(status_color))
-                        .tooltip(crate::panels::common::text_tooltip(status.clone()))
-                        .child(status),
-                )
-            })
-            .child(controls)
-            .into_any_element()
+        let (one_tip, mut all_tip) = self.ticks_search_tips();
+        if let Some(estimate) = self.ticks_estimate_tip() {
+            all_tip.push_str(&format!("\n\n{estimate}"));
+        }
+        let model = PickBarModel {
+            one_enabled: !running && !too_few && self.ticks.sel_field.is_some(),
+            all_enabled: !running && !too_few,
+            one_tip,
+            all_tip,
+            all_label: super::estimate::pick_all_label(self.ticks_estimate_time_text().as_deref()),
+        };
+        let view = cx.entity();
+        let one = view.clone();
+        let acts = PickBarActs {
+            one: std::rc::Rc::new(move |window, app| {
+                one.update(app, |this, cx| this.ticks_suggest_one(window, cx))
+            }),
+            all: std::rc::Rc::new(move |window, app| {
+                view.update(app, |this, cx| this.ticks_suggest(window, cx))
+            }),
+        };
+        pick_bar_el(&model, input, settings, &acts, p, cx)
     }
 
     /// The search settings popover and its gear. Built only while open, as the filter's is:
