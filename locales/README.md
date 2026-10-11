@@ -41,6 +41,7 @@ key space — splitting into files is purely organisational, by UI area:
 | `telegram_access.<lang>.yml` | Telegram owner and read-only viewer assignments               |
 | `telegram_report.<lang>.yml` | Telegram report replies, period buttons, and help text        |
 | `telegram_menu.<lang>.yml`   | the bot's configurable menu items, its inline section screens, and their Settings editor |
+| `telegram_layout.<lang>.yml` | the bot message builder: trade card and report layout editor  |
 | `report.<lang>.yml`          | the Report panel (columns, filters, totals)                   |
 | `trade_window.<lang>.yml`    | the trade window opened from a closed Report row              |
 | `assets.<lang>.yml`          | the Assets window/panel (columns, wallets)                    |
