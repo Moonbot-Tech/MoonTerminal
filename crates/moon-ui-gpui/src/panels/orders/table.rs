@@ -643,7 +643,7 @@ fn strat_name_cell(e: &OrderEntry, view: &Entity<OrdersPanel>, p: MoonPalette) -
         .cursor_pointer()
         .text_color(rgb(MoonTone::Muted.color(p)))
         .font_weight(FontWeight::MEDIUM)
-        .tooltip(crate::panels::common::text_tooltip(name.clone()))
+        .tooltip(crate::panels::common::text_tooltip_value(name.clone()))
         .child(name)
         .on_click(move |_, window, app| open_strat_goto(&view, core, strat_id, window, app));
     MoonDataCell::element(el)

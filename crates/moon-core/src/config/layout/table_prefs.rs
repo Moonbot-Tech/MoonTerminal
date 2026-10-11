@@ -145,3 +145,24 @@ pub struct TicksAxisLayout {
     pub ranges:
         std::collections::BTreeMap<String, crate::db::tuner::ticks::params::range::TickRange>,
 }
+
+/// The "By coin" tuner's persisted settings ([`WindowLayout::analytics_coins`]): the table's
+/// trade-count filter and the automatic coin pick's knobs. Every field is optional, so a block
+/// missing any of them reads the rest and the axis fills the gaps with its own defaults.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CoinsAxisLayout {
+    /// Hide coins with fewer trades than this; `None` = the axis default.
+    pub min_trades: Option<u32>,
+    /// Whether coins without a single trade are hidden; `None` = the axis default.
+    pub hide_zero: Option<bool>,
+    /// The fewest trades a coin needs before the pick may suggest it; `None` = the default.
+    pub pick_min_trades: Option<u32>,
+    /// Share of the period, per cent, the pick holds back to check itself on; `None` = the
+    /// default.
+    pub pick_holdout_pct: Option<u32>,
+    /// Whether the pick suggests blacklist coins; `None` = the default.
+    pub pick_black: Option<bool>,
+    /// Whether the pick suggests whitelist coins; `None` = the default.
+    pub pick_white: Option<bool>,
+}

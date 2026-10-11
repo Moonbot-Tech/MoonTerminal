@@ -1,5 +1,5 @@
 //! Background loads of the "By coin" mode: the per-coin aggregates, the selected strategies'
-//! saved lists, and the debounced rescan of the "Fact vs v1" matrix.
+//! saved lists, and the debounced rescan of the Fact / Manual / Auto matrix.
 //!
 //! Split from the rendering (`coins/mod.rs`) so the two halves stay legible on their own —
 //! this file only ever WRITES `CoinsState`, the rendering only ever reads it.
@@ -79,6 +79,7 @@ impl AnalyticsView {
         let universe_empty = universe.is_empty();
         let saved_at_start = self.coins.saved.duplicate();
         let work_at_start = self.coins.work.duplicate();
+        let auto_at_start = self.coins.suggested().cloned();
         // Lists come from EVERY read-visible selected strategy, not just the anchor, because the
         // tuner describes their combined scope. They form a union BY COIN: summing sizes would
         // count a coin twice for every pair that happens to share it.
@@ -112,10 +113,14 @@ impl AnalyticsView {
                 // The completion performs the same rebase through `adopt`; using only `lists`
                 // here would make the KPI describe different checkboxes from the visible table.
                 let plan = match &lists {
-                    Ok(lists) => {
-                        CoinPlan::build_rebased(lists, &saved_at_start, &work_at_start, &universe)
-                    }
-                    Err(_) => CoinPlan::build(&work_at_start, &universe),
+                    Ok(lists) => CoinPlan::build_rebased(
+                        lists,
+                        &saved_at_start,
+                        &work_at_start,
+                        auto_at_start.as_ref(),
+                        &universe,
+                    ),
+                    Err(_) => CoinPlan::build(&work_at_start, auto_at_start.as_ref(), &universe),
                 };
                 let report =
                     moon_core::db::tuner::coin_tuner_data(&q, &plan.variants, &picked_q, &picked);
@@ -125,11 +130,12 @@ impl AnalyticsView {
                     lists,
                     plan.bl,
                     plan.wl,
+                    plan.auto,
                     entries,
                     report.picked_strategies,
                 )
             },
-            move |this, (stats, kpi, lists, bl_n, wl_n, entries, picked_strategies), cx| {
+            move |this, (stats, kpi, lists, bl_n, wl_n, auto_n, entries, picked_strategies), cx| {
                 let entries_outcome = CatchUpOutcome::of_read(&entries);
                 let picked_outcome = CatchUpOutcome::of_read(&picked_strategies);
                 let picked_error = picked_strategies.as_ref().err().cloned();
@@ -200,6 +206,7 @@ impl AnalyticsView {
                     this.coins.kpi.apply_or_keep(kpi, keep_kpi);
                     this.coins.kpi_bl = bl_n;
                     this.coins.kpi_wl = wl_n;
+                    this.coins.kpi_auto = auto_n;
                 } else {
                     // The edit's pending or running KPI was planned against the old saved
                     // baseline. Retire it and debounce one replacement over the rebased work.
@@ -279,7 +286,7 @@ impl AnalyticsView {
         );
     }
 
-    /// Tick / untick a coin on one list. The lists drive variant v1, so the matrix is
+    /// Tick / untick a coin on one list. The lists drive the Manual column, so the matrix is
     /// rescanned — after the burst settles.
     ///
     /// Keyed by TOKEN, not by report name: a strategy list naming `BTC` covers `BTC_RP`
@@ -319,7 +326,7 @@ impl AnalyticsView {
         }));
     }
 
-    /// Rescan ONLY the "Fact vs v1" matrix — all a tick changes. The table's numbers and
+    /// Rescan ONLY the Fact / Manual / Auto matrix — all a tick changes. The table's numbers and
     /// the coin lists do not depend on the picks, so re-running them here would pay for a
     /// full per-coin grouping to redraw one column.
     ///
@@ -338,7 +345,7 @@ impl AnalyticsView {
             return;
         }
         let plan = self.coins.plan(&universe);
-        let (bl_n, wl_n) = (plan.bl, plan.wl);
+        let (bl_n, wl_n, auto_n) = (plan.bl, plan.wl, plan.auto);
         let variants = plan.variants;
         self.spawn_latest_db(
             &[crate::analytics::bg::ReadLane::CoinKpi],
@@ -364,8 +371,57 @@ impl AnalyticsView {
                 this.coins.kpi.apply(kpi);
                 this.coins.kpi_bl = bl_n;
                 this.coins.kpi_wl = wl_n;
+                this.coins.kpi_auto = auto_n;
                 cx.notify();
             },
         );
+    }
+
+    /// Run the automatic pick in the background over the selected strategies' trades, with
+    /// the working lists as the manual baseline it must improve on.
+    pub(in crate::analytics::tuner) fn run_coin_pick(&mut self, cx: &mut Context<Self>) {
+        let cfg = self.coins.pick_cfg;
+        let params = moon_core::db::tuner::coin_pick::CoinPickParams {
+            min_trades: cfg.min_trades,
+            holdout_pct: cfg.holdout_pct,
+            black: cfg.black,
+            white: cfg.white,
+            manual_black: self.coins.work.black.clone(),
+            manual_white: self.coins.work.white.clone(),
+        };
+        let q = self.tuner_query();
+        let seq = self.coins.begin_pick();
+        let lists_rev = self.coins.lists_rev;
+        let report_gen = self.coins.report_gen;
+        self.spawn_latest_db(
+            &[crate::analytics::bg::ReadLane::CoinPick],
+            false,
+            cx,
+            move || moon_core::db::tuner::coin_pick::suggest_coins(&q, &params),
+            move |this, result, cx| {
+                let landed =
+                    this.coins
+                        .land_pick(seq, lists_rev, report_gen, cfg.holdout_pct, result);
+                if landed && this.coins.suggested().is_some() {
+                    // The suggestion is the Auto column's whole content.
+                    this.arm_coin_kpi(cx);
+                }
+                cx.notify();
+            },
+        );
+        cx.notify();
+    }
+
+    /// Stop a running pick, or drop a finished one: the card returns to its settings and the
+    /// Auto column empties.
+    pub(in crate::analytics::tuner) fn reset_coin_pick(&mut self, cx: &mut Context<Self>) {
+        self.latest_reads
+            .cancel(&[crate::analytics::bg::ReadLane::CoinPick]);
+        let had_suggestion = self.coins.suggested().is_some();
+        self.coins.drop_pick();
+        if had_suggestion {
+            self.arm_coin_kpi(cx);
+        }
+        cx.notify();
     }
 }

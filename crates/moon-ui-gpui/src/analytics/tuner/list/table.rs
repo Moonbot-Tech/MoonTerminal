@@ -372,15 +372,21 @@ fn strategy_row(
                 .children(alive_dot)
                 // The basis gives the name a useful preference while both `min_w_0` calls let it
                 // yield every remaining pixel to the fixed columns on a narrow host.
-                .child(
-                    div()
+                .child({
+                    // `strat_display` turns the manual-orders id "0" into a label. Every other
+                    // string is the strategy name itself.
+                    let name_el = div()
                         .id(SharedString::from(format!("an-strat-name-{}", g.key)))
                         .flex_1()
                         .min_w_0()
-                        .truncate()
-                        .tooltip(crate::panels::common::text_tooltip(name.clone()))
-                        .child(name.clone()),
-                ),
+                        .truncate();
+                    let name_el = if g.name == "0" {
+                        name_el.tooltip(crate::panels::common::text_tooltip(name.clone()))
+                    } else {
+                        name_el.tooltip(crate::panels::common::text_tooltip_value(name.clone()))
+                    };
+                    name_el.child(name.clone())
+                }),
         )
         .child(
             h_flex()

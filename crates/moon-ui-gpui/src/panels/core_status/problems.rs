@@ -706,7 +706,7 @@ fn notice(
             // show, so a narrow dock must shrink the table instead.
             .flex_none()
             .when_some(silent, |this, names| {
-                this.tooltip(crate::panels::common::text_tooltip(names))
+                this.tooltip(crate::panels::common::text_tooltip_value(names))
             })
             .w_full()
             .px(design::ui_px(cx, 10.0))

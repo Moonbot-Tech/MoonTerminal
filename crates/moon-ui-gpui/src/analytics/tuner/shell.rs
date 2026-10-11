@@ -10,13 +10,15 @@
 //! Live search status sits on its own band above those controls so the progress line can stay
 //! readable without shrinking them.
 
+use std::rc::Rc;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::db::ReadFail;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
     MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonTag,
-    MoonTooltipView, h_flex, v_flex,
+    h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -100,6 +102,124 @@ pub(super) fn train_label(pct: usize) -> String {
     }
 }
 
+/// The write controls of the shared toolbar, present only while a strategy is selected.
+pub(super) struct ToolbarWrite {
+    /// At least one selected target admits a write.
+    pub(super) enabled: bool,
+    /// "Make a copy" is offered (single selection only).
+    pub(super) copy: bool,
+    /// Something differs from what is written: Save lights up.
+    pub(super) dirty: bool,
+}
+
+/// The shared toolbar's handlers.
+pub(super) struct ToolbarActs {
+    pub(super) on_round: Rc<dyn Fn(bool, &mut Window, &mut App)>,
+    pub(super) on_copy: Rc<dyn Fn(&mut Window, &mut App)>,
+    pub(super) on_save: Rc<dyn Fn(&mut Window, &mut App)>,
+}
+
+/// The shared toolbar of the tuner card, free of the view so a layout probe can render it.
+///
+/// Args:
+///     kind: The axis; it suffixes the element ids.
+///     title: Card title.
+///     round: The "round results" switch, `None` on an axis with nothing to round.
+///     write: Make a copy / Save, `None` without a selected strategy.
+///     acts: Handlers.
+///     cx: App, for scale and text.
+///
+/// Returns:
+///     The toolbar row.
+pub(super) fn toolbar_el(
+    kind: TunerKind,
+    title: String,
+    round: Option<bool>,
+    write: Option<&ToolbarWrite>,
+    acts: &ToolbarActs,
+    cx: &App,
+) -> AnyElement {
+    let k = match kind {
+        TunerKind::Filter => "f",
+        TunerKind::Time => "t",
+        TunerKind::Coins => "c",
+        TunerKind::Ticks => "x",
+    };
+    let mut header = h_flex()
+        .w_full()
+        // Pinned above the scrollable rows in both tuner panels — must not shrink.
+        .flex_none()
+        .px(design::ui_px(cx, 12.0))
+        .py(design::ui_px(cx, 8.0))
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        // Title, round-label and the copy/save buttons are all prose; this toolbar carries
+        // no data value of its own.
+        .font_family(design::ui_font())
+        .debug_selector(move || format!("tun-toolbar-{k}"))
+        // Let the title yield before the hosting card clips the trailing controls.
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_size(design::t_title(cx))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        );
+    // Rounding the result affects the SUGGESTION — always shown (the suggestion is
+    // available without a selected strategy too, over the current scope).
+    if let Some(round) = round {
+        let on_round = acts.on_round.clone();
+        header = header.child(
+            div().flex_none().child(
+                MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
+                    .label(t!("analytics.tuner.round_lbl").to_string())
+                    .checked(round)
+                    .on_change(move |ch: &bool, window, app| on_round(*ch, window, app)),
+            ),
+        );
+    }
+    if let Some(write) = write {
+        if write.copy {
+            let on_copy = acts.on_copy.clone();
+            header = header.child(
+                div()
+                    .flex_none()
+                    .debug_selector(move || format!("tun-copy-{k}"))
+                    .child(
+                        MoonButton::new(SharedString::from(format!("tun-copy-{k}")))
+                            .variant(MoonButtonVariant::Soft)
+                            .label(t!("analytics.tuner.copy_btn").to_string())
+                            .disabled(!write.enabled)
+                            .on_click(move |_, window, app| on_copy(window, app))
+                            .render(),
+                    ),
+            );
+        }
+        let on_save = acts.on_save.clone();
+        header = header.child(
+            div()
+                .flex_none()
+                .debug_selector(move || format!("tun-save-{k}"))
+                .child(
+                    MoonButton::new(SharedString::from(format!("tun-save-{k}")))
+                        .variant(if write.dirty {
+                            MoonButtonVariant::Amber
+                        } else {
+                            MoonButtonVariant::Soft
+                        })
+                        .label(t!("analytics.tuner.save_btn").to_string())
+                        .disabled(!write.enabled)
+                        .on_click(move |_, window, app| on_save(window, app))
+                        .render(),
+                ),
+        );
+    }
+    header.into_any_element()
+}
+
 impl AnalyticsView {
     /// The shared toolbar of the tuner card: the title + (when a strategy is selected)
     /// "round results" + "Make a copy" + "Save". The actions are per-axis.
@@ -109,12 +229,6 @@ impl AnalyticsView {
         title: String,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let k = match kind {
-            TunerKind::Filter => "f",
-            TunerKind::Time => "t",
-            TunerKind::Coins => "c",
-            TunerKind::Ticks => "x",
-        };
         // `None` — the axis has nothing to round. The coin list is text; a rounding control
         // beside it would be a switch that does nothing.
         let round = match kind {
@@ -122,120 +236,77 @@ impl AnalyticsView {
             TunerKind::Time => Some(self.time_tuner.round_results),
             TunerKind::Coins | TunerKind::Ticks => None,
         };
-        let mut header = h_flex()
-            .w_full()
-            // Pinned above the scrollable rows in both tuner panels — must not shrink.
-            .flex_none()
-            .px(design::ui_px(cx, 12.0))
-            .py(design::ui_px(cx, 8.0))
-            .items_center()
-            .gap(design::ui_px(cx, 6.0))
-            // Title, round-label and the copy/save buttons are all prose; this toolbar carries
-            // no data value of its own.
-            .font_family(design::ui_font())
-            // Let the title yield before the hosting card clips the trailing controls.
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(design::t_title(cx))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(title),
-            );
-        // Rounding the result affects the SUGGESTION — always shown (the suggestion is
-        // available without a selected strategy too, over the current scope).
-        if let Some(round) = round {
-            header = header.child(
-                div().flex_none().child(
-                    MoonCheckbox::new(SharedString::from(format!("tun-round-{k}")))
-                        .label(t!("analytics.tuner.round_lbl").to_string())
-                        .checked(round)
-                        .on_change({
-                            let view = cx.entity();
-                            move |ch: &bool, _w, app| {
-                                let on = *ch;
-                                view.update(app, |this, cx| {
-                                    match kind {
-                                        TunerKind::Filter => {
-                                            this.tuner.round_results = on;
-                                            this.tuner.invalidate_suggest();
-                                        }
-                                        TunerKind::Time => {
-                                            this.time_tuner.round_results = on;
-                                            this.time_tuner.invalidate_suggest();
-                                        }
-                                        // No rounding on this axis — the control is hidden.
-                                        TunerKind::Coins | TunerKind::Ticks => {}
-                                    }
-                                    cx.notify();
-                                });
-                            }
-                        }),
-                ),
-            );
-        }
         // Render write controls for a retained anchor, but enable them only when the action
         // authority admits at least one selected target.
-        if self.sel_strategy.is_some() {
-            let workspace_target_visible = self.visible_target_count(self.action_core_ids()) > 0;
+        let write = self.sel_strategy.is_some().then(|| ToolbarWrite {
+            enabled: self.visible_target_count(self.action_core_ids()) > 0,
             // Copy is single-target only — hidden in multi-select (many addressees, no
             // per-target preview); bulk Save is the multi path.
-            if !self.is_multi() {
-                header = header.child(
-                    MoonButton::new(SharedString::from(format!("tun-copy-{k}")))
-                        .variant(MoonButtonVariant::Soft)
-                        .label(t!("analytics.tuner.copy_btn").to_string())
-                        .disabled(!workspace_target_visible)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            // One "copy" for all axes: axis changes → a NEW strategy.
-                            match kind {
-                                TunerKind::Filter => this.open_copy_dialog(window, cx),
-                                TunerKind::Time => this.time_open_copy_dialog(window, cx),
-                                TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
-                                TunerKind::Ticks => this.ticks_open_copy_dialog(window, cx),
-                            }
-                            cx.notify();
-                        }))
-                        .render(),
-                );
-            }
-            header = header.child({
-                // "Save" lights up amber when there is something to write (filter
-                // thresholds OR a time schedule that differs from the current one).
-                // Works for both axes; the action is dispatched by `kind`.
-                let dirty = match kind {
-                    TunerKind::Filter => self.save_dirty(),
-                    TunerKind::Time => self.time_tuner.is_dirty(),
-                    // The list differs from what the strategies hold — the same condition
-                    // the coin table's "changed" badge and its Revert button read.
-                    TunerKind::Coins => self.coins.has_changes(),
-                    // The first variant column holds something to write, scored on enough
-                    // deals to recommend it; a thin one stays writable, unlit.
-                    TunerKind::Ticks => self.ticks.save_recommended(),
-                };
-                MoonButton::new(SharedString::from(format!("tun-save-{k}")))
-                    .variant(if dirty {
-                        MoonButtonVariant::Amber
-                    } else {
-                        MoonButtonVariant::Soft
-                    })
-                    .label(t!("analytics.tuner.save_btn").to_string())
-                    .disabled(!workspace_target_visible)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+            copy: !self.is_multi(),
+            // "Save" lights up amber when there is something to write (filter
+            // thresholds OR a time schedule that differs from the current one).
+            // Works for both axes; the action is dispatched by `kind`.
+            dirty: match kind {
+                TunerKind::Filter => self.save_dirty(),
+                TunerKind::Time => self.time_tuner.is_dirty(),
+                // The list differs from what the strategies hold — the same condition
+                // the coin table's "changed" badge and its Revert button read.
+                TunerKind::Coins => self.coins.has_changes(),
+                // The first variant column holds something to write, scored on enough
+                // deals to recommend it; a thin one stays writable, unlit.
+                TunerKind::Ticks => self.ticks.save_recommended(),
+            },
+        });
+        let view = cx.entity();
+        let acts = ToolbarActs {
+            on_round: Rc::new({
+                let view = view.clone();
+                move |on: bool, _: &mut Window, app: &mut App| {
+                    view.update(app, |this, cx| {
                         match kind {
-                            TunerKind::Filter => this.open_save_dialog(cx),
-                            TunerKind::Time => this.time_open_save_dialog(cx),
-                            TunerKind::Coins => this.coins_open_save_dialog(cx),
-                            TunerKind::Ticks => this.ticks_open_save_dialog(cx),
+                            TunerKind::Filter => {
+                                this.tuner.round_results = on;
+                                this.tuner.invalidate_suggest();
+                            }
+                            TunerKind::Time => {
+                                this.time_tuner.round_results = on;
+                                this.time_tuner.invalidate_suggest();
+                            }
+                            // No rounding on this axis — the control is hidden.
+                            TunerKind::Coins | TunerKind::Ticks => {}
                         }
                         cx.notify();
-                    }))
-                    .render()
-            });
-        }
-        header.into_any_element()
+                    });
+                }
+            }),
+            on_copy: Rc::new({
+                let view = view.clone();
+                move |window: &mut Window, app: &mut App| {
+                    view.update(app, |this, cx| {
+                        // One "copy" for all axes: axis changes → a NEW strategy.
+                        match kind {
+                            TunerKind::Filter => this.open_copy_dialog(window, cx),
+                            TunerKind::Time => this.time_open_copy_dialog(window, cx),
+                            TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
+                            TunerKind::Ticks => this.ticks_open_copy_dialog(window, cx),
+                        }
+                        cx.notify();
+                    });
+                }
+            }),
+            on_save: Rc::new(move |_: &mut Window, app: &mut App| {
+                view.update(app, |this, cx| {
+                    match kind {
+                        TunerKind::Filter => this.open_save_dialog(cx),
+                        TunerKind::Time => this.time_open_save_dialog(cx),
+                        TunerKind::Coins => this.coins_open_save_dialog(cx),
+                        TunerKind::Ticks => this.ticks_open_save_dialog(cx),
+                    }
+                    cx.notify();
+                });
+            }),
+        };
+        toolbar_el(kind, title, round, write.as_ref(), &acts, cx)
     }
 
     /// The suggestion row of the tuner card, branched per axis.
@@ -708,9 +779,7 @@ impl AnalyticsView {
                             .border_1()
                             .border_color(moon(p.border))
                             .bg(moon_alpha(p.panel_high, 0.32))
-                            .tooltip(move |_w, cx| {
-                                cx.new(|_| MoonTooltipView::new(help.clone())).into()
-                            })
+                            .tooltip(crate::panels::common::text_tooltip(help))
                             .child(
                                 MoonCheckbox::new(SharedString::from("tun-cfg-compose-f"))
                                     .label(t!("analytics.tuner.compose_toggle").to_string())
@@ -781,9 +850,7 @@ impl AnalyticsView {
                             .truncate()
                             .font_family(design::mono())
                             .text_color(moon(p.text_soft))
-                            .tooltip(move |_w, cx| {
-                                cx.new(|_| MoonTooltipView::new(full.clone())).into()
-                            })
+                            .tooltip(crate::panels::common::text_tooltip_value(full))
                             .child(short_seed(last)),
                     )
                     .child(

@@ -302,7 +302,9 @@ pub(super) fn render_block(
                 .text_size(design::t_body(cx))
                 .font_family(design::mono())
                 .text_color(moon(p.text))
-                .tooltip(crate::panels::common::text_tooltip(block.name.clone()))
+                .tooltip(crate::panels::common::text_tooltip_value(
+                    block.name.clone(),
+                ))
                 .child(block.name.clone()),
         )
         .when(can_reveal, |el| {

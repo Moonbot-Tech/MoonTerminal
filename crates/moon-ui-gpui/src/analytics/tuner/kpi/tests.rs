@@ -1,8 +1,8 @@
 //! Regression coverage for fixed-width Fact-versus-variant KPI values.
 
 use super::{
-    CellFormat, FigureTone, KpiCellText, MetricKind, OpenTail, figure_of, format_kpi_cell,
-    plain_factor, with_open_tail,
+    CellFormat, FigureTone, KpiCellText, MetricKind, OpenTail, VarLabel, figure_of,
+    format_kpi_cell, kpi_columns, plain_factor, with_open_tail,
 };
 use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
@@ -185,4 +185,21 @@ fn an_open_tail_follows_the_closed_profit_in_brackets() {
     assert!(tooltip.contains('5'), "{tooltip}");
     assert_eq!(figure.tone, FigureTone::Signed);
     assert!((figure.signed + 4.94).abs() < 1e-12);
+}
+
+/// A promised column is drawn without stats; a plain surplus label is not — so an axis that
+/// passes more labels than variants keeps its column count.
+#[test]
+fn only_a_placeholder_label_adds_a_column() {
+    let label = |t: &str| VarLabel::new(t.to_string());
+    let coins = [label("Manual"), label("Auto").placeholder()];
+    assert_eq!(
+        kpi_columns(2, &coins),
+        3,
+        "Fact, Manual and the promised Auto"
+    );
+    assert_eq!(kpi_columns(3, &coins), 3, "scored: the stats decide");
+    let other = [label("v1"), label("v2"), label("v3")];
+    assert_eq!(kpi_columns(2, &other), 2, "other axes unchanged");
+    assert_eq!(kpi_columns(4, &other), 4);
 }

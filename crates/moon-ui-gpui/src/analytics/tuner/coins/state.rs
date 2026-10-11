@@ -1,6 +1,6 @@
 //! State of the "By coin" axis: the coin table's own view controls (search, sort,
 //! list filter), the WORKING blacklist/whitelist the user edits, and the two background
-//! results it renders from (per-coin aggregates + the "Fact vs v1" KPI).
+//! results it renders from (per-coin aggregates + the Fact / Manual / Auto KPI).
 //!
 //! The tick boxes show the WORKING lists, not what the strategy has saved. The saved
 //! union is kept beside them purely as the baseline a "Changed" view diffs against —
@@ -10,15 +10,18 @@
 //! the reload paths write here, the render path only reads.
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use gpui::Entity;
-use moon_ui::{MoonInputState, MoonSliderState};
+use moon_ui::MoonInputState;
 
 use super::super::{COIN_COLS, COIN_DEFAULT_SORT};
 use crate::load_state::LoadState;
+use moon_core::config::CoinsAxisLayout;
 use moon_core::db::ReadResult;
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::CoinListRows;
+use moon_core::db::tuner::coin_pick::CoinPick;
 use moon_core::db::tuner::{VarStats, Variant};
 
 /// Which coins the table shows. A coin may sit in BOTH lists — the views are separate
@@ -31,6 +34,8 @@ pub(in crate::analytics::tuner) enum CoinFilter {
     /// Coins whose working membership differs from what the strategies have saved — the
     /// pending edit, before it is written anywhere.
     Changed,
+    /// Coins a finished automatic pick suggests for either list.
+    Suggested,
 }
 
 /// One side of the coin lists: what is saved, and what the user is working with.
@@ -122,12 +127,147 @@ impl CoinLists {
 /// it once and nothing here re-spells the rule.
 pub(in crate::analytics::tuner) use moon_core::symbol::coin_match_key as coin_token;
 
+/// Longest coin name a list field accepts; a longer paste is not a coin and would push the
+/// chip's remove button out of the field.
+pub(in crate::analytics::tuner) const MAX_TOKEN_LEN: usize = 32;
+
+/// The pick's own defaults and range, named once in `moon_core`.
+pub(in crate::analytics::tuner) use moon_core::db::tuner::coin_pick::{
+    DEFAULT_HOLDOUT_PCT, DEFAULT_MIN_TRADES as DEFAULT_PICK_MIN_TRADES, HOLDOUT_PCT_RANGE,
+};
+
+/// The tokens a finished pick suggests for each list, as the table tags them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct SuggestedLists {
+    pub(in crate::analytics::tuner) black: Vec<String>,
+    pub(in crate::analytics::tuner) white: Vec<String>,
+}
+
+/// Parse the "fewer trades than" input: a whole number, blank meaning 0.
+///
+/// Args:
+///     raw: The input's text.
+///
+/// Returns:
+///     The threshold, or `None` for text that is not a non-negative whole number — the
+///     caller then keeps the previous value.
+pub(in crate::analytics::tuner) fn parse_min_trades(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(0);
+    }
+    raw.parse::<u32>().ok().map(i64::from)
+}
+
+/// The automatic pick's settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct PickCfg {
+    pub(in crate::analytics::tuner) min_trades: u32,
+    pub(in crate::analytics::tuner) holdout_pct: u32,
+    /// Suggest blacklist coins.
+    pub(in crate::analytics::tuner) black: bool,
+    /// Suggest whitelist coins.
+    pub(in crate::analytics::tuner) white: bool,
+}
+
+impl Default for PickCfg {
+    fn default() -> Self {
+        Self {
+            min_trades: DEFAULT_PICK_MIN_TRADES,
+            holdout_pct: DEFAULT_HOLDOUT_PCT,
+            black: true,
+            white: false,
+        }
+    }
+}
+
+/// Where the automatic pick stands.
+#[derive(Clone)]
+pub(in crate::analytics::tuner) enum PickState {
+    Idle,
+    /// A pick request of generation `seq` is in flight.
+    Running {
+        seq: u64,
+    },
+    /// A finished pick, bound to the inputs it was published against. A later list edit
+    /// or a later report publication leaves it standing but stale (`pick_stale`). A scope
+    /// change (`invalidate`) drops it.
+    Done {
+        pick: Arc<CoinPick>,
+        lists_rev: u64,
+        /// `CoinsState::report_gen` at publication. A later report publication bumps
+        /// that counter and the pick becomes stale without being dropped.
+        report_gen: u64,
+        /// The holdout share the pick ran with; the verdict names it even after the
+        /// setting moved.
+        holdout_pct: u32,
+    },
+    /// The pick's read failed.
+    Failed(moon_core::db::ReadFail),
+}
+
+impl std::fmt::Debug for PickState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("Idle"),
+            Self::Running { seq } => write!(f, "Running {{ seq: {seq} }}"),
+            Self::Done {
+                lists_rev,
+                report_gen,
+                holdout_pct,
+                ..
+            } => write!(
+                f,
+                "Done {{ lists_rev: {lists_rev}, report_gen: {report_gen}, holdout_pct: {holdout_pct} }}"
+            ),
+            Self::Failed(_) => f.write_str("Failed"),
+        }
+    }
+}
+
+/// Two states are equal when they are the same state of the same pick: a finished pick is
+/// compared by identity, a failure by kind alone.
+impl PartialEq for PickState {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Idle, Self::Idle) | (Self::Failed(_), Self::Failed(_)) => true,
+            (Self::Running { seq: a }, Self::Running { seq: b }) => a == b,
+            (
+                Self::Done {
+                    pick: a,
+                    lists_rev: ra,
+                    report_gen: ga,
+                    holdout_pct: ha,
+                },
+                Self::Done {
+                    pick: b,
+                    lists_rev: rb,
+                    report_gen: gb,
+                    holdout_pct: hb,
+                },
+            ) => Arc::ptr_eq(a, b) && ra == rb && ga == gb && ha == hb,
+            _ => false,
+        }
+    }
+}
+
+/// The unsaved edit of both lists, per side, each part sorted by token.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(in crate::analytics::tuner) struct PendingDelta {
+    pub(in crate::analytics::tuner) added_bl: Vec<String>,
+    pub(in crate::analytics::tuner) removed_bl: Vec<String>,
+    pub(in crate::analytics::tuner) added_wl: Vec<String>,
+    pub(in crate::analytics::tuner) removed_wl: Vec<String>,
+}
+
 /// What the working lists come to when applied to a period: the KPI variants plus how
 /// many coins each side actually REACHED in that period.
 pub(in crate::analytics::tuner) struct CoinPlan {
     pub(in crate::analytics::tuner) variants: Vec<Variant>,
     pub(in crate::analytics::tuner) bl: usize,
     pub(in crate::analytics::tuner) wl: usize,
+    /// The Auto variant's reach `(bl, wl)`, when a finished pick added that third column.
+    pub(in crate::analytics::tuner) auto: Option<(usize, usize)>,
 }
 
 /// State of the "By coin" mode.
@@ -135,9 +275,9 @@ pub(in crate::analytics) struct CoinsState {
     /// Per-coin aggregates over the SELECTED strategies (all trades when nothing is
     /// selected) — the numbers each row shows.
     pub(in crate::analytics::tuner) stats: LoadState<Vec<GroupStat>>,
-    /// "Fact vs v1" for the KPI matrix; v1 = the working lists applied.
+    /// Fact / Manual / Auto for the KPI matrix: Manual = the working lists applied, Auto = Manual plus the suggestion.
     pub(in crate::analytics::tuner) kpi: LoadState<Vec<VarStats>>,
-    /// The list sizes the CURRENT `kpi` was computed for. The v1 column label reads these
+    /// The list sizes the CURRENT `kpi` was computed for. The Manual column label reads these
     /// rather than the live ones: while a rescan is in flight the matrix still shows the
     /// previous result, and the live counts would title it with an edit it never saw.
     pub(in crate::analytics::tuner) kpi_bl: usize,
@@ -150,18 +290,32 @@ pub(in crate::analytics) struct CoinsState {
     pub(in crate::analytics::tuner) work: CoinLists,
     pub(in crate::analytics::tuner) search: String,
     pub(in crate::analytics::tuner) search_input: Option<Entity<MoonInputState>>,
-    /// Hide coins whose trade count is below this SHARE of the busiest coin in the scope.
-    ///
-    /// A share, not an absolute count: the slider then has one fixed 0–100 scale whatever the
-    /// period holds, so it neither needs rebuilding when the scope changes nor spends most of
-    /// its travel on values that hide everything. The absolute figure it works out to is shown
-    /// beside it, because that is what actually decides which rows go.
-    pub(in crate::analytics::tuner) min_trades_pct: i64,
-    /// What that share comes to in trades for the CURRENT scope — recomputed on render, and
-    /// the value the row builder filters on.
+    /// Hide coins with fewer trades than this (persisted in `WindowLayout::analytics_coins`).
     pub(in crate::analytics::tuner) min_trades: i64,
-    /// Backing state of its slider (lazily created, like the search input).
-    pub(in crate::analytics::tuner) min_trades_slider: Option<Entity<MoonSliderState>>,
+    /// Hide coins without a single trade (persisted beside `min_trades`).
+    pub(in crate::analytics::tuner) hide_zero: bool,
+    /// The automatic pick's settings (persisted beside `min_trades`).
+    pub(in crate::analytics::tuner) pick_cfg: PickCfg,
+    /// Where the automatic pick stands.
+    pub(in crate::analytics::tuner) pick: PickState,
+    /// Generation of the pick request; a reply carrying another one is dropped.
+    pub(in crate::analytics::tuner) pick_seq: u64,
+    /// Typing fields of the two list editors (lazily created, like the search input).
+    pub(in crate::analytics::tuner) black_input: Option<Entity<MoonInputState>>,
+    pub(in crate::analytics::tuner) white_input: Option<Entity<MoonInputState>>,
+    /// The "fewer trades than" input of the filter bar (lazily created).
+    pub(in crate::analytics::tuner) min_trades_input: Option<Entity<MoonInputState>>,
+    /// What the last finished pick suggests; `None` while no pick has finished. Read only
+    /// through [`CoinsState::suggested`].
+    pub(in crate::analytics::tuner) suggestion: Option<SuggestedLists>,
+    /// Bumped whenever `suggestion` changes; the row model is cached against it.
+    pub(in crate::analytics::tuner) pick_rev: u64,
+    /// The pick card's two number inputs (lazily created).
+    pub(in crate::analytics::tuner) pick_min_input: Option<Entity<MoonInputState>>,
+    pub(in crate::analytics::tuner) pick_holdout_input: Option<Entity<MoonInputState>>,
+    /// The suggestion's reach the CURRENT `kpi` was scored under: `(bl, wl)` of the Auto
+    /// column, `None` while the matrix has no Auto column.
+    pub(in crate::analytics::tuner) kpi_auto: Option<(usize, usize)>,
     /// Coins the user clicked. Their purpose is the strategy list: it highlights whoever
     /// traded them, which is the "who is behind this coin?" the table cannot answer alone.
     pub(in crate::analytics::tuner) picked: HashSet<String>,
@@ -175,8 +329,12 @@ pub(in crate::analytics) struct CoinsState {
     pub(in crate::analytics::tuner) filter: CoinFilter,
     /// Bumped on every change to `work`/`saved`. The rendered row model is cached against
     /// it, so a repaint that changed no list (hovering a row, for one) reuses the model
-    /// instead of rebuilding it over thousands of coins.
+    /// instead of rebuilding it over thousands of coins. A finished pick stores the value
+    /// it was launched against; differing values make `pick_stale` true.
     pub(in crate::analytics::tuner) lists_rev: u64,
+    /// Bumped on every report publication. A finished pick stores the value it was
+    /// published under; `pick_stale` is true when they differ. Same binding as `lists_rev`.
+    pub(in crate::analytics::tuner) report_gen: u64,
     pub(in crate::analytics::tuner) seq: u64,
     pub(in crate::analytics::tuner) kpi_seq: u64,
     /// The pending debounced KPI rescan. Held so the next edit REPLACES it — dropping a
@@ -198,11 +356,22 @@ impl Default for CoinsState {
             saved: CoinLists::default(),
             work: CoinLists::default(),
             lists_rev: 0,
+            report_gen: 0,
             search: String::new(),
             search_input: None,
-            min_trades_pct: 0,
             min_trades: 0,
-            min_trades_slider: None,
+            hide_zero: true,
+            pick_cfg: PickCfg::default(),
+            pick: PickState::Idle,
+            pick_seq: 0,
+            black_input: None,
+            white_input: None,
+            min_trades_input: None,
+            suggestion: None,
+            pick_rev: 0,
+            pick_min_input: None,
+            pick_holdout_input: None,
+            kpi_auto: None,
             picked: HashSet::new(),
             picked_strats: HashSet::new(),
             picked_seq: 0,
@@ -217,18 +386,36 @@ impl Default for CoinsState {
     }
 }
 
+/// Which input moved after a finished pick was published.
+///
+/// Lists wins when both moved: the user's own edit is the note that matters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) enum PickStaleCause {
+    /// The working lists were edited after the pick.
+    Lists,
+    /// Only the report data refreshed after the pick.
+    Report,
+}
+
 impl CoinsState {
-    /// Build coin-table state with a validated process-persistent sort preference.
+    /// Build coin-table state from its saved sort and settings.
     ///
     /// Args:
-    ///     preference: Shared layout value whose direction uses MoonUI's `ascending` convention.
+    ///     preference: Sort persisted in layout.toml (`table_sorts`); its direction uses
+    ///         MoonUI's `ascending` convention.
+    ///     settings: The axis' persisted filter and pick settings, if any.
     ///
     /// Returns:
-    ///     Default coin state carrying the saved `(key, descending)` sort when the key is current.
+    ///     Default coin state carrying the saved `(key, descending)` sort when the key is current
+    ///     and the saved settings, clamped to their ranges.
     pub(in crate::analytics) fn load(
         preference: Option<moon_core::config::TableSortPreference>,
+        settings: Option<&CoinsAxisLayout>,
     ) -> Self {
         let mut state = Self::default();
+        if let Some(settings) = settings {
+            state.restore(settings);
+        }
         if let Some(preference) = preference.filter(|preference| {
             preference.column == super::super::SORT_NAME
                 || COIN_COLS
@@ -240,15 +427,204 @@ impl CoinsState {
         state
     }
 
-    /// Mark report-derived coin statistics stale while preserving working lists and picks.
+    /// Mark report-derived coin statistics stale while preserving working lists and the pick.
     ///
     /// Report commits can change the table, KPI, and picked-strategy highlight. They cannot change
     /// the strategy fields that form `saved`/`work`, so clearing those drafts here would turn live
-    /// refresh into data loss.
+    /// refresh into data loss. A finished pick stays on screen, still adoptable, and
+    /// [`Self::pick_stale`] becomes true. The note names the report, unless a list edit is
+    /// also pending, in which case it names the lists. An in-flight
+    /// pick is not retired either: the report commits every few seconds, and dropping it would
+    /// mean a slow pick never lands. Its reply publishes bound to the generation it was launched
+    /// under, so it arrives already stale. Only [`Self::invalidate`] drops the pick.
     ///
     /// The method has no return value; callers subsequently reload the active report-derived view.
     pub(in crate::analytics) fn mark_report_stale(&mut self) {
         self.dirty = true;
+        self.report_gen = self.report_gen.wrapping_add(1);
+    }
+
+    /// Take the persisted settings of the axis (`WindowLayout::analytics_coins`); a missing
+    /// field keeps its default and an out-of-range one is clamped.
+    pub(in crate::analytics::tuner) fn restore(&mut self, saved: &CoinsAxisLayout) {
+        let d = PickCfg::default();
+        if let Some(n) = saved.min_trades {
+            self.min_trades = i64::from(n);
+        }
+        if let Some(on) = saved.hide_zero {
+            self.hide_zero = on;
+        }
+        self.pick_cfg = PickCfg {
+            min_trades: saved.pick_min_trades.unwrap_or(d.min_trades),
+            holdout_pct: saved.pick_holdout_pct.map_or(d.holdout_pct, |v| {
+                v.clamp(*HOLDOUT_PCT_RANGE.start(), *HOLDOUT_PCT_RANGE.end())
+            }),
+            black: saved.pick_black.unwrap_or(d.black),
+            white: saved.pick_white.unwrap_or(d.white),
+        };
+    }
+
+    /// The axis' settings as they are written to the layout.
+    pub(in crate::analytics::tuner) fn to_layout(&self) -> CoinsAxisLayout {
+        CoinsAxisLayout {
+            min_trades: Some(u32::try_from(self.min_trades.max(0)).unwrap_or(u32::MAX)),
+            hide_zero: Some(self.hide_zero),
+            pick_min_trades: Some(self.pick_cfg.min_trades),
+            pick_holdout_pct: Some(self.pick_cfg.holdout_pct),
+            pick_black: Some(self.pick_cfg.black),
+            pick_white: Some(self.pick_cfg.white),
+        }
+    }
+
+    /// Retire the current pick: a reply in flight is dropped and the card returns to Idle.
+    ///
+    /// The KPI matrix draws whatever column `kpi` still holds. Leaving the Auto column
+    /// there after the suggestion is gone shows numbers for a pick the card no longer has,
+    /// and a later reload may keep that snapshot when the next report arrives first. Clearing
+    /// it here is what makes the matrix and the card agree on nothing.
+    pub(in crate::analytics::tuner) fn drop_pick(&mut self) {
+        self.pick_seq = self.pick_seq.wrapping_add(1);
+        self.pick = PickState::Idle;
+        if self.suggestion.take().is_some() {
+            self.pick_rev = self.pick_rev.wrapping_add(1);
+        }
+        self.kpi_auto = None;
+        if let Some(stats) = self.kpi.data_mut()
+            && stats.len() > 2
+        {
+            stats.truncate(2);
+        }
+        self.settle_filter();
+    }
+
+    /// Start a pick: retire any earlier request and return the new generation.
+    pub(in crate::analytics::tuner) fn begin_pick(&mut self) -> u64 {
+        self.drop_pick();
+        self.pick = PickState::Running { seq: self.pick_seq };
+        self.pick_seq
+    }
+
+    /// Publish a pick reply.
+    ///
+    /// Args:
+    ///     seq: The generation the request was launched under.
+    ///     lists_rev: Working-list revision at launch.
+    ///     report_gen: Report generation at launch. A publication during the run leaves
+    ///         the landed pick stale instead of current.
+    ///     holdout_pct: Holdout share the pick ran with.
+    ///     result: The background read's answer.
+    ///
+    /// Returns:
+    ///     Whether the reply landed; one whose generation was retired is dropped.
+    pub(in crate::analytics::tuner) fn land_pick(
+        &mut self,
+        seq: u64,
+        lists_rev: u64,
+        report_gen: u64,
+        holdout_pct: u32,
+        result: moon_core::db::ReadResult<CoinPick>,
+    ) -> bool {
+        if seq != self.pick_seq || self.pick != (PickState::Running { seq }) {
+            return false;
+        }
+        match result {
+            Ok(pick) => {
+                // An empty answer suggests nothing: no Auto variant is scored for it.
+                if !pick.black.is_empty() || !pick.white.is_empty() {
+                    self.suggestion = Some(SuggestedLists {
+                        black: pick.black.iter().map(|c| c.token.clone()).collect(),
+                        white: pick.white.iter().map(|c| c.token.clone()).collect(),
+                    });
+                    self.pick_rev = self.pick_rev.wrapping_add(1);
+                }
+                self.pick = PickState::Done {
+                    pick: Arc::new(pick),
+                    lists_rev,
+                    report_gen,
+                    holdout_pct,
+                };
+            }
+            Err(e) => self.pick = PickState::Failed(e),
+        }
+        true
+    }
+
+    /// The finished pick no longer matches the inputs it was published against.
+    ///
+    /// Returns:
+    ///     Whether [`Self::pick_stale_cause`] is `Some`. The card still shows the pick.
+    ///     Adopting the suggestion still applies it; the note stays when the pick was already stale.
+    pub(in crate::analytics::tuner) fn pick_stale(&self) -> bool {
+        self.pick_stale_cause().is_some()
+    }
+
+    /// Which input moved after the finished pick was published.
+    ///
+    /// A list edit bumps `lists_rev`. A report publication bumps `report_gen`. Either one
+    /// leaves the pick standing. When both moved, the cause is [`PickStaleCause::Lists`].
+    ///
+    /// Returns:
+    ///     The cause the stale note should name, or `None` when the pick is current or not finished.
+    pub(in crate::analytics::tuner) fn pick_stale_cause(&self) -> Option<PickStaleCause> {
+        match &self.pick {
+            PickState::Done {
+                lists_rev,
+                report_gen,
+                ..
+            } => {
+                let lists = *lists_rev != self.lists_rev;
+                let report = *report_gen != self.report_gen;
+                if lists {
+                    Some(PickStaleCause::Lists)
+                } else if report {
+                    Some(PickStaleCause::Report)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Apply the finished pick's own suggestion for one list to the working list, exactly as
+    /// the Auto column scored it: blacklist coins are added, a suggested whitelist REPLACES
+    /// the working one.
+    ///
+    /// Adopting the pick's own answer is not an edit the pick missed, so it is re-bound to the
+    /// new list revision and shows no stale note — unless it was stale already.
+    ///
+    /// Returns:
+    ///     How many coins were not on that list yet.
+    pub(in crate::analytics::tuner) fn adopt_suggestion(&mut self, black_side: bool) -> usize {
+        let Some(s) = self.suggestion.as_ref() else {
+            return 0;
+        };
+        let tokens = if black_side { &s.black } else { &s.white };
+        let raw = tokens.join(",");
+        let was_current = !self.pick_stale();
+        let added = if black_side {
+            self.add_tokens(true, &raw)
+        } else {
+            let white: HashSet<String> = moon_core::symbol::parse_coin_list(&raw)
+                .into_iter()
+                .collect();
+            let added = white.difference(&self.work.white).count();
+            if white != self.work.white {
+                self.work.white = white;
+                self.lists_rev = self.lists_rev.wrapping_add(1);
+                self.settle_filter();
+            }
+            added
+        };
+        if was_current && let PickState::Done { lists_rev, .. } = &mut self.pick {
+            *lists_rev = self.lists_rev;
+        }
+        added
+    }
+
+    /// What the last finished pick suggests, for the Auto column and the Suggested view.
+    pub(in crate::analytics::tuner) fn suggested(&self) -> Option<&SuggestedLists> {
+        self.suggestion.as_ref()
     }
 
     /// The scope changed (period, filters, selected strategies): every number and both
@@ -267,6 +643,7 @@ impl CoinsState {
         self.seq = self.seq.wrapping_add(1);
         self.kpi_seq = self.kpi_seq.wrapping_add(1);
         self.picked_seq = self.picked_seq.wrapping_add(1);
+        self.drop_pick();
         self.kpi_task = None;
         self.lists_rev = self.lists_rev.wrapping_add(1);
         // `stats`/`kpi` are guarded by `LoadState`, but the lists are plain sets: left
@@ -341,18 +718,6 @@ impl CoinsState {
         self.settle_filter();
     }
 
-    /// The absolute trade threshold this share comes to against `busiest`.
-    ///
-    /// Rounded UP, so any non-zero share actually excludes something: at 1% of 40 trades a
-    /// truncating conversion would land on 0 and quietly do nothing.
-    pub(in crate::analytics::tuner) fn trades_floor(&self, busiest: i64) -> i64 {
-        if self.min_trades_pct <= 0 || busiest <= 0 {
-            return 0;
-        }
-        // Manual ceiling: `div_ceil` on integers is still unstable.
-        (busiest * self.min_trades_pct + 99) / 100
-    }
-
     /// Click a coin: plain click selects it alone (and clicking the sole selection clears it),
     /// Ctrl adds or removes — the same rule the strategy list above already teaches.
     pub(in crate::analytics::tuner) fn pick_coin(&mut self, coin: String, multi: bool) {
@@ -392,11 +757,7 @@ impl CoinsState {
             return;
         }
         self.lists_rev = self.lists_rev.wrapping_add(1);
-        let set = if black_side {
-            &mut self.work.black
-        } else {
-            &mut self.work.white
-        };
+        let set = self.work_side(black_side);
         if !set.remove(&token) {
             set.insert(token);
         }
@@ -404,17 +765,75 @@ impl CoinsState {
         self.settle_filter();
     }
 
-    /// How many coins carry an unsaved edit, over the WHOLE working set.
+    /// Add every coin named in `raw` (typed or pasted, any separator) to one working list.
     ///
-    /// Not the row count: the badge sits beside a globally-scoped "revert", so counting only
-    /// the coins the search happens to show would report "0 changed" next to a live revert.
-    pub(in crate::analytics::tuner) fn changed_count(&self) -> usize {
-        self.work
-            .black
-            .symmetric_difference(&self.saved.black)
-            .chain(self.work.white.symmetric_difference(&self.saved.white))
-            .collect::<HashSet<_>>()
-            .len()
+    /// Args:
+    ///     black_side: `true` for the blacklist, `false` for the whitelist.
+    ///     raw: Free text in the strategy field's own syntax.
+    ///
+    /// Returns:
+    ///     How many coins were not on that list yet.
+    pub(in crate::analytics::tuner) fn add_tokens(&mut self, black_side: bool, raw: &str) -> usize {
+        let set = self.work_side(black_side);
+        let added = moon_core::symbol::parse_coin_list(raw)
+            .into_iter()
+            .filter(|token| token.chars().count() <= MAX_TOKEN_LEN)
+            .filter(|token| set.insert(token.clone()))
+            .count();
+        if added > 0 {
+            self.lists_rev = self.lists_rev.wrapping_add(1);
+            self.settle_filter();
+        }
+        added
+    }
+
+    /// Take one coin off a working list (the chip's x).
+    pub(in crate::analytics::tuner) fn remove_token(&mut self, black_side: bool, token: &str) {
+        if self.work_side(black_side).remove(token) {
+            self.lists_rev = self.lists_rev.wrapping_add(1);
+            self.settle_filter();
+        }
+    }
+
+    /// Undo one removal: put a coin back on its working list.
+    pub(in crate::analytics::tuner) fn restore_token(&mut self, black_side: bool, token: &str) {
+        if !token.is_empty() && self.work_side(black_side).insert(token.to_string()) {
+            self.lists_rev = self.lists_rev.wrapping_add(1);
+            self.settle_filter();
+        }
+    }
+
+    /// Empty one working list; the saved list stays the baseline, so Revert brings it back.
+    pub(in crate::analytics::tuner) fn clear(&mut self, black_side: bool) {
+        let set = self.work_side(black_side);
+        if !set.is_empty() {
+            set.clear();
+            self.lists_rev = self.lists_rev.wrapping_add(1);
+            self.settle_filter();
+        }
+    }
+
+    /// The pending edit per side, each part sorted by token.
+    pub(in crate::analytics::tuner) fn pending_delta(&self) -> PendingDelta {
+        fn sorted<'a>(it: impl Iterator<Item = &'a String>) -> Vec<String> {
+            let mut v: Vec<String> = it.cloned().collect();
+            v.sort();
+            v
+        }
+        PendingDelta {
+            added_bl: sorted(self.work.black.difference(&self.saved.black)),
+            removed_bl: sorted(self.saved.black.difference(&self.work.black)),
+            added_wl: sorted(self.work.white.difference(&self.saved.white)),
+            removed_wl: sorted(self.saved.white.difference(&self.work.white)),
+        }
+    }
+
+    fn work_side(&mut self, black_side: bool) -> &mut HashSet<String> {
+        if black_side {
+            &mut self.work.black
+        } else {
+            &mut self.work.white
+        }
     }
 
     /// Is a view backed by anything? The chips read this to decide whether they are
@@ -426,6 +845,9 @@ impl CoinsState {
             CoinFilter::Black => !self.work.black.is_empty(),
             CoinFilter::White => !self.work.white.is_empty(),
             CoinFilter::Changed => self.has_changes(),
+            CoinFilter::Suggested => self
+                .suggested()
+                .is_some_and(|s| !s.black.is_empty() || !s.white.is_empty()),
         }
     }
 
@@ -445,9 +867,9 @@ impl CoinsState {
         }
     }
 
-    /// Variants for the KPI matrix: `[Fact]`, plus v1 when the working lists say anything.
+    /// Variants for the KPI matrix: `[Fact, Manual]`, plus Auto when a pick suggests anything.
     ///
-    /// v1 is the counterfactual the mode exists to answer — the same trades WITH these
+    /// Manual is the counterfactual the mode exists to answer — the same trades WITH these
     /// lists applied: keep only whitelisted coins (when a whitelist exists), then drop the
     /// blacklisted ones, exactly as a strategy evaluates its two lists.
     ///
@@ -455,7 +877,7 @@ impl CoinsState {
     /// here against `universe` — the very coin set the table draws from. A token naming no
     /// traded coin contributes nothing rather than becoming an empty restriction.
     pub(in crate::analytics::tuner) fn plan(&self, universe: &[GroupStat]) -> CoinPlan {
-        CoinPlan::build(&self.work, universe)
+        CoinPlan::build(&self.work, self.suggested(), universe)
     }
 }
 
@@ -474,67 +896,102 @@ impl CoinPlan {
         fresh_saved: &CoinLists,
         previous_saved: &CoinLists,
         previous_work: &CoinLists,
+        auto: Option<&SuggestedLists>,
         universe: &[GroupStat],
     ) -> CoinPlan {
         let work = fresh_saved
             .duplicate()
             .with_delta(previous_saved, previous_work);
-        CoinPlan::build(&work, universe)
+        CoinPlan::build(&work, auto, universe)
     }
 
     /// Build the plan from BARE lists, so the background reload can score the lists it just
-    /// read without waiting for them to reach the view first. Reading them from state there
-    /// is what left v1 missing until the user clicked something.
-    pub(in crate::analytics::tuner) fn build(work: &CoinLists, universe: &[GroupStat]) -> CoinPlan {
-        // v1 ALWAYS exists — it is the column the whole mode is read against, and a matrix
+    /// read without waiting for them to reach the view first.
+    ///
+    /// Variants: `[Fact, Manual]`, plus `Auto` while a finished pick suggests something —
+    /// the working lists with the suggestion applied: its blacklist added, its whitelist (when
+    /// it has one) in place of the working one.
+    ///
+    /// Args:
+    ///     work: The working lists (Manual).
+    ///     auto: The finished pick's suggestion, if any.
+    ///     universe: Report coin rows used to expand list tokens.
+    ///
+    /// Returns:
+    ///     The variants and the coins each list reached.
+    pub(in crate::analytics::tuner) fn build(
+        work: &CoinLists,
+        auto: Option<&SuggestedLists>,
+        universe: &[GroupStat],
+    ) -> CoinPlan {
+        // Manual ALWAYS exists — it is the column the whole mode is read against, and a matrix
         // that grows a column the moment the first coin is ticked shifts every number under
-        // it. Empty, it restricts nothing and simply reproduces the fact, which is the honest
-        // reading of "nothing applied yet".
+        // it. Empty, it restricts nothing and simply reproduces the fact.
         let mut plan = CoinPlan {
             variants: vec![Variant::default(), Variant::default()],
             bl: 0,
             wl: 0,
+            auto: None,
         };
+        let auto_lists = auto.map(|s| {
+            let mut lists = work.duplicate();
+            lists.black.extend(s.black.iter().cloned());
+            if !s.white.is_empty() {
+                lists.white = s.white.iter().cloned().collect();
+            }
+            lists
+        });
         // An EMPTY universe is "the coin set is not known yet", not "no coin qualifies":
         // planning against it would turn a live whitelist into `Some(empty)` — the "keeps
-        // nothing" case — and publish a v1 of zero trades that no list actually produced.
-        if work.is_empty() || universe.is_empty() {
+        // nothing" case — and publish a column of zero trades that no list produced.
+        if universe.is_empty() {
             return plan;
         }
-        let white_on = !work.white.is_empty();
-        let (mut coins_in, mut coins_out) = (Vec::new(), Vec::new());
-        let (mut bl_tok, mut wl_tok) = (HashSet::new(), HashSet::new());
-        for g in universe {
-            if g.name.is_empty() {
-                continue;
-            }
-            let token = coin_token(&g.name);
-            if white_on && work.white.contains(&token) {
-                coins_in.push(g.name.clone());
-                wl_tok.insert(token.clone());
-            }
-            if work.black.contains(&token) {
-                coins_out.push(g.name.clone());
-                bl_tok.insert(token);
-            }
+        (plan.variants[1], plan.bl, plan.wl) = expand(work, universe);
+        if let Some(lists) = auto_lists {
+            let (variant, bl, wl) = expand(&lists, universe);
+            plan.variants.push(variant);
+            plan.auto = Some((bl, wl));
         }
-        // Stable order: the variant is part of a background request's identity.
-        coins_in.sort();
-        coins_out.sort();
-        // Reported as the coins the plan actually REACHED, not as the list sizes: a list
-        // may name coins that never traded in this period, and labelling the column with
-        // them would claim a restriction the numbers underneath were not scored under.
-        plan.bl = bl_tok.len();
-        plan.wl = wl_tok.len();
-        plan.variants[1] = Variant {
-            // `Some` whenever a whitelist is switched on, even when nothing matched: that
-            // case keeps NO trades, and an empty `Vec` would read as "no whitelist".
-            coins_in: white_on.then_some(coins_in),
-            coins_out,
-            ..Default::default()
-        };
         plan
     }
+}
+
+/// Expand list tokens against the coin set into a scan variant, plus how many coins each list
+/// actually REACHED in the period (a list may name coins that never traded, and labelling a
+/// column with them would claim a restriction the numbers were not scored under).
+fn expand(lists: &CoinLists, universe: &[GroupStat]) -> (Variant, usize, usize) {
+    if lists.is_empty() {
+        return (Variant::default(), 0, 0);
+    }
+    let white_on = !lists.white.is_empty();
+    let (mut coins_in, mut coins_out) = (Vec::new(), Vec::new());
+    let (mut bl_tok, mut wl_tok) = (HashSet::new(), HashSet::new());
+    for g in universe {
+        if g.name.is_empty() {
+            continue;
+        }
+        let token = coin_token(&g.name);
+        if white_on && lists.white.contains(&token) {
+            coins_in.push(g.name.clone());
+            wl_tok.insert(token.clone());
+        }
+        if lists.black.contains(&token) {
+            coins_out.push(g.name.clone());
+            bl_tok.insert(token);
+        }
+    }
+    // Stable order: the variant is part of a background request's identity.
+    coins_in.sort();
+    coins_out.sort();
+    let variant = Variant {
+        // `Some` whenever a whitelist is switched on, even when nothing matched: that case
+        // keeps NO trades, and an empty `Vec` would read as "no whitelist".
+        coins_in: white_on.then_some(coins_in),
+        coins_out,
+        ..Default::default()
+    };
+    (variant, bl_tok.len(), wl_tok.len())
 }
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own

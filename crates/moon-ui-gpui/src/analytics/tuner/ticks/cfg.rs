@@ -17,8 +17,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonInput,
-    MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement,
-    MoonTooltipView, h_flex, v_flex,
+    MoonInputEvent, MoonInputState, MoonPalette, MoonPopover, MoonPopoverPlacement, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -161,7 +160,7 @@ impl AnalyticsView {
                 div()
                     .id("tun-suggest-one-x-box")
                     .flex_none()
-                    .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(one_tip.clone())).into())
+                    .tooltip(crate::panels::common::text_tooltip(one_tip))
                     .child(
                         MoonButton::new("tun-suggest-one-x")
                             .variant(MoonButtonVariant::Soft)
@@ -181,7 +180,7 @@ impl AnalyticsView {
                 div()
                     .id("tun-suggest-run-x-box")
                     .flex_none()
-                    .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(all_tip.clone())).into())
+                    .tooltip(crate::panels::common::text_tooltip(all_tip))
                     .child(
                         MoonButton::new("tun-suggest-run-x")
                             .variant(MoonButtonVariant::Blue)

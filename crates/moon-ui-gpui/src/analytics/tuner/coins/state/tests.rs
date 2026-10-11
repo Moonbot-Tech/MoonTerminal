@@ -1,8 +1,15 @@
-use super::{CoinFilter, CoinLists, CoinsState, coin_token};
+use super::{
+    CoinFilter, CoinLists, CoinsState, PickCfg, PickStaleCause, PickState, SuggestedLists,
+    coin_token, parse_min_trades,
+};
+use moon_core::config::CoinsAxisLayout;
 use moon_core::config::TableSortPreference;
 use moon_core::db::ReadFail;
 use moon_core::db::analytics::GroupStat;
 use moon_core::db::coin_lists::{CoinListEntries, CoinListRow, CoinListRows};
+use moon_core::db::metrics::Tally;
+use moon_core::db::tuner::VarStats;
+use moon_core::db::tuner::coin_pick::{CoinPick, CoinSuggestion, PickVerdict};
 
 fn coin(name: &str) -> GroupStat {
     GroupStat {
@@ -221,6 +228,7 @@ fn refreshed_baseline_plan_keeps_the_request_start_draft() {
         &fresh_saved,
         &old_saved,
         &old_work,
+        None,
         &[coin("BTC"), coin("ETH"), coin("SOL"), coin("DOGE")],
     );
 
@@ -273,17 +281,145 @@ fn picking_a_coin_follows_the_list_convention() {
     assert!(s.picked.contains("DOGE"));
 }
 
-/// The share is scope-independent; what it COMES TO is not. Rounded up, so a non-zero
-/// share always excludes something instead of silently doing nothing.
+/// A config without the block opens on the axis defaults; an out-of-range holdout is clamped
+/// rather than handed to the pick.
 #[test]
-fn trades_floor_is_a_share_of_the_busiest() {
+fn coin_settings_restore_defaults_and_clamp_the_holdout() {
+    let fresh = CoinsState::load(None, None);
+    assert_eq!(fresh.min_trades, 0);
+    assert!(fresh.hide_zero);
+    assert_eq!(
+        fresh.pick_cfg,
+        PickCfg {
+            min_trades: 5,
+            holdout_pct: 30,
+            black: true,
+            white: false,
+        }
+    );
+
+    let saved = CoinsAxisLayout {
+        min_trades: Some(7),
+        hide_zero: Some(false),
+        pick_holdout_pct: Some(95),
+        pick_white: Some(true),
+        ..CoinsAxisLayout::default()
+    };
+    let s = CoinsState::load(None, Some(&saved));
+    assert_eq!(s.min_trades, 7);
+    assert!(!s.hide_zero);
+    assert_eq!(
+        s.pick_cfg.holdout_pct, 50,
+        "95 clamps to the top of 10..=50"
+    );
+    assert_eq!(
+        s.pick_cfg.min_trades, 5,
+        "a missing field keeps its default"
+    );
+    assert!(s.pick_cfg.black && s.pick_cfg.white);
+
+    let back = CoinsState::load(None, Some(&s.to_layout()));
+    assert_eq!(
+        back.to_layout(),
+        s.to_layout(),
+        "what is written loads back the same"
+    );
+}
+
+/// A paste in any separator adds upper-cased base tokens, and an adopt landing afterwards
+/// replays the addition instead of dropping it.
+#[test]
+fn pasted_coins_are_added_and_survive_a_reload() {
     let mut s = CoinsState::default();
-    assert_eq!(s.trades_floor(400), 0, "0% keeps everything");
-    s.min_trades_pct = 10;
-    assert_eq!(s.trades_floor(400), 40);
-    assert_eq!(s.trades_floor(0), 0, "no coins, no threshold");
-    s.min_trades_pct = 1;
-    assert_eq!(s.trades_floor(40), 1, "rounds up, never down to a no-op");
+    s.adopt(CoinLists::parse("XOLD", ""));
+    let rev = s.lists_rev;
+    assert_eq!(s.add_tokens(true, "xaaa, XBBB_RP,,xccc"), 3);
+    assert!(s.lists_rev != rev, "an edit bumps the list revision");
+    for token in ["XAAA", "XBBB", "XCCC", "XOLD"] {
+        assert!(s.work.black.contains(token), "{token} must be listed");
+    }
+    assert_eq!(s.add_tokens(true, "XAAA"), 0, "already listed adds nothing");
+
+    s.adopt(CoinLists::parse("XOLD, XNEW", ""));
+    for token in ["XAAA", "XBBB", "XCCC", "XOLD", "XNEW"] {
+        assert!(
+            s.work.black.contains(token),
+            "{token} must survive the replay"
+        );
+    }
+}
+
+/// Clear empties the working list only; Revert restores the saved one.
+#[test]
+fn clear_then_revert_restores_saved() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("XAAA, XBBB", "XCCC"));
+    s.clear(true);
+    assert!(s.work.black.is_empty());
+    assert_eq!(s.work.white.len(), 1, "the other side is untouched");
+    assert!(s.has_changes());
+    s.revert();
+    assert_eq!(s.work.black, s.saved.black);
+    assert!(!s.has_changes());
+}
+
+/// The pending delta names each side's additions and removals, sorted.
+#[test]
+fn pending_delta_is_signed_per_side_and_sorted() {
+    let mut s = CoinsState::default();
+    s.adopt(CoinLists::parse("XAAA, XBBB", "XCCC"));
+    s.add_tokens(true, "XZZZ, XDDD");
+    s.remove_token(true, "XBBB");
+    s.remove_token(false, "XCCC");
+    s.add_tokens(false, "XEEE");
+    let d = s.pending_delta();
+    assert_eq!(d.added_bl, ["XDDD", "XZZZ"]);
+    assert_eq!(d.removed_bl, ["XBBB"]);
+    assert_eq!(d.added_wl, ["XEEE"]);
+    assert_eq!(d.removed_wl, ["XCCC"]);
+    s.restore_token(true, "XBBB");
+    assert!(
+        s.pending_delta().removed_bl.is_empty(),
+        "undo takes the removal back"
+    );
+}
+
+/// A scope change retires a running pick: the card goes Idle and its reply cannot land.
+#[test]
+fn invalidate_drops_a_running_pick() {
+    let mut s = CoinsState::default();
+    s.pick = PickState::Running { seq: s.pick_seq };
+    let before = s.pick_seq;
+    s.invalidate();
+    assert_eq!(s.pick, PickState::Idle);
+    assert!(
+        s.pick_seq != before,
+        "the in-flight reply's seq no longer matches"
+    );
+}
+
+/// `coins/state.rs:CoinsState::mark_report_stale` must let an in-flight pick land stale.
+///
+/// Mutation: `drop_pick` while the pick is `Running`. The report commits every few
+/// seconds, so a pick slower than that interval would never land and the card would
+/// fall back to the settings form — the same symptom as dropping a finished pick.
+#[test]
+fn a_report_refresh_lets_an_in_flight_pick_land_stale() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    let lists_rev = s.lists_rev;
+    let report_gen = s.report_gen;
+    let seq_before = s.pick_seq;
+    s.mark_report_stale();
+    assert_eq!(s.pick, PickState::Running { seq });
+    assert_eq!(
+        s.pick_seq, seq_before,
+        "the reply must still be allowed to land"
+    );
+    assert!(s.land_pick(seq, lists_rev, report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    assert!(s.pick_stale(), "the reply scored the previous report");
+    assert_eq!(s.adopt_suggestion(true), 1);
+    assert!(s.work.black.contains("XAAA"));
 }
 
 /// A reload landing on top of an edit must REPLAY it, not union it in.
@@ -357,10 +493,13 @@ fn a_scope_change_adopts_the_new_baseline_whole() {
 /// the wrong row direction/arrow, and the exact stored tuple assertion reddens.
 #[test]
 fn coin_sort_load_restores_valid_key_and_direction() {
-    let state = CoinsState::load(Some(TableSortPreference {
-        column: "analytics.col.profit".to_string(),
-        ascending: true,
-    }));
+    let state = CoinsState::load(
+        Some(TableSortPreference {
+            column: "analytics.col.profit".to_string(),
+            ascending: true,
+        }),
+        None,
+    );
     assert_eq!(
         state.sort,
         Some(("analytics.col.profit".to_string(), false))
@@ -374,13 +513,292 @@ fn coin_sort_load_restores_valid_key_and_direction() {
 #[test]
 fn coin_sort_load_keeps_historical_default_for_unknown_key() {
     let expected = CoinsState::default().sort;
-    assert_eq!(CoinsState::load(None).sort, expected);
+    assert_eq!(CoinsState::load(None, None).sort, expected);
     assert_eq!(
-        CoinsState::load(Some(TableSortPreference {
-            column: "retired".to_string(),
-            ascending: true,
-        }))
+        CoinsState::load(
+            Some(TableSortPreference {
+                column: "retired".to_string(),
+                ascending: true,
+            }),
+            None
+        )
         .sort,
         expected
     );
+}
+
+/// The "fewer trades than" input takes a whole number (blank = 0) and refuses anything else,
+/// so the caller keeps the previous threshold.
+#[test]
+fn parse_min_trades_rejects_non_numbers_and_negatives() {
+    assert_eq!(parse_min_trades("12"), Some(12));
+    assert_eq!(parse_min_trades(" 3 "), Some(3));
+    assert_eq!(parse_min_trades(""), Some(0));
+    assert_eq!(parse_min_trades("-1"), None);
+    assert_eq!(parse_min_trades("abc"), None);
+    assert_eq!(parse_min_trades("2.5"), None);
+}
+
+fn pick_of(black: &[&str]) -> CoinPick {
+    CoinPick {
+        black: black
+            .iter()
+            .map(|t| CoinSuggestion {
+                token: t.to_string(),
+                n: 10,
+                profit: -50.0,
+            })
+            .collect(),
+        white: Vec::new(),
+        train_n: 70,
+        holdout_n: 30,
+        fact_holdout: Tally::default(),
+        manual_holdout: Tally::default(),
+        pick_holdout: Tally::default(),
+        verdict: PickVerdict::Useful,
+    }
+}
+
+/// No pick: Fact and Manual only. A finished pick adds the Auto column, scored on the
+/// working blacklist plus the suggested one.
+#[test]
+fn the_auto_variant_adds_the_suggestion_to_the_manual_lists() {
+    let universe = [coin("XAAA"), coin("XBBB_RP"), coin("XCCC")];
+    let work = CoinLists::parse("XAAA", "");
+    let plan = super::CoinPlan::build(&work, None, &universe);
+    assert_eq!(plan.variants.len(), 2);
+    assert_eq!(plan.auto, None);
+
+    let sug = SuggestedLists {
+        black: vec!["XBBB".to_string()],
+        white: Vec::new(),
+    };
+    let plan = super::CoinPlan::build(&work, Some(&sug), &universe);
+    assert_eq!(plan.variants.len(), 3);
+    assert_eq!(plan.variants[1].coins_out, ["XAAA"]);
+    assert_eq!(plan.variants[2].coins_out, ["XAAA", "XBBB_RP"]);
+    assert_eq!(plan.auto, Some((2, 0)));
+}
+
+/// A reply whose generation was retired (Stop, a new Pick) is dropped, not published.
+#[test]
+fn a_stale_pick_reply_is_dropped() {
+    let mut s = CoinsState::default();
+    let first = s.begin_pick();
+    let second = s.begin_pick();
+    assert!(!s.land_pick(first, s.lists_rev, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    assert_eq!(s.pick, PickState::Running { seq: second });
+    assert!(s.suggested().is_none());
+    assert!(s.land_pick(
+        second,
+        s.lists_rev,
+        s.report_gen,
+        30,
+        Ok(pick_of(&["XAAA"]))
+    ));
+    assert_eq!(
+        s.suggested().map(|x| x.black.clone()),
+        Some(vec!["XAAA".to_string()])
+    );
+}
+
+/// A list edit while the pick runs: the reply still lands, but the pick is flagged stale.
+/// Adopting the pick's own suggestion afterwards is not such an edit.
+#[test]
+fn a_list_edit_during_the_pick_marks_it_stale() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    let launched = s.lists_rev;
+    s.add_tokens(true, "XZZZ");
+    assert!(s.land_pick(seq, launched, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    match &s.pick {
+        PickState::Done { lists_rev, .. } => assert_ne!(*lists_rev, s.lists_rev),
+        other => panic!("expected Done, got {other:?}"),
+    }
+    assert!(s.pick_stale());
+
+    let mut fresh = CoinsState::default();
+    let seq = fresh.begin_pick();
+    let rev = fresh.lists_rev;
+    assert!(fresh.land_pick(seq, rev, fresh.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    assert_eq!(fresh.adopt_suggestion(true), 1);
+    assert!(fresh.work.black.contains("XAAA"));
+    assert!(
+        !fresh.pick_stale(),
+        "adopting the pick's own answer is no stale edit"
+    );
+}
+
+/// `coins/state.rs:CoinsState::mark_report_stale` must keep a finished pick and mark it stale.
+///
+/// Mutation: call `drop_pick` for `PickState::Done`. The next report commit would clear the
+/// verdict, the Suggested view and the table Auto column while the KPI Auto column kept that
+/// pick's numbers, and Add to blacklist would have nothing left to apply. A scope change
+/// still drops the pick, and the KPI column with it.
+#[test]
+fn a_report_refresh_keeps_a_finished_pick_and_marks_it_stale() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    let rev = s.lists_rev;
+    assert!(s.land_pick(seq, rev, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+    let pick_rev = s.pick_rev;
+    s.filter = CoinFilter::Suggested;
+    s.kpi.apply(Ok(vec![
+        VarStats {
+            n: 3,
+            ..VarStats::default()
+        };
+        3
+    ]));
+    s.kpi_auto = Some((2, 0));
+
+    s.mark_report_stale();
+
+    assert!(
+        matches!(s.pick, PickState::Done { .. }),
+        "the verdict must stay on screen"
+    );
+    assert!(s.pick_stale(), "the card must show the stale note");
+    assert_eq!(
+        s.pick_rev, pick_rev,
+        "the table Auto column must keep its tags"
+    );
+    assert_eq!(
+        s.suggested().map(|x| x.black.clone()),
+        Some(vec!["XAAA".to_string()])
+    );
+    assert!(
+        s.filter == CoinFilter::Suggested,
+        "the Suggested view must stay reachable"
+    );
+    assert_eq!(
+        s.kpi.data().map(|stats| stats.len()),
+        Some(3),
+        "the KPI Auto column must keep the same pick"
+    );
+    assert_eq!(s.kpi_auto, Some((2, 0)));
+    assert_eq!(
+        s.adopt_suggestion(true),
+        1,
+        "Add to blacklist still applies"
+    );
+    assert!(s.work.black.contains("XAAA"));
+    assert!(
+        s.pick_stale(),
+        "adopting the suggestion does not make an old verdict current"
+    );
+
+    s.invalidate();
+    assert_eq!(
+        s.pick,
+        PickState::Idle,
+        "a scope change still drops the pick"
+    );
+    assert!(s.suggested().is_none());
+    assert_eq!(s.kpi_auto, None);
+    assert_eq!(
+        s.kpi.data().map(|stats| stats.len()),
+        Some(2),
+        "dropping the pick must drop the KPI Auto column too"
+    );
+}
+
+/// `coins/state.rs:CoinsState::pick_stale_cause` must name the input that moved.
+///
+/// Mutation: always return `Lists`, or return `Report` when both bindings moved.
+/// A report refresh would tell the user they edited the lists, and a list edit made
+/// while new trades also arrived would hide that edit behind the trades note.
+#[test]
+fn pick_stale_cause_names_the_input_that_moved() {
+    let finished = || {
+        let mut s = CoinsState::default();
+        let seq = s.begin_pick();
+        assert!(s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick_of(&["XAAA"]))));
+        s
+    };
+
+    let mut report = finished();
+    report.mark_report_stale();
+    assert_eq!(
+        report.pick_stale_cause(),
+        Some(PickStaleCause::Report),
+        "a report refresh with the lists untouched names the report"
+    );
+
+    let mut lists = finished();
+    lists.add_tokens(true, "XZZZ");
+    assert_eq!(
+        lists.pick_stale_cause(),
+        Some(PickStaleCause::Lists),
+        "a list edit with the report untouched names the lists"
+    );
+
+    let mut both = finished();
+    both.add_tokens(true, "XZZZ");
+    both.mark_report_stale();
+    assert_eq!(
+        both.pick_stale_cause(),
+        Some(PickStaleCause::Lists),
+        "when both moved, the user's own edit is the note"
+    );
+}
+
+/// "Add to whitelist" applies what the Auto column scored: the suggested whitelist REPLACES
+/// the working one, while the blacklist side still adds.
+#[test]
+fn adopting_a_suggested_whitelist_replaces_the_working_one() {
+    let mut s = CoinsState::default();
+    s.add_tokens(false, "XAAA,XBBB,XCCC");
+    s.add_tokens(true, "XDDD");
+    let seq = s.begin_pick();
+    let mut pick = pick_of(&["XEEE"]);
+    pick.white = vec![CoinSuggestion {
+        token: "XAAA".to_string(),
+        n: 40,
+        profit: 120.0,
+    }];
+    assert!(s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick)));
+    assert_eq!(s.adopt_suggestion(false), 0, "XAAA was already listed");
+    assert_eq!(s.work.white, ["XAAA".to_string()].into_iter().collect());
+    assert_eq!(s.adopt_suggestion(true), 1);
+    assert!(s.work.black.contains("XDDD") && s.work.black.contains("XEEE"));
+    assert!(!s.pick_stale());
+}
+
+/// An empty answer is a finished pick, but it suggests nothing: no Auto variant.
+#[test]
+fn an_empty_pick_suggests_nothing() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    let rev = s.pick_rev;
+    assert!(s.land_pick(seq, s.lists_rev, s.report_gen, 30, Ok(pick_of(&[]))));
+    assert!(matches!(s.pick, PickState::Done { .. }));
+    assert!(s.suggested().is_none());
+    assert_eq!(s.pick_rev, rev);
+}
+
+/// The verdict names the holdout the pick RAN with, not the setting moved since.
+#[test]
+fn a_finished_pick_keeps_its_own_holdout() {
+    let mut s = CoinsState::default();
+    let seq = s.begin_pick();
+    assert!(s.land_pick(seq, s.lists_rev, s.report_gen, 25, Ok(pick_of(&["XAAA"]))));
+    s.pick_cfg.holdout_pct = 40;
+    assert!(matches!(
+        s.pick,
+        PickState::Done {
+            holdout_pct: 25,
+            ..
+        }
+    ));
+}
+
+/// A pasted name longer than any coin is rejected, not drawn as a field-wide chip.
+#[test]
+fn an_overlong_token_is_rejected() {
+    let mut s = CoinsState::default();
+    let long = "X".repeat(super::MAX_TOKEN_LEN + 1);
+    let ok = "Y".repeat(super::MAX_TOKEN_LEN);
+    assert_eq!(s.add_tokens(true, &format!("{long},{ok}")), 1);
+    assert!(s.work.black.contains(&ok));
 }

@@ -1,40 +1,33 @@
-//! The coin picker: one big `CoinsBlackList` field, written the way Moonbot writes it —
-//! coins separated by commas — but ordered and shaded by WHEN each entered the list.
+//! The "Coin lists" card: the `CoinsBlackList` and `CoinsWhiteList` fields as the user edits
+//! them — chips that can be removed, restored and added by typing or pasting.
 //!
-//! This replaced two sortable tables. A table answers "what is in the list"; this field is
-//! the VALUE itself, in the form it will be saved in — which is what a review of the list
-//! actually needs to see.
+//! Each field shows the WORKING list plus what the edit took out of the saved one: a saved
+//! coin the user removed stays in the field, struck through with an undo, and an unsaved
+//! addition is marked `+COIN`. The value written on Save never includes a removed entry.
 //!
-//! Two things the plain text cannot carry are attached per coin: the exact date, on hover,
-//! and its age, as brightness. Newest first and brightest, oldest last and dimmest — so the
-//! recent decisions, the ones actually being reviewed, are the ones that stand out.
+//! The blacklist is ordered newest first and shaded by WHEN each coin entered the list: the
+//! exact date on hover, the age as brightness. Brightness is relative to THIS list, not to the
+//! calendar — the ramp spends its full range on whatever spread the list has, so it answers
+//! "which of these came last", never "how old is this". A list saved in one go is uniformly
+//! bright.
 //!
-//! Brightness is relative to THIS list, not to the calendar: the question being asked is
-//! "what changed in this strategy last", and that has no answer outside the list. A list
-//! saved in one go is therefore uniformly bright whatever day that was — every coin in it is
-//! equally the latest — and a list with a spread runs from the newest at full brightness down
-//! to the oldest.
-//!
-//! The consequence, stated because it is easy to misread: the ramp always spends its full
-//! range on whatever spread the list happens to have, so a gap of minutes looks like a gap of
-//! months. It answers "which of these came last", never "how old is this".
-//!
-//! Only the BLACKLIST is DRAWN here. The whitelist is read too — both lists are editable in
-//! the coin table and both are written on save — but it carries no dates and no field of its
-//! own, so it exists only as the entries `coin_list_changes` writes back. See
-//! `moon_core::db::coin_lists`.
+//! The whitelist carries no dates, so its chips are plain and sorted by token.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::Arc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonPalette, MoonTooltipView, h_flex, v_flex};
+use moon_ui::{MoonInputEvent, MoonInputState, MoonPalette, v_flex};
 use rust_i18n::t;
 
 use super::super::super::AnalyticsView;
+use super::fields::{ChipKind, FieldChip, ListFieldActs, ListFieldModel};
+use super::state::CoinLists;
 
 use crate::design;
-use crate::design::{moon, moon_alpha};
+use crate::design::moon;
 use crate::load_state::LoadState;
 use moon_core::db::coin_lists::{CoinListEntries, CoinListRows};
 
@@ -46,56 +39,46 @@ const OLDEST_ALPHA: f32 = 0.42;
 /// past this fails the build rather than quietly making old entries unreadable.
 const _: () = assert!(OLDEST_ALPHA > 0.3);
 
-/// One entry of the field as it draws it.
+/// One entry of a field as it draws it.
 ///
-/// Every string here is built ONCE, when the field is folded — not per frame. The card can
-/// hold hundreds of these and GPUI rebuilds the whole element tree on any repaint, so a
-/// `format!` in the chip builder is a `format!` per coin per frame.
+/// Every string here is built ONCE, when the field is folded — not per frame. A field can
+/// hold hundreds of these and GPUI rebuilds the whole element tree on any repaint.
 struct PickCoin {
-    /// The entry AS SAVED, or the coin token for an unsaved tick. This exact string is what
-    /// gets written to `CoinsBlackList` — the field the user reads and the value that is
-    /// saved are built from one place, so they cannot drift.
+    /// The entry AS SAVED, or the coin token for an unsaved addition. This exact string is
+    /// what gets written to the field, so the chip and the saved value cannot drift.
     text: SharedString,
-    /// The same with its separator attached, for drawing. Precomputed like everything else
-    /// here: the card holds hundreds of these and rebuilds them on every repaint.
-    display: SharedString,
+    /// The matching token the edit acts on (remove / restore).
+    token: SharedString,
     /// Element id, stable across frames.
     id: SharedString,
-    /// The hover line: coin, its cores, its date.
+    /// The hover line: coin, its cores, its date or its edit state.
     tip: SharedString,
     /// When this coin's presence begins, as far as anything can tell. `None` for an unsaved
-    /// tick (it begins now) and for the few coins no retained version can attest to.
+    /// addition, for the whitelist, and for the few coins no retained version attests to.
     at: Option<i64>,
-    /// Ticked in the table but not written to any strategy yet.
+    /// In the working list but not written to any strategy yet.
     pending: bool,
+    /// Saved, but taken out of the working list: shown struck through, never written.
+    removed: bool,
     /// 0.0 = oldest, 1.0 = newest. Position on the brightness ramp.
     fresh: f32,
 }
 
-/// Ceiling on how many entries are drawn.
-///
-/// Counted in ENTRIES, not coins — a list may spell one coin several ways. Measured on the
-/// real database: the biggest single list is 474 and the union over every strategy is 819,
-/// so this clears both. Past it the field states how many it left out rather than looking
-/// complete.
-const MAX_CHIPS: usize = 1000;
-
-/// The built field, kept across repaints.
+/// The built fields, kept across repaints.
 struct FieldCache {
     /// Held by strong reference, so `ptr_eq` cannot be fooled by a reused allocation.
     src: Arc<CoinListRows>,
-    /// The working-list revision this was built for — the field follows the EDIT, so a tick
-    /// must rebuild it even though the background read has not moved.
+    /// The working-list revision this was built for — the fields follow the EDIT.
     rev: u64,
     /// Display zone used to precompute the hover dates.
     zone: chrono_tz::Tz,
-    coins: Vec<PickCoin>,
-    /// How many of them carry a date, counted here rather than in the probe: the probe runs
-    /// on every frame it is armed for, and this does not change between rebuilds.
+    black: Vec<PickCoin>,
+    white: Vec<PickCoin>,
+    /// How many blacklist entries carry a date, counted once per rebuild for the probe.
     dated: usize,
 }
 
-/// State of the picker: the background read plus the field built from it.
+/// State of the picker: the background read plus the fields built from it.
 #[derive(Default)]
 pub(in crate::analytics) struct CoinListsState {
     pub(in crate::analytics::tuner) rows: LoadState<CoinListRows>,
@@ -117,7 +100,7 @@ impl CoinListsState {
         self.field = None;
     }
 
-    /// Drop only the rendered field so dates rebuild after the display zone changes.
+    /// Drop only the rendered fields so dates rebuild after the display zone changes.
     ///
     /// Returns:
     ///     Nothing; source rows and working edits remain intact.
@@ -126,47 +109,46 @@ impl CoinListsState {
     }
 }
 
-/// Build the field unless the cache already holds it.
-///
-/// Built once per read AND per edit, never per frame: GPUI repaints the whole view on any
-/// hover, and this walks and sorts every entry of the list.
+/// Build both fields unless the cache already holds them.
 ///
 /// Args:
 ///     state: Coin-list state that owns the cache.
 ///     data: Loaded saved lists.
-///     work: Current working blacklist tokens.
-///     saved: Persisted blacklist tokens used to mark pending entries.
+///     work: Current working lists.
+///     saved: Persisted lists used to mark additions and removals.
 ///     rev: Working-list revision.
 ///     zone: Selected IANA display zone used by hover dates.
 ///
 /// Returns:
-///     Cached or freshly built field entries borrowed from `state`.
-fn field_for<'a>(
+///     The cached blacklist and whitelist entries.
+fn fields_for<'a>(
     state: &'a mut CoinListsState,
     data: &Arc<CoinListRows>,
-    work: &HashSet<String>,
-    saved: &HashSet<String>,
+    work: &CoinLists,
+    saved: &CoinLists,
     rev: u64,
     zone: chrono_tz::Tz,
-) -> &'a [PickCoin] {
+) -> (&'a [PickCoin], &'a [PickCoin]) {
     let stale = state
         .field
         .as_ref()
         .is_none_or(|c| !Arc::ptr_eq(&c.src, data) || c.rev != rev || c.zone != zone);
     if stale {
-        let coins = build(data, work, saved, zone);
+        let black = build(data, &work.black, &saved.black, zone);
+        let white = build_white(&data.white, &work.white, &saved.white);
         state.field = Some(FieldCache {
-            dated: coins.iter().filter(|c| c.at.is_some()).count(),
+            dated: black.iter().filter(|c| c.at.is_some()).count(),
             src: Arc::clone(data),
             rev,
             zone,
-            coins,
+            black,
+            white,
         });
     }
     state
         .field
         .as_ref()
-        .map(|c| c.coins.as_slice())
+        .map(|c| (c.black.as_slice(), c.white.as_slice()))
         .unwrap_or_default()
 }
 
@@ -179,24 +161,18 @@ struct Saved<'a> {
     /// The most recent EXACT date across those cores; `None` if none of them observed the
     /// addition (the caller then falls back to `before`).
     since: Option<i64>,
-    /// The EARLIEST bound across the cores that only have one — the same MIN the read
-    /// applies within a core, and for the same reason: the earliest attestation is the
-    /// strongest true claim. Taking whichever came first in the vec picked the weakest.
+    /// The EARLIEST bound across the cores that only have one — the earliest attestation is
+    /// the strongest true claim.
     before: Option<i64>,
 }
 
-/// Fold the read into the field's entries: the WORKING list, newest first, each carrying its
-/// cores and its place on the brightness ramp.
-///
-/// The working list is the point. The field is labelled with the strategy parameter and is
-/// the value the picking produces, so it has to follow the tick boxes: a coin just ticked
-/// appears, one just unticked leaves. Rendering the saved value instead made the field sit
-/// still while the badge beside it counted the edits.
+/// Fold the read into the blacklist field: the working list plus the saved coins the edit
+/// removed, newest first, each with its cores and its place on the brightness ramp.
 ///
 /// Args:
 ///     data: Loaded saved lists and their historical dates.
 ///     work: Current working blacklist tokens.
-///     saved: Persisted blacklist tokens used to mark pending entries.
+///     saved: Persisted blacklist tokens.
 ///     zone: Selected IANA display zone used by hover dates.
 ///
 /// Returns:
@@ -207,8 +183,6 @@ fn build(
     saved: &HashSet<String>,
     zone: chrono_tz::Tz,
 ) -> Vec<PickCoin> {
-    // What the SAVED lists hold, indexed by token, so a working coin can pick up its
-    // entries, its cores and its date.
     let mut by_token: HashMap<&str, Saved> = HashMap::new();
     for row in &data.black {
         let slot = by_token.entry(row.coin.as_str()).or_default();
@@ -220,9 +194,7 @@ fn build(
         if !slot.cores.contains(&row.core_name.as_str()) {
             slot.cores.push(row.core_name.as_str());
         }
-        // An EXACT date outranks a bound, whichever core it came from: the read already
-        // suppresses the bound wherever it knows the real thing, and merging on
-        // `effective_ms` here put one core's "no later than" over another's actual date.
+        // An EXACT date outranks a bound, whichever core it came from.
         slot.since = match (slot.since, row.since_ms) {
             (Some(a), Some(b)) => Some(a.max(b)),
             (a, b) => a.or(b),
@@ -233,47 +205,50 @@ fn build(
         };
     }
     let mut coins: Vec<PickCoin> = Vec::with_capacity(work.len());
-    for token in work {
+    for token in work.union(saved) {
         let known = by_token.get(token.as_str());
         let pending = !saved.contains(token);
-        // A coin present in the saved lists writes back exactly the entries that are there —
-        // `BTC, BTC_0626, BTC_0925` are three entries matching one coin, and collapsing them
-        // to `BTC` would delete two of them the moment this value is saved.
+        let removed = !work.contains(token);
+        // A saved coin writes back exactly the entries that are there — `BTC, BTC_0626` are
+        // two entries matching one coin, and collapsing them would delete one on save.
         let mut entries: Vec<String> = known.map(|k| k.entries.clone()).unwrap_or_default();
         if entries.is_empty() {
             entries.push(token.clone());
         }
         let cores = known.map(|k| k.cores.join(", ")).unwrap_or_default();
-        // Only a SAVED coin has a date; a pending tick begins now, which no history records.
+        // Only a SAVED coin has a date; a pending addition begins now.
         let at = if pending {
             None
         } else {
             known.and_then(|k| k.since.or(k.before))
         };
         for text in entries {
-            let tip = match (
-                pending,
-                at.map(|ms| moon_core::util::display_time::format_date(ms / 1000, zone)),
-            ) {
-                // An unsaved tick has no date and no core: saying so is the point, since it
-                // is the one entry the strategy does not hold yet.
-                (true, _) => format!("{text} · {}", t!("analytics.coins.pending")),
-                (false, Some(d)) if !d.is_empty() => format!("{text} · {cores} · {d}"),
-                (false, _) => format!("{text} · {cores} · {}", t!("analytics.coins.no_date")),
+            let date = at.map(|ms| moon_core::util::display_time::format_date(ms / 1000, zone));
+            let tip = match (pending, removed, date) {
+                (true, _, _) => format!("{text} · {}", t!("analytics.coins.pending")),
+                (false, true, _) => format!(
+                    "{text} · {} · {}",
+                    cores,
+                    t!("analytics.coins.chip_removed")
+                ),
+                (false, false, Some(d)) if !d.is_empty() => format!("{text} · {cores} · {d}"),
+                (false, false, _) => {
+                    format!("{text} · {cores} · {}", t!("analytics.coins.no_date"))
+                }
             };
             coins.push(PickCoin {
-                id: SharedString::from(format!("an-pick-{text}")),
-                display: SharedString::from(text.clone()),
+                id: SharedString::from(format!("an-pick-b-{text}")),
                 text: SharedString::from(text),
+                token: SharedString::from(token.clone()),
                 tip: SharedString::from(tip),
                 at,
                 pending,
+                removed,
                 fresh: 0.0,
             });
         }
     }
-    // Newest first. A pending tick is the newest thing there is — it was added just now —
-    // so it leads, which is exactly "the last written coin comes first".
+    // Newest first. A pending addition is the newest thing there is, so it leads.
     coins.sort_by(|a, b| {
         b.pending
             .cmp(&a.pending)
@@ -281,48 +256,77 @@ fn build(
             .then_with(|| a.text.cmp(&b.text))
     });
 
-    // The separator belongs to the entry BEFORE it, so a wrap never orphans a comma at the
-    // start of a line. Attached here, once, rather than in the per-frame chip builder.
-    let last = coins.len().saturating_sub(1);
-    for (i, c) in coins.iter_mut().enumerate() {
-        if i != last {
-            c.display = SharedString::from(format!("{}, ", c.text));
-        }
-    }
-
     // The ramp runs over THIS list's own span: oldest entry at the dim end, newest at the
-    // bright end. Not over the calendar — the list is what the eye is comparing.
+    // bright end. Differences, never the timestamps themselves: `f32` resolves a unix-ms
+    // value only to about a day.
     let dates: Vec<i64> = coins.iter().filter_map(|c| c.at).collect();
     let (oldest, newest) = match (dates.iter().min(), dates.iter().max()) {
         (Some(lo), Some(hi)) => (*lo, *hi),
         _ => (0, 0),
     };
-    // Differences, never the timestamps themselves: a unix-ms value is ~1.8e12 and `f32`
-    // resolves it only to about a day, while the gaps this ramp is made of are far smaller.
     let span = (newest - oldest) as f32;
     for c in &mut coins {
         c.fresh = match c.at {
-            // Not saved yet — newer than anything with a date.
             _ if c.pending => 1.0,
-            // Saved in one go: there is no "older" here, so nothing is dimmed. This is the
-            // common case — most real lists carry a single date — and the guard is what
-            // keeps a zero span out of the division below.
+            // Saved in one go: nothing is older, so nothing is dimmed.
             Some(_) if span <= 0.0 => 1.0,
             Some(at) => ((at - oldest) as f32 / span).clamp(0.0, 1.0),
-            // Nothing known at all — it predates everything we can see, so it takes the far
-            // end of the ramp rather than a colour of its own.
+            // Nothing known at all — it predates everything we can see.
             None => 0.0,
         };
     }
     coins
 }
 
-/// The whitelist's value: the entries the strategies hold for every coin still ticked, plus
-/// the bare token for one ticked but never saved.
+/// Fold the whitelist field: working plus removed coins, sorted by token, no dates.
 ///
-/// Ordered by token rather than by date — nothing reads a whitelist date, and a stable order
-/// is what keeps two identical saves from producing two different strings.
-fn white_value(saved: &[CoinListEntries], work: &HashSet<String>) -> String {
+/// Args:
+///     saved_rows: The strategies' whitelist entries as written.
+///     work: Current working whitelist tokens.
+///     saved: Persisted whitelist tokens.
+///
+/// Returns:
+///     Field entries ordered by token, then by entry.
+fn build_white(
+    saved_rows: &[CoinListEntries],
+    work: &HashSet<String>,
+    saved: &HashSet<String>,
+) -> Vec<PickCoin> {
+    let by_token = entries_by_token(saved_rows);
+    let tokens: BTreeSet<&String> = work.union(saved).collect();
+    let mut coins = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        let pending = !saved.contains(token);
+        let removed = !work.contains(token);
+        let entries: Vec<String> = match by_token.get(token.as_str()) {
+            Some(entries) if !entries.is_empty() => entries.iter().map(|e| e.to_string()).collect(),
+            _ => vec![token.clone()],
+        };
+        for text in entries {
+            let tip = if pending {
+                format!("{text} · {}", t!("analytics.coins.pending"))
+            } else if removed {
+                format!("{text} · {}", t!("analytics.coins.chip_removed"))
+            } else {
+                text.clone()
+            };
+            coins.push(PickCoin {
+                id: SharedString::from(format!("an-pick-w-{text}")),
+                text: SharedString::from(text),
+                token: SharedString::from(token.clone()),
+                tip: SharedString::from(tip),
+                at: None,
+                pending,
+                removed,
+                fresh: 1.0,
+            });
+        }
+    }
+    coins
+}
+
+/// The whitelist's saved entries per token, deduplicated, in first-seen order.
+fn entries_by_token(saved: &[CoinListEntries]) -> HashMap<&str, Vec<&str>> {
     let mut by_token: HashMap<&str, Vec<&str>> = HashMap::new();
     for r in saved {
         let slot = by_token.entry(r.coin.as_str()).or_default();
@@ -332,13 +336,19 @@ fn white_value(saved: &[CoinListEntries], work: &HashSet<String>) -> String {
             }
         }
     }
+    by_token
+}
+
+/// The whitelist's value: the entries the strategies hold for every coin still listed, plus
+/// the bare token for one added but never saved. Ordered by token, so two identical saves
+/// produce one string.
+fn white_value(saved: &[CoinListEntries], work: &HashSet<String>) -> String {
+    let by_token = entries_by_token(saved);
     let mut tokens: Vec<&String> = work.iter().collect();
     tokens.sort();
     let mut out: Vec<String> = Vec::new();
     for t in tokens {
         match by_token.get(t.as_str()) {
-            // As written: `BTC, BTC_0626` are two entries of one coin, and collapsing them
-            // to the token would delete one of them on save.
             Some(entries) => out.extend(entries.iter().map(|e| (*e).to_string())),
             None => out.push(t.clone()),
         }
@@ -346,242 +356,354 @@ fn white_value(saved: &[CoinListEntries], work: &HashSet<String>) -> String {
     out.join(", ")
 }
 
+/// The blacklist's value as written: every entry still in the working list, newest first.
+///
+/// `cached` is the field already built for the same read, edit and zone; without it the
+/// field is folded afresh.
+fn black_value(
+    data: &CoinListRows,
+    work: &HashSet<String>,
+    saved: &HashSet<String>,
+    zone: chrono_tz::Tz,
+    cached: Option<&[PickCoin]>,
+) -> String {
+    let built;
+    let coins = match cached {
+        Some(coins) => coins,
+        None => {
+            built = build(data, work, saved, zone);
+            built.as_slice()
+        }
+    };
+    coins
+        .iter()
+        .filter(|c| !c.removed)
+        .map(|c| c.text.as_ref())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The coin-list fields to write, and ONLY the ones that actually changed.
+///
+/// Every write is a whole-field overwrite, so naming a field the user did not touch would
+/// push a snapshot of it back over whatever the core has since put there.
+///
+/// Args:
+///     data: The saved lists, `None` while they have not been read.
+///     work: Current working lists.
+///     saved: Persisted lists.
+///     zone: Display zone (orders nothing written; only the shared fold needs it).
+///     cached: The blacklist field already built for this read and edit, if current.
+///
+/// Returns:
+///     `None` while the saved lists are unread: without them the entries as written are
+///     unknown, and writing folded tokens back would delete every contract-suffixed entry.
+fn list_changes(
+    data: Option<&CoinListRows>,
+    work: &CoinLists,
+    saved: &CoinLists,
+    zone: chrono_tz::Tz,
+    cached: Option<&[PickCoin]>,
+) -> Option<Vec<(String, String)>> {
+    let data = data?;
+    let mut out = Vec::new();
+    if work.black != saved.black {
+        out.push((
+            super::save::FIELD.to_string(),
+            black_value(data, &work.black, &saved.black, zone, cached),
+        ));
+    }
+    if work.white != saved.white {
+        out.push((
+            super::save::WHITE_FIELD.to_string(),
+            white_value(&data.white, &work.white),
+        ));
+    }
+    Some(out)
+}
+
+/// One field entry as the shared chip renderer draws it.
+fn chip_of(c: &PickCoin) -> FieldChip {
+    FieldChip {
+        token: c.token.clone(),
+        text: c.text.clone(),
+        tip: c.tip.clone(),
+        id: c.id.clone(),
+        kind: if c.removed {
+            ChipKind::Removed
+        } else if c.pending {
+            ChipKind::Added
+        } else {
+            ChipKind::Saved
+        },
+        // Brightness carries the age; fading is by alpha over the normal text colour.
+        alpha: OLDEST_ALPHA + (1.0 - OLDEST_ALPHA) * c.fresh,
+    }
+}
+
 impl AnalyticsView {
-    /// The coin-list fields to write, and ONLY the ones that actually changed.
-    ///
-    /// Both lists are here because the coin table can tick BOTH: writing only the blacklist
-    /// meant a whitelist edit lit the Save button, went nowhere, and was then erased by the
-    /// reload — an edit lost without a word.
-    ///
-    /// Writing only what MOVED is not a tidiness choice. Every write is a whole-field
-    /// overwrite, so naming a field the user did not touch would push a snapshot of it back
-    /// over whatever the core has since put there.
-    ///
-    /// `None` while the saved lists have not been read: without them the entries as written
-    /// are unknown, and writing folded tokens back would delete every contract-suffixed entry
-    /// the strategy holds.
+    /// The coin-list fields to write, and ONLY the ones that actually changed (see
+    /// [`list_changes`]). This VALUE is what "Make a copy" writes; Save reads only the KEYS
+    /// and sends the user's edit replayed onto each strategy's own live list instead.
     pub(in crate::analytics::tuner) fn coin_list_changes(&self) -> Option<Vec<(String, String)>> {
+        list_changes(
+            self.coin_lists.rows.data().map(|d| d.as_ref()),
+            &self.coins.work,
+            &self.coins.saved,
+            self.display_zone,
+            self.cached_black(),
+        )
+    }
+
+    /// The built blacklist field, when it was built for the current read, edit and zone.
+    fn cached_black(&self) -> Option<&[PickCoin]> {
         let data = self.coin_lists.rows.data()?;
-        let mut out = Vec::new();
-        if self.coins.work.black != self.coins.saved.black {
-            // The same fold the card draws. This VALUE is what "Make a copy" writes; Save
-            // reads only the KEYS from here and sends the user's edit replayed onto each
-            // strategy's own live list instead.
-            let coins = build(
+        self.coin_lists
+            .field
+            .as_ref()
+            .filter(|c| {
+                Arc::ptr_eq(&c.src, data)
+                    && c.rev == self.coins.lists_rev
+                    && c.zone == self.display_zone
+            })
+            .map(|c| c.black.as_slice())
+    }
+
+    /// Lazily-created typing field of one list: Enter adds what was typed, and a paste (or
+    /// any separator typed) adds every coin in it at once.
+    fn coin_list_input(
+        &mut self,
+        black: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<MoonInputState> {
+        let slot = if black {
+            &self.coins.black_input
+        } else {
+            &self.coins.white_input
+        };
+        if let Some(s) = slot {
+            return s.clone();
+        }
+        let state = cx.new(|cx| {
+            MoonInputState::new(window, cx).placeholder(t!("analytics.coins.input_ph").to_string())
+        });
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, state, ev: &MoonInputEvent, window, cx| {
+                let raw = state.read(cx).value().to_string();
+                let commit = match ev {
+                    MoonInputEvent::PressEnter { .. } => true,
+                    // The strategy field's own separators: a pasted list commits at once.
+                    MoonInputEvent::Change => raw.contains([',', ';', ' ', '\n', '\r', '\t']),
+                    _ => false,
+                };
+                if !commit || raw.trim().is_empty() {
+                    return;
+                }
+                this.coins.add_tokens(black, &raw);
+                state.update(cx, |input, cx| input.set_value("", window, cx));
+                this.arm_coin_kpi(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+        if black {
+            self.coins.black_input = Some(state.clone());
+        } else {
+            self.coins.white_input = Some(state.clone());
+        }
+        state
+    }
+
+    /// One list's current value, comma separated as the field holds it; `None` while unread.
+    fn coins_list_value(&self, black: bool) -> Option<String> {
+        let data = self.coin_lists.rows.data()?;
+        let value = if black {
+            black_value(
                 data,
                 &self.coins.work.black,
                 &self.coins.saved.black,
                 self.display_zone,
-            );
-            out.push((
-                super::save::FIELD.to_string(),
-                coins
-                    .iter()
-                    .map(|c| c.text.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            ));
-        }
-        if self.coins.work.white != self.coins.saved.white {
-            out.push((
-                super::save::WHITE_FIELD.to_string(),
-                white_value(&data.white, &self.coins.work.white),
-            ));
-        }
-        Some(out)
+                self.cached_black(),
+            )
+        } else {
+            white_value(&data.white, &self.coins.work.white)
+        };
+        Some(value)
     }
 
-    /// The card: the `CoinsBlackList` field the tick boxes build, plus the shared Save/Copy
-    /// toolbar that writes it.
-    pub(in crate::analytics::tuner) fn coins_field_card(
+    /// The handlers of one field, each going through the same KPI rescan as a tick.
+    fn coin_field_acts(&self, black: bool, cx: &Context<Self>) -> ListFieldActs {
+        let view = cx.entity();
+        let edit = move |f: Rc<dyn Fn(&mut super::state::CoinsState, &str)>| {
+            let view = view.clone();
+            Rc::new(move |token: &SharedString, _: &mut Window, app: &mut App| {
+                view.update(app, |this, cx| {
+                    f(&mut this.coins, token.as_ref());
+                    this.arm_coin_kpi(cx);
+                    cx.notify();
+                });
+            }) as super::fields::TokenAct
+        };
+        let on_remove = edit(Rc::new(move |s, t| s.remove_token(black, t)));
+        let on_restore = edit(Rc::new(move |s, t| s.restore_token(black, t)));
+        let view = cx.entity();
+        let on_clear: super::fields::Act = {
+            let view = view.clone();
+            Rc::new(move |_: &mut Window, app: &mut App| {
+                view.update(app, |this, cx| {
+                    this.coins.clear(black);
+                    this.arm_coin_kpi(cx);
+                    cx.notify();
+                });
+            })
+        };
+        let on_copy: super::fields::Act = Rc::new(move |_: &mut Window, app: &mut App| {
+            if let Some(value) = view.read(app).coins_list_value(black) {
+                app.write_to_clipboard(ClipboardItem::new_string(value));
+            }
+        });
+        ListFieldActs {
+            on_remove,
+            on_restore,
+            on_copy,
+            on_clear,
+        }
+    }
+
+    /// The card: the shared Save/Copy toolbar, the blacklist over the whitelist, and the
+    /// "Not saved" band while an edit is pending.
+    pub(in crate::analytics::tuner) fn coins_lists_card(
         &mut self,
         p: MoonPalette,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // `|_| false`: an empty list is answered in words below, not by the shared note —
-        // that one says "no closed trades in this period", a sentence about a period this
-        // card does not have.
+        let selected = self.sel_strategy.is_some();
+        let inputs = selected.then(|| {
+            (
+                self.coin_list_input(true, window, cx),
+                self.coin_list_input(false, window, cx),
+            )
+        });
+        // `|_| false`: an empty list is answered by the field itself, not by the shared note,
+        // which speaks about closed trades in a period.
         let ready = self.coin_lists.rows.view(|_| false).map(Arc::clone);
-        let picked_any = self.sel_strategy.is_some();
-        let (body, count) = match ready {
-            Err(note) => (
-                crate::load_state::note_el("an-coin-pick-note", note, 10.0, p, cx),
+        let mut counts: Option<(usize, usize)> = None;
+        let body: AnyElement = match (selected, ready) {
+            (false, _) => self.coin_fields_el(
+                ListFieldModel::new(true, None),
+                ListFieldModel::new(false, None),
                 None,
+                p,
+                cx,
             ),
-            // (the `dated` probe counter is taken from `count` below, so a state that never
-            // built a field cannot report the previous one's numbers)
-            Ok(data) => {
-                // The field follows the EDIT: `work` is what the tick boxes have built,
-                // `saved` only decides which entries count as not-yet-written.
-                //
-                // Borrowed through a destructure rather than cloned: the two sets hold a
-                // String per coin, and cloning them per render would cost more allocations
-                // every frame than the whole rest of this card — which is exactly what
-                // precomputing the chip strings was for. `coins` and `coin_lists` are
-                // separate fields, so the split borrow is sound.
+            (true, Err(note)) => crate::load_state::note_el("an-coin-pick-note", note, 10.0, p, cx),
+            (true, Ok(data)) => {
                 let display_zone = self.display_zone;
                 let Self {
                     coins: edit,
                     coin_lists: state,
                     ..
                 } = self;
-                let coins = field_for(
+                let (black, white) = fields_for(
                     state,
                     &data,
-                    &edit.work.black,
-                    &edit.saved.black,
+                    &edit.work,
+                    &edit.saved,
                     edit.lists_rev,
                     display_zone,
                 );
-                if coins.is_empty() {
-                    (
-                        div()
-                            .w_full()
-                            .font_family(design::ui_font())
-                            .text_size(design::t_caption(cx))
-                            .text_color(moon(p.text_muted))
-                            .child(if picked_any {
-                                t!("analytics.coins.list_empty").to_string()
-                            } else {
-                                t!("analytics.coins.list_pick").to_string()
-                            })
-                            .into_any_element(),
-                        picked_any.then_some(0usize),
-                    )
-                } else {
-                    let n = coins.len();
-                    // Every entry is its own element with its own tooltip, and the tree is
-                    // rebuilt on each repaint — so the count is bounded. The cut is stated
-                    // rather than silent: a field labelled with the strategy parameter must
-                    // never look complete when it is not.
-                    let shown = n.min(MAX_CHIPS);
-                    let mut items: Vec<AnyElement> = coins[..shown]
-                        .iter()
-                        .map(|c| coin_chip(c, p).into_any_element())
-                        .collect();
-                    if n > shown {
-                        items.push(
-                            div()
-                                .flex_none()
-                                .text_color(moon(p.text_muted))
-                                .child(t!("analytics.coins.more", n = n - shown).to_string())
-                                .into_any_element(),
-                        );
-                    }
-                    (
-                        // Wrapping, so it reads as one comma-separated value rather than a
-                        // column of chips — this IS the field's text, only shaded.
-                        h_flex()
-                            .w_full()
-                            .flex_wrap()
-                            .children(items)
-                            .into_any_element(),
-                        Some(n),
-                    )
-                }
+                let black_m = ListFieldModel::new(true, Some(black.iter().map(chip_of).collect()));
+                let white_m = ListFieldModel::new(false, Some(white.iter().map(chip_of).collect()));
+                counts = Some((black_m.count.unwrap_or(0), white_m.count.unwrap_or(0)));
+                self.coin_fields_el(black_m, white_m, inputs, p, cx)
             }
         };
         if super::super::super::probe_enabled() {
             super::probe(
                 "coinpick",
                 format!(
-                    "coinpick scope={} coins={} dated={}",
+                    "coinpick scope={} coins={} white={} dated={}",
                     self.scope_label(),
-                    count.map_or(-1, |n| n as i64),
-                    // Only when this render actually built a field; otherwise the cache
-                    // still holds the PREVIOUS selection's numbers.
-                    count
+                    counts.map_or(-1, |(b, _)| b as i64),
+                    counts.map_or(-1, |(_, w)| w as i64),
+                    // Only when this render actually built the fields.
+                    counts
                         .and(self.coin_lists.field.as_ref().map(|f| f.dated))
                         .unwrap_or(0),
                 ),
             );
         }
+        let band = super::fields::pending_text(&self.coins.pending_delta()).map(|text| {
+            let view = cx.entity();
+            super::fields::pending_band_el(
+                text,
+                Rc::new(move |_: &mut Window, app: &mut App| {
+                    view.update(app, |this, cx| {
+                        this.coins.revert();
+                        // Through the SAME debounced path as a tick: reverting is one more
+                        // edit of the same lists.
+                        this.arm_coin_kpi(cx);
+                        cx.notify();
+                    });
+                }),
+                p,
+                cx,
+            )
+        });
         v_flex()
             .w_full()
-            .flex_1()
-            .min_h_0()
+            .flex_none()
             .rounded(design::ui_px(cx, 8.0))
             .bg(moon(p.panel))
             .border_1()
             .border_color(moon(p.border))
             .overflow_hidden()
-            // The SHARED tuner toolbar, same as the other two axes: title, then Copy and
-            // Save. Writing the list is not a different kind of act from writing a
-            // threshold, so it must not grow its own buttons.
+            // The SHARED tuner toolbar, same as the other axes: title, then Copy and Save.
             .child(self.shell_toolbar(
                 super::super::shared::TunerKind::Coins,
-                match count {
-                    Some(n) => format!("{} {n}", t!("analytics.coins.pick_title")),
-                    None => t!("analytics.coins.pick_title").to_string(),
-                },
+                t!("analytics.coins.lists_title").to_string(),
                 cx,
             ))
-            // The field's own label, spelled as the strategy parameter it will be written to
-            // — the name the user already knows from Moonbot, not a translated paraphrase.
-            .child(
-                div()
-                    .w_full()
-                    .px(design::ui_px(cx, 8.0))
-                    .pb(design::ui_px(cx, 4.0))
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(super::save::FIELD),
-            )
-            // A recessed, bordered well rather than bare text on the card: this is an input
-            // in everything but editability, and it has to read as one. `shell` is the
-            // theme's own "below the panel" surface, so it stays recessed in either theme
-            // instead of hardcoding a dark grey.
-            .child(
-                div()
-                    .w_full()
-                    .flex_1()
-                    .min_h_0()
-                    .px(design::ui_px(cx, 8.0))
-                    .pb(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .id("an-coin-pick-field")
-                            .size_full()
-                            .min_h_0()
-                            .overflow_y_scroll()
-                            .rounded(design::ui_px(cx, 6.0))
-                            .bg(moon(p.shell))
-                            .border_1()
-                            .border_color(moon(p.border_soft))
-                            .p(design::ui_px(cx, 8.0))
-                            .text_size(design::t_body(cx))
-                            .child(body),
-                    ),
-            )
+            .child(body)
+            .when_some(band, |el, band| el.child(band))
             .into_any_element()
     }
-}
 
-/// One entry in the field: its text, its shade and its date on hover.
-///
-/// Deliberately not interactive. It carries a tooltip, but no hover style and no click: on
-/// this page amber-on-hover means "this does something", and a `hover` style on every entry
-/// also makes GPUI notify the view on each boundary the cursor crosses — hundreds of times
-/// per sweep across a wrapped field, each one rebuilding every entry.
-fn coin_chip(c: &PickCoin, p: MoonPalette) -> impl IntoElement + use<> {
-    // Brightness carries the age. The theme is DARK, so "newer stands out" means BRIGHTER —
-    // the opposite of the same idea on paper, where fresh ink is the darkest thing on the
-    // page. Fading is by alpha over the normal text colour, so the ramp follows the theme
-    // instead of hardcoding a grey.
-    let alpha = OLDEST_ALPHA + (1.0 - OLDEST_ALPHA) * c.fresh;
-    let tip = c.tip.clone();
-    div()
-        .id(c.id.clone())
-        .flex_none()
-        // An unsaved tick is the one entry the strategy does not hold yet, so it is marked as
-        // an edit — the same amber the coin table uses for exactly that.
-        .text_color(if c.pending {
-            moon(p.amber)
-        } else {
-            moon_alpha(p.text, alpha)
-        })
-        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
-        .child(c.display.clone())
+    /// Both fields, blacklist over whitelist.
+    fn coin_fields_el(
+        &self,
+        black: ListFieldModel,
+        white: ListFieldModel,
+        inputs: Option<(Entity<MoonInputState>, Entity<MoonInputState>)>,
+        p: MoonPalette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let (black_in, white_in) = match inputs {
+            Some((b, w)) => (Some(b), Some(w)),
+            None => (None, None),
+        };
+        v_flex()
+            .w_full()
+            .child(super::fields::list_field_el(
+                &black,
+                black_in.as_ref(),
+                &self.coin_field_acts(true, cx),
+                p,
+                cx,
+            ))
+            .child(super::fields::list_field_el(
+                &white,
+                white_in.as_ref(),
+                &self.coin_field_acts(false, cx),
+                p,
+                cx,
+            ))
+            .into_any_element()
+    }
 }
 
 // Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`

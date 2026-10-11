@@ -1104,11 +1104,11 @@ fn a_tuner_card_header_clips_its_text_before_its_accessory() {
 /// A tuner shell toolbar's title clips itself before it ever pushes the trailing buttons out.
 ///
 /// Breakage this pins: removing the title's clipping styles or restoring the trailing spacer in
-/// `analytics/tuner/shell.rs:shell_toolbar` would hide Copy/Save in a narrow card.
+/// `analytics/tuner/shell.rs:toolbar_el` would hide Copy/Save in a narrow card.
 #[test]
 fn a_tuner_shell_title_clips_itself_before_its_trailing_buttons() {
     let shell = read_src("analytics/tuner/shell.rs");
-    let toolbar = braced_body(&shell, "pub(super) fn shell_toolbar(");
+    let toolbar = braced_body(&shell, "pub(super) fn toolbar_el(");
 
     for needle in [".min_w_0()", ".overflow_hidden()", ".whitespace_nowrap()"] {
         assert!(

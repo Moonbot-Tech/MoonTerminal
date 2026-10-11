@@ -1,5 +1,6 @@
-use super::build;
-use moon_core::db::coin_lists::{CoinListRow, CoinListRows};
+use super::super::state::CoinLists;
+use super::{build, build_white, list_changes};
+use moon_core::db::coin_lists::{CoinListEntries, CoinListRow, CoinListRows};
 use std::collections::HashSet;
 
 /// A fixed reference point, so the fixtures read as dates rather than magic numbers.
@@ -21,11 +22,23 @@ fn set(items: &[&str]) -> HashSet<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
+fn white_row(coin: &str, entries: &[&str]) -> CoinListEntries {
+    CoinListEntries {
+        coin: coin.to_string(),
+        entries: entries.iter().map(|e| e.to_string()).collect(),
+        core_uid: 1,
+    }
+}
+
+fn lists(black: &[&str], white: &[&str]) -> CoinLists {
+    CoinLists {
+        black: set(black),
+        white: set(white),
+    }
+}
+
 fn texts(coins: &[super::PickCoin]) -> Vec<String> {
-    coins
-        .iter()
-        .map(|c| c.text.trim_end_matches(", ").to_string())
-        .collect()
+    coins.iter().map(|c| c.text.to_string()).collect()
 }
 
 /// The field is the WORKING list, not what the database holds: a coin ticked in the table
@@ -43,9 +56,10 @@ fn the_field_follows_the_edit_not_the_saved_list() {
     assert_eq!(texts(&f), vec!["ETH", "BTC"], "the new tick leads");
     assert!(f[0].pending && !f[1].pending);
 
-    // Unticked: gone from the field even though the database still lists it.
+    // Unticked: still drawn, but as a removal to undo — not as a listed coin.
     let f = build(&data, &set(&[]), &set(&["BTC"]), chrono_tz::UTC);
-    assert!(f.is_empty());
+    assert_eq!(f.len(), 1);
+    assert!(f[0].removed && !f[0].pending);
 }
 
 /// A pending tick has no date and no core — claiming either would say the strategy
@@ -173,28 +187,74 @@ fn a_future_date_stays_inside_the_ramp() {
     assert_eq!(f[1].fresh, 0.0);
 }
 
-/// The separator is a DRAWING detail: it belongs to `display`, never to `text`. `text`
-/// is what Save writes into the strategy, and a ", " baked into it would be written
-/// there too.
+/// A saved coin the edit removed stays in the field, flagged, so it can be undone — and
+/// never reaches the value Save and Make a copy write.
 #[test]
-fn the_separator_never_reaches_the_saved_text() {
+fn a_removed_saved_coin_stays_flagged_and_is_never_written() {
+    let _locale = crate::test_locale::force("en");
     let data = CoinListRows {
-        white: Vec::new(),
+        white: vec![white_row("XWWW", &["XWWW"])],
         black: vec![
-            row("A", &["A"], "BB1", Some(NOW)),
-            row("B", &["B"], "BB1", Some(NOW - DAY)),
+            row("XAAA", &["XAAA"], "BB1", Some(NOW)),
+            row("XBBB", &["XBBB", "XBBB_0626"], "BB1", Some(NOW - DAY)),
         ],
     };
-    let f = build(&data, &set(&["A", "B"]), &set(&["A", "B"]), chrono_tz::UTC);
-    assert!(
-        f[0].display.ends_with(", "),
-        "all but the last carry a separator"
+    let saved = lists(&["XAAA", "XBBB"], &["XWWW"]);
+    let work = lists(&["XAAA"], &[]);
+
+    let f = build(&data, &work.black, &saved.black, chrono_tz::UTC);
+    let gone: Vec<_> = f
+        .iter()
+        .filter(|c| c.removed)
+        .map(|c| c.text.to_string())
+        .collect();
+    assert_eq!(
+        gone,
+        ["XBBB", "XBBB_0626"],
+        "both written entries stay, struck through"
     );
-    assert!(!f[1].display.ends_with(", "), "and the last one does not");
-    assert!(
-        f.iter().all(|c| !c.text.contains(',')),
-        "the written value holds entries only, never separators"
+    assert!(f.iter().all(|c| c.removed != (c.token.as_ref() == "XAAA")));
+
+    let w = build_white(&data.white, &work.white, &saved.white);
+    assert_eq!(w.len(), 1);
+    assert!(w[0].removed && w[0].tip.contains("removed on save"));
+
+    let changes =
+        list_changes(Some(&data), &work, &saved, chrono_tz::UTC, None).expect("lists read");
+    // The value read off the built field is the value folded afresh.
+    let cached = list_changes(Some(&data), &work, &saved, chrono_tz::UTC, Some(&f));
+    assert_eq!(cached.as_ref(), Some(&changes));
+    assert_eq!(
+        changes,
+        vec![
+            ("CoinsBlackList".to_string(), "XAAA".to_string()),
+            ("CoinsWhiteList".to_string(), String::new()),
+        ]
     );
+}
+
+/// No Save before the saved lists are read: without them the entries as written are unknown.
+#[test]
+fn nothing_is_written_before_the_saved_lists_are_read() {
+    let saved = lists(&["XAAA"], &[]);
+    let work = lists(&["XAAA", "XBBB"], &[]);
+    assert_eq!(
+        list_changes(None, &work, &saved, chrono_tz::UTC, None),
+        None
+    );
+}
+
+/// The whitelist field is plain: sorted by token, no dates, additions flagged.
+#[test]
+fn the_whitelist_field_is_sorted_by_token_without_dates() {
+    let w = build_white(
+        &[white_row("XCCC", &["XCCC"]), white_row("XAAA", &["XAAA"])],
+        &set(&["XCCC", "XAAA", "XBBB"]),
+        &set(&["XCCC", "XAAA"]),
+    );
+    assert_eq!(texts(&w), ["XAAA", "XBBB", "XCCC"]);
+    assert!(w.iter().all(|c| c.at.is_none()));
+    assert!(w[1].pending && !w[0].pending && !w[2].pending);
 }
 
 /// Replacing `picker::build`'s selected-zone formatter with `fmt_unix_date` would show

@@ -28,6 +28,8 @@ pub(super) enum ReadLane {
     Coins,
     CoinKpi,
     CoinPicked,
+    /// The By coin axis' automatic pick.
+    CoinPick,
     Time,
     /// The Entry/Exit axis' database stage.
     Ticks,
@@ -128,7 +130,7 @@ impl Drop for LatestReads {
 }
 
 /// Every lane a shared scope change retires, the Entry/Exit search aside.
-const SCOPE_LANES: [ReadLane; 12] = [
+const SCOPE_LANES: [ReadLane; 13] = [
     ReadLane::Summary,
     ReadLane::StrategyBase,
     ReadLane::Calendar,
@@ -137,6 +139,7 @@ const SCOPE_LANES: [ReadLane; 12] = [
     ReadLane::Coins,
     ReadLane::CoinKpi,
     ReadLane::CoinPicked,
+    ReadLane::CoinPick,
     ReadLane::Time,
     ReadLane::Ticks,
     ReadLane::TicksReplay,
@@ -164,6 +167,7 @@ impl AnalyticsView {
             ReadLane::Coins,
             ReadLane::CoinKpi,
             ReadLane::CoinPicked,
+            ReadLane::CoinPick,
             ReadLane::Time,
             ReadLane::Ticks,
             ReadLane::TicksReplay,

@@ -442,10 +442,19 @@ fn strategy_chip(it: &DetectItem, name_w: f32, p: MoonPalette, cx: &App) -> Opti
     // Only a name at risk of being cut carries a tooltip, and only then does the chip need an id:
     // a tooltip adds a hitbox plus window mouse listeners that every mouse move walks, and there
     // can be 48 cards on screen.
+    // A strategy name or the crowd's profit-and-count figures are values. The alert
+    // sentence (no strategy on the card) is prose and stays in the UI face.
+    let value_only = it.crowd().is_some() || !it.strat_name.trim().is_empty();
     Some(if at_risk {
-        chip.id("det-strat")
-            .tooltip(crate::panels::common::text_tooltip(full.to_string()))
-            .into_any_element()
+        let tip = full.to_string();
+        let chip = chip.id("det-strat");
+        if value_only {
+            chip.tooltip(crate::panels::common::text_tooltip_value(tip))
+                .into_any_element()
+        } else {
+            chip.tooltip(crate::panels::common::text_tooltip(tip))
+                .into_any_element()
+        }
     } else {
         chip.into_any_element()
     })

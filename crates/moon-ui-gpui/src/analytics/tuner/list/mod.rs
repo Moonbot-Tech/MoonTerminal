@@ -460,14 +460,13 @@ impl AnalyticsView {
                 div()
                     .id("an-strat-active-tip")
                     .font_family(design::ui_font())
-                    .tooltip(move |_window, cx| {
+                    .tooltip({
                         let text = if enabled_available {
                             t!("analytics.strat.active_only_tip")
                         } else {
                             t!("analytics.strat.active_only_unavailable")
                         };
-                        cx.new(|_| moon_ui::MoonTooltipView::new(text.to_string()))
-                            .into()
+                        crate::panels::common::text_tooltip(text.to_string())
                     })
                     .child(
                         MoonCheckbox::new("an-strat-active")
@@ -630,10 +629,9 @@ impl AnalyticsView {
         );
         div()
             .id("an-strat-cols-tip")
-            .tooltip(|_window, cx| {
-                cx.new(|_| moon_ui::MoonTooltipView::new(t!("report.columns_menu").to_string()))
-                    .into()
-            })
+            .tooltip(crate::panels::common::text_tooltip(
+                t!("report.columns_menu").to_string(),
+            ))
             .child(menu)
     }
 }

@@ -2425,6 +2425,42 @@ fn a_hand_written_figure_alert_setting_cannot_discard_the_saved_layout() {
     assert_eq!(resolve_alert_repeat(Some(9_999)), ALERT_REPEAT_MAX);
 }
 
+/// The By coin axis' settings round-trip whole, and a malformed block costs only itself.
+#[test]
+fn the_coins_axis_settings_round_trip_and_never_cost_the_layout() {
+    let saved = WindowLayout {
+        analytics_coins: Some(CoinsAxisLayout {
+            min_trades: Some(12),
+            hide_zero: Some(false),
+            pick_min_trades: Some(8),
+            pick_holdout_pct: Some(40),
+            pick_black: Some(true),
+            pick_white: Some(true),
+        }),
+        ..WindowLayout::default()
+    };
+    let encoded = toml::to_string(&saved).expect("the layout must serialize");
+    let decoded: WindowLayout = toml::from_str(&encoded).expect("its own output must load back");
+    assert_eq!(decoded.analytics_coins, saved.analytics_coins);
+
+    let partial: WindowLayout =
+        toml::from_str("[analytics_coins]\nmin_trades = 3\n").expect("a partial block");
+    assert_eq!(
+        partial.analytics_coins,
+        Some(CoinsAxisLayout {
+            min_trades: Some(3),
+            ..CoinsAxisLayout::default()
+        })
+    );
+
+    let broken: WindowLayout = toml::from_str(
+        "analytics_period = \"p-cur-month\"\n[analytics_coins]\nmin_trades = \"many\"\n",
+    )
+    .expect("a malformed block must not cost the layout");
+    assert_eq!(broken.analytics_coins, None);
+    assert_eq!(broken.analytics_period.as_deref(), Some("p-cur-month"));
+}
+
 /// The Entry/Exit axis' settings survive their own round trip, a config without them opens on
 /// the defaults, and a block written wrong costs only itself.
 #[test]

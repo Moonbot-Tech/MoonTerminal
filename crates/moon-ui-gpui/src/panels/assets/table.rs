@@ -441,7 +441,7 @@ impl AssetsView {
                     .truncate()
                     // No `occlude`, unlike the resize handle: the click belongs to the row, and
                     // this cell only needs a hover target for the tooltip.
-                    .tooltip(crate::panels::common::text_tooltip(core_name.clone()))
+                    .tooltip(crate::panels::common::text_tooltip_value(core_name.clone()))
                     .child(core_name),
             )
             // Per-core trust, rendered by the module that owns the vocabulary — so a core

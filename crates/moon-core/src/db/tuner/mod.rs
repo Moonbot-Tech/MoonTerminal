@@ -17,6 +17,7 @@ use super::metrics::{Tally, improvement_margin, winrate};
 use super::read_fail::read_fail_on;
 use super::{ReadFail, ReadResult};
 
+pub mod coin_pick;
 mod fields;
 /// The shared "best contiguous slice by profit" kernel both searches decide with.
 mod range_pick;
