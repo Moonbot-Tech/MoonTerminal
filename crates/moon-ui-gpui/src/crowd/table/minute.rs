@@ -80,7 +80,7 @@ pub(super) fn caption(wire: Wire, look: &Look) -> Div {
             .id("crowd-source")
             .cursor_pointer()
             .hover(|style| style.bg(rgba_from(look.palette.text, HOVER_ALPHA)))
-            .tooltip(crate::panels::common::text_tooltip(SOURCE_URL))
+            .tooltip(crate::panels::common::text_tooltip_value(SOURCE_URL))
             .on_mouse_down(MouseButton::Left, |_, _, app: &mut App| {
                 app.stop_propagation();
                 app.open_url(SOURCE_URL);

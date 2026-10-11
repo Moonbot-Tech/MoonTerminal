@@ -23,7 +23,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, MoonScrollbarVisibility,
-    MoonTooltipView, MoonVirtualList, h_flex, v_flex,
+    MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -255,14 +255,14 @@ impl AnalyticsView {
                 div()
                     .id("an-ticks-deltas")
                     .flex_none()
-                    .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+                    .tooltip(crate::panels::common::text_tooltip(tip))
                     .child(caption)
             });
         let only_tip = t!("analytics.ticks.only_fit_tip").to_string();
         let only_switch = div()
             .id("an-ticks-only-tape-box")
             .flex_none()
-            .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(only_tip.clone())).into())
+            .tooltip(crate::panels::common::text_tooltip(only_tip))
             .child(
                 MoonCheckbox::new("an-ticks-only-tape")
                     .label(t!("analytics.ticks.only_fit").to_string())
@@ -477,7 +477,7 @@ impl AnalyticsView {
                 }
                 .id(id)
                 // The heading is cut to its column like a cell; the whole of it on hover.
-                .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+                .tooltip(crate::panels::common::text_tooltip(tip))
                 .cursor_pointer()
                 .text_color(if arrow.is_empty() {
                     moon(p.text_soft)
@@ -1143,7 +1143,7 @@ fn deal_row(
                     "an-ticks-{}-{}",
                     col.key, d.report_uid
                 )))
-                .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+                .tooltip(crate::panels::common::text_tooltip(tip))
                 .into_any_element(),
             _ => el.into_any_element(),
         }

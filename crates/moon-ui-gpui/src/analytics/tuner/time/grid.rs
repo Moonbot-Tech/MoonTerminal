@@ -16,8 +16,7 @@
 
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonTooltipView, h_flex,
-    v_flex,
+    MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex,
 };
 use rust_i18n::t;
 
@@ -525,7 +524,7 @@ impl AnalyticsView {
         let check = div()
             .id(SharedString::from(format!("tt-en-w-{field}")))
             .flex_none()
-            .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+            .tooltip(crate::panels::common::text_tooltip(tip))
             .child(
                 MoonCheckbox::new(SharedString::from(format!("tt-en-{field}")))
                     .checked(enabled)

@@ -5,9 +5,7 @@
 //! between them, and a helper that drifts in here stops being reviewable as shared.
 
 use gpui::*;
-use moon_ui::{
-    MoonDisclosure, MoonDisclosureDirection, MoonPalette, MoonTooltipView, h_flex, v_flex,
-};
+use moon_ui::{MoonDisclosure, MoonDisclosureDirection, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::super::AnalyticsView;
@@ -102,7 +100,7 @@ pub(super) fn card(
     body: AnyElement,
     accessory: Option<AnyElement>,
     p: MoonPalette,
-    cx: &Context<AnalyticsView>,
+    cx: &App,
 ) -> AnyElement {
     // One clipping box keeps the accessory outside the width that may yield.
     // NOT flipped to `ui_font()`: callers interpolate a raw strategy name, a field name, or
@@ -175,7 +173,7 @@ pub(super) fn glyph_btn(
         .text_size(design::t_caption(cx))
         .text_color(moon(p.text_muted))
         .hover(move |s| s.text_color(moon(hover)))
-        .tooltip(move |_w, cx| cx.new(|_| MoonTooltipView::new(tip.clone())).into())
+        .tooltip(crate::panels::common::text_tooltip(tip))
         .child(glyph)
 }
 

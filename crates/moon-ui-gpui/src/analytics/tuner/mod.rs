@@ -730,7 +730,7 @@ impl AnalyticsView {
             .child(rail);
         match mode {
             // Every arm builds its right column only while expanded. `fields_grid` and
-            // `coins_field_card` lazily create input entities, so a hidden column does not need
+            // `coins_lists_card` lazily create input entities, so a hidden column does not need
             // them.
             StratMode::Filters if !side_collapsed => {
                 // KPI is pinned at the top; ONLY the thresholds container scrolls.
@@ -748,18 +748,26 @@ impl AnalyticsView {
             }
             StratMode::Coins if !side_collapsed => {
                 // Same right column as every other axis: the shared "Fact vs variants"
-                // matrix on top, the axis' own tool below it — here the list field, which
-                // now owns the whole remaining height.
-                let pick = self.coins_field_card(p, cx);
+                // matrix on top, the axis' own tool below it — here the coin lists card. The
+                // column scrolls as a whole; each list's chip well scrolls inside past its cap.
+                let auto = self.coins_auto_card(p, window, cx);
+                let lists = self.coins_lists_card(p, window, cx);
                 main = main.child(
-                    v_flex()
+                    div()
+                        .id("an-coin-side")
                         .w(design::font_w_px(cx, 470.0))
                         .flex_none()
                         .h_full()
                         .min_h_0()
-                        .gap(design::ui_px(cx, 8.0))
-                        .child(self.coins_kpi(p, cx))
-                        .child(pick),
+                        .overflow_y_scroll()
+                        .child(
+                            v_flex()
+                                .w_full()
+                                .gap(design::ui_px(cx, 8.0))
+                                .child(self.coins_kpi(p, cx))
+                                .child(auto)
+                                .child(lists),
+                        ),
                 );
             }
             StratMode::Ticks if !side_collapsed => {

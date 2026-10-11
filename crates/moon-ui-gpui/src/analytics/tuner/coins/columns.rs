@@ -50,6 +50,9 @@ pub(in crate::analytics::tuner) const COIN_ROW_GAP: f32 = 8.0;
 /// [`COIN_COLS`] and are therefore invisible to the descriptors. Declared here so the width
 /// test below cannot drift away from what the rows actually render.
 pub(in crate::analytics::tuner) const COIN_TICK_W: f32 = 34.0;
+/// The Auto column before the ticks: the pick's "-> BL" / "-> WL" tag. Outside
+/// [`COIN_COLS`] like the ticks, so the width test reads it from here.
+pub(in crate::analytics::tuner) const COIN_AUTO_W: f32 = 52.0;
 /// What the two ticks spend together.
 #[cfg(test)]
 const COIN_TICKS_W: f32 = COIN_TICK_W * 2.0;

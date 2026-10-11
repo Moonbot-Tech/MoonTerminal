@@ -200,7 +200,7 @@ impl AnalyticsView {
             tuner::ticks::model_cfg::replace(saved.model);
             tuner::ticks::tail::replace(saved.min_tail_s);
         }
-        // Strategy-list sort is process-persistent. Unknown keys return to the same
+        // Strategy-list and coin-table sorts are persisted in layout.toml (`table_sorts`). Unknown keys return to the same
         // profit-descending default used before this preference existed.
         let saved_strat_sort =
             tuner::restore_strat_sort(backend.read(cx).layout.analytics_strat_sort.clone());
@@ -208,6 +208,8 @@ impl AnalyticsView {
             backend.read(cx),
             "analytics-tuner-coins:win",
         );
+        // The "By coin" axis' table filter and pick settings.
+        let saved_coins = backend.read(cx).layout.analytics_coins.clone();
         // Profit metric from the previous run (default raw quote money).
         let saved_metric = if backend.read(cx).layout.analytics_profit_percent {
             ProfitMetric::Percent
@@ -408,7 +410,7 @@ impl AnalyticsView {
                 saved_tuner_fields,
                 saved_tuner_compose,
             ),
-            coins: tuner::CoinsState::load(saved_coin_sort),
+            coins: tuner::CoinsState::load(saved_coin_sort, saved_coins.as_ref()),
             ticks,
             coin_lists: tuner::CoinListsState::default(),
             time_tuner: tuner::TimeTunerState::load(),

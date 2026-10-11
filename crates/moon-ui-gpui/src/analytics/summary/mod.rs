@@ -827,7 +827,7 @@ fn top_card(
                 p.text_soft
             }));
         if let Some(id) = strategy.full_id {
-            strategy_cell = strategy_cell.tooltip(crate::panels::common::text_tooltip(id));
+            strategy_cell = strategy_cell.tooltip(crate::panels::common::text_tooltip_value(id));
         }
         list = list.child(
             h_flex()

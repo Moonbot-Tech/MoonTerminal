@@ -2879,7 +2879,7 @@ fn summary_uses_resolved_core_colors_and_tooltips_unresolved_top_strategies() {
     );
     assert!(
         top.contains("strat_display_ex(")
-            && top.contains("text_tooltip(id)")
+            && top.contains("text_tooltip_value(id)")
             && top.contains("an-top-strat"),
         "an unresolved top strategy must use the extended label and expose its full id by tooltip"
     );

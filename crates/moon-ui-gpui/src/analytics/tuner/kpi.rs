@@ -4,6 +4,8 @@
 //! exactly why it lives at the tuner root rather than inside whichever axis happened to need it
 //! first. An axis that wants a differently-shaped matrix should widen this one, not fork it.
 
+use std::rc::Rc;
+
 use gpui::*;
 use moon_ui::{MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -306,6 +308,9 @@ pub(super) struct VarLabel {
     /// The column is scored on too few deals to recommend: its signed figures are drawn
     /// muted, never green as a gain.
     pub(super) muted: bool,
+    /// The column is drawn even with no stats behind it, every cell a muted "—": a column
+    /// the axis promises (the By coin Auto column before a pick) rather than one it scored.
+    pub(super) placeholder: bool,
 }
 
 impl VarLabel {
@@ -317,6 +322,7 @@ impl VarLabel {
             sub_warn: false,
             open: None,
             muted: false,
+            placeholder: false,
         }
     }
 
@@ -328,7 +334,17 @@ impl VarLabel {
             sub_warn: false,
             open: None,
             muted: false,
+            placeholder: false,
         }
+    }
+
+    /// Mark the column as promised: drawn with "—" cells while no stats back it.
+    ///
+    /// Returns:
+    ///     The same label, kept as a column without stats.
+    pub(super) fn placeholder(mut self) -> Self {
+        self.placeholder = true;
+        self
     }
 
     /// Attach a visible second line.
@@ -429,6 +445,66 @@ pub(super) fn kpi_matrix_card_over(
     p: MoonPalette,
     cx: &Context<AnalyticsView>,
 ) -> AnyElement {
+    let view = cx.entity();
+    let on_collapse: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, app| {
+        view.update(app, |this, cx| this.toggle_kpi_collapsed(cx));
+    });
+    kpi_matrix_body(
+        stats,
+        scope,
+        base,
+        var_labels,
+        collapsed,
+        on_collapse,
+        p,
+        cx,
+    )
+}
+
+/// How many columns the matrix draws: one per stat, extended to every trailing placeholder
+/// heading. A label without stats that is not a placeholder draws nothing, so an axis that
+/// passes more labels than variants keeps its column count.
+///
+/// Args:
+///     stats_len: Columns with stats, Fact included.
+///     var_labels: Headings after the Fact column.
+///
+/// Returns:
+///     The column count, Fact included.
+fn kpi_columns(stats_len: usize, var_labels: &[VarLabel]) -> usize {
+    let promised = var_labels
+        .iter()
+        .rposition(|label| label.placeholder)
+        .map_or(0, |i| i + 2);
+    stats_len.max(promised)
+}
+
+/// The matrix card itself, free of the view: the collapse caret calls `on_collapse`, so a
+/// probe can render the production matrix without an `AnalyticsView`.
+///
+/// Args:
+///     stats: Classified Fact-versus-variant load state.
+///     scope: Active strategy or selection caption.
+///     base: Heading of column 0.
+///     var_labels: Ordered headings after column 0.
+///     collapsed: Whether only trades and profit are visible.
+///     on_collapse: Toggles the collapse.
+///     p: Active MoonUI palette.
+///     cx: App, for scale and text.
+///
+/// Returns:
+///     Complete KPI matrix card or its classified placeholder.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn kpi_matrix_body(
+    stats: &LoadState<Vec<VarStats>>,
+    scope: String,
+    base: &VarLabel,
+    var_labels: &[VarLabel],
+    collapsed: bool,
+    on_collapse: Rc<dyn Fn(&mut Window, &mut App)>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
     // The collapse caret is part of the title bar in EVERY state — built up front so it does
     // not blink out while the matrix is loading or after a read error.
     let caret = collapse_caret(
@@ -437,7 +513,7 @@ pub(super) fn kpi_matrix_card_over(
         t!("analytics.tuner.kpi_collapse").to_string(),
         t!("analytics.tuner.kpi_expand").to_string(),
         p,
-        cx.listener(|this, _, _, cx| this.toggle_kpi_collapsed(cx)),
+        move |_: &bool, window: &mut Window, app: &mut App| on_collapse(window, app),
     );
     // No empty state by design: `stats.len() == variants.len()` always, so
     // the only non-data cases are loading / not-ready / read failure.
@@ -488,7 +564,8 @@ pub(super) fn kpi_matrix_card_over(
             MetricKind::MaxDrawdown,
         ),
     ];
-    let headings: Vec<VarLabel> = (0..stats.len())
+    let columns = kpi_columns(stats.len(), var_labels);
+    let headings: Vec<VarLabel> = (0..columns)
         .map(|i| {
             if i == 0 {
                 base.clone()
@@ -533,6 +610,7 @@ pub(super) fn kpi_matrix_card_over(
     for (i, label) in headings.into_iter().enumerate() {
         let tip = label.tip.clone();
         let column = v_flex()
+            .debug_selector(move || format!("kpi-head-{i}"))
             .w(design::font_w_px(cx, col_w))
             .flex_none()
             .items_end()
@@ -568,6 +646,7 @@ pub(super) fn kpi_matrix_card_over(
     let mut body = v_flex().w_full().child(head);
     for (row_index, (label, kind)) in rows.into_iter().take(shown).enumerate() {
         let mut row = h_flex()
+            .debug_selector(move || format!("kpi-row-{row_index}"))
             .w_full()
             .px(design::ui_px(cx, 8.0))
             .h(design::fit_h_px(cx, 24.0, 14.0, 5.0))
@@ -580,14 +659,17 @@ pub(super) fn kpi_matrix_card_over(
                     .flex_1()
                     .font_family(design::ui_font())
                     .text_color(moon(p.text_soft))
+                    .debug_selector(move || format!("kpi-metric-{row_index}"))
                     .child(label),
             );
-        for (i, s) in stats.iter().enumerate() {
-            let figure = match open.get(i).copied().flatten() {
-                Some(tail) if kind == MetricKind::Profit => {
+        for i in 0..columns {
+            let figure = match (stats.get(i), open.get(i).copied().flatten()) {
+                // A promised column without stats: every cell is the blank dash.
+                (None, _) => blank_figure(),
+                (Some(s), Some(tail)) if kind == MetricKind::Profit => {
                     with_open_tail(figure_of(kind, s), tail)
                 }
-                _ => figure_of(kind, s),
+                (Some(s), _) => figure_of(kind, s),
             };
             let color = match figure.tone {
                 FigureTone::Signed if muted.get(i).copied().unwrap_or(false) => p.text_muted,
@@ -602,7 +684,7 @@ pub(super) fn kpi_matrix_card_over(
                 .clone()
                 .unwrap_or_else(|| figure.text.display.clone());
             let mut value = div()
-                .id(("an-tuner-kpi-value", row_index * stats.len() + i))
+                .id(("an-tuner-kpi-value", row_index * columns + i))
                 .role(Role::Label)
                 .aria_label(accessibility_label)
                 .w(design::font_w_px(cx, col_w))

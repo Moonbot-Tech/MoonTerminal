@@ -403,3 +403,61 @@ fn startup_registers_no_fonts_of_its_own() {
         }
     }
 }
+
+/// Prose tooltips use the UI face; a value-only tooltip stays mono.
+///
+/// Breakage: sending `text_tooltip` back through `MoonTooltipView` paints sentences, including
+/// the By-coin "fewer trades than N" hint, in Geist Mono. Echoing the caller's bool, or merely
+/// mentioning `design::ui_font` without comparing it to the family `MoonTooltip` paints, lets
+/// the face drift while this test still passes.
+#[test]
+fn prose_tooltips_use_the_ui_family_and_values_stay_mono() {
+    let common = read_src("panels/common.rs");
+    let face = render_root(&common, "impl Render for TooltipFace");
+    assert!(
+        face.contains("design::ui_font()")
+            && face.contains("design::mono()")
+            && face.contains("MoonTooltip::new")
+            && face.contains(".mono(mono)"),
+        "the tooltip face must request design::ui_font or design::mono and paint that choice through MoonTooltip::mono"
+    );
+    assert!(
+        face.contains("\"Geist Mono\" => true") && face.contains("\"Inter\" => false"),
+        "the mono flag must follow the two families MoonTooltip can paint, not the caller's bool"
+    );
+    assert!(
+        !face.contains(".mono(self.mono)")
+            && !face.contains(".mono(true)")
+            && !face.contains(".mono(false)")
+            && !face.contains("=> flag"),
+        "echoing the caller's bool leaves a renamed UI font on the other face"
+    );
+    assert!(
+        !face.contains("MoonTooltipView::new"),
+        "MoonTooltipView hard-codes the mono face"
+    );
+    let prose = code_only(braced_body(&common, "pub(crate) fn text_tooltip("));
+    assert!(
+        prose.contains("tooltip_face(text, false)"),
+        "text_tooltip must request the proportional face"
+    );
+    let value = code_only(braced_body(&common, "pub(crate) fn text_tooltip_value("));
+    assert!(
+        value.contains("tooltip_face(text, true)"),
+        "text_tooltip_value must keep a bare number, coin, or name in the mono face"
+    );
+    for path in [
+        "analytics/tuner/shared.rs",
+        "analytics/tuner/shell.rs",
+        "analytics/tuner/coins/fields.rs",
+        "analytics/tuner/time/grid.rs",
+        "analytics/tuner/ticks/mod.rs",
+        "analytics/tuner/ticks/cfg.rs",
+        "analytics/tuner/list/mod.rs",
+    ] {
+        assert!(
+            !read_src(path).contains("MoonTooltipView::new"),
+            "{path} must build tuner tooltips through text_tooltip so the face cannot drift"
+        );
+    }
+}

@@ -12,7 +12,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     DockArea, MoonBackgroundPolicy, MoonBadge, MoonBadgeVariant, MoonButton, MoonButtonIconSlot,
-    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonSize, MoonTooltipView,
+    MoonButtonVariant, MoonGroupBox, MoonMenuItem, MoonPalette, MoonSize, MoonTooltip,
 };
 
 use crate::Backend;
@@ -638,11 +638,66 @@ pub(crate) fn popup_gear_trigger_dense(
         .render()
 }
 
-/// Build the handler for a plain-text tooltip.
+/// Hover tooltip whose face is chosen explicitly.
 ///
-/// GPUI takes a factory rather than a string, so every call site otherwise spells out the same
-/// `move |_, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into()`. Taking a
-/// [`SharedString`] keeps each tooltip-view clone a refcount bump instead of copying the text.
+/// `MoonTooltipView` always asks for the mono face. `MoonText` ignores a parent
+/// `font_family`, so the face is [`MoonTooltip::mono`]: `false` paints the theme
+/// proportional family, the same string as [`design::ui_font`], and `true` paints
+/// [`design::mono`].
+struct TooltipFace {
+    text: SharedString,
+    mono: bool,
+}
+
+impl Render for TooltipFace {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let want = if self.mono {
+            design::mono()
+        } else {
+            design::ui_font()
+        };
+        // `MoonTooltip` paints exactly two families and has no family argument:
+        // "Geist Mono" when `mono` is true, "Inter" when it is false. The flag is
+        // which of those names equals the design font this tooltip asked for. An
+        // unknown name keeps the caller's request, because there is no third face.
+        let mono = match want.as_ref() {
+            "Geist Mono" => true,
+            "Inter" => false,
+            _ => self.mono,
+        };
+        MoonTooltip::new(self.text.clone())
+            .mono(mono)
+            .render(window, cx)
+    }
+}
+
+/// Build a tooltip factory for one face.
+///
+/// Args:
+///     text: Complete tooltip content.
+///     mono: `true` for [`design::mono`], `false` for [`design::ui_font`].
+///
+/// Returns:
+///     A handler suitable for `Styled::tooltip`.
+fn tooltip_face(
+    text: impl Into<SharedString>,
+    mono: bool,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_window, cx| {
+        cx.new(|_| TooltipFace {
+            text: text.clone(),
+            mono,
+        })
+        .into()
+    }
+}
+
+/// Build the handler for a prose tooltip.
+///
+/// A sentence, label, or caption uses [`design::ui_font`]. GPUI takes a factory rather than a
+/// string; taking a [`SharedString`] keeps each clone a refcount bump. A tooltip that is only a
+/// number, coin, core, strategy name, timestamp, or hotkey uses [`text_tooltip_value`].
 ///
 /// Args:
 ///     text: Complete tooltip content.
@@ -652,8 +707,23 @@ pub(crate) fn popup_gear_trigger_dense(
 pub(crate) fn text_tooltip(
     text: impl Into<SharedString>,
 ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text = text.into();
-    move |_window, cx| cx.new(|_| MoonTooltipView::new(text.clone())).into()
+    tooltip_face(text, false)
+}
+
+/// Build the handler for a tooltip that is only a value.
+///
+/// A number, coin, core, strategy name, timestamp, hotkey, or other identifier with no sentence
+/// stays in [`design::mono`]. A sentence that mentions one of those still uses [`text_tooltip`].
+///
+/// Args:
+///     text: The value alone.
+///
+/// Returns:
+///     A handler suitable for `Styled::tooltip`.
+pub(crate) fn text_tooltip_value(
+    text: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    tooltip_face(text, true)
 }
 
 /// Build the tooltip text of a strategy-name search field.

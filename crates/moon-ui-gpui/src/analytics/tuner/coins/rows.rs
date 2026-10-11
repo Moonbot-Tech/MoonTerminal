@@ -13,6 +13,7 @@
 //! So the model is built once per change of the things it actually depends on, and the cache
 //! key names every one of them. A miss costs the pass; a hover costs a `Vec` walk.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use gpui::SharedString;
@@ -34,6 +35,9 @@ pub(in crate::analytics::tuner) struct CoinRow {
     pub(in crate::analytics::tuner) changed: bool,
     /// Clicked — the strategy list is showing who traded it.
     pub(in crate::analytics::tuner) picked: bool,
+    /// What the last automatic pick suggests for this coin: `Some(true)` for the blacklist,
+    /// `Some(false)` for the whitelist.
+    pub(in crate::analytics::tuner) auto: Option<bool>,
 }
 
 /// How many coins the search matched, and how many of them each list names.
@@ -46,6 +50,10 @@ pub(in crate::analytics::tuner) struct CoinCounts {
     pub(in crate::analytics::tuner) black: usize,
     pub(in crate::analytics::tuner) white: usize,
     pub(in crate::analytics::tuner) changed: usize,
+    /// Searched coins the trade-count rule hid.
+    pub(in crate::analytics::tuner) hidden: usize,
+    /// Distinct tokens the last pick suggests among the searched coins.
+    pub(in crate::analytics::tuner) suggested: usize,
 }
 
 /// Everything the row model depends on. Two equal keys MUST mean two identical models — a
@@ -58,10 +66,12 @@ struct RowsKey {
     scoped: usize,
     search: String,
     filter: CoinFilter,
-    /// The "trades ≥" threshold. In the key like every other input: without it, moving the
-    /// slider changed what the table SHOULD show while the cache kept handing back the model
-    /// built before it.
+    /// The "fewer trades than" threshold and the "no trades" switch. In the key like every
+    /// other input: without them, a change of either would keep handing back the old model.
     min_trades: i64,
+    hide_zero: bool,
+    /// The pick's suggestion revision — it decides the Auto column and the Suggested view.
+    pick_rev: u64,
     /// Which coins are clicked — it decides a row's highlight, so it decides the model.
     picked: Vec<String>,
     sort: Option<(String, bool)>,
@@ -89,6 +99,8 @@ pub(in crate::analytics::tuner) fn rows_for<'a>(
         search: state.search.trim().to_lowercase(),
         filter: state.filter,
         min_trades: state.min_trades,
+        hide_zero: state.hide_zero,
+        pick_rev: state.pick_rev,
         picked: {
             let mut v: Vec<String> = state.picked.iter().cloned().collect();
             v.sort();
@@ -120,12 +132,27 @@ fn build(
     needle: &str,
 ) -> (Vec<CoinRow>, CoinCounts, usize) {
     let by_key: HashMap<&str, &GroupStat> = scoped.iter().map(|g| (g.key.as_str(), g)).collect();
-    // With no lists in play nothing can be a member, so the per-row token — one allocation
-    // per coin over thousands of them — is never built.
-    let lists_known = !state.work.is_empty() || !state.saved.is_empty();
+    let suggested = state.suggested();
+    // With no lists and no suggestion in play nothing can be a member, so the per-row token —
+    // one allocation per coin over thousands of them — is never built.
+    let lists_known = !state.work.is_empty() || !state.saved.is_empty() || suggested.is_some();
+    let (sug_black, sug_white): (HashSet<&str>, HashSet<&str>) =
+        suggested.map_or_else(Default::default, |s| {
+            (
+                s.black.iter().map(String::as_str).collect(),
+                s.white.iter().map(String::as_str).collect(),
+            )
+        });
     let mut rows: Vec<CoinRow> = Vec::new();
-    let (mut black_tok, mut white_tok, mut changed_tok) =
-        (HashSet::new(), HashSet::new(), HashSet::new());
+    let (mut black_tok, mut white_tok, mut changed_tok, mut sug_tok) = (
+        HashSet::new(),
+        HashSet::new(),
+        HashSet::new(),
+        HashSet::new(),
+    );
+    // Every token a report row covered, so a listed coin absent from both reads still gets
+    // one row of its own below.
+    let mut seen_tok: HashSet<String> = HashSet::new();
     let mut counts = CoinCounts::default();
     // Rows come from the base scope; anything the scoped read saw but the base did not is
     // chained on after it, so a coin cannot lose its numbers to a skew between the two reads.
@@ -134,13 +161,33 @@ fn build(
         // A coin the scope never traded still gets a row — at zero, which is the whole point
         // of listing the full coin set rather than the traded one.
         let stat = by_key.get(g.key.as_str()).copied();
-        (g.name.as_str(), stat)
+        (Cow::Borrowed(g.name.as_str()), stat)
     });
     let extra = scoped
         .iter()
         .filter(|g| !seen.contains(g.key.as_str()))
-        .map(|g| (g.name.as_str(), Some(g)));
-    for (name, stat) in from_base.chain(extra) {
+        .map(|g| (Cow::Borrowed(g.name.as_str()), Some(g)));
+    let report: Vec<(Cow<str>, Option<&GroupStat>)> = from_base.chain(extra).collect();
+    if lists_known {
+        seen_tok.extend(report.iter().map(|(name, _)| coin_token(name)));
+    }
+    // A coin on either list, saved or working, is ALWAYS shown — even one no report row
+    // names, at zero trades — so the list the user edits never has members the table hides.
+    let mut listed: Vec<String> = state
+        .work
+        .black
+        .iter()
+        .chain(&state.work.white)
+        .chain(&state.saved.black)
+        .chain(&state.saved.white)
+        .filter(|t| !t.is_empty() && !seen_tok.contains(*t))
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    listed.sort();
+    let orphans = listed.into_iter().map(|t| (Cow::Owned(t), None));
+    for (name, stat) in report.into_iter().chain(orphans) {
         // A NULL coin projects as the empty string; it names nothing the user can act on and
         // would tick into a list entry that matches nothing.
         if name.trim().is_empty() {
@@ -149,14 +196,21 @@ fn build(
         if !needle.is_empty() && !name.to_lowercase().contains(needle) {
             continue;
         }
-        // Membership is the WORKING state — what the tick boxes show and what v1 is scored
-        // under; `saved` only decides whether that state counts as changed.
-        let (mut black, mut white, mut changed) = (false, false, false);
+        // Membership is the WORKING state — what the tick boxes show and what the plan is
+        // scored under; `saved` only decides whether that state counts as changed.
+        let (mut black, mut white, mut changed, mut auto) = (false, false, false, None);
         if lists_known {
-            let token = coin_token(name);
+            let token = coin_token(&name);
             black = state.work.black.contains(&token);
             white = state.work.white.contains(&token);
             changed = state.is_changed(&token);
+            auto = if sug_black.contains(token.as_str()) {
+                Some(true)
+            } else if sug_white.contains(token.as_str()) {
+                Some(false)
+            } else {
+                None
+            };
             // Counted as DISTINCT tokens: `BTC_RP` and `BTC_1230` are two rows of one list
             // entry, and counting rows would print "2" against a one-coin list.
             if black {
@@ -165,18 +219,21 @@ fn build(
             if white {
                 white_tok.insert(token.clone());
             }
+            if auto.is_some() {
+                sug_tok.insert(token.clone());
+            }
             if changed {
                 changed_tok.insert(token);
             }
         }
         counts.all += 1;
-        // Below the threshold the row is not worth reading; counted first all the same, so
-        // the chips keep describing the searched set rather than the trimmed one.
-        //
-        // "No aggregate" means ZERO trades, not "unknown": at a threshold of 0 — the default —
-        // treating it as unknown dropped every coin the scope never traded, which is the whole
-        // set this table exists to show.
-        if stat.map_or(0, |g| g.n) < state.min_trades {
+        // "No aggregate" means ZERO trades. A listed, edited or suggested coin is never
+        // hidden: it is the coin the user is deciding about.
+        let n = stat.map_or(0, |g| g.n);
+        if !(black || white || changed || auto.is_some())
+            && (n < state.min_trades || (state.hide_zero && n == 0))
+        {
+            counts.hidden += 1;
             continue;
         }
         let keep = match state.filter {
@@ -184,22 +241,25 @@ fn build(
             CoinFilter::Black => black,
             CoinFilter::White => white,
             CoinFilter::Changed => changed,
+            CoinFilter::Suggested => auto.is_some(),
         };
         if keep {
             rows.push(CoinRow {
-                picked: state.picked.contains(name),
-                name: SharedString::from(name.to_string()),
+                picked: state.picked.contains(name.as_ref()),
+                name: SharedString::from(name.into_owned()),
                 // Cloned only for rows that survive the filter, and only on a real rebuild.
                 stat: stat.cloned().unwrap_or_default(),
                 black,
                 white,
                 changed,
+                auto,
             });
         }
     }
     counts.black = black_tok.len();
     counts.white = white_tok.len();
     counts.changed = changed_tok.len();
+    counts.suggested = sug_tok.len();
     sort_rows(state, &mut rows);
     let total = rows.len();
     rows.truncate(MAX_ROWS);

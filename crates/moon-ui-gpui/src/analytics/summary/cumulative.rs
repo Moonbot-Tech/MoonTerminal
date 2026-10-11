@@ -140,7 +140,7 @@ pub(super) fn core_legend(
                         .min_w_0()
                         .truncate()
                         .text_color(moon(p.text_soft))
-                        .tooltip(crate::panels::common::text_tooltip(name.clone()))
+                        .tooltip(crate::panels::common::text_tooltip_value(name.clone()))
                         .child(name),
                 )
                 .into_any_element()
@@ -169,7 +169,7 @@ pub(super) fn core_legend(
                 .flex_none()
                 .whitespace_nowrap()
                 .text_color(moon(p.text_muted))
-                .tooltip(crate::panels::common::text_tooltip(hidden))
+                .tooltip(crate::panels::common::text_tooltip_value(hidden))
                 .child(t!("analytics.popup_more", n = order.len() - shown).to_string()),
         );
     }

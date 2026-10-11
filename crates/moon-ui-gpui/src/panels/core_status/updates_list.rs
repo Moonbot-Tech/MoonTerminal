@@ -231,7 +231,7 @@ fn cells(
             div()
                 .id(SharedString::from(format!("cs-update-from-to-{ix}")))
                 .child(from_to.clone())
-                .tooltip(crate::panels::common::text_tooltip(from_to)),
+                .tooltip(crate::panels::common::text_tooltip_value(from_to)),
         ),
         MoonDataCell::text(target),
         MoonDataCell::element(

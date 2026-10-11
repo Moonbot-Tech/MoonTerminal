@@ -580,7 +580,7 @@ fn trade_row(
                     .truncate()
                     .text_size(design::t_caption(cx))
                     .text_color(rgb(p.text_muted))
-                    .tooltip(crate::panels::common::text_tooltip(name.clone()))
+                    .tooltip(crate::panels::common::text_tooltip_value(name.clone()))
                     .child(name),
             )
         });

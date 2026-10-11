@@ -260,7 +260,7 @@ where
                         // On the ROW, which is the stateful element: a plain `Div` carries no
                         // tooltip. A core name wider than the popup clips, and this is how the
                         // whole name — never a shortened one — stays reachable.
-                        .tooltip(crate::panels::common::text_tooltip(server.clone()))
+                        .tooltip(crate::panels::common::text_tooltip_value(server.clone()))
                         .child(
                             h_flex()
                                 .w_full()

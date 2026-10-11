@@ -13,7 +13,7 @@ use crate::backend::station::{
     job::{CoreStart, Job},
 };
 use crate::design;
-use crate::panels::common::text_tooltip;
+use crate::panels::common::text_tooltip_value;
 
 /// Keep the full identity visible at any width, with natural multiline height and hover text.
 fn core_name_cell(index: usize, name: String) -> Stateful<Div> {
@@ -22,7 +22,7 @@ fn core_name_cell(index: usize, name: String) -> Stateful<Div> {
         .w_full()
         .min_w_0()
         .whitespace_normal()
-        .tooltip(text_tooltip(name.clone()))
+        .tooltip(text_tooltip_value(name.clone()))
         .child(name)
 }
 

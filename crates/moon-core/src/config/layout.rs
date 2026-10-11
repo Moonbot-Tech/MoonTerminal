@@ -630,6 +630,10 @@ pub struct WindowLayout {
     /// around it.
     #[serde(default, deserialize_with = "de_lenient")]
     pub analytics_ticks: Option<TicksAxisLayout>,
+    /// The "By coin" tuner's settings: its table filter and its automatic pick. `None` opens
+    /// on the defaults. Read leniently: a malformed block costs only itself.
+    #[serde(default, deserialize_with = "de_lenient")]
+    pub analytics_coins: Option<CoinsAxisLayout>,
     /// Visible screener columns (keys in canonical order). None = all.
     #[serde(default)]
     pub screener_columns: Option<Vec<String>>,

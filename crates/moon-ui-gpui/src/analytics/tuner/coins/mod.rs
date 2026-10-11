@@ -14,7 +14,15 @@
 
 // Files of this axis.
 /// Which columns the coin table shows and how wide it lays them out.
+/// The Auto-pick card: settings, the running pick, the verdict.
+pub(in crate::analytics::tuner) mod auto;
 pub(in crate::analytics::tuner) mod columns;
+/// One editable list field and the "Not saved" band, as free render functions.
+pub(in crate::analytics::tuner) mod fields;
+/// The coin table's filter bar, as a free render function.
+pub(in crate::analytics::tuner) mod filter_bar;
+
+pub(in crate::analytics::tuner) mod layout;
 /// Its background loads: per-coin aggregates, the strategies' saved lists, the KPI rescan.
 mod load;
 /// The coin picker: the `CoinsBlackList` field, ordered and shaded by age.
@@ -26,11 +34,12 @@ mod save;
 /// Its own state: the working coin lists, the view controls, the loaded results.
 pub(in crate::analytics::tuner) mod state;
 
+use std::rc::Rc;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputEvent, MoonInputState,
-    MoonPalette, MoonScrollbarVisibility, MoonSlider, MoonSliderEvent, MoonSliderState,
+    MoonCheckbox, MoonInputEvent, MoonInputState, MoonPalette, MoonScrollbarVisibility,
     MoonVirtualList, h_flex, v_flex,
 };
 use rust_i18n::t;
@@ -44,9 +53,10 @@ use super::{
 };
 use crate::design;
 use crate::design::{moon, moon_alpha};
+use columns::COIN_AUTO_W;
 use moon_core::db::analytics::GroupStat;
 use rows::{CoinCounts, CoinRow};
-use state::{CoinFilter, coin_token};
+use state::coin_token;
 
 impl AnalyticsView {
     /// Lazily-created coin search input; commits on every change so the table filters
@@ -79,150 +89,124 @@ impl AnalyticsView {
         state
     }
 
-    /// Lazily-created "keep coins above this share of the busiest" slider.
+    /// Write the axis' filter and pick settings into the saved layout.
+    pub(in crate::analytics::tuner) fn persist_coins_settings(&self, cx: &mut Context<Self>) {
+        let value = Some(self.coins.to_layout());
+        self.persist_setting(cx, |l| &mut l.analytics_coins, value);
+    }
+
+    /// One numeric setting's input: a valid value commits and is persisted on every change;
+    /// text that is not one is ignored, and the field is put back to the value in force when
+    /// it is left or Enter is pressed.
     ///
-    /// A fixed 0–100 scale: as a share it means the same thing in every scope, so it never
-    /// needs rebuilding when the period changes — which an absolute-trades scale did, since
-    /// its ceiling can only be set at construction.
-    fn coin_min_trades_slider(&mut self, cx: &mut Context<Self>) -> Entity<MoonSliderState> {
-        if let Some(s) = &self.coins.min_trades_slider {
-            return s.clone();
-        }
-        let cur = self.coins.min_trades_pct as f32;
-        let state = cx.new(|_| {
-            MoonSliderState::new()
-                .max(100.0)
-                .min(0.0)
-                .step(1.0)
-                .default_value(cur)
+    /// Args:
+    ///     placeholder: Hint shown in an empty field.
+    ///     get: Reads the value in force.
+    ///     set: Writes a parsed value.
+    ///     parse: Accepts the field's text, or rejects it.
+    ///     window: Window the input lives in.
+    ///     cx: View context.
+    ///
+    /// Returns:
+    ///     The new input entity; the caller keeps it.
+    pub(in crate::analytics::tuner) fn numeric_setting_input<T>(
+        &mut self,
+        placeholder: &'static str,
+        get: fn(&state::CoinsState) -> T,
+        set: fn(&mut state::CoinsState, T),
+        parse: fn(&str) -> Option<T>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<MoonInputState>
+    where
+        T: Copy + PartialEq + ToString + 'static,
+    {
+        let val = get(&self.coins).to_string();
+        let state = cx.new(|cx| {
+            MoonInputState::new(window, cx)
+                .default_value(val)
+                .placeholder(placeholder)
         });
-        cx.subscribe(&state, |this, _e, ev: &MoonSliderEvent, cx| {
-            if let MoonSliderEvent::Change(v) = ev {
-                let pct = v.end().round() as i64;
-                if this.coins.min_trades_pct != pct {
-                    this.coins.min_trades_pct = pct;
+        cx.subscribe_in(
+            &state,
+            window,
+            move |this, st, ev: &MoonInputEvent, window, cx| {
+                let leaving =
+                    matches!(ev, MoonInputEvent::Blur | MoonInputEvent::PressEnter { .. });
+                if !leaving && !matches!(ev, MoonInputEvent::Change) {
+                    return;
+                }
+                if let Some(v) = parse(st.read(cx).value().trim())
+                    && v != get(&this.coins)
+                {
+                    set(&mut this.coins, v);
+                    this.persist_coins_settings(cx);
                     cx.notify();
                 }
-            }
-        })
+                if leaving {
+                    let shown = get(&this.coins).to_string();
+                    st.update(cx, |input, cx| input.set_value(shown, window, cx));
+                }
+            },
+        )
         .detach();
-        self.coins.min_trades_slider = Some(state.clone());
         state
     }
 
-    /// Search box + the All / blacklist / whitelist views, each with its count. The two
-    /// list chips are disabled while no lists are known (no selection, several selected,
-    /// or no strategy DB) — there is nothing to filter by, and an enabled chip that
-    /// empties the table would read as "none of these coins are listed".
+    /// Lazily-created "fewer trades than" input.
+    fn coin_min_trades_state(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<MoonInputState> {
+        if let Some(s) = &self.coins.min_trades_input {
+            return s.clone();
+        }
+        let state = self.numeric_setting_input(
+            "0",
+            |s| s.min_trades,
+            |s, v| s.min_trades = v,
+            state::parse_min_trades,
+            window,
+            cx,
+        );
+        self.coins.min_trades_input = Some(state.clone());
+        state
+    }
+
+    /// The filter bar: the free renderer fed from this view's state, with handlers that edit
+    /// it and persist the axis' settings.
     fn coin_filter_bar(
         &self,
         search: &Entity<MoonInputState>,
-        min_trades: &Entity<MoonSliderState>,
+        min_trades: &Entity<MoonInputState>,
         counts: CoinCounts,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // "matched / in the strategy's list": the rows only cover coins that traded
-        // somewhere in the period, so a listed coin nobody traded has no row at all.
-        // Showing the matches alone would understate the list the user is reading.
-        let listed = |shown: usize, total: usize| {
-            if shown == total {
-                shown.to_string()
-            } else {
-                format!("{shown}/{total}")
-            }
-        };
-        let cur = self.coins.filter;
-        let chip = |id: &'static str, f: CoinFilter, label: String| {
-            let on = cur == f;
-            let enabled = self.coins.filter_available(f);
-            // The button carries a caption plus a count ("Blacklist 5/12"); buttons are prose
-            // controls regardless of the number they display.
-            div().font_family(design::ui_font()).child(
-                MoonButton::new(id)
-                    .variant(if on {
-                        MoonButtonVariant::Amber
-                    } else {
-                        MoonButtonVariant::Soft
-                    })
-                    .selected(on)
-                    .disabled(!enabled)
-                    .label(label)
-                    .on_click(cx.listener(move |this, _, _, cx| {
+        let model = filter_bar::FilterBarModel::new(&self.coins, counts);
+        let view = cx.entity();
+        let acts = filter_bar::FilterBarActs {
+            on_filter: Rc::new({
+                let view = view.clone();
+                move |f, _: &mut Window, app: &mut App| {
+                    view.update(app, |this, cx| {
                         this.coins.filter = f;
                         cx.notify();
-                    }))
-                    .render(),
-            )
+                    });
+                }
+            }),
+            on_hide_zero: Rc::new(move |on, _: &mut Window, app: &mut App| {
+                view.update(app, |this, cx| {
+                    if this.coins.hide_zero != on {
+                        this.coins.hide_zero = on;
+                        this.persist_coins_settings(cx);
+                        cx.notify();
+                    }
+                });
+            }),
         };
-        let (bl_n, wl_n) = (self.coins.work.black.len(), self.coins.work.white.len());
-        h_flex()
-            .w_full()
-            .flex_none()
-            .px(design::ui_px(cx, 8.0))
-            .py(design::ui_px(cx, 4.0))
-            .gap(design::ui_px(cx, 6.0))
-            .items_center()
-            .bg(moon(p.table_head))
-            .child(
-                div().flex_1().min_w_0().child(
-                    MoonInput::new("an-coin-search")
-                        .state(search)
-                        .size(design::INPUT_SIZE),
-                ),
-            )
-            // Right after the search: both narrow WHICH rows are worth looking at, so they
-            // belong together, ahead of the chips that only switch the view.
-            .child(
-                div().w(design::font_w_px(cx, 84.0)).flex_none().child(
-                    MoonSlider::new(min_trades)
-                        .id("an-coin-min-trades")
-                        .height(18.0),
-                ),
-            )
-            .child(
-                div()
-                    .w(design::font_w_px(cx, 62.0))
-                    .flex_none()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    // The share is what the slider is set to; the count in brackets is what it
-                    // comes to in trades here — that is the number deciding which rows go, and
-                    // it changes with the scope while the share does not.
-                    .child(format!(
-                        "{}% ({})",
-                        self.coins.min_trades_pct, self.coins.min_trades
-                    )),
-            )
-            .child(chip(
-                "an-coin-f-all",
-                CoinFilter::All,
-                format!("{} {}", t!("report.filter.all"), counts.all),
-            ))
-            .child(chip(
-                "an-coin-f-bl",
-                CoinFilter::Black,
-                format!(
-                    "{} {}",
-                    t!("analytics.coins.black"),
-                    listed(counts.black, bl_n)
-                ),
-            ))
-            .child(chip(
-                "an-coin-f-wl",
-                CoinFilter::White,
-                format!(
-                    "{} {}",
-                    t!("analytics.coins.white"),
-                    listed(counts.white, wl_n)
-                ),
-            ))
-            .child(chip(
-                "an-coin-f-ch",
-                CoinFilter::Changed,
-                format!("{} {}", t!("analytics.coins.changed"), counts.changed),
-            ))
-            .into_any_element()
+        filter_bar::filter_bar_el(&model, search, min_trades, &acts, p, cx)
     }
 
     /// Sortable heading aligned with [`coin_row`], with shared single-trade metric tooltips.
@@ -267,6 +251,10 @@ impl AnalyticsView {
                     }));
                 if let Some(tip) = super::columns::metric_header_tooltip(key) {
                     d = d.tooltip(crate::panels::common::text_tooltip(tip));
+                } else if key == SORT_NAME {
+                    d = d.tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.coins.tip_sort_name").to_string(),
+                    ));
                 }
                 match w {
                     // Shrinks with its body cell, floor included, or the heading leaves the
@@ -305,21 +293,42 @@ impl AnalyticsView {
                     Some((c.w, c.min_w)),
                 )
             }))
+            // The pick's suggestion, read-only: a tag, never a tick.
+            .child(
+                div()
+                    .id("an-coin-hdr-auto")
+                    .w(design::font_w_px(cx, COIN_AUTO_W))
+                    .flex_none()
+                    .text_center()
+                    .truncate()
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.coins.tip_col_auto").to_string(),
+                    ))
+                    .child(t!("analytics.coins.col_auto").to_string()),
+            )
             // The two list ticks close the row. They carry headings but no sort: they are
             // the EDIT surface, and a master tick over thousands of coins would be one
             // click into a list nobody meant to build.
             .child(
                 div()
+                    .id("an-coin-hdr-bl")
                     .w(design::font_w_px(cx, COIN_TICK_W))
                     .flex_none()
                     .text_center()
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.coins.tip_col_bl").to_string(),
+                    ))
                     .child(t!("analytics.coins.black").to_string()),
             )
             .child(
                 div()
+                    .id("an-coin-hdr-wl")
                     .w(design::font_w_px(cx, COIN_TICK_W))
                     .flex_none()
                     .text_center()
+                    .tooltip(crate::panels::common::text_tooltip(
+                        t!("analytics.coins.tip_col_wl").to_string(),
+                    ))
                     .child(t!("analytics.coins.white").to_string()),
             )
     }
@@ -334,16 +343,7 @@ impl AnalyticsView {
         let scale = design::font_scale(cx);
         let scope = self.scope_label();
         let search = self.coin_search_state(window, cx);
-        // The share is fixed; what it COMES TO depends on the busiest coin of the loaded
-        // scope, so it is resolved here, where that scope is known.
-        let busiest = self
-            .coins
-            .stats
-            .data()
-            .map(|v| v.iter().map(|g| g.n).max().unwrap_or(0))
-            .unwrap_or(0);
-        self.coins.min_trades = self.coins.trades_floor(busiest);
-        let min_trades = self.coin_min_trades_slider(cx);
+        let min_trades = self.coin_min_trades_state(window, cx);
         // Rows come from the base coin set (every coin the selected cores traded); the
         // numbers from the selected strategies. Either read failing is REPORTED, never
         // rendered as zeros — a read failure that looks like "this strategy traded nothing"
@@ -359,13 +359,28 @@ impl AnalyticsView {
             (Err(note), _) | (Ok(_), Err(note)) => Err(note),
             (Ok(base), Ok(scoped)) => Ok((base.clone(), scoped.clone())),
         };
-        let (body, counts, total) = match ready {
-            Err(note) => (
+        let selected = self.sel_strategy.is_some();
+        let (body, counts, total) = match (selected, ready) {
+            // No strategy: the table asks for one rather than listing every coin of every
+            // strategy, which is not a list anyone edits.
+            (false, _) => (
+                div()
+                    .w_full()
+                    .p(design::ui_px(cx, 28.0))
+                    .font_family(design::ui_font())
+                    .text_center()
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.coins.table_pick").to_string())
+                    .into_any_element(),
+                CoinCounts::default(),
+                0usize,
+            ),
+            (true, Err(note)) => (
                 super::super::note_el("an-coins-note", note, 10.0, p, cx),
                 CoinCounts::default(),
                 0usize,
             ),
-            Ok((base, scoped)) => {
+            (true, Ok((base, scoped))) => {
                 // Built once per change of what it depends on — NOT per frame. Hovering a
                 // row repaints the whole view without touching any of those inputs.
                 //
@@ -377,7 +392,7 @@ impl AnalyticsView {
                     let cache = rows::rows_for(&mut self.coins, &base.coins, &scoped);
                     (cache.counts, cache.total, cache.rows.len())
                 };
-                if drawn == 0 {
+                if coins_body(true, true, drawn) == CoinsBody::NoMatch {
                     // Data exists but the search/filter matched nothing — say so instead of
                     // leaving a blank area.
                     let note = div()
@@ -386,7 +401,7 @@ impl AnalyticsView {
                         .font_family(design::ui_font())
                         .text_center()
                         .text_color(moon(p.text_muted))
-                        .child(t!("analytics.strat.no_match").to_string())
+                        .child(no_match_text(counts.hidden))
                         .into_any_element();
                     (note, counts, 0)
                 } else {
@@ -421,7 +436,6 @@ impl AnalyticsView {
         };
         // Derived, never carried: the two cannot drift out of step.
         let shown = total.min(MAX_ROWS);
-        let changed = self.coins.has_changes();
         if super::super::probe_enabled() {
             probe(
                 "coins",
@@ -472,35 +486,6 @@ impl AnalyticsView {
                             .text_color(moon(p.text_muted))
                             .child(scope),
                     )
-                    .when(changed, |el| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .font_family(design::ui_font())
-                                .text_size(design::t_caption(cx))
-                                .text_color(moon(p.amber))
-                                .child(
-                                    t!("analytics.coins.changed_n", n = self.coins.changed_count())
-                                        .to_string(),
-                                ),
-                        )
-                        .child(
-                            div().font_family(design::ui_font()).child(
-                                MoonButton::new("an-coin-revert")
-                                    .variant(MoonButtonVariant::Soft)
-                                    .label(t!("analytics.coins.revert").to_string())
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.coins.revert();
-                                        this.coins.settle_filter();
-                                        // Through the SAME debounced path as a tick: reverting
-                                        // is one more edit of the same lists.
-                                        this.arm_coin_kpi(cx);
-                                        cx.notify();
-                                    }))
-                                    .render(),
-                            ),
-                        )
-                    })
                     .when(total > shown, |el| {
                         el.child(
                             div()
@@ -523,35 +508,72 @@ impl AnalyticsView {
             .into_any_element()
     }
 
-    /// "Fact vs v1" for the coin axis — the SHARED matrix, v1 being the ticked coins.
+    /// Fact / Manual / Auto for the coin axis — the SHARED matrix: Manual is the working lists, Auto adds the pick's suggestion.
     pub(in crate::analytics::tuner) fn coins_kpi(
         &self,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        // Titled with the count the SHOWN matrix was computed for, not the live one: a
-        // recompute keeps the previous columns on screen, and the live count would label
-        // them with a pick set they were never scored under.
-        // Title and composition on separate lines: the composition grows with the lists, and
-        // as one string it wrapped inside the fixed column width.
-        let labels = vec![super::kpi::VarLabel::with_sub(
-            t!("analytics.coins.v1").to_string(),
-            t!(
-                "analytics.coins.v1_lists",
-                bl = self.coins.kpi_bl,
-                wl = self.coins.kpi_wl
-            )
-            .to_string(),
-        )];
+        // No strategy: the matrix says so instead of scoring every strategy's trades.
+        if coins_body(self.sel_strategy.is_some(), true, 1) == CoinsBody::NoStrategy {
+            return super::shared::card(
+                t!("analytics.tuner.kpi_title").to_string(),
+                String::new(),
+                div()
+                    .w_full()
+                    .p(design::ui_px(cx, 18.0))
+                    .font_family(design::ui_font())
+                    .text_center()
+                    .text_color(moon(p.text_muted))
+                    .child(t!("analytics.coins.no_strategy").to_string())
+                    .into_any_element(),
+                None,
+                p,
+                cx,
+            );
+        }
         kpi_matrix_card(
             &self.coins.kpi,
             self.scope_label(),
-            &labels,
+            &coin_kpi_labels(&self.coins),
             self.kpi_collapsed,
             p,
             cx,
         )
     }
+}
+
+/// The Manual and Auto headings of the coin KPI matrix.
+///
+/// Titled with the counts the SHOWN matrix was computed for, not the live ones: a recompute
+/// keeps the previous columns on screen, and the live counts would label them with lists
+/// they were never scored under. Title and composition on separate lines: the composition
+/// grows with the lists and wrapped inside the fixed column.
+///
+/// Args:
+///     s: Coin state carrying the counts of the last scored plan.
+///
+/// Returns:
+///     The two headings after Fact.
+pub(in crate::analytics::tuner) fn coin_kpi_labels(
+    s: &state::CoinsState,
+) -> [super::kpi::VarLabel; 2] {
+    let lists = |bl: usize, wl: usize| t!("analytics.coins.v1_lists", bl = bl, wl = wl).to_string();
+    let manual = super::kpi::VarLabel::with_sub(
+        t!("analytics.coins.manual").to_string(),
+        lists(s.kpi_bl, s.kpi_wl),
+    )
+    .with_tip(t!("analytics.coins.tip_manual").to_string());
+    // The Auto column is always drawn — a dash until a finished pick is scored — so the
+    // matrix does not grow a column under the user's eyes.
+    let auto = super::kpi::VarLabel::with_sub(
+        t!("analytics.coins.auto_col").to_string(),
+        s.kpi_auto
+            .map_or_else(|| "—".to_string(), |(bl, wl)| lists(bl, wl)),
+    )
+    .with_tip(t!("analytics.coins.tip_auto_col").to_string())
+    .placeholder();
+    [manual, auto]
 }
 
 /// Height of one coin row, in base px.
@@ -585,11 +607,21 @@ fn coin_row(
         // handler only needs an owned token once, at click time.
         let coin = name.clone();
         let weak = weak.clone();
+        let side = if black_side { "bl" } else { "wl" };
         div()
+            .id(SharedString::from(format!("an-coin-{side}-cell-{name}")))
             .w(design::font_w_px(cx, COIN_TICK_W))
             .flex_none()
             .flex()
             .justify_center()
+            .tooltip(crate::panels::common::text_tooltip(
+                t!(if black_side {
+                    "analytics.coins.tip_col_bl"
+                } else {
+                    "analytics.coins.tip_col_wl"
+                })
+                .to_string(),
+            ))
             .child(
                 MoonCheckbox::new(SharedString::from(format!(
                     "an-coin-{}-{name}",
@@ -625,6 +657,7 @@ fn coin_row(
                 .child(name.clone()),
         )
         .children(COIN_COLS.iter().map(|col| metric_cell(col, g, p, scale)))
+        .child(auto_cell(row.auto, p, cx))
         .child(tick(true, row.black))
         .child(tick(false, row.white))
         // Clicking the ROW asks "who traded this?" — the tick boxes keep their own
@@ -646,10 +679,72 @@ fn coin_row(
         el = el.bg(moon_alpha(p.blue, 0.18));
     } else if row.changed {
         el = el.bg(moon_alpha(p.amber, 0.12));
+    } else if let Some(black) = row.auto {
+        // A suggested coin is tinted with its list's colour, faintly: a hint, not an edit.
+        el = el.bg(moon_alpha(if black { p.red } else { p.green }, 0.08));
     } else {
         el = el.hover(move |s| s.bg(moon_alpha(p.panel_high, 0.9)));
     }
     el.into_any_element()
+}
+
+/// The Auto cell: the pick's "-> BL" / "-> WL" tag for a suggested coin, empty otherwise.
+fn auto_cell(auto: Option<bool>, p: MoonPalette, cx: &App) -> AnyElement {
+    div()
+        .w(design::font_w_px(cx, COIN_AUTO_W))
+        .flex_none()
+        .flex()
+        .justify_center()
+        .when_some(auto, |el, black| {
+            let (bg, fg, label) = if black {
+                (p.red, p.red_text, t!("analytics.coins.tag_to_bl"))
+            } else {
+                (p.green, p.green_text, t!("analytics.coins.tag_to_wl"))
+            };
+            el.child(
+                div()
+                    .px(design::ui_px(cx, 5.0))
+                    .rounded(design::ui_px(cx, 3.0))
+                    .bg(moon_alpha(bg, 0.16))
+                    .text_color(moon(fg))
+                    .font_family(design::ui_font())
+                    .text_size(design::t_caption(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .truncate()
+                    .child(label.to_string()),
+            )
+        })
+        .into_any_element()
+}
+
+/// What the coin table's body shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoinsBody {
+    /// No strategy selected: the table asks for one instead of listing every coin.
+    NoStrategy,
+    /// A read is loading or failed: its note.
+    Note,
+    /// Data, but the search and views left no row.
+    NoMatch,
+    Rows,
+}
+
+/// Decide the coin table's body.
+///
+/// Args:
+///     selected: Whether a strategy is selected.
+///     ready: Whether both reads are available.
+///     drawn: Rows the model produced.
+///
+/// Returns:
+///     The body variant to render.
+fn coins_body(selected: bool, ready: bool, drawn: usize) -> CoinsBody {
+    match (selected, ready, drawn) {
+        (false, _, _) => CoinsBody::NoStrategy,
+        (true, false, _) => CoinsBody::Note,
+        (true, true, 0) => CoinsBody::NoMatch,
+        (true, true, _) => CoinsBody::Rows,
+    }
 }
 
 /// One line of the env-gated observation channel (see `analytics::probe_enabled`), written
@@ -678,3 +773,48 @@ pub(super) fn probe(key: &'static str, line: String) {
     drop(seen);
     moon_core::diagnostics::channel_line("analytics_probe.log", &line);
 }
+
+// Explicit imports, never `use super::*`: the parent re-exports `gpui::*`, whose own `test`
+// shadows the built-in attribute and makes `#[test]` expand recursively.
+/// The `_one` / `_few` / `_many` form of a count-dependent coin message in the active
+/// locale: Slavic one/few/many, one-or-other for the other shipped languages (the dictionary
+/// carries all three forms in every language, like `profit_monitor.days.cores_*`).
+///
+/// Args:
+///     base: The message key without its form suffix.
+///     n: The count the message is about.
+///
+/// Returns:
+///     The full key of the form to draw.
+pub(in crate::analytics::tuner) fn plural_key(base: &str, n: usize) -> String {
+    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
+        if (11..=14).contains(&(n % 100)) {
+            "many"
+        } else {
+            match n % 10 {
+                1 => "one",
+                2..=4 => "few",
+                _ => "many",
+            }
+        }
+    } else if n == 1 {
+        "one"
+    } else {
+        "many"
+    };
+    format!("{base}_{form}")
+}
+
+/// The empty-table sentence when rows exist but none is drawn: if the trade threshold hid
+/// every coin, it names that rule instead of blaming the search.
+fn no_match_text(hidden: usize) -> String {
+    if hidden > 0 {
+        let key = plural_key("analytics.coins.all_hidden", hidden);
+        t!(key.as_str(), hidden = hidden).to_string()
+    } else {
+        t!("analytics.strat.no_match").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests;

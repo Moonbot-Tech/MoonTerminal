@@ -561,7 +561,7 @@ fn assets_wallet_roster_reuses_canonical_exchange_sections_and_logos() {
         "img(logo)",
         "super::balances::figure(Some(agg), p, cx)",
         ".id(SharedString::from(format!(\"asset-core-name-{cid}\")))",
-        ".tooltip(crate::panels::common::text_tooltip(core_name.clone()))",
+        ".tooltip(crate::panels::common::text_tooltip_value(core_name.clone()))",
         ".flex_none()",
         ".on_click(cx.listener(move |this",
         "this.overview_wallet_pick = Some(cid)",
