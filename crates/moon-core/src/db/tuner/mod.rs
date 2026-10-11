@@ -845,13 +845,26 @@ pub fn round_bound(v: f64, up: bool) -> f64 {
         return v;
     }
     let mag = v.abs().log10().floor() as i32;
-    let step = 10f64.powi(mag - 2);
-    let r = if up {
-        (v / step).ceil()
-    } else {
-        (v / step).floor()
-    };
-    r * step
+    // A grid index `r` maps back as `r / 10^k` (or `r * 10^k`) with an EXACT power of ten, which
+    // lands on the double nearest the decimal; `r * 0.001` drifts a ULP and can cross `v` itself.
+    let pow = 10f64.powi((mag - 2).abs());
+    // Below ~1e-306 the power overflows; the raw value is the only bound that cannot cross itself.
+    if !pow.is_finite() {
+        return v;
+    }
+    let at = |r: f64| if mag < 2 { r / pow } else { r * pow };
+    let q = if mag < 2 { v * pow } else { v / pow };
+    if at(q.round()) == v {
+        return v;
+    }
+    let mut r = if up { q.ceil() } else { q.floor() };
+    // `q` carries its own rounding error, so its ceil/floor can still land one step inside `v`.
+    if up && at(r) < v {
+        r += 1.0;
+    } else if !up && at(r) > v {
+        r -= 1.0;
+    }
+    at(r)
 }
 
 /// Round `(from, to)` outward to three significant digits, but keep the RAW pair when doing so
