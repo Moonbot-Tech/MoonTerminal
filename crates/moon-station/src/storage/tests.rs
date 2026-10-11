@@ -2,6 +2,32 @@ use super::*;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
+/// Unchecked subtraction or reserve omission lets archive downloads trigger tape eviction.
+#[test]
+fn a_download_must_leave_the_disk_reserve() {
+    let disk = Disk {
+        free_bytes: 3 * GIB,
+        total_bytes: 10 * GIB,
+    };
+    assert!(fits(disk, GIB - 1));
+    assert!(fits(disk, GIB));
+    assert!(!fits(disk, GIB + 1));
+    assert!(!fits(disk, 4 * GIB));
+    assert!(fits(
+        Disk {
+            free_bytes: 0,
+            total_bytes: 0
+        },
+        u64::MAX
+    ));
+    let large = Disk {
+        free_bytes: 21 * GIB,
+        total_bytes: 200 * GIB,
+    };
+    assert!(fits(large, GIB));
+    assert!(!fits(large, GIB + 1));
+}
+
 fn disk(free_gib: f64, total_gib: u64) -> Disk {
     Disk {
         free_bytes: (free_gib * GIB as f64) as u64,

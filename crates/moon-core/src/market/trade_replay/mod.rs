@@ -28,6 +28,7 @@
 //! - Everything a caller renders arrives as a TYPE ([`TradeReplayOutcome`]), never as a built
 //!   sentence: `moon-core` has no `rust_i18n` and must not decide the user's wording.
 
+pub mod archive;
 pub mod coverage;
 pub mod gate;
 pub mod rest;

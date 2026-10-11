@@ -11,6 +11,7 @@ fn status(auto_update: Option<bool>) -> Status {
         cores_total: 1,
         bot: None,
         tape: None,
+        tape_catchup: None,
         host: None,
         last_update: None,
         auto_update,

@@ -53,7 +53,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use super::gate::ReplayGate;
+use super::gate::{NoticeEffect, ReplayGate, absorb_notice};
 use super::tick_tiles::{TickTileStore, TileKey, TileSource, residual_plan};
 use super::venue_caps::{TradeRoute, bybit_category, kline_route, trade_route};
 use super::{
@@ -102,7 +102,7 @@ use types::*;
 /// thread-affine.
 struct Shared {
     agent: ureq::Agent,
-    gate: ReplayGate,
+    gate: &'static ReplayGate,
     cache: Mutex<VecDeque<(OutcomeKey, Remembered)>>,
     tiles: Mutex<TickTileStore>,
     /// Back to the coordinator, for the native follow-ups a lane arms.

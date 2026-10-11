@@ -19,6 +19,9 @@ pub(super) fn fixture() -> (SessionManager, FeedTx) {
         blacklists_sent: std::sync::Mutex::new(HashMap::new()),
         trade_sounds: Vec::new(),
         trade_sound_epochs: HashMap::new(),
+        catchup_last: HashMap::new(),
+        catchup_unknown: Default::default(),
+        catchup_running: Default::default(),
         sessions: vec![CoreSession {
             id: 1,
             name: "fixture".into(),

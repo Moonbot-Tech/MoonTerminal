@@ -273,6 +273,9 @@ pub struct Status {
     /// it — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub tape: Option<TapeWindow>,
+    /// Progress of automatic closed-trade tape catch-up; absent on older stations.
+    #[serde(default)]
+    pub tape_catchup: Option<Box<TapeCatchup>>,
     /// The machine and the process under the station. `None` from a station older than it — an
     /// added field with a default, so neither end of version 2 misreads the other. Boxed: it is
     /// the bulk of the status, and every reply would otherwise carry its size.
@@ -297,6 +300,25 @@ pub struct Status {
     /// Absent on older stations; allocation then starts above both currently listed sets.
     #[serde(default)]
     pub core_uid_high_water: Option<u64>,
+}
+
+/// Counts and last-pass progress for the station's automatic closed-trade tape catch-up.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeCatchup {
+    /// Jobs awaiting tape that is still within reach.
+    pub pending: u32,
+    /// Closed-trade tape windows filled by catch-up.
+    pub filled: u32,
+    /// Trades without a resolved market or any supported replay source.
+    pub no_route: u32,
+    /// Trades older than every available source's retention.
+    pub out_of_reach: u32,
+    /// Jobs that failed during the last pass.
+    pub failed: u32,
+    /// UTC milliseconds of the latest catch-up pass, or `None` before one ran.
+    pub last_pass_ms: Option<i64>,
+    /// Compressed archive bytes received by catch-up during the current hourly pass.
+    pub archive_bytes: u64,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

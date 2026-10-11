@@ -128,6 +128,12 @@ where
             observer.pace(route.host());
             let page = match fetch(slice_from, slice_to, cursor) {
                 Ok(page) => page,
+                Err(rest::FetchError::OutOfRetention) => {
+                    complete = false;
+                    stop_reason = Some(TickAbandon::OutOfRetention);
+                    interrupted = Some((slice_from, slice_to, start_len, cursor));
+                    break 'walk;
+                }
                 Err(rest::FetchError::UnknownSymbol) => {
                     complete = false;
                     venue_refused = true;

@@ -53,6 +53,8 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 pub enum FetchError {
     /// The venue does not know this symbol. Permanent for this market; retrying cannot help.
     UnknownSymbol,
+    /// The requested time range has expired; this does not refuse the host gate.
+    OutOfRetention,
     /// Transport, service, or malformed-response failure that may recover.
     Transient(String),
     /// HTTP 429 or 418. The wait is the venue's `Retry-After` when `retry_after_s` is `Some`,
@@ -101,7 +103,8 @@ pub fn exchange_notice() -> ExchangeNotice {
     EXCHANGE_NOTICE.with(|cell| cell.get())
 }
 
-fn publish_exchange_notice(notice: ExchangeNotice) {
+/// Publish a response notice on this thread for callers sharing the gate's page protocol.
+pub(crate) fn publish_exchange_notice(notice: ExchangeNotice) {
     EXCHANGE_NOTICE.with(|cell| cell.set(notice));
 }
 

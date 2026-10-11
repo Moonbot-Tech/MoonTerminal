@@ -1,5 +1,34 @@
 use super::*;
 
+/// Removing archive fallback would refuse supported old trades in the tuner pre-filters.
+#[test]
+fn fetchable_uses_archive_beyond_rest_and_bounds_archive_depth() {
+    let now = 500 * 86_400_000;
+    for (brand, kind, age, expected) in [
+        (Brand::Bybit, MarketKind::Futures, 5, Fetchable::Archive),
+        (Brand::Binance, MarketKind::Futures, 1, Fetchable::Rest),
+        (Brand::Binance, MarketKind::Futures, 5, Fetchable::Archive),
+        (
+            Brand::Binance,
+            MarketKind::Futures,
+            400,
+            Fetchable::OutOfRetention,
+        ),
+        (Brand::Gate, MarketKind::Spot, 40, Fetchable::OutOfRetention),
+        (Brand::Htx, MarketKind::Spot, 1, Fetchable::NoRoute),
+    ] {
+        assert_eq!(
+            fetchable(
+                Venue { brand, kind },
+                "SYNUSDT",
+                now - age * 86_400_000,
+                now
+            ),
+            expected
+        );
+    }
+}
+
 /// `venue_caps.rs:kline_route` removing a supported arm or adding a quarterly fallback either
 /// hides a replay a user can fetch or sends an unsupported market to the wrong public endpoint.
 #[test]
@@ -239,9 +268,9 @@ fn trade_route_refuses_venues_that_still_have_klines() {
 ///
 /// Binance futures keeps 48 hours of aggTrades but accepts less than an hour per request, so
 /// copying the query cap into retention refuses a trade that closed yesterday. Gate spot
-/// documents about 30 days and no query cap; Gate futures documents neither, so copying the
+/// admits 29 days and no query cap; Gate futures admits 179 days, so copying the
 /// spot retention there drops a futures tape the endpoint would still serve. Bitget caps one
-/// request at 7 days and retains 90. OKX retains 90 days and has no `startTime` at all.
+/// request at 7 days and admits 89. OKX admits 88 days and has no `startTime` at all.
 #[test]
 fn retention_is_not_the_query_window() {
     const HOUR_MS: i64 = 60 * 60 * 1_000;
@@ -257,10 +286,11 @@ fn retention_is_not_the_query_window() {
             48 * HOUR_MS,
             Some(HOUR_MS),
         ),
-        (TradeRoute::GateSpotTrades, 30 * DAY_MS, None),
-        (TradeRoute::BitgetSpotFills, 90 * DAY_MS, Some(7 * DAY_MS)),
-        (TradeRoute::BitgetMixFills, 90 * DAY_MS, Some(7 * DAY_MS)),
-        (TradeRoute::OkxHistoryTrades, 90 * DAY_MS, None),
+        (TradeRoute::GateSpotTrades, 29 * DAY_MS, None),
+        (TradeRoute::GateFuturesTrades, 179 * DAY_MS, None),
+        (TradeRoute::BitgetSpotFills, 89 * DAY_MS, Some(7 * DAY_MS)),
+        (TradeRoute::BitgetMixFills, 89 * DAY_MS, Some(7 * DAY_MS)),
+        (TradeRoute::OkxHistoryTrades, 88 * DAY_MS, None),
     ];
     for (route, retention, query) in capped {
         assert_eq!(route.retention_ms(), Some(retention), "{route:?} retention");
@@ -271,16 +301,113 @@ fn retention_is_not_the_query_window() {
             "{route:?} must not reuse one number for both caps"
         );
     }
-    for route in [
-        TradeRoute::BinanceSpotAggTrades,
-        TradeRoute::GateFuturesTrades,
-    ] {
-        assert_eq!(route.retention_ms(), None, "{route:?}");
-        assert_eq!(route.max_query_ms(), None, "{route:?}");
-    }
+    let route = TradeRoute::BinanceSpotAggTrades;
+    assert_eq!(route.retention_ms(), None, "{route:?}");
+    assert_eq!(route.max_query_ms(), None, "{route:?}");
     assert_ne!(
         TradeRoute::GateFuturesTrades.retention_ms(),
         TradeRoute::GateSpotTrades.retention_ms()
+    );
+}
+
+/// Routing an unsupported pair to a guessed archive would spend requests on missing products.
+#[test]
+fn archive_routes_cover_only_verified_products() {
+    let kinds = [MarketKind::Spot, MarketKind::Futures, MarketKind::Quarterly];
+    for (brand, expected) in [
+        (
+            Brand::Binance,
+            [
+                Some(ArchiveRoute::BinanceSpotDaily),
+                Some(ArchiveRoute::BinanceUmDaily),
+                Some(ArchiveRoute::BinanceCmDaily),
+            ],
+        ),
+        (
+            Brand::Bybit,
+            [None, Some(ArchiveRoute::BybitTradingDaily), None],
+        ),
+        (Brand::Gate, [None; 3]),
+        (Brand::BitGet, [None; 3]),
+        (Brand::Okx, [None; 3]),
+        (Brand::Hyperliquid, [None; 3]),
+        (Brand::Htx, [None; 3]),
+    ] {
+        for (kind, route) in kinds.into_iter().zip(expected) {
+            assert_eq!(
+                archive_route(Venue { brand, kind }, "SYNUSDT"),
+                route,
+                "{brand:?} {kind:?}"
+            );
+        }
+    }
+}
+
+/// Unverified inverse quantities must never become base quantities in filed Bybit tape.
+#[test]
+fn bybit_archive_accepts_only_linear_symbols() {
+    let venue = Venue {
+        brand: Brand::Bybit,
+        kind: MarketKind::Futures,
+    };
+    for market in ["SYNUSDT", "SYNUSDC"] {
+        assert_eq!(
+            archive_route(venue, market),
+            Some(ArchiveRoute::BybitTradingDaily)
+        );
+    }
+    assert_eq!(archive_route(venue, "SYNUSD"), None);
+    assert_eq!(fetchable(venue, "SYNUSD", 1, 1000), Fetchable::NoRoute);
+}
+
+/// Checking the left edge would refuse a trade whose exit remains within Gate spot retention.
+#[test]
+fn gate_spot_crossing_29_day_edge_keeps_reachable_exit() {
+    let now = 500 * 86_400_000;
+    let hull = (now - 30 * 86_400_000, now - 28 * 86_400_000);
+    let venue = Venue {
+        brand: Brand::Gate,
+        kind: MarketKind::Spot,
+    };
+    assert_eq!(
+        fetchable(venue, "SYNUSDT", hull.0, now),
+        Fetchable::OutOfRetention
+    );
+    assert_eq!(fetchable(venue, "SYNUSDT", hull.1, now), Fetchable::Rest);
+}
+
+/// Changing a path family, day separator or host breaks public daily archive downloads.
+#[test]
+fn archive_urls_match_the_public_daily_layouts() {
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 9).unwrap();
+    for (route, url, format) in [
+        (
+            ArchiveRoute::BinanceUmDaily,
+            "https://data.binance.vision/data/futures/um/daily/aggTrades/SYNUSDT/SYNUSDT-aggTrades-2026-10-09.zip",
+            ArchiveFormat::ZipCsv,
+        ),
+        (
+            ArchiveRoute::BinanceCmDaily,
+            "https://data.binance.vision/data/futures/cm/daily/aggTrades/SYNUSDT/SYNUSDT-aggTrades-2026-10-09.zip",
+            ArchiveFormat::ZipCsv,
+        ),
+        (
+            ArchiveRoute::BinanceSpotDaily,
+            "https://data.binance.vision/data/spot/daily/aggTrades/SYNUSDT/SYNUSDT-aggTrades-2026-10-09.zip",
+            ArchiveFormat::ZipCsv,
+        ),
+        (
+            ArchiveRoute::BybitTradingDaily,
+            "https://public.bybit.com/trading/SYNUSDT/SYNUSDT2026-10-09.csv.gz",
+            ArchiveFormat::GzCsv,
+        ),
+    ] {
+        assert_eq!(route.day_url("SYNUSDT", day), url);
+        assert_eq!(route.format(), format);
+    }
+    assert_ne!(
+        ArchiveRoute::BinanceSpotDaily.host(),
+        TradeRoute::BinanceSpotAggTrades.host()
     );
 }
 

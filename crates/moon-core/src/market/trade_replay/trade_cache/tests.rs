@@ -5,6 +5,40 @@ use crate::feed::types::Side;
 /// Milliseconds in a day, for stamps the tests spread a year apart.
 const DAY_MS: i64 = 86_400_000;
 
+/// A queued reservation must survive preceding inserts and release only at the writer barrier.
+#[test]
+fn queued_reservation_releases_after_writer_barrier() {
+    /// Keep the caller's bytes reserved while the cache owns this queue token.
+    struct Reservation(Arc<std::sync::atomic::AtomicU64>);
+    impl Drop for Reservation {
+        /// The production queue must drop the token only after preceding writes finish.
+        fn drop(&mut self) {
+            self.0.fetch_sub(9, Ordering::AcqRel);
+        }
+    }
+    let pending = Arc::new(std::sync::atomic::AtomicU64::new(9));
+    let (tx, rx) = mpsc::channel();
+    let cache = TradeCache { tx };
+    cache.insert("synthetic", "SYNUSDT", 1, 2, Vec::new(), TileSource::Venue);
+    cache.release_after_writes(Reservation(pending.clone()));
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    init_schema(&conn).unwrap();
+    let mut held = 0;
+    assert_eq!(pending.load(Ordering::Acquire), 9);
+    serve(&conn, rx.recv().unwrap(), &mut held, || None);
+    assert_eq!(pending.load(Ordering::Acquire), 9);
+    assert_eq!(
+        read_spans(&conn, "synthetic", "SYNUSDT", 1, 2)
+            .unwrap()
+            .iter()
+            .map(|span| (span.from_ms, span.to_ms))
+            .collect::<Vec<_>>(),
+        vec![(1, 2)]
+    );
+    serve(&conn, rx.recv().unwrap(), &mut held, || None);
+    assert_eq!(pending.load(Ordering::Acquire), 0);
+}
+
 /// Keeps synthetic SQLite fixtures isolated and removes them after connections close.
 struct BenchDir(std::path::PathBuf);
 

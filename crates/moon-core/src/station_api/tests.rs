@@ -154,6 +154,7 @@ fn a_status_reads_back_whole() {
             margin_s: 180,
             long_position_min: 10,
         }),
+        tape_catchup: None,
         host: Some(Box::new(Host {
             uptime_s: 3_725,
             cpu: vec![CpuWindow {
@@ -197,6 +198,7 @@ fn a_status_reads_back_whole() {
         panic!("not a status");
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
+    assert_eq!(old.tape_catchup, None);
     assert_eq!(old.cores, None);
     assert_eq!(old.core_uid_high_water, None);
     assert_eq!(
@@ -205,6 +207,27 @@ fn a_status_reads_back_whole() {
     );
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
+}
+
+/// Losing the optional catch-up field breaks old status replies or discards new progress counters.
+#[test]
+fn tape_catchup_is_optional_and_round_trips() {
+    let old = r#"{"station_version":"synthetic","cores_ready":1,"cores_total":2,"bot":null}"#;
+    let mut status: Status = serde_json::from_str(old).unwrap();
+    assert_eq!(status.tape_catchup, None);
+    let wire = serde_json::json!({
+        "pending": 7,
+        "filled": 11,
+        "no_route": 2,
+        "out_of_reach": 3,
+        "failed": 5,
+        "last_pass_ms": 1234567890000_i64,
+        "archive_bytes": 9876543210_u64
+    });
+    status.tape_catchup = Some(Box::new(serde_json::from_value(wire.clone()).unwrap()));
+    let encoded = serde_json::to_value(&status).unwrap();
+    assert_eq!(encoded["tape_catchup"], wire);
+    assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), status);
 }
 
 #[test]

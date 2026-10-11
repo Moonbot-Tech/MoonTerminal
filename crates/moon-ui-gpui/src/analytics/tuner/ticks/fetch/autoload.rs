@@ -52,8 +52,8 @@ use super::job::{self, QueuedRow};
 use super::{FetchResolver, strategy_field_defaults};
 use crate::Backend;
 use moon_core::db::tuner::ticks::{Deal, model_window, required_spans};
-use moon_core::market::trade_replay::venue_caps::trade_route;
-use moon_core::market::trade_replay::worker::{self as replay_worker, inside_retention};
+use moon_core::market::trade_replay::venue_caps::{Fetchable, fetchable};
+use moon_core::market::trade_replay::worker::{self as replay_worker};
 use moon_core::market::trade_replay::{
     Coverage, ReplayWindow, long_position_ms, margin_ms, tape_autoload, tape_autoload_cores,
     trade_cache,
@@ -367,15 +367,16 @@ fn run_pass(
     let mut rows = Vec::new();
     let mut core_rows = Vec::new();
     for row in resolved {
-        // The worker's own rule, asked here only to spare the candle page a refused row would
-        // pay first: the exit inside the route's retention. Not the entry — a trade held across
-        // the retention edge still gets its exit's tape, and what the model then lacks is the
-        // model's own verdict, the same as through the button.
-        let route = trade_route(row.replay_address.venue);
-        let venue_serves = route.is_some_and(|route| inside_retention(route, row.window, now_ms));
+        // Use the shared REST/archive reach before paying for the row's candle stage.
+        let Some((_, to_ms)) = row.window.focus_spans().hull() else {
+            degenerate += 1;
+            continue;
+        };
+        let source = fetchable(row.replay_address.venue, &row.address.market, to_ms, now_ms);
+        let venue_serves = matches!(source, Fetchable::Rest | Fetchable::Archive);
         match row_path(
             (venues_on, cores_on),
-            route.is_some(),
+            source != Fetchable::NoRoute,
             venue_serves,
             row.window.close_ms,
             now_ms,

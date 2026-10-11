@@ -33,3 +33,17 @@ fn only_a_station_resumes_an_old_open_it_does_not_know() {
         OpenVerdict::Skip
     );
 }
+
+/// Ignoring queued bytes would admit two individually small writes across the disk reserve.
+#[test]
+fn pending_backfills_share_disk_reservation_until_confirmed() {
+    let pending = Arc::new(AtomicU64::new(0));
+    let first = reserve_backfill(&pending, 9, |total| total <= 15).unwrap();
+    assert!(reserve_backfill(&pending, 9, |total| total <= 15).is_none());
+    assert_eq!(pending.load(Ordering::Acquire), 9);
+    drop(first);
+    assert_eq!(pending.load(Ordering::Acquire), 0);
+    let next = reserve_backfill(&pending, 9, |total| total <= 15).unwrap();
+    drop(next);
+    assert_eq!(pending.load(Ordering::Acquire), 0);
+}

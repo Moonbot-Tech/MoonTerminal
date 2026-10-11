@@ -12,6 +12,9 @@
 //!   of it not recorded twice. The file keeps everything while the disk has room; short of the
 //!   reserve, the oldest tape goes — and only the tape (`storage.rs`).
 //!
+//! Public archive day files used for tape catch-up are transient, deleted after extraction,
+//! and share the tape's disk reserve.
+//!
 //! It values every report in USDT (`db::valuation`), whatever its profile. With `[telegram]` in
 //! `station.toml` it also runs the bot (`tg.rs`, over `moon-tg`), and with the Mini App on, the
 //! account the Mini App shows: orders, balances, strategies and the cores' health
@@ -142,6 +145,9 @@ fn main() -> anyhow::Result<()> {
     // Before any core is spawned: every feed reads it when its client is built.
     moon_core::feed::station::enable(profile);
     moon_core::market::tape_recorder::set_always_on();
+    storage::init(data_root.clone());
+    moon_core::market::trade_replay::archive::set_disk_guard(storage::room_for);
+    moon_core::market::tape_recorder::catchup::enable();
     // The interprocess lease on the replica: a second station, or a terminal, on the same data
     // root is refused here rather than corrupting the file.
     let Some(permit) = moon_core::db::report_recovery::prepare() else {
@@ -355,6 +361,7 @@ impl StationNow<'_> {
                 long_position_min: (moon_core::market::trade_replay::long_position_ms() / 60_000)
                     as u32,
             }),
+            tape_catchup: Some(Box::new(moon_core::market::tape_recorder::catchup::status())),
             host: Some(Box::new(self.host.host())),
             last_update: release::last_update(self.data_root),
             auto_update: Some(self.auto_update.on()),

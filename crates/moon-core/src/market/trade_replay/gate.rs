@@ -33,8 +33,120 @@
 //! never gave.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+use super::rest;
+use super::worker::{TickAbandon, TickVerdict};
+
+/// Return the single gate shared by replay, archive and station catch-up callers.
+pub fn shared() -> &'static ReplayGate {
+    static GATE: OnceLock<ReplayGate> = OnceLock::new();
+    GATE.get_or_init(ReplayGate::new)
+}
+
+/// The response's effect on the shared host budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoticeEffect {
+    /// No rate-limit header the gate acts on.
+    None,
+    /// HTTP 429 or 418, with a header wait or the refusal curve.
+    Throttled,
+    /// Binance weight exceeded the planned share until the next UTC minute.
+    WeightStop,
+}
+
+/// Apply the calling thread's last response headers without shortening a standing refusal.
+pub(crate) fn absorb_notice(gate: &ReplayGate, host: &'static str) -> NoticeEffect {
+    let notice = rest::exchange_notice();
+    absorb_response_notice(gate, host, &notice)
+}
+
+/// Share header handling with callers that supply their own response notice.
+pub(crate) fn absorb_response_notice(
+    gate: &ReplayGate,
+    host: &'static str,
+    notice: &rest::ExchangeNotice,
+) -> NoticeEffect {
+    let now = Instant::now();
+    let throttled = notice.status == 429 || notice.status == 418;
+    if throttled {
+        match notice.retry_after_s {
+            Some(seconds) => gate.honour_retry_after(host, now, seconds),
+            None => gate.refuse(host, now),
+        }
+    }
+    if let Some(used) = notice.used_weight_1m {
+        let unix_ms = crate::util::time::now_unix_ms_i64();
+        if unix_ms > 0 && gate.note_used_weight(host, used, now, (unix_ms as u64) / 1_000) {
+            return match throttled {
+                true => NoticeEffect::Throttled,
+                false => NoticeEffect::WeightStop,
+            };
+        }
+    }
+    match throttled {
+        true => NoticeEffect::Throttled,
+        false => NoticeEffect::None,
+    }
+}
+
+/// Absorb each page's headers and prevent a header refusal from acquiring a second curve wait.
+pub(crate) fn absorb_page(
+    gate: &ReplayGate,
+    host: &'static str,
+    page: Result<rest::TradePage, rest::FetchError>,
+) -> Result<rest::TradePage, rest::FetchError> {
+    let effect = absorb_notice(gate, host);
+    match page {
+        Err(rest::FetchError::Throttled { diagnostic, .. }) => Err(rest::FetchError::Throttled {
+            retry_after_s: None,
+            diagnostic,
+        }),
+        Err(rest::FetchError::Transient(diagnostic))
+            if matches!(effect, NoticeEffect::WeightStop | NoticeEffect::Throttled) =>
+        {
+            Err(rest::FetchError::Throttled {
+                retry_after_s: None,
+                diagnostic,
+            })
+        }
+        result => result,
+    }
+}
+
+/// Settle only the venue's verdict; return whether the walk was host-limited.
+/// Caller stops and budgets do not clear a refusal recorded by another lane.
+pub(crate) fn settle_verdict(
+    gate: &ReplayGate,
+    host: &'static str,
+    verdict: &TickVerdict,
+    asked_at: Instant,
+) -> bool {
+    match verdict {
+        TickVerdict::Ready(harvest) => match harvest.stop {
+            Some(TickAbandon::Transient) => gate.refuse(host, Instant::now()),
+            Some(TickAbandon::RateLimited) => return true,
+            _ if !harvest.venue_refused
+                || matches!(harvest.stop, Some(TickAbandon::UnknownSymbol)) =>
+            {
+                gate.clear(host, asked_at)
+            }
+            _ => {}
+        },
+        TickVerdict::Abandoned(reason) => match reason {
+            TickAbandon::Transient => gate.refuse(host, Instant::now()),
+            TickAbandon::Empty | TickAbandon::UnknownSymbol => gate.clear(host, asked_at),
+            TickAbandon::RateLimited => return true,
+            TickAbandon::Cancelled
+            | TickAbandon::OutOfRetention
+            | TickAbandon::Deadline
+            | TickAbandon::OverPageBudget
+            | TickAbandon::OverTickBudget => {}
+        },
+    }
+    false
+}
 
 /// Floor between two consecutive requests to one host, when the route names no higher one.
 ///

@@ -285,6 +285,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
         bot: None,
         tape: None,
         host: None,
+        tape_catchup: None,
         last_update: None,
         auto_update: None,
     }));
@@ -304,6 +305,7 @@ fn bot_reads_without_station_status_preserve_the_last_core_listing() {
         bot: None,
         tape: None,
         host: None,
+        tape_catchup: None,
         last_update: None,
         auto_update: None,
     }));

@@ -10,56 +10,6 @@ pub(super) struct Served {
     pub(super) tick_stage: Option<TickStage>,
 }
 
-/// What the response this thread just decoded asked the gate to do.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NoticeEffect {
-    /// No rate-limit header the gate acts on.
-    None,
-    /// HTTP 429 or 418. `Retry-After` when it parsed, otherwise the backoff curve.
-    Throttled,
-    /// `X-MBX-USED-WEIGHT-1M` over 75% of the host's limit, until the next UTC minute.
-    WeightStop,
-}
-
-/// Apply the calling thread's [`rest::exchange_notice`] to `host`.
-///
-/// A 429 or 418 honours `Retry-After` when the header is an integer number of seconds, and
-/// the 30–600 s curve when it is missing or not. Every response, including those, then
-/// applies `X-MBX-USED-WEIGHT-1M`: over 75% the host stays stopped until the next UTC minute
-/// when that is the longer wait, and a longer ban or curve is not shortened. The notice is
-/// empty when the call never produced a response, and then this records nothing.
-///
-/// Args:
-///     gate: The process-wide replay gate.
-///     host: Stable host key, from the route.
-///
-/// Returns:
-///     Which wait, if any, was recorded.
-pub(super) fn absorb_notice(gate: &ReplayGate, host: &'static str) -> NoticeEffect {
-    let notice = rest::exchange_notice();
-    let now = Instant::now();
-    let throttled = notice.status == 429 || notice.status == 418;
-    if throttled {
-        match notice.retry_after_s {
-            Some(seconds) => gate.honour_retry_after(host, now, seconds),
-            None => gate.refuse(host, now),
-        }
-    }
-    if let Some(used) = notice.used_weight_1m {
-        let unix_ms = crate::util::time::now_unix_ms_i64();
-        if unix_ms > 0 && gate.note_used_weight(host, used, now, (unix_ms as u64) / 1_000) {
-            return match throttled {
-                true => NoticeEffect::Throttled,
-                false => NoticeEffect::WeightStop,
-            };
-        }
-    }
-    match throttled {
-        true => NoticeEffect::Throttled,
-        false => NoticeEffect::None,
-    }
-}
-
 /// A candle job the gate will not send, carrying the wait [`ReplayGate::refused_for`] names.
 ///
 /// Args:
@@ -90,6 +40,9 @@ pub(super) fn abandon_status(
             // `None` only when the wait ran out between the refusal and this read: one second
             // is then the honest number, not a claim the walk never made.
             retry_in_s: gate.refused_for(route.host(), Instant::now()).unwrap_or(1),
+        },
+        Some(TickAbandon::OutOfRetention) => TickStatus::OutOfRetention {
+            retention_ms: route.retention_ms().unwrap_or(0),
         },
         _ => TickStatus::Failed,
     }
@@ -463,6 +416,14 @@ pub(super) fn serve(
                 // new one. The last page is kept: it was already paid for.
                 let _ = absorb_notice(gate, route.host());
             }
+            Err(rest::FetchError::OutOfRetention) => {
+                return Served {
+                    outcome: TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
+                        diagnostic: "candle range out of retention".into(),
+                    }),
+                    tick_stage: None,
+                };
+            }
             Err(rest::FetchError::UnknownSymbol) => {
                 // The venue ANSWERED; it simply does not list this symbol, and a refusal on
                 // record for the host is stale. A weight header on that answer can still stop
@@ -645,6 +606,7 @@ pub(super) fn tick_stage_for(
     TickStage {
         baseline: None,
         route: trade_route(venue),
+        archive: venue_caps::archive_route(venue, &key.market),
         key: key.clone(),
         candles: candles.to_vec(),
     }
@@ -673,9 +635,9 @@ pub(super) fn tick_stage_for(
 ///
 /// Returns:
 ///     `true` when the route documents no retention limit, or when the focus's own right edge
-///     falls inside the one it does document.
+///     falls inside the documented limit minus the retention safety margin.
 pub fn inside_retention(route: TradeRoute, window: ReplayWindow, now_ms: i64) -> bool {
     route
         .retention_ms()
-        .is_none_or(|r| window.focus().1 >= now_ms - r)
+        .is_none_or(|r| window.focus().1 >= now_ms - r + venue_caps::RETENTION_SAFETY_MS)
 }

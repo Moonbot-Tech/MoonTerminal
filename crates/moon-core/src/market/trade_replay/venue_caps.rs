@@ -71,7 +71,7 @@
 //! between T1 and T2" question, for the trade-detail window's tick replay. Every row was read off
 //! the vendor's own documentation, same discipline as the kline table above. Bybit, Hyperliquid
 //! and HTX document no such endpoint reachable from this build, so [`trade_route`] answers
-//! [`None`] for all three — the same honest degradation [`kline_route`] already gives HTX.
+//! [`None`] for all three. Bybit derivatives have daily archives via [`archive_route`].
 //!
 //! | route | endpoint | gate key | rows/page | max query window | retention | cursor | order | unknown-symbol | doc |
 //! |---|---|---|---|---|---|---|---|---|---|
@@ -79,13 +79,19 @@
 //! | `BinanceUsdMAggTrades` | `/fapi/v1/aggTrades` | `fapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/usds-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
 //! | `BinanceCoinMAggTrades` | `/dapi/v1/aggTrades` | `dapi.binance.com` | 1000 | **< 1 h** | **48 h** | `fromId` | undocumented | HTTP 4xx `-1121` | developers.binance.com/.../derivatives/coin-margined-futures/market-data/rest-api/Compressed-Aggregate-Trades-List |
 //! | `GateSpotTrades` | `/api/v4/spot/trades` | `api.gateio.ws` | 1000 | none (page cap `limit*(page-1) <= 100000`) | ~30 d | `from`/`to` in **SECONDS** + `page` | undocumented | label `INVALID_CURRENCY_PAIR` | gateio/gateapi-python docs/SpotApi.md |
-//! | `GateFuturesTrades` | `/api/v4/futures/usdt/trades` | `api.gateio.ws` | 1000 (documented max; default 100) | none | none documented | `from`/`to` in **SECONDS**, `to` walked back onto the oldest row's second, rows told apart by `id`; a second denser than a page drained by `offset` with `from`/`to` pinned to it — **`offset` across a window is not a cursor** (2026-09-21: back-to-back requests 100 apart came back as rows 0, 100, 100, 300, 300, 500; `last_id` ignored with `from`/`to`; within one second `offset` answered the same contiguous ids on every probe) | newest first (measured) | label `CONTRACT_NOT_FOUND` | gateio/gateapi-python docs/FuturesApi.md |
+//! | `GateFuturesTrades` | `/api/v4/futures/usdt/trades` | `api.gateio.ws` | 1000 (documented max; default 100) | none | **180 d** | `from`/`to` in **SECONDS**, `to` walked back onto the oldest row's second, rows told apart by `id`; a second denser than a page drained by `offset` with `from`/`to` pinned to it — **`offset` across a window is not a cursor** | newest first (measured) | label `CONTRACT_NOT_FOUND` | gateio/gateapi-python docs/FuturesApi.md |
 //! | `BitgetSpotFills` | `/api/v2/spot/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/spot/market/Get-Market-Trades |
 //! | `BitgetMixFills` | `/api/v2/mix/market/fills-history` | `api.bitget.com` | 1000 | **7 d** | **90 d** | `idLessThan` (+`productType` required) | **desc** | envelope `code != "00000"` | bitget.com/api-doc/classic/contract/market/Get-Fills-History |
 //! | `OkxHistoryTrades` | `/api/v5/market/history-trades` | `www.okx.com` | **100** | none (no `startTime`/`endTime` at all) | **3 months** | `type=2&after=<ms>` for the FIRST page, `type=1&after=<tradeId>` for every later one | **desc** | HTTP 200 + `code 51001` | okx.com/docs-v5/en/#order-book-trading-market-data-get-trades-history |
 //!
-//! Three venue facts that are silently wrong when mistaken: **Binance futures (both arms) retain
-//! only 48 hours of aggTrades**, so the retention check must run before any request is spent;
+//! Public-API retention measured 2026-10-11: **Binance futures (both arms) retain only 48 hours of
+//! aggTrades** and reject the exact edge with `-4166`, so callers keep [`RETENTION_SAFETY_MS`]
+//! inside it. Binance spot answered 400 days back, Gate spot retains 30 days, Gate USDT futures
+//! 180 days, Bitget spot and mix 90 days, and OKX answered about 89 days back (documented three
+//! months). The admitted windows stay one day inside those measured edges: Gate spot 29 days,
+//! Gate futures 179 days, Bitget 89 days, and OKX 88 days. Binance USD-M/COIN-M daily archives answered both yesterday and 400 days back;
+//! Bybit derivatives daily archives also answered. These archive hosts have their own gate keys.
+//! Two timestamp facts remain essential:
 //! **Gate's `from`/`to` are in SECONDS**, while every other timestamp in this module is
 //! milliseconds; and **Gate's two trade rows do not share a time cell**: futures sends
 //! `create_time`/`create_time_ms` as fractional SECONDS in a JSON number (`1789726954.306`),
@@ -105,6 +111,9 @@
 //! each route's own parser for the fact restated in the vendor's own terms.
 
 use crate::venue::{Brand, MarketKind, Venue};
+
+/// Stay inside a venue's retention boundary rather than repeatedly requesting its refused edge.
+pub const RETENTION_SAFETY_MS: i64 = 3_600_000;
 
 /// Route serving one-minute bars over a bounded past window.
 ///
@@ -446,8 +455,8 @@ impl TradeRoute {
         }
     }
 
-    /// How far back the vendor documents that this endpoint answers, or [`None`] when it
-    /// documents no limit.
+    /// How far back the endpoint answers according to documented or measured limits, or
+    /// [`None`] when no finite limit is known.
     ///
     /// Evaluated by [`super::worker::inside_retention`] BEFORE any request is spent, so an
     /// out-of-retention window costs zero.
@@ -459,10 +468,15 @@ impl TradeRoute {
         const DAY_MS: i64 = 24 * HOUR_MS;
         match self {
             Self::BinanceUsdMAggTrades | Self::BinanceCoinMAggTrades => Some(48 * HOUR_MS),
-            Self::GateSpotTrades => Some(30 * DAY_MS),
-            Self::BitgetSpotFills | Self::BitgetMixFills => Some(90 * DAY_MS),
-            Self::OkxHistoryTrades => Some(90 * DAY_MS),
-            Self::BinanceSpotAggTrades | Self::GateFuturesTrades => None,
+            // Stay one day inside the measured spot edge.
+            Self::GateSpotTrades => Some(29 * DAY_MS),
+            // Stay one day inside the measured futures edge.
+            Self::GateFuturesTrades => Some(179 * DAY_MS),
+            // Stay one day inside the measured fills edge.
+            Self::BitgetSpotFills | Self::BitgetMixFills => Some(89 * DAY_MS),
+            // The measured history edge leaves 88 full days reliably reachable.
+            Self::OkxHistoryTrades => Some(88 * DAY_MS),
+            Self::BinanceSpotAggTrades => None,
         }
     }
 }
@@ -476,8 +490,9 @@ impl TradeRoute {
 /// maps the reachable `QBinance` code to it, so a blanket "Quarterly -> None" rule would make the
 /// COIN-M route unreachable here exactly as it would in [`kline_route`].
 ///
-/// [`None`] for Bybit, Hyperliquid, HTX — none document a public trade-history endpoint this
-/// build can reach — and for the Gate / BitGet / OKX `Quarterly` arms, which name no product
+/// [`None`] for Bybit, Hyperliquid, HTX: no REST trade-history endpoint this build can reach;
+/// Bybit derivatives instead have archives via [`archive_route`]. Also `None` for the Gate /
+/// BitGet / OKX `Quarterly` arms, which name no product
 /// those brands actually have, the same reason [`kline_route`] already gives them.
 ///
 /// Args:
@@ -507,6 +522,136 @@ pub const fn trade_route(venue: Venue) -> Option<TradeRoute> {
         (Brand::Gate, MarketKind::Quarterly)
         | (Brand::BitGet, MarketKind::Quarterly)
         | (Brand::Okx, MarketKind::Quarterly) => None,
+    }
+}
+
+/// Maximum age of tape eligible for archive catch-up.
+pub const ARCHIVE_DEPTH_MS: i64 = 365 * 86_400_000;
+
+/// Available source for a focus beginning at the supplied UTC timestamp.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fetchable {
+    /// The REST route still holds this focus.
+    Rest,
+    /// A public daily archive can recover this focus.
+    Archive,
+    /// This venue has no supported trade source.
+    NoRoute,
+    /// Supported sources no longer cover this focus.
+    OutOfRetention,
+}
+
+/// Choose REST first, then a daily archive within the bounded catch-up depth.
+pub fn fetchable(venue: Venue, market: &str, from_ms: i64, now_ms: i64) -> Fetchable {
+    let rest = trade_route(venue);
+    let archive = archive_route(venue, market);
+    if rest.is_some_and(|route| {
+        route.retention_ms().is_none_or(|retention| {
+            from_ms
+                >= now_ms
+                    .saturating_sub(retention)
+                    .saturating_add(RETENTION_SAFETY_MS)
+        })
+    }) {
+        Fetchable::Rest
+    } else if archive.is_some() && from_ms >= now_ms.saturating_sub(ARCHIVE_DEPTH_MS) {
+        Fetchable::Archive
+    } else if rest.is_some() || archive.is_some() {
+        Fetchable::OutOfRetention
+    } else {
+        Fetchable::NoRoute
+    }
+}
+
+/// Daily public trade archive, independent of the venue's shorter REST retention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArchiveRoute {
+    /// Binance USD-M aggregate trades.
+    BinanceUmDaily,
+    /// Binance COIN-M aggregate trades; quantities remain contracts.
+    BinanceCmDaily,
+    /// Binance spot aggregate trades.
+    BinanceSpotDaily,
+    /// Bybit derivatives trading prints.
+    BybitTradingDaily,
+}
+
+/// Compression envelope around a daily archive's CSV stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArchiveFormat {
+    /// One CSV member in a ZIP archive.
+    ZipCsv,
+    /// A gzip CSV stream, possibly with multiple gzip members.
+    GzCsv,
+}
+
+impl ArchiveRoute {
+    /// Return the archive host's independent process-wide gate key.
+    pub const fn host(self) -> &'static str {
+        match self {
+            Self::BinanceUmDaily | Self::BinanceCmDaily | Self::BinanceSpotDaily => {
+                "data.binance.vision"
+            }
+            Self::BybitTradingDaily => "public.bybit.com",
+        }
+    }
+
+    /// Build the daily HTTPS URL for an exchange-native market name and UTC day.
+    pub fn day_url(self, market: &str, day: chrono::NaiveDate) -> String {
+        let host = self.host();
+        match self {
+            Self::BinanceUmDaily => format!(
+                "https://{host}/data/futures/um/daily/aggTrades/{market}/{market}-aggTrades-{day}.zip"
+            ),
+            Self::BinanceCmDaily => format!(
+                "https://{host}/data/futures/cm/daily/aggTrades/{market}/{market}-aggTrades-{day}.zip"
+            ),
+            Self::BinanceSpotDaily => format!(
+                "https://{host}/data/spot/daily/aggTrades/{market}/{market}-aggTrades-{day}.zip"
+            ),
+            Self::BybitTradingDaily => {
+                format!("https://{host}/trading/{market}/{market}{day}.csv.gz")
+            }
+        }
+    }
+
+    /// Return the compression format the reader must decode.
+    pub const fn format(self) -> ArchiveFormat {
+        match self {
+            Self::BinanceUmDaily | Self::BinanceCmDaily | Self::BinanceSpotDaily => {
+                ArchiveFormat::ZipCsv
+            }
+            Self::BybitTradingDaily => ArchiveFormat::GzCsv,
+        }
+    }
+
+    /// Pace downloads at one request per second across all callers of this host.
+    pub const fn page_interval(self) -> std::time::Duration {
+        std::time::Duration::from_secs(1)
+    }
+
+    /// Allow a completed UTC day time to be published before requesting it.
+    pub const fn publish_lag_ms(self) -> i64 {
+        36 * 3_600_000
+    }
+}
+
+/// Return a verified archive route; Bybit inverse quantities remain unverified, so only linear
+/// USDT and USDC symbols may use its trading archive.
+pub fn archive_route(venue: Venue, market: &str) -> Option<ArchiveRoute> {
+    match (venue.brand, venue.kind) {
+        (Brand::Binance, MarketKind::Spot) => Some(ArchiveRoute::BinanceSpotDaily),
+        (Brand::Binance, MarketKind::Futures) => Some(ArchiveRoute::BinanceUmDaily),
+        (Brand::Binance, MarketKind::Quarterly) => Some(ArchiveRoute::BinanceCmDaily),
+        (Brand::Bybit, MarketKind::Futures) => (market.ends_with("USDT")
+            || market.ends_with("USDC"))
+        .then_some(ArchiveRoute::BybitTradingDaily),
+        (Brand::Bybit, MarketKind::Spot | MarketKind::Quarterly)
+        | (Brand::Gate, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
+        | (Brand::BitGet, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
+        | (Brand::Okx, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
+        | (Brand::Hyperliquid, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
+        | (Brand::Htx, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly) => None,
     }
 }
 

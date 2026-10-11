@@ -62,14 +62,16 @@
 //!
 //! Nothing here depends on the GUI, so it moves into the station crate as it is.
 
+pub mod catchup;
 mod compare;
 mod donor;
 mod peek;
 mod plan;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use donor::{Donor, Reply};
@@ -142,7 +144,19 @@ static CORES: Mutex<Vec<Core>> = Mutex::new(Vec::new());
 /// The recorder thread's queue, started by the first event that finds the switch on.
 static TX: OnceLock<Option<Sender<Cmd>>> = OnceLock::new();
 
+/// Live events and off-thread recovery results, applied by the recorder's single cache owner.
 enum Cmd {
+    /// Resolved closed rows whose tape may still be recovered from public sources.
+    Catchup(Vec<catchup::CatchupTrade>),
+    /// Coverage fetched off-thread, filed only through this recorder's cache handle.
+    Backfilled {
+        exchange: String,
+        market: String,
+        file: Coverage,
+        ticks: Vec<Tick>,
+    },
+    /// Settlement follows every backfilled command on the recorder's queue.
+    CatchupDone(catchup::PassResult),
     Opened {
         exchange: String,
         market: String,
@@ -380,8 +394,11 @@ struct PendingCompare {
 
 type Key = (String, String);
 
+/// Own the station tape cache and coordinate live recording with serial historical recovery.
 struct Recorder {
     cache: TradeCache,
+    /// Catch-up owns its latches, but all cache reads and filings stay on this thread.
+    catchup: catchup::RecorderCatchup,
     tasks: HashMap<Key, KeyTask>,
     donors: HashMap<String, Donor>,
     shunned: HashMap<CoreId, Instant>,
@@ -393,9 +410,38 @@ struct Recorder {
     compares: Vec<PendingCompare>,
     /// Closes a reader may still ask about ([`trade_tape`]).
     closed: peek::ClosedTrades,
+    /// Outstanding backfill bytes remain reserved until the cache queue confirms their writes.
+    pending_bytes: Arc<AtomicU64>,
+}
+
+/// Account one backfill batch until the writer drops its queue barrier token.
+struct BackfillReservation {
+    pending: Arc<AtomicU64>,
+    bytes: u64,
+}
+impl Drop for BackfillReservation {
+    /// Completed or refused batches release exactly their outstanding reservation.
+    fn drop(&mut self) {
+        self.pending.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+/// Admit against all outstanding writes, releasing a rejected reservation immediately.
+fn reserve_backfill(
+    pending: &Arc<AtomicU64>,
+    bytes: u64,
+    room: impl FnOnce(u64) -> bool,
+) -> Option<BackfillReservation> {
+    let before = pending.fetch_add(bytes, Ordering::AcqRel);
+    let reservation = BackfillReservation {
+        pending: pending.clone(),
+        bytes,
+    };
+    room(bytes.saturating_add(before)).then_some(reservation)
 }
 
 impl Recorder {
+    /// Open the recorder's own tape store and initialize catch-up without starting its fetcher.
     fn start() -> Option<Self> {
         let path = crate::config::paths::tape_recorder_db_path();
         // No ceiling — not the Storage tab's `max_mb`, which is for `trades.sqlite` and would
@@ -409,6 +455,7 @@ impl Recorder {
         let now = Instant::now();
         Some(Self {
             cache,
+            catchup: catchup::RecorderCatchup::default(),
             tasks: HashMap::new(),
             donors: HashMap::new(),
             shunned: HashMap::new(),
@@ -419,13 +466,59 @@ impl Recorder {
             ticks: Vec::new(),
             compares: Vec::new(),
             closed: peek::ClosedTrades::default(),
+            pending_bytes: Arc::default(),
         })
     }
 
+    /// Apply events and reserve-checked recovery filings on the recorder thread alone.
     fn apply(&mut self, cmd: Cmd, now_ms: i64) {
         let margin = crate::market::trade_replay::margin_ms();
         let long = crate::market::trade_replay::long_position_ms();
         match cmd {
+            Cmd::Catchup(trades) => {
+                for trade in &trades {
+                    self.closed.closed(
+                        trade.id,
+                        &(trade.exchange.clone(), trade.market.clone()),
+                        trade.open_ms,
+                        trade.close_ms,
+                    );
+                }
+                self.catchup.submit(trades);
+            }
+            Cmd::Backfilled {
+                exchange,
+                market,
+                file,
+                ticks,
+            } => {
+                let bytes = (ticks.len() as u64)
+                    .saturating_mul(std::mem::size_of::<Tick>() as u64)
+                    .saturating_add((file.spans().len() as u64).saturating_mul(128));
+                let Some(reservation) = reserve_backfill(
+                    &self.pending_bytes,
+                    bytes,
+                    crate::market::trade_replay::archive::room_for,
+                ) else {
+                    line(&format!(
+                        "catch-up filing deferred for {exchange} {market}: disk reserve"
+                    ));
+                    return;
+                };
+                // Coverage already merges every overlapping or adjacent span; keep holes intact.
+                for &(from, to) in file.spans() {
+                    self.cache.insert(
+                        &exchange,
+                        &market,
+                        from,
+                        to,
+                        slice(&ticks, from, to),
+                        TileSource::Venue,
+                    );
+                }
+                self.cache.release_after_writes(reservation);
+            }
+            Cmd::CatchupDone(result) => self.catchup.finish(&self.cache, result, now_ms),
             Cmd::Opened {
                 exchange,
                 market,
@@ -500,6 +593,7 @@ impl Recorder {
                     bytes / 1_000
                 ));
                 self.cache.evict_oldest(bytes);
+                self.catchup.evicted();
             }
             Cmd::CoreGone(core) => {
                 let gone: Vec<String> = self
@@ -541,7 +635,14 @@ impl Recorder {
         }
     }
 
+    /// Advance live recording and dispatch catch-up only when its previous pass has settled.
     fn tick(&mut self, now: Instant, now_ms: i64) {
+        self.catchup.tick(
+            &self.cache,
+            now_ms,
+            crate::market::trade_replay::margin_ms(),
+            crate::market::trade_replay::long_position_ms(),
+        );
         self.collect_replies(now, now_ms);
         self.expire(now);
         self.closed.prune(now);

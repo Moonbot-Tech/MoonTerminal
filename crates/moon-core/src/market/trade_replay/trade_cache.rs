@@ -222,7 +222,11 @@ enum Op {
         reply: mpsc::Sender<rusqlite::Result<TrimReport>>,
     },
     /// Nothing: answered once every op queued before it has been served.
-    Sync { reply: mpsc::Sender<()> },
+    Sync {
+        reply: mpsc::Sender<()>,
+        /// Release an optional caller-owned reservation after all preceding writes finish.
+        reservation: Option<Box<dyn Send>>,
+    },
     /// Drop the spans written longest ago until this many packed bytes are gone, and give the
     /// pages back to the disk ([`evict`]).
     Evict { bytes: i64 },
@@ -416,7 +420,22 @@ impl TradeCache {
     ///     Whether the worker got there in time.
     pub fn sync(&self, timeout: Duration) -> bool {
         let (reply, rx) = mpsc::channel();
-        self.tx.send(Op::Sync { reply }).is_ok() && rx.recv_timeout(timeout).is_ok()
+        self.tx
+            .send(Op::Sync {
+                reply,
+                reservation: None,
+            })
+            .is_ok()
+            && rx.recv_timeout(timeout).is_ok()
+    }
+
+    /// Keep a reservation alive through the existing queue barrier, including writer failures.
+    pub(crate) fn release_after_writes(&self, reservation: impl Send + 'static) {
+        let (reply, _) = mpsc::channel();
+        let _ = self.tx.send(Op::Sync {
+            reply,
+            reservation: Some(Box::new(reservation)),
+        });
     }
 }
 
@@ -829,7 +848,8 @@ fn serve(conn: &rusqlite::Connection, op: Op, held: &mut i64, ceiling: fn() -> O
         Op::Inventory { reply } => {
             let _ = reply.send(trim::inventory(conn));
         }
-        Op::Sync { reply } => {
+        Op::Sync { reply, reservation } => {
+            drop(reservation);
             let _ = reply.send(());
         }
         Op::Evict { bytes } => match evict::evict_oldest(conn, *held, bytes) {

@@ -1,6 +1,9 @@
-//! Session startup, config reconciliation, reconnects, feed draining, and status summaries.
+//! Session startup, reconciliation, reconnects, feed draining, closed-trade recovery and status.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::config::{AppConfig, ServerConfig};
 use crate::db::ReportTx;
@@ -22,9 +25,159 @@ mod identity_stale_tests;
 #[cfg(test)]
 mod order_tests;
 #[cfg(test)]
+mod tests;
+#[cfg(test)]
 mod tg_event_tests;
 #[cfg(test)]
 mod trade_sound_tests;
+
+/// A sync completion forces a pass; otherwise enumerate each connected core once per hour.
+fn catchup_due(last: Option<Instant>, now: Instant, synced_now: bool) -> bool {
+    synced_now
+        || last.is_none_or(|last| now.saturating_duration_since(last) >= Duration::from_secs(3600))
+}
+
+/// Raw replica identity and close seconds preserve keyset ordering independently of UTC correction.
+struct CatchupRow {
+    rec_id: i64,
+    coin: String,
+    buy: crate::db::ReportStamp,
+    close: crate::db::ReportStamp,
+    closedate: i64,
+}
+
+const CATCHUP_PAGE: usize = 1000;
+
+/// Resolve optional replica columns once for a listing, while keeping later pages index-bounded.
+struct CatchupSql {
+    first: String,
+    next: String,
+}
+
+/// Build both keyset statements without retaining a reader permit between pages.
+fn catchup_sql(conn: &rusqlite::Connection) -> rusqlite::Result<CatchupSql> {
+    let mut schema = conn.prepare("PRAGMA table_info(orders_rep)")?;
+    let cols = schema
+        .query_map([], |row| row.get::<_, String>(1))?
+        .map(|name| name.map(|name| name.to_ascii_lowercase()))
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    if !["core_uid", "newrecid", "coin", "buydate", "closedate"]
+        .iter()
+        .all(|name| cols.contains(*name))
+    {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let buy_ms = if cols.contains("buydatems") {
+        "BuyDateMs"
+    } else {
+        "NULL"
+    };
+    let close_ms = if cols.contains("closedatems") {
+        "CloseDateMs"
+    } else {
+        "NULL"
+    };
+    let deleted = if cols.contains("deleted") {
+        "AND COALESCE(deleted, 0) = 0"
+    } else {
+        ""
+    };
+    let select = format!(
+        "SELECT newrecid, COALESCE(coin, ''), COALESCE(buydate, 0), {buy_ms}, closedate, {close_ms} FROM orders_rep \
+        WHERE core_uid = ?1 AND closedate > 0 AND closedate >= ?2 {deleted}"
+    );
+    let order = format!(" ORDER BY closedate DESC, newrecid DESC LIMIT {CATCHUP_PAGE}");
+    Ok(CatchupSql {
+        first: format!("{select}{order}"),
+        next: format!("{select} AND closedate <= ?3 AND (closedate < ?3 OR newrecid < ?4){order}"),
+    })
+}
+
+/// Read a bounded page using the schema already resolved for this listing.
+fn catchup_page(
+    conn: &rusqlite::Connection,
+    sql: &CatchupSql,
+    core: CoreId,
+    cutoff: i64,
+    after: Option<(i64, i64)>,
+) -> rusqlite::Result<Vec<CatchupRow>> {
+    let mut stmt = conn.prepare(if after.is_some() {
+        &sql.next
+    } else {
+        &sql.first
+    })?;
+    let map = |row: &rusqlite::Row<'_>| {
+        let closedate = row.get(4)?;
+        Ok(CatchupRow {
+            rec_id: row.get(0)?,
+            coin: row.get(1)?,
+            buy: crate::db::ReportStamp::resolve(row.get(2)?, row.get(3)?),
+            close: crate::db::ReportStamp::resolve(closedate, row.get(5)?),
+            closedate,
+        })
+    };
+    let rows = if let Some((close, rec)) = after {
+        stmt.query_map(rusqlite::params![core as i64, cutoff, close, rec], map)?
+    } else {
+        stmt.query_map(rusqlite::params![core as i64, cutoff], map)?
+    };
+    rows.collect()
+}
+
+/// Start at most one listing per core; the guard also resets when the worker unwinds.
+fn spawn_catchup(running: Arc<AtomicBool>, work: impl FnOnce() + Send + 'static) -> bool {
+    if running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    let guard = CatchupRunning(running);
+    std::thread::Builder::new()
+        .name("tape-catchup-list".into())
+        .spawn(move || {
+            let _guard = guard;
+            work();
+        })
+        .is_ok()
+}
+
+/// Release the per-core scheduling guard after completion or a failed thread spawn.
+struct CatchupRunning(Arc<AtomicBool>);
+impl Drop for CatchupRunning {
+    /// Permit a later hourly or reconnect-triggered listing.
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Exclude open, invalid and too-old rows after lifting both stamps onto true UTC.
+fn catchup_stamps(
+    row: &CatchupRow,
+    axis: &crate::db::ReportAxis,
+    core: CoreId,
+    now_ms: i64,
+) -> Option<(i64, i64)> {
+    if row.closedate <= 0 {
+        return None;
+    }
+    let (open, close) = axis.stamp_pair_to_utc_ms(row.buy, row.close, core);
+    (open > 0
+        && close >= open
+        && close
+            >= now_ms.saturating_sub(crate::market::trade_replay::venue_caps::ARCHIVE_DEPTH_MS))
+    .then_some((open, close))
+}
+
+/// Count an unknown coin once only after both the venue and its non-empty catalog are known.
+fn latch_unknown(
+    latched: &mut HashSet<crate::market::tape_recorder::TradeId>,
+    id: crate::market::tape_recorder::TradeId,
+    catalog_ready: bool,
+    venue_ready: bool,
+) -> bool {
+    catalog_ready && venue_ready && latched.insert(id)
+}
 
 /// Oldest entry, in milliseconds, still announced to Telegram as one happening now.
 const TG_OPEN_FRESH_MS: i64 = 120_000;
@@ -128,6 +281,9 @@ impl SessionManager {
             blacklists_sent: std::sync::Mutex::new(HashMap::new()),
             trade_sounds: Vec::new(),
             trade_sound_epochs: HashMap::new(),
+            catchup_last: HashMap::new(),
+            catchup_unknown: Arc::new(Mutex::new(HashSet::new())),
+            catchup_running: HashMap::new(),
             sessions: Vec::new(),
             config_order: config.servers.iter().map(|s| s.id).collect(),
             feed_wake,
@@ -236,6 +392,7 @@ impl SessionManager {
     /// and base before coordination recomputes the provider role and last command. Removal leaves
     /// this state absent.
     fn clear_core_coordination(&mut self, id: CoreId) {
+        self.catchup_last.remove(&id);
         self.trade_sound_epochs.remove(&id);
         self.trade_sounds.retain(|(core, _, _)| *core != id);
         self.core_venue.remove(&id);
@@ -407,10 +564,20 @@ impl SessionManager {
     /// that can change chart pixels.
     pub fn drain(&mut self) -> DrainStats {
         let mut stats = DrainStats::default();
+        let mut synced = HashSet::new();
         for sess in &self.sessions {
             while let Ok(msg) = sess.handle.rx.try_recv() {
                 stats.any = true;
                 match msg {
+                    FeedMsg::ReportSync(progress) => {
+                        if let Some(core) = self.store.core_mut(sess.id) {
+                            if core.report_sync.is_some() && progress.is_none() {
+                                synced.insert(sess.id);
+                            }
+                            core.apply(FeedMsg::ReportSync(progress));
+                            stats.ui_state = true;
+                        }
+                    }
                     FeedMsg::Status(status) => {
                         self.trade_sound_epochs
                             .insert(sess.id, std::sync::Arc::new(()));
@@ -582,7 +749,127 @@ impl SessionManager {
                 }
             }
         }
+        if crate::market::tape_recorder::catchup::enabled() {
+            let now = Instant::now();
+            let cores: Vec<_> = self
+                .sessions
+                .iter()
+                .filter(|sess| {
+                    self.store.core(sess.id).is_some_and(|core| {
+                        core.status == ConnStatus::Ready && core.report_sync.is_none()
+                    }) && catchup_due(
+                        self.catchup_last.get(&sess.id).copied(),
+                        now,
+                        synced.contains(&sess.id),
+                    )
+                })
+                .map(|sess| sess.id)
+                .collect();
+            for core in cores {
+                if self.list_tape_catchup(core) {
+                    self.catchup_last.insert(core, now);
+                }
+            }
+        }
         stats
+    }
+
+    /// Trigger background enumeration; closes arriving during a listing wait for the next pass.
+    /// Each page owns and drops its reader permit before resolving and submitting rows.
+    fn list_tape_catchup(&mut self, core: CoreId) -> bool {
+        let Ok(address) = self.market_source.replay_address(core) else {
+            return false;
+        };
+        let catalog_ready = self.market_source.tradable_coins(core).is_some();
+        if !catalog_ready {
+            return false;
+        }
+        let Some(quote) = self.market_source.traded_quote(core) else {
+            return false;
+        };
+        let now_ms = crate::util::now_unix_ms_i64();
+        let axis = self.true_utc_axis(core);
+        let cutoff = axis.from_utc(
+            now_ms
+                .saturating_sub(crate::market::trade_replay::venue_caps::ARCHIVE_DEPTH_MS)
+                .div_euclid(1000),
+            core,
+        );
+        let source = self.market_source.clone();
+        let unknown = self.catchup_unknown.clone();
+        let running = self.catchup_running.entry(core).or_default().clone();
+        spawn_catchup(running, move || {
+            let mut after = None;
+            let mut sql = None;
+            loop {
+                let page = match (|| {
+                    let conn = crate::db::open_reader().map_err(|error| format!("{error:?}"))?;
+                    if sql.is_none() {
+                        sql = Some(catchup_sql(&conn).map_err(|error| error.to_string())?);
+                    }
+                    catchup_page(
+                        &conn,
+                        sql.as_ref().expect("resolved schema"),
+                        core,
+                        cutoff,
+                        after,
+                    )
+                    .map_err(|error| error.to_string())
+                })() {
+                    Ok(page) => page,
+                    Err(error) => {
+                        log::debug!(
+                            "[x] tape catch-up core={core}: replica page unavailable: {error}"
+                        );
+                        return;
+                    }
+                };
+                let Some(last) = page.last() else {
+                    break;
+                };
+                after = Some((last.closedate, last.rec_id));
+                let mut trades = Vec::new();
+                for row in &page {
+                    let id = crate::market::tape_recorder::TradeId {
+                        core,
+                        rec_id: row.rec_id,
+                    };
+                    if unknown
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .contains(&id)
+                    {
+                        continue;
+                    }
+                    let Some((open_ms, close_ms)) = catchup_stamps(row, &axis, core, now_ms) else {
+                        continue;
+                    };
+                    let Some(market) = source.resolve_market(core, &quote, &row.coin) else {
+                        if latch_unknown(
+                            &mut unknown.lock().unwrap_or_else(|error| error.into_inner()),
+                            id,
+                            source.tradable_coins(core).is_some(),
+                            source.replay_address(core).is_ok(),
+                        ) {
+                            crate::market::tape_recorder::catchup::note_no_route();
+                        }
+                        continue;
+                    };
+                    trades.push(crate::market::tape_recorder::catchup::CatchupTrade {
+                        id,
+                        exchange: address.exchange_key.clone(),
+                        market,
+                        venue: address.venue,
+                        open_ms,
+                        close_ms,
+                    });
+                }
+                crate::market::tape_recorder::catchup::submit(trades);
+                if page.len() < CATCHUP_PAGE {
+                    break;
+                }
+            }
+        })
     }
 
     /// File a just-closed trade's prints from its core's retained archive.

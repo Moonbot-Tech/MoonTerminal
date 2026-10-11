@@ -58,6 +58,7 @@ fn status(host: Option<Host>) -> Status {
             margin_s: 180,
             long_position_min: 10,
         }),
+        tape_catchup: None,
         host: host.map(Box::new),
         last_update: None,
         auto_update: None,
