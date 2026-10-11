@@ -366,6 +366,8 @@ fn search_groups(
         );
     }
     if let Ok(found) = &answer {
+        // Debug's round-trip floats preserve the exact score for before/after comparisons.
+        eprintln!("    exact answer: {found:?}");
         let replays = crate::db::tuner::ticks::search::full_replays(
             found.stats.evaluations as f64,
             found.stats.fills_reused as f64,

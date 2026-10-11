@@ -7,6 +7,8 @@ use super::*;
 use crate::db::tuner::ticks::Deltas;
 use crate::feed::types::Side;
 
+mod performance;
+
 pub(super) fn tick(t_ms: i64, price: f64) -> Tick {
     Tick {
         time_ms: t_ms as f64,
