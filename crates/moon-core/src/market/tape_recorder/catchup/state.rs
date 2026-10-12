@@ -14,6 +14,11 @@ const HOUR_MS: i64 = 3_600_000;
 /// Warn lines one pass writes per failure reason; the summary line counts the rest.
 pub(super) const WARN_PER_REASON: usize = 5;
 
+/// Jobs one pass carries; the rest stay pending for the next pass, which starts as soon as this
+/// one settles. Under the shared venue gate (100 ms per request, a few pages per job) a pass of
+/// this size settles in minutes, so the station's counters and log move while a backlog drains.
+pub(super) const PASS_JOBS: usize = 200;
+
 /// Pending rows and refusals are owned by the recorder, alongside its sole cache handle.
 #[derive(Default)]
 pub(crate) struct RecorderCatchup {
@@ -170,8 +175,11 @@ impl RecorderCatchup {
         if self.worker.is_none() {
             self.worker = start_worker();
         }
+        // Plan order is soonest expiry first; untaken jobs stay pending and unlatched.
+        let mut jobs = batch.jobs;
+        jobs.truncate(PASS_JOBS);
         let pass = Pass {
-            jobs: batch.jobs,
+            jobs,
             archive_bytes: self.archive_bytes,
         };
         if self
@@ -183,8 +191,7 @@ impl RecorderCatchup {
             let mut status = STATUS
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            status.failed = 0;
-            status.failed_by.clear();
+            // `failed` keeps describing the last settled pass until this one settles.
             status.running = true;
             status.last_pass_ms = Some(now_ms);
             status.archive_bytes = self.archive_bytes;

@@ -260,3 +260,99 @@ fn reserve_refused_filing_counts_as_no_room() {
     assert_eq!(catchup::status().failed_by, vec![(R::NoRoom, 1)]);
     assert!(state.refused.is_empty());
 }
+
+/// A backlog larger than one pass drains in bounded chunks, plan order first, untaken rows free.
+#[test]
+fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
+    use crate::station_api::CatchupFailReason as R;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(true, true);
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let (sender, receiver) = mpsc::channel();
+    let mut state = RecorderCatchup {
+        worker: Some(sender),
+        ..RecorderCatchup::default()
+    };
+    let total = PASS_JOBS * 2 + 50;
+    let rows: Vec<_> = (0..total)
+        .map(|i| {
+            let mut trade = row();
+            trade.id.rec_id = i as i64;
+            trade.close_ms -= i as i64 * 60_000;
+            trade.open_ms = trade.close_ms - 60_000;
+            trade
+        })
+        .collect();
+    state.submit(rows);
+    let mut taken = Vec::new();
+    for (chunk, (expected, fault)) in [
+        (PASS_JOBS, None),
+        (
+            PASS_JOBS,
+            Some(Fault {
+                reason: R::Http,
+                detail: "synthetic HTTP 503".into(),
+            }),
+        ),
+        (50, None),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let now = NOW + chunk as i64;
+        state.tick(&cache, now, 0, DAY);
+        let pass = receiver
+            .try_recv()
+            .expect("pending work starts the next pass at once");
+        assert_eq!(pass.jobs.len(), expected);
+        assert!(catchup::status().running);
+        // Rows not taken stay pending and unlatched, so the next tick may take them.
+        for trade in state.pending.values() {
+            let in_pass = pass.jobs.iter().any(|job| job.trade.id == trade.id);
+            let settled = taken.contains(&trade.id.rec_id);
+            assert!(in_pass || settled || !state.latched.contains_key(&trade.id));
+        }
+        taken.extend(pass.jobs.iter().map(|job| job.trade.id.rec_id));
+        let failures: Vec<_> = pass
+            .jobs
+            .iter()
+            .map(|job| (job.clone(), fault.clone()))
+            .collect();
+        assert!(pass_report(0, 0, &failures).warns.len() <= WARN_PER_REASON);
+        state.finish(
+            &cache,
+            PassResult {
+                finished: pass
+                    .jobs
+                    .into_iter()
+                    .map(|job| executor::FinishedJob {
+                        job,
+                        failure: None,
+                        fault: fault.clone(),
+                        attempted: true,
+                    })
+                    .collect(),
+                archive_bytes: 0,
+            },
+            now,
+        );
+        let status = catchup::status();
+        assert!(!status.running);
+        assert_eq!(
+            status.failed, expected as u32,
+            "failed describes the last chunk"
+        );
+        let reason = fault.as_ref().map_or(R::Other, |f| f.reason);
+        assert_eq!(status.failed_by, vec![(reason, expected as u32)]);
+        assert_eq!(status.pending, total as u32);
+    }
+    // Archive-only rows tie on expiry, so the plan takes the newest close first.
+    assert_eq!(taken, (0..total as i64).collect::<Vec<_>>());
+    state.tick(&cache, NOW + 10, 0, DAY);
+    assert!(
+        receiver.try_recv().is_err(),
+        "retries wait for the next hour"
+    );
+}
