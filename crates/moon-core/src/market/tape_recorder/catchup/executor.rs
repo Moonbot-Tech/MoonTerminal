@@ -147,6 +147,8 @@ pub(crate) struct JobOutcome {
     archive_unknown: bool,
     /// Unpublished days and budget admission waits are not failed download attempts.
     waiting: bool,
+    /// A day file no longer fit the pass's remaining archive budget.
+    budget_spent: bool,
 }
 
 /// Pace and stop catch-up pages against the same process-wide host budgets as terminal replay.
@@ -359,6 +361,14 @@ fn run_archive(
     budget: u64,
 ) -> JobOutcome {
     let (result, bytes) = fetch(route, &job.trade.market, &job.missing, budget);
+    let budget_spent = matches!(
+        &result,
+        Err(archive::ArchiveError::BudgetDeferred)
+            | Ok(archive::ArchiveFill {
+                deferred: Some(archive::ArchiveError::BudgetDeferred),
+                ..
+            })
+    );
     let mut outcome = match result {
         Ok(fill) => JobOutcome {
             waiting: (fill.covered.is_empty() && fill.deferred.is_none())
@@ -373,6 +383,7 @@ fn run_archive(
             fault: fill.deferred.as_ref().map(archive_fault),
             failure: fill.deferred.map(archive_failure),
             archive_bytes: bytes,
+            budget_spent,
             ..JobOutcome::default()
         },
         Err(error) => JobOutcome {
@@ -384,6 +395,7 @@ fn run_archive(
             fault: Some(archive_fault(&error)),
             failure: Some(archive_failure(error)),
             archive_bytes: bytes,
+            budget_spent,
             ..JobOutcome::default()
         },
     };
@@ -620,6 +632,11 @@ pub(super) fn run_pass_with(
                             );
                             attempted |= !answer.waiting;
                             downloaded = downloaded.saturating_add(answer.archive_bytes);
+                            // A day that no longer fits ends archive work until the hour rolls;
+                            // smaller days would only open venue requests to be deferred again.
+                            if answer.budget_spent {
+                                downloaded = downloaded.max(ARCHIVE_BYTES_PER_PASS);
+                            }
                             if answer.failure == Some(Failure::Throttled) {
                                 stopped_hosts.insert(route.host());
                             }

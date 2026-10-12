@@ -677,6 +677,53 @@ fn spent_archive_budget_defers_archives_and_continues_rest() {
     assert_eq!(filed, vec![3, 1]);
 }
 
+static DEFERRED_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Answer every day as too large for the remaining budget, as a nearly spent hour does.
+fn deferring_archive(
+    _: ArchiveRoute,
+    _: &str,
+    _: &Coverage,
+    _: u64,
+) -> (Result<archive::ArchiveFill, archive::ArchiveError>, u64) {
+    DEFERRED_CALLS.fetch_add(1, Ordering::Relaxed);
+    (Err(archive::ArchiveError::BudgetDeferred), 0)
+}
+
+/// A day that no longer fits spends the hour: later days send no request and the next tick
+/// admits only REST jobs until the hourly reset.
+#[test]
+fn budget_deferred_day_saturates_the_hour_budget() {
+    DEFERRED_CALLS.store(0, Ordering::Relaxed);
+    let first = job(1, Brand::Bybit, MarketKind::Futures);
+    let mut second = job(2, Brand::Bybit, MarketKind::Futures);
+    second.trade.market = "SECONDUSDT".into();
+    let rest = job(3, Brand::Gate, MarketKind::Spot);
+    let result = executor::run_pass_with(
+        vec![first.clone(), second, rest.clone()],
+        || NOW,
+        &gate::ReplayGate::new(),
+        (good_rest, deferring_archive),
+        0,
+        executor::run_job_at,
+        |_, _| {},
+    );
+    assert_eq!(DEFERRED_CALLS.load(Ordering::Relaxed), 1);
+    assert!(result.archive_bytes >= ARCHIVE_BYTES_PER_PASS);
+    assert!(!result.finished[0].attempted);
+    assert!(!result.finished[1].attempted);
+    assert_eq!(result.finished[1].failure, Some(Failure::Retry));
+    assert_eq!(result.finished[2].failure, None);
+    let jobs = vec![first, rest];
+    let next = state::admissible(jobs.clone(), result.archive_bytes, NOW);
+    assert_eq!(
+        next.iter()
+            .map(|job| job.trade.id.rec_id)
+            .collect::<Vec<_>>(),
+        vec![3]
+    );
+    assert_eq!(state::admissible(jobs, 0, NOW).len(), 2);
+}
+
 static FAILED_ARCHIVE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Report compressed bytes received before a synthetic transport disconnect.
