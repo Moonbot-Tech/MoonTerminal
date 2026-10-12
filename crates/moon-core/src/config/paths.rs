@@ -848,8 +848,11 @@ pub fn strategies_db_path() -> PathBuf {
 /// replica is rebuilt from the core, while the core's own trace archive is bounded in time, so once
 /// it has aged out this file is the only copy left.
 pub fn order_traces_db_path() -> PathBuf {
-    db_dir().join("order_traces.sqlite")
+    db_dir().join(ORDER_TRACES_DB_FILE)
 }
+
+/// File name of the order-trace archive, shared with its snapshot directories.
+pub(crate) const ORDER_TRACES_DB_FILE: &str = "order_traces.sqlite";
 
 /// SQLite database for core warning episodes (sustained CPU / memory growth / connectivity), kept
 /// forever. DELIBERATELY separate from `reports.sqlite`: warning history is the only copy and must
@@ -925,6 +928,13 @@ pub fn settings_backups_dir() -> PathBuf {
 /// The directory is created lazily by `strat_db::backup` only when the database exists.
 pub fn strategies_backups_dir() -> PathBuf {
     backups_dir().join("strategies")
+}
+
+/// Directory containing manual and scheduled snapshots of the order-trace archive.
+///
+/// The directory is created lazily by `db::order_traces::backup` only when the archive exists.
+pub fn order_traces_backups_dir() -> PathBuf {
+    backups_dir().join("order_traces")
 }
 
 /// Snapshot directory name, kept as a constant so a test can prove that migration lists exclude it.

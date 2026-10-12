@@ -1,8 +1,8 @@
-//! Shared daily scheduling for settings and strategy backup domains.
+//! Shared daily scheduling for the settings, strategy and order-trace backup domains.
 //!
 //! One wall-clock coordinator owns the 12:00 UTC deadline and wakes independent domain jobs.
-//! Settings never wait for strategy synchronization, while a fresh strategy database becomes
-//! eligible only after every expected live core commits one complete set.
+//! Settings and order traces never wait for strategy synchronization, while a fresh strategy
+//! database becomes eligible only after every expected live core commits one complete set.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -155,6 +155,8 @@ static COORDINATOR: LazyLock<ScheduleCoordinator> = LazyLock::new(ScheduleCoordi
 static SETTINGS_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Prevent overlapping strategy jobs while a large SQLite copy is still running.
 static STRATEGY_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Prevent overlapping order-trace jobs while one archive copy is still running.
+static ORDER_TRACES_JOB_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Return the most recent 12:00 UTC slot at or before `now_ms`.
 pub(crate) fn due_slot_ms(now_ms: i64) -> i64 {
@@ -237,6 +239,7 @@ pub(crate) fn with_current_strategy_topology<T>(
 fn schedule_loop() {
     loop {
         launch_settings_job();
+        launch_order_traces_job();
         if let Some(generation) = COORDINATOR.strategy_claim() {
             launch_strategy_job(generation);
         }
@@ -265,6 +268,17 @@ fn launch_settings_job() {
         &SETTINGS_JOB_ACTIVE,
         false,
         crate::config::backup_due_at,
+    );
+}
+
+/// Launch one order-trace job; the archive has no readiness gate, only a lazily created file.
+fn launch_order_traces_job() {
+    launch_domain_job(
+        "order-traces-backup",
+        "order-trace",
+        &ORDER_TRACES_JOB_ACTIVE,
+        false,
+        crate::db::order_traces::backup::backup_due_at,
     );
 }
 

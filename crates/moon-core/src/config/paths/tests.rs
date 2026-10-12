@@ -2,8 +2,8 @@
 
 use super::{
     BACKUPS_DIR_NAME, CFG_FILES, DAMAGED_REPORTS_DIR_NAME, ROOT_FILES, backups_dir,
-    settings_backups_dir, strategies_backups_dir, update_root_for_executable,
-    validate_update_nonce,
+    order_traces_backups_dir, settings_backups_dir, strategies_backups_dir,
+    update_root_for_executable, validate_update_nonce,
 };
 use std::path::Path;
 
@@ -39,10 +39,14 @@ fn backup_subsystems_have_distinct_children_of_the_canonical_root() {
     let root = backups_dir();
     let settings = settings_backups_dir();
     let strategies = strategies_backups_dir();
+    let traces = order_traces_backups_dir();
 
     assert_eq!(settings.parent(), Some(root.as_path()));
     assert_eq!(strategies.parent(), Some(root.as_path()));
+    assert_eq!(traces.parent(), Some(root.as_path()));
     assert_ne!(settings, strategies);
+    assert_ne!(traces, strategies);
+    assert_ne!(traces, settings);
 }
 
 /// Moving the update root into `cfg/`, `data/`, `logs/`, or `backups/` would let cleanup or a
