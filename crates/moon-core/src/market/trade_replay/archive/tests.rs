@@ -302,7 +302,11 @@ fn server_and_transport_failures_refuse_host() {
                 }
             },
         );
-        assert!(matches!(result, Err(ArchiveError::Transient(_))));
+        if transport {
+            assert!(matches!(result, Err(ArchiveError::Transient(_))));
+        } else {
+            assert!(matches!(result, Err(ArchiveError::Http(503))));
+        }
         assert!(gate.claim(route.host(), Instant::now()).is_err());
     }
 }

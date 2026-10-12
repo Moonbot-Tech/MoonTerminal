@@ -226,7 +226,7 @@ fn fill_with(
                     200..=299 => gate.clear(route.host(), asked_at),
                     status => {
                         gate.refuse(route.host(), Instant::now());
-                        return Err(ArchiveError::Transient(format!("archive HTTP {status}")));
+                        return Err(ArchiveError::Http(status));
                     }
                 }
                 let length = response.content_length.unwrap_or(MAX_DAY_BYTES);
@@ -483,6 +483,9 @@ pub enum ArchiveError {
     TooLarge,
     /// The current pass cannot admit this response body; replay callers have no pass budget.
     BudgetDeferred,
+    /// The archive host answered with this unexpected HTTP status; retried like a transport
+    /// failure, kept apart only so the station can say the venue answered.
+    Http(u16),
     /// Transport or local filesystem access requires a later retry.
     Transient(String),
     /// Published content is malformed and must not be retried as a transport failure.

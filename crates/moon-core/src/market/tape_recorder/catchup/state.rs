@@ -3,12 +3,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Sender};
 
-use super::executor::{self, Failure, PassResult};
+use super::executor::{self, Failure, Fault, PassResult};
 use super::{CatchupJob, CatchupPlan, CatchupTrade, Latch, STATUS, TradeId};
 use crate::market::trade_replay::trade_cache::TradeCache;
 use crate::market::trade_replay::{Coverage, gate};
+use crate::station_api::CatchupFailReason;
 
 const HOUR_MS: i64 = 3_600_000;
+
+/// Warn lines one pass writes per failure reason; the summary line counts the rest.
+pub(super) const WARN_PER_REASON: usize = 5;
 
 /// Pending rows and refusals are owned by the recorder, alongside its sole cache handle.
 #[derive(Default)]
@@ -24,6 +28,8 @@ pub(crate) struct RecorderCatchup {
     archive_bytes: u64,
     /// Last applied generation; settings changes invalidate settled source decisions.
     switch_gen: u64,
+    /// Markets whose fetched tape the disk reserve refused to file during the running pass.
+    refused: HashSet<(String, String)>,
 }
 
 /// One serial fetch pass; continuation pages in the same UTC hour share the archive budget.
@@ -75,6 +81,11 @@ impl RecorderCatchup {
             self.pending.remove(&id);
         }
         batch
+    }
+
+    /// The disk reserve refused to file fetched tape: its job fails as `no_room`, not unnamed.
+    pub(crate) fn filing_refused(&mut self, exchange: String, market: String) {
+        self.refused.insert((exchange, market));
     }
 
     /// Evicted tape invalidates settled IDs so the next session listing checks coverage again.
@@ -173,6 +184,7 @@ impl RecorderCatchup {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             status.failed = 0;
+            status.failed_by.clear();
             status.running = true;
             status.last_pass_ms = Some(now_ms);
             status.archive_bytes = self.archive_bytes;
@@ -193,6 +205,7 @@ impl RecorderCatchup {
         self.archive_bytes = result.archive_bytes;
         let mut filled = 0_u32;
         let mut failed = 0_u32;
+        let mut failures = Vec::new();
         for finished in result.finished {
             let job = finished.job;
             if finished.failure == Some(Failure::Permanent) {
@@ -200,6 +213,7 @@ impl RecorderCatchup {
                 self.pending.remove(&job.trade.id);
                 if finished.attempted {
                     failed += 1;
+                    failures.push((job, finished.fault));
                 }
                 continue;
             }
@@ -221,19 +235,36 @@ impl RecorderCatchup {
                     .insert(job.trade.id, Latch::RetryAfter(next_pass(now_ms)));
                 if finished.attempted {
                     failed += 1;
+                    let fault = finished.fault.or_else(|| {
+                        self.refused
+                            .contains(&(job.trade.exchange.clone(), job.trade.market.clone()))
+                            .then(|| Fault {
+                                reason: CatchupFailReason::NoRoom,
+                                detail: "disk reserve refused filing the fetched tape".into(),
+                            })
+                    });
+                    failures.push((job, fault));
                 }
             }
         }
+        self.refused.clear();
         self.active = false;
+        let pending = self.pending.len().min(u32::MAX as usize) as u32;
+        let report = pass_report(filled, pending, &failures);
+        log::info!("{}", report.summary);
+        for warn in &report.warns {
+            log::warn!("{warn}");
+        }
         self.sync_switches();
         let mut status = STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         status.filled = status.filled.saturating_add(filled);
         status.failed = failed;
+        status.failed_by = report.counts;
         status.running = false;
         status.archive_bytes = self.archive_bytes;
-        status.pending = self.pending.len().min(u32::MAX as usize) as u32;
+        status.pending = pending;
     }
 
     /// Keep queued and retrying trades visible while a pass is running or waiting for its hour.
@@ -243,6 +274,75 @@ impl RecorderCatchup {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pending = self.pending.len().min(u32::MAX as usize) as u32;
     }
+}
+
+/// What one settled pass tells the station log and its status.
+pub(super) struct PassReport {
+    /// Failed jobs per reason, in the reasons' order.
+    pub(super) counts: Vec<(CatchupFailReason, u32)>,
+    /// The one info line for the pass.
+    pub(super) summary: String,
+    /// Up to [`WARN_PER_REASON`] lines per reason naming the job and the error's own text.
+    pub(super) warns: Vec<String>,
+}
+
+/// Count the pass's failed jobs by reason and word its bounded log; a job failed with no named
+/// fault (fetched in full, yet not held after filing) counts as `other`.
+pub(super) fn pass_report(
+    filled: u32,
+    pending: u32,
+    failures: &[(CatchupJob, Option<Fault>)],
+) -> PassReport {
+    let mut counts = std::collections::BTreeMap::<CatchupFailReason, u32>::new();
+    let mut warns = Vec::new();
+    for (job, fault) in failures {
+        let reason = fault
+            .as_ref()
+            .map_or(CatchupFailReason::Other, |f| f.reason);
+        let seen = counts.entry(reason).or_default();
+        *seen = seen.saturating_add(1);
+        if (*seen as usize) <= WARN_PER_REASON {
+            let detail = fault
+                .as_ref()
+                .map_or("fetched tape not held after filing", |f| f.detail.as_str());
+            warns.push(ascii(&format!(
+                "catch-up failed ({}): {} {} window {}: {detail}",
+                reason.key(),
+                job.trade.exchange,
+                job.trade.market,
+                job.missing
+            )));
+        }
+    }
+    let failed: u32 = counts.values().fold(0, |sum, n| sum.saturating_add(*n));
+    let breakdown = counts
+        .iter()
+        .map(|(reason, n)| format!("{}: {n}", reason.key()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let summary = if failed == 0 {
+        format!("catch-up pass: filled {filled}, failed 0, pending {pending}")
+    } else {
+        format!("catch-up pass: filled {filled}, failed {failed} ({breakdown}), pending {pending}")
+    };
+    PassReport {
+        counts: counts.into_iter().collect(),
+        summary,
+        warns,
+    }
+}
+
+/// Keep a venue's own error text to ASCII so the station log stays ASCII.
+fn ascii(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_ascii() && !c.is_ascii_control() {
+                c
+            } else {
+                '?'
+            }
+        })
+        .collect()
 }
 
 /// Anchor recoverable retries to the next UTC hour rather than to each failure's elapsed delay.

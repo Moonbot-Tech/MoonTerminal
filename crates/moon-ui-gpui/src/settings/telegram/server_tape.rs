@@ -342,6 +342,38 @@ pub(super) fn catchup_tiles(state: CatchupState, catchup: &TapeCatchup) -> Vec<T
     ]
 }
 
+/// Why the last pass's jobs failed, in plain words with a count each — `None` while nothing
+/// failed or the station is too old to say.
+pub(super) fn catchup_breakdown(catchup: &TapeCatchup) -> Option<String> {
+    if catchup.failed == 0 || catchup.failed_by.is_empty() {
+        return None;
+    }
+    let parts = catchup
+        .failed_by
+        .iter()
+        .map(|(reason, n)| {
+            let key = format!("telegram.server.catchup_reason_{}", reason.key());
+            format!("{} — {n}", t!(&key))
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(format!("{} {parts}", t!("telegram.server.catchup_why")))
+}
+
+/// The breakdown under the tiles: one muted wrapping text, never a row of separate pieces.
+pub(super) fn tape_breakdown(text: String, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    div()
+        .w_full()
+        .min_w_0()
+        .font_family(design::ui_font())
+        .text_size(design::t_caption(cx))
+        .text_color(rgba_from(p.text_muted, 1.0))
+        .debug_selector(|| "server-tape-breakdown".into())
+        .child(text)
+        .into_any_element()
+}
+
 /// The tag, the sentence and how old the numbers are.
 pub(super) fn tape_status_strip(
     state: CatchupState,
@@ -953,6 +985,9 @@ impl SettingsView {
         let tiles = catchup
             .map(|catchup| catchup_tiles(state, catchup))
             .unwrap_or_default();
+        let breakdown = catchup
+            .filter(|_| !tiles.is_empty())
+            .and_then(catchup_breakdown);
         let switches = catchup.map(|_| {
             let view = cx.entity();
             let archives_view = view.clone();
@@ -1019,6 +1054,9 @@ impl SettingsView {
             ))
             .when(!tiles.is_empty(), |block| {
                 block.child(tape_tiles(&tiles, width - design::ui_value(cx, 24.0), cx))
+            })
+            .when_some(breakdown, |block, text| {
+                block.child(tape_breakdown(text, cx))
             })
             .child(row(
                 t!("storage.trades_margin").to_string(),

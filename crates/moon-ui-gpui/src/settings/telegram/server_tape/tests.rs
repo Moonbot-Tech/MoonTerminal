@@ -9,12 +9,13 @@ use gpui::{
 };
 use moon_core::config::Language;
 use moon_core::market::trade_replay::venue_caps;
-use moon_core::station_api::{CatchupSwitches, TapeCatchup};
+use moon_core::station_api::{CatchupFailReason, CatchupSwitches, TapeCatchup};
 
 use super::{
-    CatchupState, TapeEd, TapeFacts, TapeStatus, catchup_sentence, catchup_state, catchup_switches,
-    catchup_tiles, clock, follow, job_switches, plural_key, reported_switches, tape_status,
-    tape_status_strip, tape_tiles, venue_reach_table,
+    CatchupState, TapeEd, TapeFacts, TapeStatus, catchup_breakdown, catchup_sentence,
+    catchup_state, catchup_switches, catchup_tiles, clock, follow, job_switches, plural_key,
+    reported_switches, tape_breakdown, tape_status, tape_status_strip, tape_tiles,
+    venue_reach_table,
 };
 use crate::design;
 
@@ -116,6 +117,60 @@ fn catchup() -> TapeCatchup {
         failed: 0,
         last_pass_ms: Some(1_700_000_000_000),
         archive_bytes: 0,
+        failed_by: Vec::new(),
+    }
+}
+
+/// Every reason at once: the longest breakdown a station can send.
+fn every_reason() -> Vec<(CatchupFailReason, u32)> {
+    [
+        CatchupFailReason::Http,
+        CatchupFailReason::Network,
+        CatchupFailReason::Throttled,
+        CatchupFailReason::Corrupt,
+        CatchupFailReason::ArchiveMissing,
+        CatchupFailReason::NoRoom,
+        CatchupFailReason::Other,
+    ]
+    .into_iter()
+    .zip([90, 12_345, 30, 7, 5, 2, 1])
+    .collect()
+}
+
+/// The breakdown says why in plain words with each count, and says nothing when the station
+/// sent no reasons (an older station) or nothing failed.
+#[test]
+fn station_catchup_breakdown_names_each_reason() {
+    let _locale = crate::test_locale::force("ru");
+    let failed = TapeCatchup {
+        failed: 127,
+        failed_by: vec![
+            (CatchupFailReason::Http, 90),
+            (CatchupFailReason::Throttled, 30),
+            (CatchupFailReason::Corrupt, 7),
+        ],
+        ..catchup()
+    };
+    assert_eq!(
+        catchup_breakdown(&failed).as_deref(),
+        Some("Почему: биржа ответила ошибкой — 90 · лимит запросов — 30 · битые данные — 7")
+    );
+    let older = TapeCatchup {
+        failed: 127,
+        ..catchup()
+    };
+    assert_eq!(catchup_breakdown(&older), None);
+    assert_eq!(catchup_breakdown(&catchup()), None);
+    drop(_locale);
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let text = catchup_breakdown(&TapeCatchup {
+            failed: 12,
+            failed_by: every_reason(),
+            ..catchup()
+        })
+        .unwrap();
+        assert!(!text.contains("telegram."), "{text}");
     }
 }
 
@@ -346,6 +401,12 @@ impl Render for TapeProbe {
                 cx,
             ))
             .child(tape_tiles(&tiles, self.width, cx))
+            .children(
+                catchup
+                    .filter(|_| !tiles.is_empty())
+                    .and_then(catchup_breakdown)
+                    .map(|text| tape_breakdown(text, cx)),
+            )
             .child(catchup_switches(
                 switches,
                 true,
@@ -388,6 +449,7 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
         }),
         Some(TapeCatchup {
             failed: 12,
+            failed_by: every_reason(),
             ..catchup()
         }),
         Some(TapeCatchup {
@@ -460,6 +522,34 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
                         assert!(
                             f32::from(b.size.width) + 0.5 >= need.min(f32::from(col.size.width)),
                             "tile {label} narrower than its word ({at})"
+                        );
+                    }
+                    if let Some(text) = state.as_ref().and_then(catchup_breakdown) {
+                        let b = visual
+                            .debug_bounds("server-tape-breakdown")
+                            .unwrap_or_else(|| panic!("breakdown not laid out ({at})"));
+                        inside(b, "breakdown");
+                        let row = visual.debug_bounds("server-tape-tiles").expect("tiles");
+                        let next = visual
+                            .debug_bounds("server-tape-switches")
+                            .expect("switches");
+                        assert!(
+                            b.origin.y + px(0.5) >= row.bottom()
+                                && next.origin.y + px(0.5) >= b.bottom(),
+                            "the breakdown overlaps the tiles or the switches ({at})"
+                        );
+                        // Wrapped, never clipped: the box holds at least one full line per
+                        // panel width the text needs.
+                        let need = visual.update(|_, cx| {
+                            design::ui_body_text_width(cx, &text, 400.0)
+                                * f32::from(design::t_caption(cx))
+                                / f32::from(design::t_body(cx))
+                        });
+                        let lines = (need / f32::from(b.size.width)).floor();
+                        let line = visual.update(|_, cx| f32::from(design::t_caption(cx)));
+                        assert!(
+                            f32::from(b.size.height) + 0.5 >= lines.max(1.0) * line,
+                            "the breakdown is clipped ({at})"
                         );
                     }
                     if !tiles.is_empty() {

@@ -94,6 +94,7 @@ static STATUS: Mutex<TapeCatchup> = Mutex::new(TapeCatchup {
     failed: 0,
     last_pass_ms: None,
     archive_bytes: 0,
+    failed_by: Vec::new(),
 });
 
 /// Enable recovery for the station without changing the terminal's recording settings.

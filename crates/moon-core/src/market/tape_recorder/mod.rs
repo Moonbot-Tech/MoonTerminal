@@ -503,6 +503,7 @@ impl Recorder {
                     line(&format!(
                         "catch-up filing deferred for {exchange} {market}: disk reserve"
                     ));
+                    self.catchup.filing_refused(exchange, market);
                     return;
                 };
                 // Coverage already merges every overlapping or adjacent span; keep holes intact.

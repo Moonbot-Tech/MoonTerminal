@@ -169,6 +169,7 @@ fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
                 .map(|job| executor::FinishedJob {
                     job,
                     failure: Some(Failure::Permanent),
+                    fault: None,
                     attempted: true,
                 })
                 .collect(),
@@ -178,4 +179,84 @@ fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
     );
     assert!(!catchup::status().running);
     assert!(state.latched.is_empty());
+}
+
+/// Thousands of failures write one summary and a few warn lines per reason, never one per job.
+#[test]
+fn pass_report_counts_every_failure_but_logs_a_bounded_few() {
+    use crate::station_api::CatchupFailReason as R;
+    let trade = row();
+    let job = CatchupJob {
+        missing: Coverage::one((trade.open_ms, trade.close_ms)),
+        expires_at_ms: i64::MAX,
+        source: catchup::Source::Archive(
+            crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
+        ),
+        trade,
+    };
+    let fault = |reason, detail: &str| {
+        Some(Fault {
+            reason,
+            detail: detail.into(),
+        })
+    };
+    let mut failures = vec![(job.clone(), fault(R::Http, "binance HTTP 503")); 1000];
+    failures.extend(vec![
+        (job.clone(), fault(R::Network, "timed out\u{2014}x"));
+        3
+    ]);
+    failures.push((job, None));
+    let report = pass_report(7, 40, &failures);
+    assert_eq!(
+        report.counts,
+        vec![(R::Http, 1000), (R::Network, 3), (R::Other, 1)]
+    );
+    assert_eq!(
+        report.summary,
+        "catch-up pass: filled 7, failed 1004 (http: 1000, network: 3, other: 1), pending 40"
+    );
+    assert_eq!(report.warns.len(), WARN_PER_REASON + 3 + 1);
+    assert!(report.warns.iter().all(|line| line.is_ascii()));
+    assert!(report.warns[0].contains("synthetic SYNUSDT"));
+    assert!(report.warns[0].ends_with("binance HTTP 503"));
+    assert_eq!(
+        pass_report(2, 0, &[]).summary,
+        "catch-up pass: filled 2, failed 0, pending 0"
+    );
+}
+
+/// Tape fetched in full but refused by the disk reserve at filing must count as `no_room`.
+#[test]
+fn reserve_refused_filing_counts_as_no_room() {
+    use crate::station_api::CatchupFailReason as R;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let trade = row();
+    let job = CatchupJob {
+        missing: Coverage::one((trade.open_ms, trade.close_ms)),
+        expires_at_ms: i64::MAX,
+        source: catchup::Source::Archive(
+            crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
+        ),
+        trade: trade.clone(),
+    };
+    let mut state = RecorderCatchup::default();
+    state.filing_refused(trade.exchange.clone(), trade.market.clone());
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![executor::FinishedJob {
+                job,
+                failure: None,
+                fault: None,
+                attempted: true,
+            }],
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    assert_eq!(catchup::status().failed_by, vec![(R::NoRoom, 1)]);
+    assert!(state.refused.is_empty());
 }

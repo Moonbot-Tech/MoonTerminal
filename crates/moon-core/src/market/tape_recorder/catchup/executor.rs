@@ -12,6 +12,7 @@ use crate::market::trade_replay::worker::{
 use crate::market::trade_replay::{
     Coverage, ReplayIntent, ReplayWindow, TickPlan, archive, gate, rest, tick_plan,
 };
+use crate::station_api::CatchupFailReason;
 
 /// Compressed archive traffic admitted during one hourly pass.
 pub(crate) const ARCHIVE_BYTES_PER_PASS: u64 = 2 * 1024 * 1024 * 1024;
@@ -41,12 +42,103 @@ pub(crate) enum Failure {
     Throttled,
 }
 
+/// Why a job failed: the reason the station counts, and the error's own text for its log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Fault {
+    pub(crate) reason: CatchupFailReason,
+    pub(crate) detail: String,
+}
+
+impl Fault {
+    fn new(reason: CatchupFailReason, detail: impl Into<String>) -> Self {
+        Self {
+            reason,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Name a REST refusal from its error and the HTTP status its response published (0 when the
+/// call never got a response, so a transport failure reads as the network's).
+pub(crate) fn rest_fault(error: &rest::FetchError, status: u16) -> Fault {
+    match error {
+        rest::FetchError::UnknownSymbol => Fault::new(
+            CatchupFailReason::Http,
+            format!("unknown symbol, HTTP {status}"),
+        ),
+        rest::FetchError::OutOfRetention => {
+            Fault::new(CatchupFailReason::Other, "range out of retention")
+        }
+        rest::FetchError::Throttled { diagnostic, .. } => {
+            Fault::new(CatchupFailReason::Throttled, diagnostic.clone())
+        }
+        rest::FetchError::Transient(text) => {
+            let reason = match status {
+                0 => CatchupFailReason::Network,
+                200..=299 => CatchupFailReason::Corrupt,
+                _ => CatchupFailReason::Http,
+            };
+            Fault::new(reason, text.clone())
+        }
+    }
+}
+
+/// Name a paginator stop; a page error caught on the way explains a transient or unknown stop.
+fn stop_fault(stop: Option<TickAbandon>, last: Option<Fault>) -> Fault {
+    let other = |detail: &str| Fault::new(CatchupFailReason::Other, detail);
+    match stop {
+        Some(TickAbandon::Transient) => {
+            last.unwrap_or_else(|| Fault::new(CatchupFailReason::Network, "transient failure"))
+        }
+        Some(TickAbandon::UnknownSymbol) => {
+            last.unwrap_or_else(|| Fault::new(CatchupFailReason::Http, "unknown symbol"))
+        }
+        Some(TickAbandon::RateLimited) => Fault::new(
+            CatchupFailReason::Throttled,
+            "host gate closed before the request",
+        ),
+        Some(TickAbandon::Deadline) => other("walk deadline passed"),
+        Some(TickAbandon::OverPageBudget) => other("page budget spent"),
+        Some(TickAbandon::OverTickBudget) => other("tick budget spent"),
+        Some(TickAbandon::OutOfRetention) => other("range out of retention"),
+        Some(TickAbandon::Cancelled) => other("walk cancelled"),
+        Some(TickAbandon::Empty) | None => other("empty slice at the retention edge unconfirmed"),
+    }
+}
+
+/// Name an archive refusal; a day missing past its publish delay is what `UnknownSymbol` means.
+pub(crate) fn archive_fault(error: &archive::ArchiveError) -> Fault {
+    use archive::ArchiveError as E;
+    match error {
+        E::NotPublished => Fault::new(CatchupFailReason::Other, "archive day not published yet"),
+        E::UnknownSymbol => Fault::new(
+            CatchupFailReason::ArchiveMissing,
+            "archive day missing past its publish delay",
+        ),
+        E::Throttled { .. } => Fault::new(CatchupFailReason::Throttled, "archive host throttled"),
+        E::NoRoom => Fault::new(
+            CatchupFailReason::NoRoom,
+            "disk reserve refused the archive",
+        ),
+        E::TooLarge => Fault::new(
+            CatchupFailReason::Other,
+            "archive day over the size ceiling",
+        ),
+        E::BudgetDeferred => Fault::new(CatchupFailReason::Other, "pass archive budget spent"),
+        E::Http(status) => Fault::new(CatchupFailReason::Http, format!("archive HTTP {status}")),
+        E::Transient(text) => Fault::new(CatchupFailReason::Network, text.clone()),
+        E::Corrupt(text) => Fault::new(CatchupFailReason::Corrupt, text.clone()),
+    }
+}
+
 /// Paid-for coverage and ticks survive a partial walk or an archive refusal.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct JobOutcome {
     pub(crate) file: Coverage,
     pub(crate) ticks: Vec<Tick>,
     pub(crate) failure: Option<Failure>,
+    /// Why `failure` happened; set whenever it is.
+    pub(crate) fault: Option<Fault>,
     /// Bytes returned by this archive fetch, including failed or partially completed bodies.
     pub(crate) archive_bytes: u64,
     /// An expired REST range can move to the archive without imposing host backoff.
@@ -144,6 +236,7 @@ fn run_rest(
     let plan = rest_plan(job, route, now_ms);
     let mut observer = CatchupObserver { gate, route };
     let asked_at = Instant::now();
+    let mut last = None;
     let verdict = paginate_ticks(
         route,
         &plan,
@@ -153,14 +246,22 @@ fn run_rest(
         |trade| asked_at.elapsed() >= Duration::from_secs(if trade { 180 } else { 45 }),
         &mut observer,
         |from, to, cursor| {
-            gate::absorb_page(
+            let page = gate::absorb_page(
                 gate,
                 route.host(),
                 fetch(route, &job.trade.market, from, to, cursor),
-            )
+            );
+            if let Err(error) = &page {
+                last = Some(rest_fault(error, rest::exchange_notice().status));
+            }
+            page
         },
     );
     let throttled = gate::settle_verdict(gate, route.host(), &verdict, asked_at);
+    let stop = match &verdict {
+        TickVerdict::Ready(harvest) => harvest.stop,
+        TickVerdict::Abandoned(reason) => Some(*reason),
+    };
     let mut outcome = match verdict {
         TickVerdict::Ready(harvest) => {
             let uncertain = edge_empty_slices(route, now_ms, &plan.slices, &harvest.ticks);
@@ -191,6 +292,14 @@ fn run_rest(
     };
     if throttled {
         outcome.failure = Some(Failure::Throttled);
+        outcome.fault = Some(
+            last.filter(|fault| fault.reason == CatchupFailReason::Throttled)
+                .unwrap_or_else(|| {
+                    Fault::new(CatchupFailReason::Throttled, "host refused further pages")
+                }),
+        );
+    } else if outcome.failure.is_some() {
+        outcome.fault = Some(stop_fault(stop, last));
     }
     clip(&mut outcome, &job.missing);
     outcome
@@ -261,6 +370,7 @@ fn run_archive(
                 ),
             file: fill.covered,
             ticks: fill.ticks,
+            fault: fill.deferred.as_ref().map(archive_fault),
             failure: fill.deferred.map(archive_failure),
             archive_bytes: bytes,
             ..JobOutcome::default()
@@ -271,6 +381,7 @@ fn run_archive(
                 archive::ArchiveError::BudgetDeferred | archive::ArchiveError::NotPublished
             ),
             archive_unknown: error == archive::ArchiveError::UnknownSymbol,
+            fault: Some(archive_fault(&error)),
             failure: Some(archive_failure(error)),
             archive_bytes: bytes,
             ..JobOutcome::default()
@@ -290,6 +401,7 @@ fn archive_failure(error: archive::ArchiveError) -> Failure {
         | archive::ArchiveError::TooLarge
         | archive::ArchiveError::BudgetDeferred
         | archive::ArchiveError::NoRoom
+        | archive::ArchiveError::Http(_)
         | archive::ArchiveError::Transient(_) => Failure::Retry,
     }
 }
@@ -351,6 +463,8 @@ pub(super) fn run_job_at(
 pub(crate) struct FinishedJob {
     pub(crate) job: CatchupJob,
     pub(crate) failure: Option<Failure>,
+    /// Why `failure` happened, for the pass summary and its log.
+    pub(crate) fault: Option<Fault>,
     /// Incomplete work may count as failed unless only a host or budget deferred it.
     pub(crate) attempted: bool,
 }
@@ -420,6 +534,10 @@ pub(super) fn run_pass_with(
             };
             if stopped_hosts.contains(route.host()) {
                 outcome.failure = Some(Failure::Retry);
+                outcome.fault = Some(Fault::new(
+                    CatchupFailReason::Throttled,
+                    "host stopped earlier this pass",
+                ));
                 deferred = true;
             } else {
                 let answer = run(&part, now_ms, gate, fetch_rest, fetch_archive);
@@ -469,6 +587,17 @@ pub(super) fn run_pass_with(
                         let answer = if skipped {
                             JobOutcome {
                                 failure: Some(Failure::Retry),
+                                fault: Some(if stopped_hosts.contains(route.host()) {
+                                    Fault::new(
+                                        CatchupFailReason::Throttled,
+                                        "archive host stopped earlier this pass",
+                                    )
+                                } else {
+                                    Fault::new(
+                                        CatchupFailReason::Other,
+                                        "pass archive budget spent",
+                                    )
+                                }),
                                 ..JobOutcome::default()
                             }
                         } else {
@@ -508,6 +637,7 @@ pub(super) fn run_pass_with(
                 }
                 if all_unknown && outcome.file.is_empty() {
                     outcome.failure = Some(Failure::Permanent);
+                    outcome.fault = Some(archive_fault(&archive::ArchiveError::UnknownSymbol));
                 }
             }
         }
@@ -518,6 +648,7 @@ pub(super) fn run_pass_with(
         finished.push(FinishedJob {
             job,
             failure: outcome.failure,
+            fault: outcome.fault,
             attempted: attempted && (!deferred || failed_fetch),
         });
     }
@@ -534,12 +665,26 @@ fn merge(into: &mut JobOutcome, mut part: JobOutcome) {
         into.file.add(span);
     }
     into.ticks.append(&mut part.ticks);
+    // The reason follows the failure that wins below; the first one named keeps a tie.
+    if part.fault.is_some() && (into.fault.is_none() || rank(part.failure) > rank(into.failure)) {
+        into.fault = part.fault;
+    }
     into.failure = match (into.failure, part.failure) {
         (Some(Failure::Throttled), _) | (_, Some(Failure::Throttled)) => Some(Failure::Throttled),
         (Some(Failure::Permanent), _) | (_, Some(Failure::Permanent)) => Some(Failure::Permanent),
         (Some(Failure::Retry), _) | (_, Some(Failure::Retry)) => Some(Failure::Retry),
         (None, None) => None,
     };
+}
+
+/// Precedence of a failure when two source portions disagree, matching [`merge`].
+fn rank(failure: Option<Failure>) -> u8 {
+    match failure {
+        None => 0,
+        Some(Failure::Retry) => 1,
+        Some(Failure::Permanent) => 2,
+        Some(Failure::Throttled) => 3,
+    }
 }
 
 /// Use the replay client's REST protocol without starting any replay worker or cache.

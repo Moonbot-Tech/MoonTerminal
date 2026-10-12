@@ -1174,3 +1174,84 @@ fn expired_rest_portion_moves_to_archive() {
         .is_ok()
     );
 }
+
+/// A REST page refused for a transport reason, with the HTTP status the response published.
+fn refused_rest(status: u16) -> executor::FetchRest {
+    fn with(status: u16) -> Result<rest::TradePage, rest::FetchError> {
+        rest::publish_exchange_notice(rest::ExchangeNotice {
+            status,
+            ..rest::ExchangeNotice::default()
+        });
+        Err(rest::FetchError::Transient(format!(
+            "synthetic status {status}"
+        )))
+    }
+    match status {
+        0 => |_, _, _, _, _| with(0),
+        200 => |_, _, _, _, _| with(200),
+        _ => |_, _, _, _, _| with(503),
+    }
+}
+
+/// Each refusal the REST and archive paths already return must name its reason; a wrong
+/// mapping tells the user the venue failed when the network did, or the other way round.
+#[test]
+fn failure_reasons_follow_the_errors_already_returned() {
+    use crate::station_api::CatchupFailReason as R;
+    use executor::{archive_fault, rest_fault};
+    let transient = rest::FetchError::Transient("x".into());
+    assert_eq!(rest_fault(&transient, 0).reason, R::Network);
+    assert_eq!(rest_fault(&transient, 503).reason, R::Http);
+    assert_eq!(rest_fault(&transient, 200).reason, R::Corrupt);
+    let throttled = rest::FetchError::Throttled {
+        retry_after_s: None,
+        diagnostic: "binance HTTP 429".into(),
+    };
+    assert_eq!(rest_fault(&throttled, 429).reason, R::Throttled);
+    assert_eq!(rest_fault(&throttled, 429).detail, "binance HTTP 429");
+    use archive::ArchiveError as E;
+    for (error, reason) in [
+        (E::Http(500), R::Http),
+        (E::Transient("timed out".into()), R::Network),
+        (
+            E::Throttled {
+                retry_after_s: None,
+            },
+            R::Throttled,
+        ),
+        (E::Corrupt("bad gzip".into()), R::Corrupt),
+        (E::UnknownSymbol, R::ArchiveMissing),
+        (E::NoRoom, R::NoRoom),
+        (E::TooLarge, R::Other),
+    ] {
+        assert_eq!(archive_fault(&error).reason, reason, "{error:?}");
+    }
+    assert_eq!(archive_fault(&E::Http(500)).detail, "archive HTTP 500");
+}
+
+/// A failed job carries its reason out of the executor, through the real paginator and archive.
+#[test]
+fn failed_jobs_carry_their_reason_out_of_the_executor() {
+    use crate::station_api::CatchupFailReason as R;
+    let rest_job = job(1, Brand::Gate, MarketKind::Spot);
+    let reason = |fetch: executor::FetchRest| {
+        executor::run_job_at(&rest_job, NOW, &gate::ReplayGate::new(), fetch, no_archive)
+            .fault
+            .map(|fault| fault.reason)
+    };
+    assert_eq!(reason(refused_rest(503)), Some(R::Http));
+    assert_eq!(reason(refused_rest(0)), Some(R::Network));
+    assert_eq!(reason(throttled_rest), Some(R::Throttled));
+    assert_eq!(reason(good_rest), None);
+    let archive_job = job(2, Brand::Bybit, MarketKind::Futures);
+    let outcome = executor::run_job_at(
+        &archive_job,
+        NOW,
+        &gate::ReplayGate::new(),
+        no_rest,
+        corrupt_archive,
+    );
+    let fault = outcome.fault.expect("corrupt archive names a fault");
+    assert_eq!(fault.reason, R::Corrupt);
+    assert_eq!(fault.detail, "synthetic malformed row");
+}

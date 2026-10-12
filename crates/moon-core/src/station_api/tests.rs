@@ -238,6 +238,39 @@ fn tape_catchup_is_optional_and_round_trips() {
     let progress: TapeCatchup = serde_json::from_value(legacy).unwrap();
     assert!(!progress.running);
     assert_eq!((progress.auto, progress.archives), (None, None));
+    assert!(progress.failed_by.is_empty());
+}
+
+/// The failure breakdown must round-trip, stay off the wire when empty, and survive a reason a
+/// newer station names: an unknown key failing would drop the whole status reply.
+#[test]
+fn catchup_failure_breakdown_round_trips_and_tolerates_new_reasons() {
+    let progress = TapeCatchup {
+        failed: 12,
+        failed_by: vec![
+            (CatchupFailReason::Http, 9),
+            (CatchupFailReason::ArchiveMissing, 3),
+        ],
+        ..TapeCatchup::default()
+    };
+    let encoded = serde_json::to_value(&progress).unwrap();
+    assert_eq!(
+        encoded["failed_by"],
+        serde_json::json!([["http", 9], ["archive_missing", 3]])
+    );
+    assert_eq!(
+        serde_json::from_value::<TapeCatchup>(encoded).unwrap(),
+        progress
+    );
+    let empty = serde_json::to_value(TapeCatchup::default()).unwrap();
+    assert!(empty.get("failed_by").is_none());
+    let newer: TapeCatchup = serde_json::from_value(serde_json::json!({
+        "pending": 0, "filled": 0, "no_route": 0, "out_of_reach": 0, "failed": 2,
+        "last_pass_ms": null, "archive_bytes": 0,
+        "failed_by": [["solar_flare", 2]]
+    }))
+    .unwrap();
+    assert_eq!(newer.failed_by, vec![(CatchupFailReason::Other, 2)]);
 }
 
 #[test]

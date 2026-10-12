@@ -328,6 +328,46 @@ pub struct TapeCatchup {
     pub last_pass_ms: Option<i64>,
     /// Compressed archive bytes received by catch-up during the current hourly pass.
     pub archive_bytes: u64,
+    /// Why the last pass's failed jobs failed, one count per reason. Empty from a station older
+    /// than it — an added field with a default, so neither end of version 2 misreads the other.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_by: Vec<(CatchupFailReason, u32)>,
+}
+
+/// Why one catch-up job failed; the terminal words it, the station only names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatchupFailReason {
+    /// The venue answered with an HTTP error status or its own error code.
+    Http,
+    /// The request timed out or the connection failed.
+    Network,
+    /// The venue's rate limit or the shared host gate stopped the request.
+    Throttled,
+    /// The archive file or the venue's response could not be read.
+    Corrupt,
+    /// The daily archive is still missing well past its publish delay.
+    ArchiveMissing,
+    /// Filing the tape would cross the station's disk reserve.
+    NoRoom,
+    /// Anything else, including a reason a newer station names and this build does not know.
+    #[serde(other)]
+    Other,
+}
+
+impl CatchupFailReason {
+    /// The reason's wire name, also the tail of its locale key and its word in the station log.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Network => "network",
+            Self::Throttled => "throttled",
+            Self::Corrupt => "corrupt",
+            Self::ArchiveMissing => "archive_missing",
+            Self::NoRoom => "no_room",
+            Self::Other => "other",
+        }
+    }
 }
 
 /// Station recovery choices sent only to stations reporting switch support.
