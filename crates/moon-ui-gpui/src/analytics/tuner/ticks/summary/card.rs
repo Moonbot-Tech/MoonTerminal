@@ -93,47 +93,117 @@ fn warning(text: String, p: MoonPalette, cx: &App) -> Div {
         .child(prose(text, p.text_soft, cx).flex_1())
 }
 
-/// Figures remain a separate mono segment from the human label and its slice description.
-fn profit_row(row: &ProfitRow, id: &'static str, p: MoonPalette, cx: &App) -> Div {
-    let figures = h_flex()
-        .flex_none()
-        .gap(design::ui_px(cx, 8.0))
-        .font_family(design::mono())
-        .text_size(design::t_body(cx))
-        .child(
-            div()
-                .text_color(moon(sign_color(p, row.fact)))
-                .child(fmt_signed(row.fact)),
-        )
-        .child(div().text_color(moon(p.text_muted)).child("→"))
-        .child(
-            div()
-                .text_color(moon(sign_color(p, row.variant)))
-                .child(fmt_signed(row.variant)),
-        );
+/// Widths of the profit block's fact, arrow and V1 columns, shared by its head and every row.
+#[derive(Clone, Copy)]
+struct ProfitCols {
+    fact: Pixels,
+    /// `None` on a narrow host: the arrow column drops and the other three stay aligned.
+    arrow: Option<Pixels>,
+    v1: Pixels,
+}
+
+impl ProfitCols {
+    /// Size each figure column to the widest of its head and its figures, so heads sit over them.
+    fn measure(rows: &[&ProfitRow], arrow: bool, cx: &App) -> Self {
+        let width = |head: &str, value: fn(&ProfitRow) -> f64| {
+            let normal = FontWeight::NORMAL.0;
+            let widest = rows
+                .iter()
+                .map(|row| design::mono_body_text_width(cx, &fmt_signed(value(row)), normal))
+                .fold(design::ui_caption_text_width(cx, head, normal), f32::max);
+            // The estimate sums advances without kerning; one pixel keeps a rounded glyph whole.
+            px(widest.ceil() + 1.0)
+        };
+        Self {
+            fact: width(&t!("analytics.ticks.sum.col_fact"), |row| row.fact),
+            arrow: arrow.then(|| {
+                px(design::mono_body_text_width(cx, "→", FontWeight::NORMAL.0).ceil() + 1.0)
+            }),
+            v1: width(&t!("analytics.ticks.sum.col_v1"), |row| row.variant),
+        }
+    }
+
+    /// Lay a label column and the figure cells out as one grid row, each cell's content
+    /// right-aligned inside its fixed column.
+    fn row(self, label: Div, cells: [Div; 3], cx: &App) -> Div {
+        let [fact, arrow, v1] = cells;
+        let cell =
+            |content: Div, w: Pixels| div().flex_none().w(w).flex().justify_end().child(content);
+        h_flex()
+            .w_full()
+            .items_start()
+            .gap(design::ui_px(cx, 12.0))
+            .child(label.flex_1().min_w_0())
+            .child(cell(fact, self.fact))
+            .children(self.arrow.map(|w| cell(arrow, w).justify_center()))
+            .child(cell(v1, self.v1))
+    }
+}
+
+/// Column heads share the figure columns, right-aligned over the numbers they name.
+fn profit_head(head: String, cols: ProfitCols, p: MoonPalette, cx: &App) -> Div {
+    let caption = |key: &str, sel: &'static str| {
+        div()
+            .debug_selector(move || sel.to_string())
+            .font_family(design::ui_font())
+            .text_size(design::t_caption(cx))
+            .text_color(moon(p.text_muted))
+            .whitespace_nowrap()
+            .child(t!(key).to_string())
+    };
+    cols.row(
+        div().child(label(head, p.text_muted, cx)),
+        [
+            caption("analytics.ticks.sum.col_fact", "an-ticks-sum-col-fact"),
+            div(),
+            caption("analytics.ticks.sum.col_v1", "an-ticks-sum-col-v1"),
+        ],
+        cx,
+    )
+}
+
+/// Figures remain separate mono cells from the human label and its slice description.
+fn profit_row(
+    row: &ProfitRow,
+    id: &'static str,
+    cols: ProfitCols,
+    p: MoonPalette,
+    cx: &App,
+) -> Div {
+    let figure = |value: f64, sel: String| {
+        div()
+            .debug_selector(move || sel.clone())
+            .font_family(design::mono())
+            .text_size(design::t_body(cx))
+            .whitespace_nowrap()
+            .text_color(moon(sign_color(p, value)))
+            .child(fmt_signed(value))
+    };
     v_flex()
         .w_full()
         .gap(design::ui_px(cx, 4.0))
         .child(
-            h_flex()
-                .w_full()
-                .flex_wrap()
-                .items_start()
-                .gap(design::ui_px(cx, 8.0))
-                .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .font_family(design::ui_font())
+            cols.row(
+                v_flex()
+                    .font_family(design::ui_font())
+                    .text_size(design::t_body(cx))
+                    .child(row.label.clone())
+                    .child(
+                        prose(row.sub.clone(), p.text_muted, cx)
+                            .id(id)
+                            .tooltip(crate::panels::common::text_tooltip(row.n.to_string())),
+                    ),
+                [
+                    figure(row.fact, format!("{id}-fact")),
+                    div()
+                        .font_family(design::mono())
                         .text_size(design::t_body(cx))
-                        .child(row.label.clone())
-                        .child(
-                            prose(row.sub.clone(), p.text_muted, cx)
-                                .id(id)
-                                .tooltip(crate::panels::common::text_tooltip(row.n.to_string())),
-                        ),
-                )
-                .child(figures),
+                        .text_color(moon(p.text_muted))
+                        .child("→"),
+                    figure(row.variant, format!("{id}-v1")),
+                ],
+                cx,
+            ),
         )
         .children(row.open_line.clone().map(|line| warning(line, p, cx)))
 }
@@ -194,6 +264,8 @@ fn confirmation(
 /// Args:
 ///     m: The current displayed variant's advice and inline-confirmation snapshot.
 ///     acts: Actions supplied without a live view dependency.
+///     arrow: Whether the host is wide enough for the profit block's arrow column; the same
+///         width decision as the grid's range columns.
 ///     p: Active palette for advice and signed profit colours.
 ///     cx: Application context providing scale and localized captions.
 ///
@@ -202,6 +274,7 @@ fn confirmation(
 pub(in crate::analytics::tuner) fn summary_card_el(
     m: &SummaryModel,
     acts: &SummaryActs,
+    arrow: bool,
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
@@ -286,28 +359,14 @@ pub(in crate::analytics::tuner) fn summary_card_el(
             } else {
                 format!("{}, {unit}", t!("analytics.ticks.sum.profit_head"))
             };
-            body = body.child(
-                h_flex()
-                    .w_full()
-                    .flex_wrap()
-                    .justify_between()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(label(head, p.text_muted, cx))
-                    .child(
-                        h_flex()
-                            .gap(design::ui_px(cx, 16.0))
-                            .font_family(design::ui_font())
-                            .text_color(moon(p.text_muted))
-                            .text_size(design::t_caption(cx))
-                            .child(t!("analytics.ticks.sum.col_fact").to_string())
-                            .child(t!("analytics.ticks.sum.col_v1").to_string()),
-                    ),
-            );
+            let rows: Vec<&ProfitRow> = m.train.iter().chain(&m.holdout).collect();
+            let cols = ProfitCols::measure(&rows, arrow, cx);
+            body = body.child(profit_head(head, cols, p, cx));
             if let Some(row) = &m.train {
-                body = body.child(profit_row(row, "an-ticks-sum-train-count", p, cx));
+                body = body.child(profit_row(row, "an-ticks-sum-train-count", cols, p, cx));
             }
             if let Some(row) = &m.holdout {
-                body = body.child(profit_row(row, "an-ticks-sum-hold-count", p, cx));
+                body = body.child(profit_row(row, "an-ticks-sum-hold-count", cols, p, cx));
             }
         }
         if !m.changes.is_empty() {

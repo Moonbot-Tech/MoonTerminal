@@ -535,9 +535,10 @@ impl AnalyticsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let summary = self.ticks_summary_card(p, cx);
+        let host_w = design::font_w_px(cx, 470.0);
+        let summary = self.ticks_summary_card(host_w, p, cx);
         let kpi = self.ticks_kpi(p, cx);
-        let grid = self.ticks_grid(design::font_w_px(cx, 470.0), p, window, cx);
+        let grid = self.ticks_grid(host_w, p, window, cx);
         v_flex()
             .id("an-ticks-side")
             .w_full()

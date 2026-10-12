@@ -297,7 +297,13 @@ impl Render for Probe {
                     .flex_none()
                     .min_w_0()
                     .gap(design::ui_px(cx, 8.0))
-                    .child(summary_card_el(&model(self.face), &acts, p, cx))
+                    .child(summary_card_el(
+                        &model(self.face),
+                        &acts,
+                        ranges_visible,
+                        p,
+                        cx,
+                    ))
                     .child(kpi_matrix_body_with(
                         &LoadState::Ready(Arc::new(stats())),
                         String::new(),
@@ -497,6 +503,50 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                             );
                         }
                         let m = model(face);
+                        // Each profit head must sit over its own figures, not float as one group.
+                        let rows: Vec<&str> = [
+                            m.train.as_ref().map(|_| "an-ticks-sum-train-count"),
+                            m.holdout.as_ref().map(|_| "an-ticks-sum-hold-count"),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                        for (col, suffix, text) in [
+                            ("an-ticks-sum-col-fact", "fact", 13.71),
+                            ("an-ticks-sum-col-v1", "v1", 19.23),
+                        ] {
+                            if rows.is_empty() {
+                                break;
+                            }
+                            let head = visual
+                                .debug_bounds(col)
+                                .unwrap_or_else(|| panic!("missing {col} ({at})"));
+                            inside(head, col);
+                            for row in &rows {
+                                let sel = selector(format!("{row}-{suffix}"));
+                                let figure = visual
+                                    .debug_bounds(sel)
+                                    .unwrap_or_else(|| panic!("missing {sel} ({at})"));
+                                inside(figure, sel);
+                                assert!(
+                                    (f32::from(figure.right()) - f32::from(head.right())).abs()
+                                        <= 1.0,
+                                    "{col} not over {sel} ({at}): {head:?} / {figure:?}"
+                                );
+                                let need = visual.update(|_, cx| {
+                                    design::mono_body_text_width(
+                                        cx,
+                                        &crate::analytics::summary::fmt_signed(text),
+                                        400.0,
+                                    )
+                                });
+                                assert!(
+                                    f32::from(figure.size.width) + 0.5 >= need,
+                                    "{sel} clipped ({at}): {:?} < {need}",
+                                    figure.size.width
+                                );
+                            }
+                        }
                         let mut prose = vec![m.sentence];
                         // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
                         let mut labels = Vec::new();

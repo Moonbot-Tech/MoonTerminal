@@ -464,6 +464,7 @@ impl AnalyticsView {
     /// Bind the view-free card to updates without reading this entity inside its own update.
     pub(super) fn ticks_summary_card(
         &self,
+        host_w: gpui::Pixels,
         p: MoonPalette,
         cx: &Context<Self>,
     ) -> gpui::AnyElement {
@@ -506,7 +507,8 @@ impl AnalyticsView {
                 cx.notify();
             }),
         };
-        summary_card_el(&model, &acts, p, cx)
+        let arrow = super::grid::ranges_fit(host_w - crate::design::ui_px(cx, 2.0), cx);
+        summary_card_el(&model, &acts, arrow, p, cx)
     }
 
     /// Prepare inline consent and warning checks once, without opening another dialog.
