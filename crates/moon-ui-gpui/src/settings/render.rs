@@ -348,6 +348,8 @@ impl SettingsView {
         }
         if page == Tab::Station {
             self.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
+            // A catch-up already running starts its minute re-read now, not at the next answer.
+            self.server_tape_sync(cx);
         }
         cx.notify();
     }

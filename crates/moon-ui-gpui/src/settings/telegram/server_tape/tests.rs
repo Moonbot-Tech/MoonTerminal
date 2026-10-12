@@ -641,3 +641,12 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
         }
     }
 }
+
+/// The tape block lives on the Station page, so its open state alone keeps a running catch-up
+/// re-read; the Telegram page no longer shows the numbers it would refresh.
+#[test]
+fn running_catchup_rereads_while_the_station_page_is_open() {
+    use crate::settings::Tab;
+    assert!(super::shows_tape_block(Tab::Station));
+    assert!(!super::shows_tape_block(Tab::Telegram));
+}

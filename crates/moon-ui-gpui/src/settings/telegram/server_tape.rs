@@ -778,13 +778,18 @@ pub(super) fn catchup_switches(
         .into_any_element()
 }
 
+/// The page that renders the tape block, whose open state keeps a running catch-up re-read.
+pub(super) fn shows_tape_block(page: super::super::Tab) -> bool {
+    page == super::super::Tab::Station
+}
+
 impl SettingsView {
     /// A new read of the station's window and catch-up switches: an untouched draft follows it,
     /// an edited one stays. A read without one changes nothing.
     ///
-    /// While a catch-up pass runs and the Telegram tab is open, the station is read again a
-    /// minute later, so the numbers move without a click.
-    pub(super) fn server_tape_sync(&mut self, cx: &mut Context<Self>) {
+    /// While a catch-up pass runs and the page showing the tape block is open, the station is
+    /// read again a minute later, so the numbers move without a click.
+    pub(in crate::settings) fn server_tape_sync(&mut self, cx: &mut Context<Self>) {
         let (read, switches, running) = {
             let bot = self.backend.read(cx).station.bot.as_ref();
             let catchup = reported_catchup(bot);
@@ -795,7 +800,7 @@ impl SettingsView {
                 catchup_state(catchup) == CatchupState::Running,
             )
         };
-        let shown = self.active == super::super::Tab::Telegram;
+        let shown = shows_tape_block(self.active);
         let ed = &mut self.telegram.server.tape;
         follow(&mut ed.seen, &mut ed.draft, read);
         ed.take_switches(switches);
@@ -804,7 +809,7 @@ impl SettingsView {
                 cx.background_executor().timer(RUNNING_REREAD).await;
                 let _ = this.update(cx, |this, cx| {
                     this.telegram.server.tape.reread = None;
-                    if this.active == super::super::Tab::Telegram {
+                    if shows_tape_block(this.active) {
                         this.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
                     }
                 });
