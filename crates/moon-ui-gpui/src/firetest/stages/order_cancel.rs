@@ -113,7 +113,7 @@ impl Runtime {
             },
         };
         let terms = backend
-            .manual_order_terms(core, &market, price, false, size_override)
+            .manual_order_terms(core, &market, price, false, size_override)?
             .ok_or_else(|| {
                 format!(
                     "order_cancel_lag core={core} has no complete local terms or valid order size"

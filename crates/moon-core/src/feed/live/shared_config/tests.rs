@@ -10,6 +10,24 @@ use crate::feed::{AutoStartSettings, CoreConfig, CoreConfigEditEvent, CoreConfig
 /// is arbitrary; the planner's decisions do not read it.
 const TEST_CORE: u64 = 1;
 
+/// Omitting the borrowing projection falsely refuses margin orders; copying it back from a
+/// settings draft would silently disable the core's borrowing during an unrelated edit.
+#[test]
+fn manual_quote_guard_borrowing_projection_is_read_only() {
+    let mut wire = SharedConfig::default();
+    wire.trading.moonbot_config.auto_margin_borrow = true;
+    let mut draft = core_config_from_proto(&wire);
+    assert!(draft.auto_margin_borrow);
+    draft.auto_margin_borrow = false;
+    draft.general.take_profit_pct = 4.5;
+    let mut sent = wire.clone();
+    apply_core_config(&mut sent, &draft, FieldMask::RENDERED_SECTIONS);
+    assert_eq!(sent.trading.g_take_profit, 4.5);
+    assert!(sent.trading.moonbot_config.auto_margin_borrow);
+    wire.trading.moonbot_config.auto_margin_borrow = false;
+    assert!(!core_config_from_proto(&wire).auto_margin_borrow);
+}
+
 /// Build a write out of a base config's own projection, changed by `mutate`.
 fn edit_from(cfg: &SharedConfig, mutate: impl FnOnce(&mut AutoStartSettings)) -> CoreConfig {
     let mut projected = core_config_from_proto(cfg);

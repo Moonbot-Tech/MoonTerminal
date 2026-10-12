@@ -7,6 +7,29 @@ use moon_core::config::{GroupExitSettings, GroupTradeSettings, ManualStratState,
 use moon_core::feed::{ClientSettingsEdit, StrategyRow, percentage_take_price};
 use std::time::Duration;
 
+/// Refuse only a known spot account/quote mismatch; incomplete identities and derivatives
+/// cannot establish that the account currency gates this market. Enabled or unknown margin
+/// borrowing fails open because it may fund another quote. Catalog multiplicity does not
+/// enter the decision: each selected pair is compared separately, ignoring ASCII case.
+pub(super) fn manual_quote_mismatch(
+    kind: Option<moon_core::venue::MarketKind>,
+    account: Option<&str>,
+    quote: &str,
+    auto_margin_borrow: Option<bool>,
+) -> bool {
+    let Some(account) = account
+        .map(str::trim)
+        .filter(|currency| !currency.is_empty())
+    else {
+        return false;
+    };
+    let quote = quote.trim();
+    kind == Some(moon_core::venue::MarketKind::Spot)
+        && auto_margin_borrow == Some(false)
+        && !quote.is_empty()
+        && !account.eq_ignore_ascii_case(quote)
+}
+
 /// Resolve one strategy field from the snapshot, then from its kind's schema default.
 pub(crate) fn strat_field_value(
     row: &StrategyRow,

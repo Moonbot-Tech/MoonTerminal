@@ -431,6 +431,7 @@ impl ChartPanel {
     ///
     /// The two flags travel as one [`Placement`] rather than as adjacent `bool` arguments:
     /// transposing them compiles silently and opens the wrong side with the wrong command.
+    /// A quote refusal is displayed once in the window receiving the gesture or hotkey.
     fn place_order_at_pos(
         &mut self,
         pos: (f32, f32),
@@ -491,6 +492,8 @@ impl ChartPanel {
         };
 
         let workspace_group = self.workspace_group.clone();
+        let notification_window = cx.active_window();
+        let mut quote_refusal = None;
         let placed = self.backend.update(cx, |b, _| {
             // Warn, not debug, and for the reason the identical guard on `move_orders_to_price`
             // states: a window that may not trade this core looks exactly like a gesture that
@@ -503,7 +506,15 @@ impl ChartPanel {
                 );
                 return false;
             }
-            let Some(terms) = b.manual_order_terms(core, &market, price, short, None) else {
+            let terms = match b.manual_order_terms(core, &market, price, short, None) {
+                Ok(terms) => terms,
+                Err(reason) => {
+                    log::warn!("manual order refused: {reason}");
+                    quote_refusal = Some(reason);
+                    return false;
+                }
+            };
+            let Some(terms) = terms else {
                 // The reason itself is stated by whichever guard refused, on the line immediately
                 // above this one. Listing every possible cause here as well only competes with it.
                 log::warn!(
@@ -597,6 +608,16 @@ impl ChartPanel {
                 }
             }
         });
+        if let Some(reason) = quote_refusal {
+            cx.defer(move |app| {
+                if let Some(handle) = notification_window {
+                    let _ = handle.update(app, |_, window, app| {
+                        use moon_ui::MoonWindowExt as _;
+                        window.push_notification(moon_ui::MoonNotification::warning(reason), app);
+                    });
+                }
+            });
+        }
         // Per-window/tab auto-pin keeps a chart that accepted an order from expiring through TTL
         // or inactivity.
         if placed

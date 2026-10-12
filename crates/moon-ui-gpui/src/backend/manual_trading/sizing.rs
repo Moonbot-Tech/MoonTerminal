@@ -1,8 +1,8 @@
 //! Manual order sizing and group trade edits.
 
 use super::terms::{
-    ManualOrderTerms, apply_group_exit_edit, planned_sell_price, update_group_trade_pair,
-    usd_to_base_amount,
+    ManualOrderTerms, apply_group_exit_edit, manual_quote_mismatch, planned_sell_price,
+    update_group_trade_pair, usd_to_base_amount,
 };
 use crate::Backend;
 use moon_core::config::{GroupExitSettings, GroupTradeSettings};
@@ -116,12 +116,55 @@ impl Backend {
             .map(|_| usd)
     }
 
+    /// Refuse a known spot quote mismatch before resolving terms or queuing any order side effects.
+    ///
+    /// `Err` carries the localized refusal for the existing notification surface; `Ok(None)`
+    /// retains the other sizing/strategy refusals. Unknown account or venue identities and
+    /// derivatives and enabled/unknown margin borrowing fail open for this guard. The account
+    /// belongs to the target core, even when
+    /// its market catalog comes from another provider.
+    pub(crate) fn manual_order_terms(
+        &self,
+        core: CoreId,
+        market: &str,
+        price: f64,
+        short: bool,
+        size_base_override: Option<f64>,
+    ) -> Result<Option<crate::backend::ManualOrderTerms>, String> {
+        let kind = self
+            .session
+            .core_venues()
+            .get(&core)
+            .and_then(|venue| venue.resolved())
+            .map(|venue| venue.kind);
+        let account = self.session.core_base(core);
+        let borrowing = self
+            .session
+            .store()
+            .core(core)
+            .filter(|data| !data.core_config_stale)
+            .and_then(|data| data.core_config.as_ref())
+            .map(|config| config.auto_margin_borrow);
+        let label = self.session.market_source().market_label(core, market);
+        if manual_quote_mismatch(kind, account, &label.quote, borrowing) {
+            return Err(rust_i18n::t!(
+                "errors.manual_order_quote",
+                core = moon_core::feed::core_label(core),
+                account = account.unwrap_or_default().trim(),
+                market = market,
+                quote = label.quote.as_str()
+            )
+            .to_string());
+        }
+        Ok(self.resolve_manual_order_terms(core, market, price, short, size_base_override))
+    }
+
     /// Resolve the effective exit settings and either the visible USD size or a FireTest override.
     ///
     /// Both `exit` and the size (through [`Self::manual_order_size_base`]) come from the SAME
     /// effective resolver the display uses, gated on the per-core flag: a trader sizing from a
     /// number the order does not use is the worst failure this goal can ship.
-    pub(crate) fn manual_order_terms(
+    fn resolve_manual_order_terms(
         &self,
         core: CoreId,
         market: &str,

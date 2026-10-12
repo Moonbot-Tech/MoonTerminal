@@ -1,5 +1,5 @@
 //! Projection of the core's full safe-share configuration onto the settings surfaces the terminal
-//! actually draws.
+//! actually draws, plus read-only facts needed to decide manual-order eligibility.
 //!
 //! MoonProto carries core settings over TWO channels. The compact `ClientSettingsCommand` feeds the
 //! toolbar's frequently changed controls and is projected by [`super::ClientSettings`]. The full
@@ -32,6 +32,9 @@ use crate::feed::FieldMask;
 /// stable address that survives the UI being rearranged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoreConfig {
+    /// Read-only `trading.moonbot_config.auto_margin_borrow`: a spot account may fund another
+    /// quote by borrowing, so the terminal must not refuse it solely on quote currency.
+    pub auto_margin_borrow: bool,
     /// `trading.auto_start` and `trading.auto_start_2`.
     pub auto_start: AutoStartSettings,
     /// `visual.blink_config`.
