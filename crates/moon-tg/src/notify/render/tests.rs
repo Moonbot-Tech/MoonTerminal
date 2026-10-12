@@ -284,8 +284,9 @@ alpha
     assert_only_allowed_tags(&html);
 }
 
-/// Dropping the hour or the day, or keeping seconds, would make a two-day
-/// hold and a two-minute hold look like the same kind of number. Dropping the
+/// Printing a second unit (`2m 5s`, `2h 5m`, `3d 4h`) would put a remainder
+/// back on a hold the chat shows as one unit. Rounding a sub-minute hold up
+/// to `1m` would hide a trade that lasted under a minute. Dropping the
 /// leading plus, painting a gain red, or marking a profit that rounds to
 /// `0.00` as a gain would make the figure and the mark disagree.
 #[test]
@@ -324,22 +325,65 @@ fn duration_and_sign_follow_the_rounded_figure() {
     row.profit_pct = Some(1.25);
     row.open_utc = 0;
     row.close_utc = 3 * 86_400 + 4 * 3_600;
-    assert!(trade_card(&row, false, &CardLayout::default()).contains(" \u{00b7} 3d 4h"));
+    assert!(line_ends_with_duration(&row, "3d"));
     row.close_utc = 2 * 3_600 + 5 * 60;
-    assert!(trade_card(&row, false, &CardLayout::default()).contains(" \u{00b7} 2h 5m"));
+    assert!(line_ends_with_duration(&row, "2h"));
     row.close_utc = 90;
-    assert!(trade_card(&row, false, &CardLayout::default()).contains(" \u{00b7} 1m"));
+    assert!(line_ends_with_duration(&row, "1m"));
     row.close_utc = 45;
-    assert!(trade_card(&row, false, &CardLayout::default()).contains(" \u{00b7} 0m"));
+    assert!(line_ends_with_duration(&row, "45s"));
     assert!(!trade_card(&row, false, &CardLayout::default()).contains("Duration"));
     assert_eq!(
         back_line("alpha", 3 * 86_400 + 4 * 3_600),
-        "\u{1f7e2} #alpha \u{2014} connection restored (3d 4h)"
+        "\u{1f7e2} #alpha \u{2014} connection restored (3d)"
     );
     assert_eq!(
         back_line("alpha", -5),
-        "\u{1f7e2} #alpha \u{2014} connection restored (0m)"
+        "\u{1f7e2} #alpha \u{2014} connection restored (0s)"
     );
+}
+
+/// Keeping the smaller unit (`1m 0s`, `2m 15s`, `59m 59s`, `1h 0m`, `1d 0h`,
+/// `2d 4h`) would print a remainder the hold line no longer shows. Rounding
+/// 3599 seconds up to `1h`, or 86399 seconds up to `1d`, would name a unit
+/// the hold has not finished.
+#[test]
+fn hold_duration_shows_one_largest_unit() {
+    let _locale = crate::test_locale::force("en");
+    let cases = [
+        (0, "0s"),
+        (59, "59s"),
+        (60, "1m"),
+        (135, "2m"),
+        (3_599, "59m"),
+        (3_600, "1h"),
+        (2 * 3_600 + 5 * 60, "2h"),
+        (86_399, "23h"),
+        (86_400, "1d"),
+        (3 * 86_400 + 4 * 3_600, "3d"),
+        (2 * 86_400 + 4 * 3_600, "2d"),
+        (-1, "0s"),
+    ];
+    for (secs, text) in cases {
+        assert_eq!(human_duration(secs), text, "secs={secs}");
+    }
+    let mut row = trade();
+    row.open_utc = 0;
+    row.close_utc = 42;
+    assert!(line_ends_with_duration(&row, "42s"));
+    assert_eq!(
+        back_line("alpha", 135),
+        "\u{1f7e2} #alpha \u{2014} connection restored (2m)"
+    );
+}
+
+/// The first card line ends with the duration, so a longer suffix cannot hide
+/// inside a `contains` check.
+fn line_ends_with_duration(row: &ClosedTrade, duration: &str) -> bool {
+    trade_card(row, false, &CardLayout::default())
+        .lines()
+        .next()
+        .is_some_and(|line| line.ends_with(&format!(" \u{00b7} {duration}")))
 }
 
 /// A UTC clock on a zoned outage would name the wrong hour. Markup in the
@@ -547,7 +591,7 @@ fn stablecoin_cards_use_dollar_suffixes_without_a_valuation() {
         row.volume_usd = None;
         row.profit_pct = Some(-1.77);
         row.close_utc = 45;
-        let expected = "\u{1f534} <b>#ONE</b> \u{00b7} <b>-106.36$</b> (-1.77%) \u{00b7} 5 993$ \u{00b7} 0m\nalpha\n<i>grid</i>";
+        let expected = "\u{1f534} <b>#ONE</b> \u{00b7} <b>-106.36$</b> (-1.77%) \u{00b7} 5 993$ \u{00b7} 45s\nalpha\n<i>grid</i>";
         assert_eq!(trade_card(&row, false, &CardLayout::default()), expected);
         row.profit_usd = Some(-999.0);
         row.volume_usd = Some(888.0);
@@ -559,7 +603,7 @@ fn stablecoin_cards_use_dollar_suffixes_without_a_valuation() {
             row.volume_native = Some(0.4);
             assert_eq!(
                 trade_card(&row, false, &CardLayout::default()),
-                "\u{26aa} <b>#ONE</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 0.4$ \u{00b7} 0m\nalpha\n<i>grid</i>"
+                "\u{26aa} <b>#ONE</b> \u{00b7} <b>0.00$</b> (0.00%) \u{00b7} 0.4$ \u{00b7} 45s\nalpha\n<i>grid</i>"
             );
         }
         row.profit_native = Some(1234.5);
