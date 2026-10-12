@@ -217,8 +217,8 @@ fn shared_and_duplicated_members_keep_that_order_too() {
         .collect();
     assert_eq!(
         drawn,
-        [1, 2, 1, 3, 4],
-        "Second, then Shared (drawing 1 once, before 3), then the remainder"
+        [1, 3, 1, 2, 4],
+        "Shared draws 1 once before 3, then Second, then the remainder"
     );
 }
 
@@ -252,7 +252,7 @@ fn a_one_row_section_gets_no_subtotal() {
         labels(),
     );
 
-    assert_eq!(headers(&entries), ["Pair", "Solo"]);
+    assert_eq!(headers(&entries), ["Solo", "Pair"]);
     assert_eq!(
         subtotals(&entries),
         [("Pair: total".to_string(), 3.0, 2)],
@@ -303,8 +303,8 @@ fn every_drawn_occurrence_of_a_core_is_numbered() {
         .collect();
     assert_eq!(
         occurrences,
-        [(1, 0), (1, 1), (2, 0)],
-        "Alone draws core 1 first, Both draws it a second time"
+        [(1, 0), (2, 0), (1, 1)],
+        "Both draws core 1 first, Alone draws it a second time"
     );
 }
 
@@ -335,13 +335,12 @@ fn the_remainder_caption_filters_to_configured_cores_too() {
     );
 }
 
-/// `sections.rs:sectioned` must order sections by NAME and keep the ungrouped remainder last.
+/// `sections.rs:sectioned` must keep saved group order and the ungrouped remainder last.
 ///
-/// Breakage: following the saved list order makes the sections move whenever the management modal
-/// reorders groups; sorting the ungrouped caption with the rest buries it in the middle in one
-/// language and puts it last in another.
+/// Breakage: sorting names ignores the management arrows; sorting the ungrouped caption
+/// with the rest buries it among the saved groups depending on the language.
 #[test]
-fn sections_follow_their_names_and_the_remainder_stays_last() {
+fn sections_follow_saved_order_and_the_remainder_stays_last() {
     let live = context(
         &[1, 2, 3, 4, 5, 6],
         &[("Zulu", &[1, 2]), ("alpha", &[3, 4])],
@@ -360,13 +359,13 @@ fn sections_follow_their_names_and_the_remainder_stays_last() {
         labels(),
     );
 
-    assert_eq!(headers(&entries), ["alpha", "Zulu", "Ungrouped"]);
+    assert_eq!(headers(&entries), ["Zulu", "alpha", "Ungrouped"]);
     assert_eq!(
         subtotals(&entries)
             .into_iter()
             .map(|(label, _, _)| label)
             .collect::<Vec<_>>(),
-        ["alpha: total", "Zulu: total", "Ungrouped: total"]
+        ["Zulu: total", "alpha: total", "Ungrouped: total"]
     );
 }
 
@@ -385,12 +384,12 @@ fn a_core_in_two_groups_appears_and_counts_in_both() {
         labels(),
     );
 
-    assert_eq!(headers(&entries), ["Alone", "Both"]);
+    assert_eq!(headers(&entries), ["Both", "Alone"]);
     assert_eq!(
         subtotals(&entries),
         [
-            ("Alone: total".to_string(), 11.0, 3),
             ("Both: total".to_string(), 14.0, 3),
+            ("Alone: total".to_string(), 11.0, 3),
         ],
         "the shared core counts inside both folds"
     );
@@ -426,16 +425,16 @@ fn an_explicit_sort_orders_rows_within_each_section() {
     assert_eq!(
         shape,
         [
-            "# First",
-            "2",
-            "1",
-            "= First: total",
             "# Second",
             "4",
             "3",
             "= Second: total",
+            "# First",
+            "2",
+            "1",
+            "= First: total",
         ],
-        "each section sorts descending on its own, and the captions keep their name order"
+        "each section sorts descending on its own, and captions keep saved order"
     );
 }
 

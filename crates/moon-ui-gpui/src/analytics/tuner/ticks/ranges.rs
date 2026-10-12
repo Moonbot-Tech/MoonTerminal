@@ -73,16 +73,6 @@ impl Slot {
             Slot::Step => range.step = value,
         }
     }
-
-    /// The heading of the cell's column.
-    fn title(self) -> String {
-        match self {
-            Slot::From => t!("analytics.ticks.range_from"),
-            Slot::To => t!("analytics.ticks.range_to"),
-            Slot::Step => t!("analytics.ticks.range_step"),
-        }
-        .to_string()
-    }
 }
 
 /// A typed cell's number: empty is automatic, a comma reads as the decimal point; `Err` for text
@@ -102,10 +92,57 @@ fn parse_cell(text: &str) -> Result<Option<f64>, ()> {
 
 /// Width of the whole range block — three cells, their gaps and the reset — so a row without a
 /// range and a heading keep the columns in line.
-fn block_w(cx: &App) -> Pixels {
+pub(super) fn block_w(cx: &App) -> Pixels {
     design::font_w_px(cx, RANGE_W) * 3.0
         + design::ui_px(cx, RANGE_GAP) * 3.0
         + px(design::dense_glyph_btn_w(cx))
+}
+
+/// Render the same editable range cells for production rows and the backend-free layout probe.
+pub(super) fn range_cells_el(
+    key: &str,
+    inputs: &[Entity<MoonInputState>; 3],
+    error: bool,
+    tip: String,
+    reset: AnyElement,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let selector = format!("an-ticks-range-{key}");
+    let mut cells = h_flex()
+        .id(SharedString::from(selector.clone()))
+        .debug_selector(move || selector.clone())
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, RANGE_GAP))
+        .tooltip(crate::panels::common::text_tooltip(tip));
+    for (slot, input) in Slot::ALL.into_iter().zip(inputs) {
+        let bad = error || parse_cell(input.read(cx).value().as_ref()).is_err();
+        let selector = format!("an-ticks-range-cell-{}-{key}", slot.id());
+        cells = cells.child(
+            div()
+                .debug_selector(move || selector.clone())
+                .w(design::font_w_px(cx, RANGE_W))
+                .flex_none()
+                .font_family(design::mono())
+                .rounded(design::ui_px(cx, 3.0))
+                .border_1()
+                .border_color(if bad {
+                    moon(p.red)
+                } else {
+                    moon_alpha(p.border, 0.0)
+                })
+                .child(
+                    MoonInput::new(SharedString::from(format!(
+                        "an-ticks-range-in-{}-{key}",
+                        slot.id()
+                    )))
+                    .state(input)
+                    .size(design::dense_input_size(cx)),
+                ),
+        );
+    }
+    cells.child(reset).into_any_element()
 }
 
 impl AnalyticsView {
@@ -152,20 +189,7 @@ impl AnalyticsView {
         let resolved = self.ticks_resolved(key);
         let typed = self.ticks.ranges.get(key).copied().unwrap_or_default();
         let shown = resolved.shown;
-        let mut cells = h_flex()
-            .id(SharedString::from(format!("an-ticks-range-{key}")))
-            .flex_none()
-            .items_center()
-            .gap(design::ui_px(cx, RANGE_GAP))
-            .tooltip(crate::panels::common::text_tooltip(range_tip(
-                &resolved,
-                self.ticks
-                    .data
-                    .data()
-                    .is_some_and(|d| d.integers.contains(key)),
-            )));
-        for slot in Slot::ALL {
-            // What an empty cell stands for: the value the search takes there.
+        let inputs = Slot::ALL.map(|slot| {
             let placeholder = match (shown, slot) {
                 (None, _) => "—".to_string(),
                 (Some(s), Slot::From) => spell_number(s.from),
@@ -173,38 +197,22 @@ impl AnalyticsView {
                 (Some(s), Slot::Step) if s.step > 0.0 => spell_number(s.step),
                 (Some(_), Slot::Step) => "—".to_string(),
             };
-            let input = self.ticks_range_input(key, slot, &typed, placeholder, window, cx);
-            let bad = parse_cell(input.read(cx).value().as_ref()).is_err();
-            cells = cells.child(
-                div()
-                    .w(design::font_w_px(cx, RANGE_W))
-                    .flex_none()
-                    .font_family(design::mono())
-                    .rounded(design::ui_px(cx, 3.0))
-                    .border_1()
-                    .border_color(if bad || resolved.error.is_some() {
-                        moon(p.red)
-                    } else {
-                        moon_alpha(p.border, 0.0)
-                    })
-                    .child(
-                        MoonInput::new(SharedString::from(format!(
-                            "an-ticks-range-in-{}-{key}",
-                            slot.id()
-                        )))
-                        .state(&input)
-                        .size(design::dense_input_size(cx)),
-                    ),
-            );
-        }
-        cells
-            .child(self.ticks_reset_button(
-                SharedString::from(format!("an-ticks-range-reset-{key}")),
-                vec![key],
-                t!("analytics.ticks.range_reset").to_string(),
-                cx,
-            ))
-            .into_any_element()
+            self.ticks_range_input(key, slot, &typed, placeholder, window, cx)
+        });
+        let reset = self.ticks_reset_button(
+            SharedString::from(format!("an-ticks-range-reset-{key}")),
+            vec![key],
+            t!("analytics.ticks.range_reset").to_string(),
+            cx,
+        );
+        let tip = range_tip(
+            &resolved,
+            self.ticks
+                .data
+                .data()
+                .is_some_and(|d| d.integers.contains(key)),
+        );
+        range_cells_el(key, &inputs, resolved.error.is_some(), tip, reset, p, cx)
     }
 
     /// The blank a row without a range keeps where the range block stands.
@@ -212,28 +220,27 @@ impl AnalyticsView {
         div().w(block_w(cx)).flex_none().into_any_element()
     }
 
-    /// The range columns' headings and the reset of every range, for the grid's header row.
+    /// One range heading spans the editable block, with the existing reset at its end.
     pub(super) fn ticks_range_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let keys: Vec<&'static str> = TICK_PARAMS
             .iter()
             .filter(|f| f.kind == ParamKind::Num)
             .map(|f| f.key)
             .collect();
-        let mut head = h_flex()
+        let head = h_flex()
+            .w(block_w(cx))
             .flex_none()
             .items_center()
             .gap(design::ui_px(cx, RANGE_GAP));
-        for slot in Slot::ALL {
-            head = head.child(
-                div()
-                    .w(design::font_w_px(cx, RANGE_W))
-                    .flex_none()
-                    .text_center()
-                    .truncate()
-                    .child(slot.title()),
-            );
-        }
-        head.child(self.ticks_reset_button(
+        head.child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_center()
+                .font_family(design::ui_font())
+                .child(t!("analytics.ticks.pick.col_range").to_string()),
+        )
+        .child(self.ticks_reset_button(
             "an-ticks-range-reset-all".into(),
             keys,
             t!("analytics.ticks.range_reset_all").to_string(),

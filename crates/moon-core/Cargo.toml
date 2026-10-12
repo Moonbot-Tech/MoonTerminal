@@ -107,6 +107,8 @@ rayon = "1.12"
 # decompression of the payload and CRC32 of the compressed bytes. Both are already in the
 # dependency tree transitively.
 flate2 = "1"
+# Binance daily archive reader: pure-Rust deflate decompression.
+zip = { version = "7.2", default-features = false, features = ["deflate-flate2"] }
 crc32fast = "1"
 
 # Connection to the Moonbot core (feed/live/mod.rs), the only module that knows the transport.

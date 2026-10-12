@@ -323,3 +323,37 @@ fn groups_replace_the_stations_whole_or_stay() {
         "sent groups replace the set, trimmed, deduplicated, empty ones dropped"
     );
 }
+
+/// Dropping order on a settings edit or disk save would reset reports after a chat edit/restart.
+#[test]
+fn group_order_survives_settings_edits_and_restarts_but_old_group_sends_reset_it() {
+    let current: Access = serde_json::from_value(serde_json::json!({
+        "groups": [{"name": "Zulu", "cores": [1]}, {"name": "alpha", "cores": [2]}],
+        "groups_order": ["Zulu", "alpha"]
+    }))
+    .unwrap();
+    let saved = plan_access(&current, None, &current, Access::default()).unwrap();
+    let path = scratch("group-order");
+    write_pairing(&path, &saved).unwrap();
+    let back = load_pairing(&path).unwrap();
+    let names = |access: &Access| {
+        access
+            .report_groups()
+            .into_iter()
+            .map(|group| group.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&back), ["Zulu", "alpha"]);
+    let legacy_send = Access {
+        groups: current.groups.clone(),
+        ..Access::default()
+    };
+    let saved = plan_access(&current, None, &current, legacy_send).unwrap();
+    assert_eq!(names(&saved), ["alpha", "Zulu"]);
+    let reordered = Access {
+        groups_order: Some(vec!["alpha".into(), "Zulu".into()]),
+        ..current.clone()
+    };
+    let saved = plan_access(&current, None, &current, reordered).unwrap();
+    assert_eq!(names(&saved), ["alpha", "Zulu"]);
+}

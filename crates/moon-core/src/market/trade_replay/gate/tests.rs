@@ -4,6 +4,46 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::market::trade_replay::venue_caps::{KlineRoute, TradeRoute};
 
+/// A per-caller replacement would let catch-up and replay evade each other's refusal budget.
+#[test]
+fn shared_gate_is_one_instance_and_shares_refusals() {
+    let first = shared();
+    let second = shared();
+    assert!(std::ptr::eq(first, second));
+    let now = Instant::now();
+    let host = "shared-gate.synthetic.invalid";
+    assert_eq!(second.claim(host, now), Ok(()));
+    first.refuse(host, now);
+    assert_eq!(second.claim(host, now), Err(30));
+}
+
+/// A catch-up 418 must stop another caller without verdict settlement erasing its header wait.
+#[test]
+fn response_ban_survives_rate_limited_verdict() {
+    let gate = shared();
+    let host = "catchup-ban.synthetic.invalid";
+    let asked_at = Instant::now();
+    assert_eq!(
+        absorb_response_notice(
+            gate,
+            host,
+            &rest::ExchangeNotice {
+                status: 418,
+                retry_after_s: Some(120),
+                used_weight_1m: None,
+            }
+        ),
+        NoticeEffect::Throttled
+    );
+    assert!(settle_verdict(
+        gate,
+        host,
+        &TickVerdict::Abandoned(TickAbandon::RateLimited),
+        asked_at
+    ));
+    assert!(shared().claim(host, Instant::now()).is_err());
+}
+
 /// Asking records nothing: two lanes of one host may both be sent to while neither has been
 /// refused, and a refusal is what starts the backoff — at the floor, doubling per refusal in a
 /// row, gone once the venue answers again.

@@ -1,8 +1,8 @@
 //! Regression coverage for fixed-width Fact-versus-variant KPI values.
 
 use super::{
-    CellFormat, FigureTone, KpiCellText, MetricKind, OpenTail, VarLabel, figure_of,
-    format_kpi_cell, kpi_columns, plain_factor, with_open_tail,
+    CellFormat, FigureTone, KpiCellText, MetricKind, VarLabel, figure_of, format_kpi_cell,
+    kpi_columns, plain_factor, unclosed_cell,
 };
 use crate::analytics::set_pnl_unit;
 use moon_core::db::ProfitUnit;
@@ -163,11 +163,9 @@ fn break_even_profit_factor_is_a_dash_and_all_winners_stay_99() {
     set_pnl_unit(None);
 }
 
-/// A column with deals left open shows its closed profit, then their tape-end estimate in
-/// brackets, coloured by the closed profit alone — the estimate never joins the total. Their
-/// count is the tooltip's: the narrow column cut it off the cell (2026-10-07).
+/// Folding open estimates into the profit cell would misstate the scored result.
 #[test]
-fn an_open_tail_follows_the_closed_profit_in_brackets() {
+fn unclosed_estimates_have_their_own_cell_and_never_join_profit() {
     let _locale = crate::test_locale::force("en");
     set_pnl_unit(None);
     let stats = VarStats {
@@ -175,14 +173,10 @@ fn an_open_tail_follows_the_closed_profit_in_brackets() {
         profit: -4.94,
         ..VarStats::default()
     };
-    let tail = OpenTail { profit: 20.0, n: 5 };
-    let figure = with_open_tail(figure_of(MetricKind::Profit, &stats), tail);
-    assert_eq!(figure.text.display, "-4.94 (+20)");
-    let tooltip = figure
-        .text
-        .tooltip
-        .expect("the tooltip spells the tail out");
-    assert!(tooltip.contains('5'), "{tooltip}");
+    assert_eq!(unclosed_cell(0, 7, 12.75).display, "—");
+    assert_eq!(unclosed_cell(1, 7, 12.75).display, "7 · ≈ +12.75");
+    let figure = figure_of(MetricKind::Profit, &stats);
+    assert_eq!(figure.text.display, "-4.94");
     assert_eq!(figure.tone, FigureTone::Signed);
     assert!((figure.signed + 4.94).abs() < 1e-12);
 }

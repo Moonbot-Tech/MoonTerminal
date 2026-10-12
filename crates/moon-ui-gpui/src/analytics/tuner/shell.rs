@@ -252,9 +252,8 @@ impl AnalyticsView {
                 // The list differs from what the strategies hold — the same condition
                 // the coin table's "changed" badge and its Revert button read.
                 TunerKind::Coins => self.coins.has_changes(),
-                // The first variant column holds something to write, scored on enough
-                // deals to recommend it; a thin one stays writable, unlit.
-                TunerKind::Ticks => self.ticks.save_recommended(),
+                // Entry/Exit actions live exclusively in the summary card.
+                TunerKind::Ticks => false,
             },
         });
         let view = cx.entity();
@@ -288,7 +287,7 @@ impl AnalyticsView {
                             TunerKind::Filter => this.open_copy_dialog(window, cx),
                             TunerKind::Time => this.time_open_copy_dialog(window, cx),
                             TunerKind::Coins => this.coins_open_copy_dialog(window, cx),
-                            TunerKind::Ticks => this.ticks_open_copy_dialog(window, cx),
+                            TunerKind::Ticks => {} // Entry/Exit uses its summary card.
                         }
                         cx.notify();
                     });
@@ -300,7 +299,7 @@ impl AnalyticsView {
                         TunerKind::Filter => this.open_save_dialog(cx),
                         TunerKind::Time => this.time_open_save_dialog(cx),
                         TunerKind::Coins => this.coins_open_save_dialog(cx),
-                        TunerKind::Ticks => this.ticks_open_save_dialog(cx),
+                        TunerKind::Ticks => {} // Entry/Exit uses inline summary consent.
                     }
                     cx.notify();
                 });

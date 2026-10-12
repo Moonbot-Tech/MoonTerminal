@@ -1063,14 +1063,24 @@ fn strategy_row_clicks_route_through_the_pure_gesture_decision() {
     }
 }
 
-/// A tuner card's header clips its own text before it ever pushes the collapse caret out.
+/// Legacy tuner headers clip text, while prose may wrap without pushing the caret out.
 ///
 /// Breakage this pins: removing the clipping box or restoring a second grow spacer in
-/// `analytics/tuner/shared.rs:card` would hide the caret in a narrow card.
+/// `analytics/tuner/shared.rs:card_header_layout` would hide the caret in a narrow card.
 #[test]
 fn a_tuner_card_header_clips_its_text_before_its_accessory() {
     let shared = read_src("analytics/tuner/shared.rs");
-    let card = braced_body(&shared, "pub(super) fn card(");
+    let legacy = braced_body(&shared, "pub(super) fn card(");
+    assert!(
+        legacy.contains("card_header_layout(title, sub, body, accessory, false, p, cx)"),
+        "legacy axes must retain the non-wrapping header"
+    );
+    let prose = braced_body(&shared, "pub(super) fn card_with_wrapping_caption(");
+    assert!(
+        prose.contains("card_header_layout(title, sub, body, accessory, true, p, cx)"),
+        "only the explicit prose wrapper opts into wrapping"
+    );
+    let card = braced_body(&shared, "fn card_header_layout(");
 
     for needle in [".min_w_0()", ".overflow_hidden()", ".whitespace_nowrap()"] {
         assert!(
@@ -1096,8 +1106,9 @@ fn a_tuner_card_header_clips_its_text_before_its_accessory() {
          them by order rather than shrinking both, the accessory so it never yields"
     );
     assert!(
-        !card.contains(".flex_wrap()"),
-        "the header is a fixed-height strip — wrapping would grow it and push the body down"
+        card.contains(".when(!wrap, |text| text.overflow_hidden().whitespace_nowrap())")
+            && card.contains(".when(wrap, |text| text.flex_wrap().font_family(design::ui_font()))"),
+        "legacy headers must stay clipped and non-wrapping; only prose may grow vertically"
     );
 }
 

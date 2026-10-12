@@ -3,7 +3,7 @@
 //! The Profit monitor's rules (`moon-ui-gpui` `analytics/profit_monitor/sections.rs`), which this
 //! crate cannot import from a binary crate, so the report reads the same way the window does:
 //! - a core saved into two groups is listed under BOTH;
-//! - groups are ordered by name, case-insensitively, and the cores in none come last;
+//! - groups keep the host's saved order, and the cores in none come last;
 //! - a section keeps the order the cores were handed, never the order a group saved them in;
 //! - the list stays flat when sectioning would put ONE caption over everything — no saved group
 //!   holds a listed core, or a single group holds every one of them.
@@ -28,12 +28,10 @@ pub(super) struct Section<'a> {
 ///
 /// Args:
 ///     cores: The listed cores' ids, in display order.
-///     groups: The bot's saved core groups.
+///     groups: The bot's core groups in resolved display order.
 pub(super) fn sections<'a>(cores: &[u64], groups: &'a [CoreGroup]) -> Option<Vec<Section<'a>>> {
-    let mut order: Vec<&CoreGroup> = groups.iter().collect();
-    order.sort_by_cached_key(|group| group.name.to_lowercase());
-    let mut out: Vec<Section<'a>> = order
-        .into_iter()
+    let mut out: Vec<Section<'a>> = groups
+        .iter()
         .map(|group| Section {
             group: Some(group),
             members: (0..cores.len())

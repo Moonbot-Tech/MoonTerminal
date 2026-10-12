@@ -296,6 +296,7 @@ fn core_replay_rechecks_after_candles_and_keeps_context() {
     let stage = TickStage {
         baseline: None,
         route: Some(route),
+        archive: None,
         key: OutcomeKey {
             venue: bars.venue,
             host: route.host(),
@@ -522,6 +523,33 @@ fn retention_is_decided_from_the_trade_focus_not_padded_context() {
     );
 }
 
+/// Removing the safety margin re-asks Binance's refused 48-hour edge instead of stopping early.
+#[test]
+fn retention_margin_excludes_a_focus_47_and_a_half_hours_old() {
+    const HOUR: i64 = 3_600_000;
+    let now_ms = 1_000 * HOUR;
+    let window = |close_ms| ReplayWindow {
+        from_ms: close_ms - 60_000,
+        to_ms: close_ms,
+        open_ms: close_ms - 60_000,
+        close_ms,
+        margin_ms: 0,
+        long_position_ms: 5 * 60_000,
+        over_budget: false,
+    };
+    for route in [
+        TradeRoute::BinanceUsdMAggTrades,
+        TradeRoute::BinanceCoinMAggTrades,
+    ] {
+        assert!(!inside_retention(
+            route,
+            window(now_ms - 47 * HOUR - HOUR / 2),
+            now_ms
+        ));
+        assert!(inside_retention(route, window(now_ms - 47 * HOUR), now_ms));
+    }
+}
+
 /// `market/trade_replay/worker.rs:paginate_ticks` restoring an over-budget abandonment would
 /// throw away a non-empty focus harvest and fall back to candles.
 #[test]
@@ -705,6 +733,7 @@ fn tile_stage(request: &TradeReplayRequest) -> TickStage {
     TickStage {
         baseline: None,
         route: Some(route),
+        archive: None,
         key: OutcomeKey {
             venue: request.address.venue,
             host: route.host(),
@@ -716,6 +745,192 @@ fn tile_stage(request: &TradeReplayRequest) -> TickStage {
         },
         candles: Vec::new(),
     }
+}
+
+/// Daily archives must serve Bybit and old Binance futures without entering REST paging.
+#[test]
+fn archived_focus_serves_bybit_and_old_binance_without_rest() {
+    for brand in [crate::venue::Brand::Bybit, crate::venue::Brand::Binance] {
+        let (reply, _rx) = mpsc::channel();
+        let mut request = tile_request(reply);
+        request.market = "SYNUSDT".into();
+        request.intent = ReplayIntent::Model;
+        request.address.venue = crate::venue::Venue {
+            brand,
+            kind: crate::venue::MarketKind::Futures,
+        };
+        let from = crate::util::time::now_unix_ms_i64() - 5 * 86_400_000;
+        request.window = ReplayWindow {
+            from_ms: from,
+            to_ms: from + 60_000,
+            open_ms: from,
+            close_ms: from + 60_000,
+            margin_ms: 0,
+            long_position_ms: 300_000,
+            over_budget: false,
+        };
+        let mut stage = tile_stage_for_archive(&request);
+        stage.archive = venue_caps::archive_route(request.address.venue, &request.market);
+        let focus = request.window.focus_spans();
+        let (series, _) = serve_ticks_with(
+            &rest::agent(),
+            &ReplayGate::new(),
+            &request,
+            &stage,
+            &Mutex::new(TickTileStore::default()),
+            None,
+            |route, _, missing, _| {
+                assert_eq!(Some(route), stage.archive);
+                assert_eq!(*missing, focus);
+                Ok(super::super::archive::ArchiveFill {
+                    covered: missing.clone(),
+                    ticks: vec![tick(from + 1000, 10.0)],
+                    deferred: None,
+                })
+            },
+        )
+        .expect("archive answer");
+        assert_eq!(series.tick_status, TickStatus::Served);
+        assert_eq!(series.covered, focus);
+        assert_eq!(series.ticks.len(), 1);
+    }
+}
+
+/// Opening an old chart must serve held tape without starting a daily archive download.
+#[test]
+fn chart_intent_never_calls_archive() {
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.address.venue = crate::venue::Venue {
+        brand: crate::venue::Brand::Bybit,
+        kind: crate::venue::MarketKind::Futures,
+    };
+    request.intent = ReplayIntent::Chart;
+    let stage = tile_stage_for_archive(&request);
+    let result = serve_ticks_with(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &request,
+        &stage,
+        &Mutex::new(TickTileStore::default()),
+        None,
+        |_, _, _, _| panic!("chart archive call"),
+    );
+    assert!(matches!(result, Err(Some(TickStatus::NoRoute))));
+}
+
+/// A model spanning many days must not download more than three daily archives per request.
+#[test]
+fn model_archive_request_is_limited_to_three_days() {
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.address.venue = crate::venue::Venue {
+        brand: crate::venue::Brand::Bybit,
+        kind: crate::venue::MarketKind::Futures,
+    };
+    request.intent = ReplayIntent::Model;
+    let day = 86_400_000;
+    let from = crate::util::time::now_unix_ms_i64().div_euclid(day) * day - 8 * day;
+    request.window = ReplayWindow {
+        from_ms: from,
+        to_ms: from + 5 * day - 1,
+        open_ms: from,
+        close_ms: from + 5 * day - 1,
+        margin_ms: 0,
+        long_position_ms: i64::MAX,
+        over_budget: false,
+    };
+    let stage = tile_stage_for_archive(&request);
+    let (series, _) = serve_ticks_with(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &request,
+        &stage,
+        &Mutex::new(TickTileStore::default()),
+        None,
+        |_, _, missing, _| {
+            assert_eq!(*missing, Coverage::one((from, from + 3 * day - 1)));
+            Ok(super::super::archive::ArchiveFill {
+                covered: missing.clone(),
+                ticks: vec![tick(from + 1000, 10.0)],
+                deferred: None,
+            })
+        },
+    )
+    .unwrap();
+    assert_eq!(series.covered, Coverage::one((from, from + 3 * day - 1)));
+}
+
+/// Construct archive-capable stages without assuming that Bybit has a REST endpoint.
+fn tile_stage_for_archive(request: &TradeReplayRequest) -> TickStage {
+    let key = OutcomeKey {
+        venue: request.address.venue,
+        host: "synthetic",
+        market: request.market.clone(),
+        from_ms: request.window.from_ms,
+        to_ms: request.window.to_ms,
+        margin_ms: request.window.margin_ms,
+        long_position_ms: request.window.long_position_ms,
+    };
+    tick_stage_for(request.address.venue, &key, &[])
+}
+
+/// Hydrating a cold tile store must spare an archive request when persisted tape is complete.
+#[test]
+fn warm_disk_cold_tiles_skip_archive() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "moon-warm-archive-{}-{stamp}.sqlite",
+        std::process::id()
+    ));
+    let cache = trade_cache::TradeCache::open_with_ceiling(path.clone(), || None).unwrap();
+    let (reply, _rx) = mpsc::channel();
+    let mut request = tile_request(reply);
+    request.address.venue = crate::venue::Venue {
+        brand: crate::venue::Brand::Bybit,
+        kind: crate::venue::MarketKind::Futures,
+    };
+    request.intent = ReplayIntent::Model;
+    let focus = request.window.focus_spans();
+    for &(from, to) in focus.spans() {
+        cache.insert(
+            &request.address.exchange_key,
+            &request.market,
+            from,
+            to,
+            vec![tick(from + 1000, 10.0)],
+            TileSource::Venue,
+        );
+    }
+    let stage = tile_stage_for_archive(&request);
+    let answer = serve_ticks_with(
+        &rest::agent(),
+        &ReplayGate::new(),
+        &request,
+        &stage,
+        &Mutex::new(TickTileStore::default()),
+        Some(&cache),
+        |_, _, _, _| panic!("warm disk must prevent archive HTTP"),
+    );
+    assert_eq!(answer.unwrap().0.covered, focus);
+    // Drop the owner and wait for this fixture's cache thread to finish before cleanup.
+    drop(cache);
+    for _ in 0..100 {
+        match std::fs::remove_file(&path) {
+            Ok(()) => return,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    || error.raw_os_error() == Some(32) =>
+            {
+                std::thread::sleep(Duration::from_millis(10))
+            }
+            Err(error) => panic!("fixture cleanup: {error}"),
+        }
+    }
+    panic!("fixture cache did not close");
 }
 
 /// A focus the tile store already holds whole is served from it — the real `serve_ticks`, with

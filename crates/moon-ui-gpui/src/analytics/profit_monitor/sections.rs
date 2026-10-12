@@ -13,7 +13,7 @@
 //!   window's grand-total footer is therefore NOT the sum of the subtotals: its caller folds it
 //!   from the rows BEFORE they reach this module, so every core counts once there however many
 //!   groups name it;
-//! - sections are ordered by NAME, while the ungrouped remainder always comes last, wherever its
+//! - sections keep the saved group list order, while the ungrouped remainder always comes last, wherever its
 //!   localized caption would otherwise sort;
 //! - the table is left unsectioned whenever sectioning would produce ONE caption over everything —
 //!   no saved groups, none that names a visible row, or a single group holding every visible row.
@@ -25,7 +25,6 @@
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use moon_core::config::CoreGroup;
 use moon_core::session::CoreId;
 
 use super::MonitorSort;
@@ -286,16 +285,11 @@ pub(super) fn sectioned(
     if filled + usize::from(remainder_rows > 0) < 2 {
         return flat(rows, sort);
     }
-    // By name, and case-insensitively: `sanitize_core_groups` already guarantees names are unique
-    // that way, so this is a total order and two launches cannot draw the sections differently.
-    let mut order: Vec<&CoreGroup> = live.core_groups.iter().collect();
-    order.sort_by_cached_key(|group| group.name.to_lowercase());
-
     // Every uid the configuration still holds — the authority both captions read.
     let configured: HashSet<CoreId> = live.core_order.iter().copied().collect();
     let mut entries = Vec::new();
     let mut drawn = Section::default();
-    for group in order {
+    for group in &live.core_groups {
         let members: HashSet<CoreId> = group.cores.iter().copied().collect();
         // Collected by POSITION in `rows`, never in saved-member order: `rows` already carries the
         // canonical core order, and with no column selected `sort_rows` leaves what it is given.

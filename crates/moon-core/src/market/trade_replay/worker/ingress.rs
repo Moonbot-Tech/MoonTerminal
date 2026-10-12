@@ -138,7 +138,7 @@ pub(super) fn enqueue(
 pub(super) fn run(rx: &Receiver<Inbound>, back: Sender<Inbound>) {
     let shared = Arc::new(Shared {
         agent: rest::agent(),
-        gate: ReplayGate::new(),
+        gate: gate::shared(),
         cache: Mutex::new(VecDeque::new()),
         tiles: Mutex::new(TickTileStore::default()),
         back,

@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// Project the settings the terminal renders out of a full safe-share snapshot.
+/// Project settings and read-only order eligibility facts from a full safe-share snapshot.
 ///
 /// `pub(crate)` rather than `pub(super)` for one reason: [`CoreConfig`] deliberately has no
 /// `Default`, so this is the only way to build one, and the store's own tests need a projection to
@@ -24,6 +24,7 @@ pub(crate) fn core_config_from_proto(cfg: &SharedConfig) -> CoreConfig {
     let oc = &cfg.trading.orders_control;
     let mo = &cfg.trading.multi_orders;
     CoreConfig {
+        auto_margin_borrow: t.moonbot_config.auto_margin_borrow,
         // The list verbatim: its separator rules live with the readers — see
         // `feed::fav_markets_list` — so the projection carries the core's own string unchanged.
         fav_markets: t.fav_markets.clone(),

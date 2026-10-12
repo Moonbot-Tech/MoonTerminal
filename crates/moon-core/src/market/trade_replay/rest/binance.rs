@@ -80,7 +80,11 @@ pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
     if (200..300).contains(&status) {
         return Ok(());
     }
-    // `-1121` is Binance's own "invalid symbol"; every other code is something that may recover.
+    // Expired ranges must not impose host-wide backoff on still-reachable markets.
+    if body.get("code").and_then(Value::as_i64) == Some(-4166) {
+        return Err(FetchError::OutOfRetention);
+    }
+    // `-1121` is Binance's own "invalid symbol".
     if body.get("code").and_then(Value::as_i64) == Some(-1121) {
         return Err(FetchError::UnknownSymbol);
     }

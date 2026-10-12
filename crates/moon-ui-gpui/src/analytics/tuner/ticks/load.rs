@@ -39,8 +39,9 @@ use moon_core::feed::report_traces::ArchivedLineKind;
 use moon_core::feed::strategy_deps::FieldDeps;
 use moon_core::feed::types::Tick;
 use moon_core::market::kline_cache::KlineCache;
-use moon_core::market::trade_replay::venue_caps::trade_route;
-use moon_core::market::trade_replay::worker::inside_retention;
+use moon_core::market::trade_replay::venue_caps::{
+    ARCHIVE_DEPTH_MS, Fetchable, fetchable, trade_route,
+};
 use moon_core::market::trade_replay::{
     Coverage, ReplayWindow, TickQuery, TickStatus, long_position_ms, margin_ms, query_held,
 };
@@ -838,20 +839,26 @@ pub(super) fn held_tape(
 }
 
 /// Why a fetch of a row the terminal holds no tape for could only come back refused, said at
-/// load rather than after a walk: no public route for the venue (the worker would serve such a
-/// stage from the tile store alone, which the held query just found empty), or a window older
-/// than the route's retention. `None` where the venue could serve it. The same rule the fetch
-/// job and the startup autoload apply (`inside_retention`), asked here so the row does not
+/// load rather than after a walk: no public source for the venue, or a focus older than its
+/// REST and archive reach. `None` where the venue could serve it. The same rule the fetch
+/// job and the startup autoload apply (`fetchable`), asked here so the row does not
 /// read as fetchable — and is not queued — when it is not.
 fn unservable_status(address: &RowAddress, deal: &Deal, now_ms: i64) -> Option<TapeStatus> {
-    let Some(route) = trade_route(address.venue) else {
-        return Some(TapeStatus::Refused(TickStatus::NoRoute));
-    };
     let window = model_window(deal, margin_ms(), long_position_ms())?;
-    let retention_ms = route.retention_ms()?;
-    (!inside_retention(route, window, now_ms)).then_some(TapeStatus::Refused(
-        TickStatus::OutOfRetention { retention_ms },
-    ))
+    match fetchable(
+        address.venue,
+        &address.market,
+        window.focus_spans().hull()?.1,
+        now_ms,
+    ) {
+        Fetchable::Rest | Fetchable::Archive => None,
+        Fetchable::NoRoute => Some(TapeStatus::Refused(TickStatus::NoRoute)),
+        Fetchable::OutOfRetention => Some(TapeStatus::Refused(TickStatus::OutOfRetention {
+            retention_ms: trade_route(address.venue)
+                .and_then(|route| route.retention_ms())
+                .unwrap_or(ARCHIVE_DEPTH_MS),
+        })),
+    }
 }
 
 /// Run the model on one row, from what the worker holds — asked here, one query; a row

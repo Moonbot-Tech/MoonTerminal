@@ -35,6 +35,36 @@ pub(super) fn serve_ticks(
     stage: &TickStage,
     tiles: &Mutex<TickTileStore>,
 ) -> Result<(TradeReplaySeries, bool), Option<TickStatus>> {
+    let persisted = super::trade_cache::handle();
+    serve_ticks_with(
+        agent,
+        gate,
+        request,
+        stage,
+        tiles,
+        persisted.as_ref(),
+        super::super::archive::fill,
+    )
+}
+
+/// Run the production tick pipeline with injected archive transport and persisted cache.
+pub(super) fn serve_ticks_with(
+    agent: &ureq::Agent,
+    gate: &ReplayGate,
+    request: &TradeReplayRequest,
+    stage: &TickStage,
+    tiles: &Mutex<TickTileStore>,
+    persisted: Option<&super::trade_cache::TradeCache>,
+    fetch_archive: impl FnOnce(
+        venue_caps::ArchiveRoute,
+        &str,
+        &Coverage,
+        &ReplayGate,
+    ) -> Result<
+        super::super::archive::ArchiveFill,
+        super::super::archive::ArchiveError,
+    >,
+) -> Result<(TradeReplaySeries, bool), Option<TickStatus>> {
     // The archive may have arrived while other candle jobs had priority in the worker queue.
     // For a chart, answered straight from the ring and not filed: a thinned answer is not a
     // tile, and the chart shows the series it is sent. A tiles reader gets the ring THROUGH
@@ -55,7 +85,6 @@ pub(super) fn serve_ticks(
     }
     let key: TileKey = (request.address.exchange_key.clone(), request.market.clone());
     let focus = request.window.focus_spans();
-    let persisted = super::trade_cache::handle();
     // A requester that reads the tiles gets the ring THROUGH them: what the ring holds inside
     // the focus is filed as `Core` tiles before the stage decides what is left to fetch, so a
     // trade the close-time capture missed costs the venue only what the ring does not hold.
@@ -93,8 +122,6 @@ pub(super) fn serve_ticks(
     // tuner's fetch, an earlier window — or the window prints `none`, the reason there is no
     // venue to ask.
     let serve_held = |none: TickStatus| {
-        hydrate(tiles, persisted.as_ref(), &key, &focus);
-        file_ring();
         let (covered, runs) = {
             let store = lock_tiles(tiles);
             let covered = held_coverage(&store, &key, &focus, Coverage::none());
@@ -126,18 +153,104 @@ pub(super) fn serve_ticks(
             true,
         ))
     };
-    let Some(route) = stage.route else {
-        return serve_held(TickStatus::NoRoute);
-    };
-    let deadline = Instant::now() + JOB_DEADLINE;
     // Re-derived rather than trusted from `tick_stage_for`'s own permissive pass: that check ran
     // BEFORE this stage was even queued, and a clock that could not be read then still cannot
     // prove the window is too old now, so the same `now_ms > 0` guard applies here.
     let now_ms = crate::util::time::now_unix_ms_i64();
     let earliest_ms = match now_ms > 0 {
-        true => route.retention_ms().map(|r| now_ms - r),
+        true => stage
+            .route
+            .and_then(|route| route.retention_ms())
+            .map(|r| now_ms - r + venue_caps::RETENTION_SAFETY_MS),
         false => None,
     };
+    // Persisted tape and the core ring precede the archive residual on both route paths.
+    hydrate(tiles, persisted, &key, &focus);
+    file_ring();
+    let old = match stage.route {
+        None => focus.clone(),
+        Some(_) => earliest_ms
+            .map(|earliest| focus.minus(&Coverage::one((earliest, i64::MAX))))
+            .unwrap_or_default(),
+    };
+    let mut archive_limited = None;
+    if let Some(archive) = stage
+        .archive
+        .filter(|_| request.intent == ReplayIntent::Model)
+    {
+        let held = held_coverage(&lock_tiles(tiles), &key, &focus, Coverage::none());
+        let missing = archive_request(&old.minus(&held));
+        if !missing.is_empty() {
+            match fetch_archive(archive, &request.market, &missing, gate) {
+                Ok(fill) => {
+                    let covered = fill.covered.clip(&missing);
+                    let ticks = fill.ticks;
+                    for &(from_ms, to_ms) in covered.spans() {
+                        let inside: Vec<_> = ticks
+                            .iter()
+                            .copied()
+                            .filter(|tick| {
+                                tick.time_ms.is_finite()
+                                    && tick.time_ms >= from_ms as f64
+                                    && tick.time_ms <= to_ms as f64
+                            })
+                            .collect();
+                        if let Some(cache) = persisted {
+                            cache.insert(
+                                &key.0,
+                                &key.1,
+                                from_ms,
+                                to_ms,
+                                inside.clone(),
+                                TileSource::Venue,
+                            );
+                        }
+                        let gained = !inside.is_empty();
+                        lock_tiles(tiles).insert(
+                            key.clone(),
+                            from_ms,
+                            to_ms,
+                            inside,
+                            TileSource::Venue,
+                        );
+                        if gained {
+                            super::super::trade_cache::note_filed(&key.0, &key.1);
+                        }
+                    }
+                    if let Some(super::super::archive::ArchiveError::Throttled { retry_after_s }) =
+                        fill.deferred
+                    {
+                        archive_limited = Some(TickStatus::RateLimited {
+                            retry_in_s: retry_after_s
+                                .or_else(|| gate.refused_for(archive.host(), Instant::now()))
+                                .unwrap_or(1),
+                        });
+                    }
+                }
+                Err(super::super::archive::ArchiveError::Throttled { retry_after_s }) => {
+                    archive_limited = Some(TickStatus::RateLimited {
+                        retry_in_s: retry_after_s
+                            .or_else(|| gate.refused_for(archive.host(), Instant::now()))
+                            .unwrap_or(1),
+                    });
+                }
+                Err(_) => {}
+            }
+        }
+    }
+    if let Some(status) = archive_limited {
+        return match serve_held(status) {
+            Ok((mut series, _)) => {
+                series.tick_status = status;
+                Ok((series, true))
+            }
+            Err(_) => Err(Some(status)),
+        };
+    }
+    let Some(route) = stage.route else {
+        return serve_held(TickStatus::NoRoute);
+    };
+    let deadline = Instant::now() + JOB_DEADLINE;
     let trade_deadline = deadline + (TRADE_DEADLINE - JOB_DEADLINE);
     let plan = tick_plan(request.window, route, earliest_ms, request.intent);
     if plan.slices.is_empty() {
@@ -148,8 +261,6 @@ pub(super) fn serve_ticks(
             retention_ms: route.retention_ms().unwrap_or(0),
         });
     }
-    hydrate(tiles, persisted.as_ref(), &key, &focus);
-    file_ring();
     let residual = residual_plan(&plan, &lock_tiles(tiles), &key);
     // The one line that tells a neighbouring window apart from a reopen: the focus is the
     // window's own, the spans are what the store made of it. In milliseconds, not slices — a
@@ -281,44 +392,12 @@ pub(super) fn serve_ticks(
             },
             |trade| Instant::now() >= if trade { trade_deadline } else { deadline },
             &mut observer,
-            |from_ms, to_ms, cursor| match rest::fetch_trades(
-                agent,
-                route,
-                &request.market,
-                from_ms,
-                to_ms,
-                cursor,
-            ) {
-                Ok(page) => {
-                    // A weight stop leaves this page in the harvest. The next iteration's
-                    // claim is what refuses to send another one.
-                    let _ = absorb_notice(gate, route.host());
-                    Ok(page)
-                }
-                Err(rest::FetchError::Throttled { diagnostic, .. }) => {
-                    let _ = absorb_notice(gate, route.host());
-                    Err(rest::FetchError::Throttled {
-                        retry_after_s: None,
-                        diagnostic,
-                    })
-                }
-                Err(rest::FetchError::Transient(diagnostic)) => {
-                    match absorb_notice(gate, route.host()) {
-                        // The header already named the wait. Returning Transient would have the
-                        // walk record a curve refusal on top of it.
-                        NoticeEffect::WeightStop | NoticeEffect::Throttled => {
-                            Err(rest::FetchError::Throttled {
-                                retry_after_s: None,
-                                diagnostic,
-                            })
-                        }
-                        NoticeEffect::None => Err(rest::FetchError::Transient(diagnostic)),
-                    }
-                }
-                Err(rest::FetchError::UnknownSymbol) => {
-                    let _ = absorb_notice(gate, route.host());
-                    Err(rest::FetchError::UnknownSymbol)
-                }
+            |from_ms, to_ms, cursor| {
+                gate::absorb_page(
+                    gate,
+                    route.host(),
+                    rest::fetch_trades(agent, route, &request.market, from_ms, to_ms, cursor),
+                )
             },
         );
         if let Some(mut series) = upgrade.ready.into_inner() {
@@ -330,6 +409,7 @@ pub(super) fn serve_ticks(
             series.candles = stage.candles.clone();
             return Ok((series, false));
         }
+        host_limited = gate::settle_verdict(gate, route.host(), &verdict, asked_at);
         match verdict {
             TickVerdict::Ready(harvest) => {
                 let TickHarvest {
@@ -337,24 +417,8 @@ pub(super) fn serve_ticks(
                     covered,
                     complete: walked_whole,
                     venue_refused,
-                    stop,
+                    stop: _,
                 } = harvest;
-                // The venue answered without refusing anywhere along the walk, so its refusal
-                // history is stale — exactly the candle stage's own `gate.clear` above. A
-                // refusal it gave us mid-walk (`Transient`) is recorded, or the next request to
-                // this host sends blind into a burst it just declined; an `UnknownSymbol` is an
-                // answer, not a refusal, and the host is fine.
-                match stop {
-                    Some(TickAbandon::Transient) => gate.refuse(route.host(), Instant::now()),
-                    // The wait is already the header's: a curve refusal here would replace a
-                    // Retry-After or a minute-boundary stop, and a clear would try to erase it.
-                    // `clear` still runs for an unknown symbol, which is an answer.
-                    Some(TickAbandon::RateLimited) => host_limited = true,
-                    _ if !venue_refused || matches!(stop, Some(TickAbandon::UnknownSymbol)) => {
-                        gate.clear(route.host(), asked_at)
-                    }
-                    _ => {}
-                }
                 // Clipped to what the walk actually finished (`covered`), not to the request
                 // window: a walk cut short still holds a complete answer for the slices it
                 // actually walked, and clipping to the wider window would let a stray
@@ -368,24 +432,6 @@ pub(super) fn serve_ticks(
                 complete = walked_whole;
             }
             TickVerdict::Abandoned(reason) => {
-                // The gate hears only the venue's own word. `Transient` is a refusal or failure
-                // it just gave us: recorded, so the next request to this host waits it out.
-                // `RateLimited` means the check refused us on a refusal already standing:
-                // nothing to add. `Empty` and `UnknownSymbol` are answers — the host is fine,
-                // and a refusal on record is stale. Our own stops — the user closed the window,
-                // the deadline, either budget — say nothing about the venue and touch nothing:
-                // another lane of this host may have just been refused for real.
-                match reason {
-                    TickAbandon::Transient => gate.refuse(route.host(), Instant::now()),
-                    TickAbandon::Empty | TickAbandon::UnknownSymbol => {
-                        gate.clear(route.host(), asked_at)
-                    }
-                    TickAbandon::RateLimited => host_limited = true,
-                    TickAbandon::Cancelled
-                    | TickAbandon::Deadline
-                    | TickAbandon::OverPageBudget
-                    | TickAbandon::OverTickBudget => {}
-                }
                 log::info!(
                     "[x] trade-replay tick stage abandoned on {}: {reason:?}",
                     route.host()
@@ -513,4 +559,18 @@ pub(super) fn serve_ticks(
         retry_on_reopen = true;
     }
     Ok((series, retry_on_reopen))
+}
+
+/// Admit at most three distinct UTC archive days for one model request, including holed spans.
+fn archive_request(missing: &Coverage) -> Coverage {
+    let days = super::super::archive::utc_days(missing);
+    let admitted = Coverage::from_spans(days.into_iter().take(3).map(|day| {
+        let start = day
+            .and_hms_opt(0, 0, 0)
+            .expect("UTC midnight")
+            .and_utc()
+            .timestamp_millis();
+        (start, start + 86_400_000 - 1)
+    }));
+    missing.clip(&admitted)
 }

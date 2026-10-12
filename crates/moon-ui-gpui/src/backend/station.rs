@@ -76,6 +76,8 @@ pub(crate) struct StationJobs {
     /// The last job's end: `Ok(summary)` or `Err(reason)`.
     pub(crate) outcome: Option<Result<String, String>>,
     pub(crate) bot: Option<BotState>,
+    /// UTC milliseconds when `bot` was read, so a view can name how old its numbers are.
+    pub(crate) bot_read_ms: Option<i64>,
     /// Outer None means unread; inner None means an older station without listing support.
     pub(crate) cores_seen: Option<Option<Vec<moon_core::station_api::ListedCore>>>,
     /// Retain the allocation floor with its listing across restart gaps.
@@ -193,6 +195,7 @@ impl StationJobs {
             self.core_uid_high_water = status.core_uid_high_water;
         }
         self.bot = Some(bot);
+        self.bot_read_ms = Some(moon_core::util::time::now_unix_ms_i64());
     }
 
     /// The server was forgotten: nothing learnt about it applies to the next one.

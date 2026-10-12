@@ -275,8 +275,10 @@ impl AnalyticsView {
         self.arm_ticks_variants(cx);
     }
 
-    /// Clear the variant column.
+    /// Clear the variant column and retire its previous refusal and consent.
     pub(in crate::analytics::tuner) fn ticks_clear_variant(&mut self, cx: &mut Context<Self>) {
+        self.ticks.write_confirm = None;
+        self.ticks.sugg_refusal = None;
         self.ticks.variant.clear();
         self.ticks.clear_var_score();
         self.ticks.plan.clear();
@@ -482,6 +484,7 @@ impl AnalyticsView {
             self.ticks.data.data().map(|d| d.exit_share)
         );
         self.ticks.sugg_note = Some(t!(key).to_string());
+        self.ticks.sugg_refusal = self.ticks.sugg_note.clone();
         cx.notify();
     }
 
@@ -523,6 +526,7 @@ impl AnalyticsView {
         }
         if let Err(miss) = sample_floor(pending.len()) {
             self.ticks.sugg_note = Some(miss_note(miss, 0));
+            self.ticks.sugg_refusal = self.ticks.sugg_note.clone();
             cx.notify();
             return;
         }
@@ -553,14 +557,22 @@ impl AnalyticsView {
         if let Some(n) = min_n.filter(|n| *n > train_n as i64) {
             self.ticks.sugg_note =
                 Some(t!("analytics.ticks.sugg_floor_sample", n = n, m = train_n).to_string());
+            self.ticks.sugg_refusal = self.ticks.sugg_note.clone();
             cx.notify();
             return;
         }
         let handle = SearchHandle::new();
-        self.ticks.sugg = SuggState::Running {
-            handle: handle.clone(),
-            total: restarts,
-        };
+        let started = std::time::Instant::now();
+        let estimate = self
+            .ticks_search_size(only)
+            .and_then(|size| self.ticks_search_time(&size));
+        self.ticks.start_search(
+            handle.clone(),
+            restarts,
+            started,
+            estimate,
+            (train_n, pending.len().saturating_sub(train_n)),
+        );
         self.ticks.sugg_seq = self.ticks.sugg_seq.wrapping_add(1);
         // A typed range the search set aside for the automatic one is said, not swallowed.
         self.ticks.sugg_note = (!set_aside.is_empty()).then(|| {
@@ -579,7 +591,6 @@ impl AnalyticsView {
         );
         probe::watch(handle.clone(), restarts, seq);
         self.poll_ticks_search(handle.clone(), seq, cx);
-        let started = std::time::Instant::now();
         // What the point cost the answer brings is measured under (`estimate.rs`).
         let cost_key = self.ticks_cost_key();
         self.spawn_latest_db(
@@ -668,6 +679,7 @@ impl AnalyticsView {
                         this.ticks.variant = answered;
                         this.ticks.last_seed = Some(result.seed);
                         this.ticks.last_result = Some(result);
+                        this.ticks.last_search_elapsed = Some(started.elapsed());
                     }
                     // Why nothing: the floor no point kept — the typed one, or the search's own
                     // half of the training slice (`default_min_n`) —, the corridor none kept, no
@@ -675,8 +687,10 @@ impl AnalyticsView {
                     // answer's verdict no longer speaks for the column either.
                     Err(miss) => {
                         this.ticks.last_result = None;
+                        this.ticks.last_search_elapsed = None;
                         let floor = min_n.unwrap_or_else(|| default_min_n(train_n));
                         this.ticks.sugg_note = Some(miss_note(miss, floor));
+                        this.ticks.sugg_refusal = this.ticks.sugg_note.clone();
                     }
                 }
                 // The point that earns more on the deals it closed but leaves some open goes
@@ -741,24 +755,6 @@ impl AnalyticsView {
         cx.notify();
     }
 
-    /// "Save": write В1's changes to the selected strategies through the shared dialog.
-    pub(in crate::analytics::tuner) fn ticks_open_save_dialog(&mut self, cx: &mut Context<Self>) {
-        let targets = self.selected_targets();
-        if targets.is_empty() {
-            return;
-        }
-        let changes = self.ticks.variant_changes();
-        if changes.is_empty() {
-            log::info!("analytics: 'Save' (ticks) - no variant to write");
-            return;
-        }
-        let mut warns = self.ticks_change_warnings(&changes, cx);
-        warns.extend(self.ticks_unguarded_warning(&targets, &changes, cx));
-        warns.extend(self.ticks_unmodelled_warns(&targets, cx));
-        warns.extend(self.ticks_gate_warnings(Self::changed_groups(&changes)));
-        self.open_change_dialog(targets, changes, None, Vec::new(), warns, false, cx);
-    }
-
     /// "Make a copy": a new strategy with В1's changes.
     pub(in crate::analytics::tuner) fn ticks_open_copy_dialog(
         &mut self,
@@ -769,11 +765,22 @@ impl AnalyticsView {
             return;
         };
         let changes = self.ticks.variant_changes();
-        let mut warns = self.ticks_change_warnings(&changes, cx);
-        warns.extend(self.ticks_unguarded_warning(std::slice::from_ref(&target), &changes, cx));
-        warns.extend(self.ticks_unmodelled_warns(std::slice::from_ref(&target), cx));
-        warns.extend(self.ticks_gate_warnings(Self::changed_groups(&changes)));
+        let warns = self.ticks_write_warns(std::slice::from_ref(&target), &changes, cx);
         self.open_copy_with(target, changes, warns, window, cx);
+    }
+
+    /// Gather write warnings once when preparing Save, Copy, or an inline confirmation.
+    pub(super) fn ticks_write_warns(
+        &self,
+        targets: &[super::super::shared::SaveTarget],
+        changes: &[(String, String)],
+        cx: &Context<Self>,
+    ) -> Vec<String> {
+        let mut warns = self.ticks_change_warnings(changes, cx);
+        warns.extend(self.ticks_unguarded_warning(targets, changes, cx));
+        warns.extend(self.ticks_unmodelled_warns(targets, cx));
+        warns.extend(self.ticks_gate_warnings(Self::changed_groups(changes)));
+        warns
     }
 
     /// The honesty lines of a write. A variant whose corridor fields are inverted
@@ -908,38 +915,5 @@ pub(super) fn miss_note(miss: SearchMiss, floor: i64) -> String {
         SearchMiss::Unclosed => t!("analytics.ticks.sugg_unclosed").to_string(),
         SearchMiss::Risk => t!("analytics.ticks.sugg_risk").to_string(),
         SearchMiss::Nothing => t!("analytics.ticks.sugg_none").to_string(),
-    }
-}
-
-/// The status band's account of the last search: restarts, the winning one, its passes and
-/// whether it converged, how many distinct end points, how many points were scored.
-pub(super) fn search_stats_line(stats: &moon_core::db::tuner::ticks::SearchStats) -> String {
-    let passes = if stats.converged {
-        t!("analytics.ticks.stats_converged", n = stats.passes)
-    } else {
-        t!("analytics.ticks.stats_cut", n = stats.passes)
-    };
-    let line = t!(
-        "analytics.ticks.stats_line",
-        restarts = stats.restarts,
-        best = stats.best_restart,
-        passes = passes,
-        distinct = stats.distinct,
-        evals = stats.evaluations,
-        refused = stats.refused
-    )
-    .to_string();
-    // Both groups searched: how many entry points each ran a whole exit search.
-    let line = match stats.entry_points {
-        0 => line,
-        n => format!(
-            "{line} · {}",
-            t!("analytics.ticks.stats_entry_points", n = n)
-        ),
-    };
-    // The deals taken out before the search: the sample it answers for is smaller by them.
-    match stats.left_open {
-        0 => line,
-        n => format!("{line} · {}", t!("analytics.ticks.stats_left_open", n = n)),
     }
 }

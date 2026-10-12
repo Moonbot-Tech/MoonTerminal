@@ -1,0 +1,262 @@
+//! Exercise recorder switch generations and pass transitions without starting a fetch thread.
+
+use super::*;
+use crate::market::tape_recorder::catchup::{self, tests::SWITCH_LOCK};
+use crate::venue::{Brand, MarketKind, Venue};
+
+const DAY: i64 = 86_400_000;
+const NOW: i64 = 500 * DAY;
+
+/// Restore global choices and progress even when an assertion unwinds.
+struct Restore {
+    status: crate::station_api::TapeCatchup,
+}
+
+impl Restore {
+    /// Capture the prior process-wide configuration under the test serialization lock.
+    fn new() -> Self {
+        Self {
+            status: catchup::status(),
+        }
+    }
+}
+
+impl Drop for Restore {
+    /// Keep later recorder tests independent of switch and status changes in this fixture.
+    fn drop(&mut self) {
+        catchup::set_switches(self.status.auto.unwrap(), self.status.archives.unwrap());
+        *STATUS.lock().unwrap() = self.status.clone();
+    }
+}
+
+/// A synthetic archive-only closed trade is old enough to leave the live recorder tail.
+fn row() -> CatchupTrade {
+    CatchupTrade {
+        id: TradeId {
+            core: 7,
+            rec_id: 91,
+        },
+        exchange: "synthetic".into(),
+        market: "SYNUSDT".into(),
+        venue: Venue {
+            brand: Brand::Bybit,
+            kind: MarketKind::Futures,
+        },
+        open_ms: NOW - DAY - 60_000,
+        close_ms: NOW - DAY,
+    }
+}
+
+/// Leaving permanent or complete identities latched on a switch change would hide eligible tape.
+#[test]
+fn archive_switch_change_replans_refused_and_completed_rows() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(true, false);
+    let trade = row();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let refused = state.prepare(|_| Coverage::none(), NOW, 0, DAY, false);
+    assert_eq!(refused.no_route, 1);
+    assert!(refused.jobs.is_empty());
+    state.submit(vec![trade.clone()]);
+    assert!(
+        state
+            .prepare(|_| panic!("latched row asked disk"), NOW, 0, DAY, false)
+            .jobs
+            .is_empty()
+    );
+    catchup::set_switches(true, true);
+    state.submit(vec![trade.clone()]);
+    let planned = state.prepare(|_| Coverage::none(), NOW, 0, DAY, true);
+    assert_eq!(planned.jobs.len(), 1);
+    assert!(matches!(
+        planned.jobs[0].source,
+        catchup::Source::Archive(_)
+    ));
+    assert_eq!(
+        state
+            .prepare(|trade| catchup::needed(trade, 0, DAY), NOW, 0, DAY, true)
+            .complete,
+        1
+    );
+    // An identical reload must not invalidate completed tape.
+    catchup::set_switches(true, true);
+    state.submit(vec![trade.clone()]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("unchanged generation rechecked tape"),
+                NOW,
+                0,
+                DAY,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+    catchup::set_switches(false, true);
+    state.submit(vec![trade]);
+    assert_eq!(
+        state
+            .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+            .jobs
+            .len(),
+        1
+    );
+}
+
+/// A tick's archive choice reaches planning as given, even when the live switches say otherwise.
+#[test]
+fn prepare_plans_with_the_archive_choice_it_is_handed() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(true, true);
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![row()]);
+    let plan = state.prepare(|_| Coverage::none(), NOW, 0, DAY, false);
+    assert_eq!(
+        plan.no_route, 1,
+        "archives off in the snapshot leaves no source"
+    );
+    assert!(plan.jobs.is_empty());
+}
+
+/// Automatic recovery off must keep queued rows; a dispatched pass stays running until settlement.
+#[test]
+fn auto_off_queues_without_dispatch_and_running_tracks_pass_settlement() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(false, true);
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let (sender, receiver) = mpsc::channel();
+    let mut state = RecorderCatchup {
+        worker: Some(sender),
+        ..RecorderCatchup::default()
+    };
+    state.submit(vec![row()]);
+    state.tick(&cache, NOW, 0, DAY);
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    assert!(!catchup::status().running);
+    assert_eq!(catchup::status().pending, 1);
+    catchup::set_switches(true, true);
+    state.tick(&cache, NOW, 0, DAY);
+    let pass = receiver
+        .try_recv()
+        .expect("queued trade dispatched after enabling auto");
+    assert_eq!(pass.jobs.len(), 1);
+    assert!(catchup::status().running);
+    assert_eq!(catchup::status().last_pass_ms, Some(NOW));
+    state.tick(&cache, NOW + 1, 0, DAY);
+    assert!(matches!(
+        receiver.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    // Reload while running: the old pass may settle, but its permanent refusal must not survive.
+    catchup::set_switches(false, false);
+    state.tick(&cache, NOW + 2, 0, DAY);
+    assert!(catchup::status().running);
+    state.finish(
+        &cache,
+        PassResult {
+            finished: pass
+                .jobs
+                .into_iter()
+                .map(|job| executor::FinishedJob {
+                    job,
+                    failure: Some(Failure::Permanent),
+                    fault: None,
+                    attempted: true,
+                })
+                .collect(),
+            archive_bytes: 0,
+        },
+        NOW + 3,
+    );
+    assert!(!catchup::status().running);
+    assert!(state.latched.is_empty());
+}
+
+/// Thousands of failures write one summary and a few warn lines per reason, never one per job.
+#[test]
+fn pass_report_counts_every_failure_but_logs_a_bounded_few() {
+    use crate::station_api::CatchupFailReason as R;
+    let trade = row();
+    let job = CatchupJob {
+        missing: Coverage::one((trade.open_ms, trade.close_ms)),
+        expires_at_ms: i64::MAX,
+        source: catchup::Source::Archive(
+            crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
+        ),
+        trade,
+    };
+    let fault = |reason, detail: &str| {
+        Some(Fault {
+            reason,
+            detail: detail.into(),
+        })
+    };
+    let mut failures = vec![(job.clone(), fault(R::Http, "binance HTTP 503")); 1000];
+    failures.extend(vec![
+        (job.clone(), fault(R::Network, "timed out\u{2014}x"));
+        3
+    ]);
+    failures.push((job, None));
+    let report = pass_report(7, 40, &failures);
+    assert_eq!(
+        report.counts,
+        vec![(R::Http, 1000), (R::Network, 3), (R::Other, 1)]
+    );
+    assert_eq!(
+        report.summary,
+        "catch-up pass: filled 7, failed 1004 (http: 1000, network: 3, other: 1), pending 40"
+    );
+    assert_eq!(report.warns.len(), WARN_PER_REASON + 3 + 1);
+    assert!(report.warns.iter().all(|line| line.is_ascii()));
+    assert!(report.warns[0].contains("synthetic SYNUSDT"));
+    assert!(report.warns[0].ends_with("binance HTTP 503"));
+    assert_eq!(
+        pass_report(2, 0, &[]).summary,
+        "catch-up pass: filled 2, failed 0, pending 0"
+    );
+}
+
+/// Tape fetched in full but refused by the disk reserve at filing must count as `no_room`.
+#[test]
+fn reserve_refused_filing_counts_as_no_room() {
+    use crate::station_api::CatchupFailReason as R;
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let trade = row();
+    let job = CatchupJob {
+        missing: Coverage::one((trade.open_ms, trade.close_ms)),
+        expires_at_ms: i64::MAX,
+        source: catchup::Source::Archive(
+            crate::market::trade_replay::venue_caps::ArchiveRoute::BybitTradingDaily,
+        ),
+        trade: trade.clone(),
+    };
+    let mut state = RecorderCatchup::default();
+    state.filing_refused(trade.exchange.clone(), trade.market.clone());
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![executor::FinishedJob {
+                job,
+                failure: None,
+                fault: None,
+                attempted: true,
+            }],
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    assert_eq!(catchup::status().failed_by, vec![(R::NoRoom, 1)]);
+    assert!(state.refused.is_empty());
+}

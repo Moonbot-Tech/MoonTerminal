@@ -273,6 +273,9 @@ pub struct Status {
     /// it — an added field with a default, so neither end of version 2 misreads the other.
     #[serde(default)]
     pub tape: Option<TapeWindow>,
+    /// Progress of automatic closed-trade tape catch-up; absent on older stations.
+    #[serde(default)]
+    pub tape_catchup: Option<Box<TapeCatchup>>,
     /// The machine and the process under the station. `None` from a station older than it — an
     /// added field with a default, so neither end of version 2 misreads the other. Boxed: it is
     /// the bulk of the status, and every reply would otherwise carry its size.
@@ -297,6 +300,83 @@ pub struct Status {
     /// Absent on older stations; allocation then starts above both currently listed sets.
     #[serde(default)]
     pub core_uid_high_water: Option<u64>,
+}
+
+/// Counts and last-pass progress for the station's automatic closed-trade tape catch-up.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TapeCatchup {
+    /// Whether the recorder has a fetch pass awaiting settlement.
+    #[serde(default)]
+    pub running: bool,
+    /// Automatic recovery switch; absent on stations predating switch support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    /// Archive recovery switch; absent on stations predating switch support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archives: Option<bool>,
+    /// Jobs awaiting tape that is still within reach.
+    pub pending: u32,
+    /// Closed-trade tape windows filled by catch-up.
+    pub filled: u32,
+    /// Trades without a resolved market or any supported replay source.
+    pub no_route: u32,
+    /// Trades older than every available source's retention.
+    pub out_of_reach: u32,
+    /// Jobs that failed during the last pass.
+    pub failed: u32,
+    /// UTC milliseconds of the latest catch-up pass, or `None` before one ran.
+    pub last_pass_ms: Option<i64>,
+    /// Compressed archive bytes received by catch-up during the current hourly pass.
+    pub archive_bytes: u64,
+    /// Why the last pass's failed jobs failed, one count per reason. Empty from a station older
+    /// than it — an added field with a default, so neither end of version 2 misreads the other.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_by: Vec<(CatchupFailReason, u32)>,
+}
+
+/// Why one catch-up job failed; the terminal words it, the station only names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatchupFailReason {
+    /// The venue answered with an HTTP error status or its own error code.
+    Http,
+    /// The request timed out or the connection failed.
+    Network,
+    /// The venue's rate limit or the shared host gate stopped the request.
+    Throttled,
+    /// The archive file or the venue's response could not be read.
+    Corrupt,
+    /// The daily archive is still missing well past its publish delay.
+    ArchiveMissing,
+    /// Filing the tape would cross the station's disk reserve.
+    NoRoom,
+    /// Anything else, including a reason a newer station names and this build does not know.
+    #[serde(other)]
+    Other,
+}
+
+impl CatchupFailReason {
+    /// The reason's wire name, also the tail of its locale key and its word in the station log.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Network => "network",
+            Self::Throttled => "throttled",
+            Self::Corrupt => "corrupt",
+            Self::ArchiveMissing => "archive_missing",
+            Self::NoRoom => "no_room",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Station recovery choices sent only to stations reporting switch support.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatchupSwitches {
+    /// Automatically recover closed-trade tape.
+    pub auto: bool,
+    /// Allow daily archives beyond REST retention.
+    pub archives: bool,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the
@@ -426,6 +506,10 @@ pub struct Access {
     /// are forwarded unchanged and interpreted in the station's own uid namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<CoreGroup>>,
+    /// Saved group names in display order, sent with `groups`. Absent keeps legacy
+    /// alphabetical reports; groups not named here follow the saved ones alphabetically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups_order: Option<Vec<String>>,
 }
 
 /// Read a map keyed by chat id. The ids are a JSON object's keys, strings on the wire; inside an
@@ -467,7 +551,26 @@ impl Access {
             zone: None,
             notify: None,
             groups: None,
+            groups_order: None,
         }
+    }
+
+    /// Resolve report groups in saved order, with deterministic legacy/unknown-group fallback.
+    /// Renamed or removed names in the order list never hide a current group.
+    pub fn report_groups(&self) -> Vec<CoreGroup> {
+        let mut groups = self.groups.clone().unwrap_or_default();
+        groups.sort_by_cached_key(|group| {
+            let position = self
+                .groups_order
+                .as_ref()
+                .and_then(|order| order.iter().position(|name| name == &group.name));
+            (
+                position.unwrap_or(usize::MAX),
+                group.name.to_lowercase(),
+                group.name.clone(),
+            )
+        });
+        groups
     }
 
     /// Put this access into `telegram`, leaving its token and switches as they are; the bot's

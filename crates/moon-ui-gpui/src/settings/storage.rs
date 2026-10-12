@@ -440,7 +440,11 @@ impl SettingsView {
                         tool_btn("strat-backup", t!("storage.backup").to_string(), busy)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.storage_op(cx, "storage.op_backup", || {
-                                    moon_core::strat_db::backup::backup_now().map(|_| None)
+                                    // Both domains back up on one click; the trace archive is
+                                    // attempted even when the strategy copy fails.
+                                    let strategies = moon_core::strat_db::backup::backup_now();
+                                    let traces = moon_core::db::order_traces::backup::backup_now();
+                                    strategies.and(traces).map(|_| None)
                                 });
                             }))
                             .render(),

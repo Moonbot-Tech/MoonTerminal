@@ -139,6 +139,8 @@ pub(crate) struct TickStage {
     /// retention the whole focus is past is served the same way, printing
     /// [`TickStatus::OutOfRetention`] instead.
     pub(super) route: Option<TradeRoute>,
+    /// Daily public archive for focus portions beyond the REST route's reach.
+    pub(super) archive: Option<super::venue_caps::ArchiveRoute>,
     /// The ring key this stage's answer replaces on success.
     pub(super) key: OutcomeKey,
     /// The exchange klines to carry forward as the bar layer of the eventual tick series.
@@ -361,6 +363,8 @@ pub(crate) enum TickAbandon {
     Transient,
     Empty,
     UnknownSymbol,
+    /// The venue rejected the requested time range without refusing its host.
+    OutOfRetention,
     OverPageBudget,
     /// A non-focus tile would exceed the retained tick allowance.
     OverTickBudget,

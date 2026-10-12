@@ -110,6 +110,8 @@ impl SettingsView {
         }
         // The station's bot, when one runs on a server: its status and pairing code.
         self.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
+        // A catch-up already running starts its minute re-read now, not at the next answer.
+        self.server_tape_sync(cx);
     }
 
     /// Render the fitted core selector and a full-button disclosure for its parameters.

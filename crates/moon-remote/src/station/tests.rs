@@ -729,13 +729,13 @@ fn a_tape_push_changes_only_the_tape_section() {
         margin_s: 180,
         long_position_min: 10,
     };
-    assert!(with_tape(current, same).unwrap().is_none());
+    assert!(with_tape(current, same, None).unwrap().is_none());
 
     let moved = TapeWindow {
         margin_s: 300,
         long_position_min: 10,
     };
-    let text = with_tape(current, moved)
+    let text = with_tape(current, moved, None)
         .unwrap()
         .expect("a changed window");
     let back: toml::Value = toml::from_str(&text).unwrap();
@@ -745,11 +745,47 @@ fn a_tape_push_changes_only_the_tape_section() {
     assert_eq!(back["telegram"]["mini_app"].as_bool(), Some(true));
 
     let bare = "[[core]]\nuid = 9\nname = \"Old\"\n";
-    let text = with_tape(bare, same)
+    let text = with_tape(bare, same, None)
         .unwrap()
         .expect("a file without [tape] gets one");
     let back: toml::Value = toml::from_str(&text).unwrap();
     assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
+}
+
+/// Replacing the whole tape table would reset stored switches or erase future station fields.
+#[test]
+fn tape_merge_preserves_foreign_fields_and_only_writes_supported_switches() {
+    let current = "[tape]\nmargin_s = 180\nlong_position_min = 10\nauto_catchup = false\narchive_catchup = true\nfuture = 'kept'\n";
+    let tape = TapeWindow {
+        margin_s: 180,
+        long_position_min: 10,
+    };
+    assert!(with_tape(current, tape, None).unwrap().is_none());
+    let moved = TapeWindow {
+        margin_s: 300,
+        ..tape
+    };
+    let text = with_tape(current, moved, None).unwrap().unwrap();
+    let back: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(back["tape"]["future"].as_str(), Some("kept"));
+    assert_eq!(back["tape"]["auto_catchup"].as_bool(), Some(false));
+    assert_eq!(back["tape"]["archive_catchup"].as_bool(), Some(true));
+    let choices = CatchupSwitches {
+        auto: true,
+        archives: false,
+    };
+    let text = with_tape(current, tape, Some(choices)).unwrap().unwrap();
+    let back: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(back["tape"]["future"].as_str(), Some("kept"));
+    assert_eq!(back["tape"]["auto_catchup"].as_bool(), Some(true));
+    assert_eq!(back["tape"]["archive_catchup"].as_bool(), Some(false));
+    assert_eq!(back["tape"]["margin_s"].as_integer(), Some(180));
+    assert!(with_tape(&text, tape, Some(choices)).unwrap().is_none());
+    let legacy = with_tape("", tape, None).unwrap().unwrap();
+    let back: toml::Value = toml::from_str(&legacy).unwrap();
+    assert!(back["tape"].get("auto_catchup").is_none());
+    assert!(back["tape"].get("archive_catchup").is_none());
+    assert!(with_tape("tape = 1", tape, None).is_err());
 }
 
 /// Dropping the removal marker would keep an old helper after Update the service, preventing
@@ -818,4 +854,40 @@ fn the_auto_update_switch_is_written_once_and_kept_by_a_cores_push() {
         toml::from_str(&merge_cores(Some(&off), &[synthetic_core(4, "B", None)], None).unwrap())
             .unwrap();
     assert_eq!(merged["update"]["auto"].as_bool(), Some(false));
+}
+
+/// A station that reports no switches after they were sent never will: waiting out the deadline
+/// only delays the "update the station" error.
+#[test]
+fn tape_switches_sent_to_a_pre_switch_station_fail_at_once() {
+    let tape = TapeWindow {
+        margin_s: 60,
+        long_position_min: 30,
+    };
+    let on = CatchupSwitches {
+        auto: true,
+        archives: true,
+    };
+    assert_eq!(
+        tape_verdict(Some((tape, None)), tape, Some(on)),
+        TapeVerdict::Outdated
+    );
+    assert_eq!(tape_verdict(None, tape, Some(on)), TapeVerdict::Outdated);
+    assert_eq!(tape_verdict(None, tape, None), TapeVerdict::Unreported);
+    assert_eq!(
+        tape_verdict(Some((tape, Some(on))), tape, Some(on)),
+        TapeVerdict::Applied
+    );
+    assert_eq!(
+        tape_verdict(Some((tape, None)), tape, None),
+        TapeVerdict::Applied
+    );
+    let old = TapeWindow {
+        margin_s: 30,
+        ..tape
+    };
+    assert_eq!(
+        tape_verdict(Some((old, Some(on))), tape, Some(on)),
+        TapeVerdict::Pending
+    );
 }

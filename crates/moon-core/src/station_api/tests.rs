@@ -154,6 +154,7 @@ fn a_status_reads_back_whole() {
             margin_s: 180,
             long_position_min: 10,
         }),
+        tape_catchup: None,
         host: Some(Box::new(Host {
             uptime_s: 3_725,
             cpu: vec![CpuWindow {
@@ -197,6 +198,7 @@ fn a_status_reads_back_whole() {
         panic!("not a status");
     };
     assert_eq!((old.tape, old.host, old.last_update), (None, None, None));
+    assert_eq!(old.tape_catchup, None);
     assert_eq!(old.cores, None);
     assert_eq!(old.core_uid_high_water, None);
     assert_eq!(
@@ -205,6 +207,70 @@ fn a_status_reads_back_whole() {
     );
     let refused: Reply = serde_json::from_str(r#"{"err":"no bot on this station"}"#).unwrap();
     assert_eq!(refused, Reply::Err("no bot on this station".into()));
+}
+
+/// Losing the optional catch-up field breaks old status replies or discards new progress counters.
+#[test]
+fn tape_catchup_is_optional_and_round_trips() {
+    let old = r#"{"station_version":"synthetic","cores_ready":1,"cores_total":2,"bot":null}"#;
+    let mut status: Status = serde_json::from_str(old).unwrap();
+    assert_eq!(status.tape_catchup, None);
+    let wire = serde_json::json!({
+        "pending": 7,
+        "filled": 11,
+        "no_route": 2,
+        "out_of_reach": 3,
+        "failed": 5,
+        "last_pass_ms": 1234567890000_i64,
+        "archive_bytes": 9876543210_u64,
+        "running": true,
+        "auto": false,
+        "archives": true
+    });
+    status.tape_catchup = Some(Box::new(serde_json::from_value(wire.clone()).unwrap()));
+    let encoded = serde_json::to_value(&status).unwrap();
+    assert_eq!(encoded["tape_catchup"], wire);
+    assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), status);
+    let mut legacy = wire;
+    for key in ["running", "auto", "archives"] {
+        legacy.as_object_mut().unwrap().remove(key);
+    }
+    let progress: TapeCatchup = serde_json::from_value(legacy).unwrap();
+    assert!(!progress.running);
+    assert_eq!((progress.auto, progress.archives), (None, None));
+    assert!(progress.failed_by.is_empty());
+}
+
+/// The failure breakdown must round-trip, stay off the wire when empty, and survive a reason a
+/// newer station names: an unknown key failing would drop the whole status reply.
+#[test]
+fn catchup_failure_breakdown_round_trips_and_tolerates_new_reasons() {
+    let progress = TapeCatchup {
+        failed: 12,
+        failed_by: vec![
+            (CatchupFailReason::Http, 9),
+            (CatchupFailReason::ArchiveMissing, 3),
+        ],
+        ..TapeCatchup::default()
+    };
+    let encoded = serde_json::to_value(&progress).unwrap();
+    assert_eq!(
+        encoded["failed_by"],
+        serde_json::json!([["http", 9], ["archive_missing", 3]])
+    );
+    assert_eq!(
+        serde_json::from_value::<TapeCatchup>(encoded).unwrap(),
+        progress
+    );
+    let empty = serde_json::to_value(TapeCatchup::default()).unwrap();
+    assert!(empty.get("failed_by").is_none());
+    let newer: TapeCatchup = serde_json::from_value(serde_json::json!({
+        "pending": 0, "filled": 0, "no_route": 0, "out_of_reach": 0, "failed": 2,
+        "last_pass_ms": null, "archive_bytes": 0,
+        "failed_by": [["solar_flare", 2]]
+    }))
+    .unwrap();
+    assert_eq!(newer.failed_by, vec![(CatchupFailReason::Other, 2)]);
 }
 
 #[test]
@@ -438,4 +504,24 @@ fn chats_notifications_ride_an_access_set() {
     assert!(wire.contains(r#""230057918":"#), "{wire}");
     let back: Request = serde_json::from_str(&wire).unwrap();
     assert_eq!(back, request);
+}
+
+/// Losing the default would break old payloads; name sorting would override saved arrows.
+#[test]
+fn report_groups_use_saved_order_with_legacy_and_renamed_fallback() {
+    let legacy = r#"{"groups":[{"name":"Zulu","cores":[1]},{"name":"alpha","cores":[2]},{"name":"Renamed","cores":[3]}]}"#;
+    let mut access: Access = serde_json::from_str(legacy).unwrap();
+    let names = |access: &Access| {
+        access
+            .report_groups()
+            .into_iter()
+            .map(|group| group.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&access), ["alpha", "Renamed", "Zulu"]);
+    access.groups_order = Some(vec!["Removed".into(), "Zulu".into(), "Old name".into()]);
+    assert_eq!(names(&access), ["Zulu", "alpha", "Renamed"]);
+    access.groups_order = Some(vec!["Renamed".into(), "Zulu".into(), "alpha".into()]);
+    let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
+    assert_eq!(names(&back), ["Renamed", "Zulu", "alpha"]);
 }

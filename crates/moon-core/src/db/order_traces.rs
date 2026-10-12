@@ -748,6 +748,7 @@ pub fn max_core_uid() -> ReadResult<Option<u64>> {
     super::max_core_uid_in(&conn, "trace_answers", CTX)
 }
 
+pub mod backup;
 mod pull;
 pub use pull::{STATION_LIMIT, lacking_lines};
 

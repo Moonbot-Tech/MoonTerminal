@@ -1,6 +1,23 @@
 // Not `super::*`: the parent's `gpui::*` brings gpui's own `test` attribute, which `#[test]` would
 // then name, and it expands into itself.
-use super::{Accuracy, GroupCount, pct_text};
+use super::{Accuracy, GroupCount, accuracy_sentence, pct_text};
+
+/// Dropping misses or unjudged tapes from the denominator would inflate the footer's coverage.
+#[test]
+fn the_footer_counts_all_tapes_and_names_the_independent_fit_sample() {
+    let _locale = crate::test_locale::force("en");
+    let verdicts = [
+        verdict(Some(true), Some(true)),
+        verdict(Some(false), Some(false)),
+        verdict(None, None),
+    ];
+    let acc = Accuracy::of(verdicts.iter().map(Some).chain([None]));
+    let text = accuracy_sentence(&acc, false, 3);
+    assert_eq!(
+        text,
+        "Model repeats: entry — taken from the fact · exit — 1 of 4 trades with tape (25.0 %). The search learns from 3 usable trades."
+    );
+}
 use moon_core::db::tuner::ticks::Verdict;
 
 fn verdict(entry: Option<bool>, exit: Option<bool>) -> Verdict {

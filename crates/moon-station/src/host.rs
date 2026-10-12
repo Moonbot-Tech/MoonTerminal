@@ -319,7 +319,7 @@ fn tree_size(dir: &Path) -> u64 {
 
 /// Free and total space of the filesystem `path` is on.
 #[cfg(unix)]
-fn disk_space(path: &Path) -> Option<Disk> {
+pub(crate) fn disk_space(path: &Path) -> Option<Disk> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -346,7 +346,7 @@ fn disk_space(path: &Path) -> Option<Disk> {
 
 /// Off Unix — the station's Windows build is for tests only.
 #[cfg(not(unix))]
-fn disk_space(_path: &Path) -> Option<Disk> {
+pub(crate) fn disk_space(_path: &Path) -> Option<Disk> {
     None
 }
 

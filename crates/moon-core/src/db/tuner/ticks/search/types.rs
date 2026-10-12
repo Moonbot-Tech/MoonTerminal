@@ -151,7 +151,7 @@ pub struct SearchStats {
     pub converged: bool,
     /// Distinct end points among the restarts: 1 means every restart ended at the same point.
     pub distinct: usize,
-    /// Points scored over the whole run, each a replay of the training slice.
+    /// Point-score requests over the whole run, including folded replays read from the memo.
     pub evaluations: usize,
     /// Restarts that ended on a point the search may not answer — one the corridor rules, the
     /// risk limits or the closing rule (`closing`) refuse. A search of the Entry group steers by
@@ -163,8 +163,8 @@ pub struct SearchStats {
     /// Entry points scored by a whole search of the exit under them — a search of both groups
     /// ([`nested`]); zero for a search of one.
     pub entry_points: usize,
-    /// Points scored on the entry fills of a point scored before ([`fills`]) — the exit replayed
-    /// alone.
+    /// Points scored on the entry fills of a point scored before ([`fills`]), whether their exit
+    /// was replayed or its folded result was read from the memo.
     pub fills_reused: usize,
 }
 

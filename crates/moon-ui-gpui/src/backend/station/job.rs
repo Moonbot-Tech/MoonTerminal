@@ -4,7 +4,7 @@
 use std::sync::mpsc;
 
 use moon_core::config::Secret;
-use moon_core::station_api::Access;
+use moon_core::station_api::{Access, CatchupSwitches};
 use moon_remote::error::StationError;
 use moon_remote::progress::{Progress, Step};
 use moon_remote::setup::{self, FirstAccess, NeedsAdminPassword, Setup};
@@ -113,8 +113,12 @@ pub(crate) enum Job {
         addresses: Vec<Option<String>>,
         eligible: Vec<u64>,
     },
-    /// Set the station's window around a trade.
-    Tape { target: Target, tape: TapeWindow },
+    /// Set the station's tape window and recovery choices when supported.
+    Tape {
+        target: Target,
+        tape: TapeWindow,
+        catchup: Option<CatchupSwitches>,
+    },
     /// Switch the station's own updates from the release: `[update] auto`, then a reload.
     AutoUpdate { target: Target, on: bool },
     /// Set the station's bot.
@@ -591,8 +595,12 @@ fn run(
                 bot_off: false,
             })
         }
-        Job::Tape { target, tape } => {
-            station::push_tape(&target, tape, say)?;
+        Job::Tape {
+            target,
+            tape,
+            catchup,
+        } => {
+            station::push_tape(&target, tape, catchup, say)?;
             Ok(Done::Ok {
                 transferred: false,
                 bot: None,

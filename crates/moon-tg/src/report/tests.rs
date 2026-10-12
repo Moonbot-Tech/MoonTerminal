@@ -2132,7 +2132,7 @@ fn funding_is_not_a_trade_card() {
 }
 
 /// The view by cores lists its cores under the saved groups, as the Profit monitor does: groups by
-/// name, a core in two groups under both, the cores in none last. A group is one header row
+/// saved order, a core in two groups under both, the cores in none last. A group is one header row
 /// carrying its total, the database's sum over its cores (a group of one core totals that core);
 /// the headline counts every core once. The details name each core once.
 #[test]
@@ -2190,10 +2190,10 @@ fn cores_are_listed_under_their_groups() {
     assert_eq!(
         rows,
         vec![
+            ("# margo".to_string(), 20.0),
+            ("B".to_string(), 20.0),
             ("# main".to_string(), 30.0),
             ("A".to_string(), 10.0),
-            ("B".to_string(), 20.0),
-            ("# margo".to_string(), 20.0),
             ("~ B".to_string(), 20.0),
             ("# Ungrouped".to_string(), 40.0),
             ("C".to_string(), 40.0),

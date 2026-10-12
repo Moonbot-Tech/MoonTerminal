@@ -4,6 +4,7 @@
 //! Anything used by exactly ONE axis belongs to that axis' folder — this file is the contract
 //! between them, and a helper that drifts in here stops being reviewable as shared.
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{MoonDisclosure, MoonDisclosureDirection, MoonPalette, h_flex, v_flex};
 use rust_i18n::t;
@@ -51,6 +52,19 @@ pub(super) struct SaveAuthority {
     pub(super) workspace_cores: Option<Vec<u64>>,
     /// Ordered strategy identities; order is significant for per-target edit payloads.
     pub(super) targets: Vec<(i64, Option<u64>)>,
+}
+
+/// An inline confirmation's immutable producer authority and exact write payload.
+pub(in crate::analytics::tuner) struct InlineWrite {
+    pub(in crate::analytics::tuner) authority: SaveAuthority,
+    pub(in crate::analytics::tuner) targets: Vec<SaveTarget>,
+    pub(in crate::analytics::tuner) changes: Vec<(String, String)>,
+}
+
+/// Wrap a control in a content-sized, non-shrinking box carrying a layout-probe selector.
+pub(in crate::analytics::tuner) fn tagged(sel: impl Into<String>, el: impl IntoElement) -> Div {
+    let sel = sel.into();
+    div().flex_none().debug_selector(move || sel).child(el)
 }
 
 /// A prepared save: target(s) + the list of changes. Single selection = 1 target;
@@ -102,15 +116,38 @@ pub(super) fn card(
     p: MoonPalette,
     cx: &App,
 ) -> AnyElement {
-    // One clipping box keeps the accessory outside the width that may yield.
-    // NOT flipped to `ui_font()`: callers interpolate a raw strategy name, a field name, or
-    // `scope_label()`'s bare name arm into `title`/`sub` alongside the caption text, so this
-    // box would sometimes render a VALUE. It stays mono for that raw-name case.
+    card_header_layout(title, sub, body, accessory, false, p, cx)
+}
+
+/// Let prose captions wrap within the card while legacy data captions retain their layout.
+pub(super) fn card_with_wrapping_caption(
+    title: String,
+    sub: String,
+    body: AnyElement,
+    accessory: Option<AnyElement>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    card_header_layout(title, sub, body, accessory, true, p, cx)
+}
+
+/// Share the card frame and accessory positioning across data and wrapping prose headers.
+fn card_header_layout(
+    title: String,
+    sub: String,
+    body: AnyElement,
+    accessory: Option<AnyElement>,
+    wrap: bool,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    // Data headers keep their inherited mono face and clipping contract. Prose-only headers
+    // wrap their captions while the accessory remains outside the yielding text box.
     let mut text = h_flex()
         .flex_1()
         .min_w_0()
-        .overflow_hidden()
-        .whitespace_nowrap()
+        .when(!wrap, |text| text.overflow_hidden().whitespace_nowrap())
+        .when(wrap, |text| text.flex_wrap().font_family(design::ui_font()))
         .items_center()
         .gap(design::ui_px(cx, 8.0))
         .child(
@@ -118,6 +155,7 @@ pub(super) fn card(
                 .flex_none()
                 .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
+                .debug_selector(|| "an-tuner-card-title".to_string())
                 .child(title),
         );
     if !sub.is_empty() {
@@ -126,6 +164,7 @@ pub(super) fn card(
                 .flex_none()
                 .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_muted))
+                .debug_selector(|| "an-tuner-card-caption".to_string())
                 .child(sub),
         );
     }

@@ -1,3 +1,4 @@
 # Error messages for settings validation and GPU failures.
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
+errors.manual_order_quote: "%{core} opera en %{account}; %{market} cotiza en %{quote}. Orden no enviada."

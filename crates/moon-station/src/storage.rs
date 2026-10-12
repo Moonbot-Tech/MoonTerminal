@@ -2,6 +2,8 @@
 //! while the server has space and, when it runs short, gives back the oldest tape — only the tape.
 //! The reports, the order traces and the valuation cache are never touched; the logs keep their
 //! own 14 days.
+//! Archive day files are transient and deleted after extraction; downloads and tape filing
+//! preserve this same disk reserve.
 //!
 //! The rule, decided 2026-09-30: keep free the larger of 2 GiB and a tenth of the filesystem. The
 //! disk thread (`host.rs`, every minute) measures the space; whatever it finds missing is asked of
@@ -10,6 +12,8 @@
 //! the same bytes again: after asking, the keeper waits [`SETTLE`] for the room to show before it
 //! asks again.
 
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use moon_core::station_api::Disk;
@@ -23,6 +27,31 @@ const WARN_EVERY: Duration = Duration::from_secs(30 * 60);
 /// How long after asking for room the keeper looks again: long enough for the eviction and the
 /// file's shrink to land, so one shortfall is not evicted twice.
 const SETTLE: Duration = Duration::from_secs(5 * 60);
+
+/// The station's initialized data root, shared with the archive download guard.
+static ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+/// Remember the filesystem whose reserve archive downloads must preserve.
+pub fn init(root: PathBuf) {
+    let _ = ROOT.set(root);
+}
+
+/// Whether spending `bytes` leaves the reserve intact; unknown-size mounts remain unrestricted.
+pub fn fits(disk: Disk, bytes: u64) -> bool {
+    disk.total_bytes == 0
+        || disk
+            .free_bytes
+            .checked_sub(bytes)
+            .is_some_and(|free| free >= reserve(disk.total_bytes))
+}
+
+/// Measure the initialized data filesystem before spending archive or tape-write bytes.
+/// An unavailable measurement cannot prove sufficient room, so the download waits.
+pub fn room_for(bytes: u64) -> bool {
+    ROOT.get()
+        .and_then(|root| crate::host::disk_space(root))
+        .is_some_and(|disk| fits(disk, bytes))
+}
 
 /// The free space the station keeps on a filesystem of `total_bytes`.
 pub fn reserve(total_bytes: u64) -> u64 {

@@ -322,6 +322,9 @@ fn invalidate_stops_the_search_and_drops_the_variant_scores_but_keeps_the_edits(
     state.sugg = super::super::state::SuggState::Running {
         handle: handle.clone(),
         total: 3,
+        started: std::time::Instant::now(),
+        estimate: None,
+        sample: (23, 9),
     };
     state.last_result = Some(moon_core::db::tuner::ticks::SearchResult {
         values: Vec::new(),
@@ -616,23 +619,48 @@ fn the_search_is_off_under_the_deal_floor() {
     );
 }
 
-/// A hand-typed variant scored on too few deals keeps its changes, but "Save" does not light
-/// up as a recommendation; scored on enough, it does.
+/// A current search result cannot recommend Apply after its displayed score falls below the floor.
 #[test]
 fn a_variant_scored_on_too_few_deals_does_not_light_save() {
     use moon_core::db::tuner::ticks::search::MIN_SEARCH_DEALS;
+    let _locale = crate::test_locale::force("en");
     let mut state = TicksState::default();
     state.set_variant("StopLoss", "-0.5".into());
-    assert!(
-        state.save_recommended(),
-        "not scored yet: nothing says thin"
-    );
+    use super::super::summary::{SummaryModel, Verdict};
+    let tally = |n, profit| {
+        let mut tally = moon_core::db::metrics::Tally::default();
+        tally.n = n;
+        tally.profit = profit;
+        tally
+    };
+    state.result_variant = state.variant_changes();
+    state.last_result = Some(moon_core::db::tuner::ticks::SearchResult {
+        values: Vec::new(),
+        searched: Vec::new(),
+        train: tally(23, 17.0),
+        fact_train: tally(23, 11.0),
+        holdout: Some(tally(9, 8.0)),
+        fact_holdout: Some(tally(9, 3.0)),
+        holdout_open: 0,
+        holdout_open_profit: 0.0,
+        holdout_loses: false,
+        seed: 43,
+        stats: Default::default(),
+    });
     state.var_stats = Some(moon_core::db::tuner::VarStats::default());
     state.var_n = 4;
     assert_eq!(state.variant_too_few(), Some(4));
     assert!(state.has_changes());
-    assert!(!state.save_recommended());
+    let model = SummaryModel::from_state(&state, String::new(), false);
+    assert_ne!(model.verdict, Verdict::Apply);
+    assert!(model.warnings.contains(
+        &rust_i18n::t!("analytics.ticks.var_too_few", n = 4, min = MIN_SEARCH_DEALS).to_string()
+    ));
     state.var_n = MIN_SEARCH_DEALS;
     assert_eq!(state.variant_too_few(), None);
-    assert!(state.save_recommended());
+    assert_eq!(
+        SummaryModel::from_state(&state, String::new(), false).verdict,
+        Verdict::Apply,
+        "the sufficient current result gains on both independently checked slices"
+    );
 }

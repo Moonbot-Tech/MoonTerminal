@@ -142,6 +142,7 @@ pub fn suggest_with_candidate(
 }
 
 /// The search itself; `candidate_out` takes the point beside the answer ([`Suggested`]).
+/// Folded replays are shared across its restarts without caching any per-request decisions.
 fn search(
     deals: &[PreparedDeal],
     params: &SearchParams<'_>,
@@ -252,6 +253,7 @@ fn search(
     // The fills of the entries scored lately: most points share their entry with the point
     // before (`fills`).
     let fill_cache = fills::FillCache::default();
+    let replay_cache = replays::ReplayCache::default();
     // A point's replay of the training slice, or `None` where it cannot trade at all: a corridor
     // rule refuses it, or a strategy is left with nothing standing to close a trade (`closing`).
     let replay_point = |point: &Point| -> Option<closing::Replayed> {
@@ -259,14 +261,18 @@ fn search(
         if corridor_refuses(&per_base) {
             return None;
         }
-        // Counted here, past the refusals: what the stats call a scored point is a replay.
+        // Count requests past the corridor refusal, including a replay read from the memo.
         evaluations.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if !closing::protected(&per_base) {
             unclosed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return None;
         }
+        // Keep the fills cache's access and statistics on every request, as before. Only the
+        // folded replay is memoized: refusals and tracker offers still run for every caller.
         let fills = fill_cache.fills(train, train_of, &per_base);
-        Some(closing::replay(train, train_of, &per_base, &fills))
+        Some(replay_cache.replay(&per_base, || {
+            closing::replay(train, train_of, &per_base, &fills)
+        }))
     };
     // A point the search may answer: one that closes every deal it bought (`closing`).
     let score_point = |point: &Point| -> Option<Tally> {
@@ -641,6 +647,7 @@ mod deps;
 mod fills;
 mod nested;
 mod pinned;
+mod replays;
 mod risk;
 mod screen;
 pub use self::risk::{DEFAULT_WORSE_PCT, RiskLimits};

@@ -8,6 +8,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use gpui::Entity;
 use moon_ui::MoonInputState;
@@ -355,6 +356,12 @@ pub(in crate::analytics::tuner) enum SuggState {
     Running {
         handle: SearchHandle,
         total: usize,
+        /// Wall-clock start of the launched run, including its queue wait.
+        started: Instant,
+        /// Measured estimate for the scope launched by this run.
+        estimate: Option<Duration>,
+        /// Train and holdout counts of the launched sample, independent of the editable dropdown.
+        sample: (usize, usize),
     },
 }
 
@@ -450,11 +457,19 @@ pub(in crate::analytics) struct TicksState {
     pub(in crate::analytics::tuner) sugg_seq: u64,
     /// What the last completed search found, for the holdout caption.
     pub(in crate::analytics::tuner) last_result: Option<SearchResult>,
+    /// Wall-clock duration of the last successful search; retired with its result.
+    pub(in crate::analytics::tuner) last_search_elapsed: Option<Duration>,
     /// The variant's changes as the last search landed them: its verdict speaks for that
     /// point alone ([`TicksState::current_result`]).
     pub(in crate::analytics::tuner) result_variant: Vec<(String, String)>,
-    /// The last search's failure to say anything, for the status line.
+    /// Search information for the status line, including ranges replaced by automatic ones.
     pub(in crate::analytics::tuner) sugg_note: Option<String>,
+    /// Fatal refusal or miss, separate from informational range warnings.
+    pub(in crate::analytics::tuner) sugg_refusal: Option<String>,
+    /// Whether the summary's search diagnostics are expanded.
+    pub(in crate::analytics::tuner) details_open: bool,
+    /// Captured inline consent, retired when the point or search scope changes.
+    pub(in crate::analytics::tuner) write_confirm: Option<super::summary::WriteConfirm>,
     /// `TicksData::kpi` under the shape the shared matrix reads; applied together with `data`.
     pub(in crate::analytics::tuner) kpi: LoadState<Vec<VarStats>>,
     /// Generation of the load in flight; an older completion is dropped.
@@ -567,8 +582,12 @@ impl Default for TicksState {
             sugg: SuggState::Idle,
             sugg_seq: 0,
             last_result: None,
+            last_search_elapsed: None,
             result_variant: Vec::new(),
             sugg_note: None,
+            sugg_refusal: None,
+            details_open: false,
+            write_confirm: None,
             kpi: LoadState::default(),
             seq: 0,
             dirty: true,
@@ -714,14 +733,17 @@ impl TicksState {
     /// The scope changed: every row belongs to the previous scope. The fetch batch is the
     /// process's, not the scope's, and runs on; its answers land on rows by id where present.
     pub(in crate::analytics) fn invalidate(&mut self) {
+        self.write_confirm = None;
         self.retire_rows();
         // A running search and its last answer describe the previous scope's deals.
         self.stop_search("scope change");
         // Nor does the last search's holdout: В1's caption would print it beside a column
         // rescored over deals it never saw.
         self.last_result = None;
+        self.last_search_elapsed = None;
         // A note about the previous scope's search says nothing about this one.
         self.sugg_note = None;
+        self.sugg_refusal = None;
     }
 
     /// The report axis moved — a core's clock offset measured, or measured again: the rows are
@@ -763,7 +785,7 @@ impl TicksState {
     /// Ask a running search to stop and forget it; its completion is dropped by the
     /// generation.
     pub(in crate::analytics::tuner) fn stop_search(&mut self, reason: &str) {
-        if let SuggState::Running { handle, total } = &self.sugg {
+        if let SuggState::Running { handle, total, .. } = &self.sugg {
             log::info!(
                 target: moon_core::diagnostics::TICKS_AXIS_TARGET,
                 "[x] ticks search: stopped by {reason} at {}/{total} restart(s)",
@@ -773,6 +795,26 @@ impl TicksState {
         }
         self.sugg = SuggState::Idle;
         self.sugg_seq = self.sugg_seq.wrapping_add(1);
+    }
+
+    /// Publish a launched search while retiring consent and refusal for the previous point.
+    pub(in crate::analytics::tuner) fn start_search(
+        &mut self,
+        handle: SearchHandle,
+        total: usize,
+        started: Instant,
+        estimate: Option<Duration>,
+        sample: (usize, usize),
+    ) {
+        self.write_confirm = None;
+        self.sugg_refusal = None;
+        self.sugg = SuggState::Running {
+            handle,
+            total,
+            started,
+            estimate,
+            sample,
+        };
     }
 
     /// The variant's changes over the base as `(key, value)` pairs, sorted — what Save writes
@@ -812,14 +854,10 @@ impl TicksState {
             .then_some(self.var_n)
     }
 
-    /// "Save" lights up: the variant holds something to write and was scored on enough deals
-    /// to be a recommendation.
-    pub(in crate::analytics::tuner) fn save_recommended(&self) -> bool {
-        self.has_changes() && self.variant_too_few().is_none()
-    }
-
-    /// Set one cell of the variant; an empty value clears it.
+    /// Set one variant cell and retire advice and consent from the previous point.
     pub(in crate::analytics::tuner) fn set_variant(&mut self, key: &str, value: String) {
+        self.write_confirm = None;
+        self.sugg_refusal = None;
         if value.trim().is_empty() {
             self.variant.remove(key);
         } else {

@@ -92,6 +92,12 @@ pub trait TgHost {
     /// Saved configuration: the cores (`servers`), their order (`core_sort`) and `telegram`.
     fn config(&self) -> &AppConfig;
 
+    /// Core groups in report order. The terminal uses its saved list; the station
+    /// resolves its synced order and legacy fallback before handing groups to renderers.
+    fn report_groups(&self) -> Vec<moon_core::config::CoreGroup> {
+        self.config().core_groups.clone()
+    }
+
     /// The live core sessions.
     fn session(&self) -> &SessionManager;
 

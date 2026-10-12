@@ -16,7 +16,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::{AnalyticsView, StrategyEditWatch};
-use super::shared::{SaveAuthority, SaveDialog, SaveTarget};
+use super::shared::{InlineWrite, SaveAuthority, SaveDialog, SaveTarget};
 use crate::design;
 use crate::design::{moon, moon_alpha};
 
@@ -29,6 +29,26 @@ mod tests;
 /// `TimedOut` phase either -- is folded into the existing "not confirmed" wording and dropped,
 /// so [`AnalyticsView::drain_strategy_edit_watch`] can never leave a watch pending forever.
 const STRATEGY_EDIT_WATCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Whether an inline confirmation may dispatch its captured payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::analytics::tuner) enum InlineWriteDecision {
+    Send,
+    Drop,
+}
+
+/// Refuse stale authority or a changed variant without consuming the user's draft.
+pub(in crate::analytics::tuner) fn inline_write_decision(
+    confirm_changes: &[(String, String)],
+    current_changes: &[(String, String)],
+    authority_current: bool,
+) -> InlineWriteDecision {
+    if authority_current && confirm_changes == current_changes {
+        InlineWriteDecision::Send
+    } else {
+        InlineWriteDecision::Drop
+    }
+}
 
 /// Normalize an unordered concrete core set for stable authority comparison.
 fn normalized_cores(cores: impl IntoIterator<Item = u64>) -> Vec<u64> {
@@ -93,6 +113,44 @@ fn resolve_complete_target_cores(
 }
 
 impl AnalyticsView {
+    /// Capture authority when the user opens the inline confirmation, before final consent.
+    pub(in crate::analytics::tuner) fn begin_inline_write(
+        &self,
+        targets: Vec<SaveTarget>,
+        changes: Vec<(String, String)>,
+        cx: &App,
+    ) -> InlineWrite {
+        InlineWrite {
+            authority: self.capture_save_authority(&targets, cx),
+            targets,
+            changes,
+        }
+    }
+
+    /// Revalidate the captured authority and variant, then use the existing bulk save path.
+    pub(in crate::analytics::tuner) fn commit_inline_write(
+        &mut self,
+        write: InlineWrite,
+        cx: &mut Context<Self>,
+    ) {
+        self.write_error = None;
+        let authority_current =
+            self.save_authority_is_current(&write.authority, &write.targets, cx);
+        if inline_write_decision(
+            &write.changes,
+            &self.ticks.variant_changes(),
+            authority_current,
+        ) == InlineWriteDecision::Drop
+        {
+            log::info!("analytics: stale inline confirmation refused before dispatch");
+            self.write_error = Some(t!("analytics.ticks.sum.confirm_stale").to_string());
+            cx.notify();
+            return;
+        }
+        self.send_bulk_changes(write.targets, write.changes, None, write.authority, cx);
+        cx.notify();
+    }
+
     /// Capture the complete workspace and selection identity for a Save or Copy producer.
     ///
     /// Args:
@@ -127,7 +185,7 @@ impl AnalyticsView {
     ///
     /// Returns:
     ///     `true` only when no scope, selection, or draft transition occurred.
-    fn save_authority_is_current(
+    pub(in crate::analytics::tuner) fn save_authority_is_current(
         &self,
         authority: &SaveAuthority,
         targets: &[SaveTarget],

@@ -2,6 +2,104 @@
 
 use std::time::{Duration, Instant};
 
+/// Removing the mismatch check sends BTCUSDT on a USDC spot account; making it strict also
+/// blocks valid same-quote orders, incompletely identified accounts, and derivatives.
+#[test]
+fn manual_quote_guard_compares_only_known_spot_currencies() {
+    use super::terms::manual_quote_mismatch;
+    use moon_core::venue::MarketKind::{Futures, Quarterly, Spot};
+
+    let mismatch = |kind, account, quote| manual_quote_mismatch(kind, account, quote, Some(false));
+    let account_currency = "USDC";
+    let other_quote = "USDT";
+    assert!(mismatch(Some(Spot), Some(account_currency), other_quote));
+    assert!(mismatch(Some(Spot), Some(account_currency), "BTC"));
+    assert!(!mismatch(Some(Spot), Some(" USDC "), "usdc"));
+    for account in [None, Some(""), Some("  ")] {
+        assert!(!mismatch(Some(Spot), account, "USDT"));
+    }
+    for quote in ["", "  "] {
+        assert!(!mismatch(Some(Spot), Some("USDC"), quote));
+    }
+    for kind in [None, Some(Futures), Some(Quarterly)] {
+        assert!(!mismatch(kind, Some("USDC"), "USD"));
+        assert!(!mismatch(kind, Some("USDC"), ""));
+    }
+    // Hyperliquid spot offers both quotes for a token: the selected pair alone decides.
+    assert!(mismatch(Some(Spot), Some("USDC"), "USDH"));
+    assert!(!mismatch(Some(Spot), Some("USDC"), "USDC"));
+    for borrowing in [Some(true), None] {
+        assert!(!manual_quote_mismatch(
+            Some(Spot),
+            Some(account_currency),
+            other_quote,
+            borrowing
+        ));
+    }
+}
+
+/// Independent consumers must keep routing clicks and both live hotkey roots through the same
+/// terms guard before immediate/pending dispatch. The Trade window remains a historical viewer.
+/// These source bridges complement the executable currency decision test above.
+#[test]
+fn manual_quote_guard_covers_every_order_opening_route() {
+    let sizing = include_str!("sizing.rs");
+    assert!(sizing.contains(".filter(|data| !data.core_config_stale)"));
+    assert!(sizing.contains(".map(|config| config.auto_margin_borrow)"));
+    let guard = sizing.find("if manual_quote_mismatch(").unwrap();
+    let resolve = sizing.find("Ok(self.resolve_manual_order_terms(").unwrap();
+    assert!(
+        guard < resolve,
+        "guard must precede sizing and strategy resolution"
+    );
+
+    let chart = include_str!("../../panels/chart/trade.rs");
+    let placement = &chart[chart.find("fn place_order_at_pos(").unwrap()..];
+    let terms = placement.find("b.manual_order_terms(").unwrap();
+    for send in [
+        "b.queue_visible_stop(",
+        "b.session.place_order(",
+        "b.session.place_pending_order(",
+    ] {
+        assert!(
+            terms < placement.find(send).unwrap(),
+            "{send} bypassed terms"
+        );
+    }
+    assert!(chart.contains("self.place_order_at_pos(pos, intent, cx)"));
+    let cursor = &chart[chart.find("fn place_order_at_cursor(").unwrap()..];
+    assert!(cursor.contains("self.place_order_at_pos("));
+    assert!(placement.contains("MoonNotification::warning(reason)"));
+
+    for root in [
+        include_str!("../../shell/actions.rs"),
+        include_str!("../../chart_tabs/detached_host/mod.rs"),
+    ] {
+        let opening = &root[root
+            .find("HotkeyAction::NewLong | HotkeyAction::NewShort =>")
+            .unwrap()..];
+        assert!(
+            opening[..opening
+                .find("HotkeyAction::ChartShot")
+                .unwrap_or(opening.len())]
+                .contains("crate::hotkeys::place_order_at_hovered_chart(")
+        );
+    }
+    let hotkeys = include_str!("../../hotkeys.rs");
+    assert!(hotkeys.contains("panel.place_order_at_cursor(short, pcx)"));
+    let historical = include_str!("../../trade_window/hotkeys.rs");
+    let route = &historical[historical.find("pub(super) fn route(").unwrap()..];
+    let absorbed =
+        &route[route.find("A::OrderSize(_)").unwrap()..route.find("impl TradeWindowView").unwrap()];
+    assert!(absorbed.contains("| A::NewLong"));
+    assert!(absorbed.contains("| A::NewShort"));
+    assert!(absorbed.contains("=> None"));
+    let firetest = include_str!("../../firetest/stages/order_cancel.rs");
+    assert!(
+        firetest.find(".manual_order_terms(").unwrap() < firetest.find(".place_order(").unwrap()
+    );
+}
+
 /// Roster churn must retain exactly the same cores as set membership, including duplicates.
 #[test]
 fn live_id_scratch_reuses_its_buffer_and_matches_hashset() {
