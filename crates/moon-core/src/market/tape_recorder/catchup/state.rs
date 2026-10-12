@@ -22,6 +22,8 @@ pub(crate) struct RecorderCatchup {
     active: bool,
     hour: Option<i64>,
     archive_bytes: u64,
+    /// Last applied generation; settings changes invalidate settled source decisions.
+    switch_gen: u64,
 }
 
 /// One serial fetch pass; continuation pages in the same UTC hour share the archive budget.
@@ -33,6 +35,9 @@ struct Pass {
 impl RecorderCatchup {
     /// Merge session pages without duplicating a trade already waiting for recovery.
     pub(crate) fn submit(&mut self, trades: Vec<CatchupTrade>) {
+        if !self.active {
+            self.sync_switches();
+        }
         for trade in trades {
             if !self.complete.contains(&trade.id)
                 && self.latched.get(&trade.id) != Some(&Latch::Permanent)
@@ -45,16 +50,22 @@ impl RecorderCatchup {
     }
 
     /// Plan on the recorder thread, reading held spans through its own cache queue only.
+    /// `archives` comes from the caller's switch snapshot, so one tick never mixes generations.
     pub(super) fn prepare(
         &mut self,
         held: impl Fn(&CatchupTrade) -> Coverage,
         now_ms: i64,
         margin: i64,
         long: i64,
+        archives: bool,
     ) -> CatchupPlan {
         self.prune(now_ms);
         let ready: Vec<_> = self.pending.values().cloned().collect();
-        let batch = super::plan(&ready, held, &self.latched, now_ms, margin, long);
+        let batch = if archives {
+            super::plan(&ready, held, &self.latched, now_ms, margin, long)
+        } else {
+            super::plan_with(&ready, held, &self.latched, now_ms, margin, long, false)
+        };
         for &id in &batch.permanent_ids {
             self.latched.insert(id, Latch::Permanent);
             self.pending.remove(&id);
@@ -69,6 +80,17 @@ impl RecorderCatchup {
     /// Evicted tape invalidates settled IDs so the next session listing checks coverage again.
     pub(crate) fn evicted(&mut self) {
         self.complete.clear();
+    }
+
+    /// Reconsider permanent refusals and completed IDs when source choices change.
+    fn sync_switches(&mut self) -> (bool, bool) {
+        let (generation, auto, archives) = super::switches();
+        if self.switch_gen != generation {
+            self.latched.retain(|_, latch| *latch != Latch::Permanent);
+            self.complete.clear();
+            self.switch_gen = generation;
+        }
+        (auto, archives)
     }
 
     /// Release old settled identities even when no pending work remains to start another pass.
@@ -93,7 +115,11 @@ impl RecorderCatchup {
     /// Lazily start one fetch thread and submit work only after the prior pass settled.
     pub(crate) fn tick(&mut self, cache: &TradeCache, now_ms: i64, margin: i64, long: i64) {
         self.prune(now_ms);
-        if self.active || self.pending.is_empty() {
+        if self.active {
+            return;
+        }
+        let (auto, archives) = self.sync_switches();
+        if !auto || self.pending.is_empty() {
             return;
         }
         let batch = self.prepare(
@@ -111,6 +137,7 @@ impl RecorderCatchup {
             now_ms,
             margin,
             long,
+            archives,
         );
         {
             let mut status = STATUS
@@ -146,6 +173,7 @@ impl RecorderCatchup {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             status.failed = 0;
+            status.running = true;
             status.last_pass_ms = Some(now_ms);
             status.archive_bytes = self.archive_bytes;
         } else {
@@ -197,11 +225,13 @@ impl RecorderCatchup {
             }
         }
         self.active = false;
+        self.sync_switches();
         let mut status = STATUS
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         status.filled = status.filled.saturating_add(filled);
         status.failed = failed;
+        status.running = false;
         status.archive_bytes = self.archive_bytes;
         status.pending = self.pending.len().min(u32::MAX as usize) as u32;
     }
@@ -272,3 +302,6 @@ fn start_worker() -> Option<Sender<Pass>> {
         .ok()?;
     Some(sender)
 }
+
+#[cfg(test)]
+mod tests;

@@ -222,12 +222,22 @@ fn tape_catchup_is_optional_and_round_trips() {
         "out_of_reach": 3,
         "failed": 5,
         "last_pass_ms": 1234567890000_i64,
-        "archive_bytes": 9876543210_u64
+        "archive_bytes": 9876543210_u64,
+        "running": true,
+        "auto": false,
+        "archives": true
     });
     status.tape_catchup = Some(Box::new(serde_json::from_value(wire.clone()).unwrap()));
     let encoded = serde_json::to_value(&status).unwrap();
     assert_eq!(encoded["tape_catchup"], wire);
     assert_eq!(serde_json::from_value::<Status>(encoded).unwrap(), status);
+    let mut legacy = wire;
+    for key in ["running", "auto", "archives"] {
+        legacy.as_object_mut().unwrap().remove(key);
+    }
+    let progress: TapeCatchup = serde_json::from_value(legacy).unwrap();
+    assert!(!progress.running);
+    assert_eq!((progress.auto, progress.archives), (None, None));
 }
 
 #[test]

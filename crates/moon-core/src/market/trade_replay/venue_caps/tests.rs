@@ -1,5 +1,55 @@
 use super::*;
 
+/// A displayed retention edge must match planning, including archive fallback just beyond it.
+#[test]
+fn reach_table_matches_fetchable_at_retention_edges() {
+    let now = 500 * 86_400_000;
+    let rows = reach_table();
+    assert_eq!(
+        rows.len(),
+        14,
+        "the core directory exposes fourteen products"
+    );
+    for row in rows {
+        assert!((0..=u8::MAX).any(|code| crate::venue::venue(code) == Some(row.venue)));
+        let edge = now - row.rest_retention_ms.unwrap_or(86_400_000) + RETENTION_SAFETY_MS;
+        if row.rest.is_some() {
+            assert_eq!(fetchable(row.venue, "SYNUSDT", edge, now), Fetchable::Rest);
+            if row.rest_retention_ms.is_some() {
+                assert_eq!(
+                    fetchable(row.venue, "SYNUSDT", edge - 1, now),
+                    if row.archive.is_some() {
+                        Fetchable::Archive
+                    } else {
+                        Fetchable::OutOfRetention
+                    }
+                );
+                assert_eq!(
+                    fetchable_with(row.venue, "SYNUSDT", edge - 1, now, false),
+                    Fetchable::OutOfRetention
+                );
+            }
+        } else {
+            assert_eq!(
+                fetchable(row.venue, "SYNUSDT", edge, now),
+                if row.archive.is_some() {
+                    Fetchable::Archive
+                } else {
+                    Fetchable::NoRoute
+                }
+            );
+            assert_eq!(
+                fetchable_with(row.venue, "SYNUSDT", edge, now, false),
+                Fetchable::NoRoute
+            );
+        }
+        if row.archive_linear_only {
+            assert_eq!(archive_route(row.venue, "SYNUSD"), None);
+            assert_eq!(archive_route(row.venue, "SYNUSDC"), row.archive);
+        }
+    }
+}
+
 /// Removing archive fallback would refuse supported old trades in the tuner pre-filters.
 #[test]
 fn fetchable_uses_archive_beyond_rest_and_bounds_archive_depth() {

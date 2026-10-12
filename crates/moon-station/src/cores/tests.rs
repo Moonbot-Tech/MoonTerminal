@@ -275,6 +275,16 @@ fn the_tape_window_comes_from_the_station_file() {
 
     let station = from_station_file(core, Some(&dir)).unwrap();
     assert!(station.tape.margin_s.is_none() && station.tape.long_position_min.is_none());
+    assert_eq!(
+        (station.tape.auto_catchup, station.tape.archive_catchup),
+        (None, None)
+    );
+    let switched = format!("{core}[tape]\nauto_catchup = false\narchive_catchup = true\n");
+    let station = from_station_file(&switched, Some(&dir)).unwrap();
+    assert_eq!(
+        (station.tape.auto_catchup, station.tape.archive_catchup),
+        (Some(false), Some(true))
+    );
     let unknown = format!("{core}[tape]\nmargin = 180\n");
     assert!(from_station_file(&unknown, Some(&dir)).is_err());
 }

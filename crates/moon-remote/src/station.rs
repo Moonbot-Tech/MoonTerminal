@@ -37,7 +37,7 @@ pub struct CoreKey {
     pub endpoint_override: String,
 }
 
-pub use moon_core::station_api::TapeWindow;
+pub use moon_core::station_api::{CatchupSwitches, TapeWindow};
 
 /// This terminal's window around a trade, from its `storage.toml` (Settings -> Storage): what a
 /// new station starts with. Read only when the file exists: loading a missing one would write a
@@ -238,23 +238,43 @@ pub fn with_telegram(current: &str, change: &BotChange, off: bool) -> anyhow::Re
     Ok(toml::to_string_pretty(&file)?)
 }
 
-/// `current` with its `[tape]` set to `tape`, or `None` when it already says exactly that — the
-/// other sections (the cores, the bot) as they were.
+/// Merge the window and supported switches into `[tape]`, preserving unknown fields and sections.
+/// Return `None` when requested fields match; absent switches preserve stored choices.
 ///
 /// Args:
 ///     current: The server's `station.toml`.
 ///     tape: The terminal's window around a trade.
-pub fn with_tape(current: &str, tape: TapeWindow) -> anyhow::Result<Option<String>> {
+///     switches: Recovery choices, only for stations reporting switch support.
+pub fn with_tape(
+    current: &str,
+    tape: TapeWindow,
+    switches: Option<CatchupSwitches>,
+) -> anyhow::Result<Option<String>> {
     let mut file: toml::Table = toml::from_str(current).context("the server's station.toml")?;
-    let wanted = toml::Value::try_from(tape)?;
-    if file.get("tape") == Some(&wanted) {
+    let mut wanted = toml::Table::try_from(tape)?;
+    if let Some(switches) = switches {
+        wanted.insert("auto_catchup".into(), toml::Value::Boolean(switches.auto));
+        wanted.insert(
+            "archive_catchup".into(),
+            toml::Value::Boolean(switches.archives),
+        );
+    }
+    let section = file
+        .entry("tape")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("[tape] in station.toml is not a table"))?;
+    if wanted
+        .iter()
+        .all(|(key, value)| section.get(key) == Some(value))
+    {
         return Ok(None);
     }
-    file.insert("tape".to_owned(), wanted);
+    section.extend(wanted);
     Ok(Some(toml::to_string_pretty(&file)?))
 }
 
-/// Set the station's window around a trade (the user's "Set" in the station's section): `[tape]`
+/// Set the station's window and optional supported recovery switches: `[tape]`
 /// in its `station.toml`, then a reload (SIGHUP) — the station applies the window without a
 /// restart, its cores and bot stay connected. A station already on that window is not touched; a
 /// stopped one takes it at its next start. A server without `station.toml` yet gets a window with
@@ -262,6 +282,7 @@ pub fn with_tape(current: &str, tape: TapeWindow) -> anyhow::Result<Option<Strin
 pub fn push_tape(
     target: &Target,
     tape: TapeWindow,
+    switches: Option<CatchupSwitches>,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
     // On the steps the station records with, so what it reports back can equal what was sent.
@@ -281,7 +302,7 @@ pub fn push_tape(
         return Ok(());
     }
     let wrote = edit_config(&conn, true, |current| match current {
-        Some(current) => with_tape(current, tape),
+        Some(current) => with_tape(current, tape, switches),
         None => Ok(None),
     })?;
     let window = format!(
@@ -308,26 +329,34 @@ pub fn push_tape(
     // A service without the control API cannot say what it records with.
     if script::value(&status, "api") != Some("yes") {
         script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
-        say(Progress::step(
-            Step::TapeReload,
-            format!(
-                "tape window written, the station asked to re-read it (its service does not report \
-             the window: update it): {window}"
-            ),
-        ));
+        say(Progress::step(Step::TapeReload, reload_unreported(&window)));
         return Ok(());
     }
     // The file may already say it while the station does not: an earlier re-read that failed.
-    if wrote || reported_tape(&conn)? != Some(tape) {
+    if wrote
+        || reported_tape(&conn)?.is_none_or(|(window, choices)| {
+            window != tape || switches.is_some_and(|wanted| choices != Some(wanted))
+        })
+    {
         script::checked(conn.run(&script::helper("reload", &[]), &[], STEP_TIMEOUT)?)?;
     }
-    confirm_tape(&conn, tape, &window, say)
+    confirm_tape(&conn, tape, switches, &window, say)
 }
 
-/// The window the running station reports; `None` from a service older than the report.
-fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<TapeWindow>> {
+/// Reported window and recovery choices; absent choices identify pre-switch stations.
+fn reported_tape(
+    conn: &AdminConn,
+) -> anyhow::Result<Option<(TapeWindow, Option<CatchupSwitches>)>> {
     match api::call(conn, &Request::Status)? {
-        Answer::Status(status) => Ok(status.tape),
+        Answer::Status(status) => Ok(status.tape.map(|tape| {
+            let switches = status.tape_catchup.as_ref().and_then(|catchup| {
+                Some(CatchupSwitches {
+                    auto: catchup.auto?,
+                    archives: catchup.archives?,
+                })
+            });
+            (tape, switches)
+        })),
         other => anyhow::bail!("the station answered a status request with {other:?}"),
     }
 }
@@ -336,12 +365,53 @@ fn reported_tape(conn: &AdminConn) -> anyhow::Result<Option<TapeWindow>> {
 /// 100 ms, the re-read of `station.toml` is quick.
 const TAPE_APPLIED_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Wait until the running station reports `tape` as the window it records with. A station whose
+/// The step line for a station asked to re-read a window it cannot report back.
+fn reload_unreported(window: &str) -> String {
+    format!(
+        "tape window written, the station asked to re-read it (its service does not report the \
+         window: update it): {window}"
+    )
+}
+
+/// What one status read says about the requested tape settings.
+#[derive(Debug, PartialEq, Eq)]
+enum TapeVerdict {
+    /// The station reports the window and every sent switch.
+    Applied,
+    /// The station reports no window and no switches were sent: it predates the report.
+    Unreported,
+    /// Switches were sent but the station reports none: it predates them and never will.
+    Outdated,
+    /// Not there yet; look again until the deadline.
+    Pending,
+}
+
+/// Judge one status read against the requested window and switches.
+fn tape_verdict(
+    reported: Option<(TapeWindow, Option<CatchupSwitches>)>,
+    tape: TapeWindow,
+    switches: Option<CatchupSwitches>,
+) -> TapeVerdict {
+    match (reported, switches) {
+        (Some((applied, choices)), _)
+            if applied == tape && switches.is_none_or(|wanted| choices == Some(wanted)) =>
+        {
+            TapeVerdict::Applied
+        }
+        (None, None) => TapeVerdict::Unreported,
+        (None, Some(_)) | (Some((_, None)), Some(_)) => TapeVerdict::Outdated,
+        _ => TapeVerdict::Pending,
+    }
+}
+
+/// Wait until the station reports the requested window and any sent switches. A station whose
 /// re-read failed (its log says why) keeps the old window: that is an error here, not a success.
-/// A failed look is only one look until the deadline.
+/// A station that reports no switches after they were sent fails at once. A failed look is only
+/// one look until the deadline.
 fn confirm_tape(
     conn: &AdminConn,
     tape: TapeWindow,
+    switches: Option<CatchupSwitches>,
     window: &str,
     say: &mut dyn FnMut(Progress),
 ) -> anyhow::Result<()> {
@@ -349,30 +419,36 @@ fn confirm_tape(
     loop {
         let last_chance = std::time::Instant::now() >= deadline;
         match reported_tape(conn) {
-            Ok(Some(applied)) if applied == tape => {
-                say(Progress::step(
-                    Step::TapeApplied,
-                    format!("tape window on the station: {window}"),
-                ));
-                return Ok(());
-            }
-            Ok(None) => {
-                say(Progress::step(
-                    Step::TapeReload,
-                    format!(
-                        "tape window written, the station asked to re-read it (its service does not \
-                     report the window: update it): {window}"
+            Ok(reported) => match tape_verdict(reported, tape, switches) {
+                TapeVerdict::Applied => {
+                    say(Progress::step(
+                        Step::TapeApplied,
+                        format!("tape window on the station: {window}"),
+                    ));
+                    return Ok(());
+                }
+                TapeVerdict::Unreported => {
+                    say(Progress::step(Step::TapeReload, reload_unreported(window)));
+                    return Ok(());
+                }
+                TapeVerdict::Outdated => anyhow::bail!(
+                    "the station does not report catch-up switches: update it, then write again"
+                ),
+                TapeVerdict::Pending => match reported {
+                    Some((applied, choices)) => anyhow::ensure!(
+                        !last_chance,
+                        "the station still records with margin {} s, long position from {} min: \
+                         it did not take the new tape settings (its journal says why); switches \
+                         {choices:?}, expected {switches:?}",
+                        applied.margin_s,
+                        applied.long_position_min
                     ),
-                ));
-                return Ok(());
-            }
-            Ok(Some(applied)) => anyhow::ensure!(
-                !last_chance,
-                "the station still records with margin {} s, long position from {} min: it did \
-                 not take the new window (its journal says why)",
-                applied.margin_s,
-                applied.long_position_min
-            ),
+                    None => anyhow::ensure!(
+                        !last_chance,
+                        "the station did not confirm the requested tape settings"
+                    ),
+                },
+            },
             Err(e) if last_chance => {
                 return Err(e.context("the window is written; the station did not confirm it"));
             }

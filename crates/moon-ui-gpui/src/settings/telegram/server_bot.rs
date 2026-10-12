@@ -81,6 +81,14 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) cores_armed: Option<super::station_cores::RemovalArm>,
     /// Rows retained between renders, invalidated by comparison inputs.
     pub(super) cores_cache: super::station_cores::CoreCache,
+    /// The full core list below the summary is open.
+    pub(super) cores_all_open: bool,
+    /// Which rows the full core list shows.
+    pub(super) cores_filter: super::station_cores::CoresFilter,
+    /// The full core list's name/address search.
+    pub(super) cores_query: Entity<MoonInputState>,
+    /// The full core list's own bounded scroll.
+    pub(super) cores_scroll: ScrollHandle,
     /// The server's chats the draft was taken from: what "Apply on the server" replaces, and the
     /// station refuses if its chats are no longer these.
     pub(super) access_base: Option<Access>,
@@ -129,6 +137,8 @@ pub(in crate::settings) fn build<T: 'static>(
 ) -> ServerBotEd {
     let login = input(window, cx, false);
     login.update(cx, |st, c| st.set_value("root", window, c));
+    let cores_query = input(window, cx, false);
+    super::station_cores::watch_query(&cores_query, cx);
     ServerBotEd {
         station_access: super::station_access::AccessEd::new(window, cx),
         host: input(window, cx, false),
@@ -150,6 +160,10 @@ pub(in crate::settings) fn build<T: 'static>(
         access_seen: None,
         cores_armed: None,
         cores_cache: Default::default(),
+        cores_all_open: false,
+        cores_filter: Default::default(),
+        cores_query,
+        cores_scroll: ScrollHandle::new(),
         access_base: None,
         access_draft: None,
         tape: Default::default(),
@@ -348,6 +362,7 @@ impl SettingsView {
                 ed.access_base = None;
                 ed.access_draft = None;
                 ed.chats.close();
+                ed.tape.forget_switches();
             }
             ed.known = known;
             if ed.known.is_none() {
@@ -1325,7 +1340,7 @@ impl SettingsView {
             .children(self.station_cores_block(target, width, cx))
             .child(self.station_access_block(target, cx))
             .child(self.server_auto_update_block(target, cx))
-            .child(self.server_tape_block(target, cx))
+            .child(self.server_tape_block(target, width, cx))
     }
 
     /// The service's version as last read — `Err` with the muted word while it is being read or

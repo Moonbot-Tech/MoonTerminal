@@ -305,6 +305,15 @@ pub struct Status {
 /// Counts and last-pass progress for the station's automatic closed-trade tape catch-up.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TapeCatchup {
+    /// Whether the recorder has a fetch pass awaiting settlement.
+    #[serde(default)]
+    pub running: bool,
+    /// Automatic recovery switch; absent on stations predating switch support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<bool>,
+    /// Archive recovery switch; absent on stations predating switch support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archives: Option<bool>,
     /// Jobs awaiting tape that is still within reach.
     pub pending: u32,
     /// Closed-trade tape windows filled by catch-up.
@@ -319,6 +328,15 @@ pub struct TapeCatchup {
     pub last_pass_ms: Option<i64>,
     /// Compressed archive bytes received by catch-up during the current hourly pass.
     pub archive_bytes: u64,
+}
+
+/// Station recovery choices sent only to stations reporting switch support.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CatchupSwitches {
+    /// Automatically recover closed-trade tape.
+    pub auto: bool,
+    /// Allow daily archives beyond REST retention.
+    pub archives: bool,
 }
 
 /// The window around a trade the tape is recorded in (the terminal's `[trade_replay]`, the

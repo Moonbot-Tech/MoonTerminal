@@ -21,6 +21,8 @@
 //! [tape]
 //! margin_s = 180
 //! long_position_min = 10
+//! auto_catchup = true    # on when absent
+//! archive_catchup = true # on when absent
 //! ```
 //!
 //! `[update]` is whether the station updates itself from the release; on when absent, set from
@@ -91,8 +93,8 @@ struct UpdateSection {
     auto: Option<bool>,
 }
 
-/// `[tape]`: the station's window around a trade. Absent fields keep the station's own
-/// `storage.toml` values.
+/// `[tape]`: the recording window and recovery choices. Absent window fields keep storage
+/// values; absent recovery switches enable the full catch-up behavior.
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Tape {
@@ -101,6 +103,10 @@ pub struct Tape {
     /// From how many minutes a position is recorded as its two ends
     /// (`[trade_replay] long_position_min`).
     pub long_position_min: Option<u32>,
+    /// Automatically recover closed-trade tape; absent means on.
+    pub auto_catchup: Option<bool>,
+    /// Allow daily archive recovery; absent means on.
+    pub archive_catchup: Option<bool>,
 }
 
 /// `[telegram]` as written.

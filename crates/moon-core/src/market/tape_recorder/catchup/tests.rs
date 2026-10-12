@@ -4,6 +4,9 @@ use crate::venue::{Brand, MarketKind};
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
 
+/// Serialize recorder tests because switch generations and progress are process-wide.
+pub(super) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Synthetic closed positions share no production core or market identity.
 fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
     let close_ms = NOW - age_ms;
@@ -169,10 +172,11 @@ fn rest_retention_crossing_keeps_only_reachable_missing_tape() {
 /// A source-less row must be permanently omitted after its first recorder planning pass.
 #[test]
 fn no_route_is_latched_by_recorder_and_absent_on_resubmit() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Htx, MarketKind::Spot, DAY);
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![row.clone()]);
-    let first = state.prepare(|_| Coverage::none(), NOW, 0, DAY);
+    let first = state.prepare(|_| Coverage::none(), NOW, 0, DAY, true);
     assert_eq!(first.no_route, 1);
     assert!(first.jobs.is_empty());
     state.submit(vec![row]);
@@ -181,6 +185,7 @@ fn no_route_is_latched_by_recorder_and_absent_on_resubmit() {
         NOW + DAY,
         0,
         DAY,
+        true,
     );
     assert_eq!(second.no_route, 0);
     assert!(second.jobs.is_empty());
@@ -189,12 +194,13 @@ fn no_route_is_latched_by_recorder_and_absent_on_resubmit() {
 /// Held reachable tape must not make an unfillable old hole count as a completed trade.
 #[test]
 fn clipped_away_missing_window_is_out_of_reach_and_latched() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut row = trade(1, Brand::Gate, MarketKind::Spot, 28 * DAY);
     row.open_ms = NOW - 31 * DAY;
     let earliest = NOW - 29 * DAY + venue_caps::RETENTION_SAFETY_MS;
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![row.clone()]);
-    let result = state.prepare(|_| Coverage::one((earliest, NOW)), NOW, 0, 40 * DAY);
+    let result = state.prepare(|_| Coverage::one((earliest, NOW)), NOW, 0, 40 * DAY, true);
     assert_eq!(result.out_of_reach, 1);
     assert_eq!(result.complete, 0);
     assert!(result.jobs.is_empty());
@@ -205,7 +211,8 @@ fn clipped_away_missing_window_is_out_of_reach_and_latched() {
                 |_| panic!("permanent window asked disk again"),
                 NOW + DAY,
                 0,
-                40 * DAY
+                40 * DAY,
+                true
             )
             .jobs
             .is_empty()
@@ -215,27 +222,40 @@ fn clipped_away_missing_window_is_out_of_reach_and_latched() {
 /// Complete and permanently refused IDs must stop repeated disk reads but age out after 365 days.
 #[test]
 fn complete_ids_skip_resubmission_and_old_settlements_are_pruned() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Gate, MarketKind::Spot, DAY);
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![row.clone()]);
     assert_eq!(
         state
-            .prepare(|trade| needed(trade, 0, DAY), NOW, 0, DAY)
+            .prepare(|trade| needed(trade, 0, DAY), NOW, 0, DAY, true)
             .complete,
         1
     );
     state.submit(vec![row.clone()]);
     assert!(
         state
-            .prepare(|_| panic!("completed ID was re-planned"), NOW + DAY, 0, DAY)
+            .prepare(
+                |_| panic!("completed ID was re-planned"),
+                NOW + DAY,
+                0,
+                DAY,
+                true
+            )
             .jobs
             .is_empty()
     );
-    state.prepare(|_| panic!("nothing pending"), NOW + 366 * DAY, 0, DAY);
+    state.prepare(|_| panic!("nothing pending"), NOW + 366 * DAY, 0, DAY, true);
     state.submit(vec![row]);
     assert_eq!(
         state
-            .prepare(|_| panic!("old row asked disk"), NOW + 366 * DAY, 0, DAY)
+            .prepare(
+                |_| panic!("old row asked disk"),
+                NOW + 366 * DAY,
+                0,
+                DAY,
+                true
+            )
             .out_of_reach,
         1
     );
@@ -243,12 +263,23 @@ fn complete_ids_skip_resubmission_and_old_settlements_are_pruned() {
     let refused = trade(2, Brand::Htx, MarketKind::Spot, DAY);
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![refused.clone()]);
-    assert_eq!(state.prepare(|_| Coverage::none(), NOW, 0, DAY).no_route, 1);
-    state.prepare(|_| panic!("nothing pending"), NOW + 366 * DAY, 0, DAY);
+    assert_eq!(
+        state
+            .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+            .no_route,
+        1
+    );
+    state.prepare(|_| panic!("nothing pending"), NOW + 366 * DAY, 0, DAY, true);
     state.submit(vec![refused]);
     assert_eq!(
         state
-            .prepare(|_| panic!("old row asked disk"), NOW + 366 * DAY, 0, DAY)
+            .prepare(
+                |_| panic!("old row asked disk"),
+                NOW + 366 * DAY,
+                0,
+                DAY,
+                true
+            )
             .out_of_reach,
         1
     );
@@ -771,18 +802,19 @@ fn same_route_market_day_trades_share_one_archive_fill() {
 /// Clearing settled IDs on eviction must allow an hourly resubmit to find missing tape again.
 #[test]
 fn eviction_rechecks_previously_complete_trade() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let row = trade(1, Brand::Gate, MarketKind::Spot, DAY);
     let mut state = state::RecorderCatchup::default();
     state.submit(vec![row.clone()]);
     assert_eq!(
         state
-            .prepare(|trade| needed(trade, 0, DAY), NOW, 0, DAY)
+            .prepare(|trade| needed(trade, 0, DAY), NOW, 0, DAY, true)
             .complete,
         1
     );
     state.evicted();
     state.submit(vec![row]);
-    let plan = state.prepare(|_| Coverage::none(), NOW, 0, DAY);
+    let plan = state.prepare(|_| Coverage::none(), NOW, 0, DAY, true);
     assert_eq!(plan.jobs.len(), 1);
     assert_eq!(plan.complete, 0);
 }
@@ -954,6 +986,7 @@ fn one_missing_archive(
 /// Per-day unknown results become permanent only if every requested daily file is unknown.
 #[test]
 fn archive_trade_latches_only_when_every_day_is_unknown() {
+    let _guard = SWITCH_LOCK.lock().unwrap();
     let mut row = job(1, Brand::Bybit, MarketKind::Futures);
     row.missing = Coverage::one((NOW - 5 * DAY, NOW - 3 * DAY - 1));
     let trade = row.trade.clone();
@@ -978,7 +1011,7 @@ fn archive_trade_latches_only_when_every_day_is_unknown() {
     partial_state.submit(vec![trade.clone()]);
     assert_eq!(
         partial_state
-            .prepare(|_| Coverage::none(), NOW + DAY, 0, DAY)
+            .prepare(|_| Coverage::none(), NOW + DAY, 0, DAY, true)
             .jobs
             .len(),
         1
@@ -1003,7 +1036,8 @@ fn archive_trade_latches_only_when_every_day_is_unknown() {
                 |_| panic!("permanently refused trade read disk"),
                 NOW + DAY,
                 0,
-                DAY
+                DAY,
+                true
             )
             .jobs
             .is_empty()

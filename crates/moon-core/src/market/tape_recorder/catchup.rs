@@ -5,7 +5,7 @@ mod state;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::{Cmd, TradeId};
 use crate::market::trade_replay::venue_caps::{self, ArchiveRoute, Fetchable, TradeRoute};
@@ -80,7 +80,13 @@ pub(crate) fn run_job(
 }
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
+static AUTO: AtomicBool = AtomicBool::new(true);
+static ARCHIVES: AtomicBool = AtomicBool::new(true);
+static SWITCH_GEN: AtomicU64 = AtomicU64::new(0);
 static STATUS: Mutex<TapeCatchup> = Mutex::new(TapeCatchup {
+    running: false,
+    auto: None,
+    archives: None,
     pending: 0,
     filled: 0,
     no_route: 0,
@@ -100,6 +106,30 @@ pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
+/// Apply reloadable switches atomically with respect to status readers and recorder snapshots.
+pub fn set_switches(auto: bool, archives: bool) {
+    let _status = STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let changed = AUTO.swap(auto, Ordering::Relaxed) != auto;
+    let changed = (ARCHIVES.swap(archives, Ordering::Relaxed) != archives) || changed;
+    if changed {
+        SWITCH_GEN.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Read one coherent generation and its choices under the shared status mutex.
+fn switches() -> (u64, bool, bool) {
+    let _status = STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (
+        SWITCH_GEN.load(Ordering::Relaxed),
+        AUTO.load(Ordering::Relaxed),
+        ARCHIVES.load(Ordering::Relaxed),
+    )
+}
+
 /// Queue resolved rows on the recorder, which owns all reads and writes of its tape cache.
 pub fn submit(trades: Vec<CatchupTrade>) {
     if enabled() && !trades.is_empty() {
@@ -109,10 +139,13 @@ pub fn submit(trades: Vec<CatchupTrade>) {
 
 /// Read the latest progress snapshot without touching either tape database.
 pub fn status() -> TapeCatchup {
-    STATUS
+    let snapshot = STATUS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut status = snapshot.clone();
+    status.auto = Some(AUTO.load(Ordering::Relaxed));
+    status.archives = Some(ARCHIVES.load(Ordering::Relaxed));
+    status
 }
 
 /// Count a session-latched unknown coin without creating an unresolved recorder job.
@@ -147,6 +180,19 @@ pub(crate) fn plan(
     margin_ms: i64,
     long_ms: i64,
 ) -> CatchupPlan {
+    plan_with(trades, held, latched, now_ms, margin_ms, long_ms, true)
+}
+
+/// Plan against the archive choice captured for this recorder pass, leaving REST unchanged.
+pub(crate) fn plan_with(
+    trades: &[CatchupTrade],
+    held: impl Fn(&CatchupTrade) -> Coverage,
+    latched: &HashMap<TradeId, Latch>,
+    now_ms: i64,
+    margin_ms: i64,
+    long_ms: i64,
+    archives: bool,
+) -> CatchupPlan {
     let mut result = CatchupPlan::default();
     for trade in trades {
         if latched.get(&trade.id).is_some_and(|latch| match latch {
@@ -180,8 +226,10 @@ pub(crate) fn plan(
             continue;
         };
         let rest = venue_caps::trade_route(trade.venue);
-        let archive = venue_caps::archive_route(trade.venue, &trade.market);
-        match venue_caps::fetchable(trade.venue, &trade.market, from, now_ms) {
+        let archive = archives
+            .then(|| venue_caps::archive_route(trade.venue, &trade.market))
+            .flatten();
+        match venue_caps::fetchable_with(trade.venue, &trade.market, from, now_ms, archives) {
             Fetchable::NoRoute => {
                 result.no_route += 1;
                 result.permanent_ids.push(trade.id);
@@ -189,7 +237,8 @@ pub(crate) fn plan(
             }
             Fetchable::OutOfRetention => {
                 // A REST-only window crossing the edge may still recover its reachable exit.
-                if venue_caps::fetchable(trade.venue, &trade.market, to, now_ms) != Fetchable::Rest
+                if venue_caps::fetchable_with(trade.venue, &trade.market, to, now_ms, archives)
+                    != Fetchable::Rest
                 {
                     result.out_of_reach += 1;
                     result.permanent_ids.push(trade.id);

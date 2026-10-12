@@ -543,8 +543,19 @@ pub enum Fetchable {
 
 /// Choose REST first, then a daily archive within the bounded catch-up depth.
 pub fn fetchable(venue: Venue, market: &str, from_ms: i64, now_ms: i64) -> Fetchable {
+    fetchable_with(venue, market, from_ms, now_ms, true)
+}
+
+/// Choose a reachable source while respecting the station's archive recovery switch.
+pub fn fetchable_with(
+    venue: Venue,
+    market: &str,
+    from_ms: i64,
+    now_ms: i64,
+    archives: bool,
+) -> Fetchable {
     let rest = trade_route(venue);
-    let archive = archive_route(venue, market);
+    let archive = archives.then(|| archive_route(venue, market)).flatten();
     if rest.is_some_and(|route| {
         route.retention_ms().is_none_or(|retention| {
             from_ms
@@ -639,13 +650,22 @@ impl ArchiveRoute {
 /// Return a verified archive route; Bybit inverse quantities remain unverified, so only linear
 /// USDT and USDC symbols may use its trading archive.
 pub fn archive_route(venue: Venue, market: &str) -> Option<ArchiveRoute> {
+    let route = archive_kind(venue)?;
+    if route == ArchiveRoute::BybitTradingDaily
+        && !(market.ends_with("USDT") || market.ends_with("USDC"))
+    {
+        return None;
+    }
+    Some(route)
+}
+
+/// Describe archive availability without requiring a particular market symbol.
+pub const fn archive_kind(venue: Venue) -> Option<ArchiveRoute> {
     match (venue.brand, venue.kind) {
         (Brand::Binance, MarketKind::Spot) => Some(ArchiveRoute::BinanceSpotDaily),
         (Brand::Binance, MarketKind::Futures) => Some(ArchiveRoute::BinanceUmDaily),
         (Brand::Binance, MarketKind::Quarterly) => Some(ArchiveRoute::BinanceCmDaily),
-        (Brand::Bybit, MarketKind::Futures) => (market.ends_with("USDT")
-            || market.ends_with("USDC"))
-        .then_some(ArchiveRoute::BybitTradingDaily),
+        (Brand::Bybit, MarketKind::Futures) => Some(ArchiveRoute::BybitTradingDaily),
         (Brand::Bybit, MarketKind::Spot | MarketKind::Quarterly)
         | (Brand::Gate, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
         | (Brand::BitGet, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
@@ -653,6 +673,44 @@ pub fn archive_route(venue: Venue, market: &str) -> Option<ArchiveRoute> {
         | (Brand::Hyperliquid, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly)
         | (Brand::Htx, MarketKind::Spot | MarketKind::Futures | MarketKind::Quarterly) => None,
     }
+}
+
+/// Market-independent facts for one product supported by the core's venue directory.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VenueReach {
+    /// Exchange brand and product kind.
+    pub venue: Venue,
+    /// Verified public REST trade route, when available.
+    pub rest: Option<TradeRoute>,
+    /// REST retention; `None` means unbounded when `rest` is present.
+    pub rest_retention_ms: Option<i64>,
+    /// Verified daily archive route, when available.
+    pub archive: Option<ArchiveRoute>,
+    /// Archive quantities are verified only for linear USDT/USDC symbols.
+    pub archive_linear_only: bool,
+}
+
+/// Return reachability facts in brand order, excluding products absent from the venue directory.
+pub fn reach_table() -> Vec<VenueReach> {
+    let mut rows = Vec::new();
+    for brand in Brand::ALL {
+        for kind in [MarketKind::Spot, MarketKind::Futures, MarketKind::Quarterly] {
+            let venue = Venue { brand, kind };
+            if !(0..=u8::MAX).any(|code| crate::venue::venue(code) == Some(venue)) {
+                continue;
+            }
+            let rest = trade_route(venue);
+            let archive = archive_kind(venue);
+            rows.push(VenueReach {
+                venue,
+                rest,
+                rest_retention_ms: rest.and_then(TradeRoute::retention_ms),
+                archive,
+                archive_linear_only: archive == Some(ArchiveRoute::BybitTradingDaily),
+            });
+        }
+    }
+    rows
 }
 
 /// Return the one-minute-bar route this venue is served by, if this build knows one.

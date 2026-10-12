@@ -1,16 +1,29 @@
 //! The station's window around a trade, in its section: what the station records with now, read
-//! from its status, and "Write to the station" to change it (STATION.md §1 п. 14).
+//! from its status, and "Write to the station" to change it (STATION.md §1 п. 14). Beside it, the
+//! station's catch-up of missed tape: what it is doing, its counts, its two switches and how far
+//! back each exchange still serves trades.
 //!
 //! The station's window is its own. The terminal never sends it behind the user's back — neither
 //! at start nor when Settings -> Storage changes the terminal's window: a terminal on old values
 //! would silently rewrite the station's, and several terminals may share one station. Only a new
 //! station starts with the installing terminal's window.
 
+use std::rc::Rc;
+use std::time::Duration;
+
+use chrono::TimeZone as _;
+use chrono_tz::Tz;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_core::config::storage as storage_cfg;
-use moon_core::station_api::TapeWindow;
+use moon_core::market::trade_replay::venue_caps::{self, VenueReach};
+use moon_core::station_api::{CatchupSwitches, TapeCatchup, TapeWindow};
 use moon_remote::ssh::Target;
-use moon_ui::{MoonButton, MoonPalette, h_flex, rgba_from, v_flex};
+use moon_remote::station::bot::BotState;
+use moon_ui::{
+    MoonButton, MoonCheckbox, MoonDisclosure, MoonDisclosureDirection, MoonPalette, MoonTag,
+    MoonTone, h_flex, rgba_from, v_flex,
+};
 use rust_i18n::t;
 
 use super::super::SettingsView;
@@ -20,13 +33,103 @@ use crate::design;
 /// Shown in both steppers when the station has not reported a window.
 const UNKNOWN_VALUE: &str = "—";
 
-/// The window as the station reported it and as edited here.
+/// The station looks for trades without tape about once an hour after its last pass.
+const PASS_EVERY_MS: i64 = 3_600_000;
+
+/// How often a running catch-up is read again while its tab is open.
+const RUNNING_REREAD: Duration = Duration::from_secs(60);
+
+/// The window and the catch-up switches as the station reported them and as edited here.
 #[derive(Default)]
 pub(in crate::settings) struct TapeEd {
     /// The station's window as last read.
     seen: Option<TapeWindow>,
     /// The window as edited; follows `seen` while untouched.
     draft: Option<TapeWindow>,
+    /// The station's catch-up switches as last read; `None` from a station predating them.
+    seen_switches: Option<CatchupSwitches>,
+    /// The switches as edited; follow `seen_switches` while untouched.
+    draft_switches: Option<CatchupSwitches>,
+    /// "How long exchanges keep trades" is open.
+    venues_open: bool,
+    /// The pending re-read of a running catch-up.
+    reread: Option<Task<()>>,
+}
+
+/// Take a new read into `seen`; an untouched draft follows it, an edited one stays. A read
+/// without a value (the station restarting, stopped, or older than the report) changes nothing:
+/// the last known value and the edit stay.
+fn follow<T: Copy + PartialEq>(seen: &mut Option<T>, draft: &mut Option<T>, read: Option<T>) {
+    if read.is_none() || read == *seen {
+        return;
+    }
+    if *draft == *seen {
+        *draft = read;
+    }
+    *seen = read;
+}
+
+/// The switches a station reports; `None` when it predates them.
+fn reported_switches(catchup: &TapeCatchup) -> Option<CatchupSwitches> {
+    Some(CatchupSwitches {
+        auto: catchup.auto?,
+        archives: catchup.archives.unwrap_or(true),
+    })
+}
+
+impl TapeEd {
+    /// Take one read's switches. `None` is no status read at all and changes nothing; a status
+    /// read without switches (a station rolled back, or another, older station) forgets them, so
+    /// "Write to the station" never sends that station keys it would refuse.
+    fn take_switches(&mut self, read: Option<Option<CatchupSwitches>>) {
+        match read {
+            None => {}
+            Some(None) => self.forget_switches(),
+            Some(switches) => follow(&mut self.seen_switches, &mut self.draft_switches, switches),
+        }
+    }
+
+    /// Drop the switches as read and as edited: they belonged to another station or version.
+    pub(super) fn forget_switches(&mut self) {
+        self.seen_switches = None;
+        self.draft_switches = None;
+    }
+}
+
+/// The catch-up report of the last status read, if the station sent one.
+fn reported_catchup(bot: Option<&BotState>) -> Option<&TapeCatchup> {
+    bot.and_then(|state| state.station.as_ref())
+        .and_then(|status| status.tape_catchup.as_deref())
+}
+
+/// The locale key of `base` for count `n`: Slavic one/few/many, one or many for the other
+/// languages (each dictionary carries all three forms).
+pub(super) fn plural_key(base: &str, n: u64) -> String {
+    let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
+        if (11..=14).contains(&(n % 100)) {
+            "many"
+        } else {
+            match n % 10 {
+                1 => "one",
+                2..=4 => "few",
+                _ => "many",
+            }
+        }
+    } else if n == 1 {
+        "one"
+    } else {
+        "many"
+    };
+    format!("{base}_{form}")
+}
+
+/// The switches "Write to the station" sends: only to a station that reported them, because an
+/// older station's `[tape]` refuses unknown keys.
+fn job_switches(
+    seen: Option<CatchupSwitches>,
+    draft: Option<CatchupSwitches>,
+) -> Option<CatchupSwitches> {
+    seen.and(draft)
 }
 
 /// Which one line sits beside "Write to the station".
@@ -84,26 +187,557 @@ pub(super) fn tape_status(facts: TapeFacts) -> TapeStatus {
     TapeStatus::Clean
 }
 
+/// What the station's catch-up of missed tape is doing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CatchupState {
+    /// The station does not report catch-up: it predates it.
+    NoData,
+    /// Automatic catch-up is switched off.
+    Off,
+    /// A pass is fetching now.
+    Running,
+    /// The last pass left trades it could not download.
+    Errors,
+    /// Trades are queued for the next pass.
+    Waiting,
+    /// Nothing within reach is missing.
+    Done,
+}
+
+/// Pick the catch-up state, in this priority: no data, off, running, errors, waiting, done. A
+/// queue never reads as "all caught up".
+pub(super) fn catchup_state(catchup: Option<&TapeCatchup>) -> CatchupState {
+    let Some(catchup) = catchup else {
+        return CatchupState::NoData;
+    };
+    if catchup.auto == Some(false) {
+        CatchupState::Off
+    } else if catchup.running {
+        CatchupState::Running
+    } else if catchup.failed > 0 {
+        CatchupState::Errors
+    } else if catchup.pending > 0 {
+        CatchupState::Waiting
+    } else {
+        CatchupState::Done
+    }
+}
+
+/// Wall-clock `HH:MM` of a UTC instant in `zone`.
+pub(super) fn clock(ms: i64, zone: Tz) -> String {
+    zone.timestamp_millis_opt(ms)
+        .single()
+        .map(|at| at.format("%H:%M").to_string())
+        .unwrap_or_else(|| UNKNOWN_VALUE.to_string())
+}
+
+/// The state's tag word and tone.
+fn catchup_tag(state: CatchupState) -> (&'static str, MoonTone) {
+    match state {
+        CatchupState::NoData => ("telegram.server.catchup_tag_nodata", MoonTone::Muted),
+        CatchupState::Off => ("telegram.server.catchup_tag_off", MoonTone::Muted),
+        CatchupState::Running => ("telegram.server.catchup_tag_running", MoonTone::Info),
+        CatchupState::Errors => ("telegram.server.catchup_tag_errors", MoonTone::Warning),
+        CatchupState::Waiting => ("telegram.server.catchup_tag_waiting", MoonTone::Info),
+        CatchupState::Done => ("telegram.server.catchup_tag_done", MoonTone::Positive),
+    }
+}
+
+/// The one plain sentence beside the tag. The next check is an approximation — the station looks
+/// again about an hour after its last pass — and a failure promises no retry time.
+pub(super) fn catchup_sentence(
+    state: CatchupState,
+    catchup: Option<&TapeCatchup>,
+    zone: Tz,
+) -> String {
+    let Some(c) = catchup else {
+        return t!("telegram.server.catchup_nodata").to_string();
+    };
+    let last = c.last_pass_ms;
+    let next = last.map(|last| clock(last + PASS_EVERY_MS, zone));
+    match state {
+        CatchupState::NoData => t!("telegram.server.catchup_nodata").to_string(),
+        CatchupState::Off => t!("telegram.server.catchup_off").to_string(),
+        CatchupState::Running => t!(
+            &plural_key("telegram.server.catchup_running", c.pending.into()),
+            filled = c.filled,
+            pending = c.pending
+        )
+        .to_string(),
+        CatchupState::Errors => t!(
+            &plural_key("telegram.server.catchup_errors", c.failed.into()),
+            n = c.failed
+        )
+        .to_string(),
+        CatchupState::Waiting => match next {
+            Some(next) => t!(
+                &plural_key("telegram.server.catchup_waiting", c.pending.into()),
+                n = c.pending,
+                next = next
+            )
+            .to_string(),
+            None => t!(
+                &plural_key("telegram.server.catchup_waiting_first", c.pending.into()),
+                n = c.pending
+            )
+            .to_string(),
+        },
+        CatchupState::Done => match (last, next) {
+            (Some(last), Some(next)) => t!(
+                "telegram.server.catchup_done",
+                last = clock(last, zone),
+                next = next
+            )
+            .to_string(),
+            _ => t!("telegram.server.catchup_done_never").to_string(),
+        },
+    }
+}
+
+/// One count tile: its number, its word and the short reason under it (locale keys).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Tile {
+    pub(super) value: u32,
+    pub(super) label: &'static str,
+    pub(super) hint: &'static str,
+}
+
+/// Up to four counts; "Failed" takes the last tile from "No source" while the last pass failed.
+/// None while catch-up is off or unreported.
+pub(super) fn catchup_tiles(state: CatchupState, catchup: &TapeCatchup) -> Vec<Tile> {
+    if matches!(state, CatchupState::NoData | CatchupState::Off) {
+        return Vec::new();
+    }
+    let tile = |value, label, hint| Tile { value, label, hint };
+    let last = if catchup.failed > 0 {
+        tile(
+            catchup.failed,
+            "telegram.server.catchup_tile_failed",
+            "telegram.server.catchup_tile_failed_hint",
+        )
+    } else {
+        tile(
+            catchup.no_route,
+            "telegram.server.catchup_tile_no_route",
+            "telegram.server.catchup_tile_no_route_hint",
+        )
+    };
+    vec![
+        tile(
+            catchup.filled,
+            "telegram.server.catchup_tile_filled",
+            "telegram.server.catchup_tile_filled_hint",
+        ),
+        tile(
+            catchup.pending,
+            "telegram.server.catchup_tile_pending",
+            "telegram.server.catchup_tile_pending_hint",
+        ),
+        tile(
+            catchup.out_of_reach,
+            "telegram.server.catchup_tile_out_of_reach",
+            "telegram.server.catchup_tile_out_of_reach_hint",
+        ),
+        last,
+    ]
+}
+
+/// The tag, the sentence and how old the numbers are.
+pub(super) fn tape_status_strip(
+    state: CatchupState,
+    sentence: String,
+    snapshot: Option<String>,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let (tag, tone) = catchup_tag(state);
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .debug_selector(|| "server-tape-strip".into())
+        .child(
+            div().flex_none().child(
+                MoonTag::new().tone(tone).mono(false).child(
+                    div()
+                        .font_family(design::ui_font())
+                        .child(t!(tag).to_string()),
+                ),
+            ),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex_basis(design::ui_px(cx, 200.0))
+                .min_w_0()
+                .font_family(design::ui_font())
+                .text_color(rgba_from(p.text, 1.0))
+                .debug_selector(|| "server-tape-sentence".into())
+                .child(sentence)
+                .children(snapshot.map(|at| {
+                    div()
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgba_from(p.text_muted, 1.0))
+                        .child(at)
+                })),
+        )
+        .into_any_element()
+}
+
+/// The count tiles in a wrapping row; each keeps its own width.
+pub(super) fn tape_tiles(tiles: &[Tile], cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 8.0))
+        .debug_selector(|| "server-tape-tiles".into())
+        .children(tiles.iter().enumerate().map(|(index, tile)| {
+            v_flex()
+                .flex_none()
+                .max_w_full()
+                .min_w(design::font_w_px(cx, 110.0))
+                .gap(design::ui_px(cx, 2.0))
+                .px(design::ui_px(cx, 10.0))
+                .py(design::ui_px(cx, 6.0))
+                .rounded(design::ui_px(cx, 5.0))
+                .border_1()
+                .border_color(rgba_from(p.border, 1.0))
+                .debug_selector(move || format!("server-tape-tile-{index}"))
+                .child(
+                    div()
+                        .font_family(design::mono())
+                        .text_size(design::t_body_lg(cx))
+                        .text_color(rgba_from(p.text, 1.0))
+                        .child(tile.value.to_string()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .font_family(design::ui_font())
+                        .text_color(rgba_from(p.text, 1.0))
+                        .debug_selector(move || format!("server-tape-tile-label-{index}"))
+                        .child(t!(tile.label).to_string()),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .font_family(design::ui_font())
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgba_from(p.text_muted, 1.0))
+                        .child(t!(tile.hint).to_string()),
+                )
+        }))
+        .into_any_element()
+}
+
+/// How far back a venue's REST trades reach, in words.
+fn venue_rest(reach: &VenueReach) -> String {
+    const HOUR_MS: i64 = 3_600_000;
+    const DAY_MS: i64 = 24 * HOUR_MS;
+    match (reach.rest, reach.rest_retention_ms) {
+        (None, _) => t!("telegram.server.catchup_rest_none").to_string(),
+        (Some(_), None) => t!("telegram.server.catchup_rest_unbounded").to_string(),
+        (Some(_), Some(ms)) if ms >= DAY_MS => {
+            let n = ms / DAY_MS;
+            t!(
+                &plural_key("telegram.server.catchup_rest_days", n.unsigned_abs()),
+                n = n
+            )
+            .to_string()
+        }
+        (Some(_), Some(ms)) => {
+            let n = ms / HOUR_MS;
+            t!(
+                &plural_key("telegram.server.catchup_rest_hours", n.unsigned_abs()),
+                n = n
+            )
+            .to_string()
+        }
+    }
+}
+
+/// What reaches trades older than the API does: the daily archive, or nothing. A venue whose
+/// API has no limit needs nothing older.
+fn venue_older(reach: &VenueReach) -> String {
+    match reach.archive {
+        Some(_) if reach.archive_linear_only => {
+            t!("telegram.server.catchup_archive_linear").to_string()
+        }
+        Some(_) => t!("telegram.server.catchup_archive_years").to_string(),
+        None if reach.rest.is_some() && reach.rest_retention_ms.is_none() => {
+            UNKNOWN_VALUE.to_string()
+        }
+        None => t!("telegram.server.catchup_archive_none").to_string(),
+    }
+}
+
+/// Three columns only when the measured venue, reach and archive columns all fit `width`.
+fn venue_fits(width: f32, venue: f32, rest: f32, older: f32, gaps: f32) -> bool {
+    width >= venue + rest + older + gaps
+}
+
+/// "How long exchanges keep trades": a caret line and, open, one row per venue from the core's
+/// own reach facts — a three-column table where it fits `width`, otherwise each venue stacked
+/// over its reach.
+pub(super) fn venue_reach_table(
+    open: bool,
+    rows: &[VenueReach],
+    width: f32,
+    on_toggle: Rc<dyn Fn(&mut Window, &mut App)>,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let muted = rgba_from(p.text_muted, 1.0);
+    let caret_toggle = on_toggle.clone();
+    let caret = h_flex()
+        .id("server-tape-venues")
+        .flex_none()
+        .max_w_full()
+        .items_center()
+        .gap(design::ui_px(cx, 6.0))
+        .cursor_pointer()
+        .text_color(muted)
+        .debug_selector(|| "server-tape-venues".into())
+        .on_click(move |_, window, app| on_toggle(window, app))
+        .child(
+            MoonDisclosure::button("server-tape-venues-caret", open)
+                .direction(MoonDisclosureDirection::RightDown)
+                .size(design::DISCLOSURE_GLYPH)
+                .box_size(design::DISCLOSURE_BOX)
+                .hover_color(p.text)
+                .on_toggle(move |_, window, app| {
+                    caret_toggle(window, app);
+                    app.stop_propagation();
+                }),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .font_family(design::ui_font())
+                .child(t!("telegram.server.catchup_venues").to_string()),
+        );
+    let block = v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 4.0))
+        .child(caret);
+    if !open {
+        return block.into_any_element();
+    }
+    let rows: Vec<(String, String, String)> = rows
+        .iter()
+        .map(|reach| {
+            (
+                format!(
+                    "{} {}",
+                    reach.venue.brand.display(),
+                    t!(reach.venue.kind.label_key())
+                ),
+                venue_rest(reach),
+                venue_older(reach),
+            )
+        })
+        .collect();
+    let col_venue = t!("telegram.server.catchup_venues_col_venue").to_string();
+    let col_rest = t!("telegram.server.catchup_venues_col_rest").to_string();
+    let col_older = t!("telegram.server.catchup_venues_col_older").to_string();
+    let widest = |head: &str, cell: &dyn Fn(&(String, String, String)) -> f32| {
+        rows.iter()
+            .map(cell)
+            .fold(design::ui_caption_text_width(cx, head, 400.0), f32::max)
+            .ceil()
+    };
+    let venue_need = widest(&col_venue, &|row| {
+        design::ui_body_text_width(cx, &row.0, 400.0)
+    });
+    let rest_need = widest(&col_rest, &|row| {
+        design::mono_body_text_width(cx, &row.1, 400.0)
+    });
+    let older_need = widest(&col_older, &|row| {
+        design::ui_body_text_width(cx, &row.2, 400.0)
+    });
+    let indent = design::ui_value(cx, 18.0);
+    let gap = design::ui_value(cx, 8.0);
+    let wide = venue_fits(width - indent, venue_need, rest_need, older_need, 2.0 * gap);
+    let table = v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 2.0))
+        .pl(px(indent))
+        .debug_selector(|| "server-tape-venue-table".into());
+    let table = if wide {
+        let line = |venue: String, rest: String, older: String, rest_font: SharedString| {
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_start()
+                .gap(px(gap))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .font_family(design::ui_font())
+                        .child(venue),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(rest_need))
+                        .font_family(rest_font)
+                        .child(rest),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(older_need))
+                        .font_family(design::ui_font())
+                        .child(older),
+                )
+        };
+        let head = line(col_venue, col_rest, col_older, design::ui_font())
+            .text_size(design::t_caption(cx))
+            .text_color(muted);
+        table
+            .child(head)
+            .children(rows.into_iter().map(|(venue, rest, older)| {
+                line(venue, rest, older, design::mono()).text_color(rgba_from(p.text, 1.0))
+            }))
+    } else {
+        // Too narrow for three columns: the venue on one line, its reach under it, each value
+        // named by its column's word.
+        let caption = |text: String| {
+            div()
+                .flex_none()
+                .font_family(design::ui_font())
+                .text_size(design::t_caption(cx))
+                .text_color(muted)
+                .child(text)
+        };
+        table
+            .gap(design::ui_px(cx, 6.0))
+            .children(
+                rows.into_iter()
+                    .enumerate()
+                    .map(|(index, (venue, rest, older))| {
+                        v_flex()
+                            .w_full()
+                            .min_w_0()
+                            .debug_selector(move || format!("server-tape-venue-{index}"))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .font_family(design::ui_font())
+                                    .text_color(rgba_from(p.text, 1.0))
+                                    .child(venue),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .flex_wrap()
+                                    .items_start()
+                                    .gap_x(px(gap))
+                                    .child(caption(col_rest.clone()))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .font_family(design::mono())
+                                            .text_color(rgba_from(p.text, 1.0))
+                                            .child(rest),
+                                    )
+                                    .child(caption(col_older.clone()))
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .font_family(design::ui_font())
+                                            .text_color(rgba_from(p.text, 1.0))
+                                            .child(older),
+                                    ),
+                            )
+                    }),
+            )
+    };
+    block.child(table).into_any_element()
+}
+
+/// The two catch-up switches. Archives need automatic catch-up; a station that reports counts
+/// but predates the switches shows them unchangeable.
+pub(super) fn catchup_switches(
+    switches: CatchupSwitches,
+    editable: bool,
+    on_auto: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    on_archives: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> AnyElement {
+    v_flex()
+        .flex_1()
+        .flex_basis(design::font_w_px(cx, 220.0))
+        .min_w_0()
+        .max_w_full()
+        .gap(design::ui_px(cx, 8.0))
+        .debug_selector(|| "server-tape-switches".into())
+        .child(
+            MoonCheckbox::new("server-tape-auto")
+                .checked(switches.auto)
+                .disabled(!editable)
+                .label(t!("telegram.server.catchup_auto").to_string())
+                .description(t!("telegram.server.catchup_auto_hint").to_string())
+                .on_change(on_auto),
+        )
+        .child(
+            MoonCheckbox::new("server-tape-archives")
+                .checked(switches.archives)
+                .disabled(!editable || !switches.auto)
+                .label(t!("telegram.server.catchup_archives").to_string())
+                .description(
+                    if switches.auto {
+                        t!("telegram.server.catchup_archives_hint")
+                    } else {
+                        t!("telegram.server.catchup_archives_needs_auto")
+                    }
+                    .to_string(),
+                )
+                .on_change(on_archives),
+        )
+        .into_any_element()
+}
+
 impl SettingsView {
-    /// A new read of the station's window: an untouched draft follows it, an edited one stays. A
-    /// read without one (the station restarting, stopped, or older than the report) changes
-    /// nothing: the last known window and the edit stay.
-    pub(super) fn server_tape_sync(&mut self, cx: &App) {
-        let read = self
-            .backend
-            .read(cx)
-            .station
-            .bot
-            .as_ref()
-            .and_then(|state| state.tape);
+    /// A new read of the station's window and catch-up switches: an untouched draft follows it,
+    /// an edited one stays. A read without one changes nothing.
+    ///
+    /// While a catch-up pass runs and the Telegram tab is open, the station is read again a
+    /// minute later, so the numbers move without a click.
+    pub(super) fn server_tape_sync(&mut self, cx: &mut Context<Self>) {
+        let (read, switches, running) = {
+            let bot = self.backend.read(cx).station.bot.as_ref();
+            let catchup = reported_catchup(bot);
+            (
+                bot.and_then(|state| state.tape),
+                bot.and_then(|state| state.station.as_ref())
+                    .map(|_| catchup.and_then(reported_switches)),
+                catchup_state(catchup) == CatchupState::Running,
+            )
+        };
+        let shown = self.active == super::super::Tab::Telegram;
         let ed = &mut self.telegram.server.tape;
-        if read.is_none() || read == ed.seen {
-            return;
+        follow(&mut ed.seen, &mut ed.draft, read);
+        ed.take_switches(switches);
+        if running && shown && ed.reread.is_none() {
+            ed.reread = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(RUNNING_REREAD).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.telegram.server.tape.reread = None;
+                    if this.active == super::super::Tab::Telegram {
+                        this.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
+                    }
+                });
+            }));
         }
-        if ed.draft == ed.seen {
-            ed.draft = read;
-        }
-        ed.seen = read;
     }
 
     fn server_tape_margin(&mut self, delta: i32, cx: &mut Context<Self>) {
@@ -121,10 +755,24 @@ impl SettingsView {
         }
     }
 
-    /// The station's trade window: what it records, the two steppers, and whether the draft
+    fn server_tape_switch(&mut self, edit: impl FnOnce(&mut CatchupSwitches)) {
+        if let Some(draft) = self.telegram.server.tape.draft_switches.as_mut() {
+            edit(draft);
+        }
+    }
+
+    /// The station's trade window and its catch-up of missed tape: the state and its counts,
+    /// the two steppers, the two switches, how long exchanges keep trades, and whether the draft
     /// has been written. "Write to the station" stays live only while the draft differs from
-    /// the station's recorded window.
-    pub(super) fn server_tape_block(&self, target: &Target, cx: &Context<Self>) -> AnyElement {
+    /// what the station reported.
+    ///
+    /// `width` is the settings column's width, which decides the venue table's shape.
+    pub(super) fn server_tape_block(
+        &self,
+        target: &Target,
+        width: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let p = MoonPalette::active(cx);
         let backend = self.backend.read(cx);
         let busy = backend.station.busy();
@@ -141,7 +789,10 @@ impl SettingsView {
                 .as_ref()
                 .is_some_and(|bot| bot.station.is_some() && bot.tape.is_none());
         let known = ed.draft.is_some();
-        let changed = ed.draft.is_some_and(|draft| ed.seen != Some(draft));
+        let switches_changed = ed.draft_switches != ed.seen_switches;
+        let changed = ed
+            .draft
+            .is_some_and(|draft| ed.seen != Some(draft) || switches_changed);
         let margin_changed = ed
             .draft
             .zip(ed.seen)
@@ -205,7 +856,7 @@ impl SettingsView {
             Some(draft) => t!("storage.trades_min", min = draft.long_position_min).to_string(),
             None => UNKNOWN_VALUE.to_string(),
         };
-        let row = |label: String, control: AnyElement, explanation: String| {
+        let row = |label: String, control: AnyElement, explanation: Option<String>| {
             h_flex()
                 .w_full()
                 .min_w(px(0.0))
@@ -223,14 +874,14 @@ impl SettingsView {
                         .child(label),
                 )
                 .child(control)
-                .child(
+                .children(explanation.map(|explanation| {
                     div()
                         .flex_1()
                         .min_w(design::font_w_px(cx, 220.0))
                         .max_w_full()
                         .pt(design::ui_px(cx, 4.0))
-                        .child(sentence(explanation, p.text_muted)),
-                )
+                        .child(sentence(explanation, p.text_muted))
+                }))
         };
         let mut write = MoonButton::new("server-tape-set")
             .primary()
@@ -239,16 +890,72 @@ impl SettingsView {
             .disabled(busy || !changed);
         if let Some(draft) = ed.draft {
             let target = target.clone();
+            let catchup = job_switches(ed.seen_switches, ed.draft_switches);
             write = write.on_click(cx.listener(move |this, _, _, cx| {
                 this.server_bot_run(
                     Ok(Job::Tape {
                         target: target.clone(),
                         tape: draft,
+                        catchup,
                     }),
                     cx,
                 );
             }));
         }
+        let catchup = reported_catchup(backend.station.bot.as_ref());
+        let state = catchup_state(catchup);
+        let zone = crate::chartdx::axes::display_zone();
+        let snapshot = backend
+            .station
+            .bot_read_ms
+            .filter(|_| state != CatchupState::NoData)
+            .map(|at| t!("telegram.server.catchup_snapshot", at = clock(at, zone)).to_string());
+        let tiles = catchup
+            .map(|catchup| catchup_tiles(state, catchup))
+            .unwrap_or_default();
+        let switches = catchup.map(|_| {
+            let view = cx.entity();
+            let archives_view = view.clone();
+            catchup_switches(
+                ed.draft_switches.unwrap_or(CatchupSwitches {
+                    auto: true,
+                    archives: true,
+                }),
+                ed.draft_switches.is_some() && !busy,
+                move |on, _, app| {
+                    let on = *on;
+                    view.update(app, |this, cx| {
+                        this.server_tape_switch(|s| s.auto = on);
+                        cx.notify();
+                    });
+                },
+                move |on, _, app| {
+                    let on = *on;
+                    archives_view.update(app, |this, cx| {
+                        this.server_tape_switch(|s| s.archives = on);
+                        cx.notify();
+                    });
+                },
+                cx,
+            )
+        });
+        let view = cx.entity();
+        let venues = venue_reach_table(
+            ed.venues_open,
+            &if ed.venues_open {
+                venue_caps::reach_table()
+            } else {
+                Vec::new()
+            },
+            width - design::ui_value(cx, 24.0),
+            Rc::new(move |_, app| {
+                view.update(app, |this, cx| {
+                    this.telegram.server.tape.venues_open ^= true;
+                    cx.notify();
+                })
+            }),
+            cx,
+        );
         v_flex()
             .w_full()
             .min_w(px(0.0))
@@ -264,6 +971,15 @@ impl SettingsView {
                 t!("telegram.server.tape_hint").to_string(),
                 p.text_muted,
             ))
+            .child(tape_status_strip(
+                state,
+                catchup_sentence(state, catchup, zone),
+                snapshot,
+                cx,
+            ))
+            .when(!tiles.is_empty(), |block| {
+                block.child(tape_tiles(&tiles, cx))
+            })
             .child(row(
                 t!("storage.trades_margin").to_string(),
                 self.stepper_controls_styled(
@@ -278,7 +994,7 @@ impl SettingsView {
                     margin_changed,
                 )
                 .into_any_element(),
-                t!("telegram.server.tape_margin_hint").to_string(),
+                Some(t!("telegram.server.tape_margin_hint").to_string()),
             ))
             .child(row(
                 t!("storage.trades_long_position").to_string(),
@@ -294,8 +1010,16 @@ impl SettingsView {
                     long_changed,
                 )
                 .into_any_element(),
-                t!("telegram.server.tape_long_hint").to_string(),
+                Some(t!("telegram.server.tape_long_hint").to_string()),
             ))
+            .when_some(switches, |block, switches| {
+                block.child(row(
+                    t!("telegram.server.catchup_section").to_string(),
+                    switches,
+                    None,
+                ))
+            })
+            .child(venues)
             .child(
                 h_flex()
                     .w_full()

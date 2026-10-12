@@ -425,8 +425,12 @@ fn same_bot(a: Option<&cores::Telegram>, b: Option<&cores::Telegram>) -> bool {
     }
 }
 
-/// The station's window around a trade (`[tape]`); absent fields keep what is in force.
+/// Apply the tape window and reloadable recovery switches; absent switches default to on.
 fn apply_tape(tape: &cores::Tape) {
+    moon_core::market::tape_recorder::catchup::set_switches(
+        tape.auto_catchup.unwrap_or(true),
+        tape.archive_catchup.unwrap_or(true),
+    );
     if let Some(secs) = tape.margin_s {
         moon_core::market::trade_replay::set_margin_s(secs);
     }
