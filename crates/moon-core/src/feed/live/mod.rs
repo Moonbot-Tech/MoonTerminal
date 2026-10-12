@@ -2014,7 +2014,7 @@ pub(super) fn run(
                     // the window's, not the writer's, and a core whose report feed is off can
                     // still be asked about a trade the terminal read from an older replica.
                     Event::Report(ReportEvent::TraceReady { ticket, traces }) => {
-                        log::info!(
+                        log::debug!(
                             "core {} report traces uid={}: {} archived line(s)",
                             crate::feed::core_label(server.id),
                             ticket.report_uid,

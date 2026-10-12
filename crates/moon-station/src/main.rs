@@ -71,8 +71,10 @@ use moon_core::station_api::{Answer, BotStatus, ListedCore, Reply, Request, Stat
 const DRAIN_EVERY: Duration = Duration::from_millis(100);
 /// How often the diagnostics file is re-read.
 const DIAG_POLL_EVERY: Duration = Duration::from_secs(1);
-/// How often the connection summary is logged.
+/// How often the connection summary is checked; it is logged only when it changed.
 const STATUS_EVERY: Duration = Duration::from_secs(60);
+/// An unchanged connection summary is still logged this often, as a sign of life.
+const STATUS_HEARTBEAT: Duration = Duration::from_secs(3600);
 /// How long a stopping station waits for the tape recorder's last writes. systemd waits 90 s
 /// before it kills.
 const STOP_WAIT: Duration = Duration::from_secs(15);
@@ -198,6 +200,7 @@ fn main() -> anyhow::Result<()> {
     let mut host = host::HostWatch::start(process_started, data_root.clone());
     let mut last_diag = Instant::now();
     let mut last_status = Instant::now();
+    let mut logged_status: Option<((usize, usize, Vec<String>), Instant)> = None;
     loop {
         if signals.stop_requested() {
             log::info!("stopping");
@@ -292,16 +295,27 @@ fn main() -> anyhow::Result<()> {
         }
         if now.duration_since(last_status) >= STATUS_EVERY {
             last_status = now;
-            let (ready, total, down) = cores_summary(&session, &groups, &skipped_cores);
-            match down.is_empty() {
-                true => log::info!("status: {ready}/{total} cores ready"),
-                false => log::info!(
-                    "status: {ready}/{total} cores ready; not ready: {}",
-                    down.join("; ")
-                ),
+            let summary = cores_summary(&session, &groups, &skipped_cores);
+            let quiet = logged_status.as_ref().is_some_and(|(last, at)| {
+                *last == summary && now.duration_since(*at) < STATUS_HEARTBEAT
+            });
+            if !quiet {
+                logged_status = Some((summary.clone(), now));
+                log_status(summary);
             }
         }
         std::thread::sleep(DRAIN_EVERY);
+    }
+}
+
+/// One connection-summary line: ready over total, and which cores are not ready and why.
+fn log_status((ready, total, down): (usize, usize, Vec<String>)) {
+    match down.is_empty() {
+        true => log::info!("status: {ready}/{total} cores ready"),
+        false => log::info!(
+            "status: {ready}/{total} cores ready; not ready: {}",
+            down.join("; ")
+        ),
     }
 }
 
