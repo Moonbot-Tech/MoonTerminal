@@ -90,6 +90,15 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         if open {
+            // TP and SL are order controls: a locked row opens neither, wherever the click came
+            // from — the pod under the overlay or its "More" row.
+            if matches!(
+                metric,
+                controls::TradeMetric::Tp | controls::TradeMetric::Sl
+            ) && !controls::toolbar::order_writes_reach_display(&self.backend, &self.group, cx)
+            {
+                return;
+            }
             let b = self.backend.read(cx);
             // BOTH an address and a value to show, or the popup does not open at all.
             //

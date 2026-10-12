@@ -15,7 +15,7 @@ fn main_header_uses_only_in_flow_drag_regions() {
     );
 
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let header = braced_body(&chrome, "pub fn header(");
+    let header = braced_body(&chrome, "pub(crate) fn render_header(");
     for id in ["terminal-header-brand-drag", "terminal-header-spacer-drag"] {
         let handle = header
             .split_once(&format!("MoonWindowFrame::main(\"{id}\", 0.0)"))

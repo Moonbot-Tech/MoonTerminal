@@ -191,7 +191,7 @@ fn chart_and_header_data_text_keep_the_mono_family() {
     for (path, function, surface) in [
         (
             "chrome/clock.rs",
-            "fn render_header_clock(",
+            "fn clock_with_picker(",
             "the header timestamp",
         ),
         (
@@ -361,9 +361,12 @@ fn settings_values_and_connections_repin_the_mono_family() {
 #[test]
 fn width_measurements_agree_with_their_rendered_family_and_cache_key() {
     let quiet = read_src("chrome/quiet.rs");
+    let launch = read_src("controls/launch.rs");
     assert!(
         code_only(braced_body(&quiet, "pub(crate) fn header_quiet_width("))
-            .contains("design::ui_text_width_zoomed("),
+            .contains("labeled_button_width(")
+            && code_only(braced_body(&launch, "pub(crate) fn labeled_button_width("))
+                .contains("design::ui_text_width_zoomed("),
         "header_quiet_width must measure the toggle's own zoomed tier text because shell::ticker reuses this width as its popup offset"
     );
     assert!(

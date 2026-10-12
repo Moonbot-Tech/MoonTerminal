@@ -157,15 +157,6 @@ fn brand_cuts_match_their_geometry_and_scheme() {
 }
 
 // --- Goal A: header/toolbar chrome polish -----------------------------------------------------
-//
-// AUTHOR MODE: the four names below (`CHROME_RULE_H`, `readout_color`, `chrome_toggle_tone`,
-// `chrome_toggle_label_color`) do not exist in `design.rs` yet — the implementation is being
-// typed in a different worktree while this file is authored. The three tests below use the first
-// three of those names and are therefore EXPECTED NOT TO COMPILE against today's tree; that is
-// the documented AUTHOR-mode state, not a defect in the test. `chrome_toggle_label_color` has no
-// test of its own here because it is not one of the five named contract-level breakages in this
-// packet (it is a supporting symbol `chrome/quiet.rs` calls, covered indirectly by the
-// `theme_contract` toggle-tone check instead).
 
 use super::{CHROME_RULE_H, HEADER_TOP_H, TOOLBAR_H, chrome_toggle_tone, readout_color};
 use moon_core::config::UiThemeMode;

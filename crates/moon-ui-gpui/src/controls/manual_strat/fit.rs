@@ -1,12 +1,9 @@
-//! Priority-ordered width clip for the header's manual-strategy quick-select button row.
+//! Priority-ordered width clip for the Strategy pod's quick-select button row.
 //!
-//! The header has no shared row-fit budget the way the toolbar does
-//! (`controls::toolbar::row_fit`): this cluster is one section among several the header composes,
-//! and reworking every other section's own layout to expose a live remainder is out of scope here.
-//! So the caller resolves purely from `chrome_width` against this cluster's own measured content
-//! plus a conservative reservation for the rest of the header — the same pattern
-//! `design::ticker_visible` already uses for the header's other narrow-window collapse. Pure and
-//! arg-taking, mirroring `toolbar::row_fit`'s shape, so it is unit-testable without an `App`.
+//! The toolbar counts the pod at its FULL inner ladder at every collapse level
+//! (`ToolbarWidths::strat_controls`), so this ladder runs only once the toolbar is already at its
+//! narrowest level and still short: the caller hands it the width the pod's controls may spend.
+//! Pure and arg-taking, so it is unit-testable without an `App`.
 
 /// How a button slot's label renders at the current clip level.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,18 +47,18 @@ pub(super) struct StratFit {
 /// 3. the picker pill label, capped further — the toggle and the pill are the last two standing.
 ///
 /// Args:
-///     available: `chrome_width` this cluster may spend.
+///     available: Width the pod's controls may spend.
 ///     gap: Horizontal gap between two adjacent buttons.
 ///     slots: Pre-measured widths for each visible slot, in render order.
 ///     selected: Position of the slot whose strategy is currently active, if it is on screen. It
 ///         keeps its NAME at the number-only level (see `manual_strat`'s renderer), so it is
 ///         measured at `name_only` there — budgeting it as a digit would prove a row fits at a
-///         width it then overflows, clipping the header's trailing readouts.
-///     base: Width already spent by everything else in the cluster and a conservative
-///         reservation for the rest of the header, with the picker pill at its normal label cap.
+///         width it then overflows, clipping the toolbar's trailing controls.
+///     base: Width already spent by everything else in the pod's controls, with the picker pill
+///         at its normal label cap and the gap in front of the button row.
 ///         The pill is budgeted even where it ends up hidden behind the buttons: whether it is
 ///         drawn depends on what the slots resolve to, which this ladder cannot see, and a budget
-///         that under-reserves overflows the header instead of merely showing one button fewer.
+///         that under-reserves overflows the row instead of merely showing one button fewer.
 ///
 /// Returns:
 ///     The label mode, the number of leading slots to render, and whether the pill cap is reduced.

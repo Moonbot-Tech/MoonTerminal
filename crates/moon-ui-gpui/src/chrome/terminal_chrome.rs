@@ -3,21 +3,32 @@
 //! This is an adapter layer, not a reusable MoonPalette control: it knows about
 //! Backend actions and MoonTerminal header content, while generic visuals still
 //! come from MoonPalette tokens/components.
+//!
+//! The header is built in two steps. [`HeaderModel::read`] takes everything the row shows out of
+//! the backend in one borrow; [`header_widths`] measures every element group of that model with the
+//! arithmetic the row renders with; [`render_header`] draws the model at the collapse level those
+//! widths choose. The renderer takes its actions as an `Option`, so a layout test can draw the same
+//! geometry from a synthetic model with no backend at all.
+
+use std::time::Instant;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonMenuItem, MoonPalette, MoonPopover,
-    MoonPopoverPlacement, MoonPopupMenu, MoonRect, MoonSelectorPill, MoonSelectorSegment, MoonSize,
-    MoonTag, MoonWindowFrame, h_flex,
+    MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonDisclosure, MoonMenuItem,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSegmentItem,
+    MoonSegmentSelection, MoonSegmentedControl, MoonSize, MoonTag, MoonWindowFrame, h_flex,
+    rgba_from,
 };
 use rust_i18n::t;
 
 use moon_core::config::WorkspaceMode;
 use moon_core::feed::ConnStatus;
-use moon_core::session::BalanceState;
+use moon_core::session::{BalanceState, CoreId};
 use moon_core::util::fmt;
 
+use crate::controls::launch::{LaunchTarget, launcher_label_width, open_window_button};
+use crate::design::{HeaderLevel, HeaderWidths};
 use crate::shell::Shell;
 use crate::{Backend, design};
 
@@ -35,115 +46,959 @@ fn gear_trigger() -> MoonButton {
         .tooltip(t!("core_settings.title").to_string())
 }
 
-/// Compose the terminal header for one group from the current backend and shell state.
-///
-/// `chrome_width` is the window width and controls priority-based ticker collapse on narrow windows.
-///
-/// Args:
-///     group: Group whose header is being rendered.
-///     backend: Backend providing core, balance, and ticker state.
-///     updater: Process-wide stable update state.
-///     shell: Shell owning controlled header popovers and window actions.
-///     ticker_sel: Optional core and market selected for the ticker readout.
-///     core_selector_open: Whether the active-core selector is open.
-///     core_settings_open: Whether the core-settings popover is open.
-///     core_settings_content: Lazily built content for the open core-settings popover.
-///     quiet_settings_open: Whether the quiet-mode ("sleep") settings popover is open.
-///     quiet_settings_content: Lazily built content for the open quiet-mode popover.
-///     chrome_width: Current window width used for responsive ticker visibility.
-///     p: Active palette.
-///     cx: Application context used to read state and build elements.
-///
-/// Returns:
-///     The complete terminal header element.
-#[allow(clippy::too_many_arguments)]
-pub fn header(
-    group: &str,
-    backend: Entity<Backend>,
-    updater: Entity<crate::update::UpdateController>,
-    shell: Entity<Shell>,
-    ticker_sel: Option<(moon_core::session::CoreId, String)>,
-    workspace_mode_open: bool,
-    core_selector_open: bool,
-    core_settings_open: bool,
-    core_settings_content: Option<AnyElement>,
-    quiet_settings_open: bool,
-    quiet_settings_content: Option<AnyElement>,
-    strat_slot_menu: Option<(moon_core::session::CoreId, usize)>,
-    strat_slots_open: bool,
-    chrome_width: f32,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    // Balance of the group's active trade core (server-side USDT figures). Rendered only when
-    // the store classifies it as usable: no core, no snapshot yet, an invalid valuation, or a
-    // scope that names no single account all mean the amount is unknown, and printing 0.00 there
-    // would state an empty account as fact.
-    //
-    // The scope check comes FIRST and is not a privacy nicety: `active_trade_core` falls through
-    // to the group's first core in the Auto workspace Overview, so without it this row prints ONE
-    // arbitrary server's money directly beside a pill that reads "the whole group".
-    //
-    // `overview` is resolved ONCE here and threaded to every per-core element of this row —
-    // the balance figure, the manual-strategy cluster and the core-settings gear — because all
-    // three describe ONE account and mean nothing for the whole group. In Overview the row drops
-    // them outright, separators included, rather than drawing a dash and a switch that address a
-    // server the pill beside them does not name; the Assets panel owns the real cross-core total,
-    // on a surface that says so, and stays reachable through its dock tab. Re-reading the backend
-    // per element would let the three drift apart.
-    //
-    // The emulator/real tag shares this same `scoped_core`: fetching `emu_mode` through a
-    // helper that calls `active_trade_core` first would read that arbitrary core even when the
-    // helper then discards it.
-    // `expert_settings` — which face the gear opens — is resolved in the SAME borrow as `overview`
-    // because both decide that one element: read apart, one repaint could draw the popover trigger
-    // over a state the other half no longer agrees with.
-    let (overview, balance, trade_emu, expert_settings) = {
+/// Connection state the core card's dot reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoreDot {
+    /// The named core answers.
+    Ready,
+    /// The named core is connecting, down, or unknown.
+    Down,
+    /// Auto Overview: the row names the whole group, not one core.
+    Overview,
+}
+
+/// What the core slot of the header shows.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CoreCard {
+    /// The group has no cores: a button that opens Settings to add one.
+    NoCores,
+    /// One named core, or Auto's Overview.
+    Named {
+        /// Full core name, or the Overview label.
+        name: String,
+        /// Connection state.
+        dot: CoreDot,
+        /// Auto workspace: a passive scope indicator, never a selector.
+        auto: bool,
+        /// Emulator (`true`) or real (`false`) trading; `None` without a settings snapshot.
+        emu: Option<bool>,
+    },
+}
+
+/// Which face the core gear opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GearFace {
+    /// The anchored core-settings popover.
+    Popover,
+    /// The full Moonbot settings window (`crate::core_expert`).
+    Expert,
+}
+
+/// What the balance slot of the header shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum BalanceView {
+    /// Auto Overview: the row names no single account, so there is no balance to show.
+    Hidden,
+    /// The group has no core yet.
+    NoCore,
+    /// A core is named but its balance is unknown (no snapshot, no valuation).
+    Unknown,
+    /// A usable figure: `total` is the headline, `free` the sub-figure, `stale` a pre-outage value.
+    Value { total: f64, free: f64, stale: bool },
+}
+
+impl BalanceView {
+    /// Map the store's balance state and figures onto what the header shows.
+    ///
+    /// Args:
+    ///     state: The core's balance state, or `None` with no core named.
+    ///     free: Free USDT.
+    ///     total: Total USDT.
+    ///
+    /// Returns:
+    ///     `Value` for a usable figure (stale when not current), `Unknown` otherwise.
+    pub(crate) fn of(state: Option<BalanceState>, free: f64, total: f64) -> Self {
+        match state {
+            None => Self::NoCore,
+            Some(state) if state.has_value() => Self::Value {
+                total,
+                free,
+                stale: !state.is_current(),
+            },
+            Some(_) => Self::Unknown,
+        }
+    }
+}
+
+/// The ticker's last price and its two deltas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TickerQuote {
+    pub last: f64,
+    pub delta_1h_pct: f64,
+    pub delta_24h_pct: f64,
+}
+
+/// What the updater slot shows, when an update is on offer or under way.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct UpdateView {
+    pub label: String,
+    pub tooltip: String,
+    /// `Available`: the one call to action the header ever grows.
+    pub available: bool,
+    pub busy: bool,
+}
+
+/// Everything the header shows, read out of the backend in one borrow.
+#[derive(Clone, Debug)]
+pub(crate) struct HeaderModel {
+    pub group: String,
+    pub mode: WorkspaceMode,
+    pub card: CoreCard,
+    /// The core gear, or `None` when the row names no single core.
+    pub gear: Option<GearFace>,
+    pub balance: BalanceView,
+    /// Ticker coin (`BTC` when no source is resolved yet).
+    pub ticker_base: String,
+    pub ticker: Option<TickerQuote>,
+    pub sleeping: bool,
+    pub clock_zone: chrono_tz::Tz,
+    pub update: Option<UpdateView>,
+    /// Whether any core was ever saved; the first-run Settings hint stops once one was.
+    pub core_ever_configured: bool,
+}
+
+impl HeaderModel {
+    /// Read the header's model for `group`.
+    ///
+    /// `overview` is resolved ONCE here and gates every per-core element — the balance figure, the
+    /// gear and the trade-mode tag — because all three describe ONE account and mean nothing for
+    /// the whole group. `active_trade_core` falls through to the group's first core in the Auto
+    /// workspace Overview, so without the gate this row would print ONE arbitrary server's money
+    /// beside a card that reads "the whole group". `expert_settings` is resolved in the same borrow
+    /// because it decides the same element as `overview`.
+    ///
+    /// Args:
+    ///     group: Group whose header is being rendered.
+    ///     backend: Backend providing core, balance, and ticker state.
+    ///     updater: Process-wide stable update state.
+    ///     ticker_sel: Core and market selected for the ticker readout, if resolved.
+    ///     cx: Application context used to read state.
+    ///
+    /// Returns:
+    ///     The header model.
+    pub(crate) fn read(
+        group: &str,
+        backend: &Entity<Backend>,
+        updater: &Entity<crate::update::UpdateController>,
+        ticker_sel: Option<&(CoreId, String)>,
+        cx: &App,
+    ) -> Self {
         let b = backend.read(cx);
         let overview = b.is_auto_overview_scope(group);
+        let mode = b.workspace_mode(group);
+        let card = core_card(group, b);
         let scoped_core = if overview {
             None
         } else {
             b.active_trade_core(group)
         };
         let core = scoped_core.and_then(|c| b.session.store().core(c));
-        let balance = core
-            .map(|cd| {
-                (
-                    cd.balance_state(),
-                    cd.assets.global.free_usdt,
-                    cd.assets.global.total_usdt,
-                )
-            })
-            .filter(|(state, ..)| state.has_value());
-        let trade_emu = core
+        let emu = core
             .and_then(|cd| cd.client_settings.as_ref())
             .map(|cs| cs.emu_mode);
-        (overview, balance, trade_emu, b.core_settings_expert())
+        let card = match card {
+            CoreCard::Named {
+                name, dot, auto, ..
+            } => CoreCard::Named {
+                name,
+                dot,
+                auto,
+                emu,
+            },
+            other => other,
+        };
+        let has_cores = !matches!(card, CoreCard::NoCores);
+        let balance = if overview {
+            BalanceView::Hidden
+        } else {
+            match core {
+                Some(cd) => BalanceView::of(
+                    Some(cd.balance_state()),
+                    cd.assets.global.free_usdt,
+                    cd.assets.global.total_usdt,
+                ),
+                None if has_cores => BalanceView::Unknown,
+                None => BalanceView::NoCore,
+            }
+        };
+        let gear = (!overview && has_cores).then(|| {
+            if b.core_settings_expert() {
+                GearFace::Expert
+            } else {
+                GearFace::Popover
+            }
+        });
+        let ticker = ticker_sel.and_then(|(core, market)| {
+            let t = b.session.market_source().market_ticker(*core, market)?;
+            Some(TickerQuote {
+                last: t.last,
+                delta_1h_pct: t.delta_1h_pct,
+                delta_24h_pct: t.delta_24h_pct,
+            })
+        });
+        let ticker_base = ticker_sel
+            .map(|(core, market)| b.session.market_source().market_label(*core, market).coin)
+            .unwrap_or_else(|| "BTC".to_string());
+        let sleeping = b.quiet_sleeping();
+        let core_ever_configured = b.config.core_ever_configured();
+        Self {
+            group: group.to_string(),
+            mode,
+            card,
+            gear,
+            balance,
+            ticker_base,
+            ticker,
+            sleeping,
+            clock_zone: crate::chrome::clock::selected_zone(backend, cx),
+            update: update_view(&updater.read(cx).state()),
+            core_ever_configured,
+        }
+    }
+
+    /// Whether the Auto workspace is active.
+    fn auto(&self) -> bool {
+        self.mode == WorkspaceMode::AutoTrading
+    }
+}
+
+/// Describe the updater button for `state`, or `None` while there is nothing to offer.
+fn update_view(state: &crate::update::UpdateState) -> Option<UpdateView> {
+    if !state.visible() {
+        return None;
+    }
+    let version = state
+        .version()
+        .map(|version| version.to_string())
+        .unwrap_or_default();
+    let label = if state.busy() {
+        t!("update.installing").to_string()
+    } else if matches!(state, crate::update::UpdateState::Failed { .. }) {
+        t!("update.retry").to_string()
+    } else if matches!(state, crate::update::UpdateState::Opened(_)) {
+        t!("update.opened").to_string()
+    } else {
+        t!("update.available", version = version).to_string()
     };
-    // The manual-strategy cluster is absent when the group has no active trade core or that core
-    // has no Manual-kind strategies; its separator goes with it rather than fencing off empty space.
-    //
-    // Overview is gated HERE rather than inside the control, so the function keeps its one meaning
-    // — "this core's manual strategies" — and every caller decides for itself whether it has a
-    // core to speak for. It cannot answer `None` on its own: it resolves through
-    // `Backend::active_trade_core`, whose Overview fallback returns the group's FIRST core.
-    let manual = (!overview)
-        .then(|| {
-            crate::controls::manual_strategy_controls(
-                group,
-                &backend,
-                &shell,
-                strat_slot_menu,
-                strat_slots_open,
-                chrome_width,
-                p,
+    let tooltip = match state {
+        crate::update::UpdateState::Failed { message, .. } => {
+            t!("update.failed", error = message).to_string()
+        }
+        crate::update::UpdateState::Opened(_) => t!("update.opened_tooltip").to_string(),
+        _ if cfg!(target_os = "macos") => t!("update.tooltip_image").to_string(),
+        _ => t!("update.tooltip").to_string(),
+    };
+    Some(UpdateView {
+        label,
+        tooltip,
+        available: matches!(state, crate::update::UpdateState::Available(_)),
+        busy: state.busy(),
+    })
+}
+
+/// Everything the header's controls act on. `None` at [`render_header`] draws the same geometry
+/// with inert controls.
+pub(crate) struct HeaderActions {
+    pub backend: Entity<Backend>,
+    pub updater: Entity<crate::update::UpdateController>,
+    pub shell: Entity<Shell>,
+    pub ticker_sel: Option<(CoreId, String)>,
+    pub core_selector_open: bool,
+    pub core_settings_open: bool,
+    pub core_settings_content: Option<AnyElement>,
+    pub quiet_settings_open: bool,
+    pub quiet_settings_content: Option<AnyElement>,
+    /// Whether the zone picker is held open under the header's "More" (the clock is hidden).
+    pub clock_picker_open: bool,
+    /// When the first-run Settings hint was armed, if it still is.
+    pub settings_hint_at: Option<Instant>,
+}
+
+// ---- measurement ----------------------------------------------------------------------------
+
+/// Horizontal inset of the core card before its dot.
+const CARD_PAD_L: f32 = 9.0;
+/// Horizontal inset of the core card after its caret.
+const CARD_PAD_R: f32 = 6.0;
+/// Gap between the core card's parts.
+const CARD_GAP: f32 = 8.0;
+/// Box the card's status dot is centred in.
+const CARD_DOT_BOX: f32 = 8.0;
+/// Diameter of the card's status dot.
+const CARD_DOT: f32 = 6.0;
+/// Two raw one-pixel borders around a bordered chrome group.
+const BORDER_W: f32 = 2.0;
+/// Core-name ceiling at header level 5, before the font scale.
+const CORE_NAME_CAP_L5: f32 = 110.0;
+/// Core-name ceiling at header level 6, before the font scale.
+const CORE_NAME_CAP_L6: f32 = 70.0;
+/// Narrowest the core name is ever fitted to, before the font scale: an ellipsis and a glyph.
+const CORE_NAME_FLOOR: f32 = 24.0;
+/// Gap between the ticker's coin, price and delta groups.
+const TICKER_GAP: f32 = 10.0;
+/// Gap between a ticker delta's window label and its value.
+const TICKER_DELTA_GAP: f32 = 3.0;
+/// Gap between the "free" caption and its figure.
+const FREE_GAP: f32 = 4.0;
+/// Horizontal inset of the stale-balance tag.
+const STALE_PAD_X: f32 = 5.0;
+/// Widest an AUTO/MANUAL cell is fitted to, before the font scale.
+const MODE_SEGMENT_MAX_W: f32 = 160.0;
+/// Weight of the balance headline figure.
+const BALANCE_WEIGHT: f32 = 600.0;
+/// Weight of the ticker price.
+const PRICE_WEIGHT: f32 = 600.0;
+/// Weight of the core name.
+const NAME_WEIGHT: f32 = 500.0;
+/// Weight of the mode tag's label (`MoonTag` draws MEDIUM).
+const TAG_WEIGHT: f32 = 500.0;
+/// `MoonTag`'s horizontal inset, before the UI scale.
+const TAG_PAD_X: f32 = 10.0;
+/// `MoonTag`'s text size on the legacy font channel.
+const TAG_FONT: f32 = 11.0;
+
+/// The ticker's price string: trailing dollar, magnitude-based precision.
+///
+/// Values at least 1000 are rounded to an integer and grouped with spaces, values at least 1 use
+/// two decimal places, and lower values use four decimal places.
+fn fmt_ticker_price(v: f64) -> String {
+    if v >= 1000.0 {
+        let mut s = fmt::group_thousands(&format!("{v:.0}"));
+        s.push_str(" $");
+        s
+    } else if v >= 1.0 {
+        format!("{v:.2} $")
+    } else {
+        format!("{v:.4} $")
+    }
+}
+
+/// The text of one ticker delta, or a dash with no movement to report.
+fn delta_text(v: f64) -> (String, Option<fmt::DeltaSign>) {
+    match fmt::signed_pct(v, 1) {
+        Some((text, sign)) => (text, Some(sign)),
+        None => ("—".to_string(), None),
+    }
+}
+
+/// Label of the emulator/real tag.
+fn mode_tag_label(emu: bool) -> String {
+    if emu {
+        t!("header.trade_emu").to_string()
+    } else {
+        t!("header.trade_real").to_string()
+    }
+}
+
+/// Rendered width of a `MoonTag` carrying `label`.
+fn mode_tag_width(cx: &App, label: &str) -> f32 {
+    design::ui_text_width(cx, label, TAG_FONT, TAG_WEIGHT, true)
+        + design::ui_value(cx, TAG_PAD_X) * 2.0
+        + BORDER_W
+}
+
+/// One AUTO/MANUAL cell, fitted to its label. The ONE builder both the header budget and the
+/// rendered control read, so the measured and the drawn cell cannot disagree.
+fn mode_segment_item(cx: &App, label: &str) -> MoonSegmentItem {
+    MoonSegmentItem::new("", label.to_string()).fit_width(cx, 0.0, MODE_SEGMENT_MAX_W)
+}
+
+/// Rendered width of one AUTO/MANUAL cell, from the widget's own fitted geometry.
+fn mode_segment_width(cx: &App, label: &str) -> f32 {
+    mode_segment_item(cx, label).resolved_width()
+}
+
+/// The two mode labels, active first.
+fn mode_labels(auto: bool) -> (String, String) {
+    let auto_label = t!("workspace.mode.auto").to_string();
+    let manual_label = t!("workspace.mode.classic").to_string();
+    if auto {
+        (auto_label, manual_label)
+    } else {
+        (manual_label, auto_label)
+    }
+}
+
+/// Measure the core name the card would draw at full width.
+fn core_name_width(cx: &App, name: &str) -> f32 {
+    design::mono_body_text_width(cx, name, NAME_WEIGHT)
+}
+
+/// Rendered width of the core card without its name.
+fn core_card_chrome(cx: &App, auto: bool, emu: Option<bool>) -> f32 {
+    let gap = design::ui_value(cx, CARD_GAP);
+    BORDER_W
+        + design::ui_value(cx, CARD_PAD_L)
+        + design::ui_value(cx, CARD_DOT_BOX)
+        + gap
+        + emu.map_or(0.0, |emu| gap + mode_tag_width(cx, &mode_tag_label(emu)))
+        + if auto {
+            0.0
+        } else {
+            gap + design::ui_value(cx, design::DISCLOSURE_BOX)
+        }
+        + design::ui_value(cx, CARD_PAD_R)
+}
+
+/// The labels of the three header launchers, in row order.
+fn launcher_labels() -> [String; 3] {
+    [
+        t!("toolbar.strategies").to_string(),
+        t!("toolbar.analytics").to_string(),
+        t!("shell.settings_btn").to_string(),
+    ]
+}
+
+/// Rendered width of the updater button.
+fn update_width(cx: &App, view: &UpdateView) -> f32 {
+    crate::controls::launch::labeled_button_width(
+        cx,
+        &view.label,
+        crate::controls::launch::LAUNCHER_TEXT_WEIGHT,
+        view.busy,
+    )
+}
+
+/// A live figure as the budget measures it: every ASCII digit replaced by `8`.
+///
+/// Figures render in the mono face, where every digit has one advance, so the template measures
+/// exactly what is drawn while staying constant as the figure ticks: the header's level then moves
+/// only when the window or a figure's digit count changes, never on every price update.
+fn digit_template(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_ascii_digit() { '8' } else { c })
+        .collect()
+}
+
+/// Width a text element of measured advance `w` is laid out at: GPUI rounds a text run's box up
+/// to a whole pixel, so a row of several runs outgrows the plain sum of their advances.
+pub(crate) fn text_box(w: f32) -> f32 {
+    w.ceil()
+}
+
+/// Widths of the balance's parts: headline (always), caption, unit, free sub-figure, and the
+/// part that stands in its place when stale or unknown.
+struct BalanceParts {
+    fixed: f32,
+    caption: f32,
+    unit: f32,
+    free: f32,
+}
+
+/// Measure the balance slot.
+fn balance_parts(cx: &App, view: BalanceView) -> BalanceParts {
+    let gap = design::ui_value(cx, design::CHROME_GAP);
+    let caption = || {
+        text_box(design::ui_caption_text_width(
+            cx,
+            &t!("header.balance_caption"),
+            400.0,
+        )) + gap
+    };
+    match view {
+        BalanceView::Hidden => BalanceParts {
+            fixed: 0.0,
+            caption: 0.0,
+            unit: 0.0,
+            free: 0.0,
+        },
+        BalanceView::NoCore => BalanceParts {
+            fixed: text_box(design::ui_caption_text_width(
                 cx,
-            )
-        })
-        .flatten();
-    let update_state = updater.read(cx).state();
+                &t!("header.balance_none"),
+                400.0,
+            )),
+            caption: 0.0,
+            unit: 0.0,
+            free: 0.0,
+        },
+        BalanceView::Unknown => BalanceParts {
+            fixed: text_box(design::mono_body_text_width(cx, "—", BALANCE_WEIGHT)),
+            caption: caption(),
+            unit: 0.0,
+            free: 0.0,
+        },
+        BalanceView::Value { total, free, stale } => {
+            let headline = text_box(design::mono_body_text_width(
+                cx,
+                &digit_template(&fmt::usd_grouped(total)),
+                BALANCE_WEIGHT,
+            ));
+            let stale_w = if stale {
+                gap + stale_tag_width(cx)
+            } else {
+                0.0
+            };
+            BalanceParts {
+                fixed: headline + stale_w,
+                caption: caption(),
+                unit: gap + text_box(design::mono_caption_text_width(cx, "USDT", 400.0)),
+                free: if stale {
+                    0.0
+                } else {
+                    gap + free_width(cx, free)
+                },
+            }
+        }
+    }
+}
+
+/// Rendered width of the "free 19 932.94" sub-figure.
+fn free_width(cx: &App, free: f64) -> f32 {
+    text_box(design::ui_caption_text_width(
+        cx,
+        &t!("header.balance_free"),
+        400.0,
+    )) + design::ui_value(cx, FREE_GAP)
+        + text_box(design::mono_caption_text_width(
+            cx,
+            &digit_template(&fmt::usd_grouped(free)),
+            400.0,
+        ))
+}
+
+/// Rendered width of the stale-balance tag.
+fn stale_tag_width(cx: &App) -> f32 {
+    text_box(design::ui_caption_text_width(
+        cx,
+        &t!("assets.balance_stale"),
+        500.0,
+    )) + design::ui_value(cx, STALE_PAD_X) * 2.0
+}
+
+/// Widths of the ticker: the always-drawn part and the 1h delta group with its gap.
+fn ticker_parts(cx: &App, model: &HeaderModel) -> (f32, f32) {
+    let gap = design::ui_value(cx, TICKER_GAP);
+    let base = text_box(design::ui_caption_text_width(cx, &model.ticker_base, 400.0));
+    let delta = |label: &str, v: f64| {
+        text_box(design::ui_caption_text_width(cx, label, 400.0))
+            + design::ui_value(cx, TICKER_DELTA_GAP)
+            + text_box(design::mono_body_text_width(
+                cx,
+                &digit_template(&delta_text(v).0),
+                400.0,
+            ))
+    };
+    match model.ticker {
+        Some(q) => (
+            base + gap
+                + text_box(design::mono_body_text_width(
+                    cx,
+                    &digit_template(&fmt_ticker_price(q.last)),
+                    PRICE_WEIGHT,
+                ))
+                + gap
+                + delta(&t!("header.delta_24h"), q.delta_24h_pct),
+            gap + delta(&t!("header.delta_1h"), q.delta_1h_pct),
+        ),
+        None => (
+            base + gap + text_box(design::mono_body_text_width(cx, "—", 400.0)),
+            0.0,
+        ),
+    }
+}
+
+/// Rendered width of the custom window controls, or zero where the platform draws its own.
+fn window_controls_width(cx: &App) -> f32 {
+    if design::show_custom_window_controls() {
+        design::ui_value(
+            cx,
+            MoonWindowFrame::main("header-controls-metrics", 0.0)
+                .show_controls(true)
+                .controls_width(),
+        )
+    } else {
+        0.0
+    }
+}
+
+/// Width of the three header launchers drawn as icons, the gaps between them included — the
+/// arithmetic [`header_widths`] counts them by.
+fn launch_icons_width(cx: &App) -> f32 {
+    let n = launcher_labels().len() as f32;
+    design::glyph_btn_w(cx) * n + design::ui_value(cx, design::CHROME_GAP) * (n - 1.0)
+}
+
+/// Measure every header element group of `model` with the arithmetic [`render_header`] draws with.
+///
+/// The row is a flat run of root children separated by [`design::CHROME_GAP`]; each width below
+/// carries the gap IN FRONT of its child, so a group that goes takes its gap with it. Rules are a
+/// raw pixel, deliberately not font-scaled (`design::vline`). Nothing is read back from layout.
+///
+/// Args:
+///     model: The header model.
+///     cx: Application context used to measure the active typography and scales.
+///
+/// Returns:
+///     The widths the collapse level is chosen from.
+pub(crate) fn header_widths(model: &HeaderModel, cx: &App) -> HeaderWidths {
+    let gap = design::ui_value(cx, design::CHROME_GAP);
+    let rule = gap + 1.0;
+    let glyph = design::glyph_btn_w(cx);
+    let (active_mode, inactive_mode) = mode_labels(model.auto());
+    let (card_chrome, name_full) = match &model.card {
+        CoreCard::NoCores => (launcher_label_width(cx, &t!("header.add_core")), 0.0),
+        CoreCard::Named {
+            name, auto, emu, ..
+        } => (core_card_chrome(cx, *auto, *emu), core_name_width(cx, name)),
+    };
+    // The name at a level cap is measured as the cut the card draws there, not the cap: an
+    // ellipsis lands on a glyph boundary short of it.
+    let name_fit = |cap: f32| match &model.card {
+        CoreCard::Named { name, .. } => {
+            design::fit_text(name, design::font_w(cx, cap), |text| {
+                core_name_width(cx, text)
+            })
+            .1
+        }
+        CoreCard::NoCores => 0.0,
+    };
+    let balance = balance_parts(cx, model.balance);
+    let balance_shown = model.balance != BalanceView::Hidden;
+    let (ticker, delta_1h) = ticker_parts(cx, model);
+    let (clock_time, clock_city) =
+        crate::chrome::clock::header_clock_part_widths(model.clock_zone, cx);
+    let labels = launcher_labels();
+    let launch_icons = glyph * labels.len() as f32 + gap * (labels.len() - 1) as f32;
+    let launch_labels: f32 = labels
+        .iter()
+        .map(|label| launcher_label_width(cx, label) - glyph)
+        .sum();
+    let controls = window_controls_width(cx);
+    let update = model
+        .update
+        .as_ref()
+        .map_or(0.0, |view| gap + update_width(cx, view) + rule);
+
+    let fixed = design::ui_value(cx, design::titlebar_leading_inset())
+        // Mode control: the joined strip's hairline frame, the active cell, and the gap in front.
+        + gap
+        + design::joined_strip_width(cx, mode_segment_width(cx, &active_mode))
+        // Core section and the card's chrome around its name.
+        + gap
+        + card_chrome
+        // Balance group and the spacer's gap.
+        + if balance_shown { gap + balance.fixed } else { 0.0 }
+        + gap
+        + update;
+    let right_fixed = design::ui_value(cx, design::HEADER_PAD_X)
+        + gap
+        + crate::chrome::quiet::header_quiet_width(cx, model.sleeping, false)
+        + gap
+        + clock_time
+        + gap
+        + launch_icons
+        + if controls > 0.0 { gap + controls } else { 0.0 };
+    HeaderWidths {
+        fixed,
+        right_fixed,
+        delta_1h,
+        free_sub: balance.free,
+        sleep_label: crate::chrome::quiet::header_quiet_label_width(cx, model.sleeping),
+        ticker: gap + ticker,
+        logo: design::ui_value(cx, design::HEADER_LOGO_W) + rule,
+        launcher_labels: launch_labels,
+        balance_caption: balance.caption,
+        clock_city,
+        separators: rule * if balance_shown { 2.0 } else { 1.0 },
+        right_separators: rule,
+        usdt_unit: balance.unit,
+        inactive_mode_seg: mode_segment_width(cx, &inactive_mode),
+        core_name_full: name_full,
+        core_name_cap_l5: name_fit(CORE_NAME_CAP_L5),
+        core_name_cap_l6: name_fit(CORE_NAME_CAP_L6),
+        core_gear: if model.gear.is_some() {
+            gap + glyph
+        } else {
+            0.0
+        },
+    }
+}
+
+/// How the clock is drawn once the narrowest header still does not fit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ClockFit {
+    Seconds,
+    Minutes,
+    Hidden,
+}
+
+/// What a header that outgrows its window can still give up, in rendered pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SqueezeRoom {
+    /// The core name's width at the level ([`HeaderLevel::core_name_cap`]).
+    pub name_cap: f32,
+    /// Narrowest name worth drawing; below it the name is hidden whole.
+    pub name_floor: f32,
+    /// The card's gap in front of the name, which goes with a hidden name.
+    pub name_gap: f32,
+    /// What dropping the clock's seconds saves.
+    pub clock_seconds: f32,
+    /// What dropping the minute clock with its gap saves.
+    pub clock_minutes: f32,
+    /// The updater's full width, zero when none is offered.
+    pub update: f32,
+    /// The updater's narrowest width (its icon cell).
+    pub update_min: f32,
+    /// What folding the three launchers into one "More" glyph saves.
+    pub launchers: f32,
+    /// What folding the updater (its icon cell, rule and gap) into that "More" saves; zero when
+    /// none is offered.
+    pub update_fold: f32,
+}
+
+/// What the header draws at its level in a window `over` pixels too narrow for it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct HeaderSqueeze {
+    /// The core name's width budget; zero hides the name (dot, tag and caret stay).
+    pub name: f32,
+    pub clock: ClockFit,
+    /// The updater's width budget.
+    pub update: f32,
+    /// Whether the launchers fold into one "More" glyph.
+    pub launchers_folded: bool,
+    /// Whether the updater folds into that "More" as its first row.
+    pub update_folded: bool,
+    /// Whether the right cluster still has to pin itself over the row's right edge.
+    pub pinned: bool,
+}
+
+/// Give up `over` pixels in the fixed order: the core name down to its floor, then the name whole,
+/// then the clock's seconds, then the updater's label, then the launchers fold into "More", then
+/// the updater does, and only then the clock — whose zone picker that "More" then lists. Only what
+/// is still short after all of that pins the right cluster. A row that fits gives up nothing.
+///
+/// The collapse level is always the one the window fits, so `over` is positive only at the
+/// narrowest level; the core name is touched before it only through its level cap.
+pub(crate) fn header_squeeze(over: f32, room: &SqueezeRoom) -> HeaderSqueeze {
+    let mut over = over;
+    let floor = room.name_floor.min(room.name_cap);
+    let mut name = room.name_cap;
+    if over > 0.0 {
+        let cut = over.min(name - floor);
+        name -= cut;
+        over -= cut;
+    }
+    if over > 0.0 && name > 0.0 {
+        over -= name + room.name_gap;
+        name = 0.0;
+    }
+    let mut clock = ClockFit::Seconds;
+    if over > 0.0 {
+        over -= room.clock_seconds;
+        clock = ClockFit::Minutes;
+    }
+    let mut update = room.update;
+    if over > 0.0 {
+        let cut = over.min((room.update - room.update_min).max(0.0));
+        update -= cut;
+        over -= cut;
+    }
+    let launchers_folded = over > 0.0;
+    if launchers_folded {
+        over -= room.launchers;
+    }
+    let update_folded = over > 0.0 && room.update_fold > 0.0;
+    if update_folded {
+        over -= room.update_fold;
+    }
+    // The clock goes last: its zone picker is reachable from the "More" the launchers have
+    // already folded into, so hiding it costs no control.
+    if over > 0.0 {
+        over -= room.clock_minutes;
+        clock = ClockFit::Hidden;
+    }
+    HeaderSqueeze {
+        name,
+        clock,
+        update,
+        launchers_folded,
+        update_folded,
+        pinned: over > 0.0,
+    }
+}
+
+/// The squeeze of `model`'s header at `level` in a row `available` wide.
+pub(crate) fn header_fit(
+    model: &HeaderModel,
+    widths: &HeaderWidths,
+    level: HeaderLevel,
+    available: f32,
+    cx: &App,
+) -> HeaderSqueeze {
+    let gap = design::ui_value(cx, design::CHROME_GAP);
+    let (seconds, _) = crate::chrome::clock::header_clock_part_widths(model.clock_zone, cx);
+    let minutes = crate::chrome::clock::header_clock_minutes_width(model.clock_zone, cx);
+    let room = SqueezeRoom {
+        name_cap: level.core_name_cap(widths),
+        name_floor: design::font_w(cx, CORE_NAME_FLOOR),
+        name_gap: if matches!(model.card, CoreCard::Named { .. }) {
+            design::ui_value(cx, CARD_GAP)
+        } else {
+            0.0
+        },
+        clock_seconds: (seconds - minutes).max(0.0),
+        clock_minutes: gap + minutes,
+        update: model
+            .update
+            .as_ref()
+            .map_or(0.0, |view| update_width(cx, view)),
+        update_min: design::glyph_btn_w(cx),
+        launchers: launch_icons_width(cx) - design::glyph_btn_w(cx),
+        // `header_widths` counts an offered updater as gap + button + rule (gap + 1).
+        update_fold: if model.update.is_some() {
+            gap * 2.0 + 1.0 + design::glyph_btn_w(cx)
+        } else {
+            0.0
+        },
+    };
+    header_squeeze(widths.width_at(level) - available, &room)
+}
+
+/// Fit a header core label and return the card's content-driven width.
+///
+/// Args:
+///     text: Full active-core label.
+///     max_label_w: Maximum rendered width available to the label.
+///     chrome_w: Rendered card width outside the label.
+///     measure: Function returning rendered width for arbitrary label fragments.
+///
+/// Returns:
+///     The fitted label and its measured width plus card chrome, rounded to a whole pixel.
+fn fit_header_core_trigger(
+    text: &str,
+    max_label_w: f32,
+    chrome_w: f32,
+    measure: impl Fn(&str) -> f32,
+) -> (String, f32) {
+    // A zero budget hides the name whole: even an ellipsis would outgrow it.
+    if max_label_w <= 0.0 {
+        return (String::new(), chrome_w.ceil());
+    }
+    let (label, label_w) = design::fit_text(text, max_label_w, measure);
+    (label, (label_w + chrome_w).ceil())
+}
+
+// ---- rendering --------------------------------------------------------------------------------
+
+/// Compose the terminal header from its model at one collapse level.
+///
+/// Mockup order: logo · AUTO|MANUAL · core card and gear · balance · drag spacer · updater ·
+/// ticker · sleep · clock · launchers · window controls. Each group named by `level` goes with the
+/// gap in front of it, exactly as [`header_widths`] counts it.
+///
+/// Args:
+///     model: What the row shows.
+///     widths: The model's measured widths.
+///     level: Collapse level chosen from `widths` for this window.
+///     available: Window width, for the name fit past the narrowest level.
+///     actions: Backend and Shell the controls act on; `None` draws them inert.
+///     p: Active palette.
+///     cx: Application context used to build elements.
+///
+/// Returns:
+///     The complete terminal header element.
+pub(crate) fn render_header(
+    model: &HeaderModel,
+    widths: &HeaderWidths,
+    level: HeaderLevel,
+    available: f32,
+    actions: Option<HeaderActions>,
+    p: MoonPalette,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let balance_shown = model.balance != BalanceView::Hidden;
+    let (backend, updater, shell, ticker_sel) = match &actions {
+        Some(a) => (
+            Some(a.backend.clone()),
+            Some(a.updater.clone()),
+            Some(a.shell.clone()),
+            a.ticker_sel.clone(),
+        ),
+        None => (None, None, None, None),
+    };
+    let (core_selector_open, core_settings_open, quiet_open, settings_hint_at, clock_picker_open) =
+        actions
+            .as_ref()
+            .map_or((false, false, false, None, false), |a| {
+                (
+                    a.core_selector_open,
+                    a.core_settings_open,
+                    a.quiet_settings_open,
+                    a.settings_hint_at,
+                    a.clock_picker_open,
+                )
+            });
+    let (mut core_settings_content, quiet_content) = match actions {
+        Some(a) => (a.core_settings_content, a.quiet_settings_content),
+        None => (None, None),
+    };
+    let squeeze = header_fit(model, widths, level, available, cx);
+    // Unsqueezed, the name is cut against the level's own cap — the cut `header_widths` measured;
+    // re-cutting against that cut's width could land one glyph shorter.
+    let name_budget = if squeeze.name < level.core_name_cap(widths) {
+        squeeze.name
+    } else {
+        match level.0 {
+            0..=4 => f32::INFINITY,
+            5 => design::font_w(cx, CORE_NAME_CAP_L5),
+            _ => design::font_w(cx, CORE_NAME_CAP_L6),
+        }
+    };
+    let pinned = squeeze.pinned;
+    // Pinned, the updater shares the cluster with everything right of the ticker and leaves the
+    // mode control and the core card their room; its label gives up the rest, as the core name
+    // does in an unpinned row.
+    let update_max = pinned.then(|| {
+        let gap = design::ui_value(cx, design::CHROME_GAP);
+        available
+            - left_controls_width(model, cx)
+            - widths.right_of_ticker(level)
+            // The cluster's border and leading inset, and the updater's own rule.
+            - (gap + 1.0) * 2.0
+            - gap
+    });
+    let update_max = update_max.or_else(|| {
+        model
+            .update
+            .as_ref()
+            .filter(|view| squeeze.update < update_width(cx, view))
+            .map(|_| squeeze.update)
+    });
+    // Folded, the updater is the first row of the header's "More" instead of a button.
+    let update_row = model
+        .update
+        .as_ref()
+        .filter(|_| squeeze.update_folded)
+        .map(|view| update_menu_row(view, updater.clone()));
+    let update = model
+        .update
+        .as_ref()
+        .filter(|_| !squeeze.update_folded)
+        .map(|view| update_button(view, updater.clone(), update_max, p, cx));
+    let (left_update, pinned_update) = if pinned {
+        (None, update)
+    } else {
+        (update, None)
+    };
+    let right_cluster = header_right_cluster(
+        model,
+        level,
+        (squeeze.clock, squeeze.launchers_folded, update_row),
+        pinned,
+        backend.clone(),
+        shell.clone(),
+        (quiet_open, quiet_content),
+        clock_picker_open,
+        settings_hint_at,
+        pinned_update,
+        p,
+        cx,
+    );
     h_flex()
+        .id("header")
+        // Anchors a pinned right cluster.
+        .relative()
         .w_full()
         // Keep the drawn chrome on the same tier-derived height as the window drag overlay at all
         // three densities; the old agreement existed only at Compact.
@@ -151,32 +1006,29 @@ pub fn header(
         .flex_none()
         .pl(design::ui_px(cx, design::titlebar_leading_inset()))
         .pr(design::ui_px(cx, design::HEADER_PAD_X))
-        // One spacing rule across BOTH chrome strips — see `design::CHROME_GAP`: 8px inside a
-        // group, 8px + rule + 8px between groups. The brand cluster uses the same token
-        // internally, so the seams line up.
+        // One spacing rule across BOTH chrome strips — see `design::CHROME_GAP`.
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .bg(rgb(p.shell_high))
-        // The brand carries its OWN trailing separator, so the groups below add only the seams
-        // after them. It is also the FIRST thing this row gives up on a narrow window
-        // (`design::header_brand_visible`): dropping the mark keeps the drag region and takes the
-        // rule with it, so the space goes to the readouts that carry information instead.
+        // The brand carries its OWN trailing rule. It goes at level 2; the drag region stays, so a
+        // narrow window keeps a titlebar the operator can grab.
         //
-        // The cluster is assembled here rather than through `MoonWindowFrame::brand_cluster`,
-        // which draws MoonUI's own Moonbot lockup: the terminal ships the MoonTerminal one from
-        // `assets/brand`. Only the drag handle comes from the frame — that region is what makes
-        // the titlebar grabbable, and `brand_cluster` is nothing more than that handle plus the
-        // two children added below, at the same `CHROME_GAP` and the same rule height. The rule
-        // itself is `chrome_divider`, not MoonUI's fainter `border` copy of it: owning the cluster
-        // means this seam answers to the same contrast rule as every other seam in the row.
+        // Assembled here rather than through `MoonWindowFrame::brand_cluster`, which draws MoonUI's
+        // own Moonbot lockup: the terminal ships the MoonTerminal one from `assets/brand`. Only the
+        // drag handle comes from the frame.
         .child(
             MoonWindowFrame::main("terminal-header-brand-drag", 0.0)
                 .drag_handle()
                 .flex()
                 .items_center()
                 .gap(design::ui_px(cx, design::CHROME_GAP))
-                .when(design::header_brand_visible(cx, chrome_width), |cluster| {
+                .when(level.logo(), |cluster| {
                     cluster
-                        .child(design::header_logo(cx))
+                        .child(
+                            div()
+                                .id("header-logo")
+                                .debug_selector(|| "header-logo".into())
+                                .child(design::header_logo(cx)),
+                        )
                         .child(design::chrome_divider(cx, p))
                 })
                 .flex_none()
@@ -184,107 +1036,96 @@ pub fn header(
         )
         // Workspace mode is fixed chrome rather than dock content, so it remains reachable while
         // Auto independently controls which dock operations are allowed.
-        .child(design::chrome_section(cx).child(workspace_mode_selector(
-            group,
-            &backend,
-            shell.clone(),
-            workspace_mode_open,
-            p,
+        .child(workspace_mode_segments(
+            &model.group,
+            model.mode,
+            level.inactive_mode_seg(),
+            backend.clone(),
             cx,
-        )))
-        .child(design::chrome_divider(cx, p))
-        // Active trade core leads the trading context after the workspace preset. Balance, manual
-        // strategy, and ticker all read through it. Interactive widgets are never a drag zone.
+        ))
+        .when(level.separators(), |row| {
+            row.child(design::chrome_divider(cx, p))
+        })
+        // Active trade core leads the trading context after the workspace preset. Balance and
+        // ticker read through it. Interactive widgets are never a drag zone.
         .child(
             design::chrome_section(cx)
-                .child(core_selector(
-                    group,
-                    &backend,
-                    shell.clone(),
-                    core_selector_open,
-                    p,
-                    cx,
-                ))
-                .children(header_trade_mode_tag(trade_emu))
-                // The gear edits ONE core's `CoreConfig`, so it goes with the rest of the
-                // per-core cluster in Overview. `Shell::reconcile_core_settings_popup` closes an
-                // already-open popup on the same predicate: without that, the state would stay
-                // open behind a button that is no longer drawn and the popup would reappear the
-                // moment a core is selected again.
-                // Expert mode replaces the popover with a plain button opening the full Moonbot
-                // settings window (`crate::core_expert`). The two faces cannot both be live: the
-                // expert window owns its own draft of the same page, and a popup staged beside it
-                // would give one core two pending pages with no rule for which OK wins.
-                .children((!overview && expert_settings).then(|| {
-                    let backend = backend.clone();
-                    let group = group.to_string();
-                    gear_trigger()
-                        .on_click(move |_, window, cx| {
-                            let owner_display =
-                                crate::window::windowing::window_display_id(window, cx);
-                            crate::core_expert::open(
-                                backend.clone(),
-                                Some(window.window_handle()),
-                                owner_display,
-                                group.clone(),
-                                cx,
-                            );
+                .child(
+                    // The card carries the core-settings popup's anchor at the level that hides
+                    // the gear, so an open popup stays up on a narrowing window.
+                    div()
+                        .relative()
+                        .flex_none()
+                        .child(core_selector(
+                            model,
+                            name_budget,
+                            core_selector_open,
+                            model.gear.filter(|_| !level.core_gear()),
+                            backend.clone().zip(shell.clone()),
+                            p,
+                            cx,
+                        ))
+                        .children(
+                            (core_settings_anchor(level) == CoreSettingsAnchor::Card
+                                && model.gear == Some(GearFace::Popover))
+                            .then(|| shell.clone())
+                            .flatten()
+                            .map(|shell| {
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .bottom_0()
+                                    .size_0()
+                                    .debug_selector(|| "header-core-settings-anchor".into())
+                                    .child(core_settings_popover(
+                                        "core-card-settings",
+                                        core_settings_open,
+                                        core_settings_content.take(),
+                                        div().size_0(),
+                                        shell,
+                                    ))
+                            }),
+                        ),
+                )
+                .children(
+                    level
+                        .core_gear()
+                        .then(|| {
+                            core_gear(
+                                &model.group,
+                                model.gear,
+                                core_settings_open,
+                                core_settings_content.take(),
+                                backend.clone().zip(shell.clone()),
+                            )
                         })
-                        .render()
-                }))
-                .children((!overview && !expert_settings).then(|| {
-                    let shell = shell.clone();
-                    header_gear_popover(
-                        "core-gear",
-                        MoonPopoverPlacement::BottomStart,
-                        crate::shell::core_settings_popup::CONTENT_W,
-                        core_settings_open,
-                        core_settings_content,
-                        gear_trigger().render(),
-                        move |open, window, cx| {
-                            shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
-                        },
-                    )
-                    // The alert-sound pickers on the General tab are `MoonDropdown`s, whose menus
-                    // paint in their OWN deferred layers outside this popover's box; the bounds-
-                    // based `on_mouse_down_out` runs in the CAPTURE phase, so the click that picks
-                    // a sound would read as "outside" and shut the popup before the pick landed.
-                    // Until MoonUI suppresses that (the Popover entry in docs-internal/FORK_BUGS.md)
-                    // outside-click dismissal has to be off here — the same trade the detects,
-                    // core-status, tuner and chart-label popups already make. Cancel, OK and the
-                    // gear itself are the dismissal paths, and this popup has all three.
-                    .close_on_content_click(false)
-                    .overlay_closable(false)
-                })),
+                        .flatten()
+                        .map(|gear| {
+                            div()
+                                .flex_none()
+                                .debug_selector(|| "header-gear".into())
+                                .child(gear)
+                        }),
+                ),
         )
-        // The figure names ONE account, so the divider is gated with it rather than separately —
-        // hiding the label alone would leave a rule fencing off nothing, the same coupling the
-        // manual cluster below already makes.
-        .when(!overview, |row| {
+        // The figure names ONE account, so its rule is gated with it rather than separately.
+        .when(balance_shown && level.separators(), |row| {
             row.child(design::chrome_divider(cx, p))
-                .child(balance_label(
-                    group.to_string(),
-                    backend.clone(),
-                    balance,
-                    p,
-                    cx,
-                ))
         })
-        // Shrinkable: the strategy summary inside truncates, so a long one yields space to the
-        // right-hand readouts instead of pushing them off the window.
-        .children(manual.map(|ms| {
-            h_flex()
-                .min_w_0()
-                .gap(design::ui_px(cx, design::CHROME_GAP))
-                .items_center()
-                .child(design::chrome_divider(cx, p))
-                .child(ms)
-        }))
+        .when(balance_shown, |row| {
+            row.child(balance_label(
+                model.group.clone(),
+                backend.clone(),
+                model.balance,
+                level,
+                p,
+                cx,
+            ))
+        })
         .child(
             // A dual role, both required: this is BOTH the `flex_1` spacer that pins the cluster
-            // after it (ticker, clock, window buttons) to the right edge, AND the region that
-            // drags the window by the empty part of the header. Swapping it for a plain
-            // `div().flex_1()` looks like a harmless simplification but silently removes dragging.
+            // after it to the right edge, AND the region that drags the window by the empty part
+            // of the header. Swapping it for a plain `div().flex_1()` silently removes dragging.
             MoonWindowFrame::main("terminal-header-spacer-drag", 0.0)
                 .drag_handle()
                 .h_full()
@@ -292,553 +1133,339 @@ pub fn header(
                 .min_w_0()
                 .flex(),
         )
-        // The updater is a separate pre-ticker cluster: its coupled divider appears only with the
-        // button, preserving the right-edge ticker offset and leaving no empty separator.
-        .children(update_state.visible().then(|| {
-            let version = update_state
-                .version()
-                .map(|version| version.to_string())
-                .unwrap_or_default();
-            let label = if update_state.busy() {
-                t!("update.installing").to_string()
-            } else if matches!(update_state, crate::update::UpdateState::Failed { .. }) {
-                t!("update.retry").to_string()
-            } else if matches!(update_state, crate::update::UpdateState::Opened(_)) {
-                t!("update.opened").to_string()
-            } else {
-                t!("update.available", version = version).to_string()
-            };
-            let tooltip = match &update_state {
-                crate::update::UpdateState::Failed { message, .. } => {
-                    t!("update.failed", error = message).to_string()
-                }
-                crate::update::UpdateState::Opened(_) => t!("update.opened_tooltip").to_string(),
-                _ if cfg!(target_os = "macos") => t!("update.tooltip_image").to_string(),
-                _ => t!("update.tooltip").to_string(),
-            };
-            // An offered update is the only call to action this header ever grows, and it appears
-            // on a window whose every other control is `Panel` — so neutral panel chrome is
-            // exactly what a user scanning the row does not stop on.
-            //
-            // `Green` rather than the `Blue` primary variant, and the reason is contrast, not
-            // taste. Every tinted MoonUI variant paints its LABEL in the accent colour over a
-            // ~10% wash of it, so the label's legibility is the palette token's own contrast
-            // against this header. In the light theme `Blue` resolves to `p.accent` `#009DFF`
-            // (`button.rs:866`, `tokens.rs:190`) — about 2.5:1 on `shell_high`, far under the
-            // 4.5:1 floor, and this label is 10px `Micro`. `Amber` `#B97824` is no better at
-            // ~3.6:1. `Green` is the one accent MoonUI gave a light-specific foreground,
-            // `green_text` `#0E6E45` (`tokens.rs:186`, `success_fg` at `button.rs:868`), which
-            // clears the floor at roughly 6:1 while staying the accent in the dark theme. It is
-            // also the right semantic: something good is available, not something wrong.
-            //
-            // Every other state keeps `Panel` deliberately. Installing/Restarting already read as
-            // busy through `loading(busy)`, and Failed already reads through its retry label —
-            // accenting those would advertise an action that is either underway or just refused.
-            let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {
-                MoonButtonVariant::Green
-            } else {
-                MoonButtonVariant::Panel
-            };
-            let busy = update_state.busy();
-            let updater = updater.clone();
-            design::chrome_section(cx)
-                .child(
-                    div()
-                        .id("terminal-update-tooltip")
-                        .tooltip(crate::panels::common::text_tooltip(tooltip))
-                        .child(
-                            MoonButton::new("terminal-update")
-                                .label(label)
-                                .variant(variant)
-                                .loading(busy)
-                                .on_click(move |_, _window, cx| {
-                                    crate::update::UpdateController::start_install(&updater, cx);
-                                })
-                                .render(),
-                        ),
-                )
-                .child(design::chrome_divider(cx, p))
-        }))
-        // Ambient readouts are right-aligned: rate ticker, then the clock, then the window controls.
-        .child(
-            design::chrome_section(cx)
-                // Rate ticker (configurable): "1 BTC = 61 333$ 1h +0.1% 24h +2.0%". Its popup is
-                // positioned by hand in `shell::ticker` from the window's right edge inward, so it
-                // has to account for EVERYTHING standing to the ticker's right — the divider below,
-                // the clock, the gaps, and the window controls. Move or resize anything in this
-                // cluster and that offset must follow. Divider and readout share ONE predicate:
-                // split, they could drift into a divider fencing off nothing.
-                .children(design::ticker_visible(cx, chrome_width).then(|| {
-                    design::chrome_section(cx)
-                        .child(ticker_readout(
-                            group.to_string(),
-                            ticker_sel,
-                            design::ticker_deltas_visible(cx, chrome_width),
-                            &backend,
-                            shell.clone(),
-                            p,
-                            cx,
-                        ))
-                        .child(design::chrome_divider(cx, p))
-                }))
-                // Quiet mode ("sleep"): the toggle plus its settings gear, between the rate and the
-                // clock. It renders at an explicit width (`chrome::quiet::header_quiet_width`) that
-                // the ticker popup's offset above reuses, so the two cannot drift; its trailing
-                // divider is part of the same cluster for the same reason.
-                .child(crate::chrome::quiet::header_quiet_cluster(
-                    &backend,
+        // The updater is a separate pre-ticker cluster: its coupled rule appears only with the
+        // button, so it is part of the left budget and never shifts the ticker popup. A pinned
+        // right cluster carries it instead, so the cluster cannot cover it (no ticker is drawn
+        // then).
+        .children(left_update)
+        // Rate ticker. Its popup is positioned by hand in `shell::ticker` from the window's right
+        // edge inward by `HeaderWidths::right_of_ticker`, so EVERYTHING to its right must be in
+        // that sum. One predicate for the ticker and its popup: `design::ticker_visible`.
+        .when(design::ticker_visible(level), |row| {
+            row.child(ticker_readout(
+                model,
+                ticker_sel,
+                design::ticker_deltas_visible(level),
+                backend.clone().zip(shell.clone()),
+                p,
+                cx,
+            ))
+        })
+        .child(right_cluster)
+}
+
+/// Width of the left groups a pinned right cluster must leave uncovered: the leading inset, the
+/// active mode segment and the core card at its narrowest name.
+fn left_controls_width(model: &HeaderModel, cx: &App) -> f32 {
+    let gap = design::ui_value(cx, design::CHROME_GAP);
+    let card = match &model.card {
+        CoreCard::NoCores => launcher_label_width(cx, &t!("header.add_core")),
+        CoreCard::Named { auto, emu, .. } => {
+            core_card_chrome(cx, *auto, *emu) + design::font_w(cx, CORE_NAME_FLOOR)
+        }
+    };
+    design::ui_value(cx, design::titlebar_leading_inset())
+        + gap
+        + design::joined_strip_width(cx, mode_segment_width(cx, &mode_labels(model.auto()).0))
+        + gap
+        + card
+}
+
+/// The header's right cluster: quiet mode, the clock, the launchers and the window controls,
+/// led by the updater while pinned.
+#[allow(clippy::too_many_arguments)]
+fn header_right_cluster(
+    model: &HeaderModel,
+    level: HeaderLevel,
+    (clock, launchers_folded, update_row): (ClockFit, bool, Option<MoonMenuItem>),
+    pinned: bool,
+    backend: Option<Entity<Backend>>,
+    shell: Option<Entity<Shell>>,
+    (quiet_open, quiet_content): (bool, Option<AnyElement>),
+    clock_picker_open: bool,
+    settings_hint_at: Option<Instant>,
+    update: Option<AnyElement>,
+    p: MoonPalette,
+    cx: &App,
+) -> Div {
+    // The hidden clock's zone picker: a "More" row and the anchor it opens under, both drawn with
+    // the clock gone (the launchers have folded by then, so "More" exists).
+    let clock_hidden = clock == ClockFit::Hidden;
+    let open_picker: Option<crate::chrome::clock::ClockPickerOpen> = shell.clone().map(|shell| {
+        std::rc::Rc::new(move |open: bool, _: &mut Window, cx: &mut App| {
+            shell.update(cx, |s, cx| s.set_header_clock_picker_open(open, cx));
+        }) as crate::chrome::clock::ClockPickerOpen
+    });
+    let lead = header_more_lead(update_row, clock_hidden, open_picker.clone());
+    let picker_anchor = clock_hidden.then(|| {
+        crate::chrome::clock::header_clock_picker_anchor(
+            backend.as_ref(),
+            model.clock_zone,
+            clock_picker_open,
+            open_picker,
+        )
+    });
+    design::chrome_section(cx)
+        .debug_selector(|| "header-right".into())
+        .when(pinned, |section| {
+            section
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(design::ui_px(cx, design::HEADER_PAD_X))
+                .pl(design::ui_px(cx, design::CHROME_GAP))
+                .bg(rgb(p.shell_high))
+                .border_l_1()
+                .border_color(rgb(p.border))
+        })
+        .children(update)
+        // Quiet mode ("sleep"): the labelled button plus its settings gear. Rendered at an explicit
+        // width (`chrome::quiet::header_quiet_width`) that `right_of_ticker` reuses.
+        .child(crate::chrome::quiet::header_quiet_cluster(
+            model.sleeping,
+            level.sleep_label(),
+            backend.clone().zip(shell.clone()).map(|(backend, shell)| {
+                crate::chrome::quiet::QuietActions {
+                    backend,
                     shell,
-                    quiet_settings_open,
-                    quiet_settings_content,
-                    p,
-                    cx,
-                ))
-                // The selected zone's clock with a city code or system abbreviation; clicking opens
-                // the picker. Its MoonPopover is anchored to this trigger, so unlike the ticker it
-                // needs no offset arithmetic. Last of the ambient readouts to yield space — by the
-                // width it goes, the ticker whose popup offset counts it is already gone.
-                //
-                // Divider and clock share ONE predicate, for the reason the ticker cluster above
-                // states: split, the narrow window would draw a rule fencing off nothing — and on
-                // macOS, where the window controls are hidden, that rule would end the row.
-                .children(design::header_clock_visible(cx, chrome_width).then(|| {
-                    h_flex()
-                        .items_center()
-                        .gap(design::ui_px(cx, design::CHROME_GAP))
-                        .child(design::chrome_divider(cx, p))
-                        .child(crate::chrome::clock::header_clock(&backend, p, cx))
-                }))
-                .when(design::show_custom_window_controls(), |this| {
-                    this.child(
-                        MoonWindowFrame::main("terminal-header-controls", 0.0)
-                            .show_controls(true)
-                            .visual_controls(cx),
-                    )
-                }),
-        )
+                    open: quiet_open,
+                    content: quiet_content,
+                }
+            }),
+            p,
+            cx,
+        ))
+        // The selected zone's clock; clicking opens the picker anchored to it. The narrowest
+        // header drops its seconds, then — once the launchers and the updater are in "More" — the
+        // clock, before the right cluster pins.
+        .children(match clock {
+            ClockFit::Seconds => Some(crate::chrome::clock::header_clock_city(
+                backend.as_ref(),
+                model.clock_zone,
+                level.clock_city(),
+                p,
+                cx,
+            )),
+            ClockFit::Minutes => Some(crate::chrome::clock::header_clock_minutes(
+                backend.as_ref(),
+                model.clock_zone,
+                p,
+                cx,
+            )),
+            ClockFit::Hidden => None,
+        })
+        .when(level.separators(), |row| {
+            row.child(design::chrome_divider(cx, p))
+        })
+        .child(header_launchers(
+            &model.group,
+            level.launcher_labels(),
+            launchers_folded.then_some((lead, picker_anchor)),
+            backend.clone(),
+            settings_hint_at.filter(|_| !model.core_ever_configured),
+            p,
+            cx,
+        ))
+        .when(design::show_custom_window_controls(), |this| {
+            this.child(
+                MoonWindowFrame::main("terminal-header-controls", 0.0)
+                    .show_controls(true)
+                    .visual_controls(cx),
+            )
+        })
 }
 
-/// Header badge for the visible core's emulator vs real trading mode.
+/// The AUTO|MANUAL two-segment control.
 ///
-/// Sleep and Live already occupy chrome; emulator/real used to live only inside the
-/// core-settings popover (the checkbox plus the amber banner). This tag sits in the core
-/// cluster so it tracks the same core the pill names. It is a readout, not a toggle:
-/// changing `emu_mode` stays in the gear popover, next to the existing warning.
-///
-/// `emu_mode` is already Overview-gated by the caller (`header` shares `scoped_core` with
-/// the balance figure). `None` is a missing settings snapshot and must not render as Real.
-fn header_trade_mode_tag(emu_mode: Option<bool>) -> Option<AnyElement> {
-    let emu = emu_mode?;
-    let (label, tip) = if emu {
-        (
-            t!("header.trade_emu").to_string(),
-            t!("header.trade_emu_tip").to_string(),
-        )
-    } else {
-        (
-            t!("header.trade_real").to_string(),
-            t!("header.trade_real_tip").to_string(),
-        )
-    };
-    let tag = if emu {
-        MoonTag::warning().label(label)
-    } else {
-        MoonTag::new().label(label)
-    };
-    Some(
-        div()
-            .id("header-trade-mode")
-            .flex_none()
-            .tooltip(crate::panels::common::text_tooltip(tip))
-            .child(tag)
-            .into_any_element(),
-    )
-}
-
-/// Build the persisted workspace-mode control as a compact two-item picker.
-///
-/// AUTO and MANUAL are two full modes rather than the two positions of one switch, so the header
-/// NAMES the current mode and lists both instead of showing a single labeled toggle: a toggle
-/// leaves the mode it is not showing unnamed, which is exactly the fact a user picking between two
-/// workspaces needs. Only the naming moved — `WorkspaceMode` and everything persisted under it are
-/// unchanged, and selection still writes through the same `Backend::set_workspace_mode` authority.
-///
-/// Built on the same `MoonSelectorPill` + controlled `MoonPopover` pair as [`core_selector`], with
-/// its open state on `Shell`, rather than on `MoonDropdown`: on macOS the dropdown in this header
-/// did nothing when used while the core selector beside it worked, so the mode control runs
-/// through the one popup path this header has proven on every platform. The trigger takes a
-/// FIXED `MODE_TRIGGER_W` rather than a fitted width, so the two labels render at one width and
-/// the control cannot twitch as the mode changes.
+/// AUTO and MANUAL are two full modes rather than the two positions of one switch, so both are
+/// named and the current one is filled. The inactive segment goes at header level 4; the active
+/// one then still names the mode, and a click on it does nothing. A pick writes through the same
+/// `Backend::set_workspace_mode` authority the persisted mode has always used.
 ///
 /// Args:
 ///     group: Group whose preset is selected.
-///     backend: Shared persisted workspace authority.
-///     shell: Shell that owns the picker's open state.
-///     open: Whether the picker menu is currently open.
-///     p: Active palette for the trigger label.
-///     cx: Application context used to read the controlled mode.
+///     mode: Current workspace mode.
+///     show_inactive: Whether the inactive segment fits at the current level.
+///     backend: Persisted workspace authority; `None` renders the segments inert.
+///     cx: Application context used to fit the segments.
 ///
 /// Returns:
-///     The header mode picker; a pick publishes through `WorkspaceRevision` and closes the menu.
-fn workspace_mode_selector(
+///     The filled segmented control.
+fn workspace_mode_segments(
     group: &str,
-    backend: &Entity<Backend>,
-    shell: Entity<Shell>,
-    open: bool,
-    p: MoonPalette,
+    mode: WorkspaceMode,
+    show_inactive: bool,
+    backend: Option<Entity<Backend>>,
     cx: &App,
 ) -> AnyElement {
-    /// Design-unit trigger width, FIXED rather than fitted: it holds the longer of the two SHORT
-    /// mode names (`MANUAL`) in every locale plus the pill's caret and padding,
-    /// at the narrowest supported UI font, so neither mode truncates and neither is narrower
-    /// than the other. The trigger shows only the bare name to keep the header short; the rows
-    /// below spell out «… режим» / «… mode» because a menu has the room to say what it selects.
-    const MODE_TRIGGER_W: f32 = 84.0;
-    /// Design-unit popup width: both rows plus their check column, at the trigger's own scale.
-    const MODE_MENU_W: f32 = 150.0;
-
-    let mode = backend.read(cx).workspace_mode(group);
-    let auto = mode == WorkspaceMode::AutoTrading;
-    let auto_label = t!("workspace.mode.auto").to_string();
-    let manual_label = t!("workspace.mode.classic").to_string();
-    let menu_auto_label = t!("workspace.mode.auto_item").to_string();
-    let menu_manual_label = t!("workspace.mode.classic_item").to_string();
-    let (label, tooltip) = if auto {
-        (
-            auto_label.clone(),
-            t!("workspace.mode.auto_tip").to_string(),
-        )
-    } else {
-        (
-            manual_label.clone(),
-            t!("workspace.mode.classic_tip").to_string(),
-        )
+    let segment = |target: WorkspaceMode, label: String, tip: String| {
+        let active = mode == target;
+        let item = mode_segment_item(cx, &label).selected(active).tooltip(tip);
+        (target, active, item)
     };
-    let backend = backend.clone();
+    let segments = [
+        segment(
+            WorkspaceMode::AutoTrading,
+            t!("workspace.mode.auto").to_string(),
+            t!("workspace.mode.auto_tip").to_string(),
+        ),
+        segment(
+            WorkspaceMode::Classic,
+            t!("workspace.mode.classic").to_string(),
+            t!("workspace.mode.classic_tip").to_string(),
+        ),
+    ];
+    // The modes the control draws, in order: a click maps its cell index back through this list.
+    let (targets, items): (Vec<WorkspaceMode>, Vec<MoonSegmentItem>) = segments
+        .into_iter()
+        .filter(|(_, active, _)| *active || show_inactive)
+        .map(|(target, _, item)| (target, item))
+        .unzip();
     let group = group.to_string();
-    let item_shell = shell.clone();
-    let items = crate::panels::radio_items(
-        [
-            (
-                WorkspaceMode::AutoTrading,
-                "header-workspace-mode-auto".into(),
-                menu_auto_label.into(),
-            ),
-            (
-                WorkspaceMode::Classic,
-                "header-workspace-mode-manual".into(),
-                menu_manual_label.into(),
-            ),
-        ],
-        mode,
-        crate::panels::RadioMark::Check,
-        move |app, mode| {
-            backend.update(app, |backend, backend_cx| {
-                backend.set_workspace_mode(&group, mode, backend_cx);
-            });
-            item_shell.update(app, |shell, cx| {
-                shell.set_header_workspace_mode_open(false, cx);
-            });
-        },
-    );
-
-    // Same geometry rules as the core pill: `bounds` takes final pixels, while `height` and
-    // `radius` take design units that the pill scales itself.
-    let trigger_w = design::ui_value(cx, MODE_TRIGGER_W);
-    let trigger_h = design::action_control_h_value(cx);
-    let trigger_h_units = trigger_h / design::ui_value(cx, 1.0);
-    let pill = div()
-        .relative()
-        .flex_none()
-        .w(px(trigger_w))
-        .h(px(trigger_h))
-        .child(
-            MoonSelectorPill::new("header-workspace-mode-pill")
-                .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
-                .height(trigger_h_units)
-                .radius(trigger_h_units / 2.0)
-                .caret(true)
-                .segment(
-                    MoonSelectorSegment::new(label)
-                        .color(p.text)
-                        .weight(500.0)
-                        .font_size(design::body_font_base(cx, 0.0)),
-                )
-                .render(),
-        );
-
     div()
-        .id("header-workspace-mode-tip")
-        .tooltip(crate::panels::common::text_tooltip(tooltip))
+        .id("header-mode")
+        .debug_selector(|| "header-mode".into())
+        .flex_none()
         .child(
-            MoonPopover::new("header-workspace-mode")
-                .placement(MoonPopoverPlacement::BottomStart)
-                .fit_content()
-                .open(open)
-                .on_open_change(move |open, _, cx| {
-                    shell.update(cx, |shell, cx| {
-                        shell.set_header_workspace_mode_open(open, cx);
+            MoonSegmentedControl::new("header-mode-segments")
+                .selection(MoonSegmentSelection::Filled)
+                .accent(MoonAccent::Blue)
+                .item_gap(0.0)
+                .items(items)
+                .on_click(move |ix, _, _, app| {
+                    // The active cell names the mode; a click on it does nothing.
+                    let (Some(&target), Some(backend)) = (targets.get(ix), backend.as_ref()) else {
+                        return;
+                    };
+                    if target == mode {
+                        return;
+                    }
+                    backend.update(app, |backend, backend_cx| {
+                        backend.set_workspace_mode(&group, target, backend_cx);
                     });
                 })
-                .trigger(pill)
-                .content(
-                    MoonPopupMenu::new("header-workspace-mode-menu")
-                        .width_scaled(MODE_MENU_W)
-                        .size(MoonSize::Xs)
-                        .mono(true)
-                        .items(items)
-                        .render(),
-                ),
+                .render(),
         )
         .into_any_element()
 }
 
-/// Render the header ticker as `1 BTC = 61 333$ 1h +0.1% 24h +2.0%`.
+/// The core gear for one face, or `None` when the row names no single core.
 ///
-/// Price and signed deltas come from `MarketDataSource::market_ticker`. A click opens the market;
-/// a double-click opens the source popup hosted by [`Shell`]. When `show_deltas` is false, only the
-/// price remains.
-///
-/// Args:
-///     group: Group whose current Auto authority owns the retained ticker callback.
-///     sel: Resolved ticker core and market, or `None` for the fallback source picker.
-///     show_deltas: Whether one-hour and one-day changes fit in the current chrome width.
-///     backend: Shared market data and chart-request authority.
-///     shell: Header owner used to toggle the ticker source popup.
-///     p: Active Moon palette.
-///     cx: Application context used to read data and render scaled metrics.
-///
-/// Returns:
-///     A ticker element whose delayed chart navigation cannot bypass the Auto rail.
-fn ticker_readout(
-    group: String,
-    sel: Option<(moon_core::session::CoreId, String)>,
-    show_deltas: bool,
-    backend: &Entity<Backend>,
-    shell: Entity<Shell>,
-    p: MoonPalette,
-    cx: &App,
-) -> impl IntoElement {
-    let data = sel.as_ref().and_then(|(core, market)| {
-        let b = backend.read(cx);
-        let t = b.session.market_source().market_ticker(*core, market)?;
-        Some((market.clone(), t))
-    });
-    let base = sel
-        .as_ref()
-        .map(|(core, market)| {
-            backend
-                .read(cx)
-                .session
-                .market_source()
-                .market_label(*core, market)
-                .coin
-        })
-        .unwrap_or_else(|| "BTC".to_string());
-    // Each delta carries its window as a label; without one the tooltip is the only place that
-    // says which span a percentage covers. Colour goes through `design::delta_tone`, the ONE
-    // sign-to-colour mapping, so this readout can never drift from every other money cell.
-    let delta_span = |label: String, v: f64| {
-        let (text, color) = match fmt::signed_pct(v, 1) {
-            // Zero renders neutral: colouring it would report movement that is not there.
-            Some((text, sign)) => (text, design::delta_tone(sign).color(p)),
-            None => ("—".to_string(), p.text_muted),
-        };
-        h_flex()
-            .gap(design::ui_px(cx, 3.0))
-            .items_center()
-            .child(
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(p.text_muted))
-                    .child(label),
-            )
-            .child(div().text_color(rgb(color)).child(text))
-            .into_any_element()
-    };
-    let mut row = h_flex()
-        .id("header-ticker")
-        .flex_none()
-        .items_center()
-        // Wider than the U+0020 inside a grouped price ("61 333"): with a narrower gap the eye
-        // binds "333$" to the next token and reads the thousands group as a separate number.
-        .gap(design::ui_px(cx, 10.0))
-        .font_family(design::mono())
-        .text_size(design::t_body(cx))
-        .cursor_pointer()
-        .child(
-            div()
-                .text_color(rgb(p.text_soft))
-                .child(format!("1 {base} =")),
-        );
-    match data {
-        Some((_, t)) => {
-            row = row
-                .child(
-                    div()
-                        .text_color(rgb(p.text))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(fmt_ticker_price(t.last)),
-                )
-                .children(
-                    show_deltas
-                        .then(|| delta_span(t!("header.delta_1h").to_string(), t.delta_1h_pct)),
-                )
-                .children(
-                    show_deltas
-                        .then(|| delta_span(t!("header.delta_24h").to_string(), t.delta_24h_pct)),
-                );
-        }
-        None => {
-            row = row.child(div().text_color(rgb(p.text_muted)).child("—"));
-        }
-    }
-    let backend = backend.clone();
-    row.tooltip(|_w, cx| {
-        cx.new(|_| moon_ui::MoonTooltipView::new(t!("header.ticker_tip").to_string()))
-            .into()
-    })
-    // A single click opens the ticker coin's chart on Main, matching ticker clicks in Orders and
-    // Assets; a double-click opens the coin/core picker. The first click of a double-click may
-    // already queue a chart request, but it does not raise the window because `activate` is false.
-    .on_click(move |ev: &ClickEvent, window, cx| {
-        if ev.click_count() >= 2 {
-            shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
-            return;
-        }
-        let Some((core, market)) = sel.clone() else {
-            // An unresolved source has no core or market to open, so show the picker instead.
-            shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
-            return;
-        };
-        backend.update(cx, |b, bcx| {
-            if b.open_on_main_if_authorized(Some(&group), (core, market), false) {
-                bcx.notify();
-            }
-        });
-    })
-}
-
-/// Format a ticker price with a trailing dollar sign and magnitude-based precision.
-///
-/// Values at least 1000 are rounded to an integer and grouped with spaces, values at least 1 use
-/// two decimal places, and lower values use four decimal places.
-///
-/// # Arguments
-///
-/// * `v` - Price value to format.
-///
-/// # Returns
-///
-/// The formatted price string.
-fn fmt_ticker_price(v: f64) -> String {
-    if v >= 1000.0 {
-        let mut s = fmt::group_thousands(&format!("{v:.0}"));
-        s.push('$');
-        s
-    } else if v >= 1.0 {
-        format!("{v:.2}$")
-    } else {
-        format!("{v:.4}$")
-    }
-}
-
-/// Fit a header core label and return the selector pill's content-driven width.
-///
-/// Args:
-///     text: Full active-core label.
-///     max_label_w: Maximum rendered width available to the label.
-///     chrome_w: Rendered pill width outside the label.
-///     measure: Function returning rendered width for arbitrary label fragments.
-///
-/// Returns:
-///     The fitted label and its measured width plus pill chrome, rounded to a whole pixel.
-fn fit_header_core_trigger(
-    text: &str,
-    max_label_w: f32,
-    chrome_w: f32,
-    measure: impl Fn(&str) -> f32,
-) -> (String, f32) {
-    let (label, label_w) = design::fit_text(text, max_label_w, measure);
-    (label, (label_w + chrome_w).ceil())
-}
-
-/// Build the active-core control for Classic or the passive Auto workspace scope indicator.
-///
-/// Classic choices come from the group's cores. [`Backend::active_trade_core`] prefers a still-valid
-/// remembered Classic selection, the current trading target, and finally the group's first core.
-/// Auto instead reads only the rail-owned workspace selection, displays Overview when it is empty,
-/// and returns a disabled caret-free pill without building a popover.
-/// The trading target can come from Main's active fullscreen chart or a locked comparison anchor
-/// in an Add or Custom tab. Command controls use the same active core; per-core display figures
-/// suppress themselves first when Auto Overview names no single core.
-///
-/// # Arguments
-///
-/// * `group` - Group whose trading cores should be listed.
-/// * `backend` - Backend that owns core state and the remembered group selection.
-/// * `shell` - Shell that owns the selector's controlled open state.
-/// * `open` - Whether the selector popover is currently open.
-/// * `p` - Active palette used to render status and text colors.
-/// * `cx` - Application context used to read state and measure labels.
-///
-/// # Returns
-///
-/// The interactive Classic selector, passive Auto indicator, or a Classic placeholder when the
-/// group has no cores.
-fn core_selector(
+/// Expert mode replaces the popover with a plain button opening the full Moonbot settings window
+/// (`crate::core_expert`). The two faces cannot both be live: the expert window owns its own draft
+/// of the same page, and a popup staged beside it would give one core two pending pages.
+/// `Shell::gear_popup_unavailable` closes an already-open popup whenever the header draws no
+/// core-settings popover — Overview or expert mode; at the level that hides the gear the popup
+/// moves to the core card ([`core_settings_anchor`]).
+fn core_gear(
     group: &str,
-    backend: &Entity<Backend>,
-    shell: Entity<Shell>,
+    face: Option<GearFace>,
     open: bool,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
-    // The pill follows the control-tier ordinary-control height so it shares one top/bottom edge
-    // with the neighbouring buttons; its content width is still capped below so a long
-    // user-defined name cannot displace the header's right-hand readouts.
-    let b = backend.read(cx);
-    // Filtered here rather than at `Backend::group_cores`, whose other callers include the
-    // membership-authority functions themselves: dropping non-members here also keeps
-    // `raw_active_name` below from naming a hidden core, since it looks the active id up in this
-    // same filtered list.
-    let cores: Vec<(moon_core::session::CoreId, String)> = b
-        .group_cores(group)
-        .into_iter()
-        .filter(|(id, _)| b.core_displayed_in_group(group, *id))
-        .collect();
+    content: Option<AnyElement>,
+    actions: Option<(Entity<Backend>, Entity<Shell>)>,
+) -> Option<AnyElement> {
+    let face = face?;
+    let Some((backend, shell)) = actions else {
+        return Some(gear_trigger().render().into_any_element());
+    };
+    Some(match face {
+        GearFace::Expert => {
+            let group = group.to_string();
+            gear_trigger()
+                .on_click(move |_, window, cx| {
+                    let owner_display = crate::window::windowing::window_display_id(window, cx);
+                    crate::core_expert::open(
+                        backend.clone(),
+                        Some(window.window_handle()),
+                        owner_display,
+                        group.clone(),
+                        cx,
+                    );
+                })
+                .render()
+                .into_any_element()
+        }
+        GearFace::Popover => {
+            core_settings_popover("core-gear", open, content, gear_trigger().render(), shell)
+                .into_any_element()
+        }
+    })
+}
+
+/// Where an open core-settings popup anchors at `level`: its gear, or the core card at the level
+/// that hides the gear. Never a reason to hold the level.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoreSettingsAnchor {
+    Gear,
+    Card,
+}
+
+/// The core-settings popup's anchor at `level`.
+pub(crate) fn core_settings_anchor(level: HeaderLevel) -> CoreSettingsAnchor {
+    if level.core_gear() {
+        CoreSettingsAnchor::Gear
+    } else {
+        CoreSettingsAnchor::Card
+    }
+}
+
+/// The core-settings `MoonPopover` on `trigger` — the gear, or the core card's zero-size anchor.
+fn core_settings_popover(
+    id: &'static str,
+    open: bool,
+    content: Option<AnyElement>,
+    trigger: impl IntoElement,
+    shell: Entity<Shell>,
+) -> MoonPopover {
+    header_gear_popover(
+        id,
+        MoonPopoverPlacement::BottomStart,
+        crate::shell::core_settings_popup::CONTENT_W,
+        open,
+        content,
+        trigger,
+        move |open, window, cx| {
+            shell.update(cx, |s, cx| s.set_core_settings_open(open, window, cx));
+        },
+    )
+    // The alert-sound pickers on the General tab are `MoonDropdown`s, whose menus paint in
+    // their OWN deferred layers outside this popover's box; the bounds-based
+    // `on_mouse_down_out` runs in the CAPTURE phase, so the click that picks a sound would read
+    // as "outside" and shut the popup before the pick landed. Until MoonUI suppresses that (the
+    // Popover entry in docs-internal/FORK_BUGS.md) outside-click dismissal has to be off here —
+    // the same trade the detects, core-status, tuner and chart-label popups already make.
+    // Cancel, OK and the gear itself are the dismissal paths, and this popup has all three.
+    .close_on_content_click(false)
+    .overlay_closable(false)
+}
+
+/// Resolve the core slot from the group's cores and workspace mode.
+///
+/// Classic choices come from the group's cores; [`Backend::active_trade_core`] prefers a still-valid
+/// remembered Classic selection, the current trading target, and finally the group's first core.
+/// Auto reads only the rail-owned workspace selection and names Overview when it is empty.
+fn core_card(group: &str, b: &Backend) -> CoreCard {
+    let cores: Vec<(CoreId, String)> = displayed_cores(group, b);
     let auto = b.workspace_mode(group) == WorkspaceMode::AutoTrading;
+    if cores.is_empty() && !auto {
+        return CoreCard::NoCores;
+    }
     let active = if auto {
         b.valid_auto_workspace_core(group)
     } else {
         b.active_trade_core(group)
     };
-    let store = b.session.store();
-
-    // Render a static placeholder instead of an empty drop-down when the group has no cores.
-    if cores.is_empty() && !auto {
-        return MoonTag::new()
-            .outline()
-            .rounded_full()
-            .child(design::status_dot(p.text_muted, cx))
-            .label(t!("header.no_cores").to_string())
-            .into_any_element();
-    }
-
-    let active_ready = active
-        .and_then(|id| store.core(id))
-        .map(|c| c.status == ConnStatus::Ready)
-        .unwrap_or(false);
-    let dot_color = if auto && active.is_none() {
-        p.accent
-    } else if active_ready {
-        design::positive_color(p)
+    let ready = active
+        .and_then(|id| b.session.store().core(id))
+        .is_some_and(|c| c.status == ConnStatus::Ready);
+    let dot = if auto && active.is_none() {
+        CoreDot::Overview
+    } else if ready {
+        CoreDot::Ready
     } else {
-        design::danger_color(p)
+        CoreDot::Down
     };
-    // Normal labels size the pill to their measured content, avoiding an empty tail. The text cap
-    // still prevents an anomalously long configured name from displacing the rest of the header.
-    let raw_active_name = active
+    let name = active
         .and_then(|id| cores.iter().find(|(cid, _)| *cid == id))
         .map(|(_, n)| n.clone())
         .unwrap_or_else(|| {
@@ -848,34 +1475,190 @@ fn core_selector(
                 "—".to_string()
             }
         });
-    // Chrome outside the label: left/right padding, status dot, gap, and borders. The absolute
-    // caret occupies the right-padding reservation instead of adding another flex child.
-    let (active_name, trigger_w) = fit_header_core_trigger(
-        &raw_active_name,
-        design::font_w(cx, design::HEADER_LABEL_MAX_W),
-        design::ui_value(cx, 44.0),
-        |text| design::ui_text_width_zoomed(cx, text, design::BODY_TEXT, 500.0, true),
-    );
+    CoreCard::Named {
+        name,
+        dot,
+        auto,
+        emu: None,
+    }
+}
+
+/// The group's cores the header may name.
+///
+/// Filtered here rather than at `Backend::group_cores`, whose other callers include the
+/// membership-authority functions themselves: dropping non-members here also keeps the card from
+/// naming a hidden core, since it looks the active id up in this same filtered list.
+fn displayed_cores(group: &str, b: &Backend) -> Vec<(CoreId, String)> {
+    b.group_cores(group)
+        .into_iter()
+        .filter(|(id, _)| b.core_displayed_in_group(group, *id))
+        .collect()
+}
+
+/// Build the core card: the Classic selector or the passive Auto scope indicator.
+///
+/// The card shows a status dot, the mono core name (fitted to `name_budget`), the emulator/real tag
+/// and a caret. Auto renders the same card disabled and caret-free, never a popover: the rail owns
+/// the Auto core. With no cores the slot is an "Add core" button opening Settings.
+///
+/// Args:
+///     model: Header model holding the card.
+///     name_budget: Width the name is fitted to at the current level.
+///     open: Whether the selector popover is open.
+///     settings_item: The gear's face when the level hides the gear: the menu then carries the
+///         core-settings entry the gear would have offered.
+///     actions: Backend and Shell for the selector; `None` renders the card inert.
+///     p: Active palette.
+///     cx: Application context used to measure the name.
+///
+/// Returns:
+///     The interactive Classic selector, passive Auto indicator, or the "Add core" button.
+#[allow(clippy::too_many_arguments)]
+fn core_selector(
+    model: &HeaderModel,
+    name_budget: f32,
+    open: bool,
+    settings_item: Option<GearFace>,
+    actions: Option<(Entity<Backend>, Entity<Shell>)>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let (raw_name, dot, auto, emu) = match &model.card {
+        CoreCard::NoCores => {
+            let label = t!("header.add_core").to_string();
+            let button = open_window_button(
+                LaunchTarget {
+                    id: "header-add-core",
+                    label: label.clone(),
+                    icon: "icons/plus.svg",
+                    labeled_width: Some(launcher_label_width(cx, &label)),
+                    workspace_owner: None,
+                    open: crate::settings::open,
+                },
+                actions.map(|(backend, _)| backend),
+                p,
+                cx,
+            );
+            return div()
+                .id("header-core-card")
+                .debug_selector(|| "header-core-card".into())
+                .flex_none()
+                .font_family(design::ui_font())
+                .tooltip(crate::panels::common::text_tooltip(
+                    t!("header.add_core_tip").to_string(),
+                ))
+                .child(button)
+                .into_any_element();
+        }
+        CoreCard::Named {
+            name,
+            dot,
+            auto,
+            emu,
+        } => (name.as_str(), *dot, *auto, *emu),
+    };
+    let dot_color = match dot {
+        CoreDot::Overview => p.accent,
+        CoreDot::Ready => design::positive_color(p),
+        CoreDot::Down => design::danger_color(p),
+    };
+    // A zero budget hides the name, and the card's gap in front of it goes with it.
+    let name_hidden = name_budget <= 0.0;
+    let chrome_w = core_card_chrome(cx, auto, emu)
+        - if name_hidden {
+            design::ui_value(cx, CARD_GAP)
+        } else {
+            0.0
+        };
+    let (active_name, card_w) = fit_header_core_trigger(raw_name, name_budget, chrome_w, |text| {
+        core_name_width(cx, text)
+    });
+    let name_w = card_w - chrome_w;
+    // Auto's card opens a menu only for the core-settings entry at the level that hides the gear.
+    let clickable = !auto || settings_item.is_some();
+    // Final pixels into `px`, never scaled again: the card shares one top and bottom edge with the
+    // ordinary controls beside it at every UI scale.
     let trigger_h = design::action_control_h_value(cx);
-    // `MoonSelectorPill` takes `height` and `radius` in DESIGN units and scales them by
-    // `tokens.ui()` itself, while `bounds` takes final pixels. `trigger_h` is already scaled, so
-    // undo that once here and feed the design-unit value to the two that will be scaled again —
-    // otherwise the radius is scaled twice and the pill stops being a stadium at any `ui_scale`
-    // other than the default 1.0, where the double multiply is invisible.
-    let trigger_h_units = trigger_h / design::ui_value(cx, 1.0);
+    let card = h_flex()
+        .id("header-core-card")
+        .debug_selector(|| "header-core-card".into())
+        .flex_none()
+        .items_center()
+        .w(px(card_w))
+        .h(px(trigger_h))
+        .pl(design::ui_px(cx, CARD_PAD_L))
+        .pr(design::ui_px(cx, CARD_PAD_R))
+        .gap(design::ui_px(cx, CARD_GAP))
+        .border_1()
+        .border_color(rgb(p.border))
+        .rounded(design::r_button(cx))
+        .bg(rgb(p.panel))
+        .when(clickable, |card| card.cursor_pointer())
+        .tooltip(crate::panels::common::text_tooltip(
+            t!("header.core_card_tip").to_string(),
+        ))
+        .child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(design::ui_px(cx, CARD_DOT_BOX))
+                .child(design::status_dot_sized(dot_color, CARD_DOT, cx)),
+        )
+        .when(!name_hidden, |card| {
+            card.child(
+                div()
+                    .id("header-core-name")
+                    .debug_selector(|| "header-core-name".into())
+                    .flex_none()
+                    .w(px(name_w.max(0.0)))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .font_weight(FontWeight(NAME_WEIGHT))
+                    .text_color(rgb(p.text))
+                    .child(active_name),
+            )
+        })
+        .children(emu.map(header_trade_mode_tag))
+        .when(!auto, |card| {
+            card.child(
+                div()
+                    .flex_none()
+                    .w(design::ui_px(cx, design::DISCLOSURE_BOX))
+                    .child(MoonDisclosure::glyph(open).color(p.text_muted)),
+            )
+        });
+    let Some((backend, shell)) = actions else {
+        return card.into_any_element();
+    };
+    // The rail owns the Auto core, so the Auto card is a passive scope indicator — except at the
+    // level that hides the gear, where its menu carries the core-settings entry alone.
+    if auto && settings_item.is_none() {
+        return card.into_any_element();
+    }
 
     // The header renders continuously, but exchange discovery scans every client snapshot. Build
     // the hidden menu only after controlled open state triggers a repaint.
-    let items = if open && !auto {
+    let items = if open {
+        let b = backend.read(cx);
+        let cores = if auto {
+            Vec::new()
+        } else {
+            displayed_cores(&model.group, b)
+        };
+        let active = b.active_trade_core(&model.group);
         let venues = b.session.core_venues();
         let sections = crate::controls::core_menu_sections(&cores, venues);
-        let mut items = Vec::with_capacity(cores.len() + sections.len());
+        let mut items = Vec::with_capacity(cores.len() + sections.len() + 1);
         for (venue, members) in sections {
             let exchange_label = crate::controls::venue_section_label(venue);
             items.push(MoonMenuItem::label(exchange_label));
             for (id, name) in members {
                 let backend = backend.clone();
-                let group = group.to_string();
+                let group = model.group.clone();
                 let item_shell = shell.clone();
                 items.push(
                     MoonMenuItem::with_key(format!("core-{id}"), name)
@@ -896,44 +1679,42 @@ fn core_selector(
                 );
             }
         }
+        // At the level that hides the gear, core settings stay one click away from the card.
+        if let Some(face) = settings_item {
+            let backend = backend.clone();
+            let group = model.group.clone();
+            let item_shell = shell.clone();
+            items.push(
+                MoonMenuItem::with_key("core-settings", t!("core_settings.title").to_string())
+                    .on_click(move |_, window, cx| {
+                        item_shell.update(cx, |shell, cx| {
+                            shell.set_header_core_selector_open(false, cx);
+                        });
+                        match face {
+                            GearFace::Popover => {
+                                item_shell.update(cx, |shell, cx| {
+                                    shell.set_core_settings_open(true, window, cx);
+                                });
+                            }
+                            GearFace::Expert => {
+                                let owner_display =
+                                    crate::window::windowing::window_display_id(window, cx);
+                                crate::core_expert::open(
+                                    backend.clone(),
+                                    Some(window.window_handle()),
+                                    owner_display,
+                                    group.clone(),
+                                    cx,
+                                );
+                            }
+                        }
+                    }),
+            );
+        }
         items
     } else {
         Vec::new()
     };
-
-    // Use the canonical `MoonSelectorPill` visual, with a glowing status dot and caret icon, as
-    // the `MoonPopover` trigger. The explicit bounds below give its absolute root a measurable,
-    // content-driven anchor; the content remains a `MoonPopupMenu` listing the cores. Shell
-    // controls open state so selecting a core closes the popover while exchange labels and scroll
-    // interactions do not.
-    //
-    // The pill uses `p.panel` as its background and `p.border` as an explicit border, keeping the
-    // shape legible against the `shell_high` header unlike the old borderless Panel variant.
-    //
-    let pill = div()
-        .relative()
-        .flex_none()
-        .w(px(trigger_w))
-        .h(px(trigger_h))
-        .child(
-            MoonSelectorPill::new("header-core-pill")
-                .bounds(MoonRect::new(0.0, 0.0, trigger_w, trigger_h))
-                .height(trigger_h_units)
-                .radius(trigger_h_units / 2.0)
-                .leading_dot(dot_color)
-                .disabled(auto)
-                .caret(!auto)
-                .segment(
-                    MoonSelectorSegment::new(active_name)
-                        .color(p.text)
-                        .weight(500.0)
-                        .font_size(design::body_font_base(cx, 0.0)),
-                )
-                .render(),
-        );
-    if auto {
-        return pill.into_any_element();
-    }
 
     MoonPopover::new("header-core-selector")
         .placement(MoonPopoverPlacement::BottomStart)
@@ -944,11 +1725,7 @@ fn core_selector(
                 shell.set_header_core_selector_open(open, cx);
             });
         })
-        .trigger(
-            // MoonSelectorPill::bounds is absolute. This explicit in-flow box therefore owns the
-            // exact geometry MoonPopover measures and keeps BottomStart anchored to its left edge.
-            pill,
-        )
+        .trigger(card)
         .content(
             MoonPopupMenu::new("header-core-menu")
                 .fit_width(180.0, 560.0)
@@ -960,6 +1737,374 @@ fn core_selector(
         .into_any_element()
 }
 
+/// Header badge for the named core's emulator vs real trading mode.
+///
+/// A readout, not a toggle: changing `emu_mode` stays in the gear popover, next to its warning.
+/// Real reads in the positive tint, the emulator in the bordered warning tag. `emu_mode` is already
+/// Overview-gated by [`HeaderModel::read`]; `None` (no settings snapshot) draws no tag at all.
+fn header_trade_mode_tag(emu: bool) -> AnyElement {
+    let tip = if emu {
+        t!("header.trade_emu_tip").to_string()
+    } else {
+        t!("header.trade_real_tip").to_string()
+    };
+    let tag = if emu {
+        MoonTag::warning()
+    } else {
+        MoonTag::positive()
+    }
+    .label(mode_tag_label(emu));
+    div()
+        .id("header-trade-mode")
+        .debug_selector(|| "header-trade-mode".into())
+        .flex_none()
+        .tooltip(crate::panels::common::text_tooltip(tip))
+        .child(tag)
+        .into_any_element()
+}
+
+/// The updater button and the rule after it.
+///
+/// An offered update is the only call to action this header ever grows, on a window whose every
+/// other control is `Panel`. `Green` rather than `Blue`, for contrast: every tinted MoonUI variant
+/// paints its label in the accent over a ~10% wash, and in the light theme only green has a
+/// light-specific foreground (`green_text`) that clears 4.5:1 on `shell_high`. Every other state
+/// keeps `Panel`: Installing reads as busy through `loading`, Failed through its retry label.
+fn update_button(
+    view: &UpdateView,
+    updater: Option<Entity<crate::update::UpdateController>>,
+    max_w: Option<f32>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let full = update_width(cx, view);
+    let width = max_w.map_or(full, |max| full.min(max).max(design::glyph_btn_w(cx)));
+    let measure = |text: &str| {
+        design::ui_text_width_zoomed(
+            cx,
+            text,
+            design::BODY_TEXT,
+            crate::controls::launch::LAUNCHER_TEXT_WEIGHT,
+            false,
+        )
+    };
+    // A squeezed label keeps its whole text in the tooltip.
+    let (label, tooltip) = if width < full {
+        let chrome = full - measure(&view.label);
+        (
+            design::fit_text(&view.label, (width - chrome).max(0.0), measure).0,
+            format!(
+                "{}
+{}",
+                view.label, view.tooltip
+            ),
+        )
+    } else {
+        (view.label.clone(), view.tooltip.clone())
+    };
+    let variant = if view.available {
+        MoonButtonVariant::Green
+    } else {
+        MoonButtonVariant::Panel
+    };
+    let fg = if view.available { p.green_text } else { p.text };
+    let mut button = MoonButton::new("terminal-update")
+        .width(width)
+        .padding_x(crate::controls::launch::LAUNCHER_PAD_X)
+        .text_segment(label, fg, crate::controls::launch::LAUNCHER_TEXT_WEIGHT)
+        .variant(variant)
+        .loading(view.busy);
+    if let Some(updater) = updater {
+        button = button.on_click(move |_, _window, cx| {
+            crate::update::UpdateController::start_install(&updater, cx);
+        });
+    }
+    design::chrome_section(cx)
+        .font_family(design::ui_font())
+        .child(
+            div()
+                .id("terminal-update-tooltip")
+                .debug_selector(|| "terminal-update".into())
+                .tooltip(crate::panels::common::text_tooltip(tooltip))
+                .child(button.render()),
+        )
+        .child(design::chrome_divider(cx, p))
+        .into_any_element()
+}
+
+/// The updater folded into the header's "More": its label, the same install action, disabled
+/// while an install is already running.
+fn update_menu_row(
+    view: &UpdateView,
+    updater: Option<Entity<crate::update::UpdateController>>,
+) -> MoonMenuItem {
+    let row = match updater {
+        Some(updater) => crate::controls::launch::overflow_row(
+            "header-update-menu",
+            view.label.clone(),
+            move |_, cx| crate::update::UpdateController::start_install(&updater, cx),
+        ),
+        None => MoonMenuItem::with_key("header-update-menu", view.label.clone()),
+    };
+    row.disabled(view.busy)
+}
+
+/// The rows the header's "More" lists before the launchers: the folded updater's, then — with the
+/// clock hidden — «Time zone», opening the clock's own zone picker under "More".
+///
+/// Args:
+///     update_row: The folded updater's row, if any.
+///     clock_hidden: Whether the clock is off the row.
+///     open_picker: The picker's open through `Shell`; `None` renders the row disabled.
+///
+/// Returns:
+///     The lead rows in display order.
+pub(crate) fn header_more_lead(
+    update_row: Option<MoonMenuItem>,
+    clock_hidden: bool,
+    open_picker: Option<crate::chrome::clock::ClockPickerOpen>,
+) -> Vec<MoonMenuItem> {
+    // The picker's own caption names the row, so both read alike in every locale.
+    let label = t!("header.clock_pick").to_string();
+    let zone_row = clock_hidden.then(|| match open_picker {
+        Some(open) => crate::controls::launch::overflow_row(
+            "header-clock-zone-menu",
+            label,
+            move |window, app| open(true, window, app),
+        ),
+        None => MoonMenuItem::with_key("header-clock-zone-menu", label).disabled(true),
+    });
+    update_row.into_iter().chain(zone_row).collect()
+}
+
+/// Render the header ticker as `BTC 82 690 $ 1h +0.1% 24h +2.0%`.
+///
+/// An ambient readout, so it reads muted: the coin in the UI face, the price in mono. A click opens
+/// the market on Main; a double-click opens the source popup hosted by [`Shell`]. When
+/// `show_1h` is false the 1h delta is dropped.
+///
+/// Args:
+///     model: Header model holding the ticker figures.
+///     sel: Resolved ticker core and market, or `None` for the fallback source picker.
+///     show_1h: Whether the 1h delta fits at the current level.
+///     actions: Backend and Shell; `None` renders the readout inert.
+///     p: Active Moon palette.
+///     cx: Application context used to render scaled metrics.
+///
+/// Returns:
+///     A ticker element whose delayed chart navigation cannot bypass the Auto rail.
+fn ticker_readout(
+    model: &HeaderModel,
+    sel: Option<(CoreId, String)>,
+    show_1h: bool,
+    actions: Option<(Entity<Backend>, Entity<Shell>)>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    // Each delta carries its window as a label; without one the tooltip is the only place that
+    // says which span a percentage covers. Colour goes through `design::delta_tone`, the ONE
+    // sign-to-colour mapping, so this readout can never drift from every other money cell.
+    let delta_span = |selector: &'static str, label: String, v: f64| {
+        let (text, sign) = delta_text(v);
+        // Zero renders neutral: colouring it would report movement that is not there.
+        let color = sign.map_or(p.text_muted, |sign| design::delta_tone(sign).color(p));
+        h_flex()
+            .flex_none()
+            .gap(design::ui_px(cx, TICKER_DELTA_GAP))
+            .items_baseline()
+            .child(
+                div()
+                    .font_family(design::ui_font())
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child(label),
+            )
+            .child(
+                div()
+                    .debug_selector(|| selector.into())
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(color))
+                    .child(text),
+            )
+            .into_any_element()
+    };
+    let mut row = h_flex()
+        .id("header-ticker")
+        .debug_selector(|| "header-ticker".into())
+        .flex_none()
+        .items_baseline()
+        // Wider than the U+0020 inside a grouped price ("61 333"): with a narrower gap the eye
+        // binds "333" to the next token and reads the thousands group as a separate number.
+        .gap(design::ui_px(cx, TICKER_GAP))
+        .child(
+            div()
+                .font_family(design::ui_font())
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(model.ticker_base.clone()),
+        );
+    match model.ticker {
+        Some(t) => {
+            row = row
+                .child(
+                    div()
+                        .debug_selector(|| "header-ticker-price".into())
+                        .font_family(design::mono())
+                        .text_size(design::t_body(cx))
+                        .text_color(rgb(p.text_soft))
+                        .font_weight(FontWeight(PRICE_WEIGHT))
+                        .child(fmt_ticker_price(t.last)),
+                )
+                .children(show_1h.then(|| {
+                    delta_span(
+                        "header-ticker-delta-1h",
+                        t!("header.delta_1h").to_string(),
+                        t.delta_1h_pct,
+                    )
+                }))
+                .child(delta_span(
+                    "header-ticker-delta-24h",
+                    t!("header.delta_24h").to_string(),
+                    t.delta_24h_pct,
+                ));
+        }
+        None => {
+            row = row.child(
+                div()
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .text_color(rgb(p.text_muted))
+                    .child("—"),
+            );
+        }
+    }
+    let row = row.tooltip(|_w, cx| {
+        cx.new(|_| moon_ui::MoonTooltipView::new(t!("header.ticker_tip").to_string()))
+            .into()
+    });
+    let Some((backend, shell)) = actions else {
+        return row.into_any_element();
+    };
+    let group = model.group.clone();
+    // A single click opens the ticker coin's chart on Main, matching ticker clicks in Orders and
+    // Assets; a double-click opens the coin/core picker. The first click of a double-click may
+    // already queue a chart request, but it does not raise the window because `activate` is false.
+    row.cursor_pointer()
+        .on_click(move |ev: &ClickEvent, window, cx| {
+            if ev.click_count() >= 2 {
+                shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
+                return;
+            }
+            let Some((core, market)) = sel.clone() else {
+                // An unresolved source has no core or market to open, so show the picker instead.
+                shell.update(cx, |s, cx| s.toggle_ticker_popup(window, cx));
+                return;
+            };
+            backend.update(cx, |b, bcx| {
+                if b.open_on_main_if_authorized(Some(&group), (core, market), false) {
+                    bcx.notify();
+                }
+            });
+        })
+        .into_any_element()
+}
+
+/// The Strategies, Analytics and Settings launchers.
+///
+/// Labelled with their names while the row has room, icon-only from header level 3 (the tooltip
+/// keeps the name). The first-run Settings hint rides the Settings launcher.
+fn header_launchers(
+    group: &str,
+    labeled: bool,
+    folded: Option<(Vec<MoonMenuItem>, Option<AnyElement>)>,
+    backend: Option<Entity<Backend>>,
+    settings_hint_at: Option<Instant>,
+    p: MoonPalette,
+    cx: &App,
+) -> AnyElement {
+    let [strategies, analytics, settings] = launcher_labels();
+    let width = |label: &str| labeled.then(|| launcher_label_width(cx, label));
+    let targets = [
+        LaunchTarget {
+            id: "header-strategies",
+            labeled_width: width(&strategies),
+            label: strategies,
+            icon: crate::controls::STRATEGIES_ICON,
+            workspace_owner: Some(group.to_string()),
+            open: crate::strategies::open,
+        },
+        LaunchTarget {
+            id: "header-analytics",
+            labeled_width: width(&analytics),
+            label: analytics,
+            icon: "icons/layout-dashboard.svg",
+            workspace_owner: Some(group.to_string()),
+            open: crate::analytics::open,
+        },
+        LaunchTarget {
+            id: "header-settings",
+            labeled_width: width(&settings),
+            label: settings,
+            icon: "icons/settings.svg",
+            workspace_owner: None,
+            open: crate::settings::open,
+        },
+    ];
+    // The first-run hint. TWO conditions: the timer decides how long the ring breathes, and the
+    // saved config (`HeaderModel::core_ever_configured`) decides whether it is relevant at all, so
+    // the moment a core is saved the ring is gone on the NEXT FRAME rather than at the end of its
+    // timer.
+    let mut ring = settings_hint_at.and_then(|at| crate::pulse::attention_ring(p.accent, at));
+    let section = design::chrome_section(cx)
+        .id("header-launchers")
+        .debug_selector(|| "header-launchers".into())
+        // Launcher captions are control captions, so they read in the UI face; `MoonButton` can
+        // only force MONO on its own segments, so the family is set here and inherited. Paired
+        // with `launcher_label_width`, which measures the same family.
+        .font_family(design::ui_font());
+    // The narrowest header's last steps: the three launchers fold into one "More" glyph, in the
+    // same order and opening the same windows, led by the folded updater's and the hidden
+    // clock's rows when there are; the first-run ring moves onto the glyph, and the clock's zone
+    // picker anchors under it.
+    if let Some((lead, anchor)) = folded {
+        return section
+            .child(
+                div()
+                    .relative()
+                    .child(crate::controls::launch::overflow_button(
+                        "header-overflow",
+                        lead,
+                        targets.into(),
+                        Vec::new(),
+                        backend,
+                        p,
+                        cx,
+                    ))
+                    .children(anchor)
+                    .children(ring.take()),
+            )
+            .into_any_element();
+    }
+    section
+        .children(targets.into_iter().map(|target| {
+            let is_settings = target.id == "header-settings";
+            let button = open_window_button(target, backend.clone(), p, cx);
+            if is_settings {
+                div()
+                    .relative()
+                    .child(button)
+                    // Declared AFTER the button so the ring paints on top of its chrome; it is a
+                    // pointer-transparent overlay and takes no clicks from the control beneath.
+                    .children(ring.take())
+                    .into_any_element()
+            } else {
+                button
+            }
+        }))
+        .into_any_element()
+}
+
 /// Render one header gear button and its anchored settings `MoonPopover`.
 ///
 /// Shared by the core-settings gear and the quiet-mode gear: one place that pairs a header trigger
@@ -968,7 +2113,7 @@ fn core_selector(
 ///
 /// Returns the `MoonPopover` itself rather than an opaque element so a caller whose content carries
 /// `MoonDropdown`s can switch that dismissal off — their menus paint in their own deferred layers
-/// and would read as an outside click. See the core-settings gear below.
+/// and would read as an outside click. See the core-settings gear above.
 ///
 /// Args:
 ///     id: Stable element identity; the popover derives its own id from it.
@@ -1001,34 +2146,123 @@ pub(crate) fn header_gear_popover(
         .content(content.unwrap_or_else(|| div().into_any_element()))
 }
 
-/// Header balance.
+/// Header balance: caption, TOTAL headline, unit, and the FREE sub-figure.
 ///
-/// The caller supplies `Some` only for states with a usable value. `None` therefore represents
-/// no core, no snapshot, or no valid valuation and renders as a dash. A `Stale` figure is shown
-/// muted and tagged so a retained pre-outage number is not presented as current. Usable figures
-/// render in `free / total USDT` order with the shared grouped amount format.
+/// "Balance" names the whole account (`total_usdt`); "free" the part not committed to orders
+/// (`free_usdt`). A `Stale` figure keeps its numbers and trades the "free" sub-figure for an amber
+/// tag, so a retained pre-outage number is not presented as current. Numbers go through the shared
+/// grouped amount format, the one the Assets panel uses. The caption goes at level 3, the unit at
+/// level 4, the sub-figure at level 1; the headline never.
 ///
 /// Double-click reveals Assets: Auto requests the existing group-owned surface, Classic opens the
 /// singleton window. A dash is still clickable so a first-time user with no snapshot yet can reach
 /// the same panel.
 fn balance_label(
     group: String,
-    backend: Entity<Backend>,
-    balance: Option<(BalanceState, f64, f64)>,
+    backend: Option<Entity<Backend>>,
+    view: BalanceView,
+    level: HeaderLevel,
     p: MoonPalette,
     cx: &App,
-) -> impl IntoElement {
-    let row = h_flex()
+) -> AnyElement {
+    let caption = || {
+        div()
+            .font_family(design::ui_font())
+            .text_size(design::t_caption(cx))
+            .text_color(rgb(p.text_muted))
+            .child(t!("header.balance_caption").to_string())
+    };
+    let mut row = h_flex()
         .id("header-balance")
+        .debug_selector(|| "header-balance".into())
         .flex_none()
-        .gap(px(0.0))
-        .font_family(design::mono())
-        .text_size(design::t_body(cx))
-        .text_color(rgb(p.text_soft))
-        .cursor_pointer()
-        .tooltip(crate::panels::common::text_tooltip(
-            t!("header.balance_tip").to_string(),
-        ))
+        .items_baseline()
+        .gap(design::ui_px(cx, design::CHROME_GAP))
+        .whitespace_nowrap();
+    row = match view {
+        BalanceView::Hidden => row,
+        BalanceView::NoCore => row.child(
+            div()
+                .font_family(design::ui_font())
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(t!("header.balance_none").to_string()),
+        ),
+        BalanceView::Unknown => row
+            .when(level.balance_caption(), |row| row.child(caption()))
+            .child(
+                div()
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .font_weight(FontWeight(BALANCE_WEIGHT))
+                    .text_color(rgb(p.text_muted))
+                    .child("—"),
+            ),
+        BalanceView::Value { total, free, stale } => row
+            .when(level.balance_caption(), |row| row.child(caption()))
+            .child(
+                div()
+                    .id("header-balance-total")
+                    .debug_selector(|| "header-balance-total".into())
+                    .font_family(design::mono())
+                    .text_size(design::t_body(cx))
+                    .font_weight(FontWeight(BALANCE_WEIGHT))
+                    .text_color(rgb(if stale { p.text_muted } else { p.text }))
+                    .child(fmt::usd_grouped(total)),
+            )
+            .when(level.usdt_unit(), |row| {
+                row.child(
+                    div()
+                        .font_family(design::mono())
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgb(p.text_muted))
+                        .child("USDT"),
+                )
+            })
+            .when(stale, |row| {
+                row.child(
+                    div()
+                        .id("header-balance-stale")
+                        .debug_selector(|| "header-balance-stale".into())
+                        .px(design::ui_px(cx, STALE_PAD_X))
+                        .rounded(design::ui_px(cx, 3.0))
+                        .bg(rgba_from(p.amber, 0.14))
+                        .font_family(design::ui_font())
+                        .text_size(design::t_caption(cx))
+                        .font_weight(FontWeight(500.0))
+                        .text_color(rgb(p.amber))
+                        .child(t!("assets.balance_stale").to_string()),
+                )
+            })
+            .when(!stale && level.free_sub(), |row| {
+                row.child(
+                    h_flex()
+                        .id("header-balance-free")
+                        .debug_selector(|| "header-balance-free".into())
+                        .items_baseline()
+                        .gap(design::ui_px(cx, FREE_GAP))
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgb(p.text_muted))
+                        .child(
+                            div()
+                                .font_family(design::ui_font())
+                                .child(t!("header.balance_free").to_string()),
+                        )
+                        .child(
+                            div()
+                                .font_family(design::mono())
+                                .child(fmt::usd_grouped(free)),
+                        ),
+                )
+            }),
+    };
+    let row = row.tooltip(crate::panels::common::text_tooltip(
+        t!("header.balance_tip").to_string(),
+    ));
+    let Some(backend) = backend else {
+        return row.into_any_element();
+    };
+    row.cursor_pointer()
         .on_click(move |ev: &ClickEvent, window, cx| {
             if ev.click_count() < 2 {
                 return;
@@ -1051,35 +2285,7 @@ fn balance_label(
                 );
             }
         })
-        .child("Balance: ");
-    let Some((state, free, total)) = balance else {
-        return row.child(div().text_color(rgb(p.text_muted)).child("—"));
-    };
-    let live = state.is_current();
-    // The shared amount format, precision included: the Assets panel renders this same figure,
-    // and a locally formatted string drifts from it on trailing zeros.
-    let free_text = fmt::usd_grouped(free);
-    row.child(
-        div()
-            .text_color(rgb(if live { p.text } else { p.text_muted }))
-            .font_weight(FontWeight::SEMIBOLD)
-            .child(free_text),
-    )
-    .child(
-        // Spaces on BOTH sides of the slash: " /19983" reads as a fraction of the free amount.
-        // Same format as the free figure and as Assets — a locally rounded total would disagree
-        // with the very panel this shares a number with.
-        div()
-            .text_color(rgb(p.text_muted))
-            .child(format!(" / {} USDT", fmt::usd_grouped(total))),
-    )
-    .when(!live, |el| {
-        el.child(
-            div()
-                .text_color(rgb(p.text_muted))
-                .child(format!(" {}", t!("assets.balance_stale"))),
-        )
-    })
+        .into_any_element()
 }
 
 #[cfg(test)]

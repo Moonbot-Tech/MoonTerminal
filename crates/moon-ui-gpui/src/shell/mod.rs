@@ -150,6 +150,9 @@ pub(crate) struct Shell {
     /// can move on its own in the Auto workspace, and a caption typed for one core must not land in
     /// another's slots when the field finally blurs.
     strat_slots_open: bool,
+    /// The toolbar strip whose collapsed caret menu is open; the toolbar level keeps that caret
+    /// drawn while it is.
+    toolbar_caret: Option<crate::controls::StripCaret>,
     /// Sliders and fields for the TP/SL/leverage popups.
     ///
     /// They persist across renders. TP/SL seed and edit the group-local exit generation; leverage
@@ -201,9 +204,13 @@ pub(crate) struct Shell {
     /// Shell owns this state so selecting a core can close the popover while clicks on exchange
     /// labels and the scroll area leave it open.
     header_core_selector_open: bool,
-    /// Whether the workspace-mode picker in the header is open; Shell owns it like the core
-    /// selector's so picking a mode can close the menu.
-    header_workspace_mode_open: bool,
+    /// Whether the clock's zone picker is open under the header's "More" (the clock is hidden).
+    header_clock_picker_open: bool,
+    /// The header's collapse level as of the last render.
+    ///
+    /// Read by `gear_popup_unavailable`: a level that hides the core gear takes its popover away
+    /// exactly as Overview or expert mode do, and the open-request path runs outside render.
+    header_level: crate::design::HeaderLevel,
     /// Whether the controlled `MoonPopover` on the core-settings button is open.
     /// The popover handles outside-click dismissal, while opening seeds its editor fields.
     core_settings_open: bool,

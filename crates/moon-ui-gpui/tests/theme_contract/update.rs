@@ -141,43 +141,48 @@ fn update_process_modes_dispatch_before_gpui_and_quit_through_app() {
 #[test]
 fn update_button_and_divider_share_the_pre_ticker_header_cluster() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let spacer = chrome.find("terminal-header-spacer-drag").unwrap();
-    let button = chrome.find("terminal-update-tooltip").unwrap();
-    let ticker = chrome
-        .find("design::ticker_visible(cx, chrome_width)")
-        .unwrap();
+    let header = braced_body(&chrome, "pub(crate) fn render_header(");
+    let spacer = header.find("terminal-header-spacer-drag").unwrap();
+    // Built ahead of the row (a pinned right cluster carries it instead); placed in the row here.
+    assert!(header.contains("update_button(view,"));
+    let button = header.find(".children(left_update)").unwrap();
+    let ticker = header.find("design::ticker_visible(level)").unwrap();
+    let cluster = braced_body(&chrome, "fn update_button(");
     assert!(
         spacer < button
             && button < ticker
-            && chrome[spacer..ticker].contains("update_state.visible().then")
-            && chrome[button..ticker].contains("design::chrome_divider(cx, p)"),
+            && cluster.contains("terminal-update-tooltip")
+            && cluster.contains("design::chrome_divider(cx, p)"),
         "the coupled update button/divider must stay after the drag spacer and before ticker"
     );
 }
 
-/// `chrome/terminal_chrome.rs:header` must reserve accent chrome for `Available` and pass that
-/// state-specific variant into the update button. Replacing the `Available(_)` branch's accent
-/// with `Panel` makes a newly available update look like ordinary header chrome and easy to miss.
+/// `chrome/terminal_chrome.rs:update_button` must reserve accent chrome for `Available` and pass
+/// that state-specific variant into the update button. Replacing the `Available(_)` branch's
+/// accent with `Panel` makes a newly available update look like ordinary header chrome.
 #[test]
 fn available_updates_keep_an_accented_button_while_other_states_stay_panel() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let header = braced_body(&chrome, "pub fn header(");
-    let variant = header
-        .split_once(
-            "let variant = if matches!(update_state, crate::update::UpdateState::Available(_)) {",
-        )
-        .expect("header update cluster must select a variant by update state")
+    let view = braced_body(&chrome, "fn update_view(");
+    assert!(
+        view.contains("available: matches!(state, crate::update::UpdateState::Available(_)),"),
+        "the update view must mark exactly the Available state"
+    );
+    let cluster = braced_body(&chrome, "fn update_button(");
+    let variant = cluster
+        .split_once("let variant = if view.available {")
+        .expect("update button must select a variant by update state")
         .1
-        .split_once("let busy = update_state.busy();")
-        .expect("variant selection must finish before update busy state")
+        .split_once("};")
+        .expect("variant selection must finish")
         .0;
     let (available, non_available) = variant
         .split_once("} else {")
         .expect("available and non-available states must choose separately");
     let button = chain_between(
-        header,
+        cluster,
         "MoonButton::new(\"terminal-update\")",
-        ".render(),",
+        ".loading(view.busy);",
         "update button",
     );
 

@@ -21,8 +21,6 @@ status.license: "Licença: %{value}"
 # for a build with no release tag reachable from HEAD) — a value, not prose, so it is not stored
 # here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
 status.version_tooltip: "Versão %{release} · compilação %{build} · MoonUI %{moonui}"
-# Active trading-core selector in the header: text shown when the group has no cores.
-header.no_cores: "sem núcleos"
 # Visible core's emulator vs real mode, in the header cluster beside the core pill.
 # Both states stay on the chrome so the operator does not have to open core settings.
 header.trade_emu: "Emulador"
@@ -31,6 +29,12 @@ header.trade_emu_tip: "Modo emulador. Mude nas configurações do núcleo (a eng
 header.trade_real_tip: "Modo real. Mude nas configurações do núcleo (a engrenagem)."
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip: "Clique duplo abre Ativos"
+header.balance_caption: "Saldo"
+header.balance_free: "livre"
+header.balance_none: "O saldo aparece quando um núcleo se conectar"
+header.add_core: "Adicionar núcleo"
+header.add_core_tip: "Abrir configurações para adicionar um núcleo"
+header.core_card_tip: "Núcleo ativo do grupo — clique para trocar"
 # Price ticker in the header, on the right beside the clock.
 header.ticker_tip: "Preço e deltas de 1h / 24h. O clique abre o gráfico, o clique duplo escolhe a moeda e o núcleo"
 header.ticker_pick: "Moeda do ticker (busca nos núcleos)"
@@ -43,8 +47,9 @@ header.clock_pick: "Fuso horário"
 header.clock_system: "Sistema · %{zone}"
 
 # --- Toolbar ---
-# Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
-# Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
+# Tooltips for preset strips. The toolbar's pod captions are translated (toolbar.*_caption:
+# Size, Leverage, Stop, Take, Sell, Strategy); only USDT, MAX and Live stay literal. The prose
+# tooltips are translated too.
 # `unit` is the fixed USDT-equivalent label and preserves it in narrow windows where the full
 # "Size, USDT eq." group caption has collapsed.
 toolbar.size_hint: "Tamanho da ordem B%{n} em %{unit} · clique para escolher · clique duplo para editar · Ctrl+roda para mudar"
@@ -52,6 +57,18 @@ toolbar.sell_hint: "Venda fixa S%{n} · clique para ativar · clique duplo para 
 toolbar.lev_unset_no_core: "Escolha um servidor para ver a alavancagem."
 toolbar.lev_unset_no_market: "Escolha uma moeda no gráfico Main."
 toolbar.lev_unset_unreported: "A corretora não informa a alavancagem deste mercado."
+toolbar.size_caption: "Volume"
+toolbar.lev_caption: "Alavanc."
+toolbar.sl_caption: "Stop"
+toolbar.tp_caption: "Take"
+toolbar.sell_caption: "Venda"
+toolbar.strategy_caption: "Estratégia"
+toolbar.lev_of: "de ×%{max}"
+toolbar.max_order_inline: "ordem máx."
+toolbar.no_coin_hint: "Escolha uma moeda no gráfico para ver a alavancagem e o limite de ordem"
+toolbar.locked_other_core: "O gráfico sob o cursor é do núcleo %{name} — a edição está desligada para não mudar o núcleo ativo"
+toolbar.locked_no_cores: "Adicione um núcleo — aqui aparecerão volume, stop, take e venda"
+toolbar.own_trade_menu: "Conjunto próprio do núcleo"
 toolbar.sl_unset_tip: "O stop é da estratégia, mas o valor não está disponível no núcleo agora."
 toolbar.tp_main_active_hint: "O TP principal está ativo. Escolher uma célula S move o destaque azul para ela."
 toolbar.tp_fixed_active_hint: "S%{n} está ativo. Clique em TP para voltar ao take profit principal."
@@ -115,10 +132,6 @@ toolbar.apply: "Aplicar"
 # shares its group's. Two texts, because the tooltip states what a click would do next.
 toolbar.own_trade_on: "Este núcleo guarda os próprios tamanhos e TP/SL — desligue para voltar ao conjunto compartilhado"
 toolbar.own_trade_off: "Este núcleo usa o conjunto compartilhado — ligue para dar um conjunto só dele"
-# The hovered chart's core differs from the group's active trading core (or their per-core opt-in
-# disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
-# Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
-toolbar.core_manual_mismatch: "O cursor está sobre outro núcleo — a edição está desligada para não mudar o núcleo ativo"
 
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
@@ -140,11 +153,6 @@ toolbar.core_config_area_manual: "Trading manual"
 # --- Exchange limits for the coin on the Main chart (leverage popup + toolbar readout) ---
 # Row label for the exchange's maximum order size, denominated in the market's quote currency.
 toolbar.max_order: "Ordem máxima"
-# Toolbar caption for the same figure, where the row competes for width with every trading control.
-# Deliberately untranslated: it is the industry abbreviation, like BUY/SELL and LONG/SHORT in
-# `locales/README.md`'s untranslated list, and a translated word here would be the longest thing on
-# the row. The full label above stays in the popover, where there is room to say it properly.
-toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Alavancagem máxima"
 # Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
@@ -556,6 +564,7 @@ alerts.fig.ray: "Raio"
 # The toggle's label is the SAME in both states on purpose: the header positions the ticker popup
 # by summing the widths beside it, so a label that changed on click would move that popup.
 quiet.toggle: "Sono"
+quiet.label_off: "Sons"
 quiet.tip_on: "Sono ligado: sons de detecção e de alerta estão mudos. Clique para acordar."
 quiet.tip_off: "Trabalhando: os sons estão ligados. Clique para dormir."
 quiet.gear_tip: "Configurações do sono"

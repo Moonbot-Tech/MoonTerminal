@@ -524,12 +524,12 @@ fn header_core_pill_shares_the_toolbar_buttons_fit_rule() {
 /// The future edit this pins against: a call site reverting to a bare `p.text` — which is exactly
 /// what the Lev and max-order sites do today (`p.text` unconditionally, at the current
 /// `metric_button(TradeMetric::Lev, ..)` and `strip_text(max_order_value, p.text)` call forms).
-/// Counted rather than location-pinned: `pub fn toolbar` is one long builder, and grabbing its
-/// whole body survives the exact call sites moving a few lines as the implementation lands.
+/// Counted rather than location-pinned: `render_toolbar` is one long builder, and grabbing its
+/// whole body survives the exact call sites moving a few lines.
 #[test]
 fn toolbar_unset_readouts_resolve_their_colour_through_readout_color() {
     let source = read_unsplit("controls/toolbar.rs");
-    let signature = "pub fn toolbar(";
+    let signature = "pub(crate) fn render_toolbar(";
     assert_eq!(
         source.matches(signature).count(),
         1,
@@ -545,24 +545,13 @@ fn toolbar_unset_readouts_resolve_their_colour_through_readout_color() {
     );
 }
 
-/// The three chrome toggles — the header's Sleep toggle, the toolbar's own-trade toggle, and the
-/// SL toggle beside it — must resolve their tone through `design::chrome_toggle_tone` rather than
-/// naming a `MoonTone` inline, so "amber" keeps meaning "this one is a caution state" everywhere
-/// it appears (the whole of acceptance item A3).
+/// The core card must take its height as the final-pixel `trigger_h` straight into `px(..)`, never
+/// through a second UI-scale pass, and its corners from the shared button radius.
 ///
-/// The future edit this pins against: a fourth chrome toggle hand-passing
-/// `.tone(MoonTone::Warning)`, or one of these three dropping the call — which is what the Sleep
-/// toggle does today (`.tone(if sleeping { MoonTone::Warning } else { MoonTone::Info })` inline)
-/// and what the SL toggle does today (no `.tone(..)` call at all).
-/// The core pill's `MoonSelectorPill` builder must consume `trigger_h_units` — the DESIGN-unit
-/// value undone from the final-pixel `trigger_h` — for both `.height(..)` and `.radius(..)`, never
-/// the final-pixel `trigger_h` itself.
-///
-/// The future edit this pins against: passing `trigger_h` straight into `.radius(..)` (e.g.
-/// `.radius(trigger_h / 2.0)`). `MoonSelectorPill::radius` is itself a design-unit input scaled
-/// again at `selector.rs`'s own `tokens.ui(self.radius)`, so a final-pixel value there gets scaled
-/// twice — invisible at the default `ui_scale = 1.0`, where the double multiply is the identity,
-/// and wrong the moment anyone hand-edits the UI slider.
+/// The future edit this pins against: feeding `trigger_h` to something that scales it again (a
+/// `MoonSelectorPill::height`/`radius`, or `design::ui_px(cx, trigger_h)`), which is invisible at
+/// the default `ui_scale = 1.0`, where the double multiply is the identity, and wrong the moment
+/// anyone moves the UI slider.
 #[test]
 fn core_pill_height_and_radius_use_design_units_not_final_pixels() {
     let source = read_src("chrome/terminal_chrome.rs");
@@ -575,27 +564,31 @@ fn core_pill_height_and_radius_use_design_units_not_final_pixels() {
     let body = code_only(braced_body(&source, signature));
 
     assert!(
-        body.contains(".height(trigger_h_units)"),
-        "chrome/terminal_chrome.rs:{signature} must size the pill with the design-unit trigger_h_units"
+        body.contains(".h(px(trigger_h))"),
+        "chrome/terminal_chrome.rs:{signature} must size the card with the final-pixel trigger_h"
     );
     assert!(
-        body.contains(".radius(trigger_h_units / 2.0)"),
-        "chrome/terminal_chrome.rs:{signature} must radius the pill from trigger_h_units, not final pixels"
+        body.contains(".rounded(design::r_button(cx))"),
+        "chrome/terminal_chrome.rs:{signature} must round the card with the shared button radius"
     );
     assert!(
-        !body.contains(".radius(trigger_h / 2.0)"),
-        "chrome/terminal_chrome.rs:{signature} must not radius the pill from the final-pixel \
-         trigger_h, which MoonSelectorPill::radius would scale a second time"
+        !body.contains("ui_px(cx, trigger_h") && !body.contains("MoonSelectorPill"),
+        "chrome/terminal_chrome.rs:{signature} must not scale the final-pixel trigger_h a second time"
     );
 }
 
+/// The chrome toggles — the Stop pod's mini switch (the header's Sleep control is a labelled
+/// button, accent-filled while asleep) — must resolve their tone through
+/// `design::chrome_toggle_tone` rather than naming a `MoonTone` inline, so "amber" keeps meaning
+/// "this one is a caution state" everywhere it appears (the whole of acceptance item A3). The
+/// own-set control is an icon button rather than a toggle, filled while on; it must not grow a
+/// hand-toned switch back.
+///
+/// The future edit this pins against: a chrome toggle hand-passing `.tone(MoonTone::Warning)`, or
+/// the SL switch dropping the call.
 #[test]
 fn chrome_toggles_resolve_their_tone_through_one_helper() {
-    const SITES: [(&str, &str); 3] = [
-        ("chrome/quiet.rs", "pub(crate) fn header_quiet_cluster("),
-        ("controls/toolbar.rs", "fn own_trade_toggle("),
-        ("controls/metric.rs", "pub(super) fn sl_toggle("),
-    ];
+    const SITES: [(&str, &str); 1] = [("controls/metric.rs", "pub(super) fn sl_toggle(")];
 
     for (rel, signature) in SITES {
         let source = read_unsplit(rel);
@@ -610,6 +603,32 @@ fn chrome_toggles_resolve_their_tone_through_one_helper() {
             "{rel}:{signature} must resolve its tone through design::chrome_toggle_tone"
         );
     }
+    let toolbar = read_unsplit("controls/toolbar.rs");
+    let own = code_only(braced_body(&toolbar, "fn own_trade_toggle("));
+    assert!(
+        own.contains(r#"MoonButton::new("toolbar-own-trade")"#)
+            && own.contains("MoonButtonVariant::Blue")
+            && own.contains(".selected(on)")
+            && !own.contains("MoonToggle"),
+        "the own-set control must stay an icon button whose on state is the Blue fill marked .selected(on)"
+    );
+    let own_row = code_only(braced_body(&toolbar, "fn own_trade_menu_check("));
+    assert!(
+        own_row.contains(".checked(on)"),
+        "the own-set row in \"More\" must show its state as .checked(on)"
+    );
+    // The Sleep control is the third chrome two-state control: a labelled button whose asleep
+    // state is the accent fill plus `selected`, never a hand-picked tone.
+    let quiet = code_only(braced_body(
+        &read_src("chrome/quiet.rs"),
+        "pub(crate) fn header_quiet_cluster(",
+    ));
+    assert!(
+        quiet.contains("MoonButtonVariant::Blue")
+            && quiet.contains(".selected(sleeping)")
+            && !quiet.contains(".tone("),
+        "chrome/quiet.rs:header_quiet_cluster must fill the asleep button with MoonButtonVariant::Blue and mark it .selected, with no hand-picked tone"
+    );
 }
 
 /// `settings/mod.rs:draft_sig` must stream serde into its hasher rather than

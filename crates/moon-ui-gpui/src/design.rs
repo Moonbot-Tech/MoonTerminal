@@ -23,6 +23,7 @@ use std::sync::{Arc, LazyLock};
 const M: MoonMetrics = MoonMetrics::TERMINAL;
 
 mod chrome;
+mod collapse;
 mod color;
 mod fit;
 mod logo;
@@ -33,6 +34,7 @@ mod table;
 mod window;
 
 pub use chrome::*;
+pub use collapse::*;
 pub use color::*;
 pub use fit::*;
 pub use logo::*;

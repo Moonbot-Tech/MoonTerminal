@@ -72,52 +72,76 @@ pub(crate) fn effective_chart_display_core(
     )
 }
 
-/// Per-core "keep your own manual-trading set" switch, drawn immediately right of the order-size
-/// strip.
+/// Per-core "keep your own manual-trading set" icon, drawn at the end of the Size pod.
 ///
-/// `None` when no chart core is addressed: the switch names ONE core's generation, so a row with
+/// `None` when no chart core is addressed: the icon names ONE core's generation, so a row with
 /// no core to name must not draw it. It addresses the same `display_core` the strip beside it was
-/// rendered from, so the switch and the numbers it governs can never describe different cores.
+/// rendered from, so the icon and the numbers it governs can never describe different cores.
 ///
-/// Flipping it on moves this core off its group's shared generation and onto its own, seeded from
-/// the group so the numbers do not move under the trader's hands; flipping it off returns the row
-/// to the group's, keeping the core's own set for the next time it is switched back on.
+/// Turning it on moves this core off its group's shared generation and onto its own, seeded from
+/// the group so the numbers do not move under the trader's hands; turning it off returns the row
+/// to the group's, keeping the core's own set for the next time it is switched back on. Filled
+/// while on; the tooltip names the state either way.
 pub(super) fn own_trade_toggle(
     core: Option<CoreId>,
     on: bool,
-    backend: &Entity<Backend>,
-    roles: bool,
+    backend: Option<&Entity<Backend>>,
+    cx: &App,
 ) -> Option<AnyElement> {
     let core = core?;
-    let toggle_backend = backend.clone();
     let tip = if on {
         "toolbar.own_trade_on"
     } else {
         "toolbar.own_trade_off"
     };
     Some(
-        h_flex()
-            .id("toolbar-own-trade")
-            .flex_none()
-            .items_center()
-            .child(
-                MoonToggle::new("toolbar-own-trade-toggle")
-                    .checked(on)
-                    .when_some(design::chrome_toggle_tone(on, false, roles), |t, tone| {
-                        t.tone(tone)
-                    })
-                    .on_change(move |checked: &bool, _w, app| {
-                        let on = *checked;
-                        toggle_backend.update(app, |b, cx| {
-                            b.set_core_own_trade(core, on);
-                            cx.notify();
-                        });
-                    }),
-            )
-            .tooltip(text_tooltip(SharedString::from(t!(tip).to_string())))
+        MoonButton::new("toolbar-own-trade")
+            .width(design::glyph_btn_w(cx))
+            .variant(if on {
+                MoonButtonVariant::Blue
+            } else {
+                MoonButtonVariant::Ghost
+            })
+            .selected(on)
+            .leading_icon(MoonButtonIconSlot::new(OWN_TRADE_ICON))
+            .tooltip(t!(tip).to_string())
+            .when_some(backend.cloned(), |button, backend| {
+                button.on_click(move |_, _, app| {
+                    backend.update(app, |b, cx| {
+                        b.set_core_own_trade(core, !on);
+                        cx.notify();
+                    });
+                })
+            })
+            .render()
             .into_any_element(),
     )
 }
+
+/// The own-set control folded into "More" at L7: the same flip, as a checked row, disabled where
+/// `enabled` (the row's order gate) is closed.
+pub(super) fn own_trade_menu_check(
+    core: Option<CoreId>,
+    on: bool,
+    enabled: bool,
+    backend: Option<&Entity<Backend>>,
+) -> Option<MoonMenuItem> {
+    let core = core?;
+    let label = t!("toolbar.own_trade_menu").to_string();
+    let row = match backend.filter(|_| enabled).cloned() {
+        Some(backend) => overflow_row("toolbar-own-trade-menu", label, move |_, app| {
+            backend.update(app, |b, cx| {
+                b.set_core_own_trade(core, !on);
+                cx.notify();
+            });
+        }),
+        None => MoonMenuItem::with_key("toolbar-own-trade-menu", label).disabled(true),
+    };
+    Some(row.checked(on))
+}
+
+/// The own-set icon's glyph: a person, for "this core's own set".
+const OWN_TRADE_ICON: &str = "icons/user.svg";
 
 /// Caption naming one coarse [`CoreConfigArea`] the core rejected. `moon-core` cannot localize, so
 /// the mapping lives here like every other caption of a `moon-core` enum in this module.

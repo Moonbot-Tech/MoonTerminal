@@ -173,17 +173,15 @@ fn active_trade_core_selection_is_layout_backed_and_sticky() {
     );
 }
 
-/// `terminal_chrome.rs::header` and `controls/toolbar.rs::toolbar` must keep their Overview gates
-/// around `active_trade_core`: restoring a raw read would present one arbitrary server's balance
-/// or leverage as the Auto Overview group's figure. Collapsing `header`'s
-/// `let manual = (!overview).then(...)` gate would also restore the manual-strategy toggle and
-/// quick-select buttons for an arbitrary core, where a left click can fire that core's strategy.
+/// `terminal_chrome.rs::HeaderModel::read` and `controls/toolbar.rs::ToolbarModel::read` must keep their
+/// Overview gates around `active_trade_core`: restoring a raw read would present one arbitrary
+/// server's balance or leverage as the Auto Overview group's figure. The header must also never
+/// host the manual-strategy controls again: there they would fire an arbitrary core's strategy on a
+/// left click in Overview (the toolbar's Strategy pod owns them, under its own gate).
 #[test]
 fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
-    let header = code_only(braced_body(
-        &read_src("chrome/terminal_chrome.rs"),
-        "pub fn header(",
-    ));
+    let chrome = read_src("chrome/terminal_chrome.rs");
+    let header = code_only(braced_body(&chrome, "pub(crate) fn read("));
     assert!(
         header.contains("let overview = b.is_auto_overview_scope(group);")
             && header.contains(
@@ -192,15 +190,13 @@ fn overview_chrome_and_toolbar_do_not_read_an_arbitrary_trade_core() {
         "header balance must use no core in Auto Overview before reading active_trade_core"
     );
     assert!(
-        header.contains(
-            "let manual = (!overview)\n        .then(|| {\n            crate::controls::manual_strategy_controls("
-        ),
-        "header must gate manual-strategy controls on Overview before active_trade_core can select an arbitrary core"
+        !code_only(&chrome).contains("manual_strategy_controls"),
+        "the header must not host the manual-strategy controls, whose core Overview cannot name"
     );
 
     let toolbar = code_only(braced_body(
         &read_unsplit("controls/toolbar.rs"),
-        "pub fn toolbar(",
+        "pub(crate) fn read(",
     ));
     assert!(
         toolbar.contains("let overview = b.is_auto_overview_scope(group);")
@@ -239,30 +235,43 @@ fn header_ticker_popup_accounts_for_the_clock_beside_it() {
     // when the popup moves to a MoonUI Root-owned anchored layer and the offset goes away.
     let text = read_src("shell/ticker.rs");
     assert!(
-        text.contains("header_clock_width"),
-        "ticker.rs positions its popup from the window edge, so it must account for the clock's \
-         measured width — see terminal_chrome's header cluster order"
+        text.contains("widths.right_of_ticker(level)"),
+        "ticker.rs positions its popup from the window edge, so it must offset it by the measured \
+         span right of the ticker — see terminal_chrome's header cluster order"
+    );
+    let chrome = read_src("chrome/terminal_chrome.rs");
+    let widths = fn_body(&chrome, "pub(crate) fn header_widths(");
+    assert!(
+        widths.contains("crate::chrome::clock::header_clock_part_widths(")
+            && widths.contains("clock_time")
+            && widths.contains("clock_city"),
+        "the span right of the ticker must count the clock's measured time and city"
     );
 
-    // And the measurement must still agree with what the FULL clock draws. Asserting on the call
+    // And the measurement must still agree with what the header clock draws. Asserting on the call
     // chain, not merely that the functions exist: the width or shared renderer could stop calling
-    // `clock_parts`, or the full wrapper could select minute precision while the width keeps seconds.
-    // Either drift puts the popup off its trigger while a name-only check stays green.
+    // `clock_parts`, or the header clock could select minute precision while the width keeps
+    // seconds. Either drift puts the popup off its trigger while a name-only check stays green.
     let clock = read_src("chrome/clock.rs");
-    let width = fn_body(&clock, "fn header_clock_width");
+    let width = fn_body(&clock, "fn header_clock_part_widths(");
+    let header = fn_body(&clock, "fn header_clock_city(");
     let full = fn_body(&clock, "fn header_clock(");
-    let renderer = fn_body(&clock, "fn render_header_clock(");
+    let renderer = fn_body(&clock, "fn clock_with_picker(");
     assert!(
         width.contains("clock_parts(") && width.contains("ClockPrecision::Seconds"),
-        "header_clock_width must measure the shared full-precision clock parts"
+        "header_clock_part_widths must measure the shared full-precision clock parts"
+    );
+    assert!(
+        header.contains("precision: ClockPrecision::Seconds,"),
+        "the main header clock must keep the same seconds precision measured beside the ticker"
     );
     assert!(
         full.contains("render_header_clock(backend, p, ClockPrecision::Seconds, cx)"),
-        "header_clock must keep the same seconds precision measured beside the ticker"
+        "header_clock must keep its seconds precision"
     );
     assert!(
-        renderer.contains("clock_parts(selected, now, precision)"),
-        "both visible clock modes must derive their strings from the measured clock-parts model"
+        renderer.contains("clock_parts(selected, now, style.precision)"),
+        "every visible clock mode must derive its strings from the measured clock-parts model"
     );
 }
 
@@ -1078,35 +1087,32 @@ fn the_log_panels_work_is_counted_where_it_happens() {
 }
 
 #[test]
-fn toolbar_row_budget_counts_every_rule_it_draws() {
-    // `controls::toolbar::row_fit` decides which of the row's labels collapse by summing the row's
-    // fixed width, and it restates the row's structure to do so — the rule count among it. The row
-    // itself is built 250 lines below, so the two are coupled only by hand.
+fn toolbar_row_budget_counts_every_pod_it_draws() {
+    // `controls::toolbar::toolbar_widths` decides the collapse level by summing the row's fixed
+    // width, and it restates the row's structure to do so — one pod chrome per pod among it. The
+    // row itself is built in `render_toolbar`, so the two are coupled only by hand.
     //
-    // Plausible future edit, and the reason this test exists: a sixth section is added to the row
-    // with its `design::chrome_divider` sibling, and `row_fit` is not touched. Nothing fails to
-    // compile, and at any comfortable window width nothing looks wrong — the budget is short by one
-    // rule plus its gaps, so at some narrow width a label stays on screen after the row has already
-    // outgrown the window and the trailing window buttons clip off the right edge. That is the
-    // exact failure `row_fit` exists to prevent, so an undercount defeats the mechanism silently.
+    // Plausible future edit, and the reason this test exists: a seventh pod is added to the row
+    // and `toolbar_widths` is not touched. Nothing fails to compile, and at any comfortable window
+    // width nothing looks wrong — the budget is short by one pod's chrome plus its gap, so at some
+    // narrow width a level keeps an element the row has already outgrown and the trailing cluster
+    // clips off the right edge. That is the exact failure the measured collapse exists to prevent.
     //
     // Static, because this harness has no gpui `App` and cannot lay a row out; it pins the COUPLING
     // rather than any pixel value, the same way the header ticker's popup test does.
     let text = read_unsplit("controls/toolbar.rs");
-    let drawn = fn_body(&text, "pub fn toolbar(")
-        .matches("design::chrome_divider(cx, p)")
+    let drawn = code_only(fn_body(&text, "pub(crate) fn render_toolbar("))
+        .matches("pod()")
         .count();
-    let budgeted = fn_body(&text, "fn row_fit(")
-        .split_once("let rules = ")
-        .and_then(|(_, rest)| rest.split_once(';'))
-        .and_then(|(value, _)| value.trim().trim_end_matches("f32").parse::<f32>().ok())
-        .expect("row_fit must state its rule count as `let rules = <number>;`");
+    // A pod is budgeted into `fixed`, or — the Take, Sell and Size pods, which fold into "More" —
+    // into its own `*_pod` width.
+    let budget = code_only(fn_body(&text, "pub(crate) fn toolbar_widths("));
+    let budgeted = budget.matches("fixed += pod").count() + budget.matches("_pod: pod").count();
 
     assert_eq!(
-        budgeted, drawn as f32,
-        "row_fit budgets {budgeted} rules while toolbar() draws {drawn}: the collapse thresholds \
-         are off by the difference, which shows up only as the trailing cluster clipping at a \
-         narrow window"
+        budgeted, drawn,
+        "toolbar_widths budgets {budgeted} pods while render_toolbar draws {drawn}: the levels \
+         are off by the difference, which shows only as the trailing cluster clipping"
     );
 }
 
@@ -1158,146 +1164,125 @@ fn leverage_presets_only_stage_values_until_apply() {
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must budget the Profit Monitor launcher; changing its control-tier
-/// glyph multiplier back to four makes this assertion red and lets the trailing launcher clip at narrow
-/// Main-window widths.
+/// `controls/toolbar/fit.rs:toolbar_widths` must budget both toolbar launchers; changing its
+/// control-tier glyph multiplier lets the trailing launcher clip at narrow Main-window widths. The
+/// header's three launchers are budgeted by `header_widths` from the same label list it draws.
 #[test]
 fn toolbar_budget_includes_every_singleton_launcher() {
     let text = read_unsplit("controls/toolbar.rs");
-    let budget = fn_body(&text, "fn row_fit(");
-    let toolbar = fn_body(&text, "pub fn toolbar(");
+    let budget = fn_body(&text, "pub(crate) fn toolbar_widths(");
+    let targets = fn_body(&text, "fn launch_targets(");
     // Each launcher is described once, as a `LaunchTarget`, and drawn or folded from there.
-    let drawn = toolbar.matches("=> LaunchTarget {").count();
+    let drawn = targets.matches("LaunchTarget {").count();
     assert_eq!(
-        drawn, 5,
-        "row_fit must budget every launcher rendered by toolbar"
+        drawn, 2,
+        "toolbar_widths must budget every launcher rendered by render_toolbar"
     );
     assert!(
-        budget.contains("design::glyph_btn_w(cx) * 5.0"),
-        "row_fit must reserve icon width for every open_window_button rendered by toolbar"
+        budget.contains("chart_tools: glyph * 2.0 + gap"),
+        "toolbar_widths must reserve icon width for every open_window_button render_toolbar draws"
     );
-    assert!(toolbar.contains("\"toolbar-profit-monitor\""));
-    assert!(toolbar.contains("crate::analytics::profit_monitor::open"));
+    assert!(targets.contains("\"toolbar-profit-monitor\""));
+    assert!(targets.contains("crate::analytics::profit_monitor::open"));
+
+    let chrome = read_src("chrome/terminal_chrome.rs");
+    let widths = fn_body(&chrome, "pub(crate) fn header_widths(");
+    let launchers = fn_body(&chrome, "fn header_launchers(");
+    assert!(
+        widths.contains("let labels = launcher_labels();")
+            && widths.contains("glyph * labels.len() as f32")
+            && launchers.contains("launcher_labels();"),
+        "the header must budget an icon for every launcher it draws, from the one label list"
+    );
 }
 
-/// `controls/toolbar.rs:toolbar` must retain the requested launcher order and the two
-/// semantic dividers: after Screener, then after Analytics. Moving any launcher or divider
-/// changes the operator's stable target sequence even though every destination still opens.
+/// The launchers keep their stable order and grouping: Profit Monitor then Screener in one
+/// toolbar section, and Strategies, Analytics, Settings in one header section. Moving any launcher
+/// or splitting a section changes the operator's stable target sequence even though every
+/// destination still opens.
 #[test]
 fn toolbar_orders_launchers_around_one_semantic_divider() {
     let text = read_unsplit("controls/toolbar.rs");
-    let toolbar = code_only(fn_body(&text, "pub fn toolbar("));
-    let ids = [
-        "toolbar-profit-monitor",
-        "toolbar-screener",
-        "toolbar-strategies",
-        "toolbar-analytics",
-        "toolbar-settings",
-    ];
+    let targets = code_only(fn_body(&text, "fn launch_targets("));
+    let ids = ["toolbar-profit-monitor", "toolbar-screener"];
     let positions = ids.map(|id| {
-        toolbar
+        targets
             .find(&format!("\"{id}\""))
             .unwrap_or_else(|| panic!("{id} launcher must remain present"))
     });
-
     assert!(
-        positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "launcher order must be Profit Monitor, Screener, Strategies, Analytics, Settings"
+        positions[0] < positions[1],
+        "toolbar launcher order must be Profit Monitor, Screener"
     );
-    // The row draws each launcher through `button(Launcher::..)`; the sections and dividers are
-    // checked against those draw sites.
-    let drawn = [
-        "ProfitMonitor",
-        "Screener",
-        "Strategies",
-        "Analytics",
-        "Settings",
-    ];
-    let positions = drawn.map(|name| {
-        toolbar
-            .find(&format!("button(Launcher::{name})"))
-            .unwrap_or_else(|| panic!("{name} launcher must be drawn"))
+    // Drawn in that order, into ONE trailing section with no rule between them; folded, they
+    // enter "More" in the same order.
+    let render = code_only(fn_body(&text, "pub(crate) fn render_toolbar("));
+    assert!(
+        render.contains(".fold(trailing, |section, target|")
+            && render.contains("launch_targets().into(),"),
+        "both launchers must be drawn, or folded, from the one ordered list"
+    );
+    assert!(
+        !render.contains("chrome_divider"),
+        "Profit Monitor and Screener must share the trailing launcher section"
+    );
+
+    let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
+    let header = braced_body(&chrome, "fn header_launchers(");
+    let ids = ["header-strategies", "header-analytics", "header-settings"];
+    let positions = ids.map(|id| {
+        header
+            .find(&format!("\"{id}\""))
+            .unwrap_or_else(|| panic!("{id} launcher must remain present"))
     });
     assert!(
         positions.windows(2).all(|pair| pair[0] < pair[1]),
-        "launcher draw order must be Profit Monitor, Screener, Strategies, Analytics, Settings"
-    );
-    let between_first_and_last = &toolbar[positions[0]..positions[4]];
-    assert!(
-        !toolbar[positions[0]..positions[1]].contains(".child(design::chrome_divider(cx, p))"),
-        "Profit Monitor and Screener must share the leading launcher section"
+        "header launcher order must be Strategies, Analytics, Settings"
     );
     assert!(
-        !toolbar[positions[2]..positions[3]].contains(".child(design::chrome_divider(cx, p))"),
-        "Strategies and Analytics must share one section"
-    );
-    assert_eq!(
-        between_first_and_last
-            .matches(".child(design::chrome_divider(cx, p))")
-            .count(),
-        2,
-        "the trailing cluster must contain two internal dividers"
-    );
-    assert!(
-        toolbar[positions[1]..positions[2]].contains(".child(design::chrome_divider(cx, p))"),
-        "the first trailing divider must sit between Screener and Strategies"
-    );
-    assert!(
-        toolbar[positions[3]..positions[4]].contains(".child(design::chrome_divider(cx, p))"),
-        "the second trailing divider must sit between Analytics and Settings"
+        !header.contains("chrome_divider"),
+        "the three header launchers must share one section"
     );
 }
 
-/// `controls/toolbar.rs:row_fit` must derive all three optional launcher widths from their live
-/// localized labels, while `open_window_button` must emit either the whole label or only a tooltip.
-/// Reintroducing a fixed width or an always-present text segment clips translations at font scale.
+/// The launchers' labels are measured from their live localized text in the family they render
+/// in, and `open_window_button` emits either the whole label or only a tooltip. Reintroducing a
+/// fixed width or an always-present text segment clips translations at font scale.
 #[test]
 fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     let text = read_unsplit("controls/toolbar.rs");
-    let fit = fn_body(&text, "fn row_fit(");
-    let measure = fn_body(&text, "fn launcher_label_width(");
-    let toolbar = fn_body(&text, "pub fn toolbar(");
+    let label = fn_body(&text, "fn launcher_label_width(");
+    let measure = fn_body(&text, "fn labeled_button_width(");
     let button = fn_body(&text, "fn open_window_button(");
 
+    // The launcher label goes through the one labeled-button width helper.
+    assert!(label.contains("labeled_button_width(") && label.contains("LAUNCHER_TEXT_WEIGHT"));
     assert!(measure.contains("design::ui_text_width_zoomed("));
     assert!(measure.contains("design::BODY_TEXT"));
-    assert!(measure.contains("TOOLBAR_LAUNCHER_TEXT_WEIGHT"));
     assert!(
-        measure.contains("false,"),
+        measure.contains("false"),
         "launcher widths must measure the UI family their labeled controls render in, or narrow-header shedding clips captions or hides them too early"
     );
-    let labeled_launchers = chain_between(
-        toolbar,
-        "shows_any(&[Launcher::Strategies",
-        "overflow_button(folded",
-        "labeled launcher containers",
+    let chrome = read_src("chrome/terminal_chrome.rs");
+    let launchers = code_only(braced_body(&chrome, "fn header_launchers("));
+    assert!(
+        launchers.contains(".font_family(design::ui_font())"),
+        "the header launcher section must render control captions in the UI family measured by launcher_label_width"
     );
-    assert_eq!(
-        labeled_launchers
-            .matches(".font_family(design::ui_font())")
-            .count(),
-        2,
-        "the Strategies/Analytics section and Settings hosting div must both render control captions in the UI family measured by launcher_label_width"
+    assert!(
+        launchers.contains("labeled.then(|| launcher_label_width(cx, label))"),
+        "the header must pass each launcher its measured labeled width, or none"
+    );
+    let widths = fn_body(&chrome, "pub(crate) fn header_widths(");
+    assert!(
+        widths.contains("launcher_label_width(cx, label) - glyph"),
+        "header_widths must budget each launcher label from its live text"
     );
     assert!(measure.contains(".max(design::glyph_btn_w(cx))"));
-    for (label, width) in [
-        ("launchers.analytics", "fit.analytics_width"),
-        ("launchers.strategies", "fit.strategies_width"),
-        ("launchers.settings", "fit.settings_width"),
-    ] {
-        assert!(
-            fit.contains(&format!("launcher_label_width(cx, {label})")),
-            "row_fit must measure {label}"
-        );
-        assert!(
-            toolbar.contains(width),
-            "toolbar must pass {width} to open_window_button"
-        );
-    }
     assert!(!text.contains("SETTINGS_BTN_W"));
-    assert!(measure.contains("TOOLBAR_LAUNCHER_PAD_X"));
+    assert!(measure.contains("LAUNCHER_PAD_X"));
     assert!(button.contains("if labeled_width.is_some()"));
-    assert!(button.contains("padding_x(TOOLBAR_LAUNCHER_PAD_X)"));
+    assert!(button.contains("padding_x(LAUNCHER_PAD_X)"));
     assert!(button.contains("btn.text_segment(label") || button.contains(".text_segment(label"));
     assert!(button.contains("btn.tooltip(label)"));
 }

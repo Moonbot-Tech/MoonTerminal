@@ -41,7 +41,7 @@ pub const CHART_CORNER_STRIP_H: f32 = CHART_CORNER_BTN_TOP + CHART_CORNER_BTN_SI
 
 /// Header lockup width: the header strip is height-constrained, so the longer wordmark has to buy
 /// its room in width, or the mark shrinks inside a row whose height cannot follow it.
-const HEADER_LOGO_W: f32 = 86.0 * LOGO_PORT_SCALE;
+pub(crate) const HEADER_LOGO_W: f32 = 86.0 * LOGO_PORT_SCALE;
 
 /// How much wider than the lockup the glow canvas is; the aura fills the difference.
 const LOGO_GLOW_SCALE: f32 = 1.2;

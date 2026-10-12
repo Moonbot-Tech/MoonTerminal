@@ -115,6 +115,58 @@ pub fn chrome_section(cx: &App) -> Div {
         .gap(ui_px(cx, CHROME_GAP))
 }
 
+/// Inset of a toolbar pod's content from its leading border, before the UI scale.
+pub const POD_PAD_L: f32 = 8.0;
+/// Inset of a toolbar pod's content from its trailing border, before the UI scale.
+pub const POD_PAD_R: f32 = 3.0;
+/// Gap between a pod's caption and the controls inside it, before the UI scale.
+pub const POD_GAP: f32 = 6.0;
+/// Corner radius of a toolbar pod, before the UI scale.
+pub const POD_RADIUS: f32 = 5.0;
+/// Vertical inset of a pod's content, before the UI scale.
+pub const POD_PAD_Y: f32 = 2.0;
+
+/// A toolbar pod: one labelled, bordered group of related trading controls.
+///
+/// The bordered form of [`chrome_section`]; the caption and the controls are the caller's. Its
+/// horizontal chrome is [`pod_chrome_width`], which the toolbar budget reads so the drawn and the
+/// counted pod cannot disagree.
+pub fn chrome_pod(cx: &App, p: MoonPalette) -> Div {
+    moon_ui::h_flex()
+        .flex_none()
+        .items_center()
+        .gap(ui_px(cx, POD_GAP))
+        .pl(ui_px(cx, POD_PAD_L))
+        .pr(ui_px(cx, POD_PAD_R))
+        .py(ui_px(cx, POD_PAD_Y))
+        .border_1()
+        .border_color(rgb(p.border))
+        .rounded(ui_px(cx, POD_RADIUS))
+        .bg(rgb(p.panel))
+}
+
+/// Horizontal chrome of a [`chrome_pod`]: both insets plus its two raw one-pixel borders.
+pub fn pod_chrome_width(cx: &App) -> f32 {
+    ui_value(cx, POD_PAD_L) + ui_value(cx, POD_PAD_R) + 2.0
+}
+
+/// A pod caption: the UI face at caption size, muted. Measured by [`ui_caption_text_width`].
+pub fn pod_caption(text: impl Into<SharedString>, p: MoonPalette, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .whitespace_nowrap()
+        .font_family(ui_font())
+        .text_size(t_caption(cx))
+        .text_color(rgb(p.text_muted))
+        .child(text.into())
+}
+
+/// Rendered width of a joined `MoonSegmentedControl` strip (`Filled`, `item_gap(0.0)`): its cells
+/// plus the one-pixel hairline frame the control draws around them at the UI scale.
+pub fn joined_strip_width(cx: &App, cells: f32) -> f32 {
+    cells + 2.0 * ui_value(cx, 1.0)
+}
+
 // ---- goal A: chrome group rhythm (header + toolbar) ----
 
 /// Height of [`chrome_divider`]'s rule, tall enough to read as a group boundary against the row's
@@ -200,14 +252,6 @@ pub fn chrome_toggle_tone(on: bool, caution: bool, roles: bool) -> Option<MoonTo
 /// fourth role-carrying theme needs no change here.
 pub fn theme_installs_roles(cx: &App) -> bool {
     MoonTheme::active_tokens(cx).colors.is_some()
-}
-
-/// Label colour for a chrome toggle whose ON state should read as a caution rather than an
-/// ordinary affordance.
-///
-/// Mirrors `chrome/quiet.rs`'s own toggle label exactly; see [`chrome_toggle_tone`].
-pub fn chrome_toggle_label_color(p: MoonPalette, on: bool, caution: bool) -> u32 {
-    if on && caution { p.amber } else { p.text_soft }
 }
 
 /// Foreground for a SECONDARY chrome label that still has to be read at a glance: an inactive tab

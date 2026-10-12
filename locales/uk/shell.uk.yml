@@ -21,8 +21,6 @@ status.license: "Ліцензія: %{value}"
 # for a build with no release tag reachable from HEAD) — a value, not prose, so it is not stored
 # here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
 status.version_tooltip: "Реліз %{release} · збірка %{build} · MoonUI %{moonui}"
-# Active trading-core selector in the header: text shown when the group has no cores.
-header.no_cores: "немає ядер"
 # Visible core's emulator vs real mode, in the header cluster beside the core pill.
 # Both states stay on the chrome so the operator does not have to open core settings.
 header.trade_emu: "Емулятор"
@@ -31,6 +29,12 @@ header.trade_emu_tip: "Режим емулятора. Змінюється в н
 header.trade_real_tip: "Реальний режим. Змінюється в налаштуваннях ядра (шестірня)."
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip: "Подвійний клік — відкрити Активи"
+header.balance_caption: "Баланс"
+header.balance_free: "вільно"
+header.balance_none: "Баланс з'явиться після підключення ядра"
+header.add_core: "Додати ядро"
+header.add_core_tip: "Відкрити налаштування, щоб додати ядро"
+header.core_card_tip: "Активне ядро групи — клік змінити"
 # Price ticker in the header, on the right beside the clock.
 header.ticker_tip: "Курс і дельти за 1 год / 24 год. Клік — відкрити графік, подвійний — вибрати монету й ядро"
 header.ticker_pick: "Монета тікера (пошук по ядрах)"
@@ -43,8 +47,9 @@ header.clock_pick: "Часовий пояс"
 header.clock_system: "Системний · %{zone}"
 
 # --- Toolbar ---
-# Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
-# Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
+# Tooltips for preset strips. The toolbar's pod captions are translated (toolbar.*_caption:
+# Size, Leverage, Stop, Take, Sell, Strategy); only USDT, MAX and Live stay literal. The prose
+# tooltips are translated too.
 # `unit` is the fixed USDT-equivalent label and preserves it in narrow windows where the full
 # "Size, USDT eq." group caption has collapsed.
 toolbar.size_hint: "Розмір ордера B%{n} у %{unit} · клік — вибрати · подвійний клік — правка · Ctrl+коліщатко — змінити"
@@ -52,6 +57,18 @@ toolbar.sell_hint: "Фіксований продаж S%{n} · клік — за
 toolbar.lev_unset_no_core: "Виберіть сервер, щоб побачити плече."
 toolbar.lev_unset_no_market: "Виберіть монету на графіку Main."
 toolbar.lev_unset_unreported: "Біржа не повідомляє плече для цього ринку."
+toolbar.size_caption: "Обсяг"
+toolbar.lev_caption: "Плече"
+toolbar.sl_caption: "Стоп"
+toolbar.tp_caption: "Тейк"
+toolbar.sell_caption: "Продаж"
+toolbar.strategy_caption: "Стратегія"
+toolbar.lev_of: "з ×%{max}"
+toolbar.max_order_inline: "макс. ордер"
+toolbar.no_coin_hint: "Виберіть монету на графіку — з'являться плече й ліміт ордера"
+toolbar.locked_other_core: "Під курсором графік ядра %{name} — редагування вимкнено, щоб не змінити активне ядро"
+toolbar.locked_no_cores: "Додайте ядро — тут з'являться обсяг, стоп, тейк і продаж"
+toolbar.own_trade_menu: "Власний набір ядра"
 toolbar.sl_unset_tip: "Стоп задає стратегія, але його значення зараз недоступне від ядра."
 toolbar.tp_main_active_hint: "Основний TP активний. Вибір комірки S перенесе синє підсвічування на неї."
 toolbar.tp_fixed_active_hint: "Комірка S%{n} активна. Натисніть TP, щоб повернути основний тейк."
@@ -115,10 +132,6 @@ toolbar.apply: "Застосувати"
 # shares its group's. Two texts, because the tooltip states what a click would do next.
 toolbar.own_trade_on: "У ядра свій набір розмірів і TP/SL — вимкнути, щоб повернутися до спільного"
 toolbar.own_trade_off: "Ядро використовує спільний набір — увімкнути, щоб завести власний"
-# The hovered chart's core differs from the group's active trading core (or their per-core opt-in
-# disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
-# Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
-toolbar.core_manual_mismatch: "Значення іншого ядра під курсором — правку вимкнено, щоб не змінити активне ядро"
 
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
@@ -140,11 +153,6 @@ toolbar.core_config_area_manual: "Ручна торгівля"
 # --- Exchange limits for the coin on the Main chart (leverage popup + toolbar readout) ---
 # Row label for the exchange's maximum order size, denominated in the market's quote currency.
 toolbar.max_order: "Макс. ордер"
-# Toolbar caption for the same figure, where the row competes for width with every trading control.
-# Deliberately untranslated: it is the industry abbreviation, like BUY/SELL and LONG/SHORT in
-# `locales/README.md`'s untranslated list, and a translated word here would be the longest thing on
-# the row. The full label above stays in the popover, where there is room to say it properly.
-toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Макс. плече"
 # Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
@@ -556,6 +564,7 @@ alerts.fig.ray: "Промінь"
 # The toggle's label is the SAME in both states on purpose: the header positions the ticker popup
 # by summing the widths beside it, so a label that changed on click would move that popup.
 quiet.toggle: "Сон"
+quiet.label_off: "Звуки"
 quiet.tip_on: "Сон увімкнено: звуки детектів і тривог заглушено. Клік — розбудити."
 quiet.tip_off: "Робота: звуки увімкнено. Клік — увімкнути сон."
 quiet.gear_tip: "Налаштування сну"

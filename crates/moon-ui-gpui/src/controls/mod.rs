@@ -26,7 +26,7 @@
 //! - [`core_host`] is the adapter each of its six consumers implements, plus the extras assembly
 //!   they all share;
 //! - [`fmt`] formats size, sell, and field values and computes mouse-wheel steps;
-//! - [`manual_strat`] provides the header's manual-strategy toggle and picker;
+//! - [`manual_strat`] provides the toolbar Strategy pod: the manual-strategy toggle and picker;
 //! - [`metric`] provides TP/SL/leverage trigger buttons and popup content;
 //! - [`row_selection`] holds the controlled multi-row click algorithm — plain, Ctrl, Shift and
 //!   select-all over a keyed row order — shared by Report and Core Status;
@@ -34,6 +34,7 @@
 //! - [`scale`] provides price-scale dropdowns for tabs, AddToChart stacks, and trade windows;
 //! - [`wrap_fit`] lets a wrapping panel row shrink its selectors before it takes a second line;
 //! - [`date_range`] provides the shared from/to date+time bounds of Report and Analytics;
+//! - [`launch`] holds the singleton-window launchers the header and the toolbar share;
 //! - [`toolbar`] composes the toolbar row.
 
 mod coin_menu;
@@ -51,6 +52,7 @@ pub(crate) mod core_update;
 pub(crate) mod date_range;
 mod fmt;
 mod label_fields;
+pub(crate) mod launch;
 mod manual_strat;
 mod metric;
 pub(crate) mod row_selection;
@@ -71,7 +73,6 @@ pub(crate) use core_host::{CoreComboHost, core_combo_extras};
 pub(crate) use core_quick::toggle_core_selection;
 pub use fmt::{ellipsize, fmt_adaptive, fmt_field2, fmt_field2_signed};
 pub(crate) use label_fields::{field_picker, row_display_name, row_title};
-pub use manual_strat::manual_strategy_controls;
 pub(crate) use manual_strat::select_manual_strategy;
 pub use metric::{MetricTarget, OpenMetricPopup, TradeMetric, metric_popup_content};
 
@@ -80,8 +81,11 @@ pub(crate) use scale::{
     remembered_scale, scale_dropdown_for_add_stack, scale_dropdown_for_tabs,
     scale_dropdown_for_trade_window, step_scale,
 };
+pub(crate) use strips::StripCaret;
 pub(crate) use toolbar::core_config_rejection_caption;
-pub use toolbar::toolbar;
+pub(crate) use toolbar::{
+    ToolbarActions, ToolbarModel, render_toolbar, strat_budget, toolbar_widths,
+};
 pub(crate) use venue_label::{venue_id_label, venue_label, venue_section_label};
 
 /// The glyph that stands for "strategies" wherever a control sheds that word.

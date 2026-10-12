@@ -9,6 +9,7 @@ use moon_ui::{MoonPalette, v_flex};
 
 use super::Shell;
 use crate::chrome::terminal_chrome;
+use crate::design::ToolbarLevel;
 use crate::window::input_hook::window_mouse_hook;
 use crate::{controls, design};
 
@@ -238,13 +239,80 @@ impl Render for Shell {
         // popup, and the command.
         let row_target = controls::TradeMetric::Lev.target(self.backend.read(cx), &self.group);
         let (row_limits, toolbar_quote) = self.limits_for(row_target.as_ref(), cx);
+        let toolbar_max_leverage = row_limits
+            .as_ref()
+            .map(|limits| limits.max_leverage)
+            .filter(|&lev| lev > 0);
         let toolbar_max_order = controls::MaxOrderReadout::of(row_limits);
 
-        // Auto Overview draws NO per-core header cluster at all — no gear, no manual-strategy
-        // switch — so the popups those elements own lose the only thing that could close them:
-        // their own `on_open_change`. Left alone the core-settings gear and the quick-select
-        // settings gear would spring back open over whichever core is selected NEXT, and a stale
-        // slot menu would reappear over its original button.
+        // The header is measured ONCE per frame and drawn at the level those widths choose; the
+        // ticker popup's anchor and the gear's availability read the same level, so none of the
+        // three can disagree about what the header is showing.
+        let ticker_sel = self.backend.read(cx).header_ticker();
+        let header_model = terminal_chrome::HeaderModel::read(
+            &self.group,
+            &self.backend,
+            &self.updater,
+            ticker_sel.as_ref(),
+            cx,
+        );
+        let header_widths = terminal_chrome::header_widths(&header_model, cx);
+        // Always the level the window fits: an open core-settings popup never holds it. At the level
+        // that hides the gear the popup anchors to the core card instead, so it keeps its draft.
+        let header_level = header_widths.level(chrome_width);
+        self.header_level = header_level;
+        // The zone picker held open under "More" goes when the clock comes back: its anchor is no
+        // longer drawn, and a flag left set would reopen it the next time the clock hides.
+        let clock_picker_gone = self.header_clock_picker_open
+            && terminal_chrome::header_fit(
+                &header_model,
+                &header_widths,
+                header_level,
+                chrome_width,
+                cx,
+            )
+            .clock
+                != terminal_chrome::ClockFit::Hidden;
+        if clock_picker_gone {
+            self.header_clock_picker_open = false;
+        }
+
+        // The toolbar is measured the same way, once, and its level decides what it draws.
+        let toolbar_model = controls::ToolbarModel::read(
+            &self.backend,
+            &self.group,
+            toolbar_max_order,
+            toolbar_max_leverage,
+            &toolbar_quote,
+            p,
+            cx,
+        );
+        let toolbar_widths = controls::toolbar_widths(&toolbar_model, cx);
+        // An open caret menu holds the level only where its trigger still fits: at its collapsed
+        // form's first level when the window widens past it. A menu whose strip stops taking edits
+        // or folds into "More" closes, and the floor is read after that. A TP/SL popup never
+        // holds the level — with its pod folded it anchors under "More".
+        let gates = toolbar_model.order_gates();
+        let caret_gone = self.toolbar_caret.is_some_and(|caret| {
+            let enabled = match caret {
+                controls::StripCaret::Size => gates.size,
+                controls::StripCaret::Sell => gates.sell,
+            };
+            caret.menu_gone(toolbar_widths.level(chrome_width), enabled)
+        });
+        if caret_gone {
+            self.toolbar_caret = None;
+        }
+        let floor = self
+            .toolbar_caret
+            .map_or(ToolbarLevel(0), |caret| caret.min_level());
+        let toolbar_level =
+            toolbar_widths.level_within(chrome_width, floor, ToolbarLevel(ToolbarLevel::MAX));
+
+        // A popover whose trigger stops being drawn loses the only thing that could close it: its
+        // own `on_open_change`. Left alone the core-settings gear and the quick-select settings
+        // gear would spring back open over whichever core is selected NEXT, and a stale slot menu
+        // would reappear over its original button.
         //
         // Removing the ELEMENT is also why the blur below is not optional. A controlled
         // `MoonPopover` runs its open→closed focus hand-back from its OWN render
@@ -255,17 +323,30 @@ impl Render for Shell {
         // MoonUI documents at that function. Neither gear dismisses on an outside click, so the
         // rail click that enters Overview really can leave focus inside one. Blurring hands focus
         // back to the window root, which is what MoonUI's own close path does in this case.
-        let overview = self.backend.read(cx).is_auto_overview_scope(&self.group);
-        // The core-settings gear strands focus whenever it stops drawing a popover — in Overview
-        // AND in expert mode, which `Shell::gear_popup_unavailable` names as one predicate. The
-        // quick-select gear and the slot menu go with Overview alone: expert mode does not touch
-        // them.
+        //
+        // The core-settings gear strands focus whenever it stops drawing a popover — in Overview,
+        // in expert mode, and at a header level that hides the gear, which
+        // `Shell::gear_popup_unavailable` names as one predicate. The quick-select gear and the
+        // slot menu follow the toolbar's Strategy pod: gone with the pod (AUTO, Overview, no
+        // Manual-kind strategy), the gear gone with the mode, a slot menu gone with its button —
+        // another core, or a slot the pod's inner ladder shed.
+        let strat = toolbar_model.strat.as_ref();
+        let strat_gear_gone = self.strat_slots_open && !strat.is_some_and(|s| s.gear_shown());
+        let strat_budget = controls::strat_budget(&toolbar_widths, toolbar_level, chrome_width);
+        let strat_menu_gone = self.strat_slot_menu.is_some_and(|(core, slot)| {
+            !strat.is_some_and(|s| s.core() == core && s.slot_shown(slot, strat_budget, cx))
+        });
         let strands_focus = (self.core_settings_open && self.gear_popup_unavailable(cx))
-            || (overview && (self.strat_slots_open || self.strat_slot_menu.is_some()));
-        if overview && (self.strat_slots_open || self.strat_slot_menu.is_some()) {
+            || strat_gear_gone
+            || strat_menu_gone
+            || caret_gone
+            || clock_picker_gone;
+        if strat_gear_gone {
             // Closing the popup drops the slot menu with it — the same coupling a click-away
             // already relies on.
             self.set_strat_slots_open(false);
+        } else if strat_menu_gone {
+            self.close_strat_slot_menu();
         }
 
         // Drop the gear popup before building its content if the core it was seeded from is no
@@ -289,9 +370,8 @@ impl Render for Shell {
             .quiet_settings_open
             .then(|| self.quiet_settings_content(p, cx));
 
-        // Read the persisted header-ticker selection or its cached default without mutating Backend.
-        let ticker_sel = self.backend.read(cx).header_ticker();
-        let (ticker_overlay, ticker_dismiss) = self.ticker_popup_layers(chrome_width, p, cx);
+        let (ticker_overlay, ticker_dismiss) =
+            self.ticker_popup_layers(header_level, &header_widths, p, cx);
 
         // Track Main activity with a window-level listener so movement over widgets, panels, and
         // the chart still counts even when they block the root hitbox. Record activity only for an
@@ -373,21 +453,24 @@ impl Render for Shell {
             .children(chrome_stubbed().then(|| div().w_full().h(px(design::header_height(cx)))))
             .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_HEADER_US);
-                terminal_chrome::header(
-                    &self.group,
-                    self.backend.clone(),
-                    self.updater.clone(),
-                    cx.entity(),
-                    ticker_sel,
-                    self.header_workspace_mode_open,
-                    self.header_core_selector_open,
-                    self.core_settings_open,
-                    core_settings_content,
-                    self.quiet_settings_open,
-                    quiet_settings_content,
-                    self.strat_slot_menu,
-                    self.strat_slots_open,
+                terminal_chrome::render_header(
+                    &header_model,
+                    &header_widths,
+                    header_level,
                     chrome_width,
+                    Some(terminal_chrome::HeaderActions {
+                        backend: self.backend.clone(),
+                        updater: self.updater.clone(),
+                        shell: cx.entity(),
+                        ticker_sel,
+                        core_selector_open: self.header_core_selector_open,
+                        core_settings_open: self.core_settings_open,
+                        core_settings_content,
+                        quiet_settings_open: self.quiet_settings_open,
+                        quiet_settings_content,
+                        clock_picker_open: self.header_clock_picker_open,
+                        settings_hint_at: self.settings_hint_at(),
+                    }),
                     p,
                     cx,
                 )
@@ -397,19 +480,24 @@ impl Render for Shell {
             .children(chrome_stubbed().then(|| div().w_full().h(px(design::toolbar_height(cx)))))
             .children((!chrome_stubbed()).then(|| {
                 let _t = crate::diag::scope(&crate::diag::SHELL_TOOLBAR_US);
-                controls::toolbar(
-                    &self.backend,
-                    &self.group,
-                    self.size_edit.clone(),
-                    &self.size_input,
-                    self.sell_edit.clone(),
-                    &self.sell_input,
-                    &cx.entity(),
-                    self.settings_hint_at(),
-                    metric_popup,
-                    toolbar_max_order,
-                    &toolbar_quote,
+                controls::render_toolbar(
+                    toolbar_model,
+                    &toolbar_widths,
+                    toolbar_level,
                     chrome_width,
+                    Some(controls::ToolbarActions {
+                        backend: self.backend.clone(),
+                        shell: cx.entity(),
+                        size_edit: self.size_edit.clone(),
+                        size_input: self.size_input.clone(),
+                        sell_edit: self.sell_edit.clone(),
+                        sell_input: self.sell_input.clone(),
+                        metric_popup,
+                        strat_slot_menu: self.strat_slot_menu,
+                        strat_slots_open: self.strat_slots_open,
+                        caret_open: self.toolbar_caret,
+                    }),
+                    p,
                     cx,
                 )
             }))

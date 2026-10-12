@@ -182,8 +182,8 @@ diag_counters!(
     //
     //   * `toolbar_data_us` — the one Backend read: scope, sizes, exit settings, leverage.
     //   * `toolbar_fit_us` — everything that MEASURES before building: both `FittedCells::fit`
-    //     calls, the localized launcher labels, and `row_fit`'s label ladder. Text measurement here
-    //     goes through `ui_text_width`, which lays out one glyph PER CHARACTER, so this is the part
+    //     calls, the localized launcher labels, and `toolbar_widths`' measurement. Text
+    //     measurement here goes through `ui_text_width`, which lays out one glyph PER CHARACTER, so this is the part
     //     that scales with how much text the row could show rather than with what it shows.
     //   * `toolbar_trade_us` — the trading half of the row: order size, leverage and the max-order
     //     readout, the stop, TP and the sell strip, and Live.
