@@ -122,9 +122,11 @@ fn catchup() -> TapeCatchup {
 }
 
 /// Every reason at once: the longest breakdown a station can send.
+/// Include each reported category so locale and wrapping fixtures exercise new failure labels.
 fn every_reason() -> Vec<(CatchupFailReason, u32)> {
     [
         CatchupFailReason::Http,
+        CatchupFailReason::RequestFault,
         CatchupFailReason::Network,
         CatchupFailReason::Throttled,
         CatchupFailReason::Corrupt,
@@ -133,7 +135,7 @@ fn every_reason() -> Vec<(CatchupFailReason, u32)> {
         CatchupFailReason::Other,
     ]
     .into_iter()
-    .zip([90, 12_345, 30, 7, 5, 2, 1])
+    .zip([90, 4, 12_345, 30, 7, 5, 2, 1])
     .collect()
 }
 

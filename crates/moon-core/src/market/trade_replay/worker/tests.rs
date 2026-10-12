@@ -356,6 +356,51 @@ struct FakeObserver {
     snapshots: Vec<(usize, Vec<(i64, i64)>)>,
 }
 
+/// A request rejection after paid-for pages must retain their tape while leaving the host
+/// available; marking that partial harvest as a transient refusal would stall all its peers.
+#[test]
+fn partial_request_fault_keeps_paid_rows_without_host_backoff() {
+    let route = TradeRoute::BitgetSpotFills;
+    let plan = TickPlan {
+        slices: vec![(1000, 1999), (2000, 2999)],
+        trade_len: 2,
+        focus_len: 2,
+    };
+    let gate = ReplayGate::new();
+    let asked = Instant::now();
+    let verdict = paginate_ticks(
+        route,
+        &plan,
+        100,
+        10,
+        || false,
+        |_| false,
+        &mut FakeObserver::default(),
+        |from, _, _| {
+            if from == 1000 {
+                page(vec![tick(1500, 10.0)])
+            } else {
+                Err(FetchError::RequestFault("HTTP 400: invalid bounds".into()))
+            }
+        },
+    );
+    assert!(!super::super::gate::settle_verdict(
+        &gate,
+        route.host(),
+        &verdict,
+        asked
+    ));
+    assert!(gate.claim(route.host(), Instant::now()).is_ok());
+    let TickVerdict::Ready(harvest) = verdict else {
+        panic!("paid-for tape was discarded")
+    };
+    assert_eq!(harvest.stop, Some(TickAbandon::RequestFault));
+    assert_eq!(harvest.covered, Coverage::one((1000, 1999)));
+    assert_eq!(harvest.ticks.len(), 1);
+    assert!(!harvest.complete);
+    assert!(!harvest.venue_refused);
+}
+
 impl TickObserver for FakeObserver {
     fn claim(&mut self, _host: &str) -> Result<(), u32> {
         self.claims += 1;

@@ -67,7 +67,7 @@ pub(super) fn fetch(
 
 /// Classify a `candleSnapshot` response by status alone.
 ///
-/// # Why every failure here is transient, including an unknown coin
+/// # Why an unknown coin remains transient
 ///
 /// Hyperliquid answers an unknown coin with HTTP 500 and a body of literally `null`. A genuine
 /// backend failure answers HTTP 500 and a body of literally `null`. There is no code, no message
@@ -102,7 +102,10 @@ pub(super) fn fetch(
 pub(super) fn classify(status: u16) -> Result<(), FetchError> {
     match (200..300).contains(&status) {
         true => Ok(()),
-        false => Err(FetchError::Transient(format!("hyperliquid HTTP {status}"))),
+        false => Err(super::request_error(
+            status,
+            format!("hyperliquid HTTP {status}"),
+        )),
     }
 }
 

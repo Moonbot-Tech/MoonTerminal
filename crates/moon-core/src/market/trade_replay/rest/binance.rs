@@ -88,7 +88,10 @@ pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
     if body.get("code").and_then(Value::as_i64) == Some(-1121) {
         return Err(FetchError::UnknownSymbol);
     }
-    Err(FetchError::Transient(format!("binance HTTP {status}")))
+    Err(super::request_error(
+        status,
+        format!("binance HTTP {status}"),
+    ))
 }
 
 /// Parse a Binance kline array into bars.

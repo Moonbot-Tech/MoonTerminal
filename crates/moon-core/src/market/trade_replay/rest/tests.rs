@@ -2,6 +2,48 @@ use serde_json::json;
 
 use super::*;
 
+/// A malformed error body must not turn deterministic 400s into host outages; limit statuses
+/// and venue-specific permanent errors must retain their original precedence.
+#[test]
+fn decode_separates_request_faults_from_host_failures() {
+    let response = |status, body: &'static str| {
+        ureq::http::Response::builder()
+            .status(status)
+            .body(ureq::Body::builder().data(body))
+            .unwrap()
+    };
+    for body in ["bad bounds", "{}"] {
+        assert!(matches!(
+            decode_and_classify(response(400, body), "bitget", bitget::classify_fills),
+            Err(FetchError::RequestFault(_))
+        ));
+    }
+    assert_eq!(
+        decode_and_classify(
+            response(400, "{\"code\":\"40034\"}"),
+            "bitget",
+            bitget::classify_fills
+        ),
+        Err(FetchError::UnknownSymbol)
+    );
+    for status in [403, 408, 500, 503] {
+        assert!(matches!(
+            decode_and_classify(response(status, "{}"), "bitget", bitget::classify_fills),
+            Err(FetchError::Transient(_))
+        ));
+    }
+    for status in [418, 429] {
+        assert!(matches!(
+            decode_and_classify(
+                response(status, "bad body"),
+                "bitget",
+                bitget::classify_fills
+            ),
+            Err(FetchError::Throttled { .. })
+        ));
+    }
+}
+
 /// `rest/mod.rs:split_no_fill` reading a zero only as a JSON number, or only as text, lets one
 /// venue's spelling of "nothing traded" back into the hole check as a malformed row — and the
 /// page it sits on is refused with a host backoff, the outage of 2026-09-21 on Gate futures.

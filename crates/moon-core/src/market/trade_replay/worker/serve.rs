@@ -458,6 +458,20 @@ pub(super) fn serve(
                     }
                 }
             }
+            Err(rest::FetchError::RequestFault(diagnostic)) => {
+                if matches!(
+                    absorb_notice(gate, route.host()),
+                    NoticeEffect::WeightStop | NoticeEffect::Throttled
+                ) {
+                    return rate_limited(gate, route.host());
+                }
+                return Served {
+                    outcome: TradeReplayOutcome::Failed(TradeReplayFailure::Transient {
+                        diagnostic,
+                    }),
+                    tick_stage: None,
+                };
+            }
         }
     }
     // The venue answered, so its refusal history is stale whatever the rows say.

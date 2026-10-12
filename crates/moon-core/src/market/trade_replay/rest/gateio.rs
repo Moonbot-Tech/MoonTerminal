@@ -84,10 +84,11 @@ pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
         .unwrap_or_default();
     match label {
         "INVALID_CURRENCY_PAIR" | "CONTRACT_NOT_FOUND" => Err(FetchError::UnknownSymbol),
-        "" => Err(FetchError::Transient(format!("gate HTTP {status}"))),
-        other => Err(FetchError::Transient(format!(
-            "gate HTTP {status}: {other}"
-        ))),
+        "" => Err(super::request_error(status, format!("gate HTTP {status}"))),
+        other => Err(super::request_error(
+            status,
+            format!("gate HTTP {status}: {other}"),
+        )),
     }
 }
 

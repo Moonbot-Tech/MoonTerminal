@@ -80,6 +80,10 @@ pub(crate) fn rest_fault(error: &rest::FetchError, status: u16) -> Fault {
             };
             Fault::new(reason, text.clone())
         }
+        rest::FetchError::RequestFault(text) => Fault::new(
+            CatchupFailReason::RequestFault,
+            format!("request fault: {text}"),
+        ),
     }
 }
 
@@ -92,6 +96,9 @@ fn stop_fault(stop: Option<TickAbandon>, last: Option<Fault>) -> Fault {
         }
         Some(TickAbandon::UnknownSymbol) => {
             last.unwrap_or_else(|| Fault::new(CatchupFailReason::Http, "unknown symbol"))
+        }
+        Some(TickAbandon::RequestFault) => {
+            last.unwrap_or_else(|| Fault::new(CatchupFailReason::RequestFault, "request fault"))
         }
         Some(TickAbandon::RateLimited) => Fault::new(
             CatchupFailReason::Throttled,
@@ -330,7 +337,7 @@ fn edge_empty_slices(
 /// Convert paginator stops into permanent market refusals, hourly retries or pass stops.
 fn failure_from_stop(reason: TickAbandon) -> Option<Failure> {
     match reason {
-        TickAbandon::UnknownSymbol => Some(Failure::Permanent),
+        TickAbandon::UnknownSymbol | TickAbandon::RequestFault => Some(Failure::Permanent),
         TickAbandon::RateLimited => Some(Failure::Throttled),
         TickAbandon::Empty => None,
         TickAbandon::Cancelled

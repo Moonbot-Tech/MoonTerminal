@@ -111,6 +111,10 @@ fn dense_page(
 /// on a dense venue. Both paging directions must finish the trade before spending on margins.
 #[test]
 fn trade_first_paging_protects_position_from_soft_page_and_deadline_stops() {
+    // Window reload fixtures move the process-wide threshold between these dependent reads.
+    let _settings = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
+        .lock()
+        .unwrap();
     use venue_caps::TradeRoute::*;
     for route in [OkxHistoryTrades, BitgetMixFills, BinanceUsdMAggTrades] {
         for soft_deadline in [false, true] {
@@ -1062,6 +1066,10 @@ fn kline_tick_statuses_keep_the_same_chart_revision_while_ticks_change_it() {
 /// like the whole one.
 #[test]
 fn focus_spans_split_only_a_long_position() {
+    // Keep the boundary and the windows on one threshold while reload fixtures change it.
+    let _settings = crate::market::tape_recorder::catchup::tests::SWITCH_LOCK
+        .lock()
+        .unwrap();
     // A margin well under the position's length, so the two ends of a long one stay apart:
     // neighbourhoods that reach each other fold into one stretch, which the end of this test
     // pins.
