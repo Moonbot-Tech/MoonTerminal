@@ -1411,3 +1411,94 @@ fn only_the_effective_open_date_basis_marks_the_scope_caption() {
     assert_eq!(period_basis_caption_key(true, PeriodBasis::OpenDate), None);
     assert_eq!(period_basis_caption_key(true, PeriodBasis::CloseDate), None);
 }
+
+/// Probe of the Report layout around the coin field: a filter row whose suggestion list hangs
+/// below it over a later, non-occluding table. `lifted` picks the production layer or the
+/// pre-#949 inline child.
+struct CoinPopupProbe {
+    lifted: bool,
+    popup_hits: std::rc::Rc<std::cell::Cell<u32>>,
+    table_hits: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+impl gpui::Render for CoinPopupProbe {
+    fn render(
+        &mut self,
+        _window: &mut gpui::Window,
+        _cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement as _, ParentElement as _, Styled as _, div, px};
+        let popup_hits = self.popup_hits.clone();
+        let popup = div()
+            .id("probe-popup")
+            .absolute()
+            .top_full()
+            .left_0()
+            .w(px(100.0))
+            .h(px(100.0))
+            .bg(gpui::black())
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, app| {
+                popup_hits.set(popup_hits.get() + 1);
+                app.stop_propagation();
+            })
+            .occlude();
+        let field = div().relative().h(px(20.0)).w(px(100.0));
+        let field = if self.lifted {
+            field.child(super::render::coin_popup_layer(popup))
+        } else {
+            field.child(popup)
+        };
+        let table_hits = self.table_hits.clone();
+        div().size_full().flex().flex_col().child(field).child(
+            div()
+                .id("probe-table")
+                .h(px(300.0))
+                .w_full()
+                .bg(gpui::white())
+                .on_mouse_down(gpui::MouseButton::Left, move |_, _, _| {
+                    table_hits.set(table_hits.get() + 1);
+                }),
+        )
+    }
+}
+
+/// Click inside the suggestion list's rectangle over the table and count who took it.
+fn coin_popup_click(lifted: bool, cx: &mut gpui::TestAppContext) -> (u32, u32) {
+    let popup_hits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let table_hits = std::rc::Rc::new(std::cell::Cell::new(0));
+    let window = cx.open_window(gpui::size(gpui::px(400.0), gpui::px(400.0)), {
+        let (popup_hits, table_hits) = (popup_hits.clone(), table_hits.clone());
+        move |_, _| CoinPopupProbe {
+            lifted,
+            popup_hits,
+            table_hits,
+        }
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    visual.simulate_mouse_down(
+        gpui::point(gpui::px(10.0), gpui::px(60.0)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+    (popup_hits.get(), table_hits.get())
+}
+
+/// #949: inline in the filter row, the suggestion list paints under the table and still takes
+/// the click through the table's non-occluding hitbox — a pick of a coin the user cannot see.
+/// Lifted by `coin_popup_layer`, it paints over the table and is the only thing the click reaches.
+#[gpui::test]
+fn coin_suggestions_paint_over_the_table_and_alone_take_its_clicks(cx: &mut gpui::TestAppContext) {
+    assert_eq!(
+        coin_popup_click(false, cx),
+        (1, 1),
+        "control: the inline list must reproduce the hidden pick under a table that also hears it"
+    );
+    assert_eq!(
+        coin_popup_click(true, cx),
+        (1, 0),
+        "the lifted list must sit above the table and occlude it"
+    );
+}

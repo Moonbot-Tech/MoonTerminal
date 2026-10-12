@@ -3,6 +3,17 @@
 use super::state::{ReportPreferenceWrite, schedule_report_preference};
 use super::*;
 
+/// Lift the coin-suggestion list out of the filter row's paint order.
+///
+/// The filter row paints before the table, whose opaque body would cover a list hanging below
+/// the field while the table's non-occluding hitboxes let a click fall through to a suggestion
+/// the user cannot see (#949). Deferred, the list paints after the table and its occluding rows
+/// take the pointer only where they are visible — the order the chart strip gets by making the
+/// list a later sibling of the chart body.
+pub(super) fn coin_popup_layer(popup: impl IntoElement) -> Deferred {
+    deferred(popup)
+}
+
 impl ReportPanel {
     /// Render the report table from currently renderable data.
     ///
@@ -244,7 +255,7 @@ impl Render for ReportPanel {
             let coin_input = self.coin.clone();
             let backend_pick = self.backend.clone();
             // Always a query list: this field filters a report COLUMN, not a set of charts.
-            crate::controls::coin_search::render_popup(
+            let popup = crate::controls::coin_search::render_popup(
                 "rep-coin-search",
                 crate::controls::coin_search::CoinResults::Query(results),
                 &HashSet::new(),
@@ -298,7 +309,8 @@ impl Render for ReportPanel {
             .absolute()
             .top_full()
             .left_0()
-            .mt(px(2.0))
+            .mt(px(2.0));
+            coin_popup_layer(popup)
         });
         // Catch clicks outside the popup to dismiss it. This layer sits below the filters in z-order,
         // so result rows handle their own clicks while clicks elsewhere close the list.
