@@ -6,6 +6,39 @@ use super::super::test_support::{
 use super::super::{QuoteCurrency, SideFilter};
 use super::*;
 
+/// Dividing by a drawdown displayed as zero produces a misleading recovery KPI;
+/// rounding the denominator before division also changes otherwise valid ratios.
+#[test]
+fn recovery_factor_requires_a_visible_finite_drawdown() {
+    for max_dd in [
+        0.0,
+        0.0049,
+        -0.0049,
+        f64::NAN,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    ] {
+        let stats = PeriodStats {
+            profit: 12.0,
+            max_dd,
+            ..Default::default()
+        };
+        assert_eq!(stats.recovery_factor(), None);
+    }
+    let stats = PeriodStats {
+        profit: 12.0,
+        max_dd: 4.0,
+        ..Default::default()
+    };
+    assert_eq!(stats.recovery_factor(), Some(3.0));
+    let stats = PeriodStats {
+        profit: 0.02,
+        max_dd: 0.005,
+        ..Default::default()
+    };
+    assert_eq!(stats.recovery_factor(), Some(4.0));
+}
+
 /// Build the minimal real-trade query used by analytics regression tests.
 fn q(from: i64, to: i64) -> Query {
     Query {
@@ -25,11 +58,10 @@ fn q(from: i64, to: i64) -> Query {
     }
 }
 
-/// A single-day period switches the series grid to HOURS and reports the profit split
-/// by strategy type — and that split must reconcile with the period total, or the two
-/// charts on screen contradict each other.
+/// A single-day period switches the series grid to HOURS with no holes, so the bottom pane of
+/// the profit chart draws hourly bars.
 #[test]
-fn single_day_uses_hourly_grid_and_kinds_reconcile() {
+fn single_day_uses_hourly_grid() {
     let path = temp_db("oneday");
     let day = 1_780_000_000i64 / 86_400 * 86_400;
     // Four trades spread across three different hours of ONE day.
@@ -60,44 +92,20 @@ fn single_day_uses_hourly_grid_and_kinds_reconcile() {
         s.days
     );
 
-    // Without the strategies DB every trade folds into ONE unnamed type — the chart
-    // still has something to draw instead of vanishing.
-    assert_eq!(s.kinds.len(), 1, "no strategies DB → a single group");
-    assert_eq!(s.kinds[0].kind, "");
-
-    // The split must add up to the period total, both in money and in count.
-    let ksum: f64 = s.kinds.iter().map(|k| k.profit).sum();
-    let kn: i64 = s.kinds.iter().map(|k| k.trades).sum();
-    assert!(
-        (ksum - s.cur.profit).abs() < 1e-9,
-        "Σ of types {ksum} != period total {}",
-        s.cur.profit
-    );
-    assert_eq!(kn, s.cur.n, "Σ of type trades != the period's n");
-
-    // And inside a type, the per-core rows the popup lists must add up to its own bar.
-    let csum: f64 = s.kinds[0].cores.iter().map(|c| c.profit).sum();
-    assert!(
-        (csum - s.kinds[0].profit).abs() < 1e-9,
-        "Σ of cores {csum} != the type's profit {}",
-        s.kinds[0].profit
-    );
-
-    // A longer period keeps the daily grid and computes no type split at all.
+    // A longer period keeps the daily grid.
     let wide_scope =
         summary_on(&conn, &q(day - 86_400, day + 86_400), false, false).expect("reads");
     let wide = wide_scope
         .data()
         .expect("single-quote wide summary is comparable");
     assert_eq!(wide.bucket_secs, 86_400, "two days → daily grid");
-    assert!(wide.kinds.is_empty(), "no type split on a long period");
 
     drop(conn);
     remove_db(&path);
 }
 
 /// Replacing Summary's civil-span check with elapsed UTC seconds would classify Warsaw's
-/// 25-hour fall-back day as a multi-day period and remove its hourly and strategy-kind views.
+/// 25-hour fall-back day as a multi-day period and remove its hourly view.
 #[test]
 fn fall_back_civil_day_keeps_the_hourly_summary_grid() {
     let path = temp_db("fall-back-day");
@@ -120,10 +128,6 @@ fn fall_back_civil_day_keeps_the_hourly_summary_grid() {
     let summary = scoped.data().expect("single-quote summary is comparable");
 
     assert_eq!(summary.bucket_secs, 3_600);
-    assert!(
-        !summary.kinds.is_empty(),
-        "one civil day keeps the kind split"
-    );
     drop(conn);
     remove_db(&path);
 }
@@ -519,6 +523,9 @@ fn one_current_stream_preserves_every_summary_field() {
                 per_bucket_trades: vec![2, 0, 0, 0, 0],
                 total: 6.0,
                 trades: 2,
+                wins: 1,
+                win_sum: 10.0,
+                loss_sum: 4.0,
             },
             CoreSeries {
                 uid: 2,
@@ -527,33 +534,12 @@ fn one_current_stream_preserves_every_summary_field() {
                 per_bucket_trades: vec![0, 1, 0, 0, 1],
                 total: 4.0,
                 trades: 2,
+                wins: 1,
+                win_sum: 6.0,
+                loss_sum: 2.0,
             },
         ],
         best_hour: Some((2, 6.0, 1)),
-        kinds: vec![
-            KindStat {
-                kind: "Pump".into(),
-                profit: 6.0,
-                trades: 2,
-                cores: vec![KindCore {
-                    uid: 1,
-                    name: "alpha".into(),
-                    profit: 6.0,
-                    trades: 2,
-                }],
-            },
-            KindStat {
-                kind: "Dump".into(),
-                profit: 4.0,
-                trades: 2,
-                cores: vec![KindCore {
-                    uid: 2,
-                    name: "beta".into(),
-                    profit: 4.0,
-                    trades: 2,
-                }],
-            },
-        ],
         cores: Vec::new(),
         from: day,
         to: day + 86_400,

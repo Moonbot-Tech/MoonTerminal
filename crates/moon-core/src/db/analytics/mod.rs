@@ -34,7 +34,7 @@ pub(crate) mod time_zone;
 pub use calendar::{
     CalendarPeriod, CellTotals, DayCell, HourStat, calendar_cells, calendar_hours, hourly_profiles,
 };
-pub use groups::{GroupStat, KindCore, KindStat, TopTrade, coin_groups, strategies_for_coins};
+pub use groups::{GroupStat, TopTrade, coin_groups, strategies_for_coins};
 pub use profit_monitor::{
     ProfitMonitorCore, ProfitMonitorCurrency, ProfitMonitorSnapshot, ProfitMonitorSummary,
     profit_monitor, profit_monitor_snapshot,
@@ -70,8 +70,15 @@ pub struct PeriodStats {
 }
 
 impl PeriodStats {
+    /// Win percentage of the period's trades, or zero for an empty period.
     pub fn winrate(&self) -> f64 {
         winrate(self.wins, self.n)
+    }
+
+    /// Profit divided by drawdown, absent when drawdown is non-finite or rounds to zero.
+    pub fn recovery_factor(&self) -> Option<f64> {
+        let rounded = crate::util::fmt::round_to(self.max_dd, 2)?;
+        (rounded != 0.0).then(|| self.profit / self.max_dd)
     }
 }
 
@@ -85,7 +92,7 @@ pub struct DayPoint {
 }
 
 /// One core's profit and trade-count series in the same buckets as `Summary::days`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CoreSeries {
     pub uid: u64,
     pub name: String,
@@ -96,6 +103,24 @@ pub struct CoreSeries {
     pub total: f64,
     /// The core's trades over the whole period = sum of `per_bucket_trades`.
     pub trades: i64,
+    /// Trades with strictly positive profit; zero-profit trades count as losses.
+    pub wins: i64,
+    /// Sum of strictly positive trade profits over the period.
+    pub win_sum: f64,
+    /// Absolute sum of non-positive trade profits over the period.
+    pub loss_sum: f64,
+}
+
+impl CoreSeries {
+    /// Win percentage using the same rule as the period aggregate.
+    pub fn winrate(&self) -> f64 {
+        winrate(self.wins, self.trades)
+    }
+
+    /// Profit factor using the period aggregate's no-loss convention.
+    pub fn pf(&self) -> f64 {
+        profit_factor(self.win_sum, self.loss_sum)
+    }
 }
 
 /// Data for the Summary tab, returned as one aggregate result.
@@ -123,10 +148,6 @@ pub struct Summary {
     pub core_days: Vec<CoreSeries>,
     /// Most profitable selected-zone hour as `(hour, profit, trades)`.
     pub best_hour: Option<(u32, f64, i64)>,
-    /// Profit per strategy type, descending. Filled only for periods of one day or less.
-    /// The main series is hourly for those periods, daily through 400 days, and weekly
-    /// for periods longer than 400 days.
-    pub kinds: Vec<KindStat>,
     /// Cores found in the replica for the filter combo box, WITHOUT applying filters so a
     /// selection cannot collapse the list.
     pub cores: Vec<(u64, String)>,
@@ -694,7 +715,6 @@ pub(super) fn summary_on(
         &q,
         &axis,
         bucket,
-        one_day,
         has_strat_names,
     )?;
     let data = Summary {
@@ -708,7 +728,6 @@ pub(super) fn summary_on(
         strategies: parts.strategies,
         coins: parts.coins,
         best_hour: parts.best_hour,
-        kinds: parts.kinds,
         cores: if read_cores {
             super::distinct_cores(conn)?
         } else {

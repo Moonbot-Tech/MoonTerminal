@@ -149,7 +149,9 @@ impl AnalyticsView {
         // own schedule.
         if !after_report {
             self.data = ProfitLoadState::default();
+            self.data_as_of = None;
             self.summary_derived = None;
+            self.summary_catching_up = false;
         }
         // Presets keep their enum across civil rollovers while their resolved bounds slide, so
         // only the range can tell whether retained bucket hovers still name the same data.
@@ -160,12 +162,8 @@ impl AnalyticsView {
         if !after_report || range_moved {
             // Bucket indices are time-ordered and survive a same-scope catch-up, but a moved
             // range shifts their meaning without changing the preset enum.
-            self.hover_daily_bucket = None;
-            self.hover_cum_bucket = None;
+            self.hover_profit_bucket = None;
         }
-        // Kinds are profit-sorted on every read, so an existing index can name another kind even
-        // during a same-scope catch-up; a closed popup is safer than a silently wrong one.
-        self.hover_kind = None;
         self.seq = self.seq.wrapping_add(1);
         let req = self.seq;
         let report_req = self.current_report_generation();
@@ -209,7 +207,15 @@ impl AnalyticsView {
                     && this.keep_on_catch_up(after_report, data_outcome, report_req);
                 if !preserve_snapshot {
                     this.data.apply(data);
+                    this.data_as_of = Some(moon_core::util::now_unix_ms_i64() / 1000);
+                    if let Some(d) = this.data.data() {
+                        let present = d.core_days.iter().map(|c| c.uid).collect();
+                        this.summary_ui.retain_picks(&present);
+                    }
                 }
+                // Kept snapshot = a scheduled correction is still coming; a fresh publication
+                // (including an exhausted retry's) ends the catch-up.
+                this.summary_catching_up = preserve_snapshot;
                 this.data_dirty = refresh::report_result_is_stale(
                     report_req,
                     this.current_report_generation(),

@@ -786,7 +786,7 @@ pub(super) fn probe(key: &'static str, line: String) {
 ///
 /// Returns:
 ///     The full key of the form to draw.
-pub(in crate::analytics::tuner) fn plural_key(base: &str, n: usize) -> String {
+pub(in crate::analytics) fn plural_key(base: &str, n: usize) -> String {
     let form = if matches!(rust_i18n::locale().as_ref(), "ru" | "uk") {
         if (11..=14).contains(&(n % 100)) {
             "many"

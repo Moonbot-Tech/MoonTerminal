@@ -1,6 +1,6 @@
 //! Equality and invalidation proofs for the snapshot-owned Summary cache.
 
-use super::{DailyLabels, SummaryDerived, configured_colors, ensure_derived as refresh_derived};
+use super::{SummaryDerived, configured_colors, ensure_derived as refresh_derived};
 use crate::analytics::summary::tests::{
     old_colors, old_cumulative, synthetic_servers, synthetic_summary,
 };
@@ -65,37 +65,12 @@ fn bench_cumulative_derive_400x200() {
         std::hint::black_box((
             cached.cum.clone(),
             cached.pts.clone(),
-            cached.order.clone(),
-            cached.curves.clone(),
-            cached.vmin,
-            cached.vmax,
-            cached.swings.clone(),
+            cached.core_curves.clone(),
+            cached.peaks.clone(),
         ));
     }
     println!(
         "bench_cumulative_derive_400x200 after_us_per_iter={:.3}",
-        started.elapsed().as_secs_f64() * 1000.0
-    );
-}
-
-/// Reuse daily strings and width-keyed thinning; GUI font measurement remains outside timing.
-#[test]
-#[ignore]
-fn bench_daily_labels_400() {
-    let data = synthetic_summary();
-    let mut daily = DailyLabels::new(&data.days);
-    daily.ensure_texts(crate::analytics::pnl_suffix());
-    daily.ensure_labelled(48.0);
-    let started = std::time::Instant::now();
-    for _ in 0..1000 {
-        std::hint::black_box(daily.ensure_texts(crate::analytics::pnl_suffix()));
-        std::hint::black_box((
-            daily.texts.clone(),
-            daily.ensure_labelled(std::hint::black_box(48.0)),
-        ));
-    }
-    println!(
-        "bench_daily_labels_400 after_us_per_iter={:.3}",
         started.elapsed().as_secs_f64() * 1000.0
     );
 }
@@ -212,7 +187,7 @@ fn colours_recompute_only_for_new_snapshot_or_changed_rgb() {
 
 /// Moving f32 accumulation into an f64 sum or changing stable tie order distorts drawn curves.
 #[test]
-fn cumulative_cache_is_bit_equal_to_original_with_nan_and_absolute_ties() {
+fn cumulative_cache_is_bit_equal_to_original_with_nan() {
     let mut data = synthetic_summary();
     data.days[3].profit = f64::NAN;
     data.days[19].profit = f64::INFINITY;
@@ -221,7 +196,7 @@ fn cumulative_cache_is_bit_equal_to_original_with_nan_and_absolute_ties() {
     data.core_days[0].total = 1_000_000.0;
     data.core_days[1].total = -1_000_000.0;
     data.core_days[2].total = f64::NAN;
-    let (cum, pts, order, curves, vmin, vmax) = old_cumulative(&data);
+    let (cum, pts, curves) = old_cumulative(&data);
     let data = Arc::new(data);
     let mut cached = None;
     ensure_derived(
@@ -239,20 +214,13 @@ fn cumulative_cache_is_bit_equal_to_original_with_nan_and_absolute_ties() {
         cached.pts.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
         pts.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
     );
-    assert_eq!(cached.order.as_ref(), order);
-    assert_eq!(cached.curves.len(), curves.len());
-    for (actual, expected) in cached.curves.iter().zip(&curves) {
+    assert_eq!(cached.core_curves.len(), curves.len());
+    for (actual, expected) in cached.core_curves.iter().zip(&curves) {
         assert_eq!(
             actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
             expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
         );
     }
-    assert_eq!(cached.vmin.to_bits(), vmin.to_bits());
-    assert_eq!(cached.vmax.to_bits(), vmax.to_bits());
-    assert_eq!(
-        cached.swings.as_ref(),
-        crate::analytics::summary::cumulative::swing_labels(&pts)
-    );
 }
 
 /// Hover redraws and RGB edits must keep the expensive snapshot-only curves and legend order.
@@ -271,8 +239,7 @@ fn cumulative_hover_churn_derives_once_and_rgb_edit_keeps_curves() {
         ));
     }
     assert_eq!(count, 1);
-    let curves = cached.as_ref().unwrap().curves.clone();
-    let order = cached.as_ref().unwrap().order.clone();
+    let curves = cached.as_ref().unwrap().core_curves.clone();
     servers[0].1 = [250, 0, 0];
     assert!(ensure_derived(
         &mut cached,
@@ -280,8 +247,7 @@ fn cumulative_hover_churn_derives_once_and_rgb_edit_keeps_curves() {
         servers.iter().copied(),
         MoonPalette::LIGHT
     ));
-    assert!(Rc::ptr_eq(&curves, &cached.as_ref().unwrap().curves));
-    assert!(Rc::ptr_eq(&order, &cached.as_ref().unwrap().order));
+    assert!(Rc::ptr_eq(&curves, &cached.as_ref().unwrap().core_curves));
     let replacement = Arc::new((*data).clone());
     assert!(ensure_derived(
         &mut cached,
@@ -289,90 +255,43 @@ fn cumulative_hover_churn_derives_once_and_rgb_edit_keeps_curves() {
         servers.iter().copied(),
         MoonPalette::LIGHT
     ));
-    assert!(!Rc::ptr_eq(&curves, &cached.as_ref().unwrap().curves));
+    assert!(!Rc::ptr_eq(&curves, &cached.as_ref().unwrap().core_curves));
 }
 
-/// Omitting suffix invalidation mislabels percent bars; every render must still measure once.
+/// The drawdown marks sit on the deepest fall of a saw: trough at its bottom, peak at the running
+/// high just before it; a rising curve has no marks.
 #[test]
-fn daily_texts_match_original_formats_and_measure_cached_widest_each_render() {
-    let data = synthetic_summary();
-    let mut daily = DailyLabels::new(&data.days);
-    let mut text_derivations = 0;
-    for suffix in ["", "", "%", "%"] {
-        text_derivations += usize::from(daily.ensure_texts(suffix));
-        let expected: Vec<_> = data
-            .days
-            .iter()
-            .map(|d| format!("{}{}", moon_core::util::fmt::compact(d.profit, 0), suffix))
-            .collect();
-        assert_eq!(daily.texts.as_ref(), expected);
-        let expected_widest = expected
-            .iter()
-            .max_by_key(|text| text.chars().count())
-            .unwrap();
-        let calls = std::cell::Cell::new(0);
-        assert_eq!(
-            daily.label_w(|text| {
-                calls.set(calls.get() + 1);
-                assert_eq!(text, expected_widest);
-                text.chars().count() as f32 * 8.0
-            }),
-            expected_widest.chars().count() as f32 * 8.0
-        );
-        assert_eq!(calls.get(), 1);
-    }
-    assert_eq!(text_derivations, 2);
-    let empty = DailyLabels::new(&[]);
-    assert_eq!(
-        empty.label_w(|_| panic!("empty data must measure no label")),
-        0.0
-    );
+fn drawdown_marks_find_the_deepest_fall_of_a_saw() {
+    let saw = [0.0f32, 5.0, 2.0, 8.0, 1.0, 6.0, 4.0];
+    let (peaks, peak_ix, trough_ix) = super::drawdown_marks(&saw);
+    assert_eq!(&*peaks, &[0.0, 5.0, 5.0, 8.0, 8.0, 8.0, 8.0]);
+    assert_eq!((peak_ix, trough_ix), (Some(3), Some(4)));
+    assert_eq!(super::drawdown_marks(&[0.0, 1.0, 2.0]).1, None);
 }
 
-/// Reusing thinning across a width change lets labels collide after a font or theme change.
+/// Every core gets a cached curve (J1) and the
+/// day extremes point at the largest and smallest buckets; hover churn derives nothing again.
 #[test]
-fn daily_thinning_matches_old_algorithm_and_recomputes_only_for_width_or_snapshot() {
+fn every_core_curve_is_cached_once() {
     let data = Arc::new(synthetic_summary());
+    let servers = synthetic_servers();
     let mut cached = None;
-    ensure_derived(
-        &mut cached,
-        &data,
-        synthetic_servers().into_iter(),
-        MoonPalette::LIGHT,
-    );
-    let daily = &cached.as_ref().unwrap().daily;
-    let profits: Vec<_> = data.days.iter().map(|d| d.profit).collect();
-    let mut count = 0;
-    let mut first = None;
-    for width in [48.0, 48.0, 72.0, 72.0] {
-        let (actual, changed) = daily.ensure_labelled(width);
-        count += usize::from(changed);
-        let expected: std::collections::BTreeSet<_> =
-            crate::analytics::summary::charts::thinned_labels(
-                &profits,
-                crate::analytics::summary::charts::PLOT_W_NOMINAL,
-                width,
-            )
-            .into_iter()
-            .collect();
-        assert_eq!(*actual, expected);
-        if width == 48.0 {
-            if let Some(previous) = &first {
-                assert!(Rc::ptr_eq(previous, &actual));
-            }
-            first = Some(actual);
-        }
+    let mut derives = 0;
+    for _ in 0..50 {
+        derives += usize::from(ensure_derived(
+            &mut cached,
+            &data,
+            servers.iter().copied(),
+            MoonPalette::LIGHT,
+        ));
     }
-    assert_eq!(count, 2);
-    let replacement = Arc::new((*data).clone());
-    ensure_derived(
-        &mut cached,
-        &replacement,
-        synthetic_servers().into_iter(),
-        MoonPalette::LIGHT,
-    );
-    assert!(
-        cached.as_ref().unwrap().daily.ensure_labelled(72.0).1,
-        "new Arc must derive even at the same width"
-    );
+    assert_eq!(derives, 1);
+    let d = cached.as_ref().unwrap();
+    assert_eq!(d.core_curves.len(), data.core_days.len());
+    let profits: Vec<f64> = data.days.iter().map(|day| day.profit).collect();
+    let max = profits.iter().copied().fold(f64::MIN, f64::max);
+    let min = profits.iter().copied().fold(f64::MAX, f64::min);
+    assert_eq!(profits[d.day_max_ix.unwrap()], max);
+    assert_eq!(profits[d.day_min_ix.unwrap()], min);
+    assert_eq!(d.peaks.len(), d.pts.len());
 }

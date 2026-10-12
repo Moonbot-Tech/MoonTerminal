@@ -7,6 +7,57 @@ use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
 use super::*;
 
+/// Losing per-core win totals or treating zero profit as a win makes ranking KPIs
+/// disagree with the period, including the shared no-loss profit-factor convention.
+#[test]
+fn core_metrics_match_the_period_win_rule() {
+    let conn = Connection::open_in_memory().expect("in-memory database");
+    conn.execute_batch(
+        "CREATE TABLE current_rows(
+            closedate INTEGER, buydate INTEGER, pnl REAL, core_uid INTEGER,
+            core_name TEXT, coin TEXT, strategyid INTEGER, isshort INTEGER,
+            profitbtc REAL, spentbtc REAL, basecurrency INTEGER
+         );
+         INSERT INTO current_rows VALUES
+            (100, 90, 8.0, 11, 'XALPHA', 'XCOIN', 17, 0, 8.0, 20.0, 1),
+            (200, 190, -4.0, 11, 'XALPHA', 'XCOIN', 17, 0, -4.0, 20.0, 1),
+            (300, 290, 0.0, 11, 'XALPHA', 'XCOIN', 17, 0, 0.0, 20.0, 1),
+            (400, 390, 4.0, 11, 'XALPHA', 'XCOIN', 17, 0, 4.0, 20.0, 1),
+            (500, 490, 6.0, 22, 'XBETA', 'XCOIN', 27, 0, 6.0, 20.0, 1),
+            (600, 590, 0.0, 22, 'XBETA', 'XCOIN', 27, 0, 0.0, 20.0, 1);",
+    )
+    .expect("synthetic two-core stream");
+    let query = Query {
+        from: 1,
+        to: 700,
+        ..Default::default()
+    };
+    let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
+    let parts = read(&conn, source, None, &query, &query.axis, 3_600, false)
+        .expect("current-period stream");
+    let alpha = parts.core_days.iter().find(|core| core.uid == 11).unwrap();
+    let beta = parts.core_days.iter().find(|core| core.uid == 22).unwrap();
+
+    assert_eq!(
+        (alpha.name.as_str(), alpha.trades, alpha.wins),
+        ("XALPHA", 4, 2)
+    );
+    assert_eq!((alpha.win_sum, alpha.loss_sum), (12.0, 4.0));
+    assert_eq!((alpha.winrate(), alpha.pf()), (50.0, 3.0));
+    assert_eq!(
+        (beta.name.as_str(), beta.trades, beta.wins),
+        ("XBETA", 2, 1)
+    );
+    assert_eq!((beta.win_sum, beta.loss_sum), (6.0, 0.0));
+    assert_eq!((beta.winrate(), beta.pf()), (50.0, 99.0));
+    assert_eq!((parts.cur.n, parts.cur.wins, parts.cur.losses), (6, 3, 3));
+    assert_eq!((parts.cur.winrate(), parts.cur.pf), (50.0, 4.5));
+    assert_eq!(
+        parts.core_days.iter().map(|core| core.wins).sum::<i64>(),
+        parts.cur.wins
+    );
+}
+
 /// Serializes the process-global function-pointer trace sink used by rusqlite.
 static TRACE_GUARD: Mutex<()> = Mutex::new(());
 /// SQL statements executed while the local test connection has tracing enabled.
@@ -100,7 +151,7 @@ fn current_summary_rows_execute_multiple_bounded_statements() {
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
     conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
-    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, false);
+    let result = read(&conn, source, None, &query, &query.axis, 3_600, false);
     conn.trace_v2(TraceEventCodes::empty(), None);
     result.expect("bounded current-period stream");
 
@@ -163,17 +214,8 @@ fn current_summary_windows_cover_empty_short_exact_and_multi_periods_once() {
             to,
             ..Default::default()
         };
-        let result = read(
-            &conn,
-            source,
-            None,
-            &query,
-            &query.axis,
-            86_400,
-            false,
-            false,
-        )
-        .expect("bounded window fixture");
+        let result = read(&conn, source, None, &query, &query.axis, 86_400, false)
+            .expect("bounded window fixture");
         assert_eq!(result.cur.n, expected_rows, "period [{from}, {to})");
         assert_eq!(result.cur.profit, expected_profit, "period [{from}, {to})");
     }
@@ -218,7 +260,6 @@ fn multi_window_results_match_one_window_reference_across_boundary() {
         &query.axis,
         StreamReadConfig {
             bucket: 86_400,
-            include_kinds: false,
             has_names: false,
             query_window_secs: QUERY_WINDOW_SECS,
         },
@@ -232,7 +273,6 @@ fn multi_window_results_match_one_window_reference_across_boundary() {
         &query.axis,
         StreamReadConfig {
             bucket: 86_400,
-            include_kinds: false,
             has_names: false,
             query_window_secs: 3 * QUERY_WINDOW_SECS,
         },
@@ -304,7 +344,7 @@ fn shifted_two_core_rows_accumulate_in_true_utc_chronology() {
     };
     let source = "(SELECT * FROM current_rows WHERE ?1 <= ?2) o";
 
-    let result = read(&conn, source, None, &query, &axis, 3_600, false, false)
+    let result = read(&conn, source, None, &query, &axis, 3_600, false)
         .expect("shifted chronological stream");
 
     assert_eq!(result.cur.n, 3);
@@ -359,7 +399,7 @@ fn shifted_window_padding_keeps_extreme_historical_boundary_row() {
           WHERE closedate >= ?1 + {baked} AND closedate < ?2 + {baked}) o"
     );
 
-    let result = read(&conn, &source, None, &query, &axis, 86_400, false, false)
+    let result = read(&conn, &source, None, &query, &axis, 86_400, false)
         .expect("extreme shifted boundary remains in the exact outer window");
 
     assert_eq!(result.cur.n, 1);
@@ -479,28 +519,10 @@ fn equal_time_mixed_pnl_and_top_rows_ignore_union_planner_order() {
     let reverse = "(SELECT * FROM tie_b WHERE closedate >= ?1 AND closedate < ?2
                      UNION ALL
                      SELECT * FROM tie_a WHERE closedate >= ?1 AND closedate < ?2) o";
-    let left = read(
-        &conn,
-        forward,
-        None,
-        &query,
-        &query.axis,
-        3_600,
-        false,
-        false,
-    )
-    .expect("forward UNION result");
-    let right = read(
-        &conn,
-        reverse,
-        None,
-        &query,
-        &query.axis,
-        3_600,
-        false,
-        false,
-    )
-    .expect("reverse UNION result");
+    let left = read(&conn, forward, None, &query, &query.axis, 3_600, false)
+        .expect("forward UNION result");
+    let right = read(&conn, reverse, None, &query, &query.axis, 3_600, false)
+        .expect("reverse UNION result");
     let top = |rows: &[TopTrade]| {
         rows.iter()
             .map(|row| {
@@ -566,7 +588,7 @@ fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
     );
 
     conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
-    read(&conn, source, None, &query, &zero_axis, 3_600, true, false)
+    read(&conn, source, None, &query, &zero_axis, 3_600, false)
         .expect("zero-offset current-period stream");
     conn.trace_v2(TraceEventCodes::empty(), None);
     let zero_sql = TRACE_SQL
@@ -592,17 +614,8 @@ fn current_summary_ordering_uses_raw_dates_only_for_zero_offset_axes() {
         chrono_tz::UTC,
     );
     conn.trace_v2(TraceEventCodes::SQLITE_TRACE_STMT, Some(record_sql));
-    read(
-        &conn,
-        source,
-        None,
-        &query,
-        &shifted_axis,
-        3_600,
-        true,
-        false,
-    )
-    .expect("shifted current-period stream");
+    read(&conn, source, None, &query, &shifted_axis, 3_600, false)
+        .expect("shifted current-period stream");
     conn.trace_v2(TraceEventCodes::empty(), None);
     let shifted_sql = TRACE_SQL
         .lock()
@@ -636,7 +649,7 @@ fn textual_strategy_storage_keeps_group_and_top_fallbacks() {
     };
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
 
-    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, false)
+    let result = read(&conn, source, None, &query, &query.axis, 3_600, false)
         .expect("textual strategy remains readable");
 
     assert_eq!(result.strategies.len(), 1);
@@ -687,8 +700,8 @@ fn summary_strategy_rows_keep_identity_when_head_names_are_missing_or_blank() {
         ..Default::default()
     };
     let source = "(SELECT * FROM current_rows WHERE closedate >= ?1 AND closedate < ?2) o";
-    let result = read(&conn, source, None, &query, &query.axis, 3_600, true, true)
-        .expect("strategy-name summary");
+    let result =
+        read(&conn, source, None, &query, &query.axis, 3_600, true).expect("strategy-name summary");
 
     let row = |coin: &str| {
         result

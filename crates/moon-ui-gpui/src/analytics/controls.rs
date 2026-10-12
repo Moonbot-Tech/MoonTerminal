@@ -207,12 +207,89 @@ impl AnalyticsView {
     /// Returns:
     ///     Nothing; the current core selection is published and reloaded in place.
     pub(super) fn core_selection_changed(&mut self, cx: &mut Context<Self>) {
+        self.persist_core_selection(cx);
+        self.reload(cx);
+        cx.notify();
+    }
+
+    /// Publish the core selection and its caption to the session, without reloading.
+    ///
+    /// Args:
+    ///     cx: Analytics context owning the backend handle.
+    fn persist_core_selection(&mut self, cx: &mut Context<Self>) {
         let selected = self.sel_cores.clone();
         let core_caption = self.core_caption.clone();
         self.backend.update(cx, |b, _| {
             b.ui_session.analytics.sel_cores = selected;
             b.ui_session.analytics.core_caption = core_caption;
         });
+    }
+
+    /// Adopt a strategy mask text and write it to the layout, without reloading.
+    ///
+    /// Args:
+    ///     value: New mask text.
+    ///     cx: Analytics context owning the backend handle.
+    fn persist_strategy_mask(&mut self, value: String, cx: &mut Context<Self>) {
+        self.strategy_mask = value.clone();
+        self.backend.update(cx, |b, _| {
+            b.layout.analytics_strategy_mask = Some(value);
+            b.layout_dirty = true;
+        });
+    }
+
+    /// Switch the Summary's previous-period comparison; display only, so nothing reloads.
+    ///
+    /// Args:
+    ///     cx: Analytics context used to record the session choice and repaint.
+    pub(super) fn toggle_compare_prev(&mut self, cx: &mut Context<Self>) {
+        self.compare_prev = !self.compare_prev;
+        let compare = self.compare_prev;
+        self.backend.update(cx, |b, _| {
+            b.ui_session.analytics.compare_prev = compare;
+        });
+        cx.notify();
+    }
+
+    /// The Summary empty face's "Reset filters": side, order kind and strategy mask back to
+    /// their defaults and the core selection cleared, through the same field writes and
+    /// persistence as their own controls, then ONE reload for all of them. A pinned core filter
+    /// (Auto on a concrete core) is kept, as every core control keeps it.
+    ///
+    /// Args:
+    ///     window: Window owning the mask input, which is cleared too.
+    ///     cx: Analytics context used to persist and reload.
+    pub(super) fn reset_summary_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let plan = summary_reset_plan(
+            self.side,
+            self.emu,
+            &self.strategy_mask,
+            self.sel_cores.is_empty(),
+            self.core_filter_pinned(),
+        );
+        if !plan.any() {
+            return;
+        }
+        if plan.side {
+            self.side = SideFilter::All;
+        }
+        if plan.emu {
+            self.emu = None;
+        }
+        if plan.mask {
+            // `set_strategy_mask`'s persistence, without its own reload or debounce; the input's
+            // Change event then finds the text already adopted and does nothing.
+            self.persist_strategy_mask(String::new(), cx);
+            self.strategy_mask_debounce = None;
+            self.strategy_mask_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        if plan.cores {
+            // `core_selection_changed`'s session sync, without its own reload.
+            self.sel_cores.clear();
+            self.core_caption.manual_selection_changed();
+            self.persist_core_selection(cx);
+        }
         self.reload(cx);
         cx.notify();
     }
@@ -259,11 +336,7 @@ impl AnalyticsView {
             return;
         }
         if text_changed {
-            self.strategy_mask = value.clone();
-            self.backend.update(cx, |b, _| {
-                b.layout.analytics_strategy_mask = Some(value.clone());
-                b.layout_dirty = true;
-            });
+            self.persist_strategy_mask(value.clone(), cx);
         }
         // Any fresh decision retires whatever timer is still pending: dropping the task cancels it.
         self.strategy_mask_debounce = None;
@@ -384,3 +457,52 @@ impl AnalyticsView {
         cx.notify();
     }
 }
+
+/// Which Summary filters "Reset filters" changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct SummaryResetPlan {
+    /// Side goes back to All.
+    pub(super) side: bool,
+    /// Order kind goes back to all kinds.
+    pub(super) emu: bool,
+    /// The strategy mask is cleared.
+    pub(super) mask: bool,
+    /// The core selection is cleared.
+    pub(super) cores: bool,
+}
+
+impl SummaryResetPlan {
+    /// Whether anything changes, so the reset reads once or not at all.
+    pub(super) fn any(self) -> bool {
+        self.side || self.emu || self.mask || self.cores
+    }
+}
+
+/// Decide what "Reset filters" changes.
+///
+/// Args:
+///     side: Current side filter.
+///     emu: Current order-kind filter.
+///     mask: Current strategy mask text.
+///     cores_empty: Whether the retained core selection is already All.
+///     pinned: Whether the core filter is pinned by Auto; the pin is kept.
+///
+/// Returns:
+///     The fields that differ from their defaults; the core selection only when unpinned.
+pub(super) fn summary_reset_plan(
+    side: SideFilter,
+    emu: Option<bool>,
+    mask: &str,
+    cores_empty: bool,
+    pinned: bool,
+) -> SummaryResetPlan {
+    SummaryResetPlan {
+        side: side != SideFilter::All,
+        emu: emu.is_some(),
+        mask: !mask.is_empty(),
+        cores: !cores_empty && !pinned,
+    }
+}
+
+#[cfg(test)]
+mod tests;

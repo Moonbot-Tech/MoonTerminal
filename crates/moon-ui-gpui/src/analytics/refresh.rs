@@ -259,6 +259,19 @@ pub(super) fn preserve_on_catch_up(
     after_report && outcome == CatchUpOutcome::Transient && (retry_allowance || superseded)
 }
 
+/// Whether the Summary shows its catch-up banner.
+///
+/// Args:
+///     catching_up: The last Summary completion kept its snapshot under
+///         [`preserve_on_catch_up`] (a correction is scheduled).
+///     has_data: Figures are on screen.
+///
+/// Returns:
+///     `true` only while kept figures are on screen.
+pub(super) fn summary_catchup_banner(catching_up: bool, has_data: bool) -> bool {
+    catching_up && has_data
+}
+
 /// Decide whether the compact Strategies base may continue into its visible axis.
 ///
 /// The axis is a child of the compound base refresh. Starting it after a partial base failure

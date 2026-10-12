@@ -15,6 +15,7 @@ use super::{
     CoreSelectionCaption, KIND_TRIGGER_W, METRIC_TRIGGER_W, SIDE_TRIGGER_W, UndatedBanner,
     analytics_core_filter_ids, presets_row_fits, sole_core_name, undated_banner_state,
 };
+use super::{MetricChoice, chip_is_set, compare_label, summary_counter, whole_days};
 
 /// Read the font delta from the same presentation mapping used when installing the UI theme.
 fn presentation_font_deltas() -> [f32; 1] {
@@ -475,5 +476,70 @@ fn a_fresh_partially_hidden_implicit_all_query_uses_only_visible_configured_core
     assert_eq!(
         actual, expected,
         "a fresh partial scope must query exactly the configured cores it still shows"
+    );
+}
+
+/// A default filter must not light up as a set chip, and every changed one must.
+///
+/// Inverting one comparison makes the Summary chips claim a filter the user never set.
+#[test]
+fn summary_chips_light_up_only_for_non_default_filters() {
+    use moon_core::db::SideFilter;
+    assert_eq!(
+        chip_is_set(false, SideFilter::All, None, MetricChoice::Native),
+        [false; 4]
+    );
+    assert_eq!(
+        chip_is_set(true, SideFilter::Short, Some(false), MetricChoice::Percent),
+        [true; 4]
+    );
+    assert_eq!(
+        chip_is_set(false, SideFilter::All, None, MetricChoice::Usdt),
+        [false, false, false, true]
+    );
+}
+
+/// The comparison starts on in every fresh process; off by default would hide every delta.
+#[test]
+fn compare_with_the_previous_period_starts_on() {
+    assert!(AnalyticsSessionState::default().compare_prev);
+}
+
+/// Loading, failure and an empty period each get their own counter face on the Summary.
+#[test]
+fn summary_counter_faces() {
+    use super::super::ProfitLoadState;
+    use moon_core::db::ReadFail;
+    use std::sync::Arc;
+    let _locale = crate::test_locale::force("en");
+    let loading = summary_counter(&ProfitLoadState::Loading);
+    assert_eq!(loading, ("counting trades…".to_string(), true));
+    let failed = summary_counter(&ProfitLoadState::Failed(ReadFail::PeriodOutOfRange));
+    assert_eq!(failed, ("…".to_string(), true));
+    let empty = summary_counter(&ProfitLoadState::Ready {
+        unit: None,
+        data: Arc::new(moon_core::db::analytics::Summary::default()),
+    });
+    assert!(empty.0.contains('0') && !empty.1, "{empty:?}");
+}
+
+/// The toggle names whole days, survives a DST hour, and falls back for a partial range.
+#[test]
+fn compare_label_counts_whole_days() {
+    let _locale = crate::test_locale::force("en");
+    assert_eq!(whole_days((0, 30 * 86_400)), Some(30));
+    assert_eq!(whole_days((0, 30 * 86_400 - 3_600)), Some(30));
+    assert_eq!(whole_days((0, 5 * 3_600)), None);
+    assert_eq!(
+        compare_label((0, 86_400)),
+        "compare with the previous 1 day"
+    );
+    assert_eq!(
+        compare_label((0, 7 * 86_400)),
+        "compare with the previous 7 days"
+    );
+    assert_eq!(
+        compare_label((0, 3_600)),
+        "compare with the previous period"
     );
 }
