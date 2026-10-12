@@ -45,6 +45,16 @@ fn prose(text: String, color: u32, cx: &App) -> Div {
         .child(div().debug_selector(move || content.clone()).child(text))
 }
 
+/// A short label beside a sibling in a wrapping row: it never shrinks, so a narrow row wraps
+/// the label to the next line instead of folding its text into one glyph per line.
+fn label(text: String, color: u32, cx: &App) -> Div {
+    prose(text, color, cx)
+        .w_auto()
+        .min_w_auto()
+        .flex_none()
+        .whitespace_nowrap()
+}
+
 /// Give the layout probe a content-sized button using the active density tier.
 fn button(
     id: &'static str,
@@ -247,14 +257,17 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                     .flex_wrap()
                     .justify_between()
                     .gap(design::ui_px(cx, 8.0))
-                    .child(prose(progress_text(*done, *total, *points), p.text_muted, cx).w_auto())
+                    .child(label(
+                        progress_text(*done, *total, *points),
+                        p.text_muted,
+                        cx,
+                    ))
                     .children(left.map(|time| {
-                        prose(
+                        label(
                             t!("analytics.ticks.sum.left", time = duration_text(time)).to_string(),
                             p.text_muted,
                             cx,
                         )
-                        .w_auto()
                     })),
             )
             .child(h_flex().child(button(
@@ -279,7 +292,7 @@ pub(in crate::analytics::tuner) fn summary_card_el(
                     .flex_wrap()
                     .justify_between()
                     .gap(design::ui_px(cx, 8.0))
-                    .child(prose(head, p.text_muted, cx).w_auto())
+                    .child(label(head, p.text_muted, cx))
                     .child(
                         h_flex()
                             .gap(design::ui_px(cx, 16.0))

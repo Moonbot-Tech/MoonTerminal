@@ -498,9 +498,11 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         }
                         let m = model(face);
                         let mut prose = vec![m.sentence];
+                        // Short labels sit beside a sibling in a wrapping row; they must wrap the row, never their glyphs.
+                        let mut labels = Vec::new();
                         if face == 1 {
-                            prose.push(super::super::summary::progress_text(3, 11, 107));
-                            prose.push(
+                            labels.push(super::super::summary::progress_text(3, 11, 107));
+                            labels.push(
                                 t!(
                                     "analytics.ticks.sum.left",
                                     time = super::super::estimate::duration_text(
@@ -512,7 +514,7 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                         } else {
                             if m.train.is_some() || m.holdout.is_some() {
                                 let unit = crate::analytics::pnl_unit_label();
-                                prose.push(if unit.is_empty() {
+                                labels.push(if unit.is_empty() {
                                     t!("analytics.ticks.sum.profit_head").to_string()
                                 } else {
                                     format!("{}, {unit}", t!("analytics.ticks.sum.profit_head"))
@@ -539,6 +541,24 @@ fn the_ticks_column_fits_all_languages_themes_zooms_and_widths(cx: &mut gpui::Te
                                 prose.extend(m.details.into_iter().map(|(label, _)| label));
                             }
                         }
+                        for text in &labels {
+                            let content = visual
+                                .debug_bounds(selector(format!("an-ticks-prose-content-{text}")))
+                                .unwrap_or_else(|| panic!("missing label {text} ({at})"));
+                            let need = visual
+                                .update(|_, cx| design::ui_caption_text_width(cx, text, 400.0));
+                            assert!(
+                                f32::from(content.size.width) + 0.5 >= need,
+                                "label squeezed below one line ({at}): {text}: {:?} < {need}",
+                                content.size.width
+                            );
+                            assert!(
+                                content.size.height < line_height * 1.5,
+                                "label wrapped onto several lines ({at}): {text}: {:?}",
+                                content.size.height
+                            );
+                        }
+                        prose.extend(labels);
                         for text in prose {
                             let bounds = visual
                                 .debug_bounds(selector(format!("an-ticks-prose-{text}")))
