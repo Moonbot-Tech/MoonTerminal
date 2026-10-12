@@ -1,101 +1,67 @@
 //! Deleting what the "Data by core" table selected: the confirmation and the writers' round trip.
 
+use std::collections::BTreeSet;
+use std::rc::Rc;
+
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, MoonWindowExt as _, h_flex};
 use rust_i18n::t;
 
+use super::super::super::common::{Confirm, ConfirmBtn, ConfirmKind, confirm, count_label};
 use super::super::super::{SettingsView, StatusMsg};
-use super::{CoreCounts, CoreLine, DIALOG_ID, Group, Kinds, Line, WRITER_WAIT};
-use crate::design;
+use super::{
+    CoreCounts, CoreLine, Group, Kind, Kinds, Line, WRITER_WAIT, deletion_pairs, deletion_targets,
+};
 
 impl SettingsView {
-    /// Ask before deleting, naming the cores and what goes, with the counts.
+    /// Ask before deleting. The shared confirm dialog closes itself, then the delete runs.
+    ///
+    /// Args:
+    ///     window: Window the dialog opens over.
+    ///     cx: Settings view context.
     pub(super) fn core_data_confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let kinds = self.storage.core_data.kinds;
         let lines = self.core_data_lines(cx);
+        let targets = deletion_targets(&lines, &self.storage.core_data.selected);
+        if targets.is_empty() || !kinds.any() {
+            return;
+        }
+        let wanted: BTreeSet<u64> = targets.iter().map(|target| target.uid).collect();
         let chosen: Vec<CoreLine> = lines
             .into_iter()
-            .filter_map(|l| match l {
-                Line::Core(c)
-                    if c.selectable()
-                        && self.storage.core_data.selected.contains(&c.counts.uid) =>
-                {
-                    Some(c)
-                }
+            .filter_map(|line| match line {
+                Line::Core(core) if wanted.contains(&core.counts.uid) => Some(core),
                 _ => None,
             })
             .collect();
-        if chosen.is_empty() || !kinds.any() {
-            return;
-        }
         let summary = confirm_text(&chosen, kinds);
+        let body = format!("{}\n\n{}", t!("storage.core_data.delete_body"), summary);
         let view = cx.entity().downgrade();
-        let targets: Vec<u64> = chosen.iter().map(|c| c.counts.uid).collect();
-        window.open_unique_moon_dialog(DIALOG_ID, cx, move |dialog, _window, cx| {
-            let p = MoonPalette::active(cx);
-            let view = view.clone();
-            let targets = targets.clone();
-            let summary = summary.clone();
-            dialog
-                .w(px(460.0))
-                .close_button(true)
-                .overlay(true)
-                .overlay_closable(true)
-                .bg(rgb(p.shell_high))
-                .border_color(rgb(p.border))
-                .rounded(design::r_container(cx))
-                .text_color(rgb(p.text))
-                .header(
-                    div()
-                        .w_full()
-                        .py_2()
-                        .border_b_1()
-                        .border_color(rgb(p.border))
-                        .font_family(design::ui_font())
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(t!("storage.core_data_confirm_title").to_string()),
-                )
-                .content(move |content, _window, cx| {
-                    let p = MoonPalette::active(cx);
-                    content.child(
-                        div()
-                            .w_full()
-                            .font_family(design::ui_font())
-                            .text_size(design::t_body(cx))
-                            .text_color(rgb(p.text))
-                            .whitespace_normal()
-                            .child(summary.clone()),
-                    )
-                })
-                .footer(
-                    h_flex()
-                        .w_full()
-                        .gap_2()
-                        .justify_end()
-                        .child(
-                            MoonButton::new("core-data-delete-no")
-                                .outline()
-                                .mono(false)
-                                .label(format!("  {}  ", t!("dialogs.no")))
-                                .on_click(|_, window, cx| window.close_dialog(cx))
-                                .render(),
-                        )
-                        .child(
-                            MoonButton::new("core-data-delete-yes")
-                                .variant(MoonButtonVariant::Danger)
-                                .mono(false)
-                                .label(format!("  {}  ", t!("storage.core_data_delete_yes")))
-                                .on_click(move |_, window, cx| {
-                                    let targets = targets.clone();
-                                    let _ = view.update(cx, |this, cx| {
-                                        this.core_data_delete(&targets, kinds, cx);
-                                    });
-                                    window.close_dialog(cx);
-                                })
-                                .render(),
-                        ),
-                )
-        });
+        let uids: Vec<u64> = targets.iter().map(|target| target.uid).collect();
+        confirm(
+            window,
+            cx,
+            Confirm {
+                title: t!("storage.core_data.delete_title").to_string(),
+                body,
+                buttons: vec![
+                    ConfirmBtn {
+                        label: t!("dialogs.cancel").to_string(),
+                        kind: ConfirmKind::Cancel,
+                        on: Rc::new(|_, _| {}),
+                    },
+                    ConfirmBtn {
+                        label: t!("storage.core_data_delete_yes").to_string(),
+                        kind: ConfirmKind::DangerSolid,
+                        on: Rc::new(move |_, app| {
+                            let uids = uids.clone();
+                            let _ = view.update(app, |this, cx| {
+                                this.core_data_delete(&uids, kinds, cx);
+                            });
+                        }),
+                    },
+                ],
+            },
+        );
     }
 
     /// Delete the chosen stores for the chosen cores.
@@ -113,19 +79,28 @@ impl SettingsView {
             cx.notify();
             return;
         }
-        // Re-read at the moment of "Yes", not when the dialog opened: a catch-up may have started
-        // or the core may have joined or left Connections meanwhile.
-        let targets: Vec<(u64, Group)> = self
-            .core_data_lines(cx)
+        // The request the test pins, re-read at "Yes": a catch-up that started while the dialog
+        // was open drops that core.
+        let lines = self.core_data_lines(cx);
+        let wanted: BTreeSet<u64> = uids.iter().copied().collect();
+        let pairs = deletion_pairs(&lines, &wanted, kinds);
+        let archived: BTreeSet<u64> = deletion_targets(&lines, &wanted)
             .into_iter()
-            .filter_map(|l| match l {
-                Line::Core(c) if c.selectable() && uids.contains(&c.counts.uid) => {
-                    Some((c.counts.uid, c.group))
-                }
-                _ => None,
-            })
+            .filter(|target| target.group == Group::Archive)
+            .map(|target| target.uid)
             .collect();
-        if targets.is_empty() {
+        let of_kind = |kind: Kind| -> Vec<u64> {
+            pairs
+                .iter()
+                .filter(|(_, k)| *k == kind)
+                .map(|(uid, _)| *uid)
+                .collect()
+        };
+        let mut uids: Vec<u64> = pairs.iter().map(|(uid, _)| *uid).collect();
+        uids.dedup();
+        let strategy_uids = of_kind(Kind::Strategies);
+        let trace_uids = of_kind(Kind::Traces);
+        if pairs.is_empty() {
             self.status = Some((
                 StatusMsg::Text(t!("storage.core_data_nothing").to_string()),
                 true,
@@ -140,30 +115,27 @@ impl SettingsView {
         let mut warnings_failed: Option<String> = None;
         let report_sink = {
             let b = self.backend.read(cx);
-            for &(uid, group) in &targets {
-                if kinds.reports {
-                    let server = b.config.servers.iter().find(|s| s.uid == uid);
-                    // Only a core that replicates reports downloads them again; a core with the
-                    // report feed off keeps an empty replica, as it asked for.
-                    let resync = server
-                        .filter(|s| s.feed.reports)
-                        .and_then(|_| b.session.live_reports(uid));
-                    report_jobs.push((uid, resync, group == Group::Archive));
-                }
+            for uid in of_kind(Kind::Reports) {
+                let server = b.config.servers.iter().find(|s| s.uid == uid);
+                // Only a core that replicates reports downloads them again; a core with the
+                // report feed off keeps an empty replica, as it asked for.
+                let resync = server
+                    .filter(|s| s.feed.reports)
+                    .and_then(|_| b.session.live_reports(uid));
+                report_jobs.push((uid, resync, archived.contains(&uid)));
+            }
+            for uid in of_kind(Kind::Warnings) {
                 // On this thread because the backend owns the store's connection here, like every
                 // episode it inserts: 16 ms for the core with the most episodes (480) on a real
                 // store.
-                if kinds.warnings {
-                    match b.warn_store.as_ref().map(|w| w.forget_core(uid)) {
-                        Some(Ok(n)) => warnings_deleted += n,
-                        Some(Err(e)) => warnings_failed = Some(e.to_string()),
-                        None => {}
-                    }
+                match b.warn_store.as_ref().map(|w| w.forget_core(uid)) {
+                    Some(Ok(n)) => warnings_deleted += n,
+                    Some(Err(e)) => warnings_failed = Some(e.to_string()),
+                    None => {}
                 }
             }
             b.reports.as_ref().map(|h| h.tx.clone())
         };
-        let uids: Vec<u64> = targets.iter().map(|(uid, _)| *uid).collect();
         self.storage.core_data.selected.clear();
         self.storage.core_data.counts = None;
         self.storage_op(cx, "storage.op_core_delete", move || {
@@ -195,11 +167,11 @@ impl SettingsView {
                     }
                 }
             }
-            if kinds.strategies {
+            if !strategy_uids.is_empty() {
                 match moon_core::strat_db::sink() {
                     None => failed.push(t!("storage.core_data_col_strategies").to_string()),
                     Some(sink) => {
-                        for uid in &uids {
+                        for uid in &strategy_uids {
                             let ok = sink.forget_core(*uid).is_some_and(|rx| {
                                 matches!(rx.recv_timeout(WRITER_WAIT), Ok(Some(_)))
                             });
@@ -211,11 +183,11 @@ impl SettingsView {
                     }
                 }
             }
-            if kinds.traces {
+            if !trace_uids.is_empty() {
                 match moon_core::db::order_traces::sink() {
                     None => failed.push(t!("storage.core_data_col_traces").to_string()),
                     Some(sink) => {
-                        let waits: Vec<_> = uids
+                        let waits: Vec<_> = trace_uids
                             .iter()
                             .map(|uid| {
                                 let (done, rx) = std::sync::mpsc::sync_channel(1);
@@ -271,9 +243,9 @@ fn confirm_text(chosen: &[CoreLine], kinds: Kinds) -> String {
     out.push('\n');
     if kinds.reports {
         out.push('\n');
-        out.push_str(&t!(
+        out.push_str(&count_label(
             "storage.core_data_confirm_reports",
-            n = sum(|c| c.reports)
+            sum(|c| c.reports),
         ));
         if chosen.iter().any(|c| c.group != Group::Archive) {
             out.push(' ');
@@ -290,9 +262,9 @@ fn confirm_text(chosen: &[CoreLine], kinds: Kinds) -> String {
     }
     if kinds.traces {
         out.push('\n');
-        out.push_str(&t!(
+        out.push_str(&count_label(
             "storage.core_data_confirm_traces",
-            n = sum(|c| c.traces)
+            sum(|c| c.traces),
         ));
     }
     if kinds.warnings {

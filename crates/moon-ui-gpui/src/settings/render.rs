@@ -1,18 +1,41 @@
-//! Renders the Settings window: tab strip, the Interface and General inner switch, the active
-//! page, the Save/status footer, and the window header (`settings_header`).
+//! Renders the Settings window: page navigation (sidebar, or a picker in a narrow window), the
+//! active page with its header and save bar (`frame`), and the window header (`settings_header`).
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
+use std::rc::Rc;
+
 use moon_ui::{
-    MoonButton, MoonButtonSize, MoonButtonVariant, MoonPalette, MoonScrollAxis,
-    MoonScrollbarVisibility, MoonWindowFrame, h_flex, moon_scrollbar_overlay_with_palette,
-    rgba_from, v_flex,
+    MoonPalette, MoonScrollAxis, MoonScrollbarVisibility, MoonWindowFrame, h_flex,
+    moon_scrollbar_overlay_with_palette, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::groups::TabGroup;
+use super::frame;
+use super::nav::{self, NAV_BREAKPOINT};
 use super::{SETTINGS_HEADER_H, SettingsView, Tab};
 use crate::design;
+
+/// Inset of every page body, header and save bar, in unscaled pixels.
+pub(super) const BODY_PAD: f32 = 18.0;
+
+/// A callback that runs `f` on the Settings view, handed to the navigation and the save bar.
+fn handler<A: 'static>(
+    cx: &Context<SettingsView>,
+    f: impl Fn(&mut SettingsView, A, &mut Window, &mut Context<SettingsView>) + 'static,
+) -> Rc<dyn Fn(A, &mut Window, &mut App)> {
+    let view = cx.entity();
+    Rc::new(move |arg, window, app| view.update(app, |this, cx| f(this, arg, window, cx)))
+}
+
+/// [`handler`] for a plain click.
+fn click(
+    cx: &Context<SettingsView>,
+    f: impl Fn(&mut SettingsView, &mut Window, &mut Context<SettingsView>) + 'static,
+) -> frame::OnClick {
+    let run = handler(cx, move |this, (), window, cx| f(this, window, cx));
+    Rc::new(move |window, app| run((), window, app))
+}
 
 impl Render for SettingsView {
     /// Render the active Settings tab, its bounded or scrolling body, and the shared footer.
@@ -27,47 +50,50 @@ impl Render for SettingsView {
         crate::diag::bump(&crate::diag::SETTINGS_RENDER);
         // A finished station job clears the secrets typed for it: its inputs need the window.
         self.server_bot_sync(window, cx);
+        // "Save and close" waiting on the station closes or stays on its answer.
+        self.close_after_station_sync(window, cx);
         // The bot menu trees take a new button order before they render.
         self.bot_menu_sync(cx);
         // The picked chats' notification editors take their stored rows.
         self.chat_notify_sync(window, cx);
+        // The station tape's long-position field follows the station's reads.
+        self.server_tape_input_sync(window, cx);
         let p = MoonPalette::active(cx);
         let chrome_width = f32::from(window.viewport_size().width);
 
-        // ── Tab strip ───────────────────────────────────────────────────────
-        // Derive row capacity from the same resolved geometry as the buttons, so larger fonts
-        // and additional tabs cannot overflow the minimum Settings width.
-        const TAB_BUTTON_W: f32 = 110.0;
-        const TAB_GAP: f32 = 6.0;
-        const TAB_PAD_X: f32 = 8.0;
-        let tab_w = design::font_w(cx, TAB_BUTTON_W);
-        let gap = design::ui_value(cx, TAB_GAP);
-        let available = chrome_width - 2.0 * design::ui_value(cx, TAB_PAD_X);
-        let capacity = ((available + gap) / (tab_w + gap)).floor().max(1.0) as usize;
-        let row_h = design::fit_h_px(cx, 34.0, 13.0, 10.5);
-        let mut tabs = v_flex()
-            .w_full()
-            .bg(rgba_from(p.shell_high, 1.0))
-            .border_b_1()
-            .border_color(rgba_from(p.border, 1.0));
-        for row in TabGroup::ALL.chunks(capacity) {
-            tabs = tabs.child(self.tab_strip_row(row, row_h, tab_w, cx));
-        }
-        let subgroup = self.subgroup_switch(chrome_width, cx);
-
         // ── Active tab body ─────────────────────────────────────────────────
-        let content = match self.active {
-            Tab::Interface => self.interface_tab(cx).into_any_element(),
-            Tab::General => self.general_tab(cx).into_any_element(),
-            Tab::Hotkeys => self.hotkeys_tab(window, cx).into_any_element(),
-            Tab::Lines => self.lines_tab(cx).into_any_element(),
-            Tab::Badges => self.badges_tab(cx).into_any_element(),
-            Tab::Connections => self.connections_tab(cx).into_any_element(),
-            Tab::Storage => self.storage_tab(cx).into_any_element(),
-            Tab::Telegram => self.telegram_tab(chrome_width, cx).into_any_element(),
-            Tab::Station => self.station_tab(chrome_width, cx).into_any_element(),
-            Tab::TradeSounds => self.trade_sounds_tab(chrome_width, cx).into_any_element(),
+        // The body column is narrower than the window by the sidebar; pages that size their own
+        // column from the width get the width they actually have.
+        let narrow = chrome_width < NAV_BREAKPOINT;
+        let body_width = if narrow {
+            chrome_width
+        } else {
+            (chrome_width - design::ui_value(cx, nav::NAV_W)).max(0.0)
         };
+        let parts = match self.active {
+            Tab::Cores => self.cores_page(narrow, body_width, cx),
+            Tab::TgBot => self.tg_bot_page(body_width, cx),
+            Tab::TgCore => self.tg_core_page(body_width, cx),
+            Tab::StOverview => self.st_overview_page(body_width, cx),
+            Tab::Appearance => self.appearance_page(cx),
+            Tab::Lines => self.lines_page(cx),
+            Tab::Badges => self.badges_page(body_width, cx),
+            Tab::Hotkeys => self.hotkeys_page(window, cx),
+            Tab::General => self.general_page(cx),
+            Tab::Security => self.security_page(cx),
+            Tab::Storage => self.storage_page(cx),
+            Tab::Sounds => self.sounds_page(body_width, cx),
+            Tab::TgNotify => self.tg_notify_page(body_width, cx),
+            Tab::TgMessages => self.tg_messages_page(body_width, cx),
+            Tab::StCores => self.st_cores_page(body_width, cx),
+            Tab::StTape => self.st_tape_page(body_width, cx),
+            Tab::StMaint => self.st_maint_page(body_width, cx),
+        };
+        let frame::PageParts {
+            header,
+            body: content,
+            bar,
+        } = parts;
         // Keep the viewport bounded but measure its child at intrinsic height. The convenience
         // scrollbar wrapper forces its child to flex_1, so expanded descendants can overflow
         // that child's bounds without increasing the scroll extent.
@@ -78,7 +104,7 @@ impl Render for SettingsView {
         // its parent hands it. Trade sounds pins its folder block under the exchange table and
         // scrolls the table alone. Both tabs take `flex_1 + min_h_0` down to their list, matching
         // every other `MoonVirtualList` call site in this app. Every other tab is unaffected.
-        let bounded = matches!(self.active, Tab::Connections | Tab::TradeSounds);
+        let bounded = matches!(self.active, Tab::Cores | Tab::Sounds);
         let body_inner = if bounded {
             div()
                 .id("settings-body")
@@ -87,16 +113,16 @@ impl Render for SettingsView {
                 .flex()
                 .flex_col()
                 .min_h(px(0.0))
-                .p(design::ui_px(cx, 18.0))
+                .p(design::ui_px(cx, BODY_PAD))
                 .gap(design::ui_px(cx, 10.0))
                 .overflow_hidden()
                 // The Settings root flips to the UI face for prose; Connections holds a data
                 // table and chrome that must stay mono like every other data surface. Trade
                 // sounds sets its own faces per element.
-                .when(self.active == Tab::Connections, |el| {
+                .when(self.active == Tab::Cores, |el| {
                     el.font_family(design::mono())
                 })
-                .child(page_with_switch(subgroup, content, true, cx))
+                .child(content)
                 .into_any_element()
         } else {
             let scroll = window
@@ -107,11 +133,7 @@ impl Render for SettingsView {
                 .relative()
                 .size_full()
                 .bg(rgba_from(p.shell, 1.0))
-                .child(scrollable_tab_content(
-                    page_with_switch(subgroup, content, false, cx),
-                    &scroll,
-                    cx,
-                ))
+                .child(scrollable_tab_content(content, &scroll, cx))
                 .children(moon_scrollbar_overlay_with_palette(
                     "settings-body-scrollbar",
                     &scroll,
@@ -123,131 +145,77 @@ impl Render for SettingsView {
                 ))
                 .into_any_element()
         };
-        let body = div().flex_1().min_h(px(0.0)).w_full().child(body_inner);
-
-        // ── Footer: Save and status ─────────────────────────────────────────
-        // Whether Save has anything to do. TWO sources, because Save itself has two: the config
-        // draft, and the password draft that `security.rs` deliberately keeps outside `AppConfig`
-        // -- `save` applies the latter BEFORE the config write, so a password-only edit makes this
-        // very button write key slots to disk. `Some(Err(..))` counts as dirty too: the user typed
-        // a pair, Save will act on it and report the error, so "no changes" would be false there.
-        //
-        // The two are combined HERE and nowhere else, and `self.draft_dirty` is READ, never
-        // written. That field is the observer's own repaint memo and holds the config term ALONE
-        // (`settings/mod.rs`); folding the security term back into it made one field carry two
-        // different definitions, which broke both ways at once. A pending password left it stuck
-        // at `true`, so a later `transport` or `chart_bundle` edit -- the very fields
-        // `settings_sig` skips, and therefore the only ones this flag exists to catch -- found
-        // the observer already believing `true` and issued no repaint at all. In the other
-        // direction the observer wrote `false` back on the next backend notification and render
-        // wrote `true` again, repainting the whole window on every unrelated backend tick for as
-        // long as the password stayed pending. Reading the memo also drops two full `draft_sig`
-        // passes (56 servers serialized twice) from every render, including a plain tab switch.
-        let dirty = self.draft_dirty || self.security.has_pending_request(cx);
-
+        // ── Save bar ────────────────────────────────────────────────────────
         // Resolve status keys against the current locale here so a language change cannot leave
-        // text from the previous locale behind.
-        let status_el = match &self.status {
-            // A SUCCESS status is suppressed once the draft is dirty again: "Сохранено" beside a
-            // caption reading "есть несохранённые изменения" is a contradiction, and the stale
-            // half is the one that has to go. An ERROR status always stays -- it reports
-            // something that happened and was never superseded by a later edit.
-            Some((msg, err)) if *err || !dirty => {
-                let text = match msg {
+        // text from the previous locale behind. A SUCCESS status is dropped once the draft is
+        // dirty again: "Сохранено" over a bar naming unsaved pages is a contradiction, and the
+        // stale half is the one that has to go. An ERROR status always stays.
+        let dirty_pages = self.nav_dirty_pages(cx);
+        let dirty = self.config_unsaved(cx);
+        let status = match &self.status {
+            Some((msg, err)) if *err || !dirty => Some((
+                match msg {
                     super::StatusMsg::Key(k) => t!(*k).to_string(),
                     super::StatusMsg::Text(s) => s.clone(),
-                };
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgba_from(if *err { p.red } else { p.green }, 1.0))
-                    .child(text)
-            }
-            _ => div(),
+                },
+                *err,
+            )),
+            _ => None,
         };
-        let footer = h_flex()
-            .w_full()
-            .h(design::fit_h_px(cx, 42.0, 14.0, 14.0))
-            .gap(design::ui_px(cx, 10.0))
-            .px(design::ui_px(cx, 10.0))
-            .items_center()
-            .bg(rgba_from(p.shell_high, 1.0))
-            .border_t_1()
-            .border_color(rgba_from(p.border, 1.0))
-            .child(
-                MoonButton::new("save")
-                    // Primary while there is something to save, plain otherwise. NEVER disabled:
-                    // an always-enabled Save costs a redundant write at worst, while a disabled
-                    // one strands a user whose change the indicator failed to notice.
-                    .variant(if dirty {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Neutral
-                    })
-                    .label(t!("settings.save").to_string())
-                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx)))
-                    .render(),
-            )
-            .child(
-                // Both status captions yield to the content-sized action buttons at narrow widths.
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(rgba_from(p.text_muted, 1.0))
-                    .child(
-                        t!(if dirty {
-                            "settings.dirty"
-                        } else {
-                            "settings.clean"
-                        })
-                        .to_string(),
-                    ),
-            )
-            .child(status_el)
-            .child(div().flex_1())
-            // Put MoonBot import in the footer's right-hand area, which the General tab does not
-            // use for Copy/Paste, and expose its explanation through a tooltip.
-            .when(self.active == Tab::General, |f| {
-                f.child(
-                    div()
-                        .id("moonbot-import-tip")
-                        .tooltip(|_window, cx| {
-                            cx.new(|_| {
-                                moon_ui::MoonTooltipView::new(t!("import.hint").to_string())
-                                    .max_width(420.0)
-                            })
-                            .into()
-                        })
-                        .child(
-                            MoonButton::new("moonbot-import")
-                                .outline()
-                                .label(t!("import.button").to_string())
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.start_moonbot_import(cx)),
-                                )
-                                .render(),
-                        ),
-                )
-            })
-            // Offer Copy/Paste only on tabs with portable files: Interface, Lines, Badges, and
-            // Hotkeys. See `share.rs`.
-            .when(self.shareable(), |f| {
-                // Tier padding supplies the inset without extra label spaces consuming footer width.
-                f.child(
-                    MoonButton::new("share-copy")
-                        .outline()
-                        .label(t!("settings.copy").to_string())
-                        .on_click(cx.listener(|this, _, _, cx| this.copy_tab(cx)))
-                        .render(),
-                )
+        let on_save = click(cx, |this, window, cx| {
+            this.save(window, cx);
+        });
+        let on_revert = click(cx, |this, window, cx| this.revert_draft(window, cx));
+        let save_bar = frame::save_bar(bar, status, on_save, on_revert, cx);
+
+        let body = v_flex()
+            .flex_1()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .h_full()
+            .child(frame::page_header(header, narrow, cx))
+            .child(div().flex_1().min_h(px(0.0)).w_full().child(body_inner))
+            .children(save_bar);
+
+        // ── Navigation ──────────────────────────────────────────────────────
+        let main = if narrow {
+            let model = nav::nav_model("", dirty_pages, &self.nav_counts);
+            self.sync_nav_picker(&model, cx);
+            v_flex()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
+                .child(nav::nav_picker(&self.nav_pick, cx))
+                .child(body)
+                .into_any_element()
+        } else {
+            let query = self.nav_query.read(cx).value().to_string();
+            let model = nav::nav_model(&query, dirty_pages, &self.nav_counts);
+            let on_pick: nav::OnPick = handler(cx, |this, tab, _, cx| this.show_page(tab, cx));
+            let on_import = click(cx, |this, _, cx| this.start_moonbot_import(cx));
+            h_flex()
+                .flex_1()
+                .min_h(px(0.0))
+                .w_full()
+                .items_start()
                 .child(
-                    MoonButton::new("share-paste")
-                        .outline()
-                        .label(t!("settings.paste").to_string())
-                        .on_click(cx.listener(|this, _, window, cx| this.paste_tab(window, cx)))
-                        .render(),
+                    div()
+                        .h_full()
+                        .flex_none()
+                        .border_r_1()
+                        .border_color(rgba_from(p.border, 1.0))
+                        .child(nav::nav_sidebar(
+                            &model,
+                            self.active,
+                            &self.nav_query,
+                            on_pick,
+                            on_import,
+                            cx,
+                        )),
                 )
-            });
+                .child(body)
+                .into_any_element()
+        };
 
         v_flex()
             .size_full()
@@ -258,9 +226,7 @@ impl Render for SettingsView {
             .line_height(design::line_px(cx, 14.0))
             .text_color(rgba_from(p.text, 1.0))
             .child(settings_header(p, cx))
-            .child(tabs)
-            .child(body)
-            .child(footer)
+            .child(main)
             // Render the MoonBot import preview over the entire window body.
             .children(self.import_overlay(cx))
             .child(
@@ -275,121 +241,47 @@ impl Render for SettingsView {
 }
 
 impl SettingsView {
-    /// Build one tab-strip row of font-scaled tab buttons.
+    /// Show `page`.
     ///
-    /// Args:
-    ///     tabs: Slice of strip buttons to render in this row, in [`TabGroup::ALL`] order.
-    ///     row_h: Fitted row height matching the previous single-row strip.
-    ///     tab_w: Font-scaled tab button width, shared with the wrap threshold.
-    ///     cx: Settings context used for click handlers.
-    ///
-    /// Returns:
-    ///     One full-width tab row.
-    fn tab_strip_row(
-        &self,
-        tabs: &[TabGroup],
-        row_h: Pixels,
-        tab_w: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let mut row = h_flex()
-            .w_full()
-            .h(row_h)
-            .gap(design::ui_px(cx, 6.0))
-            .px(design::ui_px(cx, 8.0))
-            .bg(rgba_from(p.shell_high, 1.0));
-        for group in tabs.iter().copied() {
-            let on = self.active.group() == group;
-            row = row.child(
-                MoonButton::new(group.id())
-                    .variant(if on {
-                        MoonButtonVariant::Blue
-                    } else {
-                        MoonButtonVariant::Ghost
-                    })
-                    .size(MoonButtonSize::density(cx))
-                    .width(tab_w)
-                    .selected(on)
-                    .label(group.title())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.show_group(group, cx);
-                    }))
-                    .render(),
-            );
-        }
-        row
-    }
-
-    /// Show the page this strip button remembers, or its only page.
-    ///
-    /// Args:
-    ///     group: The button that was pressed.
-    ///     cx: Settings context notified after the page changes.
-    fn show_group(&mut self, group: TabGroup, cx: &mut Context<Self>) {
-        self.show_page(self.subpages.page(group), cx);
-    }
-
-    /// Show `page` and remember it when it belongs to a grouped button.
-    ///
-    /// A Hotkeys row hovered when that page goes away gets no leave event; the hover is cleared
-    /// on every page change so the popup cannot reappear on return. Opening Telegram still
-    /// refreshes the picked core.
+    /// Opening a Telegram page refreshes the picked core, and a station page asks the station for
+    /// its state.
     ///
     /// Args:
     ///     page: The page to show.
     ///     cx: Settings context notified after the page changes.
-    fn show_page(&mut self, page: Tab, cx: &mut Context<Self>) {
-        self.subpages.remember(page);
+    pub(super) fn show_page(&mut self, page: Tab, cx: &mut Context<Self>) {
         self.active = page;
-        self.hotkeys_hover_row = None;
-        if page == Tab::Telegram {
+        if matches!(page, Tab::TgBot | Tab::TgCore) {
             self.telegram_tab_activated(cx);
         }
-        if page == Tab::Station {
+        if matches!(
+            page,
+            Tab::StOverview | Tab::StCores | Tab::StTape | Tab::StMaint
+        ) {
             self.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
             // A catch-up already running starts its minute re-read now, not at the next answer.
             self.server_tape_sync(cx);
         }
+        self.nav_pick
+            .update(cx, |state, _| state.set_selected_value(&page));
         cx.notify();
     }
 
-    /// Inner switch for the active group, drawn with the same control as the Telegram tab.
+    /// Refill the narrow-window picker when a caption changed since the last frame.
     ///
-    /// Args:
-    ///     width: Viewport width passed through to the shared segment fitter.
-    ///     cx: Settings context used to build the control and its click handler.
-    ///
-    /// Returns:
-    ///     The switch when Interface or General is showing, otherwise nothing.
-    fn subgroup_switch(&mut self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let group = self.active.group();
-        if !group.has_switch() {
-            return None;
+    /// Refilling notifies the picker, so doing it every frame would repaint forever.
+    fn sync_nav_picker(&mut self, model: &nav::NavModel, cx: &mut Context<Self>) {
+        let labels: Vec<String> = model.items.iter().map(nav::picker_label).collect();
+        if labels == self.nav_pick_labels {
+            return;
         }
-        let pages = group.pages();
-        let labels: Vec<String> = pages.iter().copied().map(Tab::segment_title).collect();
-        let selected = pages
-            .iter()
-            .position(|page| *page == self.active)
-            .unwrap_or(0);
-        let view = cx.entity();
-        Some(
-            super::segment::settings_segment(
-                group.segment_id(),
-                &labels,
-                selected,
-                width,
-                move |index, _, _, app| {
-                    let Some(page) = group.pages().get(index).copied() else {
-                        return;
-                    };
-                    view.update(app, |this, cx| this.show_page(page, cx));
-                },
-                cx,
-            )
-            .into_any_element(),
-        )
+        self.nav_pick_labels = labels;
+        let items = nav::picker_items(model);
+        let active = self.active;
+        self.nav_pick.update(cx, |state, cx| {
+            state.set_items(items, cx);
+            state.set_selected_value(&active);
+        });
     }
 }
 
@@ -425,50 +317,13 @@ fn settings_header(p: MoonPalette, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Place the inner switch above a page, using the Telegram tab's 16-unit gap.
-///
-/// A bounded page (Trade sounds) needs the column to take the height the host already gave the
-/// page, so the exchange table still receives a finite height. A scrolling page keeps the
-/// column at its intrinsic height so the switch scrolls with the page, as Telegram's own
-/// switch does.
-///
-/// Args:
-///     switch: The inner switch, or `None` when this page's button has no sub-pages.
-///     content: The unchanged page body.
-///     fill: Whether the column must take the remaining height of a bounded host.
-///     cx: Application context used to scale the gap.
-///
-/// Returns:
-///     `content` unchanged when there is no switch, otherwise the switch stacked above it.
-fn page_with_switch(
-    switch: Option<AnyElement>,
-    content: AnyElement,
-    fill: bool,
-    cx: &App,
-) -> AnyElement {
-    let Some(switch) = switch else {
-        return content;
-    };
-    let mut column = v_flex()
-        .w_full()
-        .gap(design::ui_px(cx, 16.0))
-        .child(switch)
-        .child(content);
-    column = if fill {
-        column.flex_1().min_h(px(0.0))
-    } else {
-        column.flex_none()
-    };
-    column.into_any_element()
-}
-
 /// Measure the whole padded tab at intrinsic height inside a fixed scroll viewport.
 ///
 /// The direct non-flex child makes expanded descendants contribute to the scroll extent. A tab
 /// that narrows its column gives it an explicit width, never `w_full().max_w(..)`: the column's
 /// height is then measured with its wrapped text laid out at the full viewport width — fewer
 /// lines than it renders at the narrower width — and its end falls outside the scroll extent.
-fn scrollable_tab_content(
+pub(super) fn scrollable_tab_content(
     content: impl IntoElement,
     scroll: &ScrollHandle,
     cx: &App,
@@ -496,7 +351,7 @@ fn scrollable_tab_content(
             v_flex()
                 .w_full()
                 .flex_none()
-                .p(design::ui_px(cx, 18.0))
+                .p(design::ui_px(cx, BODY_PAD))
                 .gap(design::ui_px(cx, 10.0))
                 .child(content),
         )

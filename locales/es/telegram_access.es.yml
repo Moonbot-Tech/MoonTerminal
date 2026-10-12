@@ -7,7 +7,6 @@ telegram.access_owner_summary: "Propietario: todos los núcleos, acceso completo
 telegram.access_viewer_summary: "Observador: %{count} núcleos, solo lectura"
 telegram.access_waiting: "Observador: sin núcleos asignados ni acceso a datos"
 telegram.access_no_cores: "Aún no se han asignado núcleos a este chat. Pide al propietario que los seleccione en MoonTerminal: Ajustes → Telegram."
-telegram.access_edit: "Configurar"
 telegram.access_collapse: "Contraer"
 telegram.access_name: "Nombre del chat en el terminal"
 telegram.access_name_placeholder: "Por ejemplo, Alex — cliente"

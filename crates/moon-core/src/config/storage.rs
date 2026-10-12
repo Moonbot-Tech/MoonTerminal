@@ -103,8 +103,8 @@ pub const LONG_POSITION_MIN_RANGE: std::ops::RangeInclusive<u32> = 1..=120;
 /// so this is months of them for the reader who never touches the setting.
 pub const DEFAULT_TRADES_MAX_MB: u32 = 256;
 
-/// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage tab steps
-/// through this list rather than by a fixed amount, so the short end is fine-grained and the
+/// The values [`TradeReplayStoreCfg::margin_s`] may take, ascending: the Storage page and the
+/// station tape offer exactly this list as a pick rather than a fixed increment, so the short end is fine-grained and the
 /// long end coarse. The floor is 30 s — the tuner's run-up and tail
 /// (`trade_replay::MODEL_PAD_MS`): one setting sizes the chart's window, the close-time capture,
 /// the tuner's fetch and the cleanup alike, and none of them pads it behind the tab's back (the
@@ -202,13 +202,6 @@ pub fn clamp_long_position_min(minutes: u32) -> u32 {
     )
 }
 
-/// `minutes` moved by `delta` minutes, within [`LONG_POSITION_MIN_RANGE`] — the stepper of the
-/// long-position threshold, the terminal's and the station's.
-pub fn step_long_position_min(minutes: u32, delta: i32) -> u32 {
-    let moved = (i64::from(minutes) + i64::from(delta)).max(0);
-    clamp_long_position_min(u32::try_from(moved).unwrap_or(u32::MAX))
-}
-
 /// The step of [`TRADE_MARGIN_STEPS_S`] nearest to `secs` — the lower one when `secs` sits
 /// exactly between two (a migrated `margin_min = 45` lands on 30 minutes, not 60). Anything
 /// past the last step is the last step, anything under the first is the first.
@@ -224,26 +217,6 @@ pub fn snap_trade_margin_s(secs: u32) -> u32 {
         .copied()
         .min_by_key(|step| (step.abs_diff(secs), *step))
         .unwrap_or(DEFAULT_TRADE_MARGIN_S)
-}
-
-/// The step `delta` places away from `secs` in [`TRADE_MARGIN_STEPS_S`], from the step nearest
-/// to `secs`; the list's ends absorb the rest. What the Storage tab's stepper does.
-///
-/// Args:
-///     secs: The current margin in seconds.
-///     delta: How many steps to move, negative for shorter.
-///
-/// Returns:
-///     A member of [`TRADE_MARGIN_STEPS_S`].
-pub fn step_trade_margin_s(secs: u32, delta: i32) -> u32 {
-    let snapped = snap_trade_margin_s(secs);
-    let index = TRADE_MARGIN_STEPS_S
-        .iter()
-        .position(|&step| step == snapped)
-        .unwrap_or(0);
-    let last = TRADE_MARGIN_STEPS_S.len() - 1;
-    let target = (index as i64 + i64::from(delta)).clamp(0, last as i64) as usize;
-    TRADE_MARGIN_STEPS_S[target]
 }
 
 /// The `[strategies]` section for the local strategy and version database.

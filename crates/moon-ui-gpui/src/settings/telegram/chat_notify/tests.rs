@@ -1,4 +1,5 @@
-use super::{parse_amount, settings_from};
+use super::{Commit, commit_plan, may_switch, parse_amount, settings_from};
+use moon_core::station_api::ChatNotifyRow;
 use moon_core::telegram::notify::{CoreScope, NotifySettings};
 
 /// Reverting a shared checkbox caption to a period alone hides the delivery schedule from
@@ -53,4 +54,65 @@ fn the_fields_complete_the_draft() {
         settings_from(&none_picked, ["", "", "", "5", "", ""]),
         Err("telegram.mini_settings_err_cores")
     );
+}
+
+const F: [&str; 6] = ["50", "", "", "10", "", ""];
+
+fn stored(revision: u64) -> (i64, ChatNotifyRow) {
+    let settings = settings_from(&NotifySettings::default(), F).unwrap();
+    (7, ChatNotifyRow { settings, revision })
+}
+
+/// J7: an edit applies on change, against the revision the row was read at, so a row changed
+/// elsewhere meanwhile is refused by the bot instead of overwritten.
+#[test]
+fn a_change_saves_at_once_against_the_read_revision() {
+    let row = stored(41);
+    let fields = ["75", "", "", "10", "", ""];
+    match commit_plan(Some(&row), 7, &NotifySettings::default(), fields, false) {
+        Commit::Save(settings, revision) => {
+            assert_eq!(settings.trades.min_volume_usd, Some(75.0));
+            assert_eq!(revision, 41);
+        }
+        other => panic!("expected a save, got {other:?}"),
+    }
+}
+
+/// Nothing is sent when the editor holds the stored row, or belongs to another chat.
+#[test]
+fn an_unchanged_or_foreign_editor_sends_nothing() {
+    let row = stored(3);
+    let draft = NotifySettings::default();
+    assert_eq!(
+        commit_plan(Some(&row), 7, &draft, F, false),
+        Commit::Nothing
+    );
+    assert_eq!(
+        commit_plan(Some(&row), 8, &draft, ["1", "", "", "10", "", ""], false),
+        Commit::Nothing
+    );
+    assert_eq!(commit_plan(None, 7, &draft, F, false), Commit::Nothing);
+}
+
+/// A bad number or a busy station refuses visibly; the edits are not dropped silently.
+#[test]
+fn a_bad_field_or_busy_station_refuses() {
+    let row = stored(3);
+    let draft = NotifySettings::default();
+    assert!(matches!(
+        commit_plan(Some(&row), 7, &draft, ["abc", "", "", "10", "", ""], false),
+        Commit::Refuse(_)
+    ));
+    assert_eq!(
+        commit_plan(Some(&row), 7, &draft, ["99", "", "", "10", "", ""], true),
+        Commit::Refuse("telegram.mini_error_busy_station")
+    );
+}
+
+/// The picker leaves a chat only once its edits were taken.
+#[test]
+fn the_picker_stays_on_a_refused_or_sending_chat() {
+    assert!(may_switch(false, false));
+    assert!(!may_switch(true, false));
+    assert!(!may_switch(false, true));
 }

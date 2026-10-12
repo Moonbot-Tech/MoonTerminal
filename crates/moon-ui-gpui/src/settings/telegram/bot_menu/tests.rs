@@ -69,3 +69,95 @@ fn telegram_bot_menu_titles_identify_their_host() {
         "Station bot — Bot menu and notifications"
     );
 }
+
+/// A synthetic editor body: `n` rows of long text standing in for the real editor.
+fn stand_in(tag: &'static str, n: usize) -> gpui::AnyElement {
+    use gpui::{IntoElement, ParentElement, Styled};
+    gpui::div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .children((0..n).map(move |i| {
+            gpui::div().w_full().child(format!(
+                "{tag} synthetic row {i} with a long caption that wraps"
+            ))
+        }))
+        .into_any_element()
+}
+
+/// The Notifications page's box stays inside the body in every language at the default and the
+/// minimum window.
+#[gpui::test]
+fn the_notify_box_fits_the_body(cx: &mut gpui::TestAppContext) {
+    use super::box_column_el;
+    use crate::settings::layout_probe::{ProbeSpec, sweep};
+    use crate::settings::telegram::tests::Host;
+    sweep(
+        cx,
+        |_, _, (width, _)| Host {
+            width,
+            scroll: gpui::ScrollHandle::new(),
+            build: std::rc::Rc::new(|_, cx| {
+                box_column_el(
+                    "tgm-notify".into(),
+                    rust_i18n::t!("telegram.notify_editor.title").to_string(),
+                    stand_in("notify", 6),
+                    cx,
+                )
+            }),
+        },
+        |_| ProbeSpec {
+            container: "probe-body",
+            inside: vec!["bot-box-tgm-notify".into()],
+            last: Some("bot-box-tgm-notify".into()),
+            ..Default::default()
+        },
+    );
+}
+
+/// The Messages page's two columns sit side by side or stack, never overlap and never leave the
+/// body, in every language at the default and the minimum window.
+#[gpui::test]
+fn the_messages_columns_fit_the_body(cx: &mut gpui::TestAppContext) {
+    use super::{bot_columns_el, box_column_el};
+    use crate::settings::layout_probe::{ProbeSpec, sweep};
+    use crate::settings::telegram::tests::Host;
+    sweep(
+        cx,
+        |_, _, (width, _)| Host {
+            width,
+            scroll: gpui::ScrollHandle::new(),
+            build: std::rc::Rc::new(|_, cx| {
+                bot_columns_el(
+                    box_column_el(
+                        "tgms-keys".into(),
+                        rust_i18n::t!("telegram.settings.buttons").to_string(),
+                        stand_in("keys", 8),
+                        cx,
+                    ),
+                    box_column_el(
+                        "tgms-layout".into(),
+                        rust_i18n::t!("telegram.layout.tab_card").to_string(),
+                        stand_in("layout", 8),
+                        cx,
+                    ),
+                    cx,
+                )
+            }),
+        },
+        |_| ProbeSpec {
+            container: "probe-body",
+            inside: vec![
+                "bot-columns".into(),
+                "bot-box-tgms-keys".into(),
+                "bot-box-tgms-layout".into(),
+            ],
+            no_overlap: vec![vec![
+                "bot-box-tgms-keys".into(),
+                "bot-box-tgms-layout".into(),
+            ]],
+            last: Some("bot-columns".into()),
+            ..Default::default()
+        },
+    );
+}

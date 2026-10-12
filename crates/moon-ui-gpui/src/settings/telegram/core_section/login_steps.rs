@@ -21,6 +21,46 @@ use moon_core::feed::{
 
 use super::LOGOUT_DIALOG_ID;
 
+/// The login's four visual steps: phone, code, two-factor password, done.
+pub(super) const LOGIN_STEPS: usize = 4;
+
+/// Where a login state stands among the four steps, and the words for a state the steps alone
+/// do not name. Ready marks every step done. Email, registration and premium happen on the way
+/// from the phone to the password, so they stand on the code step; a QR login replaces the code.
+/// A transitional or unknown state names itself and stands on the first step: no input is
+/// guessed for it.
+///
+/// Args:
+///     step: The core's auth step.
+///
+/// Returns:
+///     The current step index (`LOGIN_STEPS` when done) and an optional locale key.
+pub(super) fn login_step(step: AuthStep) -> (usize, Option<&'static str>) {
+    match step {
+        AuthStep::WaitPhone => (0, None),
+        AuthStep::WaitCode | AuthStep::WaitQrConfirmation => (1, None),
+        AuthStep::WaitEmailAddress | AuthStep::WaitEmailCode => (1, Some("tgcore.steps.email")),
+        AuthStep::WaitRegistration => (1, Some("tgcore.steps.registration")),
+        AuthStep::WaitPremiumPurchase => (1, Some("tgcore.steps.premium_required")),
+        AuthStep::WaitPassword => (2, None),
+        AuthStep::Ready => (LOGIN_STEPS, None),
+        AuthStep::Transitional => (0, Some("tgcore.steps.waiting")),
+        AuthStep::Unknown => (0, Some("tgcore.steps.unknown")),
+    }
+}
+
+/// The four steps' captions.
+pub(super) fn login_labels() -> Vec<String> {
+    [
+        "tgcore.steps.phone",
+        "tgcore.steps.code",
+        "tgcore.steps.password",
+        "tgcore.steps.done",
+    ]
+    .map(|key| t!(key).to_string())
+    .to_vec()
+}
+
 impl SettingsView {
     pub(super) fn auth_block(
         &self,
@@ -40,7 +80,21 @@ impl SettingsView {
                     connection_label(&service.connection)
                 )),
         );
-        col = col.child(self.step_panel(core, service, muted, p, cx));
+        let (current, note) = login_step(auth_step(&service.auth_state));
+        col = col
+            .child(super::super::super::common::steps(
+                "tgcore-login-steps",
+                login_labels(),
+                current,
+            ))
+            .children(note.map(|key| {
+                div()
+                    .debug_selector(|| "tgcore-step-note".into())
+                    .font_family(design::ui_font())
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(t!(key).to_string())
+            }))
+            .child(self.step_panel(core, service, muted, p, cx));
         if let Some(err) = service.error.as_ref() {
             col = col.child(
                 div()
@@ -152,7 +206,7 @@ impl SettingsView {
                     .ghost()
                     .padding_x(12.0)
                     .mono(false)
-                    .label(t!("telegram_core.login_qr").to_string())
+                    .label(t!("tgcore.qr_login").to_string())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.send_telegram(
                             core,
@@ -754,7 +808,7 @@ impl SettingsView {
                         .justify_end()
                         .child(
                             MoonButton::new("telegram-core-logout-no")
-                                .outline()
+                                .variant(moon_ui::MoonButtonVariant::Neutral)
                                 .mono(false)
                                 .label(format!("  {}  ", t!("dialogs.no")))
                                 .on_click(move |_, window, cx| {
@@ -829,3 +883,6 @@ fn code_kind_line(ct: &CoreTelegramCodeType) -> String {
         _ => kind,
     }
 }
+
+#[cfg(test)]
+mod tests;

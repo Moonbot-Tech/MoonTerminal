@@ -148,10 +148,10 @@ fn a_margin_under_the_floor_loads_at_the_floor() {
     );
 }
 
-/// The step list is what the snap and the stepper agree on: every step snaps to itself, the
+/// The step list is what the snap and the pickers agree on: every step snaps to itself, the
 /// ends absorb what lies beyond them, and the default and the ceiling are both members.
 #[test]
-fn snap_and_step_walk_the_step_list() {
+fn snap_lands_on_the_step_list() {
     for &step in TRADE_MARGIN_STEPS_S {
         assert_eq!(snap_trade_margin_s(step), step);
     }
@@ -169,24 +169,6 @@ fn snap_and_step_walk_the_step_list() {
     assert_eq!(snap_trade_margin_s(62), 60);
     assert_eq!(snap_trade_margin_s(63), 60);
     assert_eq!(snap_trade_margin_s(u32::MAX), MAX_TRADE_MARGIN_S);
-
-    assert_eq!(step_trade_margin_s(900, 1), 1800);
-    assert_eq!(step_trade_margin_s(900, -1), 600);
-    assert_eq!(step_trade_margin_s(900, 3), 7200);
-    assert_eq!(
-        step_trade_margin_s(900, 4),
-        7200,
-        "the top absorbs the rest"
-    );
-    assert_eq!(step_trade_margin_s(30, -1), 30, "so does the bottom");
-    assert_eq!(step_trade_margin_s(60, 1), 180);
-    assert_eq!(step_trade_margin_s(60, -1), 30);
-    assert_eq!(
-        step_trade_margin_s(2700, 1),
-        3600,
-        "from the snapped step, 1800"
-    );
-    assert_eq!(step_trade_margin_s(2700, 0), 1800);
 }
 
 /// The core-archive autoload round-trips, and a file that carries only the venue switch — the
@@ -210,11 +192,10 @@ autoload_missing = true
     assert!(!back.trade_replay.autoload_cores);
 }
 
-/// The long-position stepper moves by minutes and stays inside the range, at both ends.
+/// A long-position threshold from the file or a field lands inside the range, at both ends.
 #[test]
-fn the_long_position_step_stays_in_range() {
-    assert_eq!(step_long_position_min(10, 5), 15);
-    assert_eq!(step_long_position_min(3, -5), 1);
-    assert_eq!(step_long_position_min(118, 5), 120);
-    assert_eq!(step_long_position_min(0, 0), 1);
+fn the_long_position_threshold_is_clamped_to_its_range() {
+    assert_eq!(clamp_long_position_min(15), 15);
+    assert_eq!(clamp_long_position_min(0), 1);
+    assert_eq!(clamp_long_position_min(500), 120);
 }

@@ -351,3 +351,164 @@ fn renaming_a_group_moves_all_of_its_cores() {
     // group window for the new name simply starts from defaults.
     assert!(specs.iter().any(|s| s.group == "G1" && s.num == 0));
 }
+
+/// Catches a revert that leaves anything a Save would write: the reverted draft of a config reads
+/// clean against that config, whatever the discarded draft held.
+#[test]
+fn reverted_draft_reads_clean_against_the_saved_config() {
+    let saved = moon_core::config::AppConfig::load(None, false).expect("test config");
+    let mut edited = saved.clone();
+    edited.log_to_file = !edited.log_to_file;
+    edited.theme.dark.bg[0] = edited.theme.dark.bg[0].wrapping_add(1);
+    assert!(crate::settings::draft_dirty(&saved, &edited));
+
+    let draft = super::reverted(&saved);
+    assert!(!crate::settings::draft_dirty(&saved, &draft));
+    assert_eq!(crate::settings::dirty_pages(&saved, &draft).len(), 0);
+}
+
+/// Catches a close that drops unsaved work silently, or a confirmed close that keeps asking.
+#[test]
+fn close_asks_only_for_unconfirmed_unsaved_work() {
+    use super::{CloseDecision, close_decision};
+    assert_eq!(close_decision(false, false), CloseDecision::Allow);
+    assert_eq!(close_decision(false, true), CloseDecision::Allow);
+    assert_eq!(close_decision(true, false), CloseDecision::Ask);
+    assert_eq!(close_decision(true, true), CloseDecision::Allow);
+}
+
+/// Catches Save reporting success over a refused password or a failed write: "Сохранить и
+/// закрыть" closes only on Saved, so either would close a window with work lost.
+#[test]
+fn save_outcome_is_saved_only_when_everything_persisted() {
+    use super::{SaveOutcome, save_outcome};
+    use crate::settings::security::SecurityApply;
+    let _locale = crate::test_locale::force("en");
+
+    assert_eq!(
+        save_outcome(&SecurityApply::Nothing, Ok(())),
+        SaveOutcome::Saved
+    );
+    assert_eq!(
+        save_outcome(&SecurityApply::Accepted, Ok(())),
+        SaveOutcome::Saved
+    );
+    assert!(matches!(
+        save_outcome(&SecurityApply::Rejected("security.err.mismatch"), Ok(())),
+        SaveOutcome::Rejected(_)
+    ));
+    for security in [
+        SecurityApply::Nothing,
+        SecurityApply::Accepted,
+        SecurityApply::Rejected("security.err.mismatch"),
+    ] {
+        assert_eq!(
+            save_outcome(&security, Err("disk full".into())),
+            SaveOutcome::WriteFailed("disk full".into())
+        );
+    }
+}
+
+/// Catches key material keeping a password no write stored (C2): a failed write rolls the slots
+/// back (the typed passwords stay for the retry), a successful one commits them, and a write with
+/// nothing accepted before it touches nothing.
+#[test]
+fn a_failed_write_rolls_accepted_key_slots_back() {
+    use crate::settings::security::{Settle, settle};
+    assert_eq!(settle(true, false), Settle::Rollback);
+    assert_eq!(settle(true, true), Settle::Commit);
+    assert_eq!(settle(false, false), Settle::Nothing);
+    assert_eq!(settle(false, true), Settle::Nothing);
+}
+
+/// Catches a revert that clears the typed passwords but leaves a checkbox flipped (C1): with the
+/// checkboxes back on what the file carries and the fields empty, neither block asks for anything,
+/// while the flipped state before the revert did.
+#[test]
+fn a_reverted_checkbox_leaves_no_password_request() {
+    use crate::settings::security::{Block, resolve};
+    let empty = String::new;
+    // A stored password unticked asks to remove it; ticked back by the revert, it asks nothing.
+    assert_eq!(
+        resolve(empty(), empty(), false, true, Block::Launch),
+        Ok(Some(None))
+    );
+    assert_eq!(
+        resolve(empty(), empty(), true, true, Block::Launch),
+        Ok(None)
+    );
+    // No password stored and the box ticked is an error; unticked by the revert, nothing.
+    assert!(resolve(empty(), empty(), true, false, Block::File).is_err());
+    assert_eq!(
+        resolve(empty(), empty(), false, false, Block::File),
+        Ok(None)
+    );
+}
+
+/// Catches unsaved work outside every page reading as a clean window (F1/F7): an edit only
+/// `draft_dirty` sees (e.g. `chart_memory_percent`) makes the bar dirty, Save enabled and close
+/// ask, with the generic sentence instead of an empty page list.
+#[test]
+fn unsaved_work_no_page_names_still_counts() {
+    use crate::settings::apply::{CloseDecision, close_body, close_decision};
+    use crate::settings::frame::{bar_dirty, has_unsaved};
+    let _locale = crate::test_locale::force("ru");
+    let dirty = has_unsaved(true, false, false);
+    assert!(dirty);
+    assert!(!has_unsaved(false, false, false));
+    assert!(
+        has_unsaved(false, false, true),
+        "a station draft counts too"
+    );
+    // The save bar reads the config part only: a station draft alone leaves it clean while the
+    // close request still asks.
+    assert!(!bar_dirty(false, false, true));
+    assert!(has_unsaved(false, false, true));
+    assert!(bar_dirty(true, false, true) && bar_dirty(false, true, false));
+    assert_eq!(
+        close_decision(has_unsaved(false, false, true), false),
+        CloseDecision::Ask
+    );
+    assert_eq!(close_decision(dirty, false), CloseDecision::Ask);
+    assert_eq!(
+        close_body(&[], true, false),
+        rust_i18n::t!("settings.close.body_other").to_string()
+    );
+    assert_eq!(
+        rust_i18n::t!("settings.close.body_other").to_string(),
+        "Есть несохранённые изменения. Закрыть без сохранения?"
+    );
+}
+
+/// Catches "Save and close" closing over a station draft that never reached the station (C3):
+/// the window waits for the station's answer, closes on success and stays on a refusal.
+#[test]
+fn save_and_close_waits_for_the_station_answer() {
+    use crate::settings::apply::{SaveClose, StationClose, close_body, save_close, station_close};
+    let _locale = crate::test_locale::force("ru");
+    assert_eq!(save_close(true, false, false), SaveClose::Close);
+    assert_eq!(save_close(true, true, true), SaveClose::WaitStation);
+    assert_eq!(save_close(true, true, false), SaveClose::StationNotStarted);
+    assert_eq!(save_close(false, true, true), SaveClose::Stay);
+
+    assert_eq!(station_close(true, None), StationClose::Wait);
+    assert_eq!(
+        station_close(true, Some(&Ok("ok".into()))),
+        StationClose::Wait
+    );
+    assert_eq!(
+        station_close(false, Some(&Ok("ok".into()))),
+        StationClose::Close
+    );
+    assert_eq!(
+        station_close(false, Some(&Err("refused".into()))),
+        StationClose::Stay(Some("refused".into()))
+    );
+    assert_eq!(station_close(false, None), StationClose::Stay(None));
+
+    let body = close_body(&[], false, true);
+    assert_eq!(
+        body,
+        rust_i18n::t!("settings.close.station_pending").to_string()
+    );
+}

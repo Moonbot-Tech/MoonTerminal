@@ -650,3 +650,33 @@ fn same_move_row(a: GestureSlot, b: GestureSlot) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// Rows that never fire because another holder takes their binding first, keyboard and mouse
+/// together; the number the Settings navigation shows beside Hotkeys.
+///
+/// Args:
+///     hotkeys: Draft hotkey layout.
+///
+/// Returns:
+///     How many rows carry a shadowed caption.
+pub(in crate::settings) fn conflict_count(hotkeys: &HotkeysConfig) -> u32 {
+    let clashes = Clashes::build(hotkeys);
+    let keys = KeySlot::all()
+        .into_iter()
+        .filter(|slot| {
+            clashes
+                .key(hotkeys, *slot)
+                .is_some_and(|c| c.severity == Severity::Shadowed)
+        })
+        .count();
+    let gestures = GestureSlot::all()
+        .into_iter()
+        .filter(|slot| {
+            clashes
+                .mouse(hotkeys, *slot)
+                .iter()
+                .any(|c| c.severity == Severity::Shadowed)
+        })
+        .count();
+    u32::try_from(keys + gestures).unwrap_or(u32::MAX)
+}

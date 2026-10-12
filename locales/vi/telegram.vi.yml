@@ -2,10 +2,7 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram.segment_terminal_bot: "Bot Telegram"
-telegram.segment_core_reader: "Telegram trên core"
 
-telegram.intro: "Nối bot của bạn và ghép chat để nhận báo cáo Telegram. Mini App bật riêng."
 telegram.state.connected: "Bot đã nối"
 telegram.pair_copy: "Chép lệnh"
 telegram.mini_copy_url: "Chép địa chỉ Mini App"
@@ -21,11 +18,6 @@ telegram.bot_mini_wait: "Mini App chưa dùng được. Xem trạng thái trong 
 telegram.bot_mini_disabled_station: "Mini App đang tắt trên trạm. Chủ trạm bật nó trong terminal: Cài đặt → Telegram, ô «Mini App trên máy chủ». Rồi gửi /miniapp."
 telegram.bot_mini_wait_station: "Mini App chưa dùng được: trạm vẫn đang mở lối vào. Gửi lại /miniapp sau một phút."
 
-telegram.tab: "Telegram"
-
-station.tab: "Trạm"
-
-telegram.server.on_station: "Bot chạy trên trạm, trên máy chủ Linux. Cài đặt, trạng thái và thao tác của trạm nằm ở tab Trạm."
 
 telegram.section_bot: "Bot của terminal này"
 telegram.section_mini_app: "Mini App"
@@ -38,8 +30,6 @@ telegram.onboarding: "Tạo bot: gửi /newbot tới @BotFather. Dán token và 
 telegram.mini_app: "Bật Mini App"
 telegram.mini_app_hint: "Sau khi lưu, gửi /miniapp để có nút mở. /start mở điều hướng báo cáo. Hãy để terminal chạy."
 
-telegram.paired_none: "Chưa ghép chat"
-telegram.paired_count: "Chat đã ghép: %{count}"
 
 telegram.state.disabled: "Đang tắt: đặt token bot để bật Telegram."
 telegram.state.unsaved: "Có thay đổi. Nhấn Lưu để áp dụng."
@@ -61,7 +51,6 @@ telegram.rate_limited: "Telegram giới hạn tốc độ: thử lại sau %{sec
 
 telegram.stopped: "Đã dừng"
 
-telegram.pair_code: "/pair %{code}\nGửi lệnh này cho bot trong chat riêng. Mã dùng một lần và hết hạn sau 10 phút."
 
 telegram.pair_new: "Lấy mã ghép"
 
@@ -237,7 +226,6 @@ telegram.server.transfer_hint: "Bot của terminal chuyển sang máy chủ: tok
 telegram.server.mini_app: "Mini App trên máy chủ"
 telegram.server.mini_app_hint: "Mini App đi qua đường hầm Cloudflare: nơi Cloudflare bị chặn thì nó không mở, hãy tắt ở đó. Bật tắt sẽ khởi động lại trạm."
 telegram.server.access_apply: "Áp dụng trên máy chủ"
-telegram.server.access_revert: "Bỏ sửa"
 telegram.server.groups_same: "Nhóm core trên trạm khớp với terminal: %{names}."
 telegram.server.groups_differ: "Nhóm core trên trạm: %{station} · trong terminal này: %{terminal}. Báo cáo theo core của bot dùng nhóm của trạm."
 telegram.server.groups_send: "Gửi nhóm lên trạm"
@@ -464,7 +452,6 @@ telegram.server.remove_unsupported: "Trình hỗ trợ đã cài không gỡ đ�
 telegram.server.removed: "Đã gỡ trạm và bí mật của nó khỏi máy chủ; terminal đã quên máy chủ."
 telegram.server.remove_unconfirmed: "Máy chủ không xác nhận đã gỡ trạm. Bản ghi quyền được giữ: kiểm tra dịch vụ và thử gỡ lại."
 telegram.server.remove_local_failed: "Đã gỡ trạm và bí mật khỏi máy chủ, nhưng terminal không quên được máy chủ. Bản ghi quyền được giữ."
-telegram.server.confirm: "Xác nhận"
 telegram.server.cancel: "Hủy"
 telegram.server.done: "Xong."
 telegram.server.needs_old_admin: "Máy chủ do bản cũ dựng: moon vẫn còn mật khẩu. Nhập một lần rồi thử lại — sau đó chỉ đăng nhập bằng khóa."
@@ -503,3 +490,27 @@ telegram.server.install_confirm: "Tin khóa này và cài"
 telegram.server.chats_hint: "Thêm chat bằng mã; chat đầu là chủ, các chat khác thấy core được gán sau khi Áp dụng trên máy chủ."
 telegram.server.cores_changed: "Trạm đã thay đổi — làm mới danh sách rồi thử lại."
 telegram.server.cores_not_configured: "Trạm chưa được cấu hình — cài đặt lại rồi gửi các core."
+
+# Settings redesign (phases 3-5)
+telegram.host.local: "Bot chạy trong terminal này"
+telegram.host.station: "Bot chạy trên trạm"
+telegram.where.label: "Bot chạy ở đâu"
+telegram.where.local: "Trong terminal, khi nó đang mở"
+telegram.where.move: "Chuyển sang trạm…"
+telegram.chats.col_chat: "Cuộc trò chuyện"
+telegram.chats.col_role: "Vai trò"
+telegram.chats.configure: "Thiết lập"
+telegram.chats.pair: "+ Kết nối cuộc trò chuyện"
+telegram.chats.unpair_all: "Ngắt mọi cuộc trò chuyện…"
+telegram.chats.unpair_title: "Ngắt mọi cuộc trò chuyện?"
+telegram.chats.unpair_body: "Bot sẽ ngừng trả lời ở đó. Muốn lấy lại cuộc trò chuyện thì phải kết nối lại."
+telegram.pair.hint: "Gửi mã cho bot trong cuộc trò chuyện cần dùng; nó sẽ hiện trong danh sách."
+telegram.notify.sec.closed: "Giao dịch đã đóng"
+telegram.notify.sec.core: "Trạng thái lõi"
+telegram.notify.sec.auto: "Báo cáo tự động"
+telegram.host.chats_n_one: "%{n} cuộc trò chuyện"
+telegram.host.chats_n_few: "%{n} cuộc trò chuyện"
+telegram.host.chats_n_many: "%{n} cuộc trò chuyện"
+telegram.maint.row_version: "Phiên bản"
+telegram.maint.row_resetup: "Cấu hình lại"
+telegram.maint.row_address: "Địa chỉ máy chủ"

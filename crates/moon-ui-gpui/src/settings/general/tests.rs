@@ -1,4 +1,4 @@
-//! Zoom presentation and zoom-caption regressions for the General tab.
+//! Zoom presentation and zoom-caption regressions, and the General page layout.
 
 use super::zoom_text;
 use moon_core::config::UiThemeMode;
@@ -69,4 +69,65 @@ fn experimental_modes_install_moonui_colour_roles_on_their_own_side() {
             "{mode:?} keeps its bundled palette theme"
         );
     }
+}
+
+/// The General page with every long help unfolded keeps its three sections apart, every row and
+/// control inside the body, and no unfolded help cut off, in every language at the default and
+/// the minimum window.
+#[gpui::test]
+fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
+    use super::probe_host::{all_open, host, stub};
+    use super::{GENERAL_ROWS, GeneralControls, general_body};
+    use crate::settings::layout_probe::{ProbeSpec, sweep};
+
+    sweep(
+        cx,
+        host(|_, cx| {
+            let controls = GeneralControls {
+                language: stub("probe-language", 220.0, 28.0),
+                valuation: stub("probe-valuation", 260.0, 28.0),
+                tab_per_core: stub("probe-split", 18.0, 18.0),
+                book_pan: stub("probe-pan", 18.0, 18.0),
+                idle_on: stub("probe-idle-on", 18.0, 18.0),
+                idle_secs: stub("probe-idle-secs", 130.0, 28.0),
+                log_files: stub("probe-logf", 18.0, 18.0),
+                retention: stub("probe-retention", 130.0, 28.0),
+            };
+            general_body(controls, &all_open, cx)
+        }),
+        |_| {
+            let mut inside: Vec<String> = GENERAL_ROWS.iter().map(|id| id.to_string()).collect();
+            inside.extend(
+                [
+                    "probe-language",
+                    "probe-valuation",
+                    "probe-idle-secs",
+                    "probe-retention",
+                ]
+                .map(String::from),
+            );
+            let wraps = [
+                ("general-valuation", "general.valuation.more"),
+                ("general-tab-per-core", "general.charts_split_by_core_hint"),
+                ("general-book-pan", "general.book_pan.more"),
+                ("general-idle", "general.main_idle_close_hint"),
+                ("general-retention", "general.log_retention_hint"),
+            ]
+            .map(|(id, key)| (format!("{id}-more-text"), rust_i18n::t!(key).to_string()))
+            .to_vec();
+            ProbeSpec {
+                container: "probe-body",
+                inside,
+                no_overlap: vec![
+                    ["general-sec-lang", "general-sec-charts", "general-sec-logs"]
+                        .map(String::from)
+                        .to_vec(),
+                    GENERAL_ROWS.map(String::from).to_vec(),
+                ],
+                wraps,
+                last: Some("general-sec-logs".into()),
+                ..Default::default()
+            }
+        },
+    );
 }

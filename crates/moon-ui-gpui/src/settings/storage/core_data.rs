@@ -14,17 +14,18 @@ use std::time::Duration;
 
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonButtonVariant, MoonCheckbox, MoonDisclosure, MoonDisclosureDirection,
-    MoonPalette, h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
+use super::super::SettingsView;
+use super::super::common::{Action, hint_row};
 use super::super::connections::{
     CONN_INDENT_MARGIN, CONN_INDENT_PAD, CONN_TABLE_INSET, ConnEntry, EntryLabels, ServerRowMeta,
     conn_row_h_value, flatten_entries, group_count, group_icon, group_name, group_pill,
     sorted_group_rows, subsection_header_row,
 };
-use super::super::{SettingsView, section};
+use super::super::telegram::plural_key;
 use crate::design;
 use moon_core::config::paths;
 
@@ -35,8 +36,6 @@ mod tests;
 
 /// How long a delete waits for each writer to confirm before reporting it as not confirmed.
 const WRITER_WAIT: Duration = Duration::from_secs(30);
-
-const DIALOG_ID: &str = "storage-core-data-delete";
 
 /// Widths of the count columns, in unscaled pixels: reports, strategies, traces, warnings, sync.
 const COUNT_COLS: [f32; 5] = [90.0, 110.0, 80.0, 80.0, 80.0];
@@ -71,9 +70,9 @@ impl Kinds {
 }
 
 /// Section state, kept on the Storage tab for the life of the Settings window.
+///
+/// The table is always on the page. There is no collapsed state.
 pub(in crate::settings) struct CoreDataEd {
-    /// Collapsed by default: the list is a maintenance tool, not something read every visit.
-    pub(super) expanded: bool,
     /// The counts, or why they could not be read; `None` until the first count lands.
     pub(super) counts: Option<Result<Vec<CoreCounts>, String>>,
     pub(super) inflight: bool,
@@ -84,7 +83,6 @@ pub(in crate::settings) struct CoreDataEd {
 impl Default for CoreDataEd {
     fn default() -> Self {
         Self {
-            expanded: false,
             counts: None,
             inflight: false,
             selected: BTreeSet::new(),
@@ -157,7 +155,7 @@ fn merge(
 
 /// Where a core stands relative to Connections, which is what decides what deleting it means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Group {
+pub(super) enum Group {
     /// Configured and ready: its reports download again after a delete.
     Connected,
     /// Configured, not ready now: its reports download on its next connection.
@@ -168,12 +166,12 @@ enum Group {
 
 /// One core as the list shows it.
 #[derive(Clone, Debug)]
-struct CoreLine {
-    counts: CoreCounts,
-    name: String,
-    group: Group,
+pub(super) struct CoreLine {
+    pub(super) counts: CoreCounts,
+    pub(super) name: String,
+    pub(super) group: Group,
     /// The running report catch-up's percent, `Some` while one runs on a ready core.
-    syncing: Option<String>,
+    pub(super) syncing: Option<String>,
 }
 
 impl CoreLine {
@@ -186,7 +184,7 @@ impl CoreLine {
 
 /// A list line: the Connections tree, then the cores that are not in Connections.
 #[derive(Clone, Debug)]
-enum Line {
+pub(super) enum Line {
     /// A window-group branch, with its cores for the group's checkbox.
     Group {
         name: String,
@@ -207,7 +205,7 @@ enum Line {
 ///
 /// `entries` is the Connections list's own flattening (`flatten_entries`), so groups, exchange
 /// sections and the core order are exactly the ones that tab shows.
-fn lines(
+pub(super) fn lines(
     entries: &[ConnEntry],
     mut cores: HashMap<u64, CoreLine>,
     archive_caption: &str,
@@ -289,7 +287,16 @@ fn count_cells(texts: [String; 5], color: u32, cx: &App) -> Div {
 }
 
 /// The column captions above the list, aligned with the rows below.
-fn head_row(p: MoonPalette, cx: &App) -> impl IntoElement {
+///
+/// Args:
+///     select_all: Header checkbox that selects every selectable core. Its label is the short
+///         "All" string, so the caption row stays one line.
+///     p: Active palette.
+///     cx: Application context for scale.
+///
+/// Returns:
+///     The caption row.
+fn head_row(select_all: impl IntoElement, p: MoonPalette, cx: &App) -> impl IntoElement {
     h_flex()
         .w_full()
         .items_center()
@@ -298,9 +305,12 @@ fn head_row(p: MoonPalette, cx: &App) -> impl IntoElement {
         .text_size(design::t_caption(cx))
         .text_color(rgb(p.text_muted))
         .child(
-            div()
+            h_flex()
                 .flex_1()
                 .min_w_0()
+                .gap(design::ui_px(cx, 6.0))
+                .items_center()
+                .child(select_all)
                 .child(t!("storage.core_data_col_core").to_string()),
         )
         .child(count_cells(
@@ -414,6 +424,94 @@ fn core_row(
         .border_color(rgb(p.border))
         .child(row)
         .into_any_element()
+}
+
+/// One core a delete may touch. `group` decides whether its reports come back.
+struct DeleteTarget {
+    uid: u64,
+    group: Group,
+}
+
+/// Selectable cores whose uid is in `selected`, in list order.
+///
+/// A core whose catch-up is running is left out even when its uid is in the set: selecting it
+/// would let a page from the old download land under the new one.
+///
+/// Args:
+///     lines: The table, including group and section rows.
+///     selected: Uids the checkboxes have on.
+///
+/// Returns:
+///     The cores the delete will name.
+fn deletion_targets(lines: &[Line], selected: &BTreeSet<u64>) -> Vec<DeleteTarget> {
+    lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Core(core) if core.selectable() && selected.contains(&core.counts.uid) => {
+                Some(DeleteTarget {
+                    uid: core.counts.uid,
+                    group: core.group,
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// One per-core store the table can delete from, in column order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Kind {
+    Reports,
+    Strategies,
+    Traces,
+    Warnings,
+}
+
+/// Kinds that are on, in column order: reports, strategies, traces, warnings.
+///
+/// Args:
+///     kinds: Which stores the request names.
+///
+/// Returns:
+///     The on kinds. Empty when every box is off.
+fn active_kinds(kinds: Kinds) -> Vec<Kind> {
+    [
+        (kinds.reports, Kind::Reports),
+        (kinds.strategies, Kind::Strategies),
+        (kinds.traces, Kind::Traces),
+        (kinds.warnings, Kind::Warnings),
+    ]
+    .into_iter()
+    .filter_map(|(on, kind)| on.then_some(kind))
+    .collect()
+}
+
+/// The delete request: each selected selectable core crossed with each kind that is on.
+///
+/// Args:
+///     lines: The table the checkboxes were drawn from.
+///     selected: Uids the user ticked, including ones a catch-up has since made untouchable.
+///     kinds: Which stores the request names.
+///
+/// Returns:
+///     `(uid, kind)` in list order, then kind order. A syncing core contributes nothing.
+fn deletion_pairs(lines: &[Line], selected: &BTreeSet<u64>, kinds: Kinds) -> Vec<(u64, Kind)> {
+    let kinds = active_kinds(kinds);
+    deletion_targets(lines, selected)
+        .into_iter()
+        .flat_map(|target| kinds.iter().copied().map(move |kind| (target.uid, kind)))
+        .collect()
+}
+
+/// "N cores selected" in the active language's plural form.
+///
+/// Args:
+///     n: How many selectable cores are in the selection.
+///
+/// Returns:
+///     The localized count line.
+fn selected_label(n: usize) -> String {
+    t!(&plural_key("storage.core_data.selected_n", n as u64), n = n).to_string()
 }
 
 impl SettingsView {
@@ -541,240 +639,268 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Render the section: a caret-headed title, and while expanded the toolbar, list and hint.
+    /// The core table, always on the page: selection, kind checkboxes and a confirmed delete.
+    /// Gathers the table's state; the layout is [`core_section_el`]'s.
+    ///
+    /// Args:
+    ///     cx: Settings view context.
+    ///
+    /// Returns:
+    ///     The section. A missing count shows the loading line and starts a refresh.
     pub(super) fn core_data_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        let muted = rgba_from(p.text_muted, 1.0);
-        let expanded = self.storage.core_data.expanded;
-        if expanded && self.storage.core_data.counts.is_none() {
+        if self.storage.core_data.counts.is_none() {
             self.core_data_refresh(cx);
         }
-        let caret = MoonDisclosure::button("core-data-caret", expanded)
-            .direction(MoonDisclosureDirection::DownUp)
-            .size(design::DISCLOSURE_GLYPH)
-            .box_size(design::DISCLOSURE_BOX)
-            .hover_color(p.text)
-            .on_toggle(cx.listener(|this, open: &bool, _, cx| {
-                this.storage.core_data.expanded = *open;
-                if *open {
-                    this.core_data_refresh(cx);
+        let lines = match &self.storage.core_data.counts {
+            None => None,
+            Some(Err(e)) => Some(Err(e.clone())),
+            Some(Ok(_)) => Some(Ok(Rc::new(self.core_data_lines(cx)))),
+        };
+        // Group icons, loaded here: `texture` needs `&mut self`.
+        let mut icons: HashMap<u32, Option<std::sync::Arc<RenderImage>>> = HashMap::new();
+        if let Some(Ok(lines)) = &lines {
+            for line in lines.iter() {
+                if let Line::Group { icon, .. } = line {
+                    icons
+                        .entry(*icon)
+                        .or_insert_with(|| self.icons.texture(*icon));
                 }
-                cx.notify();
-            }));
-        let header = h_flex()
-            .id("core-data-header")
-            .gap(design::ui_px(cx, 6.0))
-            .items_center()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
-                let open = !this.storage.core_data.expanded;
-                this.storage.core_data.expanded = open;
-                if open {
-                    this.core_data_refresh(cx);
-                }
-                cx.notify();
-            }))
-            .child(caret)
-            .child(section(&t!("storage.core_data_title"), p, cx));
-        let mut body = v_flex().w_full().gap_1().child(header);
-        if !expanded {
+            }
+        }
+        let view = CoreView {
+            lines,
+            selected: self.storage.core_data.selected.clone(),
+            kinds: self.storage.core_data.kinds,
+            busy: self.storage.busy,
+            icons,
+        };
+        let open = self.more_open.clone();
+        let ctx = super::StorageCtx {
+            weak: cx.entity().downgrade(),
+            open: &open,
+        };
+        core_section_el(&view, &ctx, cx)
+    }
+}
+
+/// What the core table draws, gathered by [`SettingsView::core_data_section`].
+pub(super) struct CoreView {
+    /// The table's lines; `None` while counting, `Err` when the count failed.
+    pub(super) lines: Option<Result<Rc<Vec<Line>>, String>>,
+    pub(super) selected: BTreeSet<u64>,
+    pub(super) kinds: Kinds,
+    /// A maintenance operation runs: Delete is disabled.
+    pub(super) busy: bool,
+    /// Group icon textures by icon id.
+    pub(super) icons: HashMap<u32, Option<std::sync::Arc<RenderImage>>>,
+}
+
+/// The core table: its title and help, the header with select-all, one line per group, section
+/// and core, and the footer with the kind boxes and Delete.
+pub(super) fn core_section_el(core: &CoreView, s: &super::StorageCtx, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let muted = rgba_from(p.text_muted, 1.0);
+    let open = s.open.contains("storage-core-hint");
+    let view = s.weak.clone();
+    let toggle: Action = Rc::new(move |_, app| {
+        let _ = view.update(app, |this, cx| {
+            if !this.more_open.remove("storage-core-hint") {
+                this.more_open.insert("storage-core-hint");
+            }
+            cx.notify();
+        });
+    });
+    let title = hint_row(
+        "storage-core-hint",
+        t!("storage.core_data.title").to_string(),
+        None,
+        Some(t!("storage.core_data_hint").to_string()),
+        div().into_any_element(),
+        open,
+        toggle,
+        cx,
+    );
+    let body = v_flex()
+        .id("storage-core")
+        .debug_selector(|| "storage-core".into())
+        .w_full()
+        .gap(design::ui_px(cx, 6.0))
+        .child(title);
+    let lines = match &core.lines {
+        None => {
             return body
                 .child(
                     div()
                         .text_color(muted)
-                        .child(t!("storage.core_data_collapsed_hint").to_string()),
+                        .child(t!("storage.core_data_loading").to_string()),
                 )
                 .into_any_element();
         }
-        let lines = match &self.storage.core_data.counts {
-            None => {
-                return body
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("storage.core_data_loading").to_string()),
-                    )
-                    .into_any_element();
-            }
-            Some(Err(e)) => {
-                return body
-                    .child(
-                        div()
-                            .text_color(rgb(p.red))
-                            .child(t!("storage.core_data_failed", err = e.clone()).to_string()),
-                    )
-                    .into_any_element();
-            }
-            Some(Ok(_)) => Rc::new(self.core_data_lines(cx)),
-        };
-        let selectable: Vec<u64> = lines
-            .iter()
-            .filter_map(|l| match l {
-                Line::Core(c) if c.selectable() => Some(c.counts.uid),
-                _ => None,
-            })
-            .collect();
-        let selected = self.storage.core_data.selected.clone();
-        let all_selected =
-            !selectable.is_empty() && selectable.iter().all(|u| selected.contains(u));
-        let kinds = self.storage.core_data.kinds;
-        let busy = self.storage.busy;
-        let can_delete = !busy && kinds.any() && !selected.is_empty();
+        Some(Err(e)) => {
+            return body
+                .child(
+                    div()
+                        .text_color(rgb(p.red))
+                        .child(t!("storage.core_data_failed", err = e.clone()).to_string()),
+                )
+                .into_any_element();
+        }
+        Some(Ok(lines)) => lines.clone(),
+    };
+    let selectable: Vec<u64> = lines
+        .iter()
+        .filter_map(|l| match l {
+            Line::Core(c) if c.selectable() => Some(c.counts.uid),
+            _ => None,
+        })
+        .collect();
+    let selected = core.selected.clone();
+    let chosen = deletion_targets(&lines, &selected);
+    let all_selected = !selectable.is_empty() && selectable.iter().all(|u| selected.contains(u));
+    let kinds = core.kinds;
+    let busy = core.busy;
+    let can_delete = !busy && kinds.any() && !chosen.is_empty();
 
-        let kind_box = |id: &'static str, label: String, on: bool, set: fn(&mut Kinds, bool)| {
-            MoonCheckbox::new(id)
-                .checked(on)
-                .label(label)
-                .on_change(cx.listener(move |this, v: &bool, _, cx| {
+    let kind_box = |id: &'static str, label: String, on: bool, set: fn(&mut Kinds, bool)| {
+        MoonCheckbox::new(id).checked(on).label(label).on_change({
+            let weak = s.weak.clone();
+            move |v: &bool, _, app| {
+                let _ = weak.update(app, |this, cx| {
                     set(&mut this.storage.core_data.kinds, *v);
                     cx.notify();
-                }))
-        };
-        let all_uids = selectable.clone();
-        let toolbar = h_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 12.0))
-            .items_center()
-            .flex_wrap()
-            .child(
-                MoonCheckbox::new("core-data-all")
-                    .checked(all_selected)
-                    .disabled(selectable.is_empty())
-                    .label(t!("storage.core_data_select_all").to_string())
-                    .on_change(cx.listener(move |this, v: &bool, _, cx| {
-                        this.storage.core_data.selected.clear();
-                        this.core_data_set(&all_uids, *v, cx);
-                    })),
-            )
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("storage.core_data_what").to_string()),
-            )
-            .child(kind_box(
-                "core-data-kind-reports",
-                t!("storage.core_data_col_reports").to_string(),
-                kinds.reports,
-                |k, v| k.reports = v,
-            ))
-            .child(kind_box(
-                "core-data-kind-strategies",
-                t!("storage.core_data_col_strategies").to_string(),
-                kinds.strategies,
-                |k, v| k.strategies = v,
-            ))
-            .child(kind_box(
-                "core-data-kind-traces",
-                t!("storage.core_data_col_traces").to_string(),
-                kinds.traces,
-                |k, v| k.traces = v,
-            ))
-            .child(kind_box(
-                "core-data-kind-warnings",
-                t!("storage.core_data_col_warnings").to_string(),
-                kinds.warnings,
-                |k, v| k.warnings = v,
-            ))
-            .child(
-                MoonButton::new("core-data-delete")
-                    .variant(MoonButtonVariant::Danger)
-                    .mono(false)
-                    .label(format!("  {}  ", t!("storage.core_data_delete")))
-                    .disabled(!can_delete)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.core_data_confirm(window, cx);
-                    }))
-                    .render(),
-            );
-
-        // Group icons, loaded first: `texture` needs `&mut self`, and the rows below are built
-        // while `cx` is borrowed as `&App`.
-        let mut icon_tex: HashMap<u32, Option<std::sync::Arc<RenderImage>>> = HashMap::new();
-        for line in lines.iter() {
-            if let Line::Group { icon, .. } = line {
-                icon_tex
-                    .entry(*icon)
-                    .or_insert_with(|| self.icons.texture(*icon));
+                });
             }
-        }
-        // Every line at full height, scrolled by the page: GPUI hands a wheel event to EVERY
-        // scrolling hitbox under the pointer (`should_handle_scroll` is a hit test, not "topmost"),
-        // so a list with a scroll of its own inside this scrolling page would move both at once.
-        // Connections avoids that with a bounded, non-scrolling page (`settings/render.rs`); this
-        // section shares its page with the rest of the Storage tab, so it does not scroll by itself.
-        let row_h = conn_row_h_value(cx);
-        let weak = cx.entity().downgrade();
-        let app: &App = cx;
-        let rows: Vec<AnyElement> = lines
-            .iter()
-            .map(|line| {
-                let p = MoonPalette::active(app);
-                let el = match line {
-                    Line::Group { name, icon, uids } => {
-                        let group_selectable: Vec<u64> = uids
-                            .iter()
-                            .copied()
-                            .filter(|u| selectable.contains(u))
-                            .collect();
-                        let all = !group_selectable.is_empty()
-                            && group_selectable.iter().all(|u| selected.contains(u));
-                        group_row(
-                            &weak,
-                            name,
-                            icon_tex.get(icon).cloned().flatten(),
-                            uids.len(),
-                            group_selectable,
-                            all,
-                            p,
-                            app,
-                        )
-                    }
-                    Line::Section {
-                        id,
-                        caption,
-                        count,
-                        highlighted,
-                    } => subsection_header_row(
-                        id.clone(),
-                        caption.clone(),
-                        *count,
-                        *highlighted,
+        })
+    };
+    let all_uids = selectable.clone();
+    let select_all = MoonCheckbox::new("core-data-all")
+        .checked(all_selected)
+        .disabled(selectable.is_empty())
+        .label(t!("storage.core_data_select_all").to_string())
+        .on_change({
+            let weak = s.weak.clone();
+            move |v: &bool, _, app| {
+                let _ = weak.update(app, |this, cx| {
+                    this.storage.core_data.selected.clear();
+                    this.core_data_set(&all_uids, *v, cx);
+                });
+            }
+        });
+    let footer = h_flex()
+        .w_full()
+        .gap(design::ui_px(cx, 12.0))
+        .items_center()
+        .flex_wrap()
+        .child(div().text_color(muted).child(selected_label(chosen.len())))
+        .child(
+            div()
+                .text_color(muted)
+                .child(t!("storage.core_data_what").to_string()),
+        )
+        .child(kind_box(
+            "core-data-kind-reports",
+            t!("storage.core_data_col_reports").to_string(),
+            kinds.reports,
+            |k, v| k.reports = v,
+        ))
+        .child(kind_box(
+            "core-data-kind-strategies",
+            t!("storage.core_data_col_strategies").to_string(),
+            kinds.strategies,
+            |k, v| k.strategies = v,
+        ))
+        .child(kind_box(
+            "core-data-kind-traces",
+            t!("storage.core_data_col_traces").to_string(),
+            kinds.traces,
+            |k, v| k.traces = v,
+        ))
+        .child(kind_box(
+            "core-data-kind-warnings",
+            t!("storage.core_data_col_warnings").to_string(),
+            kinds.warnings,
+            |k, v| k.warnings = v,
+        ))
+        .child(
+            MoonButton::new("core-data-delete")
+                .variant(MoonButtonVariant::Danger)
+                .mono(false)
+                .label(format!("  {}  ", t!("storage.core_data.delete")))
+                .disabled(!can_delete)
+                .on_click(s.click(|this, window, cx| {
+                    this.core_data_confirm(window, cx);
+                }))
+                .render(),
+        );
+    let header = head_row(select_all, p, cx);
+
+    // Every line at full height, scrolled by the page: GPUI hands a wheel event to EVERY
+    // scrolling hitbox under the pointer (`should_handle_scroll` is a hit test, not "topmost"),
+    // so a list with a scroll of its own inside this scrolling page would move both at once.
+    // Connections avoids that with a bounded, non-scrolling page (`settings/render.rs`); this
+    // section shares its page with the rest of the Storage tab, so it does not scroll by itself.
+    let row_h = conn_row_h_value(cx);
+    let weak = s.weak.clone();
+    let app: &App = cx;
+    let icon_tex = &core.icons;
+    let rows: Vec<AnyElement> = lines
+        .iter()
+        .map(|line| {
+            let p = MoonPalette::active(app);
+            let el = match line {
+                Line::Group { name, icon, uids } => {
+                    let group_selectable: Vec<u64> = uids
+                        .iter()
+                        .copied()
+                        .filter(|u| selectable.contains(u))
+                        .collect();
+                    let all = !group_selectable.is_empty()
+                        && group_selectable.iter().all(|u| selected.contains(u));
+                    group_row(
+                        &weak,
+                        name,
+                        icon_tex.get(icon).cloned().flatten(),
+                        uids.len(),
+                        group_selectable,
+                        all,
                         p,
                         app,
                     )
-                    .into_any_element(),
-                    Line::Core(core) => {
-                        core_row(&weak, core, selected.contains(&core.counts.uid), p, app)
-                    }
-                };
-                // Clipped like a virtual-list item: a narrow window cuts the count columns at the
-                // row's edge rather than letting them spill past it.
-                div()
-                    .relative()
-                    .overflow_hidden()
-                    .w_full()
-                    .h(px(row_h))
-                    .child(el)
-                    .into_any_element()
-            })
-            .collect();
+                }
+                Line::Section {
+                    id,
+                    caption,
+                    count,
+                    highlighted,
+                } => {
+                    subsection_header_row(id.clone(), caption.clone(), *count, *highlighted, p, app)
+                        .into_any_element()
+                }
+                Line::Core(core) => {
+                    core_row(&weak, core, selected.contains(&core.counts.uid), p, app)
+                }
+            };
+            // Clipped like a virtual-list item: a narrow window cuts the count columns at the
+            // row's edge rather than letting them spill past it.
+            div()
+                .relative()
+                .overflow_hidden()
+                .w_full()
+                .h(px(row_h))
+                .child(el)
+                .into_any_element()
+        })
+        .collect();
 
-        body = body
-            .child(toolbar)
-            .child(head_row(p, cx))
-            .child(if lines.is_empty() {
-                div()
-                    .text_color(muted)
-                    .child(t!("storage.core_data_empty").to_string())
-                    .into_any_element()
-            } else {
-                v_flex().w_full().children(rows).into_any_element()
-            })
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("storage.core_data_hint").to_string()),
-            );
-        body.into_any_element()
-    }
+    body.child(header)
+        .child(if lines.is_empty() {
+            div()
+                .text_color(muted)
+                .child(t!("storage.core_data_empty").to_string())
+                .into_any_element()
+        } else {
+            v_flex().w_full().children(rows).into_any_element()
+        })
+        .child(footer)
+        .into_any_element()
 }

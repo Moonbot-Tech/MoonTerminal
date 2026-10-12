@@ -4,7 +4,6 @@ _version: 1
 
 telegram_core.section: "Telegram на ядре"
 
-telegram_core.intro: "Управление встроенным Telegram-ридером выбранного ядра. Состояние принадлежит ядру, не этому терминалу."
 
 telegram_core.core_pick: "Ядро"
 
@@ -38,7 +37,6 @@ telegram_core.disconnected: "Ядро не подключено."
 
 telegram_core.no_snapshot: "Нет снимка состояния."
 
-telegram_core.proxy_section: "Прокси"
 
 telegram_core.proxy_kind_none: "Без прокси"
 
@@ -56,7 +54,6 @@ telegram_core.proxy_password: "Пароль"
 
 telegram_core.proxy_secret: "Секрет"
 
-telegram_core.proxy_save: "Сохранить прокси"
 
 telegram_core.proxy_secret_hint: "Ядро не возвращает сохранённый пароль или секрет — его нужно ввести снова. Пустое значение стирает его, а не оставляет прежнее."
 
@@ -73,7 +70,6 @@ telegram_core.phone_hint: "Международный формат, наприм
 
 telegram_core.phone_send: "Отправить номер"
 
-telegram_core.login_qr: "Войти по QR"
 
 telegram_core.login_phone: "Войти по номеру телефона"
 
@@ -184,3 +180,17 @@ telegram_core.code_kind.fragment: "Fragment: %{url}"
 telegram_core.code_kind.unsupported: "Этот способ доставки не поддерживается."
 
 telegram_core.code_kind.other: "%{kind}"
+
+# Settings redesign (phases 3-5)
+tgcore.steps.phone: "Номер телефона"
+tgcore.steps.code: "Код из Telegram"
+tgcore.steps.password: "Облачный пароль"
+tgcore.steps.done: "Подключено"
+tgcore.steps.email: "Почта для входа"
+tgcore.steps.registration: "Аккаунт не зарегистрирован"
+tgcore.steps.premium_required: "Нужен Telegram Premium"
+tgcore.steps.waiting: "Ждём ответа ядра…"
+tgcore.steps.unknown: "Неизвестный шаг входа"
+tgcore.qr_login: "Войти по QR-коду"
+tgcore.proxy.title: "Прокси"
+tgcore.proxy.send: "Отправить ядру"

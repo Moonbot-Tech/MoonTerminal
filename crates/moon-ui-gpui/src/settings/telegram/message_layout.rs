@@ -382,9 +382,6 @@ impl SettingsView {
                         ),
                     ),
             )
-            .when(side == ChatsOf::Station, |footer| {
-                footer.child(self.server_access_actions("tgl", cx))
-            })
             .when(side == ChatsOf::Terminal, |footer| {
                 footer.child(
                     div()

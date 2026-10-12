@@ -12,6 +12,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::super::SettingsView;
+use super::super::frame::{RemoteBar, SaveBar};
 use super::server_tape::plural_key;
 use crate::backend::station::{
     cores_sync::{self, Counts, Row, RowState},
@@ -74,6 +75,11 @@ fn action_id(verb: &str, surface: ActionSurface, index: usize) -> SharedString {
     SharedString::from(format!("station-core-{verb}-{surface}-{index}"))
 }
 
+/// How many rows differ between the terminal and the station: the page's count and its bar's.
+pub(super) fn diverging(rows: &[Row]) -> usize {
+    rows.iter().filter(|row| row.state.differs()).count()
+}
+
 /// Offer removal only for station-only entries when another station core remains.
 fn removable(row: &Row, station_count: usize) -> bool {
     row.state == RowState::OnlyOnStation && row.station_uid.is_some() && station_count > 1
@@ -94,6 +100,25 @@ fn retained_arm(armed: Option<RemovalArm>, rows: &[Row]) -> Option<RemovalArm> {
 
 /// Confirmation binds every visible part of the identity, not just a reused uid.
 pub(super) type RemovalArm = (u64, Option<String>, String);
+
+/// Whether a removal confirmed NOW may run, checked at the moment of "Yes" rather than when the
+/// dialog opened: the station must be idle and the row still listed, unchanged and removable.
+///
+/// Returns:
+///     `Err` with the locale key of the reason the job does not start.
+pub(super) fn removal_check(
+    busy: bool,
+    arm: &RemovalArm,
+    rows: &[Row],
+) -> Result<(), &'static str> {
+    if busy {
+        return Err("telegram.mini_error_busy_station");
+    }
+    if retained_arm(Some(arm.clone()), rows).is_none() {
+        return Err("telegram.server.cores_changed");
+    }
+    Ok(())
+}
 
 /// Comparison cache invalidates on the listing and the secret-free local config revision.
 #[derive(Default)]
@@ -148,7 +173,7 @@ pub(super) struct CoresSummary {
 fn cores_summary(rows: &[Row]) -> CoresSummary {
     CoresSummary {
         total: rows.len(),
-        differ: rows.iter().filter(|row| row.state.differs()).count(),
+        differ: diverging(rows),
     }
 }
 
@@ -547,42 +572,11 @@ pub(super) fn show_all_el(
         .into_any_element()
 }
 
-/// The block's tail: the push button only while something can be pushed, sized to its label;
-/// the station-only note under it; the last result only when there is one; then the sync note.
-pub(super) fn push_els(
-    push: Option<(usize, impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)>,
-    busy: bool,
-    only_station: bool,
-    result: Option<String>,
-    cx: &App,
-) -> Vec<AnyElement> {
+/// The block's tail: the last result only when there is one, then the sync note.
+pub(super) fn result_els(result: Option<String>, cx: &App) -> Vec<AnyElement> {
     let palette = MoonPalette::active(cx);
     let muted = rgba_from(palette.text_muted, 1.0);
     let mut els = Vec::new();
-    if let Some((pushable, on_push)) = push {
-        els.push(
-            h_flex()
-                .debug_selector(|| "station-cores-send-all".into())
-                .child(
-                    MoonButton::new("station-cores-send-all")
-                        .primary()
-                        .size(design::CONTROL_TIER)
-                        .label(t!("telegram.server.cores_send_all", n = pushable).to_string())
-                        .disabled(busy)
-                        .on_click(on_push)
-                        .render(),
-                )
-                .into_any_element(),
-        );
-        if only_station {
-            els.push(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.cores_send_all_hint").to_string())
-                    .into_any_element(),
-            );
-        }
-    }
     if let Some(result) = result.filter(|result| !result.is_empty()) {
         els.push(
             div()
@@ -753,7 +747,73 @@ pub(super) fn table_el(
 struct RowAt<'a>(usize, &'a Row, ActionSurface);
 
 impl SettingsView {
-    /// Clear stale confirmations after a listing change or any backend job starts.
+    /// How many cores differ between the terminal and the station, for the Station cores
+    /// page's navigation count; `None` while that is not known. Phase 4 fills it in.
+    pub(in crate::settings) fn station_diverging_count(&self, cx: &App) -> Option<u32> {
+        let seen = self.backend.read(cx).station.cores_seen.as_ref()?;
+        seen.as_ref()?;
+        Some(diverging(&self.telegram.server.cores_cache.rows) as u32)
+    }
+
+    /// The Station cores page's one send bar: how many cores differ, and the button that sends
+    /// every terminal core the station lacks or holds differently. Station-only cores are never
+    /// sent; they leave the station only through their own confirmed removal.
+    pub(in crate::settings) fn station_cores_bar(&self, cx: &Context<Self>) -> SaveBar {
+        let Some(target) = self.telegram.server.known().cloned() else {
+            return SaveBar::None;
+        };
+        let backend = self.backend.read(cx);
+        if !matches!(backend.station.cores_seen, Some(Some(_))) {
+            return SaveBar::None;
+        }
+        let ed = &self.telegram.server;
+        let rows = &ed.cores_cache.rows;
+        let n = diverging(rows);
+        let upsert = cores_sync::bulk(rows);
+        let busy = backend.station.busy();
+        let msg = if n == 0 {
+            t!("settings.mode.remote").to_string()
+        } else {
+            t!(&plural_key("station.cores.diverge_n", n as u64), n = n).to_string()
+        };
+        let eligible: Vec<_> = ed
+            .cores_cache
+            .local_revision
+            .iter()
+            .map(|core| core.uid)
+            .collect();
+        let dirty = !upsert.is_empty() && !busy;
+        let upsert_n = upsert.len();
+        let view = cx.entity().downgrade();
+        SaveBar::Remote(RemoteBar {
+            msg,
+            dirty,
+            apply: Rc::new(move |_, app| {
+                if upsert.is_empty() {
+                    return;
+                }
+                let job = Job::Cores {
+                    target: target.clone(),
+                    upsert: upsert.clone(),
+                    eligible: eligible.clone(),
+                    started: CoreStart::Bulk,
+                };
+                let _ = view.update(app, |this, cx| this.server_bot_run(Ok(job), cx));
+            }),
+            revert: None,
+            label: if upsert_n == 0 {
+                t!("telegram.server.access_apply").to_string()
+            } else {
+                t!(
+                    &plural_key("station.cores.send_n", upsert_n as u64),
+                    n = upsert_n
+                )
+                .to_string()
+            },
+        })
+    }
+
+    /// Refresh the comparison rows after a listing or local config change.
     pub(super) fn station_cores_sync(&mut self, cx: &App) {
         let backend = self.backend.read(cx);
         self.telegram.server.cores_cache.update(
@@ -761,14 +821,6 @@ impl SettingsView {
             cores_sync::local_cores(&backend.config),
             backend.station.core_uid_high_water,
         );
-        self.telegram.server.cores_armed = if backend.station.busy() {
-            None
-        } else {
-            retained_arm(
-                self.telegram.server.cores_armed.take(),
-                &self.telegram.server.cores_cache.rows,
-            )
-        };
     }
 
     /// Lead with the verdict and the differing cores; the full list stays folded behind a caret.
@@ -901,29 +953,15 @@ impl SettingsView {
                     .child(table_el(layout, shown, &ed.cores_scroll, cx));
             }
         }
-        let upsert = cores_sync::bulk(rows);
-        let target = target.clone();
-        let push = (!upsert.is_empty()).then(|| {
-            let on_push = cx.listener(move |this, _, _, cx| {
-                this.server_bot_run(
-                    Ok(Job::Cores {
-                        target: target.clone(),
-                        upsert: upsert.clone(),
-                        eligible: eligible.clone(),
-                        started: CoreStart::Bulk,
-                    }),
-                    cx,
-                );
-            });
-            (counts.pushable, on_push)
-        });
-        for el in push_els(
-            push,
-            busy,
-            counts.only_station != 0,
-            backend.station.cores_result.clone(),
-            cx,
-        ) {
+        // The send button lives in the page's bar; the station-only note stays with the list.
+        if counts.pushable != 0 && counts.only_station != 0 {
+            section = section.child(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.server.cores_send_all_hint").to_string()),
+            );
+        }
+        for el in result_els(backend.station.cores_result.clone(), cx) {
             section = section.child(el);
         }
         Some(section.into_any_element())
@@ -974,55 +1012,56 @@ impl SettingsView {
                     .render(),
             );
         } else if removable(row, station_count) {
-            let arm = (id, row.address.clone(), row.name.clone());
-            let armed = self.telegram.server.cores_armed.as_ref() == Some(&arm);
             let target = target.clone();
             let name = row.name.clone();
+            let address = row.address.clone();
             actions = actions.child(
                 MoonButton::new(action_id("remove", surface, index))
                     .danger()
                     .size(design::CONTROL_TIER)
-                    .label(
-                        t!(if armed {
-                            "telegram.server.cores_remove_confirm"
-                        } else {
-                            "telegram.server.cores_remove"
-                        })
-                        .to_string(),
-                    )
+                    .label(t!("telegram.server.cores_remove").to_string())
                     .disabled(busy)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.telegram.server.cores_armed.as_ref() == Some(&arm) {
-                            this.server_bot_run(
-                                Ok(Job::CoresRemove {
-                                    target: target.clone(),
-                                    uids: vec![id],
-                                    names: vec![name.clone()],
-                                    addresses: vec![arm.1.clone()],
-                                    eligible: eligible.clone(),
-                                }),
-                                cx,
-                            );
-                        } else {
-                            this.telegram.server.cores_armed = Some(arm.clone());
-                            cx.notify();
-                        }
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let view = cx.entity().downgrade();
+                        // The dialog runs the removal at most once.
+                        let job = std::cell::Cell::new(Some(Job::CoresRemove {
+                            target: target.clone(),
+                            uids: vec![id],
+                            names: vec![name.clone()],
+                            addresses: vec![address.clone()],
+                            eligible: eligible.clone(),
+                        }));
+                        let arm: RemovalArm = (id, address.clone(), name.clone());
+                        let body = match &address {
+                            Some(address) => format!("{name} · {address}"),
+                            None => name.clone(),
+                        };
+                        super::confirm_danger(
+                            window,
+                            cx,
+                            format!("{}?", t!("telegram.server.cores_remove")),
+                            body,
+                            t!("telegram.server.cores_remove_confirm").to_string(),
+                            Rc::new(move |_, app| {
+                                let Some(job) = job.take() else {
+                                    return;
+                                };
+                                let _ = view.update(app, |this, cx| {
+                                    this.station_cores_sync(cx);
+                                    let busy = this.backend.read(cx).station.busy();
+                                    let rows = &this.telegram.server.cores_cache.rows;
+                                    match removal_check(busy, &arm, rows) {
+                                        Ok(()) => this.server_bot_run(Ok(job), cx),
+                                        Err(key) => {
+                                            this.server_bot_run(Err(t!(key).to_string()), cx)
+                                        }
+                                    }
+                                });
+                            }),
+                        );
                     }))
                     .render(),
             );
-            if armed {
-                actions = actions.child(
-                    MoonButton::new(action_id("cancel", surface, index))
-                        .size(design::CONTROL_TIER)
-                        .label(t!("dialogs.cancel").to_string())
-                        .disabled(busy)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.telegram.server.cores_armed = None;
-                            cx.notify();
-                        }))
-                        .render(),
-                );
-            }
         }
         actions.into_any_element()
     }

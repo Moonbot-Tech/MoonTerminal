@@ -412,6 +412,45 @@ pub fn forget_other_machines() -> Result<(), AccessError> {
     Ok(())
 }
 
+/// The vault's slots and rewrite flag as they were at one moment, to put back when a change made
+/// after it is abandoned before it reached disk.
+///
+/// Opaque: the caller can only hand it back to [`restore_header`]. It holds no key, only slots.
+pub struct HeaderSnapshot(Option<(Header, bool)>);
+
+/// Redacted by hand like [`Material`]: slot bytes have no business in a log line.
+impl std::fmt::Debug for HeaderSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HeaderSnapshot(<redacted>)")
+    }
+}
+
+fn snapshot_of(vault: &Vault) -> HeaderSnapshot {
+    HeaderSnapshot(match vault {
+        Vault::Open(material) => Some((material.header.clone(), material.needs_rewrite)),
+        Vault::Unopened | Vault::Sealed(_) => None,
+    })
+}
+
+fn restore_into(vault: &mut Vault, snapshot: HeaderSnapshot) {
+    if let (Vault::Open(material), Some((header, needs_rewrite))) = (vault, snapshot.0) {
+        material.header = header;
+        material.needs_rewrite = needs_rewrite;
+    }
+}
+
+/// Take a [`HeaderSnapshot`] of the open vault; an unopened or sealed vault snapshots as nothing.
+pub fn header_snapshot() -> HeaderSnapshot {
+    snapshot_of(&vault())
+}
+
+/// Put back the slots and rewrite flag of `snapshot`. The file key is never touched, so this only
+/// undoes password and machine-slot edits made since the snapshot; a snapshot of an unopened
+/// vault, or a vault that is no longer open, changes nothing.
+pub fn restore_header(snapshot: HeaderSnapshot) {
+    restore_into(&mut vault(), snapshot);
+}
+
 /// Report what the loaded file says about access.
 pub fn access_state() -> AccessState {
     match &*vault() {

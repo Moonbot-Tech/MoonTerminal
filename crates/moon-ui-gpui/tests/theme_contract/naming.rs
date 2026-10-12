@@ -124,7 +124,7 @@ fn the_main_tab_row_labels_charts_from_the_panels_own_ticker() {
 /// Every visible exchange caption must come from the one venue-directory formatter.
 ///
 /// Removing it from `controls/core_combo.rs:core_combo`, `screener/view.rs:source_combo`,
-/// `chrome/terminal_chrome.rs:header`, `settings/connections/tab.rs:connections_tab`,
+/// `chrome/terminal_chrome.rs:header`, `settings/connections/page.rs:cores_page`,
 /// `profit_monitor/rows.rs:grouped_rows`, `panels/news/mod.rs:open_coin`,
 /// `panels/detects/cards.rs:chip` or `shell/workspace.rs:render_rail_item` puts a core build's own
 /// spelling back on that surface — which is how `Binance Quarterly` (COIN-M, code 6) rendered
@@ -143,7 +143,7 @@ fn current_exchange_surfaces_share_display_policy_without_changing_identity() {
             "crate::controls::venue_section_label(venue)",
         ),
         (
-            "settings/connections/tab.rs",
+            "settings/connections/page.rs",
             "crate::controls::venue_section_label(venue)",
         ),
         (

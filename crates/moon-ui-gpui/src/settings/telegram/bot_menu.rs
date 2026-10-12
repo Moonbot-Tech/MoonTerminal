@@ -98,6 +98,47 @@ fn bot_section_title(side: ChatsOf, station_host: &str, section: &str) -> String
     format!("{host} — {}", t!(section))
 }
 
+/// One column of a bot box under its own title; `id` keys the group box.
+pub(super) fn box_column_el(
+    id: SharedString,
+    title: String,
+    body: AnyElement,
+    cx: &App,
+) -> AnyElement {
+    let selector = format!("bot-box-{id}");
+    div()
+        .w_full()
+        .min_w(design::ui_px(cx, COLUMN_MIN_W))
+        .debug_selector(move || selector.clone())
+        .child(
+            MoonGroupBox::new(id)
+                .title(title)
+                .padding(12.0)
+                .gap(10.0)
+                .child(body),
+        )
+        .into_any_element()
+}
+
+/// Two bot columns side by side, stacked when both do not fit (the Messages page).
+pub(super) fn bot_columns_el(left: AnyElement, right: AnyElement, cx: &App) -> AnyElement {
+    let column = |child: AnyElement| {
+        div()
+            .flex_1()
+            .min_w(design::ui_px(cx, COLUMN_MIN_W))
+            .child(child)
+    };
+    h_flex()
+        .debug_selector(|| "bot-columns".into())
+        .w_full()
+        .flex_wrap()
+        .items_start()
+        .gap(design::ui_px(cx, 16.0))
+        .child(column(left))
+        .child(column(right))
+        .into_any_element()
+}
+
 /// One button as a row shows it.
 #[derive(Clone, Copy)]
 struct Row {
@@ -188,49 +229,50 @@ impl SettingsView {
         self.chats_edit(side, cx, |telegram| edit(&mut telegram.bot));
     }
 
-    /// The named host's bot box: the menu on the left, a chat's notifications on the right.
-    pub(in crate::settings) fn bot_menu_box(
+    /// One column of the named host's bot box, under its own title.
+    fn bot_box_column(
+        &self,
+        side: ChatsOf,
+        what: &str,
+        title_key: &str,
+        body: AnyElement,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let id: SharedString = match side {
+            ChatsOf::Terminal => format!("tgm-{what}").into(),
+            ChatsOf::Station => format!("tgms-{what}").into(),
+        };
+        box_column_el(id, self.bot_section_title(side, title_key), body, cx)
+    }
+
+    /// The named host's bot menu buttons (the Messages page).
+    pub(in crate::settings) fn bot_menu_keys_box(
         &self,
         side: ChatsOf,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let id = |what: &str| -> SharedString {
-            match side {
-                ChatsOf::Terminal => format!("tgm-{what}").into(),
-                ChatsOf::Station => format!("tgms-{what}").into(),
-            }
-        };
-        let column = |what: &str, key: &str, body: AnyElement| {
-            div().flex_1().min_w(design::ui_px(cx, COLUMN_MIN_W)).child(
-                MoonGroupBox::new(id(what))
-                    .title(t!(key).to_string())
-                    .padding(12.0)
-                    .gap(10.0)
-                    .child(body),
-            )
-        };
-        MoonGroupBox::new(id("box"))
-            .title(self.bot_section_title(side, "telegram.menu_editor.title"))
-            .padding(14.0)
-            .gap(10.0)
-            .child(
-                h_flex()
-                    .w_full()
-                    .flex_wrap()
-                    .items_start()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(column(
-                        "keys",
-                        "telegram.settings.buttons",
-                        self.bot_menu_keys(side, cx),
-                    ))
-                    .child(column(
-                        "notify",
-                        "telegram.notify_editor.title",
-                        self.chat_notify_column(side, cx),
-                    )),
-            )
-            .into_any_element()
+        self.bot_box_column(
+            side,
+            "keys",
+            "telegram.settings.buttons",
+            self.bot_menu_keys(side, cx),
+            cx,
+        )
+    }
+
+    /// The named host's per-chat notifications (the Notifications page).
+    pub(in crate::settings) fn bot_notify_box(
+        &self,
+        side: ChatsOf,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        self.bot_box_column(
+            side,
+            "notify",
+            "telegram.notify_editor.title",
+            self.chat_notify_column(side, cx),
+            cx,
+        )
     }
 
     /// The menu column for `side`, or a note when the station predates the menu.
@@ -371,14 +413,11 @@ impl SettingsView {
                     .child(t!("telegram.menu_editor.delivery").to_string()),
             )
             .when(side == ChatsOf::Station, |section| {
-                section
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.menu_editor.station_control_note").to_string()),
-                    )
-                    .children(self.station_groups_row(cx))
-                    .child(self.server_access_actions("server-menu", cx))
+                section.child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.menu_editor.station_control_note").to_string()),
+                )
             })
             .into_any_element()
     }

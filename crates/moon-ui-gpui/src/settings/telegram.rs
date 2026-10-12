@@ -10,12 +10,13 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex,
-    rgba_from, v_flex,
+    MoonAlert, MoonButton, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
+    h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::SettingsView;
+use super::frame::{PageParts, RemoteBar, SaveBar};
+use super::{SettingsView, Tab, common};
 use crate::{Backend, design};
 use moon_core::config::Secret;
 
@@ -32,22 +33,16 @@ mod server_tape;
 mod station_access;
 mod station_cores;
 mod station_groups;
+mod station_overview;
+
+pub(super) use server_tape::plural_key;
 
 /// Password-field width in unscaled pixels, matching the Security tab.
 const TOKEN_FIELD_W: f32 = 240.0;
 
-/// Session-only navigation; deliberately absent from configuration and draft signatures.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum TelegramSegment {
-    #[default]
-    TerminalBot,
-    CoreReader,
-}
-
-/// Per-window Telegram editors retained together while navigation changes the visible segment.
+/// Per-window Telegram editors, kept while the Telegram pages change.
 pub(super) struct TelegramEd {
-    segment: TelegramSegment,
-    token: Entity<MoonInputState>,
+    pub(super) token: Entity<MoonInputState>,
     /// The terminal bot's chat editor; one expanded chat keeps long client lists compact.
     chats: access::ChatEd,
     /// History candidates are independent of the draft grants so deselection is reversible.
@@ -64,13 +59,22 @@ pub(super) struct TelegramEd {
 }
 
 impl TelegramEd {
-    /// Change navigation only, preserving inputs and the selected core without sending commands.
-    fn select_segment(&mut self, segment: TelegramSegment) {
-        self.segment = segment;
+    /// Show the saved Telegram settings again after a revert.
+    ///
+    /// The token field takes the saved token. The open chat is closed so its caption field is
+    /// seeded from the draft when it is reopened; the menu tree and card editor re-read the draft
+    /// on their own (`bot_menu_sync`, the layout preview).
+    pub(super) fn reseed(&mut self, token: String, window: &mut Window, cx: &mut App) {
+        self.token
+            .update(cx, |state, cx| state.set_value(token, window, cx));
+        self.chats.active_chat = None;
+        self.chats.pending_owner = None;
+        self.server.chats.active_chat = None;
+        self.server.chats.pending_owner = None;
     }
 }
 
-/// Build retained editors bound to the Settings draft, initially showing the terminal bot.
+/// Build retained editors bound to the Settings draft.
 ///
 /// Args:
 ///     backend: Settings backend that owns the draft configuration.
@@ -110,7 +114,6 @@ pub(super) fn build(
     })
     .detach();
     let ed = TelegramEd {
-        segment: TelegramSegment::default(),
         token,
         chats: access::ChatEd::new(window, cx),
         history_cores: Vec::new(),
@@ -127,103 +130,246 @@ pub(super) fn build(
     ed
 }
 
+/// Which bot the Telegram pages edit: the station's when one is known, else the terminal's.
+/// One UI serves both; only where an edit goes differs.
+pub(super) fn bot_host(station_known: bool) -> access::ChatsOf {
+    if station_known {
+        access::ChatsOf::Station
+    } else {
+        access::ChatsOf::Terminal
+    }
+}
+
+/// The host line's words: where the bot runs and how many chats it serves.
+pub(super) fn host_words(side: access::ChatsOf, chats: usize) -> String {
+    let host = match side {
+        access::ChatsOf::Terminal => t!("telegram.host.local"),
+        access::ChatsOf::Station => t!("telegram.host.station"),
+    };
+    let n = chats as u64;
+    let chats = t!(&plural_key("telegram.host.chats_n", n), n = n);
+    format!("{host} · {chats}")
+}
+
+/// A disclosure toggle for rows that carry no long help.
+pub(super) fn no_more() -> common::Action {
+    std::rc::Rc::new(|_: &mut Window, _: &mut App| {})
+}
+
+/// Ask before a destructive station action: Cancel, or `label` (red) which runs `on`.
+pub(super) fn confirm_danger(
+    window: &mut Window,
+    cx: &mut App,
+    title: String,
+    body: String,
+    label: String,
+    on: common::Action,
+) {
+    common::confirm(
+        window,
+        cx,
+        common::Confirm {
+            title,
+            body,
+            buttons: vec![
+                common::ConfirmBtn {
+                    label: t!("dialogs.cancel").to_string(),
+                    kind: common::ConfirmKind::Cancel,
+                    on: no_more(),
+                },
+                common::ConfirmBtn {
+                    label,
+                    kind: common::ConfirmKind::DangerSolid,
+                    on,
+                },
+            ],
+        },
+    );
+}
+
 impl SettingsView {
-    /// Render session-only sub-tabs fitted to the window width, with their own intro and content.
-    pub(super) fn telegram_tab(&self, width: f32, cx: &Context<Self>) -> impl IntoElement {
-        let selected = self.telegram.segment;
-        let labels = [
-            t!("telegram.segment_terminal_bot").to_string(),
-            t!("telegram.segment_core_reader").to_string(),
-        ];
-        let selected_index = match selected {
-            TelegramSegment::TerminalBot => 0,
-            TelegramSegment::CoreReader => 1,
+    /// Whether the bot runs on a known station, which makes its pages apply there.
+    pub(super) fn station_known(&self) -> bool {
+        self.telegram.server.known().is_some()
+    }
+
+    /// Which host's bot the Telegram pages edit.
+    fn bot_side(&self) -> access::ChatsOf {
+        bot_host(self.station_known())
+    }
+
+    /// One column of `width` holding `children`, as every Telegram and Station page lays out.
+    // An explicit width, not `w_full().max_w(..)`: see `render::scrollable_tab_content` — the
+    // bottom of a long page would fall outside the scroll extent.
+    fn page_column(&self, width: f32, children: Vec<AnyElement>, cx: &Context<Self>) -> AnyElement {
+        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
+            .min(design::font_w(cx, 680.0))
+            .max(0.0);
+        v_flex()
+            .w(px(column_w))
+            .gap(design::ui_px(cx, 16.0))
+            .children(children)
+            .into_any_element()
+    }
+
+    /// The line on top of every bot page: where the bot runs, with how many chats.
+    fn bot_host_line(&self, side: access::ChatsOf, cx: &Context<Self>) -> AnyElement {
+        let chats = self
+            .chats(side, cx)
+            .map_or(0, |t| t.authorized_chat_ids.len());
+        MoonAlert::success("tg-host-line", host_words(side, chats)).into_any_element()
+    }
+
+    /// The bar of a page whose edits go to the station's bot: what is pending there, one apply
+    /// for chats, roles, cores and menu alike, and the revert of all of them.
+    fn station_access_bar(&self, cx: &Context<Self>) -> SaveBar {
+        let station = &self.backend.read(cx).station;
+        let pending = self.station_draft_pending();
+        let msg = match (&station.applied, station.applying) {
+            (_, true) => t!("telegram.server.applying").to_string(),
+            (Some(Ok(text)), false) => text.clone(),
+            (Some(Err(reason)), false) => reason.clone(),
+            (None, false) if pending => t!("settings.savebar.dirty_other").to_string(),
+            (None, false) => t!("settings.mode.remote").to_string(),
         };
-        let view = cx.entity();
-        let navigation = super::segment::settings_segment(
-            "telegram-segments",
-            &labels,
-            selected_index,
-            width,
-            move |index, _, _, app| {
-                view.update(app, |this, cx| {
-                    this.telegram.select_segment(if index == 0 {
-                        TelegramSegment::TerminalBot
-                    } else {
-                        TelegramSegment::CoreReader
-                    });
-                    cx.notify();
+        let apply: super::frame::OnClick = {
+            let weak = cx.entity().downgrade();
+            std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.apply_station_access(cx);
                 });
-            },
+            })
+        };
+        let revert: super::frame::OnClick = {
+            let weak = cx.entity().downgrade();
+            std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.revert_station_access(cx));
+            })
+        };
+        SaveBar::Remote(RemoteBar {
+            msg,
+            dirty: pending && !station.busy(),
+            apply,
+            revert: pending.then_some(revert),
+            label: t!("telegram.server.access_apply").to_string(),
+        })
+    }
+
+    /// The bot page: where the bot runs, its token, its chats and the Mini App — the same for the
+    /// terminal's bot and the station's.
+    pub(super) fn tg_bot_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let side = self.bot_side();
+        let children = match side {
+            access::ChatsOf::Terminal => {
+                let mut children = vec![self.bot_host_line(side, cx)];
+                children.extend(self.terminal_bot_sections(cx));
+                children
+            }
+            access::ChatsOf::Station => vec![
+                self.bot_host_line(side, cx),
+                v_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 16.0))
+                    .child(self.server_bot_block(cx))
+                    .children(self.server_bot_sections(cx))
+                    .child(self.server_bot_progress(false, cx))
+                    .into_any_element(),
+            ],
+        };
+        let body = self.page_column(width, children, cx);
+        let mut parts = self.page_parts(Tab::TgBot, body, Vec::new(), cx);
+        if side == access::ChatsOf::Station {
+            parts.bar = self.station_access_bar(cx);
+        }
+        parts
+    }
+
+    /// The Telegram-on-the-core page: the core's reader, its login and its proxy.
+    pub(super) fn tg_core_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let body = self.page_column(
+            width,
+            vec![self.core_telegram_section(cx).into_any_element()],
             cx,
         );
-        let content = match selected {
-            TelegramSegment::TerminalBot => self.terminal_bot_segment(cx).into_any_element(),
-            TelegramSegment::CoreReader => v_flex()
-                .gap(design::ui_px(cx, 16.0))
-                .child(
-                    div()
-                        .font_family(design::ui_font())
-                        .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
-                        .child(t!("telegram_core.intro").to_string()),
-                )
-                .child(self.core_telegram_section(cx))
-                .into_any_element(),
-        };
-        // An explicit width, not `w_full().max_w(..)`: see `render::scrollable_tab_content` — the
-        // bottom of a long segment would fall outside the scroll extent.
-        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
-            .min(design::font_w(cx, 680.0))
-            .max(0.0);
-        v_flex()
-            .w(px(column_w))
-            .gap(design::ui_px(cx, 16.0))
-            .child(navigation)
-            .child(content)
+        self.page_parts(Tab::TgCore, body, Vec::new(), cx)
     }
 
-    /// Render the Station tab: the install form, or the known station's status, actions and tape
-    /// window, and the last job's progress. Station buttons act at once, without Save.
-    pub(super) fn station_tab(&self, width: f32, cx: &Context<Self>) -> impl IntoElement {
-        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
-            .min(design::font_w(cx, 680.0))
-            .max(0.0);
-        v_flex()
-            .w(px(column_w))
-            .gap(design::ui_px(cx, 16.0))
-            .child(self.server_bot_section(column_w, cx))
+    /// The Notifications page: the bot's per-chat notifications, applied as they change.
+    pub(super) fn tg_notify_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let body = self.page_column(width, vec![self.bot_notify_box(self.bot_side(), cx)], cx);
+        let mut parts = self.page_parts(Tab::TgNotify, body, Vec::new(), cx);
+        // On the station too every change is sent at once, against the row's revision.
+        parts.bar = SaveBar::Live;
+        parts
     }
 
-    /// Render exactly one bot: the station's when known, otherwise the terminal's.
-    /// Host-named sections distinguish independent bot settings. Pairing and role edits share
-    /// one Chats box; server jobs retain their outcome feedback.
-    ///
-    /// Controls stack vertically so a 620-pixel Settings width does not need a horizontal
-    /// scrollbar. Unsaved edits remain explicit while live transport health is shown
-    /// independently from the draft.
-    ///
-    /// Args:
-    ///     cx: Settings context used for palette, draft, and callbacks.
-    ///
-    /// Returns:
-    ///     The bot's segment.
-    fn terminal_bot_segment(&self, cx: &Context<Self>) -> impl IntoElement {
-        let p = MoonPalette::active(cx);
-        let muted = rgba_from(p.text_muted, 1.0);
-        if self.telegram.server.known().is_some() {
-            return v_flex()
-                .w_full()
-                .gap(design::ui_px(cx, 16.0))
-                .child(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.server.on_station").to_string()),
-                )
-                .child(self.server_bot_block(cx))
-                .children(self.server_bot_sections(cx))
-                .child(self.server_bot_progress(false, cx))
-                .into_any_element();
+    /// The Menu and messages page: the bot's menu buttons beside its message layout, stacked
+    /// when two columns do not fit.
+    pub(super) fn tg_messages_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let side = self.bot_side();
+        let body = self.page_column(
+            width,
+            vec![bot_menu::bot_columns_el(
+                self.bot_menu_keys_box(side, cx),
+                self.message_layout_box(side, cx),
+                cx,
+            )],
+            cx,
+        );
+        let mut parts = self.page_parts(Tab::TgMessages, body, Vec::new(), cx);
+        if side == access::ChatsOf::Station {
+            parts.bar = self.station_access_bar(cx);
         }
+        parts
+    }
+
+    /// The station's cores page.
+    pub(super) fn st_cores_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let mut parts = vec![self.station_cores_section(width, cx)];
+        parts.extend(self.station_groups_row(cx));
+        let body = self.page_column(width, parts, cx);
+        let mut parts = self.page_parts(Tab::StCores, body, Vec::new(), cx);
+        parts.bar = self.station_cores_bar(cx);
+        parts
+    }
+
+    /// The station's trade tape page.
+    pub(super) fn st_tape_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let body = self.page_column(width, vec![self.station_tape_section(width, cx)], cx);
+        let mut parts = self.page_parts(Tab::StTape, body, Vec::new(), cx);
+        parts.bar = self.station_tape_bar(cx);
+        parts
+    }
+
+    /// The station's maintenance page: auto-update and the station's access.
+    pub(super) fn st_maint_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let body = self.page_column(width, vec![self.station_maint_section(cx)], cx);
+        self.page_parts(Tab::StMaint, body, Vec::new(), cx)
+    }
+
+    /// The station overview page.
+    pub(super) fn st_overview_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
+        let head = if self.station_known() {
+            station_overview::tiles_el(self.station_tiles(cx), cx)
+        } else {
+            let st = &self.backend.read(cx).station;
+            station_overview::install_steps_el(station_overview::install_step(
+                st.install_probe.is_some(),
+                st.busy(),
+            ))
+        };
+        let body = self.page_column(
+            width,
+            vec![head, self.server_bot_section(cx).into_any_element()],
+            cx,
+        );
+        self.page_parts(Tab::StOverview, body, Vec::new(), cx)
+    }
+
+    /// The terminal's bot: token and where it runs, its chats, the Mini App. Edits go to the
+    /// draft and persist with Save; live service status and pairing come from the running bot.
+    fn terminal_bot_sections(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+        let p = MoonPalette::active(cx);
         let cfg = self.backend.read(cx);
         let draft = cfg.preview.as_ref().unwrap_or(&cfg.config);
         let telegram = &draft.telegram;
@@ -233,12 +379,6 @@ impl SettingsView {
         } else {
             cfg.telegram_service_status_text()
         };
-        let pairing = cfg
-            .telegram
-            .pairing
-            .as_ref()
-            .map(|(code, _)| t!("telegram.pair_code", code = code.clone()).to_string())
-            .unwrap_or_default();
         let mini_changed =
             token_changed || telegram.mini_app_enabled != cfg.config.telegram.mini_app_enabled;
         let mini_status = if mini_changed {
@@ -269,179 +409,143 @@ impl SettingsView {
         } else {
             None
         };
-        let paired = if telegram.authorized_chat_ids.is_empty() {
-            t!("telegram.paired_none").to_string()
-        } else {
-            t!(
-                "telegram.paired_count",
-                count = telegram.authorized_chat_ids.len()
-            )
-            .to_string()
-        };
         let mini_app = telegram.mini_app_enabled;
-
-        let pairing_actions = v_flex()
-            .gap(design::ui_px(cx, 8.0))
-            .child(div().text_color(muted).child(paired))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        MoonButton::new("telegram-pair")
-                            .primary()
-                            .padding_x(12.0)
-                            .label(t!("telegram.pair_new").to_string())
-                            .disabled(cfg.telegram.service.is_none() || token_changed)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    b.issue_telegram_pairing();
-                                    bcx.notify();
-                                });
-                            }))
-                            .render(),
-                    )
-                    .child(
-                        MoonButton::new("telegram-reset")
-                            .ghost()
-                            .padding_x(12.0)
-                            .disabled(cfg.config.telegram.authorized_chat_ids.is_empty())
-                            .label(t!("telegram.pair_reset").to_string())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    b.reset_telegram_pairing(bcx);
-                                    bcx.notify();
-                                });
-                            }))
-                            .render(),
-                    ),
-            )
-            .when(!pairing.is_empty() && !token_changed, |section| {
-                section.child(
-                    v_flex()
-                        .gap(design::ui_px(cx, 8.0))
-                        .child(div().font_family(design::mono()).child(pairing))
-                        .child(
-                            MoonButton::new("telegram-copy-pair")
-                                .label(t!("telegram.pair_copy").to_string())
-                                .padding_x(12.0)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    let command = this
-                                        .backend
-                                        .read(cx)
-                                        .telegram
-                                        .pairing
-                                        .as_ref()
-                                        .filter(|(_, expiry)| std::time::Instant::now() < *expiry)
-                                        .map(|(code, _)| format!("/pair {code}"));
-                                    if let Some(command) = command {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(command));
-                                        this.status =
-                                            Some((super::StatusMsg::Key("settings.copied"), false));
-                                        cx.notify();
-                                    }
-                                }))
-                                .render(),
-                        ),
+        let code = cfg
+            .telegram
+            .pairing
+            .as_ref()
+            .filter(|_| !token_changed)
+            .map(|(code, _)| code.clone());
+        let pairing = self.chat_pairing(
+            access::ChatsOf::Terminal,
+            access::PairingState {
+                code,
+                pair_disabled: cfg.telegram.service.is_none() || token_changed,
+                unpair_disabled: cfg.config.telegram.authorized_chat_ids.is_empty(),
+            },
+            cx,
+        );
+        let onboarding = cfg
+            .config
+            .telegram
+            .token
+            .expose()
+            .is_empty()
+            .then(|| t!("telegram.onboarding").to_string());
+        // A bot without a saved token shows how to get one, already unfolded.
+        let onboarding_open = onboarding.is_some();
+        let token_row = common::hint_row(
+            "tg-token",
+            t!("telegram.token").to_string(),
+            Some(t!("telegram.token_hint").to_string()),
+            onboarding,
+            div()
+                .w(design::font_w_px(cx, TOKEN_FIELD_W))
+                .child(
+                    MoonInput::new("telegram-token")
+                        .state(&self.telegram.token)
+                        .size(design::INPUT_SIZE)
+                        .mono(true)
+                        .mask_toggle(),
                 )
-            })
-            .into_any_element();
-        let local = v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 16.0))
-            .child(
-                MoonGroupBox::new("telegram-bot-section")
-                    .title(t!("telegram.section_bot").to_string())
-                    .padding(14.0)
-                    .gap(10.0)
-                    .child(div().text_color(rgba_from(p.text, 1.0)).child(status_text))
-                    .child(
-                        h_flex()
-                            .flex_wrap()
-                            .gap(design::ui_px(cx, 10.0))
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_color(rgba_from(p.text_soft, 1.0))
-                                    .child(t!("telegram.token").to_string()),
-                            )
-                            .child(
-                                div().w(design::font_w_px(cx, TOKEN_FIELD_W)).child(
-                                    MoonInput::new("telegram-token")
-                                        .state(&self.telegram.token)
-                                        .size(design::INPUT_SIZE)
-                                        .mono(true)
-                                        .mask_toggle(),
-                                ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.token_hint").to_string()),
-                    )
-                    .when(cfg.config.telegram.token.expose().is_empty(), |token| {
-                        token.child(
-                            div()
-                                .text_color(muted)
-                                .child(t!("telegram.onboarding").to_string()),
-                        )
-                    }),
-            )
-            .child(self.telegram_chat_access(access::ChatsOf::Terminal, pairing_actions, None, cx))
-            .child(self.bot_menu_box(access::ChatsOf::Terminal, cx))
-            .child(self.message_layout_box(access::ChatsOf::Terminal, cx))
-            .child(
-                MoonGroupBox::new("telegram-mini-section")
-                    .title(
-                        self.bot_section_title(
-                            access::ChatsOf::Terminal,
-                            "telegram.section_mini_app",
-                        ),
-                    )
-                    .padding(14.0)
-                    .gap(10.0)
-                    .child(
-                        self.draft_checkbox(cx, "tg-mini-app", mini_app, |p, v| {
-                            if p.telegram.mini_app_enabled != v {
-                                p.telegram.mini_app_enabled = v;
-                                true
-                            } else {
-                                false
-                            }
-                        })
-                        .label(t!("telegram.mini_app").to_string())
-                        .description(t!("telegram.mini_app_hint").to_string()),
-                    )
-                    .child(div().text_color(rgba_from(p.text, 1.0)).child(mini_status))
-                    .when_some(mini_url, |tab, url| {
-                        tab.child(
-                            MoonButton::new("telegram-copy-url")
-                                .label(t!("telegram.mini_copy_url").to_string())
-                                .ghost()
-                                .padding_x(12.0)
-                                .tooltip(url.clone())
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
-                                    this.status =
-                                        Some((super::StatusMsg::Key("settings.copied"), false));
-                                    cx.notify();
-                                }))
-                                .render(),
-                        )
-                    }),
-            );
-        v_flex()
-            .w_full()
-            .gap(design::ui_px(cx, 16.0))
+                .into_any_element(),
+            onboarding_open,
+            no_more(),
+            cx,
+        );
+        let where_row = common::hint_row(
+            "tg-where",
+            t!("telegram.where.label").to_string(),
+            Some(t!("telegram.where.local").to_string()),
+            None,
+            MoonButton::new("tg-where-move")
+                .padding_x(12.0)
+                .label(t!("telegram.where.move").to_string())
+                .on_click(cx.listener(|this, _, _, cx| this.show_page(Tab::StOverview, cx)))
+                .render()
+                .into_any_element(),
+            false,
+            no_more(),
+            cx,
+        );
+        let bot = MoonGroupBox::new("telegram-bot-section")
+            .title(t!("telegram.section_bot").to_string())
+            .padding(14.0)
+            .gap(6.0)
             .child(
                 div()
-                    .text_color(muted)
-                    .child(t!("telegram.intro").to_string()),
+                    .debug_selector(|| "tg-bot-status".into())
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(status_text),
             )
-            .child(local)
-            .into_any_element()
+            .child(token_row)
+            .child(where_row);
+        let mini_toggle: common::Action = {
+            let weak = cx.entity().downgrade();
+            std::rc::Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.telegram_ui.mini_more = !this.telegram_ui.mini_more;
+                    cx.notify();
+                });
+            })
+        };
+        let mini_row = common::hint_row(
+            "tg-mini",
+            t!("telegram.mini_app").to_string(),
+            Some(mini_status),
+            Some(t!("telegram.mini_app_hint").to_string()),
+            h_flex()
+                .gap(design::ui_px(cx, 8.0))
+                .items_center()
+                .child(self.draft_checkbox(cx, "tg-mini-app", mini_app, |p, v| {
+                    if p.telegram.mini_app_enabled != v {
+                        p.telegram.mini_app_enabled = v;
+                        true
+                    } else {
+                        false
+                    }
+                }))
+                .when_some(mini_url, |row, url| {
+                    row.child(
+                        MoonButton::new("telegram-copy-url")
+                            .label(t!("telegram.mini_copy_url").to_string())
+                            .ghost()
+                            .padding_x(12.0)
+                            .tooltip(url.clone())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                                this.status =
+                                    Some((super::StatusMsg::Key("settings.copied"), false));
+                                cx.notify();
+                            }))
+                            .render(),
+                    )
+                })
+                .into_any_element(),
+            self.telegram_ui.mini_more,
+            mini_toggle,
+            cx,
+        );
+        let mini = MoonGroupBox::new("telegram-mini-section")
+            .title(t!("telegram.section_mini_app").to_string())
+            .padding(14.0)
+            .gap(6.0)
+            .child(mini_row);
+        vec![
+            bot.into_any_element(),
+            self.telegram_chat_access(access::ChatsOf::Terminal, pairing, cx)
+                .into_any_element(),
+            mini.into_any_element(),
+        ]
     }
+}
+
+/// UI state of the Telegram (bot, notifications, messages, Telegram on the core) page that the draft does not hold. Branch-owned: fields are added here,
+/// never on `SettingsView`.
+#[derive(Default)]
+pub(super) struct TelegramUi {
+    /// The Mini App row's long help is open.
+    mini_more: bool,
 }
 
 #[cfg(test)]

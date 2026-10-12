@@ -12,8 +12,10 @@
 //! assembly. [`endpoints`] derives endpoint text and duplicate peers from every draft key.
 
 mod columns;
+mod cores;
 mod endpoints;
 mod entries;
+mod page;
 mod tab;
 mod table;
 
@@ -58,9 +60,6 @@ static NEXT_ROW_KEY: AtomicU64 = AtomicU64::new(1);
 pub(super) struct ConnRow {
     /// Per-session identity for this row's elements and popup state. See [`NEXT_ROW_KEY`].
     pub(super) row_key: u64,
-    /// Precomputed per-row element-id strings, built once here rather than with `format!` inside
-    /// the row factory on every frame. See [`ConnRowIds`].
-    pub(super) ids: ConnRowIds,
     name: Entity<MoonInputState>,
     key: Entity<MoonInputState>,
     /// Hand-typed endpoint override; empty follows the key, whose endpoint is the placeholder.
@@ -73,92 +72,6 @@ pub(super) struct ConnRow {
     /// See `ServerConfig::chart_bundle`.
     bundle: Entity<MoonInputState>,
     color: Entity<MoonColorPickerState>,
-}
-
-/// The per-row element-id strings the row factory used to rebuild with `format!` on every
-/// frame. Built once in [`build_conn`] and read from thereafter, so `server_row` allocates none of
-/// them.
-///
-/// Keyed on row IDENTITY, not draft position: a saved row keys on its `ServerConfig.uid` (stable
-/// for the row's whole configured life), an unsaved row on its [`ConnRow::row_key`] (`uid` is zero
-/// for every pending row and cannot tell them apart -- see [`row_ident`]).
-pub(super) struct ConnRowIds {
-    pub(super) name: SharedString,
-    pub(super) key: SharedString,
-    pub(super) address: SharedString,
-    /// Id of the interactive wrapper that carries the address cell's tooltip. See
-    /// [`Self::feed_tip`].
-    pub(super) address_tip: SharedString,
-    /// Id of the station glyph beside a filled address field (`table.rs::station_affix`).
-    pub(super) address_station: SharedString,
-    pub(super) group: SharedString,
-    pub(super) bundle: SharedString,
-    pub(super) feed: SharedString,
-    /// Id of the interactive wrapper that carries the data cell's tooltip.
-    ///
-    /// Separate from [`Self::feed`]: `MoonDropdown` has no tooltip prop, so the tooltip lives on
-    /// a `div` around it, and gpui needs its own id for an interactive element.
-    pub(super) feed_tip: SharedString,
-    pub(super) proto: SharedString,
-    /// Id of the interactive wrapper that carries the proto cell's tooltip. See
-    /// [`Self::feed_tip`].
-    pub(super) proto_tip: SharedString,
-    pub(super) preset: SharedString,
-    pub(super) total: SharedString,
-    pub(super) act: SharedString,
-    pub(super) del: SharedString,
-    pub(super) rec: SharedString,
-}
-
-/// Build the identity fragment for one row's element IDs.
-///
-/// A saved row uses `u{uid}`; a pending row uses `s{row_key}` because draft `ServerConfig.id` can
-/// be reissued after deletion, while neither `uid` nor `row_key` is reused.
-///
-/// Args:
-///     uid: Persisted row identity, or zero for a pending row.
-///     row_key: Monotonic per-session identity for the row.
-///
-/// Returns:
-///     The saved-row or pending-row fragment used by all of the row's element IDs.
-fn row_ident(uid: u64, row_key: u64) -> String {
-    if uid != 0 {
-        format!("u{uid}")
-    } else {
-        format!("s{row_key}")
-    }
-}
-
-impl ConnRowIds {
-    /// Build every stable element ID for one server-row editor.
-    ///
-    /// Args:
-    ///     uid: Persisted row identity, or zero for a pending row.
-    ///     row_key: Monotonic per-session identity for the row.
-    ///
-    /// Returns:
-    ///     The precomputed IDs keyed by the row's stable identity fragment.
-    fn build(uid: u64, row_key: u64) -> Self {
-        let ident = row_ident(uid, row_key);
-        Self {
-            name: SharedString::from(format!("name-{ident}")),
-            key: SharedString::from(format!("key-{ident}")),
-            address: SharedString::from(format!("address-{ident}")),
-            address_tip: SharedString::from(format!("address-tip-{ident}")),
-            address_station: SharedString::from(format!("address-station-{ident}")),
-            group: SharedString::from(format!("group-{ident}")),
-            bundle: SharedString::from(format!("bundle-{ident}")),
-            feed: SharedString::from(format!("feed-{ident}")),
-            feed_tip: SharedString::from(format!("feed-tip-{ident}")),
-            proto: SharedString::from(format!("proto-{ident}")),
-            proto_tip: SharedString::from(format!("proto-tip-{ident}")),
-            preset: SharedString::from(format!("preset-{ident}")),
-            total: SharedString::from(format!("total-{ident}")),
-            act: SharedString::from(format!("act-{ident}")),
-            del: SharedString::from(format!("del-{ident}")),
-            rec: SharedString::from(format!("rec-{ident}")),
-        }
-    }
 }
 
 /// Add missing group rows to a Settings preview without removing intermediate names.
@@ -174,16 +87,10 @@ pub(super) fn sync_groups_from_servers(
 
 /// Build a text input bound to a field of draft server `servers[i]`.
 ///
-/// Focusing the field brings its row into view and records it as focused; blurring it, when this
-/// is still the focused row, clears that record. `on_conn_visible_range` reads the record to blur a
-/// field whose row has scrolled out of the mounted range, so a keystroke can never target an
-/// invisible input.
-///
 /// Args:
 ///     window: Settings window used to create the input state.
 ///     cx: Settings context used to subscribe to input events.
 ///     i: Draft index of the server field.
-///     row_key: Per-session identity of the owning row.
 ///     init: Initial field value.
 ///     placeholder: Hint shown while the field is empty, or `None` for a field whose empty
 ///         state needs no explanation.
@@ -197,7 +104,6 @@ fn conn_input(
     window: &mut Window,
     cx: &mut Context<SettingsView>,
     i: usize,
-    row_key: u64,
     init: String,
     placeholder: Option<String>,
     get: fn(&ServerConfig) -> String,
@@ -230,16 +136,8 @@ fn conn_input(
                     bcx.notify();
                 }
             });
-            // This keystroke may have re-ranked the list under the field being typed into; the
-            // next frame scrolls this row back into view before anything can evict it.
-            this.conn_edit_pending = Some(row_key);
             // Key replacements can leave settings_sig unchanged; refresh endpoint cells anyway.
             cx.notify();
-        } else if matches!(ev, MoonInputEvent::Focus) {
-            this.focused_conn_row = Some(row_key);
-            this.scroll_conn_row_into_view(row_key);
-        } else if matches!(ev, MoonInputEvent::Blur) && this.focused_conn_row == Some(row_key) {
-            this.focused_conn_row = None;
         }
     })
     .detach();
@@ -292,12 +190,10 @@ pub(super) fn build_conn(
             let row_key = NEXT_ROW_KEY.fetch_add(1, Ordering::Relaxed);
             let row = ConnRow {
                 row_key,
-                ids: ConnRowIds::build(s.uid, row_key),
                 name: conn_input(
                     window,
                     cx,
                     i,
-                    row_key,
                     s.name.clone(),
                     // No placeholder: a nameless core is not a state worth explaining, and the
                     // user's own text is the only thing this field ever holds.
@@ -313,7 +209,6 @@ pub(super) fn build_conn(
                         window,
                         cx,
                         i,
-                        row_key,
                         s.key.expose().to_string(),
                         Some(t!("conn.key_ph").to_string()),
                         |s| s.key.expose().to_string(),
@@ -342,7 +237,6 @@ pub(super) fn build_conn(
                     window,
                     cx,
                     i,
-                    row_key,
                     s.endpoint_override.clone(),
                     Some(address_placeholder(s.key.expose())),
                     |s| s.endpoint_override.clone(),
@@ -353,7 +247,6 @@ pub(super) fn build_conn(
                     window,
                     cx,
                     i,
-                    row_key,
                     s.group.clone(),
                     // No placeholder: `build_conn` is only ever handed saved or pending rows
                     // whose group defaults to "default", so the field is never empty in practice.
@@ -366,7 +259,6 @@ pub(super) fn build_conn(
                     window,
                     cx,
                     i,
-                    row_key,
                     s.chart_bundle.clone(),
                     // An empty bundle field is the DEFAULT, not an omission: the core then
                     // follows the global chart setting. The hint is what says so, and without it
@@ -411,7 +303,7 @@ pub(super) fn address_placeholder(key: &str) -> String {
 /// A separate subscription rather than a line in the key's `conn_input` setter: the placeholder
 /// lives on the input STATE, and `set_placeholder` needs the window the setter does not get. The
 /// Paste glyph sets the key with `set_value`, which emits no Change, so it updates the placeholder
-/// itself (`table.rs::paste_key_affix`).
+/// itself (the core card's Вставить, `page.rs`).
 ///
 /// Args:
 ///     key: The row's key input.
@@ -436,143 +328,4 @@ fn follow_key_placeholder(
         },
     )
     .detach();
-}
-
-impl SettingsView {
-    /// Find the last flattened list position for a row key.
-    ///
-    /// Args:
-    ///     row_key: Per-session identity of the draft row to locate.
-    ///
-    /// Returns:
-    ///     The matching `CoreRow` position, or `None` when the row is not in the cached entries.
-    fn conn_entry_index(&self, row_key: u64) -> Option<usize> {
-        self.conn_entries.iter().position(|e| match e {
-            ConnEntry::CoreRow { draft_index, .. } => self
-                .conn
-                .get(*draft_index)
-                .is_some_and(|r| r.row_key == row_key),
-            _ => false,
-        })
-    }
-
-    /// Scroll a Connections row into view when its input gains keyboard focus.
-    ///
-    /// Args:
-    ///     row_key: Per-session identity of the row to reveal.
-    ///
-    /// Returns:
-    ///     Nothing; updates the virtual-list scroll target when the row is present.
-    fn scroll_conn_row_into_view(&mut self, row_key: u64) {
-        if let Some(pos) = self.conn_entry_index(row_key) {
-            self.conn_scroll.scroll_to_item(pos, ScrollStrategy::Top);
-        }
-    }
-
-    /// Keep the row the user is EDITING on screen.
-    ///
-    /// The list order is a pure function of the draft plus the sort mode, so a keystroke in a name
-    /// or group field can re-rank the list and carry the very row being typed into out of the
-    /// mounted range -- where [`Self::on_conn_visible_range`] would blur it and end the edit after
-    /// one character.
-    ///
-    /// Keyed on the EDIT, deliberately, and not on a change in the list ORDER. Order is the wrong
-    /// trigger: the entry sequence also moves for reasons that have nothing to do with the user's
-    /// hands -- a venue resolving for some other core re-buckets it and shifts every index below --
-    /// and `scroll_to_item` is non-strict, measured against the offset the user's own wheel has
-    /// already produced this frame (`moon-gpui/src/elements/uniform_list.rs`). Order-triggered, an
-    /// unrelated reshuffle therefore yanked the viewport back to a merely-focused row while the user
-    /// was calmly scrolling somewhere else. Tied to the edit, nothing fires unless a field actually
-    /// changed, and a row that is already visible costs nothing because the scroll is a no-op.
-    ///
-    /// Runs while `connections_tab` assembles the frame, BEFORE the list lays out, so the scroll is
-    /// already applied by the time a visible range is computed.
-    ///
-    /// Returns:
-    ///     Nothing; consumes the pending edit and queues that row's scroll when one is recorded.
-    fn follow_edited_conn_row(&mut self) {
-        if let Some(key) = self.conn_edit_pending.take() {
-            self.scroll_conn_row_into_view(key);
-        }
-    }
-
-    /// Handle a visible-range change from the Connections virtual list.
-    ///
-    /// On every visible-range change: blur a focused input whose row scrolled out of range, so a
-    /// keystroke can never target an unmounted field; close the feed-flag menu, the transport-mode
-    /// menu or the icon picker when the row or group heading that owns it left the range, so
-    /// scrolling back cannot resurrect a controlled popup nothing dismissed.
-    ///
-    /// Args:
-    ///     range: Currently mounted entry range.
-    ///     window: Settings window used to blur an evicted input.
-    ///     cx: Settings context used to request a repaint after state changes.
-    ///
-    /// Returns:
-    ///     Nothing; evicts focused or open row-owned state outside the mounted range.
-    pub(super) fn on_conn_visible_range(
-        &mut self,
-        range: std::ops::Range<usize>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let mut changed = false;
-        let visible_at = |pos: Option<usize>| pos.is_some_and(|pos| range.contains(&pos));
-
-        if let Some(key) = self.focused_conn_row {
-            let visible = visible_at(self.conn_entry_index(key));
-            if !visible {
-                window.blur();
-                self.focused_conn_row = None;
-                changed = true;
-            }
-        }
-
-        if let Some(key) = self.feed_open {
-            let visible = visible_at(self.conn_entry_index(key));
-            if !visible {
-                self.feed_open = None;
-                changed = true;
-            }
-        }
-
-        if let Some(key) = self.proto_open {
-            let visible = visible_at(self.conn_entry_index(key));
-            if !visible {
-                self.proto_open = None;
-                changed = true;
-            }
-        }
-
-        if let Some(key) = self.preset_open {
-            let visible = visible_at(self.conn_entry_index(key));
-            if !visible {
-                self.preset_open = None;
-                changed = true;
-            }
-        }
-
-        if let Some(key) = self.total_open {
-            let visible = visible_at(self.conn_entry_index(key));
-            if !visible {
-                self.total_open = None;
-                changed = true;
-            }
-        }
-
-        if let Some(name) = self.picking.clone() {
-            let visible =
-                visible_at(self.conn_entries.iter().position(
-                    |e| matches!(e, ConnEntry::GroupHeader { name: n, .. } if *n == name),
-                ));
-            if !visible {
-                self.picking = None;
-                changed = true;
-            }
-        }
-
-        if changed {
-            cx.notify();
-        }
-    }
 }

@@ -26,8 +26,8 @@ use rust_i18n::t;
 
 use crate::hotkeys::meta::{self, SlotMeta};
 
-/// Hotkey groups shown as sub-tabs below the built-in block, matching Moonbot's hotkey pages.
-/// Built-ins are not a group and remain visible above the switcher.
+/// Hotkey categories, matching Moonbot's hotkey pages. Built-ins are not a category: they sit in
+/// a collapsed block at the bottom of the page.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(in crate::settings) enum HotkeyGroup {
     Presets,
@@ -37,14 +37,10 @@ pub(in crate::settings) enum HotkeyGroup {
     OrderMove,
     Mouse,
     ManualStrategy,
-    /// Not a hotkey page: the "pull layout from core" preview, which compares every slot the core
-    /// carries against the local one. A tab of its own so the manual-strategy page ends where its
-    /// rows end.
-    CorePull,
 }
 
 impl HotkeyGroup {
-    pub(in crate::settings) const ALL: [Self; 8] = [
+    pub(in crate::settings) const ALL: [Self; 7] = [
         Self::Presets,
         Self::Trading,
         Self::Chart,
@@ -52,7 +48,6 @@ impl HotkeyGroup {
         Self::OrderMove,
         Self::Mouse,
         Self::ManualStrategy,
-        Self::CorePull,
     ];
 
     pub(in crate::settings) fn title(self) -> String {
@@ -64,14 +59,8 @@ impl HotkeyGroup {
             Self::OrderMove => t!("hotkeys.group.order_move"),
             Self::Mouse => t!("hotkeys.group.mouse"),
             Self::ManualStrategy => t!("hotkeys.group.manual_strategy"),
-            Self::CorePull => t!("hotkeys.pull.title"),
         }
         .to_string()
-    }
-
-    /// Whether the page is the hotkey table — with its header — rather than the pull preview.
-    pub(in crate::settings) fn is_table(self) -> bool {
-        self != Self::CorePull
     }
 
     /// Returns the hint shown above the active sub-tab's rows.
@@ -84,7 +73,6 @@ impl HotkeyGroup {
             Self::OrderMove => t!("hotkeys.group.order_move_hint"),
             Self::Mouse => t!("hotkeys.group.mouse_hint"),
             Self::ManualStrategy => t!("hotkeys.group.manual_strategy_hint"),
-            Self::CorePull => t!("hotkeys.pull.hint"),
         }
         .to_string()
     }
@@ -145,16 +133,31 @@ impl SlotSpec {
         }
     }
 
-    /// Whether the title is an identity like `F3` rather than a phrase — the preset rows, which the
-    /// page sets in mono for that reason.
-    pub fn title_is_identity(&self) -> bool {
-        matches!(
-            self.key(),
-            Some(KeySlot::OrderSize(_) | KeySlot::SellPreset(_))
-        )
+    /// The command's name in the user's language — what the Команда column leads with.
+    pub fn name(&self) -> String {
+        match self.editors {
+            Editors::Key(key) | Editors::Both(key, _) => key_name(key),
+            Editors::Mouse(mouse) => {
+                let key = format!("hotkeys.cmd.{}", mouse.stem());
+                t!(&key).to_string()
+            }
+        }
     }
 
-    /// The localized explanation under the title.
+    /// The command's MoonBot name, set in mono under [`Self::name`] — `None` where it would only
+    /// repeat the name (any case) or where the row is a numbered preset the name already counts.
+    pub fn moonbot_name(&self) -> Option<String> {
+        if matches!(
+            self.key(),
+            Some(KeySlot::OrderSize(_) | KeySlot::SellPreset(_) | KeySlot::ManualStrategy(_))
+        ) {
+            return None;
+        }
+        let title = self.title();
+        (title.to_lowercase() != self.name().to_lowercase()).then_some(title)
+    }
+
+    /// The localized explanation of the row, shown as the name's tooltip.
     pub fn hint(&self) -> String {
         match self.editors {
             Editors::Key(key) | Editors::Both(key, _) => match key {
@@ -213,8 +216,6 @@ pub(super) enum Row {
     LabelScroll,
     /// The modifier that turns a left drag over the plot into the percent ruler.
     RulerDrag,
-    /// The "pull layout from core" preview — the whole of its own page.
-    CorePull,
 }
 
 impl Row {
@@ -225,7 +226,6 @@ impl Row {
             Self::SameForMove => HotkeyGroup::Mouse,
             Self::LabelScroll => HotkeyGroup::Chart,
             Self::RulerDrag => HotkeyGroup::Chart,
-            Self::CorePull => HotkeyGroup::CorePull,
         }
     }
 }
@@ -323,7 +323,6 @@ fn build_rows() -> Vec<Row> {
     rows.extend(
         (0..MANUAL_STRATEGY_KEYS).map(|i| key(G::ManualStrategy, KeySlot::ManualStrategy(i))),
     );
-    rows.push(Row::CorePull);
     rows
 }
 
@@ -365,6 +364,21 @@ pub(super) fn key_title(slot: KeySlot) -> String {
         KeySlot::SplitOrder => t!("hotkeys.split_order", n = SPLIT_ORDER_PARTS).to_string(),
         named => {
             let key = format!("hotkeys.{}", named.stem());
+            t!(&key).to_string()
+        }
+    }
+}
+
+/// The name of a keyboard slot's command in the user's language (`hotkeys.cmd.<stem>`); the
+/// numbered families count themselves, the manual strategies keep their own title.
+pub(super) fn key_name(slot: KeySlot) -> String {
+    match slot {
+        KeySlot::OrderSize(i) => t!("hotkeys.cmd.order_size", n = i + 1).to_string(),
+        KeySlot::SellPreset(i) => t!("hotkeys.cmd.sell_preset", n = i + 1).to_string(),
+        KeySlot::ManualStrategy(i) => t!("hotkeys.manual_strategy", n = i + 1).to_string(),
+        KeySlot::SplitOrder => t!("hotkeys.cmd.split_order", n = SPLIT_ORDER_PARTS).to_string(),
+        named => {
+            let key = format!("hotkeys.cmd.{}", named.stem());
             t!(&key).to_string()
         }
     }

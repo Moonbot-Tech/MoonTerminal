@@ -2,10 +2,7 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram.segment_terminal_bot: "Бот Telegram"
-telegram.segment_core_reader: "Telegram на ядре"
 
-telegram.intro: "Подключите своего бота и привяжите чат для отчётов в Telegram. Mini App включается отдельно."
 telegram.state.connected: "Бот подключён"
 telegram.pair_copy: "Скопировать команду"
 telegram.mini_copy_url: "Скопировать адрес Mini App"
@@ -21,11 +18,6 @@ telegram.bot_mini_wait: "Mini App пока недоступно. Проверь�
 telegram.bot_mini_disabled_station: "Mini App на станции выключено. Его включает владелец в терминале: «Настройки → Telegram», галка «Mini App на сервере». Затем отправьте /miniapp."
 telegram.bot_mini_wait_station: "Mini App пока недоступно: станция ещё открывает к нему доступ. Повторите /miniapp через минуту."
 
-telegram.tab: "Telegram"
-
-station.tab: "Станция"
-
-telegram.server.on_station: "Бот работает на станции на сервере Linux. Установка, состояние и действия станции — во вкладке «Станция»."
 
 telegram.section_bot: "Бот этого терминала"
 telegram.section_mini_app: "Mini App"
@@ -38,8 +30,6 @@ telegram.onboarding: "Создайте бота: отправьте /newbot в @
 telegram.mini_app: "Включить Mini App"
 telegram.mini_app_hint: "После сохранения отправьте боту /miniapp для кнопки входа. /start открывает меню отчётов. Терминал должен оставаться запущенным."
 
-telegram.paired_none: "Нет привязанных чатов"
-telegram.paired_count: "Привязанных чатов: %{count}"
 
 telegram.state.disabled: "Выключено: задайте токен бота, чтобы включить Telegram."
 telegram.state.unsaved: "Есть изменения. Нажмите «Сохранить», чтобы применить их."
@@ -61,7 +51,6 @@ telegram.rate_limited: "Ограничение Telegram: повтор через
 
 telegram.stopped: "Остановлено"
 
-telegram.pair_code: "/pair %{code}\nОтправьте эту команду боту в личном чате. Код действует 10 минут и только один раз."
 
 telegram.pair_new: "Получить код привязки"
 
@@ -237,7 +226,6 @@ telegram.server.transfer_hint: "Бот терминала переносится
 telegram.server.mini_app: "Mini App на сервере"
 telegram.server.mini_app_hint: "Вход в Mini App идёт через туннель Cloudflare: где Cloudflare заблокирован, Mini App не откроется — тогда выключите. Переключение перезапускает станцию."
 telegram.server.access_apply: "Применить на сервере"
-telegram.server.access_revert: "Отменить правки"
 telegram.server.groups_same: "Группы ядер на станции совпадают с терминалом: %{names}."
 telegram.server.groups_differ: "Группы ядер на станции: %{station} · в этом терминале: %{terminal}. Отчёт бота по ядрам берёт группы станции."
 telegram.server.groups_send: "Отправить группы на станцию"
@@ -464,7 +452,6 @@ telegram.server.remove_unsupported: "Установленная служебна
 telegram.server.removed: "Станция и её секреты удалены с сервера; сервер забыт в терминале."
 telegram.server.remove_unconfirmed: "Сервер не подтвердил удаление станции. Запись доступа сохранена: проверьте службу и повторите удаление."
 telegram.server.remove_local_failed: "Станция и её секреты удалены с сервера, но забыть сервер в терминале не удалось. Запись доступа сохранена."
-telegram.server.confirm: "Подтвердить"
 telegram.server.cancel: "Отмена"
 telegram.server.done: "Готово."
 telegram.server.needs_old_admin: "Сервер настроен старой версией: у moon ещё есть пароль. Введите его один раз и повторите — после этого вход будет только по ключу."
@@ -503,3 +490,27 @@ telegram.server.install_confirm: "Доверять ключу и установ�
 telegram.server.chats_hint: "Добавьте чат по коду; первый — владелец, остальные видят выбранные ядра после «Применить на сервере»."
 telegram.server.cores_changed: "Станция изменилась — обновите список и повторите."
 telegram.server.cores_not_configured: "Станция не настроена — установите её заново, затем отправьте ядра."
+
+# Settings redesign (phases 3-5)
+telegram.host.local: "Бот работает в этом терминале"
+telegram.host.station: "Бот работает на станции"
+telegram.where.label: "Где работает бот"
+telegram.where.local: "В терминале — пока он открыт"
+telegram.where.move: "Перенести на станцию…"
+telegram.chats.col_chat: "Чат"
+telegram.chats.col_role: "Роль"
+telegram.chats.configure: "Настроить"
+telegram.chats.pair: "+ Подключить чат"
+telegram.chats.unpair_all: "Отключить все чаты…"
+telegram.chats.unpair_title: "Отключить все чаты?"
+telegram.chats.unpair_body: "Бот перестанет отвечать в них. Чтобы вернуть чат, его придётся подключить заново."
+telegram.pair.hint: "Отправьте боту код в нужном чате — чат появится в списке."
+telegram.notify.sec.closed: "Закрытые сделки"
+telegram.notify.sec.core: "Состояние ядер"
+telegram.notify.sec.auto: "Автоматические отчёты"
+telegram.host.chats_n_one: "%{n} чат"
+telegram.host.chats_n_few: "%{n} чата"
+telegram.host.chats_n_many: "%{n} чатов"
+telegram.maint.row_version: "Версия"
+telegram.maint.row_resetup: "Перенастройка"
+telegram.maint.row_address: "Адрес сервера"

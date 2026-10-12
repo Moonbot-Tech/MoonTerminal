@@ -1,23 +1,27 @@
-//! Interface tab for chart-theme editing, ported from egui's `settings/interface.rs`.
+//! Appearance page: the interface theme as cards, UI zoom, and the chart colour set in groups
+//! beside a still preview, then the order-book width and the dock reset.
 //!
-//! It exposes chart, crosshair, candle, volume, trade, order-book and panel colors plus numeric
-//! controls. Edits update the draft for live preview; Save writes `theme.toml` and the global
-//! order-book width in `settings.toml`. [`Iface`] owns editor controls.
+//! Edits update the draft for live preview; Save writes `theme.toml`, and the theme, zoom and
+//! global order-book width in `settings.toml`. [`Iface`] owns the colour-set controls.
 //!
 //! The trade-mark sizes and the bottom-volume band are NOT here. They describe a chart tab rather
 //! than a colour scheme, so they live on `ChartGraphicsCfg` and are edited from the chart's palette
 //! popup (`crate::chart_tabs::graphics_popup`).
 
+use std::rc::Rc;
+
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonColorPickerEvent, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex,
-    v_flex,
+    MoonButton, MoonCheckbox, MoonColorPickerEvent, MoonColorPickerState, MoonPalette, MoonSlider,
+    MoonSliderState, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
-use super::{SettingsView, color_row, section, separator, slider_row};
+use super::common::num_input;
+use super::{SettingsView, color_row};
 use crate::{Backend, design};
-use moon_core::{config::ChartTheme, util::fmt};
+use moon_core::config::{AppConfig, ChartTheme, UiThemeMode};
+use moon_core::util::fmt;
 
 /// Theme editor state with one retained control entity per field.
 pub(super) struct Iface {
@@ -50,8 +54,6 @@ pub(super) struct Iface {
     book_level_ask: Entity<MoonColorPickerState>,
     book_level_alpha: Entity<MoonSliderState>,
     book_level_width: Entity<MoonSliderState>,
-    /// Global width slider, independent of the active theme.
-    order_book_width: Entity<MoonSliderState>,
     panel_bg: Entity<MoonColorPickerState>,
 }
 
@@ -347,26 +349,6 @@ pub(super) fn build(
             4.0,
             0.1,
         ),
-        order_book_width: {
-            let b = backend.read(cx);
-            let width = moon_core::config::book_width::normalize(
-                b.preview.as_ref().unwrap_or(&b.config).order_book_width_px,
-            );
-            super::draft_slider(
-                cx,
-                moon_core::config::book_width::MIN,
-                moon_core::config::book_width::MAX,
-                10.0,
-                width,
-                |p, width, _| {
-                    if p.order_book_width_px == width {
-                        return false;
-                    }
-                    p.order_book_width_px = width;
-                    true
-                },
-            )
-        },
         panel_bg: color_field(backend, window, cx, |t| t.panel_bg, |t, v| t.panel_bg = v),
     }
 }
@@ -407,7 +389,7 @@ impl SettingsView {
             .child(color_row(&label, state, p, cx))
             .child(
                 MoonButton::new(id)
-                    .outline()
+                    .variant(moon_ui::MoonButtonVariant::Neutral)
                     .label(t!("iface.book_level_auto"))
                     .disabled(automatic)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -434,202 +416,774 @@ impl SettingsView {
             )
     }
 
-    /// Render the Interface tab for the portable `theme.toml` chart theme variant.
+    /// Switch the interface theme from a theme card.
     ///
-    /// Sections cover chart-label font, chart background/grid, crosshair, candles, price lines,
-    /// trades, order book, and panels. Personal interface mode and UI font settings belong to
-    /// General in `settings.toml`.
-    ///
-    /// Args:
-    ///     cx: Settings context that supplies the active palette and display scale.
-    ///
-    /// Returns:
-    ///     The assembled Interface-tab content with formatted slider endpoints and values.
-    pub(super) fn interface_tab(&self, cx: &Context<Self>) -> impl IntoElement {
+    /// The per-mode editors hold a SNAPSHOT of the colour set that was live when their widgets
+    /// were built, so a mode change rebuilds them, exactly as the theme-mode select does; the
+    /// select is moved along so the two never disagree.
+    fn pick_theme_mode(&mut self, mode: UiThemeMode, window: &mut Window, cx: &mut Context<Self>) {
+        let changed = self.backend.update(cx, |b, bcx| {
+            let Some(p) = b.preview.as_mut() else {
+                return false;
+            };
+            if !pick_theme(p, mode) {
+                return false;
+            }
+            crate::install_moon_theme_for_config(p, bcx);
+            bcx.notify();
+            true
+        });
+        if changed {
+            self.theme_mode
+                .update(cx, |s, _| s.set_selected_value(&mode));
+            self.iface = build(&self.backend, window, cx);
+            self.lines = super::lines::build(&self.backend, window, cx);
+            self.badges = super::badges::build(&self.backend, window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The theme cards offered now: the three reviewed themes, plus the experimental ones while
+    /// their checkbox is on or one of them is the current theme.
+    fn theme_cards(&self, current: UiThemeMode, cx: &Context<Self>) -> Vec<AnyElement> {
+        visible_modes(self.appearance_ui.show_experimental, current)
+            .into_iter()
+            .map(|mode| {
+                let this = cx.entity().downgrade();
+                let on_click: super::common::Action = Rc::new(move |window, cx| {
+                    let _ = this.update(cx, |view, cx| view.pick_theme_mode(mode, window, cx));
+                });
+                theme_card(mode, mode == current, on_click, cx)
+            })
+            .collect()
+    }
+
+    /// The colour groups of the active colour set, each a title and its rows.
+    fn color_groups(&self, cx: &Context<Self>) -> Vec<ColorGroup> {
         let i = &self.iface;
         let p = MoonPalette::active(cx);
-        v_flex()
-            .w_full()
-            .gap_1()
-            // Chart-label font field from the portable theme.
-            .child(section(&t!("iface.sec_font"), p, cx))
-            .child(slider_row(
-                &t!("iface.label_font_delta"),
-                &i.label_font_delta,
-                -4.0..=12.0,
-                |v| {
-                    fmt::round_to(v as f64, 1).map_or_else(
-                        || "+0.0 px".to_string(),
-                        |rounded| format!("{rounded:+.1} px"),
-                    )
-                },
+        let pct = |v: f32| {
+            fmt::pct((v * 100.0) as f64, 0).map_or_else(|| "0%".to_string(), |(text, _)| text)
+        };
+        let px1 = |v: f32| format!("{} px", fmt::compact(v as f64, 1));
+        let color = |key: &str, st: &Entity<MoonColorPickerState>| {
+            color_line(color_row(&t!(key), st, p, cx).into_any_element(), None, cx)
+        };
+        let color_alpha =
+            |key: &str, st: &Entity<MoonColorPickerState>, alpha: &Entity<MoonSliderState>| {
+                color_line(
+                    color_row(&t!(key), st, p, cx).into_any_element(),
+                    Some(slider_ctl(alpha, &pct, cx)),
+                    cx,
+                )
+            };
+        let slider = |key: &str, st: &Entity<MoonSliderState>, f: &dyn Fn(f32) -> String| {
+            color_line(
+                div()
+                    .text_color(rgba_from(p.text_soft, 1.0))
+                    .child(t!(key).to_string())
+                    .into_any_element(),
+                Some(slider_ctl(st, f, cx)),
                 cx,
-            ))
-            .child(separator(p, cx))
-            // Chart background and grid.
-            .child(section(&t!("iface.sec_chart"), p, cx))
-            .child(color_row(&t!("iface.bg"), &i.bg, p, cx))
-            .child(color_row(&t!("iface.grid"), &i.grid, p, cx))
-            .child(slider_row(
-                &t!("iface.grid_alpha"),
-                &i.grid_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Chart crosshair.
-            .child(section(&t!("iface.sec_cross"), p, cx))
-            .child(color_row(&t!("iface.cross"), &i.cross, p, cx))
-            .child(slider_row(
-                &t!("iface.cross_alpha"),
-                &i.cross_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.cross_thickness"),
-                &i.cross_thickness,
-                0.5..=4.0,
-                |v| format!("{} px", fmt::compact(v as f64, 1)),
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Per-theme candle colors shared by all windows; visibility and mode live in the candle popup.
-            .child(section(&t!("iface.sec_candles"), p, cx))
-            .child(color_row(&t!("iface.candle_up"), &i.candle_up, p, cx))
-            .child(color_row(&t!("iface.candle_down"), &i.candle_down, p, cx))
-            .child(color_row(
-                &t!("iface.candle_neutral"),
-                &i.candle_neutral,
-                p,
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.candle_fill_alpha"),
-                &i.candle_fill_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Volumes: the bars take the candle colours above; only the horizontal profile's
-            // backdrop is its own. Opacity, height and style stay in the chart's own popups.
-            .child(section(&t!("iface.sec_volumes"), p, cx))
-            .child(color_row(&t!("iface.hvol_bg"), &i.hvol_bg, p, cx))
-            .child(separator(p, cx))
-            // Price lines. Colour and width used to be per-backend shader literals.
-            .child(section(&t!("iface.sec_price_lines"), p, cx))
-            .child(color_row(&t!("iface.price_line"), &i.price_line, p, cx))
-            .child(slider_row(
-                &t!("iface.price_line_alpha"),
-                &i.price_line_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(color_row(&t!("iface.mark_line"), &i.mark_line, p, cx))
-            .child(slider_row(
-                &t!("iface.mark_line_alpha"),
-                &i.mark_line_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.price_line_px"),
-                &i.price_line_px,
-                0.5..=6.0,
-                |v| format!("{} px", fmt::compact(v as f64, 1)),
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Trade colors are shared by all chart tabs using this theme.
-            .child(section(&t!("iface.sec_trades"), p, cx))
-            .child(color_row(&t!("iface.tick_buy"), &i.tick_buy, p, cx))
-            .child(color_row(&t!("iface.tick_sell"), &i.tick_sell, p, cx))
-            .child(color_row(&t!("iface.tick_liq"), &i.tick_liq, p, cx))
-            .child(separator(p, cx))
-            // Order book.
-            .child(section(&t!("iface.sec_book"), p, cx))
-            .child(slider_row(
-                &t!("iface.order_book_width"),
-                &i.order_book_width,
-                moon_core::config::book_width::MIN..=moon_core::config::book_width::MAX,
-                |v| format!("{} px", fmt::compact(v as f64, 0)),
-                cx,
-            ))
-            .child(color_row(&t!("iface.book_bg"), &i.book_bg, p, cx))
-            .child(color_row(&t!("iface.book_bg_ask"), &i.book_bg_ask, p, cx))
-            .child(color_row(&t!("iface.book_bg_bid"), &i.book_bg_bid, p, cx))
-            .child(color_row(&t!("iface.book_bid"), &i.book_bid, p, cx))
-            .child(color_row(&t!("iface.book_ask"), &i.book_ask, p, cx))
-            .child(self.book_level_row(true, cx))
-            .child(self.book_level_row(false, cx))
-            .child(slider_row(
-                &t!("iface.book_level_alpha"),
-                &i.book_level_alpha,
-                0.0..=1.0,
-                |v| {
-                    fmt::pct((v * 100.0) as f64, 0)
-                        .map_or_else(|| "0%".to_string(), |(text, _)| text)
-                },
-                cx,
-            ))
-            .child(slider_row(
-                &t!("iface.book_level_width"),
-                &i.book_level_width,
-                1.0..=4.0,
-                |v| format!("{} px", fmt::compact(v as f64, 1)),
-                cx,
-            ))
-            .child(separator(p, cx))
-            // Panels.
-            .child(section(&t!("iface.sec_panels"), p, cx))
-            .child(color_row(&t!("iface.panel_bg"), &i.panel_bg, p, cx))
-            .child(
-                h_flex()
-                    .items_center()
-                    .gap(design::ui_px(cx, 10.0))
+            )
+        };
+        vec![
+            ColorGroup {
+                id: "iface-grp-bg",
+                title: t!("iface.grp.bg_grid").to_string(),
+                rows: vec![
+                    color("iface.bg", &i.bg),
+                    color_alpha("iface.grid", &i.grid, &i.grid_alpha),
+                    color("iface.panel_bg", &i.panel_bg),
+                    color("iface.hvol_bg", &i.hvol_bg),
+                ],
+            },
+            ColorGroup {
+                id: "iface-grp-candles",
+                title: t!("iface.grp.candles").to_string(),
+                rows: vec![
+                    color("iface.candle_up", &i.candle_up),
+                    color("iface.candle_down", &i.candle_down),
+                    color("iface.candle_neutral", &i.candle_neutral),
+                    slider("iface.candle_fill_alpha", &i.candle_fill_alpha, &pct),
+                ],
+            },
+            ColorGroup {
+                id: "iface-grp-price",
+                title: t!("iface.grp.price_cross").to_string(),
+                rows: vec![
+                    color_alpha("iface.price_line", &i.price_line, &i.price_line_alpha),
+                    color_alpha("iface.mark_line", &i.mark_line, &i.mark_line_alpha),
+                    // Logical pixels: the device scale is applied where the uniform is built.
+                    slider("iface.price_line_px", &i.price_line_px, &px1),
+                    color_alpha("iface.cross", &i.cross, &i.cross_alpha),
+                    slider("iface.cross_thickness", &i.cross_thickness, &px1),
+                ],
+            },
+            ColorGroup {
+                id: "iface-grp-trades",
+                title: t!("iface.grp.trades").to_string(),
+                rows: vec![
+                    color("iface.tick_buy", &i.tick_buy),
+                    color("iface.tick_sell", &i.tick_sell),
+                    color("iface.tick_liq", &i.tick_liq),
+                ],
+            },
+            ColorGroup {
+                id: "iface-grp-book",
+                title: t!("iface.grp.book").to_string(),
+                rows: vec![
+                    color("iface.book_bg_bid", &i.book_bg_bid),
+                    color("iface.book_bg_ask", &i.book_bg_ask),
+                    color("iface.book_bg", &i.book_bg),
+                    color("iface.book_bid", &i.book_bid),
+                    color("iface.book_ask", &i.book_ask),
+                    self.book_level_row(true, cx).into_any_element(),
+                    self.book_level_row(false, cx).into_any_element(),
+                    slider("iface.book_level_alpha", &i.book_level_alpha, &pct),
+                    slider("iface.book_level_width", &i.book_level_width, &px1),
+                ],
+            },
+            ColorGroup {
+                id: "iface-grp-labels",
+                title: t!("iface.grp.labels").to_string(),
+                rows: vec![slider(
+                    "iface.label_font_delta",
+                    &i.label_font_delta,
+                    &|v| {
+                        fmt::round_to(v as f64, 1).map_or_else(
+                            || "+0.0 px".to_string(),
+                            |rounded| format!("{rounded:+.1} px"),
+                        )
+                    },
+                )],
+            },
+        ]
+    }
+
+    /// Render the Appearance page body: interface theme and zoom, the chart colour set with its
+    /// preview, the order-book width and the dock reset.
+    ///
+    /// Args:
+    ///     cx: Settings context that supplies the active draft and palette.
+    ///
+    /// Returns:
+    ///     The assembled page content.
+    pub(super) fn interface_tab(&self, cx: &Context<Self>) -> AnyElement {
+        let (mode, theme, show) = {
+            let b = self.backend.read(cx);
+            let d = b.preview.as_ref().unwrap_or(&b.config);
+            (
+                d.ui_theme_mode,
+                d.theme.get(d.ui_theme_mode.is_light()).clone(),
+                self.appearance_ui.show_experimental,
+            )
+        };
+        let experimental = MoonCheckbox::new("iface-show-experimental")
+            .checked(show)
+            .label(t!("iface.theme.experimental").to_string())
+            .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                this.appearance_ui.show_experimental = *checked;
+                cx.notify();
+            }))
+            .into_any_element();
+        let dock_reset = MoonButton::new("iface-dock-reset")
+            .variant(moon_ui::MoonButtonVariant::Neutral)
+            .size(design::CONTROL_TIER)
+            .label(t!("iface.dock_reset_btn").to_string())
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.backend.update(cx, |b, bcx| {
+                    b.request_dock_layout_reset(bcx);
+                });
+            }))
+            .render()
+            .into_any_element();
+        let parts = AppearanceParts {
+            cards: self.theme_cards(mode, cx),
+            experimental,
+            zoom: slider_ctl(&self.ui_zoom, &super::general::zoom_text, cx),
+            set_note: t!(set_note_key(mode)).to_string(),
+            groups: self.color_groups(cx),
+            preview: chart_preview(&theme, cx),
+            book_width: num_input(
+                "iface-book-width",
+                &self.appearance_ui.order_book_width_px,
+                f64::from(moon_core::config::book_width::MIN)
+                    ..=f64::from(moon_core::config::book_width::MAX),
+                10.0,
+                Some("px".into()),
+            ),
+            dock_reset,
+        };
+        appearance_body(parts, &|key| self.more_toggle(key, cx), cx)
+    }
+
+    /// The Theme and colours page, Copy and Paste in its header.
+    pub(super) fn appearance_page(&self, cx: &Context<Self>) -> super::frame::PageParts {
+        let body = self.interface_tab(cx);
+        self.page_parts(super::Tab::Appearance, body, self.share_actions(cx), cx)
+    }
+}
+
+/// Set the interface theme in the draft.
+///
+/// Returns:
+///     Whether the draft changed.
+fn pick_theme(p: &mut AppConfig, mode: UiThemeMode) -> bool {
+    if p.ui_theme_mode == mode {
+        return false;
+    }
+    p.ui_theme_mode = mode;
+    true
+}
+
+/// The theme cards to show: the reviewed three always, the experimental ones when asked for or
+/// when one of them is already in use (hiding the current theme would leave no card selected).
+fn visible_modes(show_experimental: bool, current: UiThemeMode) -> Vec<UiThemeMode> {
+    let experimental = [
+        UiThemeMode::LightExperimental,
+        UiThemeMode::DarkExperimental,
+    ];
+    let mut modes = vec![UiThemeMode::Light, UiThemeMode::Graphite, UiThemeMode::Dark];
+    if show_experimental || experimental.contains(&current) {
+        modes.extend(experimental);
+    }
+    modes
+}
+
+/// Locale key naming which chart colour set the page edits for `mode`.
+fn set_note_key(mode: UiThemeMode) -> &'static str {
+    if mode.is_light() {
+        "iface.set_note.light"
+    } else {
+        "iface.set_note.dark"
+    }
+}
+
+/// Element id and caption of a theme card.
+fn theme_card_meta(mode: UiThemeMode) -> (&'static str, &'static str) {
+    match mode {
+        UiThemeMode::Light => ("theme-card-light", "iface.theme.light"),
+        UiThemeMode::Graphite => ("theme-card-graphite", "iface.theme.graphite"),
+        UiThemeMode::Dark => ("theme-card-dark", "iface.theme.dark"),
+        UiThemeMode::LightExperimental => {
+            ("theme-card-light-exp", "iface.light_experimental_theme")
+        }
+        UiThemeMode::DarkExperimental => ("theme-card-dark-exp", "iface.dark_experimental_theme"),
+    }
+}
+
+/// The interface palette a theme card previews: the theme's own shell, not the active one. The
+/// dark card takes MoonUI's default, the dark shell, since it previews a theme not in use.
+fn card_palette(mode: UiThemeMode) -> MoonPalette {
+    match mode {
+        UiThemeMode::Graphite => MoonPalette::GRAPHITE,
+        mode if mode.is_light() => MoonPalette::LIGHT,
+        _ => MoonPalette::default(),
+    }
+}
+
+/// One theme card: a miniature of the theme's panel and chart, and its name.
+fn theme_card(
+    mode: UiThemeMode,
+    selected: bool,
+    on_click: super::common::Action,
+    cx: &App,
+) -> AnyElement {
+    let (id, label) = theme_card_meta(mode);
+    let pal = card_palette(mode);
+    let candle = |up: bool, top: f32, h: f32| {
+        div()
+            .absolute()
+            .top(relative(top))
+            .h(relative(h))
+            .w(design::ui_px(cx, 4.0))
+            .bg(rgba_from(if up { pal.green } else { pal.red }, 1.0))
+    };
+    let mini = h_flex()
+        .w_full()
+        .h(design::ui_px(cx, 44.0))
+        .rounded(design::ui_px(cx, 4.0))
+        .overflow_hidden()
+        .border_1()
+        .border_color(rgba_from(pal.border, 1.0))
+        .child(
+            div()
+                .w(relative(0.22))
+                .h_full()
+                .bg(rgba_from(pal.shell_high, 1.0)),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .h_full()
+                .relative()
+                .bg(rgba_from(pal.shell, 1.0))
+                .gap(design::ui_px(cx, 6.0))
+                .px(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .relative()
+                        .w(design::ui_px(cx, 4.0))
+                        .h_full()
+                        .child(candle(true, 0.45, 0.35)),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .w(design::ui_px(cx, 4.0))
+                        .h_full()
+                        .child(candle(false, 0.3, 0.3)),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .w(design::ui_px(cx, 4.0))
+                        .h_full()
+                        .child(candle(true, 0.2, 0.4)),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .w(design::ui_px(cx, 4.0))
+                        .h_full()
+                        .child(candle(true, 0.1, 0.3)),
+                ),
+        );
+    div()
+        .w(design::ui_px(cx, 150.0))
+        .debug_selector(move || id.to_string())
+        .child(super::common::select_card(
+            id,
+            selected,
+            on_click,
+            vec![
+                v_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 6.0))
+                    .child(mini)
                     .child(
                         div()
-                            .text_color(rgb(p.text_soft))
-                            .child(t!("iface.dock_reset").to_string()),
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!(label).to_string()),
                     )
-                    .child(
-                        MoonButton::new("iface-dock-reset")
-                            .outline()
-                            .label(format!("  {}  ", t!("iface.dock_reset_btn")))
-                            .tooltip(t!("iface.dock_reset_tip").to_string())
-                            .on_click(cx.listener(|this, _, _window, cx| {
-                                this.backend.update(cx, |b, bcx| {
-                                    b.request_dock_layout_reset(bcx);
-                                });
-                            }))
-                            .render(),
-                    ),
+                    .into_any_element(),
+            ],
+        ))
+        .into_any_element()
+}
+
+/// A compact slider for a colour-group row: the track and its value in the mono face.
+pub(super) fn slider_ctl(
+    st: &Entity<MoonSliderState>,
+    format: &dyn Fn(f32) -> String,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let value = st.read(cx).value().end();
+    let value = if value == 0.0 { 0.0 } else { value };
+    h_flex()
+        .flex_none()
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
+        .child(
+            div()
+                .w(design::ui_px(cx, 110.0))
+                .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
+        )
+        .child(
+            div()
+                .w(design::font_w_px(cx, 56.0))
+                .font_family(design::mono())
+                .text_align(TextAlign::Right)
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(format(value)),
+        )
+        .into_any_element()
+}
+
+/// One colour-group row: what it edits on the left, an optional slider on the right; the
+/// slider drops under the label when the group is narrow.
+fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) -> AnyElement {
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .justify_between()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .py(design::ui_px(cx, 2.0))
+        .child(div().min_w_0().child(left))
+        .children(right)
+        .into_any_element()
+}
+
+/// A colour group of the Appearance page.
+pub(super) struct ColorGroup {
+    id: &'static str,
+    title: String,
+    rows: Vec<AnyElement>,
+}
+
+/// The parts of the Appearance page, built by the view and laid out by [`appearance_body`].
+pub(super) struct AppearanceParts {
+    cards: Vec<AnyElement>,
+    experimental: AnyElement,
+    zoom: AnyElement,
+    /// Which chart colour set is edited, from [`set_note_key`].
+    set_note: String,
+    groups: Vec<ColorGroup>,
+    preview: AnyElement,
+    book_width: AnyElement,
+    dock_reset: AnyElement,
+}
+
+/// The Appearance page body.
+///
+/// The preview sits right of the colour groups while the body has room for both, and drops
+/// below them when it does not: the two wrap rather than squeeze.
+fn appearance_body(
+    parts: AppearanceParts,
+    more: &dyn Fn(&'static str) -> (bool, super::common::Action),
+    cx: &App,
+) -> AnyElement {
+    let pal = MoonPalette::active(cx);
+    let muted = rgba_from(pal.text_muted, 1.0);
+    let row = |id: &'static str,
+               label: String,
+               hint: String,
+               long: Option<String>,
+               control: AnyElement| {
+        let (open, toggle) = more(id);
+        div()
+            .debug_selector(move || id.to_string())
+            .child(super::common::hint_row(
+                id,
+                label,
+                Some(hint),
+                long,
+                control,
+                open,
+                toggle,
+                cx,
+            ))
+            .into_any_element()
+    };
+    // The groups keep 420 before the preview drops below them: with the sidebar and padding that
+    // is the mockup's 980-pixel window breakpoint.
+    let groups = h_flex()
+        .flex_1()
+        .min_w(design::ui_px(cx, 420.0))
+        .flex_wrap()
+        .items_start()
+        .gap(design::ui_px(cx, 12.0))
+        .children(parts.groups.into_iter().map(|g| {
+            div()
+                .flex_1()
+                .min_w(design::ui_px(cx, 260.0))
+                .child(super::general::page_section(g.id, g.title, g.rows, cx))
+        }));
+    let preview = v_flex()
+        .flex_none()
+        .w(design::ui_px(cx, 300.0))
+        .max_w_full()
+        .gap(design::ui_px(cx, 6.0))
+        .debug_selector(|| "iface-preview".into())
+        .child(
+            div()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(t!("iface.preview").to_string()),
+        )
+        .child(parts.preview);
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 16.0))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(t!("iface.theme.title").to_string()),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 10.0))
+                        .debug_selector(|| "iface-themes".into())
+                        .children(parts.cards),
+                )
+                .child(parts.experimental),
+        )
+        .child(super::general::page_box(
+            vec![row(
+                "iface-zoom",
+                t!("iface.ui_zoom").to_string(),
+                t!("iface.ui_zoom.hint").to_string(),
+                Some(t!("iface.ui_zoom_hint").to_string()),
+                parts.zoom,
+            )],
+            cx,
+        ))
+        .child(
+            v_flex()
+                .w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div()
+                        .debug_selector(|| "iface-set-note".into())
+                        .text_color(muted)
+                        .child(parts.set_note),
+                )
+                .child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .items_start()
+                        .gap(design::ui_px(cx, 14.0))
+                        .debug_selector(|| "iface-colors".into())
+                        .child(groups)
+                        .child(preview),
+                ),
+        )
+        .child(super::general::page_box(
+            vec![
+                row(
+                    "iface-book-width",
+                    t!("iface.order_book_width").to_string(),
+                    t!("iface.order_book_width.hint").to_string(),
+                    None,
+                    parts.book_width,
+                ),
+                row(
+                    "iface-dock-reset",
+                    t!("iface.dock_reset").to_string(),
+                    t!("iface.dock_reset.hint").to_string(),
+                    Some(t!("iface.dock_reset_tip").to_string()),
+                    parts.dock_reset,
+                ),
+            ],
+            cx,
+        ))
+        // `theme.toml` is the shareable file the colour set lands in.
+        .child(
+            div()
+                .debug_selector(|| "iface-footnote".into())
+                .text_color(muted)
+                .child(t!("iface.hint").to_string()),
+        )
+        .into_any_element()
+}
+
+/// A still picture of a chart in the edited colour set: grid, candles, the price and mark lines,
+/// and the order-book zones on the right.
+///
+/// Drawn from plain elements rather than the chart renderer: the renderer reads candles only
+/// from live market rings, and a synthetic series would need a market-data source the settings
+/// window does not have.
+fn chart_preview(theme: &ChartTheme, cx: &App) -> AnyElement {
+    let c = |rgb: [u8; 3], alpha: f32| {
+        Hsla::from(Rgba {
+            r: f32::from(rgb[0]) / 255.0,
+            g: f32::from(rgb[1]) / 255.0,
+            b: f32::from(rgb[2]) / 255.0,
+            a: alpha.clamp(0.0, 1.0),
+        })
+    };
+    let level = |bid: bool| {
+        let v = theme.resolved_book_level(bid);
+        Hsla::from(Rgba {
+            r: v[0],
+            g: v[1],
+            b: v[2],
+            a: theme.book_level_alpha.clamp(0.0, 1.0),
+        })
+    };
+    // (open, close, high, low) as fractions of the chart height from the top.
+    const CANDLES: [(f32, f32, f32, f32); 10] = [
+        (0.62, 0.55, 0.50, 0.66),
+        (0.55, 0.58, 0.52, 0.62),
+        (0.58, 0.47, 0.44, 0.60),
+        (0.47, 0.42, 0.38, 0.50),
+        (0.42, 0.46, 0.40, 0.49),
+        (0.46, 0.36, 0.33, 0.48),
+        (0.36, 0.40, 0.34, 0.43),
+        (0.40, 0.30, 0.27, 0.42),
+        (0.30, 0.33, 0.28, 0.36),
+        (0.33, 0.26, 0.22, 0.35),
+    ];
+    let chart_w = 0.72;
+    let step = chart_w / CANDLES.len() as f32;
+    let mut chart = div()
+        .relative()
+        .w_full()
+        .h(design::ui_px(cx, 220.0))
+        .overflow_hidden()
+        .rounded(design::r_container(cx))
+        .bg(c(theme.bg, 1.0));
+    for k in 1..4 {
+        let y = k as f32 / 4.0;
+        chart = chart.child(
+            div()
+                .absolute()
+                .left_0()
+                .w(relative(chart_w))
+                .top(relative(y))
+                .h(px(1.0))
+                .bg(c(theme.grid, theme.grid_alpha)),
+        );
+    }
+    for (n, (open, close, high, low)) in CANDLES.into_iter().enumerate() {
+        let up = close < open;
+        let color = if up {
+            theme.candle_up
+        } else {
+            theme.candle_down
+        };
+        let x = step * n as f32 + step * 0.2;
+        let (top, bottom) = if up { (close, open) } else { (open, close) };
+        chart = chart
+            .child(
+                div()
+                    .absolute()
+                    .left(relative(x + step * 0.28))
+                    .w(px(1.0))
+                    .top(relative(high))
+                    .h(relative(low - high))
+                    .bg(c(color, 1.0)),
             )
             .child(
                 div()
-                    .mt_2()
-                    .text_color(rgb(p.text_soft))
-                    .child(t!("iface.hint").to_string()),
-            )
+                    .absolute()
+                    .left(relative(x))
+                    .w(relative(step * 0.6))
+                    .top(relative(top))
+                    .h(relative((bottom - top).max(0.01)))
+                    .border_1()
+                    .border_color(c(color, 1.0))
+                    .bg(c(color, theme.candle_fill_alpha)),
+            );
+    }
+    let last = CANDLES[CANDLES.len() - 1].1;
+    chart = chart
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .w(relative(chart_w))
+                .top(relative(last))
+                .h(px(theme.price_line_px.max(0.5)))
+                .bg(c(theme.price_line, theme.price_line_alpha)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .w(relative(chart_w))
+                .top(relative(last + 0.04))
+                .h(px(1.0))
+                .bg(c(theme.mark_line, theme.mark_line_alpha)),
+        );
+    // The book: ask zone above the spread, bid zone below, each with one wall and one level.
+    let book = v_flex()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(relative(chart_w))
+        .right_0()
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .bg(c(theme.book_bg_ask, 1.0))
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .bottom(relative(0.3))
+                        .h(px(4.0))
+                        .w(relative(0.8))
+                        .bg(c(theme.book_ask, 1.0)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .bottom(relative(0.6))
+                        .h(px(3.0))
+                        .w(relative(0.4))
+                        .bg(level(false)),
+                ),
+        )
+        .child(div().h(relative(0.06)).bg(c(theme.book_bg, 1.0)))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .bg(c(theme.book_bg_bid, 1.0))
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top(relative(0.3))
+                        .h(px(4.0))
+                        .w(relative(0.7))
+                        .bg(c(theme.book_bid, 1.0)),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top(relative(0.6))
+                        .h(px(3.0))
+                        .w(relative(0.35))
+                        .bg(level(true)),
+                ),
+        );
+    chart.child(book).into_any_element()
+}
+
+/// UI state of the Appearance page that the draft does not hold. Branch-owned: fields are added
+/// here, never on `SettingsView`.
+pub(super) struct AppearanceUi {
+    /// Number field for `order_book_width_px`.
+    pub(super) order_book_width_px: Entity<moon_ui::MoonInputState>,
+    /// Whether the experimental theme cards are shown. Per Settings session; not a setting.
+    pub(super) show_experimental: bool,
+}
+
+impl AppearanceUi {
+    /// Fields seeded from the draft `config` and bound to the draft.
+    pub(super) fn init(
+        config: &AppConfig,
+        window: &mut Window,
+        cx: &mut Context<SettingsView>,
+    ) -> Self {
+        use moon_core::config::book_width;
+        Self {
+            order_book_width_px: super::general::draft_number(
+                f64::from(book_width::normalize(config.order_book_width_px).round()),
+                window,
+                cx,
+                |p| {
+                    Some(f64::from(
+                        book_width::normalize(p.order_book_width_px).round(),
+                    ))
+                },
+                |p, v| {
+                    let width = book_width::normalize(v as f32);
+                    let changed = p.order_book_width_px != width;
+                    p.order_book_width_px = width;
+                    changed
+                },
+            ),
+            show_experimental: false,
+        }
     }
 }
+
+#[cfg(test)]
+mod tests;

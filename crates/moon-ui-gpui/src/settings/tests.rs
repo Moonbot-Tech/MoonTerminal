@@ -18,3 +18,116 @@ fn global_book_width_edit_marks_settings_dirty_and_reverting_clears_it() {
     draft.order_book_width_px = saved.order_book_width_px;
     assert!(!draft_dirty(&saved, &draft));
 }
+
+/// The page ids of the approved mockup's navigation, in its order.
+const MOCKUP_IDS: [&str; 17] = [
+    "cores",
+    "tg-bot",
+    "tg-notify",
+    "tg-msg",
+    "tg-core",
+    "st-over",
+    "st-cores",
+    "st-tape",
+    "st-maint",
+    "appearance",
+    "lines",
+    "badges",
+    "hotkeys",
+    "general",
+    "security",
+    "storage",
+    "sounds",
+];
+
+/// Catches a renamed, duplicated or reordered page id; element ids and the mockup key off them.
+#[test]
+fn page_ids_are_unique_ascii_and_match_the_mockup() {
+    let ids: Vec<&str> = super::Tab::ALL.iter().map(|t| t.id()).collect();
+    assert_eq!(ids, MOCKUP_IDS);
+    for id in &ids {
+        assert!(id.is_ascii(), "{id}");
+        assert_eq!(ids.iter().filter(|other| *other == id).count(), 1, "{id}");
+    }
+}
+
+/// Catches a missing locale key: rust-i18n falls back to the raw key, which would show up in the
+/// navigation as `settings.page.x.title`.
+#[test]
+fn every_page_and_group_has_text_in_every_language() {
+    for lang in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(lang.code());
+        for tab in super::Tab::ALL {
+            for (what, text) in [
+                ("title", tab.title()),
+                ("desc", tab.desc()),
+                ("keywords", tab.keywords()),
+            ] {
+                assert!(
+                    !text.trim().is_empty() && !text.starts_with("settings."),
+                    "{}: {tab:?} {what} = {text:?}",
+                    lang.code()
+                );
+            }
+            assert_eq!(tab.keywords(), tab.keywords().to_lowercase(), "{tab:?}");
+        }
+        for group in super::NavGroup::ALL {
+            let title = group.title();
+            assert!(
+                !title.trim().is_empty() && !title.starts_with("settings."),
+                "{}: {group:?} = {title:?}",
+                lang.code()
+            );
+        }
+    }
+}
+
+/// Catches a field hashed under the wrong page: a theme colour edit must dot Appearance alone.
+#[test]
+fn theme_colour_edit_dirties_only_appearance() {
+    let saved = AppConfig::load(None, false).expect("test config");
+    let mut draft = saved.clone();
+    draft.theme.dark.bg[0] = draft.theme.dark.bg[0].wrapping_add(1);
+    let pages = super::dirty_pages(&saved, &draft);
+    assert!(draft_dirty(&saved, &draft));
+    assert_eq!(
+        pages.iter().collect::<Vec<_>>(),
+        vec![super::Tab::Appearance]
+    );
+}
+
+/// Catches the bot token falling outside TgBot, or a token edit leaking to other pages.
+#[test]
+fn token_edit_dirties_only_the_bot_page() {
+    let saved = AppConfig::load(None, false).expect("test config");
+    let mut draft = saved.clone();
+    draft.telegram.token = moon_core::config::Secret::new("123:synthetic-token");
+    assert!(draft_dirty(&saved, &draft));
+    let pages = super::dirty_pages(&saved, &draft);
+    assert_eq!(pages.iter().collect::<Vec<_>>(), vec![super::Tab::TgBot]);
+}
+
+/// Catches page signatures disagreeing with the whole-draft signature: some page is dirty exactly
+/// when the draft is, for edits to page-owned fields and for no edit at all.
+#[test]
+fn page_dirt_appears_exactly_when_the_draft_is_dirty() {
+    let saved = AppConfig::load(None, false).expect("test config");
+    let clean = saved.clone();
+    assert!(!draft_dirty(&saved, &clean));
+    assert_eq!(super::dirty_pages(&saved, &clean).len(), 0);
+
+    let mut edits: Vec<AppConfig> = Vec::new();
+    let mut d = saved.clone();
+    d.log_to_file = !d.log_to_file;
+    edits.push(d);
+    let mut d = saved.clone();
+    d.telegram.mini_app_enabled = !d.telegram.mini_app_enabled;
+    edits.push(d);
+    let mut d = saved.clone();
+    d.ui_scale += 0.25;
+    edits.push(d);
+    for draft in edits {
+        assert!(draft_dirty(&saved, &draft));
+        assert_eq!(super::dirty_pages(&saved, &draft).len(), 1);
+    }
+}

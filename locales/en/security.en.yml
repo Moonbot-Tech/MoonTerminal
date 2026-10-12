@@ -10,12 +10,9 @@ security.mismatch: "Passwords do not match"
 
 # --- Launch gate ---
 security.launch: "Password on launch"
-security.launch_hint: "A local latch asked for at every start. Any length. It does NOT encrypt the core keys — anyone with file access still reads them."
 
 # --- servers.enc encryption password ---
 security.file: "servers.enc encryption password"
-security.file_hint: "Asked only where the file cannot be opened with the machine key: on a new machine, or after the OS keyring is lost. Once entered correctly it is remembered for this machine and not asked again."
-security.file_warning: "This password cannot be recovered. Losing it together with the machine key loses the cores."
 security.rule: "At least %{min} characters and two different character classes."
 security.bits: "≈%{bits} bits"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Too predictable — make it longer and more varied"
 
 # --- Machine key slots ---
 security.machines: "Machines with access: %{used} of %{max}"
-security.machines_unknown: "Machines with access: — of %{max}"
-security.forget_machines: "Forget the others"
 security.machines_forgotten: "Access revoked for the other machines"
 
 # --- Apply results ---
@@ -64,3 +59,18 @@ login.throttled: "Entry slows down after repeated failures"
 login.err.empty: "Enter a password"
 login.err.backend: "The password could not be checked; see the log"
 login.err.wrong: "Wrong password"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Computers with access"
+security.machines.label: "Open the file without a password"
+security.machines.count: "%{n} of %{max}"
+security.machines.keep_only: "Keep only this one…"
+security.machines.hint: "Revoking is saved at once."
+security.machines.confirm_title: "Keep access for this computer only?"
+security.machines.confirm_body: "The other computers will no longer open the connections file without a password. The change is saved at once."
+security.machines.confirm_btn: "Keep only this one"
+security.unrecoverable: "It cannot be recovered. Forget the password on a new computer and the core keys must be entered again."
+security.launch.title: "Password at startup"
+security.launch.hint: "Asked at every start. Does not encrypt the core keys."
+security.file.title: "Connections file encryption"
+security.file.hint: "Needed only on a computer where the file does not open by itself."

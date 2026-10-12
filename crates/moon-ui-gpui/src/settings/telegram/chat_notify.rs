@@ -191,6 +191,57 @@ fn settings_from(
     Ok(settings)
 }
 
+/// What committing the editor of `chat` does now.
+#[derive(Debug, PartialEq)]
+enum Commit {
+    /// Save these settings against the revision the row was read at.
+    Save(NotifySettings, u64),
+    /// Nothing is saved; the reason is shown and the edits stay.
+    Refuse(&'static str),
+    /// The editor holds nothing the stored row does not.
+    Nothing,
+}
+
+/// Decide a commit: the edits are saved only when they read, differ from the stored row and the
+/// station can take them now. The revision is always the one the row was read at, so a row
+/// changed elsewhere meanwhile is refused by the bot rather than overwritten.
+///
+/// Args:
+///     loaded: The chat and stored row the editor was filled from.
+///     chat: The chat being committed.
+///     draft: Switches and cores as edited.
+///     fields: The number fields as typed.
+///     station_busy: A station job runs and would drop this one.
+fn commit_plan(
+    loaded: Option<&(i64, ChatNotifyRow)>,
+    chat: i64,
+    draft: &NotifySettings,
+    fields: [&str; FIELDS],
+    station_busy: bool,
+) -> Commit {
+    let Some((_, row)) = loaded.filter(|(c, _)| *c == chat) else {
+        return Commit::Nothing;
+    };
+    let settings = match settings_from(draft, fields) {
+        Ok(settings) => settings,
+        Err(key) => return Commit::Refuse(key),
+    };
+    if settings == row.settings {
+        return Commit::Nothing;
+    }
+    if station_busy {
+        return Commit::Refuse("telegram.mini_error_busy_station");
+    }
+    Commit::Save(settings, row.revision)
+}
+
+/// Whether the chat picker may leave the chat after its edits were committed: not while they
+/// were refused or are still on their way to the station — the editor would be refilled over
+/// them.
+fn may_switch(refused: bool, sending: bool) -> bool {
+    !refused && !sending
+}
+
 impl SettingsView {
     pub(super) fn notify_ed(&self, side: ChatsOf) -> &NotifyEd {
         &self.chat_ed(side).notify
@@ -354,7 +405,7 @@ impl SettingsView {
         ));
     }
 
-    /// Change `side`'s draft switches.
+    /// Change `side`'s draft switches and apply them at once.
     pub(super) fn notify_edit(
         &mut self,
         side: ChatsOf,
@@ -364,6 +415,41 @@ impl SettingsView {
         let ed = self.notify_ed_mut(side);
         edit(&mut ed.draft);
         ed.status = None;
+        if let Some(chat) = ed.loaded.as_ref().map(|(chat, _)| *chat) {
+            self.notify_save(side, chat, cx);
+        }
+        cx.notify();
+    }
+
+    /// Apply the number fields of `side`'s editor once one is left or confirmed with Enter.
+    pub(super) fn wire_notify(side: ChatsOf, ed: &NotifyEd, cx: &mut Context<Self>) {
+        for field in ed.inputs() {
+            cx.subscribe(field, move |this, _, ev: &moon_ui::MoonInputEvent, cx| {
+                if matches!(
+                    ev,
+                    moon_ui::MoonInputEvent::Blur | moon_ui::MoonInputEvent::PressEnter { .. }
+                ) && let Some(chat) = this.notify_ed(side).loaded.as_ref().map(|(c, _)| *c)
+                {
+                    this.notify_save(side, chat, cx);
+                }
+            })
+            .detach();
+        }
+    }
+
+    /// Commit the open chat's edits before the picker shows `picked`; stay on the open chat when
+    /// they were refused or are still being sent.
+    fn notify_pick(&mut self, side: ChatsOf, picked: i64, cx: &mut Context<Self>) {
+        if let Some(open) = self.notify_chat(side, cx).filter(|open| *open != picked) {
+            self.notify_save(side, open, cx);
+            let ed = self.notify_ed(side);
+            let refused = matches!(&ed.status, Some((c, Err(_))) if *c == open);
+            if !may_switch(refused, ed.sending.is_some()) {
+                cx.notify();
+                return;
+            }
+        }
+        self.notify_ed_mut(side).chat = Some(picked);
         cx.notify();
     }
 
@@ -379,20 +465,30 @@ impl SettingsView {
     /// Save `chat`'s notifications on `side` against the revision they were read at.
     fn notify_save(&mut self, side: ChatsOf, chat: i64, cx: &mut Context<Self>) {
         let ed = self.notify_ed(side);
-        let Some(revision) = ed
-            .loaded
-            .as_ref()
-            .filter(|(c, _)| *c == chat)
-            .map(|(_, row)| row.revision)
-        else {
+        if ed.sending.is_some() {
             return;
-        };
+        }
         let fields = ed.fields(cx);
-        let settings = match settings_from(&ed.draft, fields.each_ref().map(String::as_str)) {
-            Ok(settings) => settings,
-            Err(key) => {
+        let busy = side == ChatsOf::Station && self.backend.read(cx).station.busy();
+        let plan = commit_plan(
+            ed.loaded.as_ref(),
+            chat,
+            &ed.draft,
+            fields.each_ref().map(String::as_str),
+            busy,
+        );
+        let (settings, revision) = match plan {
+            Commit::Save(settings, revision) => (settings, revision),
+            Commit::Refuse(key) => {
                 self.notify_ed_mut(side).status = Some((chat, Err(t!(key).to_string())));
                 cx.notify();
+                return;
+            }
+            Commit::Nothing => {
+                let ed = self.notify_ed_mut(side);
+                if matches!(&ed.status, Some((c, Err(_))) if *c == chat) {
+                    ed.status = None;
+                }
                 return;
             }
         };
@@ -493,10 +589,7 @@ impl SettingsView {
                 chat,
                 crate::panels::RadioMark::Check,
                 move |app, picked| {
-                    let _ = weak.update(app, |this, cx| {
-                        this.notify_ed_mut(side).chat = Some(picked);
-                        cx.notify();
-                    });
+                    let _ = weak.update(app, |this, cx| this.notify_pick(side, picked, cx));
                 },
             )
         };
@@ -659,6 +752,23 @@ impl SettingsView {
                         ),
                 )
             })
+            .when_some(status, |block, status| {
+                let (text, color) = match status {
+                    Ok(text) => (text, p.text_muted),
+                    Err(reason) => (reason, p.red_text),
+                };
+                block.child(
+                    div()
+                        .debug_selector(|| "tg-notify-status".into())
+                        .text_color(rgba_from(color, 1.0))
+                        .child(text),
+                )
+            })
+            .child(super::super::common::section(
+                &t!("telegram.notify.sec.closed"),
+                p,
+                cx,
+            ))
             .child(switch(
                 "trades",
                 t!("telegram.mini_settings_trades").to_string(),
@@ -720,11 +830,11 @@ impl SettingsView {
             .when(side == ChatsOf::Station, |block| {
                 block.child(self.chart_notify_block(side, chat, cx))
             })
-            .child(
-                div()
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(t!("telegram.notify_editor.events").to_string()),
-            )
+            .child(super::super::common::section(
+                &t!("telegram.notify.sec.core"),
+                p,
+                cx,
+            ))
             .child(
                 h_flex()
                     .flex_wrap()
@@ -757,17 +867,29 @@ impl SettingsView {
                         draft.down.on,
                         |s, v| s.down.on = v,
                     ))
-                    .child(field(
-                        &ed.after_minutes,
-                        "after",
-                        t!("telegram.mini_settings_after_minutes").to_string(),
-                    )),
+                    .child(
+                        h_flex()
+                            .gap(design::ui_px(cx, 8.0))
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_color(muted)
+                                    .child(t!("telegram.mini_settings_after_minutes").to_string()),
+                            )
+                            .child(super::super::common::num_input(
+                                "tg-notify-after",
+                                &ed.after_minutes,
+                                1.0..=1440.0,
+                                1.0,
+                                None,
+                            )),
+                    ),
             )
-            .child(
-                div()
-                    .text_color(rgba_from(p.text, 1.0))
-                    .child(t!("telegram.auto.title").to_string()),
-            )
+            .child(super::super::common::section(
+                &t!("telegram.notify.sec.auto"),
+                p,
+                cx,
+            ))
             .child(
                 h_flex()
                     .flex_wrap()
@@ -786,32 +908,6 @@ impl SettingsView {
                         .child(t!("telegram.auto.open_basis").to_string()),
                 )
             })
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .child(
-                        MoonButton::new(id("save"))
-                            .primary()
-                            .padding_x(12.0)
-                            .label(t!("telegram.notify_editor.save").to_string())
-                            .disabled(
-                                side == ChatsOf::Station && self.backend.read(cx).station.busy(),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.notify_save(side, chat, cx);
-                            }))
-                            .render(),
-                    )
-                    .when_some(status, |row, status| {
-                        let (text, color) = match status {
-                            Ok(text) => (text, p.text_muted),
-                            Err(reason) => (reason, p.red_text),
-                        };
-                        row.child(div().text_color(rgba_from(color, 1.0)).child(text))
-                    }),
-            )
             .into_any_element()
     }
 

@@ -252,3 +252,24 @@ pub(super) fn apply_core_hotkeys(hotkeys: &mut HotkeysConfig, rows: &[PullRow]) 
 
 #[cfg(test)]
 mod tests;
+
+/// Write a pull the user confirmed into `draft`, the Settings DRAFT: exactly the rows the dialog
+/// showed, never a layout re-read at click time, never the saved configuration or `hotkeys.toml`.
+/// Save persists it through the normal path; closing without saving drops it.
+///
+/// Args:
+///     draft: The draft hotkey set to change.
+///     keys: The key rows the dialog showed.
+///     gestures: The gesture rows the dialog showed.
+///
+/// Returns:
+///     Whether any slot changed.
+pub(super) fn apply_pull(
+    draft: &mut HotkeysConfig,
+    keys: &[PullRow],
+    gestures: &[super::pull_gestures::GesturePullRow],
+) -> bool {
+    let mut changed = apply_core_hotkeys(draft, keys);
+    changed |= super::pull_gestures::apply_core_gestures(draft, gestures);
+    changed
+}

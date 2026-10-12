@@ -356,7 +356,7 @@ fn settings_save_does_not_create_a_backup() {
     let source = read_src("settings/apply.rs");
     let save = code_only(fn_body(
         &source,
-        "pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {",
+        "pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) -> SaveOutcome {",
     ));
 
     for forbidden in ["backup_due", "backup_now", "snapshot", "save_with_snapshot"] {

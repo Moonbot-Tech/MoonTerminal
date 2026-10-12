@@ -54,8 +54,7 @@ fn terminal_text_uses_no_legacy_font_channel_outside_documented_mirrors() {
                 .to_string_lossy()
                 .replace('\\', "/");
             let code = code_only(&std::fs::read_to_string(path).ok()?);
-            (!(matches!(rel.as_str(), "design.rs" | "settings/connections/table.rs")
-                || rel.starts_with("design/"))
+            (!(rel == "design.rs" || rel.starts_with("design/"))
                 && (code.contains("tokens.font(") || code.contains("design::font_value(")))
             .then_some(rel)
         })
@@ -72,7 +71,13 @@ fn terminal_text_uses_no_legacy_font_channel_outside_documented_mirrors() {
 /// follow the tier, so the rows stop aligning.
 #[test]
 fn settings_and_analytics_tabs_do_not_pin_custom_button_metrics() {
-    for path in ["settings/render.rs", "analytics/toolbar.rs"] {
+    // The Settings buttons live in the page header, the save bar and the sidebar, not in render.rs.
+    for path in [
+        "settings/render.rs",
+        "settings/frame.rs",
+        "settings/nav.rs",
+        "analytics/toolbar.rs",
+    ] {
         assert!(
             !code_only(&read_src(path)).contains("MoonButtonSize::Custom {"),
             "{path} must use the control tier instead of a custom button size"

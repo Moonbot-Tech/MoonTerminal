@@ -2,10 +2,10 @@
 //!
 //! Explicit imports (no `use super::*`, which would bring in gpui's `test` macro).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use super::super::super::connections::ConnEntry;
-use super::{CoreCounts, CoreLine, Group, Line, lines, merge};
+use super::{CoreCounts, CoreLine, Group, Kind, Kinds, Line, deletion_pairs, lines, merge};
 
 fn line(uid: u64, name: &str, group: Group) -> CoreLine {
     CoreLine {
@@ -165,4 +165,42 @@ fn a_downloading_core_is_not_selectable() {
     assert!(core.selectable());
     core.syncing = Some("43%".into());
     assert!(!core.selectable());
+}
+
+/// The delete request is the selected cores crossed with the kinds that are on.
+///
+/// A core whose catch-up is running is in the selection and still contributes nothing: a page
+/// from that download would land under the wipe. The expected pairs are written out here, not
+/// produced by a second walk of the same lines.
+///
+/// Breaks on: `deletion_pairs` keeping a syncing core, dropping an archive core, or emitting a
+/// kind whose box is off.
+#[test]
+fn delete_request_is_the_selected_cores_crossed_with_the_kinds() {
+    let mut syncing = line(2, "sync", Group::Connected);
+    syncing.syncing = Some("10%".into());
+    let rows = vec![
+        Line::Core(line(1, "a", Group::Connected)),
+        Line::Core(syncing),
+        Line::Core(line(3, "c", Group::Archive)),
+    ];
+    let selected = BTreeSet::from([1, 2, 3]);
+    let kinds = Kinds {
+        reports: true,
+        strategies: false,
+        traces: true,
+        warnings: false,
+    };
+
+    let pairs = deletion_pairs(&rows, &selected, kinds);
+
+    assert_eq!(
+        pairs,
+        vec![
+            (1, Kind::Reports),
+            (1, Kind::Traces),
+            (3, Kind::Reports),
+            (3, Kind::Traces),
+        ]
+    );
 }

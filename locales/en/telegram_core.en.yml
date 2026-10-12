@@ -4,7 +4,6 @@ _version: 1
 
 telegram_core.section: "Telegram on the core"
 
-telegram_core.intro: "Control the built-in Telegram reader on the selected core. State belongs to the core, not this terminal."
 
 telegram_core.core_pick: "Core"
 
@@ -38,7 +37,6 @@ telegram_core.disconnected: "Core is not connected."
 
 telegram_core.no_snapshot: "No state snapshot."
 
-telegram_core.proxy_section: "Proxy"
 
 telegram_core.proxy_kind_none: "No proxy"
 
@@ -56,7 +54,6 @@ telegram_core.proxy_password: "Password"
 
 telegram_core.proxy_secret: "Secret"
 
-telegram_core.proxy_save: "Save proxy"
 
 telegram_core.proxy_secret_hint: "The core never returns a saved password or secret, so type it again. Leaving it empty clears it, rather than keeping the old value."
 
@@ -73,7 +70,6 @@ telegram_core.phone_hint: "International format, for example +15551234567."
 
 telegram_core.phone_send: "Send number"
 
-telegram_core.login_qr: "Log in by QR instead"
 
 telegram_core.login_phone: "Use a phone number instead"
 
@@ -184,3 +180,17 @@ telegram_core.code_kind.fragment: "Fragment: %{url}"
 telegram_core.code_kind.unsupported: "This delivery method is not supported."
 
 telegram_core.code_kind.other: "%{kind}"
+
+# Settings redesign (phases 3-5)
+tgcore.steps.phone: "Phone number"
+tgcore.steps.code: "Code from Telegram"
+tgcore.steps.password: "Cloud password"
+tgcore.steps.done: "Connected"
+tgcore.steps.email: "Login email"
+tgcore.steps.registration: "The account is not registered"
+tgcore.steps.premium_required: "Telegram Premium is required"
+tgcore.steps.waiting: "Waiting for the core…"
+tgcore.steps.unknown: "Unknown login step"
+tgcore.qr_login: "Log in with a QR code"
+tgcore.proxy.title: "Proxy"
+tgcore.proxy.send: "Send to the core"

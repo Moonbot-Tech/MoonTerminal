@@ -2,10 +2,7 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram.segment_terminal_bot: "Bot de Telegram"
-telegram.segment_core_reader: "Telegram en el núcleo"
 
-telegram.intro: "Conecta tu bot y vincula tu chat para recibir informes en Telegram. Mini App se activa por separado."
 telegram.state.connected: "Bot conectado"
 telegram.pair_copy: "Copiar comando"
 telegram.mini_copy_url: "Copiar dirección de Mini App"
@@ -21,11 +18,6 @@ telegram.bot_mini_wait: "Mini App aún no está disponible. Comprueba su estado 
 telegram.bot_mini_disabled_station: "Mini App está desactivada en la estación. La activa su propietario en el terminal: Ajustes → Telegram, la casilla «Mini App en el servidor». Después envía /miniapp."
 telegram.bot_mini_wait_station: "Mini App aún no está disponible: la estación todavía está abriendo el acceso. Vuelve a enviar /miniapp en un minuto."
 
-telegram.tab: "Telegram"
-
-station.tab: "Estación"
-
-telegram.server.on_station: "El bot funciona en la estación de un servidor Linux. La instalación, el estado y las acciones de la estación están en la pestaña Estación."
 
 telegram.section_bot: "Bot de este terminal"
 telegram.section_mini_app: "Mini App"
@@ -38,8 +30,6 @@ telegram.onboarding: "Crea un bot: envía /newbot a @BotFather. Pega el token y 
 telegram.mini_app: "Activar Mini App"
 telegram.mini_app_hint: "Después de guardar, envía /miniapp para obtener el botón de acceso. /start abre los informes. Mantén el terminal abierto."
 
-telegram.paired_none: "Sin chats vinculados"
-telegram.paired_count: "Chats vinculados: %{count}"
 
 telegram.state.disabled: "Desactivado: indica un token de bot para activar Telegram."
 telegram.state.unsaved: "Hay cambios pendientes. Pulsa Guardar para aplicarlos."
@@ -61,7 +51,6 @@ telegram.rate_limited: "Límite de Telegram: reintento tras %{seconds}s."
 
 telegram.stopped: "Detenido"
 
-telegram.pair_code: "/pair %{code}\nEnvía este comando a tu bot en un chat privado. El código es de un solo uso y caduca a los 10 minutos."
 
 telegram.pair_new: "Obtener código de vinculación"
 
@@ -237,7 +226,6 @@ telegram.server.transfer_hint: "El bot del terminal se traslada al servidor: su 
 telegram.server.mini_app: "Mini App en el servidor"
 telegram.server.mini_app_hint: "La Mini App se abre a través de un túnel de Cloudflare: donde Cloudflare está bloqueado no se abrirá, así que desactívala. Cambiarlo reinicia la estación."
 telegram.server.access_apply: "Aplicar en el servidor"
-telegram.server.access_revert: "Descartar cambios"
 telegram.server.groups_same: "Los grupos de núcleos de la estación coinciden con el terminal: %{names}."
 telegram.server.groups_differ: "Grupos de núcleos en la estación: %{station} · en este terminal: %{terminal}. El informe por núcleo del bot usa los de la estación."
 telegram.server.groups_send: "Enviar grupos a la estación"
@@ -464,7 +452,6 @@ telegram.server.remove_unsupported: "El script instalado no permite eliminar la 
 telegram.server.removed: "Se eliminaron la estación y sus secretos del servidor; el terminal olvidó el servidor."
 telegram.server.remove_unconfirmed: "El servidor no confirmó la eliminación. Se conservó el acceso: comprueba el servicio y vuelve a intentarlo."
 telegram.server.remove_local_failed: "Se eliminaron la estación y sus secretos del servidor, pero el terminal no pudo olvidar el servidor. Se conservó la entrada de acceso."
-telegram.server.confirm: "Confirmar"
 telegram.server.cancel: "Cancelar"
 telegram.server.done: "Hecho."
 telegram.server.needs_old_admin: "El servidor fue configurado por una versión anterior: moon aún tiene contraseña. Introdúcela una vez y repite; después el acceso será solo por clave."
@@ -503,3 +490,27 @@ telegram.server.install_confirm: "Confiar en esta clave e instalar"
 telegram.server.chats_hint: "Añade chats por código; el primero es propietario, los demás ven núcleos asignados al Aplicar en el servidor."
 telegram.server.cores_changed: "La estación cambió — actualiza la lista e inténtalo de nuevo."
 telegram.server.cores_not_configured: "La estación no está configurada — instálala de nuevo y envía los núcleos."
+
+# Settings redesign (phases 3-5)
+telegram.host.local: "El bot funciona en este terminal"
+telegram.host.station: "El bot funciona en la estación"
+telegram.where.label: "Dónde funciona el bot"
+telegram.where.local: "En el terminal, mientras esté abierto"
+telegram.where.move: "Mover a la estación…"
+telegram.chats.col_chat: "Chat"
+telegram.chats.col_role: "Rol"
+telegram.chats.configure: "Configurar"
+telegram.chats.pair: "+ Conectar un chat"
+telegram.chats.unpair_all: "Desconectar todos los chats…"
+telegram.chats.unpair_title: "¿Desconectar todos los chats?"
+telegram.chats.unpair_body: "El bot dejará de responder en ellos. Para recuperar un chat habrá que conectarlo de nuevo."
+telegram.pair.hint: "Envía el código al bot en el chat que quieras; el chat aparecerá en la lista."
+telegram.notify.sec.closed: "Operaciones cerradas"
+telegram.notify.sec.core: "Estado de los núcleos"
+telegram.notify.sec.auto: "Informes automáticos"
+telegram.host.chats_n_one: "%{n} chat"
+telegram.host.chats_n_few: "%{n} chats"
+telegram.host.chats_n_many: "%{n} chats"
+telegram.maint.row_version: "Versión"
+telegram.maint.row_resetup: "Reconfigurar"
+telegram.maint.row_address: "Dirección del servidor"

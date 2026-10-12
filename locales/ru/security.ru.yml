@@ -10,12 +10,9 @@ security.mismatch: "Пароли не совпадают"
 
 # --- Launch gate ---
 security.launch: "Пароль при запуске"
-security.launch_hint: "Локальная защёлка: спрашивается при каждом старте. Длина любая. Ключи ядер она НЕ шифрует — тот, кто имеет доступ к файлам, читает их и без неё."
 
 # --- servers.enc encryption password ---
 security.file: "Пароль шифрования servers.enc"
-security.file_hint: "Спрашивается только там, где файл не открывается ключом машины: на новой машине или после потери хранилища ключей ОС. Введённый верно — он запоминается для этой машины, больше спрашивать не будем."
-security.file_warning: "Этот пароль восстановить нельзя. Забыв его вместе с ключом машины, ядра теряются."
 security.rule: "Минимум %{min} символов и два разных класса символов."
 security.bits: "≈%{bits} бит"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Слишком предсказуемый — сд�
 
 # --- Machine key slots ---
 security.machines: "Машин с доступом: %{used} из %{max}"
-security.machines_unknown: "Машин с доступом: — из %{max}"
-security.forget_machines: "Забыть остальные"
 security.machines_forgotten: "Доступ остальных машин отозван"
 
 # --- Apply results ---
@@ -64,3 +59,18 @@ login.throttled: "После нескольких ошибок ввод заме
 login.err.empty: "Введите пароль"
 login.err.backend: "Не удалось проверить пароль — подробности в логе"
 login.err.wrong: "Неверный пароль"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Компьютеры с доступом"
+security.machines.label: "Открывают файл без пароля"
+security.machines.count: "%{n} из %{max}"
+security.machines.keep_only: "Оставить только этот…"
+security.machines.hint: "Отзыв сохраняется сразу."
+security.machines.confirm_title: "Оставить доступ только этому компьютеру?"
+security.machines.confirm_body: "Остальные компьютеры больше не откроют файл подключений без пароля. Изменение сохраняется сразу."
+security.machines.confirm_btn: "Оставить только этот"
+security.unrecoverable: "Восстановить нельзя. Забудете пароль на новом компьютере — ключи ядер придётся вводить заново."
+security.launch.title: "Пароль при запуске"
+security.launch.hint: "Спрашивается при каждом старте. Ключи ядер не шифрует."
+security.file.title: "Шифрование файла подключений"
+security.file.hint: "Нужен только на компьютере, где файл не открывается сам."

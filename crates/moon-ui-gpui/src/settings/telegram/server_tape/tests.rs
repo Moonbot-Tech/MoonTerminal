@@ -649,6 +649,17 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
 #[test]
 fn running_catchup_rereads_while_the_station_page_is_open() {
     use crate::settings::Tab;
-    assert!(super::shows_tape_block(Tab::Station));
-    assert!(!super::shows_tape_block(Tab::Telegram));
+    assert!(super::shows_tape_block(Tab::StOverview));
+    assert!(!super::shows_tape_block(Tab::TgBot));
+}
+
+/// A typed long-position threshold inside the range stays as typed; one outside it is clamped
+/// and the field is marked for a write-back of the clamped number.
+#[test]
+fn an_out_of_range_long_position_is_written_back_clamped() {
+    use super::long_shown_after;
+    use moon_core::config::storage::clamp_long_position_min;
+    assert_eq!(long_shown_after(15, clamp_long_position_min(15)), Some(15));
+    assert_eq!(long_shown_after(500, clamp_long_position_min(500)), None);
+    assert_eq!(long_shown_after(0, clamp_long_position_min(0)), None);
 }

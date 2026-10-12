@@ -10,12 +10,9 @@ security.mismatch: "As senhas não coincidem"
 
 # --- Launch gate ---
 security.launch: "Senha ao abrir"
-security.launch_hint: "Uma trava local pedida em cada início. Qualquer tamanho. Ela NÃO criptografa as chaves dos núcleos — quem tem acesso aos arquivos ainda as lê."
 
 # --- servers.enc encryption password ---
 security.file: "Senha de criptografia do servers.enc"
-security.file_hint: "Pedida só quando o arquivo não abre com a chave da máquina: numa máquina nova, ou depois que o cofre de chaves do sistema se perde. Depois de digitada corretamente, fica memorizada nesta máquina e não é pedida de novo."
-security.file_warning: "Esta senha não pode ser recuperada. Se você perdê-la junto com a chave da máquina, perderá os núcleos."
 security.rule: "Pelo menos %{min} caracteres e duas classes de caracteres diferentes."
 security.bits: "≈%{bits} bits"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Previsível demais — deixe mais longa e variada"
 
 # --- Machine key slots ---
 security.machines: "Máquinas com acesso: %{used} de %{max}"
-security.machines_unknown: "Máquinas com acesso: — de %{max}"
-security.forget_machines: "Esquecer as outras"
 security.machines_forgotten: "Acesso revogado nas outras máquinas"
 
 # --- Apply results ---
@@ -64,3 +59,18 @@ login.throttled: "A entrada fica mais lenta depois de falhas repetidas"
 login.err.empty: "Digite uma senha"
 login.err.backend: "Não foi possível verificar a senha; veja o log"
 login.err.wrong: "Senha incorreta"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Computadores com acesso"
+security.machines.label: "Abrem o arquivo sem senha"
+security.machines.count: "%{n} de %{max}"
+security.machines.keep_only: "Manter só este…"
+security.machines.hint: "A revogação é salva na hora."
+security.machines.confirm_title: "Manter o acesso só para este computador?"
+security.machines.confirm_body: "Os outros computadores não abrirão mais o arquivo de conexões sem senha. A alteração é salva na hora."
+security.machines.confirm_btn: "Manter só este"
+security.unrecoverable: "Não dá para recuperar. Se esquecer a senha num computador novo, terá de digitar as chaves dos núcleos de novo."
+security.launch.title: "Senha ao iniciar"
+security.launch.hint: "Pedida a cada início. Não criptografa as chaves dos núcleos."
+security.file.title: "Criptografia do arquivo de conexões"
+security.file.hint: "Só é necessária num computador onde o arquivo não abre sozinho."

@@ -10,12 +10,9 @@ security.mismatch: "Parolalar uyuşmuyor"
 
 # --- Launch gate ---
 security.launch: "Açılışta parola"
-security.launch_hint: "Her açılışta sorulan yerel bir kilit. Uzunluk serbest. Çekirdek anahtarlarını ŞİFRELEMEZ — dosyaya erişen biri onları yine okur."
 
 # --- servers.enc encryption password ---
 security.file: "servers.enc şifreleme parolası"
-security.file_hint: "Yalnızca dosya makine anahtarıyla açılamadığında sorulur: yeni bir makinede veya işletim sistemi anahtarlığı kaybolunca. Doğru girilince bu makine için hatırlanır ve bir daha sorulmaz."
-security.file_warning: "Bu parola kurtarılamaz. Makine anahtarıyla birlikte kaybedilirse çekirdeklere erişim kaybolur."
 security.rule: "En az %{min} karakter ve iki farklı karakter sınıfı."
 security.bits: "≈%{bits} bit"
 
@@ -35,8 +32,6 @@ security.issue.low_entropy: "Çok tahmin edilebilir — uzatın ve çeşitlendir
 
 # --- Machine key slots ---
 security.machines: "Erişimi olan makineler: %{used} / %{max}"
-security.machines_unknown: "Erişimi olan makineler: — / %{max}"
-security.forget_machines: "Diğerlerini unut"
 security.machines_forgotten: "Diğer makinelerin erişimi kaldırıldı"
 
 # --- Apply results ---
@@ -64,3 +59,18 @@ login.throttled: "Art arda hatalardan sonra giriş yavaşlar"
 login.err.empty: "Bir parola girin"
 login.err.backend: "Parola denetlenemedi; günlüğe bakın"
 login.err.wrong: "Yanlış parola"
+
+# Settings redesign (phases 3-5)
+security.machines.title: "Erişimi olan bilgisayarlar"
+security.machines.label: "Dosyayı parolasız açar"
+security.machines.count: "%{n} / %{max}"
+security.machines.keep_only: "Yalnızca bunu tut…"
+security.machines.hint: "İptal hemen kaydedilir."
+security.machines.confirm_title: "Erişim yalnızca bu bilgisayarda kalsın mı?"
+security.machines.confirm_body: "Diğer bilgisayarlar bağlantı dosyasını artık parolasız açamaz. Değişiklik hemen kaydedilir."
+security.machines.confirm_btn: "Yalnızca bunu tut"
+security.unrecoverable: "Kurtarılamaz. Yeni bilgisayarda parolayı unutursanız çekirdek anahtarlarını yeniden girmeniz gerekir."
+security.launch.title: "Açılışta parola"
+security.launch.hint: "Her açılışta sorulur. Çekirdek anahtarlarını şifrelemez."
+security.file.title: "Bağlantı dosyası şifreleme"
+security.file.hint: "Yalnızca dosyanın kendiliğinden açılmadığı bilgisayarda gerekir."

@@ -6,11 +6,12 @@ use gpui::*;
 use moon_core::config::TelegramConfig;
 use moon_core::config::telegram_access::{TelegramChatAccess, TelegramReportAccess};
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputEvent, MoonInputState, MoonPalette,
-    h_flex, rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputEvent,
+    MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
+use super::super::common;
 use super::SettingsView;
 use crate::design;
 use moon_core::session::core_order::CoreOrder;
@@ -104,6 +105,7 @@ impl ChatEd {
 
     /// Write the opened chat's caption into `side`'s draft as it is typed.
     pub(in crate::settings) fn wire(&self, side: ChatsOf, cx: &mut Context<SettingsView>) {
+        SettingsView::wire_notify(side, &self.notify, cx);
         cx.subscribe(&self.name, move |this, emitter, ev: &MoonInputEvent, cx| {
             if matches!(ev, MoonInputEvent::Change) {
                 let Some(chat) = this.chat_ed(side).active_chat else {
@@ -133,6 +135,31 @@ impl ChatEd {
     pub(in crate::settings) fn close(&mut self) {
         self.active_chat = None;
         self.pending_owner = None;
+    }
+}
+
+/// What the pairing bar under a chats table shows.
+pub(in crate::settings) struct PairingState {
+    /// The live pairing code, while one is issued.
+    pub(in crate::settings) code: Option<String>,
+    /// A code cannot be issued now (no running bot, an unsaved token, a station job).
+    pub(in crate::settings) pair_disabled: bool,
+    /// There are no chats to unpair.
+    pub(in crate::settings) unpair_disabled: bool,
+}
+
+/// A chat's role and what it may see, as its table row names it; `true` when a viewer chat has
+/// no cores and so sees nothing.
+pub(super) fn access_words(telegram: &TelegramConfig, chat: i64) -> (String, bool) {
+    if telegram.owner() == Some(chat) {
+        return (t!("telegram.access_owner_summary").to_string(), false);
+    }
+    match telegram.report_access(chat) {
+        Some(TelegramReportAccess::Viewer(ids)) if !ids.is_empty() => (
+            t!("telegram.access_viewer_summary", count = ids.len()).to_string(),
+            false,
+        ),
+        _ => (t!("telegram.access_waiting").to_string(), true),
     }
 }
 
@@ -264,17 +291,16 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// Name the bot host, stack chat cards and expand one editor so narrow Settings stays readable.
+    /// The chats as a table — chat, role and access, Настроить — with one chat's editor opened
+    /// under its row, and the pairing bar below.
     ///
     /// Args:
     ///     side: Whose chats.
-    ///     pairing: Live pairing actions, always shown even when the chat list is empty.
-    ///     footer: The station's Apply/Discard row; terminal edits use the shared Settings Save.
+    ///     pairing: The pairing bar ([`Self::chat_pairing`]), shown even when there are no chats.
     pub(in crate::settings) fn telegram_chat_access(
         &self,
         side: ChatsOf,
         pairing: AnyElement,
-        footer: Option<AnyElement>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let palette = MoonPalette::active(cx);
@@ -293,79 +319,45 @@ impl SettingsView {
                 ),
             );
         let Some(telegram) = self.chats(side, cx) else {
-            return section.child(pairing).children(footer);
+            return section.child(pairing);
         };
         let ed = self.chat_ed(side);
-        let mut section = section;
+        let mut table = chat_table(side, !telegram.authorized_chat_ids.is_empty(), cx);
         for &chat in &telegram.authorized_chat_ids {
             let owner = telegram.owner() == Some(chat);
-            let title = chat_title(telegram, chat);
-            let summary = if owner {
-                t!("telegram.access_owner_summary").to_string()
-            } else {
-                let count = match telegram.report_access(chat) {
-                    Some(TelegramReportAccess::Viewer(ids)) => ids.len(),
-                    _ => 0,
-                };
-                if count == 0 {
-                    t!("telegram.access_waiting").to_string()
-                } else {
-                    t!("telegram.access_viewer_summary", count = count).to_string()
-                }
-            };
+            let (summary, sees_nothing) = access_words(telegram, chat);
             let active = ed.active_chat == Some(chat);
-            let mut card = v_flex()
-                .w_full()
-                .min_w_0()
-                .gap(design::ui_px(cx, 8.0))
-                .p(design::ui_px(cx, 10.0))
-                .border_1()
-                .border_color(rgba_from(palette.border, 1.0))
-                .rounded(design::ui_px(cx, 6.0))
-                .child(
-                    h_flex()
-                        .w_full()
-                        .flex_wrap()
-                        .gap(design::ui_px(cx, 8.0))
-                        .items_center()
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_w_0()
-                                .child(div().text_color(rgba_from(palette.text, 1.0)).child(title))
-                                .child(div().text_color(muted).child(summary)),
-                        )
-                        .child(
-                            MoonButton::new(side.id(format_args!("edit-{chat}")))
-                                .ghost()
-                                .label(
-                                    if active {
-                                        t!("telegram.access_collapse")
-                                    } else {
-                                        t!("telegram.access_edit")
-                                    }
-                                    .to_string(),
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    if this.chat_ed(side).active_chat == Some(chat) {
-                                        let ed = this.chat_ed_mut(side);
-                                        ed.active_chat = None;
-                                        ed.pending_owner = None;
-                                        cx.notify();
-                                    } else {
-                                        this.edit_telegram_chat(side, chat, window, cx);
-                                    }
-                                }))
-                                .render(),
-                        ),
-                );
+            let toggle = MoonButton::new(side.id(format_args!("edit-{chat}")))
+                .ghost()
+                .label(
+                    if active {
+                        t!("telegram.access_collapse")
+                    } else {
+                        t!("telegram.chats.configure")
+                    }
+                    .to_string(),
+                )
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if this.chat_ed(side).active_chat == Some(chat) {
+                        let ed = this.chat_ed_mut(side);
+                        ed.active_chat = None;
+                        ed.pending_owner = None;
+                        cx.notify();
+                    } else {
+                        this.edit_telegram_chat(side, chat, window, cx);
+                    }
+                }))
+                .render()
+                .into_any_element();
+            let mut row = chat_row(
+                chat,
+                chat_title(telegram, chat),
+                (summary, sees_nothing),
+                toggle,
+                cx,
+            );
             if active {
-                card = card
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .child(t!("telegram.access_chat", id = chat).to_string()),
-                    )
+                row = row
                     .child(div().child(t!("telegram.access_name").to_string()))
                     .child(
                         MoonInput::new(side.id("chat-name"))
@@ -374,11 +366,11 @@ impl SettingsView {
                             .size(design::INPUT_SIZE),
                     );
                 if !owner {
-                    card = card.child(self.telegram_core_access(side, chat, cx));
+                    row = row.child(self.telegram_core_access(side, chat, cx));
                     let confirm = ed.pending_owner == Some(chat);
-                    card = card
-                        .when(confirm, |card| {
-                            card.child(
+                    row = row
+                        .when(confirm, |row| {
+                            row.child(
                                 div()
                                     .text_color(muted)
                                     .child(t!("telegram.access_transfer_hint").to_string()),
@@ -438,9 +430,179 @@ impl SettingsView {
                         );
                 }
             }
-            section = section.child(card);
+            table = table.child(row);
         }
-        section.child(pairing).children(footer)
+        let empty = telegram.authorized_chat_ids.is_empty();
+        section
+            .when(!empty, |section| section.child(table))
+            .child(pairing)
+    }
+
+    /// The bar under the chats: issue a pairing code (shown with Скопировать and how to use it),
+    /// and unpair every chat — only from a confirmation dialog.
+    pub(in crate::settings) fn chat_pairing(
+        &self,
+        side: ChatsOf,
+        state: PairingState,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let muted = rgba_from(p.text_muted, 1.0);
+        let buttons = h_flex()
+            .w_full()
+            .flex_wrap()
+            .gap(design::ui_px(cx, 8.0))
+            .items_center()
+            .child(
+                MoonButton::new(side.id("pair"))
+                    .primary()
+                    .padding_x(12.0)
+                    .label(t!("telegram.chats.pair").to_string())
+                    .disabled(state.pair_disabled)
+                    .on_click(cx.listener(move |this, _, _, cx| this.chat_pair(side, cx)))
+                    .render(),
+            )
+            .child(div().flex_1())
+            .child(
+                MoonButton::new(side.id("unpair-all"))
+                    .variant(MoonButtonVariant::OutlineRed)
+                    .padding_x(12.0)
+                    .label(t!("telegram.chats.unpair_all").to_string())
+                    .disabled(state.unpair_disabled)
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        let weak = cx.entity().downgrade();
+                        common::confirm(
+                            window,
+                            cx,
+                            common::Confirm {
+                                title: t!("telegram.chats.unpair_title").to_string(),
+                                body: t!("telegram.chats.unpair_body").to_string(),
+                                buttons: vec![
+                                    common::ConfirmBtn {
+                                        label: t!("dialogs.cancel").to_string(),
+                                        kind: common::ConfirmKind::Cancel,
+                                        on: std::rc::Rc::new(|_, _| {}),
+                                    },
+                                    common::ConfirmBtn {
+                                        label: t!("telegram.pair_reset").to_string(),
+                                        kind: common::ConfirmKind::DangerSolid,
+                                        on: std::rc::Rc::new(move |_, cx| {
+                                            let _ = weak.update(cx, |this, cx| {
+                                                this.chat_unpair_all(side, cx)
+                                            });
+                                        }),
+                                    },
+                                ],
+                            },
+                        );
+                    }))
+                    .render(),
+            );
+        v_flex()
+            .w_full()
+            .gap(design::ui_px(cx, 8.0))
+            .child(buttons)
+            .when_some(state.code, |bar, code| {
+                bar.child(
+                    h_flex()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 10.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .debug_selector(|| "tg-pair-code".into())
+                                .font_family(design::mono())
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("/pair {code}")),
+                        )
+                        .child(
+                            MoonButton::new(side.id("copy-pair"))
+                                .label(t!("telegram.pair_copy").to_string())
+                                .padding_x(12.0)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.chat_pair_copy(side, cx);
+                                }))
+                                .render(),
+                        ),
+                )
+                .child(
+                    div()
+                        .text_color(muted)
+                        .child(t!("telegram.pair.hint").to_string()),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Issue a pairing code on `side`'s bot.
+    fn chat_pair(&mut self, side: ChatsOf, cx: &mut Context<Self>) {
+        match side {
+            ChatsOf::Terminal => self.backend.update(cx, |b, bcx| {
+                b.issue_telegram_pairing();
+                bcx.notify();
+            }),
+            ChatsOf::Station => {
+                if let Some(target) = super::server_bot::known_server() {
+                    self.server_bot_run(
+                        Ok(crate::backend::station::job::Job::PairIssue { target }),
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Copy the live pairing command; judged at the click, since nothing repaints when the code
+    /// expires.
+    fn chat_pair_copy(&mut self, side: ChatsOf, cx: &mut Context<Self>) {
+        let code = {
+            let b = self.backend.read(cx);
+            match side {
+                ChatsOf::Terminal => b
+                    .telegram
+                    .pairing
+                    .as_ref()
+                    .filter(|(_, expiry)| std::time::Instant::now() < *expiry)
+                    .map(|(code, _)| code.clone()),
+                ChatsOf::Station => b
+                    .station
+                    .bot
+                    .as_ref()
+                    .and_then(|s| s.pairing_code().map(str::to_owned)),
+            }
+        };
+        if let Some(code) = code {
+            cx.write_to_clipboard(ClipboardItem::new_string(format!("/pair {code}")));
+            self.status = Some((super::super::StatusMsg::Key("settings.copied"), false));
+        }
+        cx.notify();
+    }
+
+    /// Unpair every chat of `side`'s bot: the terminal's at once, the station's as last read —
+    /// nothing is kept from a draft.
+    fn chat_unpair_all(&mut self, side: ChatsOf, cx: &mut Context<Self>) {
+        match side {
+            ChatsOf::Terminal => self.backend.update(cx, |b, bcx| {
+                b.reset_telegram_pairing(bcx);
+                bcx.notify();
+            }),
+            ChatsOf::Station => {
+                let base = self.telegram.server.access_seen().cloned();
+                if let (Some(target), Some(base)) = (super::server_bot::known_server(), base) {
+                    self.server_bot_run(
+                        Ok(crate::backend::station::job::Job::Access {
+                            target,
+                            base,
+                            access: moon_core::station_api::Access::default(),
+                            edits: false,
+                        }),
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
     }
 
     /// Viewer assignments use stable saved core IDs; selecting today's list never grants future cores.
@@ -607,4 +769,104 @@ impl SettingsView {
             )
         })
     }
+}
+
+/// The chats table with its column heads when there are chats.
+pub(super) fn chat_table(side: ChatsOf, has_chats: bool, cx: &App) -> gpui::Stateful<gpui::Div> {
+    let palette = MoonPalette::active(cx);
+    let muted = rgba_from(palette.text_muted, 1.0);
+    let line = rgba_from(palette.border, 1.0);
+    let head = |text: String| {
+        div()
+            .min_w_0()
+            .text_color(muted)
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(text)
+    };
+    v_flex()
+        .id(side.id("chat-table"))
+        .debug_selector(|| "tg-chat-table".into())
+        .w_full()
+        .min_w_0()
+        .border_1()
+        .border_color(line)
+        .rounded(design::ui_px(cx, 6.0))
+        .when(has_chats, |table| {
+            table.child(
+                h_flex()
+                    .w_full()
+                    .gap(design::ui_px(cx, 10.0))
+                    .px(design::ui_px(cx, 10.0))
+                    .py(design::ui_px(cx, 6.0))
+                    .border_b_1()
+                    .border_color(line)
+                    .child(head(t!("telegram.chats.col_chat").to_string()).flex_1())
+                    .child(head(t!("telegram.chats.col_role").to_string()).flex_1()),
+            )
+        })
+}
+
+/// One chat's table row: title and id, what it may see (red when nothing), and its toggle.
+pub(super) fn chat_row(
+    chat: i64,
+    title: String,
+    (summary, sees_nothing): (String, bool),
+    toggle: AnyElement,
+    cx: &App,
+) -> gpui::Div {
+    let palette = MoonPalette::active(cx);
+    let muted = rgba_from(palette.text_muted, 1.0);
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, 10.0))
+        .py(design::ui_px(cx, 6.0))
+        .border_b_1()
+        .border_color(rgba_from(palette.border, 1.0))
+        .child(
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .gap(design::ui_px(cx, 10.0))
+                .items_center()
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(design::ui_px(cx, 6.0))
+                        .items_center()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_color(rgba_from(palette.text, 1.0))
+                                .child(title),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .font_family(design::mono())
+                                .text_color(muted)
+                                .child(format!("#{chat}")),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .debug_selector(move || format!("tg-chat-role-{chat}"))
+                        .text_color(if sees_nothing {
+                            rgba_from(palette.red_text, 1.0)
+                        } else {
+                            muted
+                        })
+                        .child(summary),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .debug_selector(move || format!("tg-chat-act-{chat}"))
+                        .child(toggle),
+                ),
+        )
 }

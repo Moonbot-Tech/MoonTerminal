@@ -1,5 +1,6 @@
-//! Inline confirmations for address changes, forgetting and removing a station. Pending
-//! destructive actions retain the exact host the user saw and never silently switch targets.
+//! The station's access on the Maintenance page: the address change with its inline fingerprint
+//! check, and the danger zone whose Forget and Remove run only through a confirmation dialog.
+//! The dialog captures the exact host the user saw, so it never silently switches targets.
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -13,17 +14,10 @@ use super::server_bot::parse_target;
 use crate::backend::station::job::Job;
 use crate::design;
 
-/// One exact destructive action awaiting an inline second click.
-enum Confirmation {
-    Forget(Host),
-    Remove(Host),
-}
-
 /// Session-only editors; none of these choices persist through Settings Save.
 pub(super) struct AccessEd {
     address: Entity<MoonInputState>,
     editing: bool,
-    confirmation: Option<Confirmation>,
 }
 
 impl AccessEd {
@@ -32,15 +26,93 @@ impl AccessEd {
         Self {
             address: cx.new(|cx| MoonInputState::new(window, cx)),
             editing: false,
-            confirmation: None,
         }
     }
 
-    /// Close all local confirmations after cancellation or losing the known host.
+    /// Close the address editor after cancellation or losing the known host.
     pub(super) fn clear(&mut self) {
         self.editing = false;
-        self.confirmation = None;
     }
+}
+
+/// Whether a confirmed Forget or Remove may run NOW, checked at the moment of "Yes": no station
+/// job running and no bot hand-over or return pending.
+///
+/// Returns:
+///     `Err` with the locale key of the reason the job does not start.
+pub(super) fn access_check(
+    running: bool,
+    refusal: Option<&'static str>,
+) -> Result<(), &'static str> {
+    if running {
+        return Err("telegram.mini_error_busy_station");
+    }
+    refusal.map_or(Ok(()), Err)
+}
+
+/// A danger action's handler; the zone only forwards the click.
+pub(super) type DangerClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// The red-framed danger zone: Forget and Remove, both disabled while `busy`.
+pub(super) fn danger_el(
+    busy: bool,
+    on_forget: DangerClick,
+    on_remove: DangerClick,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let red = rgba_from(p.red_text, 1.0);
+    let button = |id, key| {
+        MoonButton::new(id)
+            .label(t!(key).to_string())
+            .size(design::CONTROL_TIER)
+            .disabled(busy)
+            .danger()
+    };
+    v_flex()
+        .id("station-danger")
+        .debug_selector(|| "station-danger".into())
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 8.0))
+        .p(design::ui_px(cx, 12.0))
+        .border_1()
+        .border_color(red)
+        .rounded(design::ui_px(cx, 6.0))
+        .child(
+            div()
+                .text_color(red)
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(t!("station.maint.danger").to_string()),
+        )
+        .child(
+            h_flex()
+                .flex_wrap()
+                .gap(design::ui_px(cx, 8.0))
+                .child(
+                    div().debug_selector(|| "station-forget".into()).child(
+                        button("station-forget", "station.maint.forget")
+                            .on_click(on_forget)
+                            .render(),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "station-remove".into()).child(
+                        button("station-remove", "station.maint.remove")
+                            .on_click(on_remove)
+                            .render(),
+                    ),
+                ),
+        )
+        // What Forget does, in place of a long tooltip: the zone is where it is read before a click.
+        .child(
+            div()
+                .debug_selector(|| "station-forget-note".into())
+                .min_w_0()
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(t!("telegram.server.forget_hint").to_string()),
+        )
+        .into_any_element()
 }
 
 impl SettingsView {
@@ -89,8 +161,14 @@ impl SettingsView {
             .ok_or_else(|| t!("telegram.server.no_known_server").to_string())
     }
 
-    /// Arm a destructive confirmation without changing the server or saved host record.
-    fn station_access_confirm(&mut self, remove: bool, cx: &mut Context<Self>) {
+    /// Ask before forgetting or removing the station; nothing changes until the dialog's red
+    /// button. The dialog holds the host read now, so a later address change cannot redirect it.
+    fn station_access_confirm(
+        &mut self,
+        remove: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.backend.read(cx).station.running {
             return;
         }
@@ -98,19 +176,68 @@ impl SettingsView {
             self.server_bot_run(Err(t!(reason).to_string()), cx);
             return;
         }
-        match self.station_access_source() {
-            Ok(source) => {
-                let ed = &mut self.telegram.server.station_access;
-                ed.clear();
-                ed.confirmation = Some(if remove {
-                    Confirmation::Remove(source)
-                } else {
-                    Confirmation::Forget(source)
-                });
-                self.station_address_cancel_probe(cx);
+        let source = match self.station_access_source() {
+            Ok(source) => source,
+            Err(reason) => {
+                self.server_bot_run(Err(reason), cx);
+                return;
             }
-            Err(reason) => self.server_bot_run(Err(reason), cx),
+        };
+        self.telegram.server.station_access.clear();
+        self.station_address_cancel_probe(cx);
+        let has_bot = self
+            .backend
+            .read(cx)
+            .station
+            .bot
+            .as_ref()
+            .is_none_or(|bot| bot.has_token);
+        let (title, body, which, label) = if remove {
+            (
+                "station.maint.remove_title",
+                "station.maint.remove_body",
+                "telegram.server.remove_confirm",
+                "telegram.server.remove",
+            )
+        } else {
+            (
+                "station.maint.forget_title",
+                "station.maint.forget_body",
+                "telegram.server.forget_confirm",
+                "telegram.server.forget",
+            )
+        };
+        let mut text = format!("{}\n\n{}", t!(which, addr = source.addr.clone()), t!(body));
+        if remove && has_bot {
+            text = format!("{text}\n\n{}", t!("telegram.server.remove_bot_confirm"));
         }
+        let view = cx.entity().downgrade();
+        let source = std::cell::Cell::new(Some(source));
+        super::confirm_danger(
+            window,
+            cx,
+            t!(title).to_string(),
+            text,
+            t!(label).to_string(),
+            std::rc::Rc::new(move |_, app| {
+                let Some(source) = source.take() else {
+                    return;
+                };
+                let _ = view.update(app, |this, cx| {
+                    this.telegram.server.station_access.clear();
+                    let station = &this.backend.read(cx).station;
+                    if let Err(key) = access_check(station.running, station.access_refusal()) {
+                        this.server_bot_run(Err(t!(key).to_string()), cx);
+                        return;
+                    }
+                    if remove {
+                        this.server_bot_run(Ok(Job::Remove { source }), cx);
+                    } else {
+                        this.server_bot_forget(source, cx);
+                    }
+                });
+            }),
+        );
         cx.notify();
     }
 
@@ -129,7 +256,6 @@ impl SettingsView {
             .address_change
             .clone()
             .filter(|change| change.source.addr == target.addr());
-        let has_bot = backend.station.bot.as_ref().is_none_or(|bot| bot.has_token);
         let p = MoonPalette::active(cx);
         let button = |id, key| {
             MoonButton::new(id)
@@ -137,34 +263,7 @@ impl SettingsView {
                 .size(design::CONTROL_TIER)
                 .disabled(busy)
         };
-        let mut block =
-            v_flex()
-                .gap(design::ui_px(cx, 8.0))
-                .pt(design::ui_px(cx, 10.0))
-                .border_t_1()
-                .border_color(rgba_from(p.border, 1.0))
-                .child(
-                    h_flex()
-                        .flex_wrap()
-                        .gap(design::ui_px(cx, 8.0))
-                        .child(
-                            button("station-forget", "telegram.server.forget")
-                                .danger()
-                                .tooltip(t!("telegram.server.forget_hint").to_string())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.station_access_confirm(false, cx)
-                                }))
-                                .render(),
-                        )
-                        .child(
-                            button("station-remove", "telegram.server.remove")
-                                .danger()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.station_access_confirm(true, cx)
-                                }))
-                                .render(),
-                        ),
-                );
+        let mut block = v_flex().gap(design::ui_px(cx, 8.0));
         if let Some(reason) = refusal {
             block = block.child(
                 div()
@@ -231,61 +330,34 @@ impl SettingsView {
                         .render(),
                 );
         }
-        if let Some(confirmation) = &ed.confirmation {
-            let (remove, source) = match confirmation {
-                Confirmation::Forget(h) => (false, h),
-                Confirmation::Remove(h) => (true, h),
-            };
-            let source = source.clone();
-            block = block
-                .child(
-                    div().text_color(rgba_from(p.red_text, 1.0)).child(
-                        t!(
-                            if remove {
-                                "telegram.server.remove_confirm"
-                            } else {
-                                "telegram.server.forget_confirm"
-                            },
-                            addr = source.addr.clone()
-                        )
-                        .to_string(),
-                    ),
-                )
-                .when(remove && has_bot, |block| {
-                    block.child(div().child(t!("telegram.server.remove_bot_confirm").to_string()))
-                })
-                .child(
-                    button("station-destructive-confirm", "telegram.server.confirm")
-                        .primary()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.telegram.server.station_access.clear();
-                            if remove {
-                                this.server_bot_run(
-                                    Ok(Job::Remove {
-                                        source: source.clone(),
-                                    }),
-                                    cx,
-                                );
-                            } else {
-                                this.server_bot_forget(source.clone(), cx);
-                            }
-                        }))
-                        .render(),
-                );
-        }
-        block.when(
-            ed.editing || ed.confirmation.is_some() || backend.station.address_change.is_some(),
-            |block| {
-                block.child(
-                    button("station-access-cancel", "telegram.server.cancel")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.telegram.server.station_access.clear();
-                            this.station_address_cancel_probe(cx);
-                            cx.notify();
-                        }))
-                        .render(),
-                )
-            },
-        )
+        let danger = danger_el(
+            busy,
+            Box::new(
+                cx.listener(|this, _, window, cx| this.station_access_confirm(false, window, cx)),
+            ),
+            Box::new(
+                cx.listener(|this, _, window, cx| this.station_access_confirm(true, window, cx)),
+            ),
+            cx,
+        );
+        block
+            .when(
+                ed.editing || backend.station.address_change.is_some(),
+                |block| {
+                    block.child(
+                        button("station-access-cancel", "telegram.server.cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.telegram.server.station_access.clear();
+                                this.station_address_cancel_probe(cx);
+                                cx.notify();
+                            }))
+                            .render(),
+                    )
+                },
+            )
+            .child(danger)
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -2,10 +2,7 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram.segment_terminal_bot: "Telegram botu"
-telegram.segment_core_reader: "Çekirdekteki Telegram"
 
-telegram.intro: "Telegram raporları için botunuzu bağlayın ve sohbetinizi eşleştirin. Mini App ayrı açılır."
 telegram.state.connected: "Bot bağlı"
 telegram.pair_copy: "Komutu kopyala"
 telegram.mini_copy_url: "Mini App adresini kopyala"
@@ -21,11 +18,6 @@ telegram.bot_mini_wait: "Mini App henüz yok. Durumunu Ayarlar → Telegram'da d
 telegram.bot_mini_disabled_station: "Mini App istasyonda kapalı. Sahibi terminalde açar: Ayarlar → Telegram, «Sunucudaki Mini App» kutusu. Sonra /miniapp gönderin."
 telegram.bot_mini_wait_station: "Mini App henüz yok: istasyon erişimini hâlâ açıyor. Bir dakika sonra /miniapp'i yeniden gönderin."
 
-telegram.tab: "Telegram"
-
-station.tab: "İstasyon"
-
-telegram.server.on_station: "Bot, Linux sunucusundaki istasyonda çalışır. İstasyonun kurulumu, durumu ve eylemleri İstasyon sekmesindedir."
 
 telegram.section_bot: "Bu terminalin botu"
 telegram.section_mini_app: "Mini App"
@@ -38,8 +30,6 @@ telegram.onboarding: "Bot oluşturun: @BotFather'a /newbot gönderin. Token'ı y
 telegram.mini_app: "Mini App'i etkinleştir"
 telegram.mini_app_hint: "Kaydettikten sonra başlatma düğmesi için /miniapp gönderin. /start rapor gezginini açar. Terminali açık tutun."
 
-telegram.paired_none: "Eşleşmiş sohbet yok"
-telegram.paired_count: "Eşleşen sohbet: %{count}"
 
 telegram.state.disabled: "Kapalı: Telegram'ı açmak için bir bot token'ı girin."
 telegram.state.unsaved: "Değişiklikler bekliyor. Uygulamak için Kaydet'e basın."
@@ -61,7 +51,6 @@ telegram.rate_limited: "Telegram hız sınırı: %{seconds} sn sonra yeniden den
 
 telegram.stopped: "Durdu"
 
-telegram.pair_code: "/pair %{code}\nBu komutu botunuza özel sohbette gönderin. Kod bir kez çalışır ve 10 dakika sonra düşer."
 
 telegram.pair_new: "Eşleştirme kodu al"
 
@@ -237,7 +226,6 @@ telegram.server.transfer_hint: "Terminalin botu sunucuya taşınır: token'ı, s
 telegram.server.mini_app: "Sunucudaki Mini App"
 telegram.server.mini_app_hint: "Mini App bir Cloudflare tünelinden açılır: Cloudflare'in kapalı olduğu yerde açılmaz, orada kapatın. Değiştirmek istasyonu yeniden başlatır."
 telegram.server.access_apply: "Sunucuda uygula"
-telegram.server.access_revert: "Düzenlemeleri bırak"
 telegram.server.groups_same: "İstasyondaki çekirdek grupları terminaldekilerle aynı: %{names}."
 telegram.server.groups_differ: "İstasyondaki çekirdek grupları: %{station} · bu terminalde: %{terminal}. Botun çekirdeğe göre raporu istasyonunkileri kullanır."
 telegram.server.groups_send: "Grupları istasyona gönder"
@@ -464,7 +452,6 @@ telegram.server.remove_unsupported: "Kurulu yardımcı istasyon kaldırmayı des
 telegram.server.removed: "İstasyon ve sırları sunucudan kalktı; sunucu terminalde unutuldu."
 telegram.server.remove_unconfirmed: "Sunucu istasyonun kalktığını onaylamadı. Erişim kaydı duruyor: hizmeti denetleyip kaldırmayı yeniden deneyin."
 telegram.server.remove_local_failed: "İstasyon ve sırları sunucudan kalktı ama terminal sunucuyu unutamadı. Erişim kaydı duruyor."
-telegram.server.confirm: "Onayla"
 telegram.server.cancel: "İptal"
 telegram.server.done: "Bitti."
 telegram.server.needs_old_admin: "Sunucuyu eski bir sürüm kurmuş: moon'un hâlâ parolası var. Bir kez girin ve yeniden deneyin — bundan sonra giriş yalnızca anahtarla."
@@ -503,3 +490,27 @@ telegram.server.install_confirm: "Bu anahtara güven ve kur"
 telegram.server.chats_hint: "Sohbetleri kodla ekleyin; ilki sahibidir, diğerleri Sunucuda uygula'dan sonra atanmış çekirdekleri görür."
 telegram.server.cores_changed: "İstasyon değişti — listeyi yenileyip tekrar deneyin."
 telegram.server.cores_not_configured: "İstasyon yapılandırılmamış — yeniden kurun, ardından çekirdekleri gönderin."
+
+# Settings redesign (phases 3-5)
+telegram.host.local: "Bot bu terminalde çalışıyor"
+telegram.host.station: "Bot istasyonda çalışıyor"
+telegram.where.label: "Bot nerede çalışıyor"
+telegram.where.local: "Terminalde, açık olduğu sürece"
+telegram.where.move: "İstasyona taşı…"
+telegram.chats.col_chat: "Sohbet"
+telegram.chats.col_role: "Rol"
+telegram.chats.configure: "Ayarla"
+telegram.chats.pair: "+ Sohbet bağla"
+telegram.chats.unpair_all: "Tüm sohbetlerin bağlantısını kes…"
+telegram.chats.unpair_title: "Tüm sohbetlerin bağlantısı kesilsin mi?"
+telegram.chats.unpair_body: "Bot bunlarda yanıt vermeyi bırakır. Bir sohbeti geri almak için yeniden bağlamanız gerekir."
+telegram.pair.hint: "Kodu istediğiniz sohbette bota gönderin; sohbet listede görünür."
+telegram.notify.sec.closed: "Kapanan işlemler"
+telegram.notify.sec.core: "Çekirdek durumu"
+telegram.notify.sec.auto: "Otomatik raporlar"
+telegram.host.chats_n_one: "%{n} sohbet"
+telegram.host.chats_n_few: "%{n} sohbet"
+telegram.host.chats_n_many: "%{n} sohbet"
+telegram.maint.row_version: "Sürüm"
+telegram.maint.row_resetup: "Yeniden yapılandır"
+telegram.maint.row_address: "Sunucu adresi"

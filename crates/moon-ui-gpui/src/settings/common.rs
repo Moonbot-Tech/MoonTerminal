@@ -1,50 +1,33 @@
 //! Shared Settings-window UI helpers (`slider_row`, `section`, `color_row`, and `separator`) and
-//! draft binders (`draft_color`, `draft_slider`, and `draft_slider_on`).
+//! draft binders (`draft_color`, `draft_slider`, and `draft_slider_on`), plus the page primitives
+//! (`hint_row`, `num_input`, `confirm`) and thin adapters over MoonUI widgets (`steps`,
+//! `usage_bar`, `select_card`).
 //!
 //! Interface, Lines, and Connections reuse these helpers through re-exports in `settings/mod.rs`.
 
-use std::{collections::HashSet, ops::RangeInclusive};
+use std::ops::RangeInclusive;
 
 use gpui::*;
 use moon_ui::{
-    MoonAccordion, MoonColorPicker, MoonColorPickerEvent, MoonColorPickerState, MoonPalette,
-    MoonSlider, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
+    MoonBarSegment, MoonButton, MoonButtonVariant, MoonColorPicker, MoonColorPickerEvent,
+    MoonColorPickerState, MoonDisclosure, MoonDisclosureDirection, MoonInputState, MoonNumberInput,
+    MoonPalette, MoonSelectableCard, MoonSlider, MoonSliderEvent, MoonSliderState, MoonStackedBar,
+    MoonSteps, MoonWindowExt, h_flex, rgba_from, v_flex,
 };
+use rust_i18n::t;
 
 use super::SettingsView;
 use crate::{Backend, design};
 use moon_core::config::AppConfig;
 
-/// Build a one-item-per-key collapsible block with MoonUI's `MoonAccordion`.
-///
-/// Lines and Hotkeys share this header-plus-body helper. Each tab owns expansion in a `HashSet`:
-/// `open` is the current state and `set` accesses the collection updated after a toggle click.
-pub(super) fn collapse_block(
-    cx: &Context<SettingsView>,
-    id: SharedString,
-    key: &'static str,
-    title: SharedString,
-    open: bool,
-    body: AnyElement,
-    set: fn(&mut SettingsView) -> &mut HashSet<&'static str>,
-) -> impl IntoElement + use<> {
-    let entity = cx.entity();
-    MoonAccordion::new(id)
-        .item(move |item| item.title(title).open(open).child(body))
-        .on_toggle_click(move |open_ixs, _window, cx| {
-            let now_open = !open_ixs.is_empty();
-            entity.update(cx, |this, c| {
-                let s = set(this);
-                let changed = if now_open {
-                    s.insert(key)
-                } else {
-                    s.remove(key)
-                };
-                if changed {
-                    c.notify();
-                }
-            });
-        })
+/// A number field's input state holding `value`, for a page's `num_input`.
+pub(super) fn number_state(
+    value: impl ToString,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<moon_ui::MoonInputState> {
+    let value = value.to_string();
+    cx.new(|cx| moon_ui::MoonInputState::new(window, cx).default_value(value))
 }
 
 /// Convert color-picker `Hsla` to an sRGB `[u8; 3]` for `ChartTheme` or `OrdersStyle`.
@@ -163,14 +146,6 @@ pub(super) fn slider_row(
                         .child(val),
                 ),
         )
-}
-
-/// Build a section separator ported from egui's `ui.separator()`.
-pub(super) fn separator(p: MoonPalette, cx: &App) -> impl IntoElement {
-    div()
-        .my(design::ui_px(cx, 8.0))
-        .h(px(1.0))
-        .bg(rgba_from(p.border, 1.0))
 }
 
 /// Opens a folder in the platform file manager.
@@ -311,6 +286,269 @@ pub(super) fn draft_slider_on(
     })
     .detach();
     st
+}
+
+/// Click handler of a [`hint_row`] disclosure or a [`ConfirmBtn`].
+pub(super) type Action = std::rc::Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// One setting row: label, a one-line hint, an optional longer help behind "подробнее", and the
+/// control on the right.
+///
+/// The long help is a disclosure rather than a tooltip: a tooltip cannot be read while the
+/// control is being used and is invisible on touch, while this stays open until it is folded.
+///
+/// Args:
+///     id: Stable element id; the disclosure derives its own from it.
+///     label: Setting name.
+///     hint: One short line under the label, or `None`.
+///     more: Longer help shown only while `open`, or `None` for no disclosure at all.
+///     control: The editor, laid out at its own width.
+///     open: Whether the long help is shown.
+///     on_toggle: Flips `open`; the caller keeps the state (see `SettingsView::more_open`).
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The row.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hint_row(
+    id: &'static str,
+    label: String,
+    hint: Option<String>,
+    more: Option<String>,
+    control: AnyElement,
+    open: bool,
+    on_toggle: Action,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let muted = rgba_from(p.text_muted, 1.0);
+    let toggle = more.is_some().then(|| {
+        let on_caret = on_toggle.clone();
+        h_flex()
+            .id(SharedString::from(format!("{id}-more")))
+            .gap(design::ui_px(cx, 4.0))
+            .items_center()
+            .cursor_pointer()
+            .text_size(design::t_caption(cx))
+            .text_color(rgba_from(p.blue, 1.0))
+            .on_click(move |_, window, cx| on_toggle(window, cx))
+            .child(
+                MoonDisclosure::button(SharedString::from(format!("{id}-caret")), open)
+                    .direction(MoonDisclosureDirection::DownUp)
+                    .size(design::DISCLOSURE_GLYPH)
+                    .box_size(design::DISCLOSURE_BOX)
+                    .on_toggle(move |_, window, cx| on_caret(window, cx)),
+            )
+            .child(
+                if open {
+                    t!("settings.less")
+                } else {
+                    t!("settings.more")
+                }
+                .to_string(),
+            )
+    });
+    let text = v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap(design::ui_px(cx, 2.0))
+        .child(
+            div()
+                .debug_selector(move || format!("{id}-label"))
+                .min_w_0()
+                .child(label),
+        )
+        // Hints and help are captions: smaller and muted under the body-size label.
+        .children(hint.map(|hint| {
+            div()
+                .min_w_0()
+                .text_size(design::t_caption(cx))
+                .text_color(muted)
+                .child(hint)
+        }))
+        .children(toggle)
+        .children(more.filter(|_| open).map(|more| {
+            div()
+                .debug_selector(move || format!("{id}-more-text"))
+                .min_w_0()
+                .text_size(design::t_caption(cx))
+                .text_color(muted)
+                .child(more)
+        }));
+    h_flex()
+        .id(SharedString::from(id))
+        .w_full()
+        .items_start()
+        .gap(design::ui_px(cx, 16.0))
+        .py(design::ui_px(cx, 6.0))
+        .child(text)
+        .child(div().flex_none().child(control))
+        .into_any_element()
+}
+
+/// A counted text in the active language's plural form: `base` names keys `base_one`,
+/// `base_few` and `base_many`, each with an `n` placeholder.
+pub(super) fn count_label(base: &str, n: u64) -> String {
+    t!(&super::telegram::plural_key(base, n), n = n).to_string()
+}
+
+/// Number field over [`MoonNumberInput`]: typed entry, -/+ and arrow-key steps, a unit suffix,
+/// value in the mono face. The caller owns `state` and subscribes to its
+/// `MoonInputEvent::Change`, reading the number with [`MoonNumberInput::read_value`].
+///
+/// Args:
+///     id: Stable element id.
+///     state: The field's input state.
+///     range: Allowed values; the field clamps on blur.
+///     step: Increment of one -/+ press or arrow key.
+///     unit: Suffix such as "px" or "s", or `None`.
+///
+/// Returns:
+///     The field.
+pub(super) fn num_input(
+    id: &'static str,
+    state: &Entity<MoonInputState>,
+    range: RangeInclusive<f64>,
+    step: f64,
+    unit: Option<String>,
+) -> AnyElement {
+    let field = MoonNumberInput::new(id)
+        .state(state)
+        .range(*range.start(), *range.end())
+        .step(step)
+        .size(design::CONTROL_TIER);
+    // A typed number is a compared value: mono, like every value Settings shows.
+    div()
+        .font_family(design::mono())
+        .child(match unit {
+            Some(unit) => field.unit(unit),
+            None => field,
+        })
+        .into_any_element()
+}
+
+/// Progress through a short sequence (TG login, station install) over [`MoonSteps`].
+pub(super) fn steps(id: &'static str, labels: Vec<String>, current: usize) -> AnyElement {
+    MoonSteps::new(id)
+        .steps(labels)
+        .current(current)
+        .size(design::CONTROL_TIER)
+        .into_any_element()
+}
+
+/// One share of a [`usage_bar`].
+pub(super) struct UsageShare {
+    pub(super) value: f64,
+    pub(super) color: u32,
+    /// Tooltip naming the share.
+    pub(super) label: String,
+}
+
+/// Stacked usage bar (Storage: how the total splits by database) over [`MoonStackedBar`].
+pub(super) fn usage_bar(id: &'static str, shares: Vec<UsageShare>, total: f64) -> AnyElement {
+    MoonStackedBar::new(id)
+        .segments(shares.into_iter().map(|share| {
+            MoonBarSegment::new(share.value)
+                .color(share.color)
+                .label(share.label)
+        }))
+        .total(total)
+        .into_any_element()
+}
+
+/// Selectable card (theme pick) over [`MoonSelectableCard`].
+pub(super) fn select_card(
+    id: &'static str,
+    selected: bool,
+    on_click: Action,
+    children: Vec<AnyElement>,
+) -> AnyElement {
+    MoonSelectableCard::new(id)
+        .selected(selected)
+        .on_click(move |_, window, cx| on_click(window, cx))
+        .children(children)
+        .into_any_element()
+}
+
+/// How a confirmation button reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ConfirmKind {
+    /// Backs out; the quiet choice.
+    Cancel,
+    /// Destroys or discards, outlined in red.
+    Danger,
+    /// Destroys or discards, filled red: the dialog's main action.
+    DangerSolid,
+    /// The safe main action.
+    Primary,
+}
+
+/// One confirmation button. The dialog closes before `on` runs.
+pub(super) struct ConfirmBtn {
+    pub(super) label: String,
+    pub(super) kind: ConfirmKind,
+    pub(super) on: Action,
+}
+
+/// A confirmation dialog: title, body, buttons right-aligned in the given order.
+pub(super) struct Confirm {
+    pub(super) title: String,
+    pub(super) body: String,
+    pub(super) buttons: Vec<ConfirmBtn>,
+}
+
+/// Open `c` as the window's one confirmation dialog, replacing any already open.
+///
+/// Args:
+///     window: Window the dialog opens over.
+///     cx: Application context.
+///     c: What the dialog says and offers.
+pub(super) fn confirm(window: &mut Window, cx: &mut App, c: Confirm) {
+    let Confirm {
+        title,
+        body,
+        buttons,
+    } = c;
+    let buttons: std::rc::Rc<Vec<ConfirmBtn>> = std::rc::Rc::new(buttons);
+    window.open_unique_moon_dialog("settings-confirm", cx, move |dialog, _window, cx| {
+        let p = MoonPalette::active(cx);
+        let mut footer = h_flex().w_full().justify_end().flex_wrap().gap_2();
+        for (index, btn) in buttons.iter().enumerate() {
+            let on = btn.on.clone();
+            let button = MoonButton::new(SharedString::from(format!("settings-confirm-{index}")))
+                .label(btn.label.clone())
+                .on_click(move |_, window, cx| {
+                    window.close_dialog(cx);
+                    on(window, cx);
+                });
+            let button = match btn.kind {
+                ConfirmKind::Cancel => button.variant(MoonButtonVariant::Neutral),
+                ConfirmKind::Danger => button.variant(MoonButtonVariant::OutlineRed),
+                ConfirmKind::DangerSolid => button.variant(MoonButtonVariant::Red),
+                ConfirmKind::Primary => button.variant(MoonButtonVariant::Blue),
+            };
+            footer = footer.child(button.render());
+        }
+        let body = body.clone();
+        dialog
+            .w(design::ui_px(cx, 440.0))
+            .close_button(true)
+            .overlay(true)
+            .overlay_closable(true)
+            .bg(rgba_from(p.shell_high, 1.0))
+            .border_color(rgba_from(p.border, 1.0))
+            .rounded(design::r_container(cx))
+            .text_color(rgba_from(p.text, 1.0))
+            .header(
+                div()
+                    .w_full()
+                    .py_2()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title.clone()),
+            )
+            .content(move |content, _window, _cx| content.child(body.clone()))
+            .footer(footer.into_any_element())
+    });
 }
 
 #[cfg(test)]

@@ -2254,24 +2254,27 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
         "the default conversion must be offered first"
     );
 
-    // MoonUI-first: the row is a MoonSelect over that table, not a hand-built trigger, and it
-    // carries the hint. Both caveats of the expert setting — rates come from Binance/Bybit spot,
-    // and the tuner is re-valued too — live in `general.valuation_mode_hint`.
+    // MoonUI-first: the row is a MoonSelect over that table, not a hand-built trigger, under
+    // its label and hint.
     let general = read_src("settings/general.rs");
     let tab = braced_body(&general, "pub(super) fn general_tab(");
+    assert!(
+        tab.contains("select_control(&self.valuation,"),
+        "the General tab must present the conversion setting through its select row"
+    );
     for needle in [
-        "\"general.valuation_mode\"",
-        "&self.valuation",
-        "settings_hint(\n                \"general.valuation_mode_hint\",\n                &t!(\"general.valuation_mode_hint\"),",
+        "\"general.valuation.label\"",
+        "\"general.valuation.hint\"",
+        "\"general.valuation.more\"",
     ] {
         assert!(
-            tab.contains(needle),
-            "the General tab must present the conversion setting: missing {needle}"
+            general.contains(needle),
+            "the General page must label the conversion setting: missing {needle}"
         );
     }
     // The row it is built from is MoonUI's select, not a hand-rolled trigger.
     assert!(
-        braced_body(&general, "fn labeled_select<").contains("MoonSelect::new(state)"),
+        braced_body(&general, "fn select_control<").contains("MoonSelect::new(state)"),
         "the General tab's enum rows must be MoonUI selects"
     );
 
@@ -2325,7 +2328,7 @@ fn the_valuation_mode_selector_lives_in_settings_and_wakes_every_surface() {
     );
     let mut named_source = 0;
     for (lang, tuner_word) in hints {
-        let hint = locale_value("general", lang, "general.valuation_mode_hint");
+        let hint = locale_value("general", lang, "general.valuation.more");
         let hits = hint.matches("Binance/Bybit").count();
         assert_eq!(
             hits, 1,

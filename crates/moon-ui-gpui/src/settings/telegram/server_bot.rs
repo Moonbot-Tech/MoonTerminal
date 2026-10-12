@@ -26,8 +26,8 @@ use moon_remote::ssh::Target;
 use moon_remote::station::BotChange;
 use moon_remote::station::bot::BotState;
 use moon_ui::{
-    MoonButton, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputState, MoonPalette, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonButtonVariant, MoonCheckbox, MoonGroupBox, MoonInput, MoonInputState,
+    MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 use zeroize::Zeroizing;
@@ -77,8 +77,6 @@ pub(in crate::settings) struct ServerBotEd {
     pub(super) chats: ChatEd,
     /// The server's chats as last read.
     access_seen: Option<Access>,
-    /// The station-only core awaiting an explicit second removal click.
-    pub(super) cores_armed: Option<super::station_cores::RemovalArm>,
     /// Rows retained between renders, invalidated by comparison inputs.
     pub(super) cores_cache: super::station_cores::CoreCache,
     /// The full core list below the summary is open.
@@ -158,7 +156,6 @@ pub(in crate::settings) fn build<T: 'static>(
         seen_restored: 0,
         chats: ChatEd::new(window, cx),
         access_seen: None,
-        cores_armed: None,
         cores_cache: Default::default(),
         cores_all_open: false,
         cores_filter: Default::default(),
@@ -205,7 +202,7 @@ fn secret(state: &Entity<MoonInputState>, cx: &App) -> Option<Zeroizing<String>>
 }
 
 /// The station's bot in words.
-fn bot_words(bot: &BotState) -> String {
+pub(super) fn bot_words(bot: &BotState) -> String {
     let status = bot.bot.as_ref().map(|b| &b.status);
     if bot.stopped {
         t!("telegram.server.bot_stopped").to_string()
@@ -348,8 +345,10 @@ impl SettingsView {
         self.station_cores_sync(cx);
         let ed = &mut self.telegram.server;
         // A window opened straight on this tab never "activated" it: the first render asks.
-        let ask = self.active == super::super::Tab::Telegram
-            && ed.known.is_some()
+        let ask = matches!(
+            self.active,
+            super::super::Tab::TgBot | super::super::Tab::TgCore
+        ) && ed.known.is_some()
             && bot_unknown
             && !ed.bot_asked;
         ed.bot_asked |= ask;
@@ -467,7 +466,6 @@ impl SettingsView {
     pub(super) fn server_bot_run(&mut self, job: Result<Job, String>, cx: &mut Context<Self>) {
         match job {
             Ok(job) => {
-                self.telegram.server.cores_armed = None;
                 let hand_over = matches!(
                     job,
                     Job::Install {
@@ -701,7 +699,6 @@ impl SettingsView {
                     .when(has_token || b.station.has_returned_bot(), |row| {
                         row.child(
                             button("server-bot-off", t!("telegram.server.bot_off").to_string())
-                                .tooltip(t!("telegram.server.bot_off_hint").to_string())
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     if let Some(target) = known_server() {
                                         this.server_bot_run(
@@ -729,6 +726,16 @@ impl SettingsView {
                         .render(),
                     ),
             )
+            .when(has_token || b.station.has_returned_bot(), |section| {
+                section.child(self.more_note(
+                    "server-bot-more",
+                    vec![(
+                        t!("telegram.server.bot_off").to_string(),
+                        t!("telegram.server.bot_off_hint").to_string(),
+                    )],
+                    cx,
+                ))
+            })
     }
 
     /// Render host-named Chats and Mini App sections so they identify the station's bot.
@@ -742,97 +749,17 @@ impl SettingsView {
             return Vec::new();
         };
         let p = MoonPalette::active(cx);
-        let muted = rgba_from(p.text_muted, 1.0);
         let busy = b.station.busy();
         let seen = state.access.clone().unwrap_or_default();
-        let paired = match seen.authorized_chat_ids.len() {
-            0 => t!("telegram.paired_none").to_string(),
-            count => t!("telegram.paired_count", count = count).to_string(),
-        };
-        let code = state.pairing_code().map(str::to_owned);
-
-        let pairing =
-            v_flex()
-                .gap(design::ui_px(cx, 8.0))
-                .child(div().text_color(muted).child(paired))
-                .child(
-                    h_flex()
-                        .flex_wrap()
-                        .gap(design::ui_px(cx, 8.0))
-                        .child(
-                            MoonButton::new("server-pair")
-                                .primary()
-                                .padding_x(12.0)
-                                .label(t!("telegram.pair_new").to_string())
-                                .disabled(busy)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(target) = known_server() {
-                                        this.server_bot_run(Ok(Job::PairIssue { target }), cx);
-                                    }
-                                }))
-                                .render(),
-                        )
-                        .child(
-                            MoonButton::new("server-pair-reset")
-                                .ghost()
-                                .padding_x(12.0)
-                                .label(t!("telegram.pair_reset").to_string())
-                                .disabled(busy || seen.authorized_chat_ids.is_empty())
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    // All of them, as last read: nothing to keep from a draft.
-                                    let base = this.telegram.server.access_seen.clone();
-                                    if let (Some(target), Some(base)) = (known_server(), base) {
-                                        this.server_bot_run(
-                                            Ok(Job::Access {
-                                                target,
-                                                base,
-                                                access: Access::default(),
-                                                edits: false,
-                                            }),
-                                            cx,
-                                        );
-                                    }
-                                }))
-                                .render(),
-                        ),
-                )
-                .when_some(code, |s, code| {
-                    s.child(
-                        v_flex()
-                            .gap(design::ui_px(cx, 8.0))
-                            .child(div().font_family(design::mono()).child(
-                                t!("telegram.server.bot_pair", code = code.clone()).to_string(),
-                            ))
-                            .child(
-                                MoonButton::new("server-copy-pair")
-                                    .label(t!("telegram.pair_copy").to_string())
-                                    .padding_x(12.0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        // Judged at the click: nothing repaints when the code expires.
-                                        let code = this
-                                            .backend
-                                            .read(cx)
-                                            .station
-                                            .bot
-                                            .as_ref()
-                                            .and_then(|s| s.pairing_code().map(str::to_owned));
-                                        if let Some(code) = code {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                format!("/pair {code}"),
-                                            ));
-                                            this.status = Some((
-                                                super::super::StatusMsg::Key("settings.copied"),
-                                                false,
-                                            ));
-                                        }
-                                        cx.notify();
-                                    }))
-                                    .render(),
-                            ),
-                    )
-                });
-
-        let apply_row = self.server_access_actions("server-access", cx);
+        let pairing = self.chat_pairing(
+            ChatsOf::Station,
+            super::access::PairingState {
+                code: state.pairing_code().map(str::to_owned),
+                pair_disabled: busy,
+                unpair_disabled: busy || seen.authorized_chat_ids.is_empty(),
+            },
+            cx,
+        );
 
         let mini_words = match &bot.mini_app {
             _ if !bot.mini_app_on => t!("telegram.mini_disabled"),
@@ -883,99 +810,72 @@ impl SettingsView {
             });
 
         vec![
-            self.telegram_chat_access(
-                ChatsOf::Station,
-                pairing.into_any_element(),
-                Some(apply_row),
-                cx,
-            )
-            .into_any_element(),
-            self.bot_menu_box(ChatsOf::Station, cx),
-            self.message_layout_box(ChatsOf::Station, cx),
+            self.telegram_chat_access(ChatsOf::Station, pairing, cx)
+                .into_any_element(),
             mini.into_any_element(),
         ]
     }
 
-    /// "Apply on the server" and "Revert" for the station's draft — chats and bot menu alike;
-    /// shown under each box that edits it, `id` keeping each pair's elements apart.
-    pub(super) fn server_access_actions(&self, id: &str, cx: &Context<Self>) -> AnyElement {
-        let station = &self.backend.read(cx).station;
-        let busy = station.busy();
-        let p = MoonPalette::active(cx);
-        // How the last "Apply on the server" came out, here beside its buttons.
-        let outcome = match (&station.applied, station.applying) {
-            (_, true) => Some((t!("telegram.server.applying").to_string(), p.text_muted)),
-            (Some(Ok(text)), false) => Some((text.clone(), p.text_muted)),
-            (Some(Err(reason)), false) => Some((reason.clone(), p.red_text)),
-            (None, false) => None,
-        };
+    /// Whether the station's draft holds edits not yet applied on the station.
+    pub(in crate::settings) fn station_draft_pending(&self) -> bool {
         let ed = &self.telegram.server;
-        let edited = access_edited(ed.access_draft.as_ref(), ed.access_base.as_ref());
-        v_flex()
-            .gap(design::ui_px(cx, 8.0))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        MoonButton::new(SharedString::from(format!("{id}-apply")))
-                            .primary()
-                            .padding_x(12.0)
-                            .label(t!("telegram.server.access_apply").to_string())
-                            .disabled(busy || !edited)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let ed = &this.telegram.server;
-                                let edit = ed.access_base.clone().zip(ed.access_draft.as_ref());
-                                if let (Some(target), Some((base, draft))) = (known_server(), edit)
-                                {
-                                    let access = draft_access(draft, &base);
-                                    this.server_bot_run(
-                                        Ok(Job::Access {
-                                            target,
-                                            base,
-                                            access,
-                                            edits: true,
-                                        }),
-                                        cx,
-                                    );
-                                }
-                            }))
-                            .render(),
-                    )
-                    .child(
-                        MoonButton::new(SharedString::from(format!("{id}-revert")))
-                            .ghost()
-                            .padding_x(12.0)
-                            .label(t!("telegram.server.access_revert").to_string())
-                            .disabled(!edited)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                let ed = &mut this.telegram.server;
-                                ed.access_draft = ed.access_seen.as_ref().map(draft_of);
-                                ed.access_base = ed.access_seen.clone();
-                                ed.chats.close();
-                                this.backend.update(cx, |b, bcx| {
-                                    b.station.applied = None;
-                                    b.station.revision = b.station.revision.wrapping_add(1);
-                                    bcx.notify();
-                                });
-                                cx.notify();
-                            }))
-                            .render(),
-                    ),
-            )
-            .when_some(outcome, |s, (text, color)| {
-                s.child(div().text_color(rgba_from(color, 1.0)).child(text))
-            })
-            .into_any_element()
+        access_edited(ed.access_draft.as_ref(), ed.access_base.as_ref())
+    }
+
+    /// Send the station's draft to the station, as "Apply on the server" does.
+    ///
+    /// Returns:
+    ///     Whether the job started; `false` with no station, no draft, or a job already running.
+    pub(in crate::settings) fn apply_station_access(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(target) = known_server() else {
+            return false;
+        };
+        if self.backend.read(cx).station.busy() {
+            return false;
+        }
+        let ed = &self.telegram.server;
+        let Some((base, access)) =
+            ed.access_base
+                .clone()
+                .zip(ed.access_draft.as_ref())
+                .map(|(base, draft)| {
+                    let access = draft_access(draft, &base);
+                    (base, access)
+                })
+        else {
+            return false;
+        };
+        // A job refused before it starts must not leave an older answer to be read as this one's.
+        self.backend.update(cx, |b, _| b.station.applied = None);
+        self.server_bot_run(
+            Ok(Job::Access {
+                target,
+                base,
+                access,
+                edits: true,
+            }),
+            cx,
+        );
+        true
+    }
+
+    /// Drop the station draft's edits: chats, roles, cores and menu return to the server's as
+    /// last read.
+    pub(super) fn revert_station_access(&mut self, cx: &mut Context<Self>) {
+        let ed = &mut self.telegram.server;
+        ed.access_draft = ed.access_seen.as_ref().map(draft_of);
+        ed.access_base = ed.access_seen.clone();
+        ed.chats.close();
+        self.backend.update(cx, |b, bcx| {
+            b.station.applied = None;
+            b.station.revision = b.station.revision.wrapping_add(1);
+            bcx.notify();
+        });
+        cx.notify();
     }
 
     /// The station section: the install form, or the station's own actions, and the last job.
-    /// `width` is the available settings-column width in pixels, used to fit the core comparison.
-    pub(in crate::settings) fn server_bot_section(
-        &self,
-        width: f32,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+    pub(in crate::settings) fn server_bot_section(&self, cx: &Context<Self>) -> impl IntoElement {
         let st = &self.backend.read(cx).station;
         let show_progress =
             st.outcome.is_some() || st.status.is_some() || !st.lines.is_empty() || st.busy();
@@ -985,7 +885,7 @@ impl SettingsView {
             .gap(10.0)
             .child(self.server_bot_hint("telegram.server.intro", cx));
         let section = match self.telegram.server.known.clone() {
-            Some(target) => self.server_bot_known(section, &target, width, cx),
+            Some(target) => self.server_bot_known(section, &target, cx),
             None => self.server_bot_new(section, cx),
         };
         section.when(show_progress, |s| {
@@ -1263,12 +1163,10 @@ impl SettingsView {
 
     /// Group a known station's everyday and maintenance actions into wrapping button rows.
     /// Destructive actions and their unchanged confirmations live in the separated access block.
-    /// Pass the available column `width` to the core comparison so its rows fit the same space.
     fn server_bot_known(
         &self,
         section: MoonGroupBox,
         target: &Target,
-        width: f32,
         cx: &Context<Self>,
     ) -> MoonGroupBox {
         let p = MoonPalette::active(cx);
@@ -1312,7 +1210,6 @@ impl SettingsView {
                     _ => button("server-update", t!("telegram.server.update").to_string()),
                 };
                 update
-                    .tooltip(t!("telegram.server.update_hint").to_string())
                     .on_click(on(|_, target, _| Ok(Job::Update { target })))
                     .render()
             });
@@ -1323,7 +1220,6 @@ impl SettingsView {
             .gap(design::ui_px(cx, 8.0))
             .child(
                 button("server-resetup", t!("telegram.server.resetup").to_string())
-                    .tooltip(t!("telegram.server.resetup_hint").to_string())
                     .on_click(on(|this, target, cx| {
                         this.server_bot_resetup_job(target, cx)
                     }))
@@ -1344,14 +1240,193 @@ impl SettingsView {
                 .child(t!("telegram.server.known", addr = target.addr()).to_string()),
         );
         let section = section.child(self.server_version_block(service, version, cx));
-        // A server set up already updates from the release: no file to choose.
+        let more = self.more_note(
+            "server-actions-more",
+            vec![
+                (
+                    t!("telegram.server.update").to_string(),
+                    t!("telegram.server.update_hint").to_string(),
+                ),
+                (
+                    t!("telegram.server.resetup").to_string(),
+                    t!("telegram.server.resetup_hint").to_string(),
+                ),
+            ],
+            cx,
+        );
         self.server_bot_old_admin(section, cx)
             .child(actions)
             .child(maintenance)
-            .children(self.station_cores_block(target, width, cx))
-            .child(self.station_access_block(target, cx))
-            .child(self.server_auto_update_block(target, cx))
-            .child(self.server_tape_block(target, width, cx))
+            .child(more)
+    }
+
+    /// A station page's box: `body` for the known station, else a note that none is set up.
+    fn station_page_box(
+        &self,
+        id: &'static str,
+        title_key: &str,
+        body: impl FnOnce(&Target) -> Vec<AnyElement>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let section = MoonGroupBox::new(id)
+            .title(t!(title_key).to_string())
+            .padding(14.0)
+            .gap(10.0);
+        match self.telegram.server.known.clone() {
+            Some(target) => section.children(body(&target)),
+            None => section.child(self.server_bot_hint("telegram.server.intro", cx)),
+        }
+        .into_any_element()
+    }
+
+    /// The station's cores (the Station cores page).
+    pub(in crate::settings) fn station_cores_section(
+        &self,
+        width: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        self.station_page_box(
+            "station-cores-page",
+            "settings.page.st_cores.title",
+            |target| {
+                self.station_cores_block(target, width, cx)
+                    .into_iter()
+                    .map(IntoElement::into_any_element)
+                    .collect()
+            },
+            cx,
+        )
+    }
+
+    /// The station's trade tape (the Trade tape page).
+    pub(in crate::settings) fn station_tape_section(
+        &self,
+        width: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        self.station_page_box(
+            "station-tape-page",
+            "settings.page.st_tape.title",
+            |target| vec![self.server_tape_block(target, width, cx).into_any_element()],
+            cx,
+        )
+    }
+
+    /// The station's access and auto-update (the Maintenance page).
+    pub(in crate::settings) fn station_maint_section(&self, cx: &Context<Self>) -> AnyElement {
+        self.station_page_box(
+            "station-maint-page",
+            "settings.page.st_maint.title",
+            |target| {
+                vec![
+                    self.station_maint_rows(target, cx),
+                    self.station_access_block(target, cx).into_any_element(),
+                    self.server_auto_update_block(target, cx).into_any_element(),
+                ]
+            },
+            cx,
+        )
+    }
+
+    /// Maintenance's first box: the version with Update, Reconfigure and the server address,
+    /// each a caption left and its control right, on the same actions as the Station page.
+    fn station_maint_rows(&self, target: &Target, cx: &Context<Self>) -> AnyElement {
+        let p = MoonPalette::active(cx);
+        let busy = self.backend.read(cx).station.busy();
+        let (service, version) = self.server_versions(cx);
+        let on = |make: fn(&Self, Target, &App) -> Result<Job, String>| {
+            let target = target.clone();
+            cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
+                let job = make(this, target.clone(), cx);
+                this.server_bot_run(job, cx);
+            })
+        };
+        let row = |id: &'static str, label: String, value: AnyElement, control: AnyElement| {
+            h_flex()
+                .debug_selector(move || id.to_string())
+                .w_full()
+                .min_w_0()
+                .flex_wrap()
+                .items_center()
+                .gap(design::ui_px(cx, 10.0))
+                .py(design::ui_px(cx, 6.0))
+                .child(
+                    div()
+                        .w(px(design::font_w(cx, 150.0)))
+                        .flex_none()
+                        .child(label),
+                )
+                .child(div().flex_1().min_w_0().child(value))
+                .child(control)
+                .into_any_element()
+        };
+        let update = match &version {
+            ServiceVersion::Behind(newest) => MoonButton::new("maint-update")
+                .label(t!("telegram.server.update_to", version = newest.to_string()).to_string())
+                .primary(),
+            _ => MoonButton::new("maint-update")
+                .variant(MoonButtonVariant::Neutral)
+                .label(t!("telegram.server.update").to_string()),
+        }
+        .size(design::CONTROL_TIER)
+        .disabled(busy)
+        .on_click(on(|_, target, _| Ok(Job::Update { target })))
+        .render()
+        .into_any_element();
+        let resetup = MoonButton::new("maint-resetup")
+            .size(design::CONTROL_TIER)
+            .variant(MoonButtonVariant::Neutral)
+            .label(t!("telegram.server.resetup").to_string())
+            .disabled(busy)
+            .on_click(on(|this, target, cx| {
+                this.server_bot_resetup_job(target, cx)
+            }))
+            .render()
+            .into_any_element();
+        let address = MoonButton::new("maint-change-address")
+            .size(design::CONTROL_TIER)
+            .variant(MoonButtonVariant::Neutral)
+            .label(t!("telegram.server.change_address").to_string())
+            .disabled(busy || self.backend.read(cx).station.running)
+            .on_click(cx.listener(|this, _, window, cx| this.station_address_begin(window, cx)))
+            .render()
+            .into_any_element();
+        let muted = |text: String| {
+            div()
+                .text_size(design::t_caption(cx))
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(text)
+                .into_any_element()
+        };
+        super::super::general::page_box(
+            vec![
+                row(
+                    "maint-version",
+                    t!("telegram.maint.row_version").to_string(),
+                    self.server_version_block(service, version, cx)
+                        .into_any_element(),
+                    update,
+                ),
+                row(
+                    "maint-resetup-row",
+                    t!("telegram.maint.row_resetup").to_string(),
+                    muted(t!("telegram.server.resetup_hint").to_string()),
+                    resetup,
+                ),
+                row(
+                    "maint-address",
+                    t!("telegram.maint.row_address").to_string(),
+                    div()
+                        .font_family(design::mono())
+                        .truncate()
+                        .child(target.addr().to_string())
+                        .into_any_element(),
+                    address,
+                ),
+            ],
+            cx,
+        )
+        .into_any_element()
     }
 
     /// The service's version as last read — `Err` with the muted word while it is being read or

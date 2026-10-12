@@ -400,64 +400,70 @@ impl SettingsView {
                 .map(|preview| Some(removal_detail(&preview.report)))
         });
     }
+}
 
-    /// The cleanup button with the count beside it.
-    pub(super) fn trades_cleanup_controls(
-        &self,
-        cx: &mut Context<Self>,
-        p: MoonPalette,
-        busy: bool,
-    ) -> impl IntoElement {
-        let muted = rgba_from(p.text_muted, 1.0);
-        let preview = self.storage.cleanup.clone();
-        let line = match &preview {
-            None => t!("storage.trades_cleanup_pending").to_string(),
-            Some(Err(err)) => t!("storage.trades_cleanup_failed", err = err).to_string(),
-            Some(Ok(preview)) if preview.report.is_empty() => {
-                t!("storage.trades_cleanup_empty").to_string()
-            }
-            Some(Ok(preview)) => t!(
-                "storage.trades_cleanup_preview",
-                prints = preview.report.prints_dropped,
-                size = moon_tg::size_text(preview.report.bytes_dropped.max(0) as u64)
-            )
-            .to_string(),
-        };
-        // Pressable only with something counted to remove: an empty count is "nothing to do",
-        // a pending one may still be a large file being read.
-        let armed = !busy && matches!(&preview, Some(Ok(preview)) if !preview.report.is_empty());
-        v_flex()
-            .gap_1()
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 8.0))
-                    .items_center()
-                    .child(
-                        // Spaces around the label: the fork's `MoonButton` `pad_x=0` bug, as
-                        // the other tool buttons of the tab work around it.
-                        MoonButton::new("trades-cleanup")
-                            .outline()
-                            .label(format!("  {}  ", t!("storage.trades_cleanup")))
-                            .disabled(!armed)
-                            .on_click(cx.listener(|this, _, _, cx| this.trades_cleanup_press(cx)))
-                            .render(),
-                    )
-                    // MIXED NODE: the count combines a localized label with figures in one
-                    // text node — stays mono, like the tab's other readouts.
-                    .child(
-                        div()
-                            .text_color(muted)
-                            .font_family(design::mono())
-                            .child(line),
-                    ),
-            )
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("storage.trades_cleanup_hint").to_string()),
-            )
-    }
+/// The cleanup button with the count beside it.
+///
+/// Args:
+///     s: Where the press goes.
+///     preview: The count; `None` while pending.
+///     busy: A maintenance operation runs.
+///     cx: Application context for theme and scale.
+pub(super) fn cleanup_el(
+    s: &super::StorageCtx,
+    preview: Option<Result<CleanupPreview, String>>,
+    busy: bool,
+    cx: &App,
+) -> AnyElement {
+    let muted = rgba_from(MoonPalette::active(cx).text_muted, 1.0);
+    let line = match &preview {
+        None => t!("storage.trades_cleanup_pending").to_string(),
+        Some(Err(err)) => t!("storage.trades_cleanup_failed", err = err).to_string(),
+        Some(Ok(preview)) if preview.report.is_empty() => {
+            t!("storage.trades_cleanup_empty").to_string()
+        }
+        Some(Ok(preview)) => t!(
+            "storage.trades_cleanup_preview",
+            prints = preview.report.prints_dropped,
+            size = moon_tg::size_text(preview.report.bytes_dropped.max(0) as u64)
+        )
+        .to_string(),
+    };
+    // Pressable only with something counted to remove: an empty count is "nothing to do",
+    // a pending one may still be a large file being read.
+    let armed = !busy && matches!(&preview, Some(Ok(preview)) if !preview.report.is_empty());
+    v_flex()
+        .gap_1()
+        .child(
+            h_flex()
+                .flex_wrap()
+                .gap(design::ui_px(cx, 8.0))
+                .items_center()
+                .child(
+                    // Spaces around the label: the fork's `MoonButton` `pad_x=0` bug, as
+                    // the other tool buttons of the tab work around it.
+                    MoonButton::new("trades-cleanup")
+                        .variant(moon_ui::MoonButtonVariant::Neutral)
+                        .label(format!("  {}  ", t!("storage.trades_cleanup")))
+                        .disabled(!armed)
+                        .on_click(s.click(|this, _, cx| this.trades_cleanup_press(cx)))
+                        .render(),
+                )
+                // MIXED NODE: the count combines a localized label with figures in one
+                // text node — stays mono, like the tab's other readouts.
+                .child(
+                    div()
+                        .text_color(muted)
+                        .font_family(design::mono())
+                        .child(line),
+                ),
+        )
+        .child(
+            div()
+                .text_color(muted)
+                .child(t!("storage.trades_cleanup_hint").to_string()),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]

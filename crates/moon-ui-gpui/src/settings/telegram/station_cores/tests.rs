@@ -1,15 +1,15 @@
 //! Confirmation and layout invariants from the approved station cores mockup.
 use super::{
     ActionSurface, CoreCache, CoresFilter, CoresSummary, TABLE_MAX_H, action_id, compact_name_cell,
-    compact_row, core_address_cell, core_name_cell, cores_summary, differ_card, filter_rows,
-    list_controls_el, push_els, removable, retained_arm, show_all_el, state_label, summary_el,
-    table_el, table_fits, table_layout,
+    compact_row, core_address_cell, core_name_cell, cores_summary, differ_card, diverging,
+    filter_rows, list_controls_el, removable, removal_check, result_els, retained_arm, show_all_el,
+    state_label, summary_el, table_el, table_fits, table_layout,
 };
 use crate::backend::station::cores_sync::{self, LocalCore, Row, RowState};
 use crate::design;
 use gpui::{
-    AnyElement, App, AppContext, ClickEvent, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, ScrollHandle, Styled, TextOverflow, WhiteSpace, Window, div, px,
+    AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, ScrollHandle, Styled, TextOverflow, WhiteSpace, Window, div, px,
 };
 use moon_core::config::Language;
 use moon_core::station_api::ListedCore;
@@ -162,6 +162,30 @@ fn confirmation_is_cleared_when_identity_changes_or_becomes_local() {
     );
 }
 
+/// A removal confirmed while the station is busy, or after its row vanished or changed identity,
+/// never starts; an idle station with the same row runs it.
+#[test]
+fn a_confirmed_removal_rechecks_busy_and_the_row() {
+    let listing = [3, 9].map(|uid| ListedCore {
+        endpoint_override: None,
+        uid,
+        name: format!("Core {uid}"),
+        address: Some(format!("198.51.100.{uid}:4510")),
+        key_fp: None,
+    });
+    let rows = cores_sync::reconcile(&[], &listing, None);
+    let arm = (9, listing[1].address.clone(), listing[1].name.clone());
+    assert_eq!(removal_check(false, &arm, &rows), Ok(()));
+    assert_eq!(
+        removal_check(true, &arm, &rows),
+        Err("telegram.mini_error_busy_station")
+    );
+    assert_eq!(
+        removal_check(false, &arm, &rows[..1]),
+        Err("telegram.server.cores_changed")
+    );
+}
+
 /// The mockup reserves positive tone for equal cores and warning/info for push actions.
 #[test]
 fn actionable_states_follow_mockup_invariants() {
@@ -286,8 +310,6 @@ fn probe_actions(row: &Row, index: usize) -> AnyElement {
 struct CoresProbe {
     rows: Vec<Row>,
     width: f32,
-    /// Cores the push button would send; `None` when nothing differs.
-    push: Option<usize>,
     query: Entity<MoonInputState>,
     scroll: ScrollHandle,
 }
@@ -320,14 +342,7 @@ impl Render for CoresProbe {
                 cx,
             ))
             .child(table_el(layout, shown, &self.scroll, cx));
-        for el in push_els(
-            self.push
-                .map(|n| (n, |_: &ClickEvent, _: &mut Window, _: &mut App| {})),
-            false,
-            true,
-            None,
-            cx,
-        ) {
+        for el in result_els(None, cx) {
             section = section.child(el);
         }
         div()
@@ -350,18 +365,12 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
     for language in Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         for zoom in [1.0, 1.25] {
-            for (column, push) in [
-                (860.0, None),
-                (860.0, Some(3)),
-                (420.0, None),
-                (420.0, Some(3)),
-            ] {
+            for column in [860.0, 420.0] {
                 let width = column * zoom;
                 let window =
                     cx.open_window(gpui::size(px(width), px(4000.0)), |window, cx| CoresProbe {
                         rows: rows(),
                         width,
-                        push,
                         query: cx.new(|cx| MoonInputState::new(window, cx)),
                         scroll: ScrollHandle::new(),
                     });
@@ -372,10 +381,7 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
                         let _ = window.draw(cx);
                     });
                 }
-                let at = format!(
-                    "{} zoom {zoom} column {column} push {push:?}",
-                    language.code()
-                );
+                let at = format!("{} zoom {zoom} column {column}", language.code());
                 let col = visual.debug_bounds("probe-col").expect("column laid out");
                 let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
                     assert!(
@@ -432,33 +438,15 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
                     .expect("sync note laid out");
                 inside(hint, "sync note");
                 let gap = 10.0 * zoom + 1.0;
-                match push {
-                    None => {
-                        assert!(
-                            visual.debug_bounds("station-cores-send-all").is_none(),
-                            "a push button with nothing to push ({at})"
-                        );
-                        assert!(
-                            f32::from(hint.origin.y) - f32::from(table.bottom()) <= gap,
-                            "a gap opened above the sync note ({at})"
-                        );
-                    }
-                    Some(_) => {
-                        let button = visual
-                            .debug_bounds("station-cores-send-all")
-                            .expect("push button laid out");
-                        inside(button, "push button");
-                        assert!(
-                            f32::from(button.size.width) < f32::from(col.size.width) - 24.0,
-                            "the push button stretched to the panel ({at})"
-                        );
-                        assert!(
-                            button.origin.y + px(0.5) >= table.bottom()
-                                && hint.origin.y + px(0.5) >= button.bottom(),
-                            "the push button overlaps its neighbours ({at})"
-                        );
-                    }
-                }
+                // The send button lives in the page's bar, never in the block.
+                assert!(
+                    visual.debug_bounds("station-cores-send-all").is_none(),
+                    "a push button with nothing to push ({at})"
+                );
+                assert!(
+                    f32::from(hint.origin.y) - f32::from(table.bottom()) <= gap,
+                    "a gap opened above the sync note ({at})"
+                );
             }
         }
     }
@@ -479,4 +467,19 @@ fn core_action_ids_are_unique_per_row_and_surface() {
             assert_ne!(a, b);
         }
     }
+}
+
+/// The page's count is the differing rows, and its one send bar never carries a station-only
+/// core: those leave the station only through their own confirmed removal.
+#[test]
+fn the_send_bar_counts_differences_and_skips_station_only_cores() {
+    let rows = rows();
+    assert_eq!(diverging(&rows), 4);
+    assert_eq!(diverging(&rows[4..]), 0);
+    let station_only = rows[0].station_uid;
+    assert!(
+        cores_sync::bulk(&rows)
+            .iter()
+            .all(|upsert| Some(upsert.station_uid) != station_only)
+    );
 }
