@@ -345,7 +345,7 @@ impl Render for TapeProbe {
                 Some(snapshot),
                 cx,
             ))
-            .child(tape_tiles(&tiles, cx))
+            .child(tape_tiles(&tiles, self.width, cx))
             .child(catchup_switches(
                 switches,
                 true,
@@ -461,6 +461,75 @@ fn the_tape_catchup_block_fits_every_language_width_and_zoom(cx: &mut gpui::Test
                             f32::from(b.size.width) + 0.5 >= need.min(f32::from(col.size.width)),
                             "tile {label} narrower than its word ({at})"
                         );
+                    }
+                    if !tiles.is_empty() {
+                        let row = visual
+                            .debug_bounds("server-tape-tiles")
+                            .expect("tiles row laid out");
+                        let next = visual
+                            .debug_bounds("server-tape-switches")
+                            .expect("switches laid out");
+                        assert!(
+                            next.origin.y + px(0.5) >= row.bottom(),
+                            "the row below overlaps the tiles ({at})"
+                        );
+                        let boxes: Vec<_> = (0..tiles.len())
+                            .map(|index| {
+                                visual
+                                    .debug_bounds(leak(format!("server-tape-tile-{index}")))
+                                    .expect("tile laid out")
+                            })
+                            .collect();
+                        for (index, b) in boxes.iter().enumerate() {
+                            assert!(
+                                b.origin.y + px(0.5) >= row.origin.y
+                                    && b.bottom() <= row.bottom() + px(0.5),
+                                "tile {index} spills out of its row ({at})"
+                            );
+                            for other in &boxes {
+                                if (f32::from(other.origin.y) - f32::from(b.origin.y)).abs() < 0.5 {
+                                    continue;
+                                }
+                                let overlap = other.origin.y < b.bottom()
+                                    && b.origin.y < other.bottom()
+                                    && other.origin.x < b.right()
+                                    && b.origin.x < other.right();
+                                assert!(!overlap, "tiles overlap ({at})");
+                            }
+                        }
+                        let first = boxes[0];
+                        for b in &boxes {
+                            assert!(
+                                (f32::from(b.size.width) - f32::from(first.size.width)).abs() < 1.0,
+                                "tiles differ in width ({at})"
+                            );
+                        }
+                        for (index, b) in boxes.iter().enumerate() {
+                            for other in &boxes {
+                                let same_row =
+                                    other.origin.y < b.bottom() && b.origin.y < other.bottom();
+                                if same_row {
+                                    assert!(
+                                        (f32::from(other.origin.y) - f32::from(b.origin.y)).abs()
+                                            < 0.5
+                                            && (f32::from(other.size.height)
+                                                - f32::from(b.size.height))
+                                            .abs()
+                                                < 0.5,
+                                        "tile {index} is staggered in its row ({at})"
+                                    );
+                                }
+                            }
+                        }
+                        if column >= 860.0 {
+                            let per_row = boxes
+                                .iter()
+                                .filter(|b| {
+                                    (f32::from(b.origin.y) - f32::from(first.origin.y)).abs() < 0.5
+                                })
+                                .count();
+                            assert!(per_row >= 2, "a wide column stacks the tiles ({at})");
+                        }
                     }
                     for index in 0..venue_caps::reach_table().len() {
                         if let Some(b) =

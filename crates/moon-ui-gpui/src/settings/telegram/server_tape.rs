@@ -386,50 +386,90 @@ pub(super) fn tape_status_strip(
         .into_any_element()
 }
 
-/// The count tiles in a wrapping row; each keeps its own width.
-pub(super) fn tape_tiles(tiles: &[Tile], cx: &App) -> AnyElement {
+/// How many equal tiles go in one row: four where `width` holds four of the widest label, two
+/// where it holds two, else one.
+fn tile_columns(width: f32, tile: f32, gap: f32, count: usize) -> usize {
+    [4, 2]
+        .into_iter()
+        .find(|&cols| cols as f32 * tile + (cols - 1) as f32 * gap <= width)
+        .unwrap_or(1)
+        .min(count.max(1))
+}
+
+/// The count tiles in rows of equal-width, equal-height tiles; the column count comes from
+/// `width`, so the row reserves exactly the height it paints.
+pub(super) fn tape_tiles(tiles: &[Tile], width: f32, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    h_flex()
+    let gap = design::ui_value(cx, 8.0);
+    let pad = design::ui_value(cx, 10.0);
+    let widest = tiles
+        .iter()
+        .map(|tile| design::ui_body_text_width(cx, &t!(tile.label), 400.0))
+        .fold(0.0_f32, f32::max);
+    let tile_min = (widest + 2.0 * pad + 2.0).max(design::font_w(cx, 150.0));
+    let cols = tile_columns(width, tile_min, gap, tiles.len());
+    let tile_el = |index: usize, tile: &Tile| {
+        v_flex()
+            .flex_1()
+            .flex_basis(px(0.0))
+            .min_w_0()
+            .gap(design::ui_px(cx, 2.0))
+            .px(px(pad))
+            .py(design::ui_px(cx, 6.0))
+            .rounded(design::ui_px(cx, 5.0))
+            .border_1()
+            .border_color(rgba_from(p.border, 1.0))
+            .debug_selector(move || format!("server-tape-tile-{index}"))
+            .child(
+                div()
+                    .font_family(design::mono())
+                    .text_size(design::t_body_lg(cx))
+                    .text_color(rgba_from(p.text, 1.0))
+                    .child(tile.value.to_string()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .font_family(design::ui_font())
+                    .text_color(rgba_from(p.text, 1.0))
+                    .debug_selector(move || format!("server-tape-tile-label-{index}"))
+                    .child(t!(tile.label).to_string()),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .font_family(design::ui_font())
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(t!(tile.hint).to_string()),
+            )
+            .into_any_element()
+    };
+    v_flex()
         .w_full()
         .min_w_0()
-        .flex_wrap()
-        .gap(design::ui_px(cx, 8.0))
+        .gap(px(gap))
         .debug_selector(|| "server-tape-tiles".into())
-        .children(tiles.iter().enumerate().map(|(index, tile)| {
-            v_flex()
-                .flex_none()
-                .max_w_full()
-                .min_w(design::font_w_px(cx, 110.0))
-                .gap(design::ui_px(cx, 2.0))
-                .px(design::ui_px(cx, 10.0))
-                .py(design::ui_px(cx, 6.0))
-                .rounded(design::ui_px(cx, 5.0))
-                .border_1()
-                .border_color(rgba_from(p.border, 1.0))
-                .debug_selector(move || format!("server-tape-tile-{index}"))
-                .child(
-                    div()
-                        .font_family(design::mono())
-                        .text_size(design::t_body_lg(cx))
-                        .text_color(rgba_from(p.text, 1.0))
-                        .child(tile.value.to_string()),
+        .children(tiles.chunks(cols).enumerate().map(|(row, chunk)| {
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_stretch()
+                .gap(px(gap))
+                .children(
+                    chunk
+                        .iter()
+                        .enumerate()
+                        .map(|(i, tile)| tile_el(row * cols + i, tile)),
                 )
-                .child(
+                // A short last row keeps the tile width of the rows above.
+                .children((chunk.len()..cols).map(|_| {
                     div()
+                        .flex_1()
+                        .flex_basis(px(0.0))
                         .min_w_0()
-                        .font_family(design::ui_font())
-                        .text_color(rgba_from(p.text, 1.0))
-                        .debug_selector(move || format!("server-tape-tile-label-{index}"))
-                        .child(t!(tile.label).to_string()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .font_family(design::ui_font())
-                        .text_size(design::t_caption(cx))
-                        .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(t!(tile.hint).to_string()),
-                )
+                        .into_any_element()
+                }))
         }))
         .into_any_element()
 }
@@ -978,7 +1018,7 @@ impl SettingsView {
                 cx,
             ))
             .when(!tiles.is_empty(), |block| {
-                block.child(tape_tiles(&tiles, cx))
+                block.child(tape_tiles(&tiles, width - design::ui_value(cx, 24.0), cx))
             })
             .child(row(
                 t!("storage.trades_margin").to_string(),
