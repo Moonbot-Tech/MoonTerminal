@@ -432,6 +432,12 @@ fn portions(
     }
 }
 
+/// Whether part of the job's missing tape can only come from a daily archive at `now_ms`.
+pub(super) fn needs_archive(job: &CatchupJob, now_ms: i64) -> bool {
+    let (_, _, archive, old) = portions(job, now_ms);
+    archive.is_some() && !old.is_empty()
+}
+
 /// Execute one job at an injected clock and gate, preserving paid-for REST tape on archive errors.
 pub(super) fn run_job_at(
     job: &CatchupJob,

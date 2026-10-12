@@ -356,3 +356,89 @@ fn backlog_drains_in_bounded_passes_that_each_move_the_status() {
         "retries wait for the next hour"
     );
 }
+
+/// A spent hourly archive budget keeps archive jobs out of passes until the hour rolls, while
+/// REST-able jobs still go out and nothing spins on work no pass could do.
+#[test]
+fn spent_archive_budget_holds_archive_jobs_until_the_hour_rolls() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    catchup::set_switches(true, true);
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    assert!(cache.sync(std::time::Duration::from_secs(2)));
+    let (sender, receiver) = mpsc::channel();
+    let mut state = RecorderCatchup {
+        worker: Some(sender),
+        hour: Some(NOW.div_euclid(HOUR_MS)),
+        archive_bytes: executor::ARCHIVE_BYTES_PER_PASS,
+        ..RecorderCatchup::default()
+    };
+    let archive_row = row();
+    let mut rest_row = row();
+    rest_row.id.rec_id = 92;
+    rest_row.venue = Venue {
+        brand: Brand::Gate,
+        kind: MarketKind::Spot,
+    };
+    state.submit(vec![archive_row.clone(), rest_row.clone()]);
+
+    state.tick(&cache, NOW, 0, DAY);
+    let pass = receiver.try_recv().expect("REST work still starts a pass");
+    let ids: Vec<_> = pass.jobs.iter().map(|job| job.trade.id).collect();
+    assert_eq!(ids, vec![rest_row.id], "archive job left out of the pass");
+    assert!(!state.latched.contains_key(&archive_row.id));
+    state.finish(
+        &cache,
+        PassResult {
+            finished: pass
+                .jobs
+                .into_iter()
+                .map(|job| executor::FinishedJob {
+                    job,
+                    failure: Some(executor::Failure::Retry),
+                    fault: None,
+                    attempted: true,
+                })
+                .collect(),
+            archive_bytes: executor::ARCHIVE_BYTES_PER_PASS,
+        },
+        NOW,
+    );
+
+    state.tick(&cache, NOW + 1, 0, DAY);
+    assert!(
+        receiver.try_recv().is_err(),
+        "no pass starts for archive work alone while the budget is spent"
+    );
+    assert!(state.pending.contains_key(&archive_row.id));
+    assert!(
+        !state.latched.contains_key(&archive_row.id),
+        "a held job is not failed"
+    );
+    assert!(!state.active);
+
+    let next_hour = (NOW.div_euclid(HOUR_MS) + 1) * HOUR_MS;
+    state.tick(&cache, next_hour, 0, DAY);
+    let pass = receiver
+        .try_recv()
+        .expect("the hour roll re-admits archive jobs");
+    assert!(pass.jobs.iter().any(|job| job.trade.id == archive_row.id));
+    assert_eq!(state.archive_bytes, 0);
+}
+
+/// Selection keeps plan order and the pass size, filtering archive work only when spent.
+#[test]
+fn admissible_filters_archive_jobs_only_once_the_budget_is_spent() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let rows: Vec<_> = (0..PASS_JOBS + 5)
+        .map(|i| {
+            let mut trade = row();
+            trade.id.rec_id = i as i64;
+            trade
+        })
+        .collect();
+    let jobs = catchup::plan(&rows, |_| Coverage::none(), &HashMap::new(), NOW, 0, DAY).jobs;
+    assert_eq!(admissible(jobs.clone(), 0, NOW).len(), PASS_JOBS);
+    assert!(admissible(jobs, executor::ARCHIVE_BYTES_PER_PASS, NOW).is_empty());
+}
