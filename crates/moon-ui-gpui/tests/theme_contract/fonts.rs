@@ -277,25 +277,30 @@ fn settings_values_and_connections_repin_the_mono_family() {
     );
     let settings = read_src("settings/render.rs");
     let render = render_root(&settings, "impl Render for SettingsView");
-    // The bounded branch hosts two pages; only Cores holds a data table that must stay mono,
-    // so the pin is gated on it rather than applied to the branch.
+    // The bounded branch hosts Cores and Trade sounds. Neither pins a face on the whole page:
+    // labels and captions are prose in the UI face, and every value sets mono itself.
     let bounded = chain_between(&render, "if bounded {", "} else {", "Settings bounded body");
-    let gate = ".when(self.active == Tab::Cores, |el| {";
-    let (before_gate, gated) = bounded
-        .split_once(gate)
-        .expect("Settings bounded body: the mono pin must be gated on Cores");
-    let gated = gated
-        .split_once("})")
-        .expect("Settings bounded body: the Cores gate must close")
-        .0;
     assert!(
-        gated.contains(".font_family(design::mono())"),
-        "Settings Cores must pin mono at its branch because its table inherits the Settings root otherwise"
+        !bounded.contains(".font_family(design::mono())"),
+        "Settings bounded body must not pin mono: it would paint the Cores labels in the data face"
     );
-    assert!(
-        !before_gate.contains(".font_family(design::mono())"),
-        "the mono pin belongs inside the Cores gate: Trade sounds shares the branch and sets its own faces per element"
-    );
+    let cores = read_src("settings/connections/cores.rs");
+    for input in [
+        "core-card-name-input",
+        "core-card-key",
+        "core-card-addr",
+        "core-card-bundle-input",
+    ] {
+        let at = cores
+            .find(&format!("MoonInput::new(\"{input}\")"))
+            .unwrap_or_else(|| panic!("Cores card input {input} is missing"));
+        // The builder chain right after the constructor: `.state(..)` then `.mono(true)`.
+        let builder = &cores[at..(at + 160).min(cores.len())];
+        assert!(
+            builder.contains(".mono(true)"),
+            "Cores card input {input} holds a value and must stay mono"
+        );
+    }
 
     let security = read_src("settings/security.rs");
     assert!(

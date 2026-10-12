@@ -25,6 +25,8 @@ const TITLE_H: f32 = super::SETTINGS_HEADER_H;
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TextFace {
     Ui,
+    /// The page title: UI face, 17px semibold.
+    Title,
 }
 
 /// What one probe run checks. Selectors are `debug_selector` names.
@@ -42,6 +44,9 @@ pub(super) struct ProbeSpec {
     pub(super) inside: Vec<String>,
     /// Groups of elements no two of which may intersect.
     pub(super) no_overlap: Vec<Vec<String>>,
+    /// Groups of elements of which any two on one line must share their top edge and height: a row of
+    /// tiles that stretches to its tallest member.
+    pub(super) same_row_same_height: Vec<Vec<String>>,
     /// The last element of a scrolling page: it must lie within the scroll extent.
     pub(super) last: Option<String>,
 }
@@ -116,9 +121,13 @@ pub(super) fn check(
         let b = bounds(visual, sel)?;
         let need = visual.update(|_, cx| match face {
             TextFace::Ui => design::ui_body_text_width(cx, text, 400.0),
+            TextFace::Title => design::ui_text_width_zoomed(cx, text, 17.0, 600.0, false),
         });
         if f32::from(b.size.width) + 0.5 < need {
-            return Err(format!("{sel} is narrower than {text:?}"));
+            return Err(format!(
+                "{sel} is narrower than {text:?} ({} < {need})",
+                f32::from(b.size.width)
+            ));
         }
     }
     for (sel, text) in &spec.wraps {
@@ -152,6 +161,25 @@ pub(super) fn check(
             for (b, bb) in &boxes[i + 1..] {
                 if ab.intersects(bb) && ab.intersect(bb).size.width > tol {
                     return Err(format!("{a} overlaps {b}"));
+                }
+            }
+        }
+    }
+    for group in &spec.same_row_same_height {
+        let boxes = group
+            .iter()
+            .map(|sel| bounds(visual, sel).map(|b| (sel, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (i, (a, ab)) in boxes.iter().enumerate() {
+            for (b, bb) in &boxes[i + 1..] {
+                // Vertically overlapping boxes share a line of the wrapping row.
+                let same_row = ab.origin.y < bb.bottom_left().y && bb.origin.y < ab.bottom_left().y;
+                let dy = (f32::from(ab.origin.y) - f32::from(bb.origin.y)).abs();
+                let dh = (f32::from(ab.size.height) - f32::from(bb.size.height)).abs();
+                if same_row && (dy > f32::from(tol) || dh > f32::from(tol)) {
+                    return Err(format!(
+                        "{a} and {b} share a row but are offset by {dy} and differ in height by {dh}"
+                    ));
                 }
             }
         }

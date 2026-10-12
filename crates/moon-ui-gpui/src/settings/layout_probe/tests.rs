@@ -218,7 +218,9 @@ fn page_header_and_dirty_bar_fit_the_body(cx: &mut gpui::TestAppContext) {
 }
 
 /// Three hint rows — a short hint, a long help unfolded, a number field with a unit — keep their
-/// controls inside the body and their unfolded help uncut, in every language.
+/// controls inside the body and their unfolded help uncut, in every language. The number field
+/// must stay at least as wide as its widest value and unit: it used to collapse to an empty box
+/// between its buttons.
 #[gpui::test]
 fn hint_rows_fit_the_body(cx: &mut gpui::TestAppContext) {
     sweep(
@@ -232,9 +234,9 @@ fn hint_rows_fit_the_body(cx: &mut gpui::TestAppContext) {
                     .child(num_input(
                         "probe-num-input",
                         &state,
-                        0.0..=600.0,
+                        0.0..=100000.0,
                         1.0,
-                        Some("s".into()),
+                        Some("px".into()),
                     ))
                     .into_any_element();
                 div()
@@ -300,16 +302,71 @@ fn hint_rows_fit_the_body(cx: &mut gpui::TestAppContext) {
                 "probe-row-2".into(),
                 "probe-row-3".into(),
             ]],
-            fits: vec![(
-                "probe-row-3-label".into(),
-                rust_i18n::t!("settings.page.sounds.title").to_string(),
-                TextFace::Ui,
-            )],
+            fits: vec![
+                (
+                    "probe-row-3-label".into(),
+                    rust_i18n::t!("settings.page.sounds.title").to_string(),
+                    TextFace::Ui,
+                ),
+                ("probe-num".into(), "100000 px".into(), TextFace::Ui),
+            ],
             wraps: vec![(
                 "probe-row-2-more-text".into(),
                 rust_i18n::t!("settings.page.storage.desc").to_string(),
             )],
             last: Some("probe-row-3".into()),
+            ..Default::default()
+        },
+    );
+}
+
+/// Catches the page title collapsing to an ellipsis beside its save-mode chip (a truncating text
+/// inside a nested flex row shrinks to nothing): every page's header shows its full title, chip
+/// and two actions alongside, in every language at the default and the minimum window.
+#[gpui::test]
+fn every_page_header_shows_its_full_title(cx: &mut gpui::TestAppContext) {
+    sweep(
+        cx,
+        host(move |window, cx, _| {
+            let narrow = f32::from(window.viewport_size().width) < super::NAV_BREAKPOINT;
+            let action = |id: &'static str| {
+                moon_ui::MoonButton::new(id)
+                    .outline()
+                    .label(rust_i18n::t!("settings.copy").to_string())
+                    .render()
+                    .into_any_element()
+            };
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(Tab::ALL.into_iter().map(|tab| {
+                    page_header(
+                        PageHeader {
+                            tab,
+                            mode: crate::settings::SaveMode::Remote,
+                            desc_override: None,
+                            actions: vec![action("probe-a"), action("probe-b")],
+                        },
+                        narrow,
+                        cx,
+                    )
+                }))
+                .into_any_element()
+        }),
+        |_| ProbeSpec {
+            container: "probe-body",
+            fits: Tab::ALL
+                .into_iter()
+                .map(|tab| {
+                    (
+                        format!("settings-page-title-{}", tab.id()),
+                        tab.title(),
+                        TextFace::Title,
+                    )
+                })
+                .collect(),
+            ..Default::default()
         },
     );
 }

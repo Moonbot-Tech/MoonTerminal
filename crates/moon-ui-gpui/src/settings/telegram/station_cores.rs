@@ -835,7 +835,10 @@ impl SettingsView {
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
         let section = MoonGroupBox::new("station-cores")
-            .title(t!("telegram.server.cores_title").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.server.cores_title").to_string(),
+                cx,
+            ))
             .padding(12.0)
             .gap(10.0);
         if seen.is_none() {

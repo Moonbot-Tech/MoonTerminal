@@ -94,7 +94,10 @@ impl SettingsView {
         let p = MoonPalette::active(cx);
         let muted = rgba_from(p.text_muted, 1.0);
         MoonGroupBox::new("telegram-core-section")
-            .title(t!("telegram_core.section").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram_core.section").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(self.core_picker_row(cx, p))

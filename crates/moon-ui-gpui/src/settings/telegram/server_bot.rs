@@ -624,7 +624,10 @@ impl SettingsView {
                 .disabled(busy)
         };
         MoonGroupBox::new("telegram-server-bot")
-            .title(t!("telegram.server.bot_title", addr = addr).to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.server.bot_title", addr = addr).to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(div().text_color(words_color).child(words))
@@ -776,7 +779,10 @@ impl SettingsView {
             _ => None,
         };
         let mini = MoonGroupBox::new("telegram-server-mini")
-            .title(self.bot_section_title(ChatsOf::Station, "telegram.section_mini_app"))
+            .child(crate::settings::common::group_title(
+                self.bot_section_title(ChatsOf::Station, "telegram.section_mini_app"),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(
@@ -880,7 +886,10 @@ impl SettingsView {
         let show_progress =
             st.outcome.is_some() || st.status.is_some() || !st.lines.is_empty() || st.busy();
         let section = MoonGroupBox::new("telegram-station-section")
-            .title(t!("telegram.server.section").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.server.section").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(self.server_bot_hint("telegram.server.intro", cx));
@@ -1269,7 +1278,10 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let section = MoonGroupBox::new(id)
-            .title(t!(title_key).to_string())
+            .child(crate::settings::common::group_title(
+                t!(title_key).to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0);
         match self.telegram.server.known.clone() {

@@ -202,8 +202,18 @@ impl SettingsView {
     // An explicit width, not `w_full().max_w(..)`: see `render::scrollable_tab_content` — the
     // bottom of a long page would fall outside the scroll extent.
     fn page_column(&self, width: f32, children: Vec<AnyElement>, cx: &Context<Self>) -> AnyElement {
+        Self::column_of(width, Some(design::font_w(cx, 680.0)), children, cx)
+    }
+
+    /// A page column `width` wide less the body gutters, capped at `max` when given.
+    fn column_of(
+        width: f32,
+        max: Option<f32>,
+        children: Vec<AnyElement>,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
-            .min(design::font_w(cx, 680.0))
+            .min(max.unwrap_or(f32::INFINITY))
             .max(0.0);
         v_flex()
             .w(px(column_w))
@@ -358,8 +368,10 @@ impl SettingsView {
                 st.busy(),
             ))
         };
-        let body = self.page_column(
+        // The overview is a dashboard: its tiles and card take the whole content width.
+        let body = Self::column_of(
             width,
+            None,
             vec![head, self.server_bot_section(cx).into_any_element()],
             cx,
         );
@@ -469,7 +481,10 @@ impl SettingsView {
             cx,
         );
         let bot = MoonGroupBox::new("telegram-bot-section")
-            .title(t!("telegram.section_bot").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.section_bot").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(6.0)
             .child(
@@ -527,7 +542,10 @@ impl SettingsView {
             cx,
         );
         let mini = MoonGroupBox::new("telegram-mini-section")
-            .title(t!("telegram.section_mini_app").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.section_mini_app").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .gap(6.0)
             .child(mini_row);

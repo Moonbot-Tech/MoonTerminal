@@ -390,7 +390,10 @@ impl SettingsView {
                 )
             });
         MoonGroupBox::new(control_id(side, "box"))
-            .title(t!("telegram.layout.title").to_string())
+            .child(crate::settings::common::group_title(
+                t!("telegram.layout.title").to_string(),
+                cx,
+            ))
             .padding(14.0)
             .child(body.child(footer))
             .into_any_element()

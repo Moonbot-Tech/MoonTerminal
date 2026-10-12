@@ -22,6 +22,7 @@ use super::{
     core_card, cores_empty, cores_layout, cores_list, cores_split, deletes, feeds_partial,
     plain_dot,
 };
+use super::{CARD_LABEL_W, LIST_SHARE};
 use crate::settings::layout_probe::{ProbeSpec, Probed, sweep};
 
 /// Synthetic core config.
@@ -378,4 +379,67 @@ fn the_cores_page_fits_the_body(cx: &mut gpui::TestAppContext) {
             ..Default::default()
         },
     );
+}
+
+/// Catches the mockup's split regressing in a wide window: the list squeezed to a narrow column
+/// that truncates every address, or the card's fields pinned to the far right with a hole after
+/// the label. The list takes [`LIST_SHARE`] of the content, each address shows in full, and the
+/// key field starts right after the card's label column.
+#[gpui::test]
+fn a_wide_cores_page_follows_the_mockup_split(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let _locale = crate::test_locale::force("ru");
+    let size = (1600.0_f32, 900.0_f32);
+    let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
+        let (width, _) = crate::settings::layout_probe::body_box(size, cx);
+        let fields = inputs(window, cx);
+        Host {
+            scroll: ScrollHandle::new(),
+            width,
+            build: Rc::new(move |window, cx| body(window, cx, &fields)),
+        }
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    let get = |visual: &mut gpui::VisualTestContext, sel: &'static str| {
+        visual
+            .debug_bounds(sel)
+            .unwrap_or_else(|| panic!("{sel} was not laid out"))
+    };
+    let body_w = f32::from(get(&mut visual, "probe-body").size.width);
+    let list_w = f32::from(get(&mut visual, "cores-list-box").size.width);
+    assert!(
+        (list_w - body_w * LIST_SHARE).abs() < 1.0,
+        "list {list_w} of {body_w}"
+    );
+
+    for key in [1_u64, 2, 3] {
+        let sel = crate::settings::layout_probe::leak(format!("cores-addr-{key}"));
+        let addr = get(&mut visual, sel);
+        let text = model()
+            .groups
+            .iter()
+            .flat_map(|g| g.exchanges.iter())
+            .flat_map(|e| e.rows.iter())
+            .find(|r| r.row_key == key)
+            .map(|r| r.addr.clone())
+            .expect("synthetic row");
+        let need = visual.update(|_, cx| crate::design::mono_body_text_width(cx, &text, 400.0));
+        assert!(
+            f32::from(addr.size.width) + 0.5 >= need,
+            "address {key} is cut: {} < {need}",
+            f32::from(addr.size.width)
+        );
+    }
+
+    let card = get(&mut visual, "core-card");
+    let key = get(&mut visual, "core-card-key");
+    // Card padding 14, label column, row gap 16, plus a pixel of border.
+    let lead = visual.update(|_, cx| crate::design::ui_value(cx, 14.0 + CARD_LABEL_W + 16.0)) + 2.0;
+    let offset = f32::from(key.origin.x - card.origin.x);
+    assert!(offset <= lead, "key field starts {offset} px into the card");
 }

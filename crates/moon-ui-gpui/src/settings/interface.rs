@@ -804,7 +804,7 @@ pub(super) fn slider_ctl(
 
 /// One colour-group row: what it edits on the left, an optional slider on the right; the
 /// slider drops under the label when the group is narrow.
-fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) -> AnyElement {
+pub(super) fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) -> AnyElement {
     h_flex()
         .w_full()
         .min_w_0()
@@ -813,7 +813,13 @@ fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) -> AnyEleme
         .items_center()
         .gap(design::ui_px(cx, 8.0))
         .py(design::ui_px(cx, 2.0))
-        .child(div().min_w_0().child(left))
+        // The label side takes what the control leaves and wraps under it below that floor.
+        .child(
+            div()
+                .flex_1()
+                .min_w(design::font_w_px(cx, 140.0))
+                .child(left),
+        )
         .children(right)
         .into_any_element()
 }

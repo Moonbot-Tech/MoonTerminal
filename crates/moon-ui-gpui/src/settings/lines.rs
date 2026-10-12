@@ -8,8 +8,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonCheckbox, MoonColorPicker, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex,
-    rgba_from, v_flex,
+    MoonCheckbox, MoonColorPickerState, MoonPalette, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 
 use super::SettingsView;
@@ -728,11 +727,8 @@ impl SettingsView {
             fmt::pct((v * 100.0) as f64, 0).map_or_else(|| "0%".to_string(), |(text, _)| text)
         };
         let px1 = |v: f32| format!("{} px", fmt::compact(v as f64, 1));
-        let picker = |st: &Entity<MoonColorPickerState>| {
-            MoonColorPicker::new(st)
-                .colors(design::picker_palette())
-                .into_any_element()
-        };
+        let picker =
+            |st: &Entity<MoonColorPickerState>| super::common::swatch_picker(st).into_any_element();
         // Element ids carry the row so a retained checkbox never shows another line's state.
         let check_id = |what: &str| SharedString::from(format!("line-{}-{what}", kind.key));
         let mut rows = vec![
@@ -872,11 +868,7 @@ impl SettingsView {
                     )
                     // With "line colour" on the picker is a dead knob: disabled, not hidden, so
                     // the row keeps its shape while saying why it does nothing.
-                    .child(
-                        MoonColorPicker::new(&l.path_color)
-                            .colors(design::picker_palette())
-                            .disabled(use_line_color),
-                    ),
+                    .child(super::common::swatch_picker(&l.path_color).disabled(use_line_color)),
             )
             .child(
                 h_flex()

@@ -116,12 +116,6 @@ impl Render for SettingsView {
                 .p(design::ui_px(cx, BODY_PAD))
                 .gap(design::ui_px(cx, 10.0))
                 .overflow_hidden()
-                // The Settings root flips to the UI face for prose; Connections holds a data
-                // table and chrome that must stay mono like every other data surface. Trade
-                // sounds sets its own faces per element.
-                .when(self.active == Tab::Cores, |el| {
-                    el.font_family(design::mono())
-                })
                 .child(content)
                 .into_any_element()
         } else {

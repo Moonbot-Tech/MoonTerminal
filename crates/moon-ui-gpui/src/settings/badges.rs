@@ -9,9 +9,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonAlert, MoonBadge, MoonBadgeVariant, MoonButton, MoonColorPicker, MoonColorPickerState,
-    MoonDisclosure, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, rgba_from,
-    v_flex,
+    MoonAlert, MoonBadge, MoonBadgeVariant, MoonButton, MoonColorPickerState, MoonDisclosure,
+    MoonInput, MoonInputEvent, MoonInputState, MoonPalette, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -370,12 +369,8 @@ impl SettingsView {
         };
         let outline_colors = outline.then(|| {
             (
-                MoonColorPicker::new(&row.outline_long)
-                    .colors(design::picker_palette())
-                    .into_any_element(),
-                MoonColorPicker::new(&row.outline_short)
-                    .colors(design::picker_palette())
-                    .into_any_element(),
+                super::common::swatch_picker(&row.outline_long).into_any_element(),
+                super::common::swatch_picker(&row.outline_short).into_any_element(),
             )
         });
         let input = |id: String, state: &Entity<moon_ui::MoonInputState>| {
@@ -391,9 +386,7 @@ impl SettingsView {
             name: input(format!("badge-name-{idx}"), &row.name),
             code: input(format!("badge-code-{idx}"), &row.code),
             short,
-            color: MoonColorPicker::new(&row.color)
-                .colors(design::picker_palette())
-                .into_any_element(),
+            color: super::common::swatch_picker(&row.color).into_any_element(),
             outline: outline_chk.into_any_element(),
             look: MoonBadge::new(code)
                 .size(moon_ui::MoonSize::Xs.into())

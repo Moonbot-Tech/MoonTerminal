@@ -2,6 +2,8 @@
 //! and the three install steps while none is.
 
 use gpui::*;
+use moon_core::telegram::TelegramStatus;
+use moon_remote::station::bot::BotState;
 use moon_ui::{MoonPalette, MoonProgress, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
@@ -10,10 +12,12 @@ use super::server_bot::bot_words;
 use super::station_cores::diverging;
 use crate::design;
 
-/// One overview tile: a caption, its value and, where a share means something, a bar.
+/// One overview tile: a caption, a short value, an optional muted note under it and, where a
+/// share means something, a bar.
 pub(super) struct Tile {
     pub(super) label: String,
     pub(super) value: String,
+    pub(super) note: Option<String>,
     /// Percent, 0..=100.
     pub(super) progress: Option<f32>,
 }
@@ -62,6 +66,8 @@ pub(super) fn tiles_el(tiles: Vec<Tile>, cx: &App) -> AnyElement {
         .w_full()
         .min_w_0()
         .flex_wrap()
+        // Every tile in a line is as tall as the tallest one.
+        .items_stretch()
         .gap(design::ui_px(cx, 8.0));
     for (index, tile) in tiles.into_iter().enumerate() {
         row = row.child(
@@ -84,12 +90,21 @@ pub(super) fn tiles_el(tiles: Vec<Tile>, cx: &App) -> AnyElement {
                 .child(
                     div()
                         .min_w_0()
+                        .truncate()
                         .font_family(design::mono())
                         .text_size(design::t_title(cx))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgba_from(p.text, 1.0))
                         .child(tile.value),
                 )
+                .children(tile.note.map(|note| {
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(design::t_caption(cx))
+                        .text_color(rgba_from(p.text_muted, 1.0))
+                        .child(note)
+                }))
                 .children(tile.progress.map(|percent| {
                     MoonProgress::new(("station-tile-bar", index))
                         .value(percent)
@@ -99,6 +114,39 @@ pub(super) fn tiles_el(tiles: Vec<Tile>, cx: &App) -> AnyElement {
         );
     }
     row.into_any_element()
+}
+
+/// Split a station version such as `v1.2.3 (abc123)` into the version and its build.
+///
+/// Args:
+///     raw: The version the station reported.
+///
+/// Returns:
+///     The version for the tile value and the build, when there is one, for its note.
+pub(super) fn split_version(raw: &str) -> (String, Option<String>) {
+    match raw.split_once(" (") {
+        Some((version, build)) => (
+            version.trim().to_string(),
+            Some(build.trim_end_matches(')').trim().to_string()).filter(|b| !b.is_empty()),
+        ),
+        None => (raw.trim().to_string(), None),
+    }
+}
+
+/// The bot tile's short value and note: a paired bot reads "running" over its chat count; any
+/// other state is its usual sentence.
+fn bot_tile_words(bot: &BotState) -> (String, Option<String>) {
+    match bot.bot.as_ref().map(|b| &b.status) {
+        Some(TelegramStatus::Paired { chat_count })
+            if !bot.stopped && !bot.no_api && bot.has_token =>
+        {
+            (
+                t!("station.over.bot_running").to_string(),
+                Some(t!("station.over.bot_chats", count = chat_count).to_string()),
+            )
+        }
+        _ => (bot_words(bot), None),
+    }
 }
 
 impl SettingsView {
@@ -115,12 +163,15 @@ impl SettingsView {
                 "station.over.offline"
             })
             .to_string(),
+            note: None,
             progress: None,
         }];
         if let Some(status) = status {
+            let (version, build) = split_version(&status.station_version);
             tiles.push(Tile {
                 label: t!("station.over.version").to_string(),
-                value: status.station_version.clone(),
+                value: version,
+                note: build,
                 progress: None,
             });
         }
@@ -130,13 +181,16 @@ impl SettingsView {
             tiles.push(Tile {
                 label: t!("station.over.cores").to_string(),
                 value: format!("{same} / {}", rows.len()),
+                note: None,
                 progress: (!rows.is_empty()).then(|| same as f32 * 100.0 / rows.len() as f32),
             });
         }
         if let Some(bot) = st.bot.as_ref() {
+            let (value, note) = bot_tile_words(bot);
             tiles.push(Tile {
                 label: t!("station.over.bot").to_string(),
-                value: bot_words(bot),
+                value,
+                note,
                 progress: None,
             });
         }

@@ -112,7 +112,7 @@ pub(super) fn box_column_el(
         .debug_selector(move || selector.clone())
         .child(
             MoonGroupBox::new(id)
-                .title(title)
+                .child(crate::settings::common::group_title(title, cx))
                 .padding(12.0)
                 .gap(10.0)
                 .child(body),

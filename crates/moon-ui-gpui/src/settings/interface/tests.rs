@@ -1,11 +1,11 @@
 //! Appearance page: theme picking, the edited colour set, and the layout.
 
-use gpui::IntoElement;
+use gpui::{AppContext as _, IntoElement};
 use moon_core::config::{AppConfig, UiThemeMode};
 
 use super::{
-    AppearanceParts, ColorGroup, appearance_body, chart_preview, pick_theme, set_note_key,
-    theme_card_meta, visible_modes,
+    AppearanceParts, ColorGroup, appearance_body, chart_preview, color_line, pick_theme,
+    set_note_key, slider_ctl, theme_card_meta, visible_modes,
 };
 use crate::settings::general::probe_host::{all_open, host, stub};
 use crate::settings::layout_probe::{ProbeSpec, sweep};
@@ -174,4 +174,69 @@ fn appearance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
             }
         },
     );
+}
+
+/// The longest colour labels of the Appearance groups, each probed with and without the opacity
+/// slider beside it.
+const LONG_COLOR_LABELS: [&str; 4] = [
+    "iface.panel_bg",
+    "iface.hvol_bg",
+    "iface.candle_neutral",
+    "iface.price_line",
+];
+
+/// Catches a colour label painting past its card ("Фон панелей (тулбар, ордер…" over the border):
+/// the label must lie inside its group and be tall enough for its wrapped text, in every
+/// language at the default and the minimum window, beside a slider or alone.
+#[gpui::test]
+fn colour_labels_wrap_inside_their_card(cx: &mut gpui::TestAppContext) {
+    for key in LONG_COLOR_LABELS {
+        for with_slider in [false, true] {
+            sweep(
+                cx,
+                host(move |window, cx| {
+                    let theme = AppConfig::load(None, false)
+                        .expect("test-binary config must load")
+                        .theme
+                        .get(false)
+                        .clone();
+                    let picker = cx.new(|cx| moon_ui::MoonColorPickerState::new(window, cx));
+                    let slider = cx.new(|_| moon_ui::MoonSliderState::new().max(100.0).min(0.0));
+                    let p = moon_ui::MoonPalette::active(cx);
+                    let label = rust_i18n::t!(key).to_string();
+                    let mut row = Some(color_line(
+                        crate::settings::color_row(&label, &picker, p, cx).into_any_element(),
+                        with_slider.then(|| slider_ctl(&slider, &|v| format!("{v:.0}%"), cx)),
+                        cx,
+                    ));
+                    let parts = AppearanceParts {
+                        cards: Vec::new(),
+                        experimental: stub("probe-experimental", 220.0, 18.0),
+                        zoom: stub("probe-zoom", 180.0, 22.0),
+                        set_note: String::new(),
+                        groups: ["iface-grp-bg", "iface-grp-candles", "iface-grp-price"]
+                            .map(|id| ColorGroup {
+                                id,
+                                title: id.to_string(),
+                                rows: vec![
+                                    row.take().unwrap_or_else(|| stub("probe-row", 240.0, 24.0)),
+                                ],
+                            })
+                            .into_iter()
+                            .collect(),
+                        preview: chart_preview(&theme, cx),
+                        book_width: stub("probe-book-width", 130.0, 28.0),
+                        dock_reset: stub("probe-dock-reset", 200.0, 28.0),
+                    };
+                    appearance_body(parts, &all_open, cx).into_any_element()
+                }),
+                move |_| ProbeSpec {
+                    container: "iface-grp-bg",
+                    inside: vec!["color-row-label".into()],
+                    wraps: vec![("color-row-label".into(), rust_i18n::t!(key).to_string())],
+                    ..Default::default()
+                },
+            );
+        }
+    }
 }

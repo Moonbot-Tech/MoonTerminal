@@ -13,8 +13,8 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonAlert, MoonButton, MoonButtonIconSlot, MoonButtonSize, MoonButtonVariant, MoonCheckbox,
-    MoonColorPicker, MoonColorPickerState, MoonDisclosure, MoonDisclosureDirection, MoonDropdown,
-    MoonInput, MoonInputState, MoonMenuItem, MoonPalette, MoonSegmentItem, MoonSegmentSelection,
+    MoonColorPickerState, MoonDisclosure, MoonDisclosureDirection, MoonDropdown, MoonInput,
+    MoonInputState, MoonMenuItem, MoonPalette, MoonSegmentItem, MoonSegmentSelection,
     MoonSegmentedControl, MoonTag, MoonToggle, MoonTone, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
@@ -24,7 +24,7 @@ use super::entries::CoreDot;
 use super::entries::{CoreListRow, CoresModel, GroupBlock};
 use super::table::{FEED_FLAGS, FEED_TOTAL};
 use crate::design;
-use crate::settings::common::{Action, hint_row};
+use crate::settings::common::{Action, column_row};
 use moon_core::config::{TotalMode, TransportVersion, WorkspaceMembership};
 
 /// Something the user did on the Cores page.
@@ -242,9 +242,14 @@ fn core_item(
         )
         .child(
             div()
-                .flex_shrink(1.0)
-                .min_w_0()
-                .max_w(design::ui_px(cx, 130.0))
+                .debug_selector({
+                    let key = row.row_key;
+                    move || format!("cores-addr-{key}")
+                })
+                // Shown whole while it fits; a very long address truncates at half the row so
+                // the name and the feed badge always keep their room.
+                .flex_none()
+                .max_w(relative(0.5))
                 .truncate()
                 .font_family(design::mono())
                 .text_color(rgba_from(p.text_muted, 1.0))
@@ -515,7 +520,7 @@ pub(crate) fn core_card(
                hint: Option<String>,
                more: Option<String>,
                control: AnyElement| {
-        hint_row(
+        column_row(
             id,
             label,
             hint,
@@ -523,6 +528,7 @@ pub(crate) fn core_card(
             control,
             open(id),
             toggle(act, id),
+            CARD_LABEL_W,
             cx,
         )
     };
@@ -530,16 +536,19 @@ pub(crate) fn core_card(
     // Only an EMPTY key is worth pointing at: a ring around a filled field reads as an error.
     let key_empty = inputs.key.read(cx).value().trim().is_empty();
     let key = h_flex()
+        .w_full()
         .gap(design::ui_px(cx, 6.0))
         .items_center()
         .child(
             div()
                 .debug_selector(|| "core-card-key".into())
                 .relative()
-                .w(field_w)
+                .flex_1()
+                .min_w(field_w)
                 .child(
                     MoonInput::new("core-card-key")
                         .state(inputs.key)
+                        .mono(true)
                         .small()
                         .mask_toggle()
                         .cleanable(true)
@@ -566,11 +575,13 @@ pub(crate) fn core_card(
 
     let station_act = act.clone();
     let address = v_flex()
+        .w_full()
         .gap(design::ui_px(cx, 4.0))
         .child(
-            div().w(field_w).child(
+            div().w_full().min_w(field_w).child(
                 MoonInput::new("core-card-addr")
                     .state(inputs.address)
+                    .mono(true)
                     .small()
                     .cleanable(true)
                     .when(card.addr_invalid, |i| {
@@ -718,10 +729,12 @@ pub(crate) fn core_card(
                 Some(t!("conn.card.bundle_hint").to_string()),
                 Some(t!("conn.tip.bundle").to_string()),
                 div()
-                    .w(field_w)
+                    .w_full()
+                    .min_w(field_w)
                     .child(
                         MoonInput::new("core-card-bundle-input")
                             .state(inputs.bundle)
+                            .mono(true)
                             .small(),
                     )
                     .into_any_element(),
@@ -786,10 +799,12 @@ pub(crate) fn core_card(
             None,
             None,
             div()
-                .w(field_w)
+                .w_full()
+                .min_w(field_w)
                 .child(
                     MoonInput::new("core-card-name-input")
                         .state(inputs.name)
+                        .mono(true)
                         .small(),
                 )
                 .into_any_element(),
@@ -824,9 +839,7 @@ pub(crate) fn core_card(
             t!("conn.card.color").to_string(),
             Some(t!("conn.card.color_hint").to_string()),
             None,
-            MoonColorPicker::new(inputs.color)
-                .colors(design::picker_palette())
-                .into_any_element(),
+            super::super::common::swatch_picker(inputs.color).into_any_element(),
         ))
         .child(disclosure(
             FEEDS_KEY,
@@ -901,15 +914,15 @@ pub(crate) fn cores_empty(act: &CoreAct, add: AnyElement, cx: &App) -> AnyElemen
 /// Height the list keeps in a narrow window, where the card sits under it, unscaled.
 const NARROW_LIST_H: f32 = 240.0;
 /// Share of the body the list takes beside the card, clamped to [`LIST_W_MIN`]..[`LIST_W_MAX`].
-const LIST_SHARE: f32 = 0.38;
+const LIST_SHARE: f32 = 0.45;
 /// Narrowest list beside the card, unscaled: a core name and its status still read.
 const LIST_W_MIN: f32 = 200.0;
 /// Widest list beside the card, unscaled.
-const LIST_W_MAX: f32 = 280.0;
+const LIST_W_MAX: f32 = 640.0;
 /// Gap between the list and the card, unscaled.
 const SPLIT_GAP: f32 = 12.0;
-/// The least a card row's caption keeps beside its control, unscaled.
-const CARD_LABEL_MIN_W: f32 = 64.0;
+/// Width of a card row's label column, unscaled: the mockup's form card.
+const CARD_LABEL_W: f32 = 120.0;
 
 /// How the list and the card share the body.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -927,7 +940,7 @@ pub(crate) fn card_min_w(cx: &App) -> f32 {
         design::ui_text_width_zoomed(cx, &t!("conn.card.paste"), design::BODY_TEXT, 400.0, false)
             + 2.0 * design::ui_value(cx, design::CONTROL_TIER.control_metrics().pad_x)
             + 2.0;
-    design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_MIN_W + 16.0 + FIELD_W + 6.0) + 2.0 + paste
+    design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_W + 16.0 + FIELD_W + 6.0) + 2.0 + paste
 }
 
 /// Side by side only when the list at its share and the card at its minimum both fit

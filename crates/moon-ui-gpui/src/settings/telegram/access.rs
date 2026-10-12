@@ -306,7 +306,10 @@ impl SettingsView {
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
         let section = MoonGroupBox::new(side.id("chat-access"))
-            .title(self.bot_section_title(side, "telegram.access_title"))
+            .child(crate::settings::common::group_title(
+                self.bot_section_title(side, "telegram.access_title"),
+                cx,
+            ))
             .padding(14.0)
             .gap(10.0)
             .child(

@@ -8,7 +8,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{MoonButton, MoonButtonVariant, MoonPalette, MoonTag, h_flex, rgba_from, v_flex};
+use moon_ui::{
+    MoonButton, MoonButtonVariant, MoonPalette, MoonTag, MoonTagRadius, MoonTagVariant, MoonTone,
+    h_flex, rgba_from, v_flex,
+};
 use rust_i18n::t;
 
 use super::{SaveMode, SettingsView, Tab};
@@ -79,14 +82,27 @@ fn mode_label(mode: SaveMode) -> String {
 ///     The header row.
 pub(super) fn page_header(h: PageHeader, narrow: bool, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    let chip = match h.mode {
-        SaveMode::Draft => MoonTag::info(),
-        SaveMode::Live => MoonTag::positive(),
-        SaveMode::Remote => MoonTag::warning(),
-    }
-    .mono(false)
-    // A child, not `label()`: the mockup's chip is sentence case, `label()` upper-cases.
-    .child(mode_label(h.mode));
+    let tone = match h.mode {
+        SaveMode::Draft => MoonTone::Info,
+        SaveMode::Live => MoonTone::Positive,
+        SaveMode::Remote => MoonTone::Warning,
+    };
+    // The mockup's `.mode` chip: a soft wash, 3px corners, a compact row and a leading dot.
+    let chip = MoonTag::new()
+        .tone(tone)
+        .variant(MoonTagVariant::Soft)
+        .radius(MoonTagRadius::Small)
+        .compact(true)
+        .mono(false)
+        .child(
+            div()
+                .flex_none()
+                .size(design::ui_px(cx, 6.0))
+                .rounded_full()
+                .bg(rgba_from(tone.color(p), 1.0)),
+        )
+        // A child, not `label()`: the mockup's chip is sentence case, `label()` upper-cases.
+        .child(mode_label(h.mode));
     let desc = h.desc_override.unwrap_or_else(|| h.tab.desc());
     let title = v_flex()
         .min_w_0()
@@ -99,8 +115,14 @@ pub(super) fn page_header(h: PageHeader, narrow: bool, cx: &App) -> AnyElement {
                 .items_center()
                 .child(
                     div()
-                        .min_w_0()
-                        .truncate()
+                        .debug_selector({
+                            let id = h.tab.id();
+                            move || format!("settings-page-title-{id}")
+                        })
+                        // Never truncated: a truncating text in this nested flex row collapses
+                        // to a bare ellipsis, and page titles are short enough to always fit.
+                        .flex_none()
+                        .whitespace_nowrap()
                         .font_family(design::ui_font())
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_size(design::ui_px(cx, 17.0))
@@ -129,7 +151,10 @@ pub(super) fn page_header(h: PageHeader, narrow: bool, cx: &App) -> AnyElement {
             .children(actions)
             .into_any_element()
     } else {
+        // `w_full`: a content-sized row gives the `flex_1` title column no room, and its
+        // truncating title collapses to a bare ellipsis.
         h_flex()
+            .w_full()
             .gap(design::ui_px(cx, 12.0))
             .items_start()
             .child(title)

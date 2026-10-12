@@ -1,6 +1,6 @@
 //! Filter and marker coverage for the Settings navigation model.
 
-use super::{NavCount, NavCounts, nav_model, picker_label};
+use super::{NavCount, NavCounts, nav_model, picker_label, tab_icon};
 use crate::settings::{Tab, TabSet};
 
 fn tabs(model: &super::NavModel) -> Vec<Tab> {
@@ -87,4 +87,18 @@ fn dirty_flags_and_counts_reach_their_pages() {
     let hotkeys = quiet.items.iter().find(|i| i.tab == Tab::Hotkeys).unwrap();
     assert_eq!(hotkeys.count, None);
     assert!(!hotkeys.dirty);
+}
+
+/// Catches a sidebar icon path MoonUI does not ship, which draws an empty slot before the page
+/// name: every page's icon must load from the app's asset source.
+#[test]
+fn every_page_icon_is_a_shipped_asset() {
+    use gpui::AssetSource as _;
+    for tab in Tab::ALL {
+        let path = tab_icon(tab);
+        assert!(
+            matches!(moon_ui::MoonAssets.load(path), Ok(Some(_))),
+            "{tab:?}: {path} is not in MoonUI's assets"
+        );
+    }
 }

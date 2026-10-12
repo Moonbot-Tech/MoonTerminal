@@ -26,7 +26,12 @@ use super::table::{
 };
 use crate::design;
 use crate::settings::Tab;
-use crate::settings::common::hint_row;
+use crate::settings::common::column_row;
+
+/// Label column of the market-source and core-order card, unscaled.
+const SELECT_LABEL_W: f32 = 250.0;
+/// Widest the two selects beside it get, unscaled.
+const SELECT_W: f32 = 320.0;
 use crate::settings::frame::PageParts;
 use moon_core::config::{AppConfig, ServerConfig, TransportVersion};
 
@@ -653,10 +658,11 @@ impl SettingsView {
 
     /// Market source and core order, as two rows above the list.
     fn cores_selects(&self, act: &CoreAct, cx: &App) -> AnyElement {
-        let width = design::ui_px(cx, 260.0);
-        let menu_w = design::font_w(cx, 260.0);
+        let width = design::ui_px(cx, SELECT_W);
+        let menu_w = design::font_w(cx, SELECT_W);
         let market = div()
-            .w(width)
+            .w_full()
+            .max_w(width)
             .child(
                 MoonSelect::new(&self.mode)
                     .trigger_size(MoonButtonSize::density(cx))
@@ -664,7 +670,8 @@ impl SettingsView {
             )
             .into_any_element();
         let sort = div()
-            .w(width)
+            .w_full()
+            .max_w(width)
             .child(
                 MoonSelect::new(&self.core_sort)
                     .trigger_size(MoonButtonSize::density(cx))
@@ -675,10 +682,16 @@ impl SettingsView {
             let act = act.clone();
             Rc::new(move |window, cx| act(CoreAction::Disclose(key), window, cx))
         };
+        let p = moon_ui::MoonPalette::active(cx);
+        // The mockup's form card: a bordered box, a label column and each select beside it.
         v_flex()
             .w_full()
             .flex_none()
-            .child(hint_row(
+            .px(design::ui_px(cx, 14.0))
+            .border_1()
+            .border_color(moon_ui::rgba_from(p.border, 1.0))
+            .rounded(design::r_container(cx))
+            .child(column_row(
                 "conn-market-src",
                 t!("conn.market_src").to_string(),
                 Some(t!("conn.market_src.hint").to_string()),
@@ -686,9 +699,10 @@ impl SettingsView {
                 market,
                 self.more_open.contains("conn-market-src"),
                 toggle("conn-market-src"),
+                SELECT_LABEL_W,
                 cx,
             ))
-            .child(hint_row(
+            .child(column_row(
                 "conn-core-sort",
                 t!("conn.core_sort").to_string(),
                 Some(t!("conn.core_sort.hint").to_string()),
@@ -696,6 +710,7 @@ impl SettingsView {
                 sort,
                 false,
                 toggle("conn-core-sort"),
+                SELECT_LABEL_W,
                 cx,
             ))
             .into_any_element()

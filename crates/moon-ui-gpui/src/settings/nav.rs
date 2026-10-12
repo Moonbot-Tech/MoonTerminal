@@ -9,7 +9,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonInput, MoonInputState, MoonPalette, MoonSelect, MoonSelectItem,
+    MoonButton, MoonIcon, MoonInput, MoonInputState, MoonPalette, MoonSelect, MoonSelectItem,
     MoonSelectState, MoonSidebar, MoonSidebarGroup, MoonSidebarMenu, MoonSidebarMenuItem, MoonTag,
     MoonTooltipView, h_flex, rgba_from, v_flex,
 };
@@ -166,7 +166,9 @@ pub(super) fn nav_sidebar(
             .map(|item| menu_item(item, active, on_pick.clone()))
             .collect();
         (!entries.is_empty()).then(|| {
-            MoonSidebarGroup::new(group.title()).child(MoonSidebarMenu::new().children(entries))
+            // The mockup's section headers are small muted capitals.
+            MoonSidebarGroup::new(group.title().to_uppercase())
+                .child(MoonSidebarMenu::new().children(entries))
         })
     });
     let footer = MoonButton::new("settings-nav-import")
@@ -190,12 +192,36 @@ pub(super) fn nav_sidebar(
         .into_any_element()
 }
 
-/// One sidebar entry with its unsaved dot and count.
+/// The sidebar icon of `tab`, one of the icons MoonUI ships.
+fn tab_icon(tab: Tab) -> &'static str {
+    match tab {
+        Tab::Cores => "icons/cpu.svg",
+        Tab::TgBot => "icons/bot.svg",
+        Tab::TgNotify => "icons/bell.svg",
+        Tab::TgMessages => "icons/inbox.svg",
+        Tab::TgCore => "icons/network.svg",
+        Tab::StOverview => "icons/layout-dashboard.svg",
+        Tab::StCores => "icons/memory-stick.svg",
+        Tab::StTape => "icons/trending-up.svg",
+        Tab::StMaint => "icons/settings-2.svg",
+        Tab::Appearance => "icons/palette.svg",
+        Tab::Lines => "icons/chart-labels.svg",
+        Tab::Badges => "icons/star.svg",
+        Tab::Hotkeys => "icons/square-terminal.svg",
+        Tab::General => "icons/settings.svg",
+        Tab::Security => "icons/eye-off.svg",
+        Tab::Storage => "icons/hard-drive.svg",
+        Tab::Sounds => "icons/play.svg",
+    }
+}
+
+/// One sidebar entry with its icon, unsaved dot and count.
 fn menu_item(item: &NavItem, active: Tab, on_pick: OnPick) -> MoonSidebarMenuItem {
     let tab = item.tab;
     let dirty = item.dirty;
     let count = item.count;
     MoonSidebarMenuItem::new(item.title.clone())
+        .icon(MoonIcon::empty().path(tab_icon(tab)))
         .active(tab == active)
         .on_click(move |_, window, cx| on_pick(tab, window, cx))
         .when(dirty || count.is_some(), |entry| {

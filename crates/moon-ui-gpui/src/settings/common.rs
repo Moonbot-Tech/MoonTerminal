@@ -7,12 +7,13 @@
 
 use std::ops::RangeInclusive;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_ui::{
     MoonBarSegment, MoonButton, MoonButtonVariant, MoonColorPicker, MoonColorPickerEvent,
-    MoonColorPickerState, MoonDisclosure, MoonDisclosureDirection, MoonInputState, MoonNumberInput,
-    MoonPalette, MoonSelectableCard, MoonSlider, MoonSliderEvent, MoonSliderState, MoonStackedBar,
-    MoonSteps, MoonWindowExt, h_flex, rgba_from, v_flex,
+    MoonColorPickerState, MoonColorPickerTrigger, MoonDisclosure, MoonDisclosureDirection,
+    MoonInputState, MoonNumberInput, MoonPalette, MoonSelectableCard, MoonSlider, MoonSliderEvent,
+    MoonSliderState, MoonStackedBar, MoonSteps, MoonText, MoonWindowExt, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -169,20 +170,63 @@ pub(super) fn section(title: &str, p: MoonPalette, cx: &App) -> impl IntoElement
         .child(title.to_string())
 }
 
-/// Build an egui-style color row with a swatch picker followed by its label.
+/// The title of a Settings group box in the UI face.
+///
+/// `MoonGroupBox::title` paints its caption mono; a card title is a label, so Settings hands the
+/// box this as its first child instead, in the same size, weight and colour.
+///
+/// Args:
+///     title: The caption.
+///     cx: App context, for the palette.
+///
+/// Returns:
+///     The caption element.
+pub(super) fn group_title(title: impl Into<SharedString>, cx: &App) -> AnyElement {
+    MoonText::new(title)
+        .color(MoonPalette::active(cx).text_soft)
+        .font_size(10.5)
+        .line_height(13.0)
+        .weight(600.0)
+        .mono(false)
+        .uppercase(false)
+        .render()
+        .into_any_element()
+}
+
+/// Build the Settings colour control: the mockup's compact swatch over the shared picker palette.
+///
+/// Args:
+///     st: The picker state the swatch reads and writes.
+///
+/// Returns:
+///     The picker, ready for further builder calls such as `disabled`.
+pub(super) fn swatch_picker(st: &Entity<MoonColorPickerState>) -> MoonColorPicker {
+    MoonColorPicker::new(st)
+        .colors(design::picker_palette())
+        .trigger_style(MoonColorPickerTrigger::Swatch)
+}
+
+/// Build a colour row: the swatch picker followed by its label, which wraps when long.
 pub(super) fn color_row(
     label: &str,
     st: &Entity<MoonColorPickerState>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
+    // The label shrinks and wraps beside the fixed swatch: a long one takes a second line
+    // instead of painting past its card.
     h_flex()
+        .w_full()
+        .min_w_0()
         .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
         .gap(design::ui_px(cx, 10.0))
         .items_center()
-        .child(MoonColorPicker::new(st).colors(design::picker_palette()))
+        .child(div().flex_none().child(swatch_picker(st)))
         .child(
             div()
+                .debug_selector(|| "color-row-label".into())
+                .flex_1()
+                .min_w_0()
                 .text_color(rgba_from(p.text_soft, 1.0))
                 .child(label.to_string()),
         )
@@ -320,6 +364,64 @@ pub(super) fn hint_row(
     on_toggle: Action,
     cx: &App,
 ) -> AnyElement {
+    row_layout(id, label, hint, more, control, open, on_toggle, None, cx)
+}
+
+/// A [`hint_row`] laid out in columns, as in a form card: the label column `label_w` wide
+/// (unscaled), the control right beside it filling the rest, and a hairline under the row.
+///
+/// Args:
+///     id: Stable element id; the disclosure derives its own from it.
+///     label: Setting name.
+///     hint: One short line under the label, or `None`.
+///     more: Longer help shown only while `open`, or `None` for no disclosure at all.
+///     control: The editor; it gets the remaining width and may fill it.
+///     open: Whether the long help is shown.
+///     on_toggle: Flips `open`.
+///     label_w: Width of the label column, unscaled.
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The row.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn column_row(
+    id: &'static str,
+    label: String,
+    hint: Option<String>,
+    more: Option<String>,
+    control: AnyElement,
+    open: bool,
+    on_toggle: Action,
+    label_w: f32,
+    cx: &App,
+) -> AnyElement {
+    row_layout(
+        id,
+        label,
+        hint,
+        more,
+        control,
+        open,
+        on_toggle,
+        Some(label_w),
+        cx,
+    )
+}
+
+/// Shared body of [`hint_row`] (`label_w` `None`: label flexes, control at its own width on the
+/// right) and [`column_row`] (`Some`: a fixed label column and the control filling the rest).
+#[allow(clippy::too_many_arguments)]
+fn row_layout(
+    id: &'static str,
+    label: String,
+    hint: Option<String>,
+    more: Option<String>,
+    control: AnyElement,
+    open: bool,
+    on_toggle: Action,
+    label_w: Option<f32>,
+    cx: &App,
+) -> AnyElement {
     let p = MoonPalette::active(cx);
     let muted = rgba_from(p.text_muted, 1.0);
     let toggle = more.is_some().then(|| {
@@ -349,8 +451,13 @@ pub(super) fn hint_row(
             )
     });
     let text = v_flex()
-        .flex_1()
+        .map(|el| match label_w {
+            Some(w) => el.flex_none().w(design::ui_px(cx, w)),
+            None => el.flex_1(),
+        })
         .min_w_0()
+        // A row's label and hint are prose in the UI face, whatever face the page sets.
+        .font_family(design::ui_font())
         .gap(design::ui_px(cx, 2.0))
         .child(
             div()
@@ -382,7 +489,13 @@ pub(super) fn hint_row(
         .gap(design::ui_px(cx, 16.0))
         .py(design::ui_px(cx, 6.0))
         .child(text)
-        .child(div().flex_none().child(control))
+        .map(|el| match label_w {
+            Some(_) => el
+                .border_b_1()
+                .border_color(rgba_from(p.border, 1.0))
+                .child(div().flex_1().min_w_0().child(control)),
+            None => el.child(div().flex_none().child(control)),
+        })
         .into_any_element()
 }
 
