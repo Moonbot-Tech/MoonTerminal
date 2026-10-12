@@ -31,6 +31,7 @@ header.trade_real_tip: "Gerçek kip. Çekirdek ayarlarından değişir (dişli).
 header.balance_tip: "Çift tıklama Varlıkları açar"
 header.balance_caption: "Bakiye"
 header.balance_free: "serbest"
+header.balance_partial: "sayılmadı: %{n}"
 header.balance_none: "Bakiye bir çekirdek bağlanınca görünür"
 header.add_core: "Çekirdek ekle"
 header.add_core_tip: "Çekirdek eklemek için ayarları aç"

@@ -31,6 +31,7 @@ header.trade_real_tip: "Modo real. Se cambia en ajustes del núcleo (el engranaj
 header.balance_tip: "Doble clic abre Activos"
 header.balance_caption: "Saldo"
 header.balance_free: "libre"
+header.balance_partial: "sin contar: %{n}"
 header.balance_none: "El saldo aparecerá al conectar un núcleo"
 header.add_core: "Añadir núcleo"
 header.add_core_tip: "Abrir ajustes para añadir un núcleo"

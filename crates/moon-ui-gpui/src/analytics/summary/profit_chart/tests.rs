@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use super::{ProfitChartModel, hover_bucket_at, popup_model, tick_indices};
+use super::{ProfitChartModel, extreme_label_y, hover_bucket_at, popup_model, tick_indices};
 use crate::analytics::summary::derived::derive_for_test;
 use crate::analytics::summary::state::{CoreLines, SummaryUi};
 use moon_core::db::analytics::{CoreSeries, DayPoint, Summary};
@@ -186,4 +186,29 @@ fn axis_ticks_thin_and_keep_the_last() {
     let t = tick_indices(31);
     assert_eq!(t.last(), Some(&30));
     assert!(t.windows(2).all(|w| w[1] - w[0] >= 3), "{t:?}");
+}
+
+/// A worst day whose bar fills the lower half has no room past its tip; the label used to be
+/// clamped back onto the bar and printed through it. It must jump above the zero line instead,
+/// and a short bar keeps its label right past the tip. Same for the best day.
+#[test]
+fn extreme_label_never_covers_its_own_bar() {
+    let (zero, min_y, max_bottom, cap) = (100.0, 40.0, 150.0, 14.0);
+    let clear = |top: f32, a: f32, b: f32| top + cap <= a.min(b) || top >= a.max(b);
+    // Worst day reaching the pane bottom.
+    let y = extreme_label_y(false, 150.0, zero, min_y, max_bottom, cap);
+    assert!(clear(y, zero, 150.0) && y >= min_y && y + cap <= max_bottom);
+    // Short worst day: right under its tip.
+    assert_eq!(
+        extreme_label_y(false, 110.0, zero, min_y, max_bottom, cap),
+        112.0
+    );
+    // Best day reaching the pane top.
+    let y = extreme_label_y(true, 40.0, zero, min_y + 10.0, max_bottom, cap);
+    assert!(clear(y, 40.0, zero) && y + cap <= max_bottom);
+    // Short best day: right over its tip.
+    assert_eq!(
+        extreme_label_y(true, 90.0, zero, min_y, max_bottom, cap),
+        74.0
+    );
 }

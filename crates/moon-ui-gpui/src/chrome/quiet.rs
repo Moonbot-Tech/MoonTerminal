@@ -115,11 +115,11 @@ pub(crate) fn header_quiet_cluster(
     .to_string();
     let text = button_label(sleeping);
     // Accent-filled while asleep: sounds the operator relies on are being withheld, and the state
-    // must read from across the screen. Awake it is ordinary chrome.
+    // must read from across the screen. Awake it is a flat (ghost) header action.
     let variant = if sleeping {
         MoonButtonVariant::Blue
     } else {
-        MoonButtonVariant::Soft
+        MoonButtonVariant::Ghost
     };
     let fg = if sleeping { p.accent } else { p.text_soft };
     let mut button = MoonButton::new("header-sleep")

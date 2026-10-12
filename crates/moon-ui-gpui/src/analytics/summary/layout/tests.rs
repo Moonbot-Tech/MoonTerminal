@@ -673,6 +673,19 @@ fn side_column_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext
                         && badge.right() <= strat.origin.x + px(0.5),
                     "trade {k} coin, badge and strategy out of order ({at})"
                 );
+                // The close time stays on one line and clear of the coin: a wrapped time
+                // grew taller than its row and printed over the next one.
+                let closed = bounds(visual, &format!("sum-trades-closed-{k}"), at);
+                assert!(
+                    closed.size.height <= row.size.height + px(0.5)
+                        && closed.right() <= coin.origin.x + px(0.5),
+                    "trade {k} close time wrapped or ran into the coin ({at})"
+                );
+                let line = visual.update(|_, cx| f32::from(design::t_body(cx)) * 1.8);
+                assert!(
+                    f32::from(closed.size.height) <= line,
+                    "trade {k} close time on two lines ({at})"
+                );
                 let need =
                     visual.update(|_, cx| design::mono_body_text_width(cx, &tr.coin, 400.0) * 0.98);
                 assert!(fits(text, need), "trade {k} coin cut ({at})");

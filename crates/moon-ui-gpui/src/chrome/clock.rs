@@ -203,7 +203,7 @@ pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
     );
     design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)
         + design::ui_value(cx, CLOCK_GAP)
-        + design::mono_body_text_width(cx, &code, CLOCK_TZ_WEIGHT)
+        + design::mono_caption_text_width(cx, &code, CLOCK_TZ_WEIGHT)
 }
 
 /// Rendered widths of the main header's clock parts: the time, and the city code with the gap
@@ -224,7 +224,7 @@ pub(crate) fn header_clock_part_widths(zone: chrono_tz::Tz, cx: &App) -> (f32, f
     (
         text_box(design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)),
         design::ui_value(cx, CLOCK_GAP)
-            + text_box(design::mono_body_text_width(cx, &code, CLOCK_TZ_WEIGHT)),
+            + text_box(design::mono_caption_text_width(cx, &code, CLOCK_TZ_WEIGHT)),
     )
 }
 
@@ -450,7 +450,8 @@ fn clock_with_picker(
         .id("header-clock")
         .debug_selector(|| "header-clock".into())
         .flex_none()
-        .items_center()
+        // The city is a smaller caption: it sits on the time's baseline, as in the mockup.
+        .items_baseline()
         .gap(design::ui_px(cx, CLOCK_GAP))
         .font_family(design::mono())
         .text_size(design::t_body(cx))
@@ -468,8 +469,10 @@ fn clock_with_picker(
         )
         .when(style.show_city, |row| {
             row.child(
+                // Reference info: the muted caption tier, not a second value.
                 div()
-                    .text_color(rgb(p.text_soft))
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgb(p.text_muted))
                     .font_weight(FontWeight(CLOCK_TZ_WEIGHT))
                     .child(code),
             )

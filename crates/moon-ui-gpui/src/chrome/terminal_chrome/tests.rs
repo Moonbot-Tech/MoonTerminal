@@ -168,7 +168,8 @@ fn balance_view_maps_total_free_and_staleness() {
         BalanceView::Value {
             total: 100.0,
             free: 12.5,
-            stale: false
+            stale: false,
+            missing: 0
         }
     );
     assert_eq!(
@@ -176,7 +177,8 @@ fn balance_view_maps_total_free_and_staleness() {
         BalanceView::Value {
             total: 100.0,
             free: 12.5,
-            stale: true
+            stale: true,
+            missing: 0
         }
     );
     assert_eq!(
@@ -188,6 +190,61 @@ fn balance_view_maps_total_free_and_staleness() {
         BalanceView::Unknown
     );
     assert_eq!(BalanceView::of(None, 0.0, 0.0), BalanceView::NoCore);
+}
+
+/// `terminal_chrome.rs:BalanceView::of_group` heads the Auto overview with the group's folded
+/// total. A total that left awaiting or unpriced cores out must say how many (a silent partial
+/// sum reads as the whole group's money), one that counted a pre-outage figure is stale, and a
+/// group where nothing could be counted prints no number at all.
+#[test]
+fn group_balance_names_what_the_total_left_out() {
+    use moon_core::session::balances::BalanceAggregate;
+    let sum = |total: Option<f64>, counted, stale, excluded| BalanceAggregate {
+        free: total.map(|t| t / 2.0),
+        total,
+        counted,
+        stale,
+        excluded,
+        awaiting: excluded,
+        unpriced: 0,
+    };
+    assert_eq!(
+        BalanceView::of_group(&sum(Some(100.0), 3, 0, 0), 3),
+        BalanceView::Value {
+            total: 100.0,
+            free: 50.0,
+            stale: false,
+            missing: 0
+        }
+    );
+    let partial = BalanceView::of_group(&sum(Some(100.0), 2, 1, 1), 3);
+    assert_eq!(
+        partial,
+        BalanceView::Value {
+            total: 100.0,
+            free: 50.0,
+            stale: true,
+            missing: 1
+        }
+    );
+    assert!(partial.tagged());
+    {
+        let _locale = crate::test_locale::force("en");
+        let tag = super::balance_tag_text(true, 1);
+        assert!(
+            tag.contains(&rust_i18n::t!("header.balance_partial", n = 1).to_string())
+                && tag.contains(&rust_i18n::t!("assets.balance_stale").to_string()),
+            "a partial, stale total must name both: {tag}"
+        );
+    }
+    assert_eq!(
+        BalanceView::of_group(&sum(None, 0, 0, 3), 3),
+        BalanceView::Unknown
+    );
+    assert_eq!(
+        BalanceView::of_group(&sum(None, 0, 0, 0), 0),
+        BalanceView::NoCore
+    );
 }
 
 /// `terminal_chrome.rs:header_widths` measures figures off a digit template: two balances with
@@ -205,11 +262,13 @@ fn balances_with_equal_digit_counts_measure_alike(cx: &mut gpui::TestAppContext)
             total: 1111.11,
             free: 1000.01,
             stale: false,
+            missing: 0,
         };
         high.balance = BalanceView::Value {
             total: 9999.99,
             free: 8888.88,
             stale: false,
+            missing: 0,
         };
         assert_eq!(
             super::header_widths(&low, cx),
@@ -267,7 +326,12 @@ fn synthetic_header(state: HeaderState) -> super::HeaderModel {
         auto: false,
         emu,
     };
-    let value = |total, free, stale| BalanceView::Value { total, free, stale };
+    let value = |total, free, stale| BalanceView::Value {
+        total,
+        free,
+        stale,
+        missing: 0,
+    };
     let (mode, card, gear, balance) = match state {
         HeaderState::Normal => (
             WorkspaceMode::Classic,
@@ -302,7 +366,13 @@ fn synthetic_header(state: HeaderState) -> super::HeaderModel {
                 emu: None,
             },
             None,
-            BalanceView::Hidden,
+            // A group total that could not count two cores says so.
+            BalanceView::Value {
+                total: 48_210.55,
+                free: 31_002.1,
+                stale: false,
+                missing: 2,
+            },
         ),
         HeaderState::LongName => (
             WorkspaceMode::Classic,
@@ -412,7 +482,10 @@ fn figure_widths(model: &super::HeaderModel, cx: &gpui::App) -> Vec<(&'static st
         ));
     }
     if let BalanceView::Value {
-        free, stale: false, ..
+        free,
+        stale: false,
+        missing: 0,
+        ..
     } = model.balance
     {
         out.push(("header-balance-free", super::free_width(cx, free)));

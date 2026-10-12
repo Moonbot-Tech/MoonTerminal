@@ -308,7 +308,16 @@ pub(in crate::analytics) fn trades_el(
         )
         + badge_w
         + f32::from(design::ui_px(cx, 4.0));
-    let closed_w = design::font_w_px(cx, 84.0);
+    // The close time never wraps: the column is the widest time as the row draws it (mono).
+    let closed_w = px(cells
+        .iter()
+        .map(|c| design::mono_body_text_width(cx, &c.closed, 400.0))
+        .fold(
+            design::ui_caption_text_width(cx, &t!("analytics.col.closed"), 400.0),
+            f32::max,
+        )
+        .ceil()
+        + 1.0);
     let profit_w = design::font_w_px(cx, 64.0);
     let gap = design::ui_px(cx, 8.0);
     let row_base = |h: Pixels| {
@@ -381,8 +390,10 @@ pub(in crate::analytics) fn trades_el(
                 .border_color(moon_alpha(p.border, 0.6))
                 .child(
                     div()
+                        .debug_selector(move || format!("sum-trades-closed-{ix}"))
                         .w(closed_w)
                         .flex_none()
+                        .whitespace_nowrap()
                         .text_color(moon(p.text_soft))
                         .child(c.closed),
                 )

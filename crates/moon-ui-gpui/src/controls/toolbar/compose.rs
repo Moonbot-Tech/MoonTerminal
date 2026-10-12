@@ -199,8 +199,9 @@ impl ToolbarModel {
         // While a manual strategy owns the exits, BOTH readouts come from its overlay; with MS
         // off — or on another chart — they are the saved generation, untouched underneath.
         let manual_exit = manual_core.and_then(|c| b.manual_exit_overlay(c));
+        // A take is a gain: signed like one, as the mockup's green `+1.00%`.
         let tp_value = format!(
-            "{}%",
+            "+{}%",
             fmt_field2(
                 manual_exit
                     .and_then(|ms| ms.take_profit_pct)
@@ -372,7 +373,7 @@ impl ToolbarModel {
         use SynthToolbar::*;
         let manual_on = state == Manual;
         let follow = state != Paused;
-        let tp_value = "2.50%".to_string();
+        let tp_value = "+2.50%".to_string();
         let size_cells = strips::FittedCells::fit(
             cx,
             strips::size_labels([10.0, 25.0, 50.0, 100.0, 250.0, 1000.0]),
@@ -758,8 +759,7 @@ pub(crate) fn render_toolbar(
     pods = pods.children(sl_pod);
 
     // Take and Sell, until L8 folds both into "More". Take: TP and the S presets are one sell
-    // target, exactly one of them lit. `p.blue` in both themes, not the light theme's `p.accent`,
-    // which a lit Blue button uses as its fill.
+    // target, exactly one of them lit. The value reads as the gain it is, in the positive tone.
     let tp_lit = model.tp_engaged && !model.manual_on;
     let sell_slot = model.sell_slot_shown();
     // Sell: disabled where a click would reach nothing — a manual strategy owning the sell price,
@@ -774,7 +774,7 @@ pub(crate) fn render_toolbar(
                 .child(metric_button(
                     TradeMetric::Tp,
                     model.tp_value.clone(),
-                    p.blue,
+                    design::positive_color(p),
                     false,
                     tp_popup.is_some(),
                     tp_lit,

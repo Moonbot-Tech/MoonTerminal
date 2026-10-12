@@ -427,10 +427,10 @@ fn lev_input(input: &Entity<MoonInputState>, cx: &App) -> Option<f64> {
 /// component-owned popup padding and border.
 const POPUP_CONTENT_W: f32 = 220.0;
 
-/// Horizontal inset of a value-only metric trigger, before the UI scale.
-const METRIC_PAD_X: f32 = 7.0;
-/// Weight of a metric trigger's value.
-const METRIC_VALUE_WEIGHT: f32 = 500.0;
+/// Horizontal inset of a value-only metric trigger, before the UI scale (the mockup's 6px).
+const METRIC_PAD_X: f32 = 6.0;
+/// Weight of a metric trigger's value: semibold, as the mockup's pod values.
+const METRIC_VALUE_WEIGHT: f32 = 600.0;
 
 /// Rendered width of a value-only metric trigger carrying `value`: the mono value it draws, its
 /// two insets and its two raw one-pixel borders. The ONE measurement the toolbar budget and the
@@ -487,17 +487,17 @@ pub(super) fn metric_button(
     let lit = enabled && (open || engaged);
     let width = metric_value_width(cx, &value_str);
     let color = if struck { p.text_muted } else { color };
+    // Plain text inside its pod: the pod is the frame, so the value draws no box of its own —
+    // a ghost button, only a hover tint marks it clickable. "Lit" is the ghost's selected tint.
     let btn = MoonButton::new(metric.id())
         .width(width)
         .padding_x(METRIC_PAD_X)
         .mono(true)
-        .variant(if lit {
-            MoonButtonVariant::Blue
-        } else {
-            MoonButtonVariant::Neutral
-        })
-        .selected(lit)
-        .disabled(!enabled);
+        .variant(MoonButtonVariant::Ghost)
+        // Not `.disabled`: MoonUI paints every disabled button with a border and a fill, which
+        // would box the value again. The popover below is what refuses to open, and the caller
+        // already mutes an unavailable value's colour.
+        .selected(lit);
     let trigger = div()
         .flex_none()
         .when(struck, |el| el.line_through())

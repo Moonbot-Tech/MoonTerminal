@@ -24,6 +24,7 @@ use rust_i18n::t;
 
 use moon_core::config::WorkspaceMode;
 use moon_core::feed::ConnStatus;
+use moon_core::session::balances::{BalanceAggregate, BalanceFigures, aggregate_account_figures};
 use moon_core::session::{BalanceState, CoreId};
 use moon_core::util::fmt;
 
@@ -42,7 +43,8 @@ use crate::{Backend, design};
 fn gear_trigger() -> MoonButton {
     MoonButton::new("core-gear")
         .leading_icon(MoonButtonIconSlot::new("icons/settings-2.svg"))
-        .variant(MoonButtonVariant::Panel)
+        // A flat icon button beside the core card, as the mockup's.
+        .variant(MoonButtonVariant::Ghost)
         .tooltip(t!("core_settings.title").to_string())
 }
 
@@ -87,14 +89,18 @@ pub(crate) enum GearFace {
 /// What the balance slot of the header shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum BalanceView {
-    /// Auto Overview: the row names no single account, so there is no balance to show.
-    Hidden,
     /// The group has no core yet.
     NoCore,
     /// A core is named but its balance is unknown (no snapshot, no valuation).
     Unknown,
-    /// A usable figure: `total` is the headline, `free` the sub-figure, `stale` a pre-outage value.
-    Value { total: f64, free: f64, stale: bool },
+    /// A usable figure: `total` is the headline, `free` the sub-figure, `stale` a pre-outage value,
+    /// `missing` the scoped cores a group total could not count (always 0 for one core).
+    Value {
+        total: f64,
+        free: f64,
+        stale: bool,
+        missing: u32,
+    },
 }
 
 impl BalanceView {
@@ -114,9 +120,42 @@ impl BalanceView {
                 total,
                 free,
                 stale: !state.is_current(),
+                missing: 0,
             },
             Some(_) => Self::Unknown,
         }
+    }
+
+    /// Map a group's folded account aggregate onto the overview's balance slot.
+    ///
+    /// The sum is the Assets footer's ([`aggregate_account_figures`]): awaiting and unpriced
+    /// cores are left out, never counted as zero, and a shared account is counted once. A total
+    /// that left cores out says how many; one that counted a pre-outage figure is stale.
+    ///
+    /// Args:
+    ///     sum: The folded aggregate over the group's displayed cores.
+    ///     cores: How many cores the group displays.
+    ///
+    /// Returns:
+    ///     `NoCore` for an empty group, `Unknown` when nothing could be counted, else `Value`.
+    pub(crate) fn of_group(sum: &BalanceAggregate, cores: usize) -> Self {
+        if cores == 0 {
+            return Self::NoCore;
+        }
+        match (sum.total, sum.free) {
+            (Some(total), Some(free)) if sum.counted > 0 => Self::Value {
+                total,
+                free,
+                stale: sum.stale > 0,
+                missing: sum.excluded,
+            },
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Whether the figure carries a trust tag (stale or partial) in place of its free sub-figure.
+    pub(crate) fn tagged(self) -> bool {
+        matches!(self, Self::Value { stale, missing, .. } if stale || missing > 0)
     }
 }
 
@@ -160,12 +199,12 @@ pub(crate) struct HeaderModel {
 impl HeaderModel {
     /// Read the header's model for `group`.
     ///
-    /// `overview` is resolved ONCE here and gates every per-core element — the balance figure, the
-    /// gear and the trade-mode tag — because all three describe ONE account and mean nothing for
-    /// the whole group. `active_trade_core` falls through to the group's first core in the Auto
-    /// workspace Overview, so without the gate this row would print ONE arbitrary server's money
-    /// beside a card that reads "the whole group". `expert_settings` is resolved in the same borrow
-    /// because it decides the same element as `overview`.
+    /// `overview` is resolved ONCE here and gates every per-core element — the gear and the
+    /// trade-mode tag — because both describe ONE account and mean nothing for the whole group.
+    /// `active_trade_core` falls through to the group's first core in the Auto workspace Overview,
+    /// so the balance there is never that core's: it is the group's folded total
+    /// ([`BalanceView::of_group`]), beside a card that reads "the whole group". `expert_settings`
+    /// is resolved in the same borrow because it decides the same element as `overview`.
     ///
     /// Args:
     ///     group: Group whose header is being rendered.
@@ -209,7 +248,28 @@ impl HeaderModel {
         };
         let has_cores = !matches!(card, CoreCard::NoCores);
         let balance = if overview {
-            BalanceView::Hidden
+            // The whole group's money, through the Assets footer's trust model.
+            let store = b.session.store();
+            let rows: Vec<(CoreId, String, BalanceFigures)> = displayed_cores(group, b)
+                .into_iter()
+                .map(|(id, name)| {
+                    let figures = match store.core(id) {
+                        Some(cd) => BalanceFigures {
+                            state: cd.balance_state(),
+                            free: cd.assets.global.free_usdt,
+                            total: cd.assets.global.total_usdt,
+                        },
+                        None => BalanceFigures {
+                            state: BalanceState::Awaiting,
+                            free: 0.0,
+                            total: 0.0,
+                        },
+                    };
+                    (id, name, figures)
+                })
+                .collect();
+            let agg = aggregate_account_figures(&b.session, &b.config.servers, &rows);
+            BalanceView::of_group(&agg.sum, rows.len())
         } else {
             match core {
                 Some(cd) => BalanceView::of(
@@ -496,12 +556,6 @@ fn balance_parts(cx: &App, view: BalanceView) -> BalanceParts {
         )) + gap
     };
     match view {
-        BalanceView::Hidden => BalanceParts {
-            fixed: 0.0,
-            caption: 0.0,
-            unit: 0.0,
-            free: 0.0,
-        },
         BalanceView::NoCore => BalanceParts {
             fixed: text_box(design::ui_caption_text_width(
                 cx,
@@ -518,14 +572,20 @@ fn balance_parts(cx: &App, view: BalanceView) -> BalanceParts {
             unit: 0.0,
             free: 0.0,
         },
-        BalanceView::Value { total, free, stale } => {
+        BalanceView::Value {
+            total,
+            free,
+            stale,
+            missing,
+        } => {
+            let tagged = view.tagged();
             let headline = text_box(design::mono_body_text_width(
                 cx,
                 &digit_template(&fmt::usd_grouped(total)),
                 BALANCE_WEIGHT,
             ));
-            let stale_w = if stale {
-                gap + stale_tag_width(cx)
+            let stale_w = if tagged {
+                gap + stale_tag_width(cx, stale, missing)
             } else {
                 0.0
             };
@@ -533,7 +593,7 @@ fn balance_parts(cx: &App, view: BalanceView) -> BalanceParts {
                 fixed: headline + stale_w,
                 caption: caption(),
                 unit: gap + text_box(design::mono_caption_text_width(cx, "USDT", 400.0)),
-                free: if stale {
+                free: if tagged {
                     0.0
                 } else {
                     gap + free_width(cx, free)
@@ -557,11 +617,23 @@ fn free_width(cx: &App, free: f64) -> f32 {
         ))
 }
 
-/// Rendered width of the stale-balance tag.
-fn stale_tag_width(cx: &App) -> f32 {
+/// Text of the balance trust tag: every reason the figure is not current and complete, so a
+/// partial total that also counted a pre-outage figure says both.
+fn balance_tag_text(stale: bool, missing: u32) -> String {
+    let partial = (missing > 0).then(|| t!("header.balance_partial", n = missing).to_string());
+    let stale = stale.then(|| t!("assets.balance_stale").to_string());
+    partial
+        .into_iter()
+        .chain(stale)
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Rendered width of the balance trust tag.
+fn stale_tag_width(cx: &App, stale: bool, missing: u32) -> f32 {
     text_box(design::ui_caption_text_width(
         cx,
-        &t!("assets.balance_stale"),
+        &balance_tag_text(stale, missing),
         500.0,
     )) + design::ui_value(cx, STALE_PAD_X) * 2.0
 }
@@ -654,7 +726,6 @@ pub(crate) fn header_widths(model: &HeaderModel, cx: &App) -> HeaderWidths {
         CoreCard::NoCores => 0.0,
     };
     let balance = balance_parts(cx, model.balance);
-    let balance_shown = model.balance != BalanceView::Hidden;
     let (ticker, delta_1h) = ticker_parts(cx, model);
     let (clock_time, clock_city) =
         crate::chrome::clock::header_clock_part_widths(model.clock_zone, cx);
@@ -678,7 +749,8 @@ pub(crate) fn header_widths(model: &HeaderModel, cx: &App) -> HeaderWidths {
         + gap
         + card_chrome
         // Balance group and the spacer's gap.
-        + if balance_shown { gap + balance.fixed } else { 0.0 }
+        + gap
+        + balance.fixed
         + gap
         + update;
     let right_fixed = design::ui_value(cx, design::HEADER_PAD_X)
@@ -700,7 +772,7 @@ pub(crate) fn header_widths(model: &HeaderModel, cx: &App) -> HeaderWidths {
         launcher_labels: launch_labels,
         balance_caption: balance.caption,
         clock_city,
-        separators: rule * if balance_shown { 2.0 } else { 1.0 },
+        separators: rule * 2.0,
         right_separators: rule,
         usdt_unit: balance.unit,
         inactive_mode_seg: mode_segment_width(cx, &inactive_mode),
@@ -907,7 +979,6 @@ pub(crate) fn render_header(
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement + use<> {
-    let balance_shown = model.balance != BalanceView::Hidden;
     let (backend, updater, shell, ticker_sel) = match &actions {
         Some(a) => (
             Some(a.backend.clone()),
@@ -1108,20 +1179,17 @@ pub(crate) fn render_header(
                         }),
                 ),
         )
-        // The figure names ONE account, so its rule is gated with it rather than separately.
-        .when(balance_shown && level.separators(), |row| {
+        .when(level.separators(), |row| {
             row.child(design::chrome_divider(cx, p))
         })
-        .when(balance_shown, |row| {
-            row.child(balance_label(
-                model.group.clone(),
-                backend.clone(),
-                model.balance,
-                level,
-                p,
-                cx,
-            ))
-        })
+        .child(balance_label(
+            model.group.clone(),
+            backend.clone(),
+            model.balance,
+            level,
+            p,
+            cx,
+        ))
         .child(
             // A dual role, both required: this is BOTH the `flex_1` spacer that pins the cluster
             // after it to the right edge, AND the region that drags the window by the empty part
@@ -2180,7 +2248,6 @@ fn balance_label(
         .gap(design::ui_px(cx, design::CHROME_GAP))
         .whitespace_nowrap();
     row = match view {
-        BalanceView::Hidden => row,
         BalanceView::NoCore => row.child(
             div()
                 .font_family(design::ui_font())
@@ -2198,7 +2265,12 @@ fn balance_label(
                     .text_color(rgb(p.text_muted))
                     .child("—"),
             ),
-        BalanceView::Value { total, free, stale } => row
+        BalanceView::Value {
+            total,
+            free,
+            stale,
+            missing,
+        } => row
             .when(level.balance_caption(), |row| row.child(caption()))
             .child(
                 div()
@@ -2207,7 +2279,7 @@ fn balance_label(
                     .font_family(design::mono())
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight(BALANCE_WEIGHT))
-                    .text_color(rgb(if stale { p.text_muted } else { p.text }))
+                    .text_color(rgb(if view.tagged() { p.text_muted } else { p.text }))
                     .child(fmt::usd_grouped(total)),
             )
             .when(level.usdt_unit(), |row| {
@@ -2219,7 +2291,7 @@ fn balance_label(
                         .child("USDT"),
                 )
             })
-            .when(stale, |row| {
+            .when(view.tagged(), |row| {
                 row.child(
                     div()
                         .id("header-balance-stale")
@@ -2231,10 +2303,10 @@ fn balance_label(
                         .text_size(design::t_caption(cx))
                         .font_weight(FontWeight(500.0))
                         .text_color(rgb(p.amber))
-                        .child(t!("assets.balance_stale").to_string()),
+                        .child(balance_tag_text(stale, missing)),
                 )
             })
-            .when(!stale && level.free_sub(), |row| {
+            .when(!view.tagged() && level.free_sub(), |row| {
                 row.child(
                     h_flex()
                         .id("header-balance-free")

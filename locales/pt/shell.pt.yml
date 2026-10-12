@@ -31,6 +31,7 @@ header.trade_real_tip: "Modo real. Mude nas configurações do núcleo (a engren
 header.balance_tip: "Clique duplo abre Ativos"
 header.balance_caption: "Saldo"
 header.balance_free: "livre"
+header.balance_partial: "sem contar: %{n}"
 header.balance_none: "O saldo aparece quando um núcleo se conectar"
 header.add_core: "Adicionar núcleo"
 header.add_core_tip: "Abrir configurações para adicionar um núcleo"

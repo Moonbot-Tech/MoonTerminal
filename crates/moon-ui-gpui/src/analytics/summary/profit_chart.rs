@@ -495,6 +495,48 @@ fn band_alpha(p: MoonPalette) -> f32 {
     if p.is_light() { 0.16 } else { 0.22 }
 }
 
+/// Top of a bar-extreme label, placed so it never covers its own bar.
+///
+/// The label sits past the bar's tip when it fits there; when the bar reaches the edge of its
+/// half of the pane (the worst day always does), it moves to the other side of the zero line,
+/// where its own bucket has no bar.
+///
+/// Args:
+///     above: True for the best-day label (bar grows up), false for the worst day.
+///     tip_y: Y of the bar's far end.
+///     zero_y: Y of the zero line.
+///     min_y: Highest top the label may take.
+///     max_bottom: Lowest bottom the label may reach (the axis strip starts there).
+///     cap_h: Label height.
+///
+/// Returns:
+///     The label's top, in plot coordinates.
+fn extreme_label_y(
+    above: bool,
+    tip_y: f32,
+    zero_y: f32,
+    min_y: f32,
+    max_bottom: f32,
+    cap_h: f32,
+) -> f32 {
+    const GAP: f32 = 2.0;
+    if above {
+        let y = tip_y - cap_h - GAP;
+        if y >= min_y {
+            y
+        } else {
+            (zero_y + GAP).min(max_bottom - cap_h)
+        }
+    } else {
+        let y = tip_y + GAP;
+        if y + cap_h <= max_bottom {
+            y
+        } else {
+            (zero_y - cap_h - GAP).max(min_y)
+        }
+    }
+}
+
 /// The two panes, their labels, the axis, the hover surface and the popup.
 fn plot_el(
     m: &ProfitChartModel,
@@ -579,12 +621,14 @@ fn plot_el(
         if (above && v <= 0.0) || (!above && v >= 0.0) {
             continue;
         }
-        let y = if above {
-            (bar_y(v) - cap_h).max(top_h + gap - cap_h)
-        } else {
-            // Inside the bars pane: the strip below it belongs to the axis ticks.
-            bar_y(v).min(top_h + gap + bot_h - cap_h)
-        };
+        let y = extreme_label_y(
+            above,
+            bar_y(v),
+            zero_y,
+            top_h + gap - cap_h,
+            top_h + gap + bot_h,
+            cap_h,
+        );
         labels.push(label(
             bucket_frac(k, n),
             y,

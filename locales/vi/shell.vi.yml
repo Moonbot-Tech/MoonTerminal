@@ -31,6 +31,7 @@ header.trade_real_tip: "Chế độ thật. Đổi trong cài đặt core (bánh
 header.balance_tip: "Nhấp đúp mở Tài sản"
 header.balance_caption: "Số dư"
 header.balance_free: "khả dụng"
+header.balance_partial: "chưa tính: %{n}"
 header.balance_none: "Số dư sẽ hiện khi lõi kết nối"
 header.add_core: "Thêm lõi"
 header.add_core_tip: "Mở cài đặt để thêm lõi"

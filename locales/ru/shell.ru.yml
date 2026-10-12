@@ -31,6 +31,7 @@ header.trade_real_tip: "Реальный режим. Меняется в нас�
 header.balance_tip: "Двойной клик — открыть Активы"
 header.balance_caption: "Баланс"
 header.balance_free: "свободно"
+header.balance_partial: "не учтено: %{n}"
 header.balance_none: "Баланс появится после подключения ядра"
 header.add_core: "Добавить ядро"
 header.add_core_tip: "Открыть настройки, чтобы добавить ядро"

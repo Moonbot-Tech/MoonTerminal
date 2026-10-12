@@ -102,7 +102,7 @@ pub(crate) fn launch_window(
     );
 }
 
-/// A chrome button that opens a singleton window, styled like Live (Soft/Sm).
+/// A chrome button that opens a singleton window: a flat (ghost) icon+label, tinted on hover.
 ///
 /// `labeled_width = None` renders the icon alone with its name as a tooltip; `Some(w)` renders
 /// icon + label inside the fixed width `w`, and the tooltip still names it. With no `backend` the
@@ -132,11 +132,12 @@ pub(crate) fn open_window_button(
     } = target;
     let mut btn = MoonButton::new(id)
         .width(labeled_width.unwrap_or_else(|| design::glyph_btn_w(cx)))
-        .variant(MoonButtonVariant::Soft)
+        // Borderless: the header's actions are flat, as in the approved mockup.
+        .variant(MoonButtonVariant::Ghost)
         .leading_icon(MoonButtonIconSlot::new(icon).color(p.text_soft));
     btn = if labeled_width.is_some() {
         btn.padding_x(LAUNCHER_PAD_X)
-            .text_segment(label.clone(), p.text, LAUNCHER_TEXT_WEIGHT)
+            .text_segment(label.clone(), p.text_soft, LAUNCHER_TEXT_WEIGHT)
             .tooltip(label)
     } else {
         btn.tooltip(label)
@@ -203,7 +204,7 @@ pub(crate) fn overflow_button(
     let rows = std::rc::Rc::new(rows);
     let button = MoonButton::new(id)
         .width(design::glyph_btn_w(cx))
-        .variant(MoonButtonVariant::Soft)
+        .variant(MoonButtonVariant::Ghost)
         .leading_icon(MoonButtonIconSlot::new("icons/ellipsis.svg").color(p.text_soft))
         .tooltip(t!("toolbar.more_launchers").to_string())
         .on_click(move |_, window, cx| {
