@@ -575,7 +575,7 @@ pub(crate) fn render_toolbar(
         .flex_none()
         .items_center()
         .gap(design::ui_px(cx, design::CHROME_GAP))
-        .px(design::ui_px(cx, design::HEADER_PAD_X))
+        .px(design::ui_px(cx, design::TOOLBAR_PAD_X))
         .bg(rgb(p.shell_high))
         // The bottom border bounds the whole chrome block (header + toolbar share one background)
         // against the dock region below — it is not a seam between the two rows.
@@ -905,7 +905,7 @@ pub(crate) fn render_toolbar(
                 .absolute()
                 .top_0()
                 .bottom_0()
-                .right(design::ui_px(cx, design::HEADER_PAD_X))
+                .right(design::ui_px(cx, design::TOOLBAR_PAD_X))
                 .pl(design::ui_px(cx, design::CHROME_GAP))
                 .bg(rgb(p.shell_high))
                 .border_l_1()

@@ -2,7 +2,7 @@
 
 // NOT `use super::*`: the glob would pull in the `gpui::test` macro re-exported by the parent,
 // and `#[test]` would expand into itself (recursion limit).
-use super::{MetricTarget, TradeMetric, position_cap_text};
+use super::{MetricTarget, TradeMetric, lev_unset_reason, position_cap_text};
 use moon_core::market::MarketLimits;
 
 /// First distinct core identity used by target-comparison tests.
@@ -95,4 +95,18 @@ fn a_known_position_cap_is_grouped_with_its_quote() {
         Some(format!("{grouped} USDT"))
     );
     assert_eq!(position_cap_text(with_cap(Some(cap)), ""), Some(grouped));
+}
+
+/// Catches `metric.rs:lev_unset_reason` checking the core before the coin again: AUTO Overview
+/// scopes no single core, so with no coin on the Main chart the toolbar would fall back to a
+/// dashed Leverage pod instead of the one no-coin hint the mockup draws.
+#[test]
+fn a_missing_coin_outranks_a_missing_core() {
+    assert_eq!(
+        lev_unset_reason(false, false),
+        "toolbar.lev_unset_no_market"
+    );
+    assert_eq!(lev_unset_reason(true, false), "toolbar.lev_unset_no_market");
+    assert_eq!(lev_unset_reason(false, true), "toolbar.lev_unset_no_core");
+    assert_eq!(lev_unset_reason(true, true), "toolbar.lev_unset_unreported");
 }

@@ -170,9 +170,8 @@ impl TradeMetric {
 
     /// Return the localized explanation key for an unavailable leverage value.
     ///
-    /// The checks follow [`Self::seed_value`] from broadest missing address to narrowest missing
-    /// value, so the disabled chip and its tooltip explain the same state the popup open guard
-    /// rejects.
+    /// The reason is [`lev_unset_reason`]'s, so the disabled chip, its tooltip and the toolbar's
+    /// no-coin hint explain the same state the popup open guard rejects.
     ///
     /// Args:
     ///     b: Backend providing the visible core, Main-chart market, and leverage snapshot.
@@ -184,13 +183,10 @@ impl TradeMetric {
         if !matches!(self, TradeMetric::Lev) || self.seed_value(b, group).is_some() {
             return None;
         }
-        if scoped_lev_core(b, group).is_none() {
-            Some("toolbar.lev_unset_no_core")
-        } else if b.main_chart_target(group).is_none() {
-            Some("toolbar.lev_unset_no_market")
-        } else {
-            Some("toolbar.lev_unset_unreported")
-        }
+        Some(lev_unset_reason(
+            scoped_lev_core(b, group).is_some(),
+            b.main_chart_target(group).is_some(),
+        ))
     }
 
     /// Where an edit from this metric's popup is addressed right now, or `None` if nowhere.
@@ -1003,6 +999,29 @@ pub fn metric_popup_content(
         );
     }
     content.into_any_element()
+}
+
+/// The locale key explaining why no leverage value is shown.
+///
+/// A missing coin wins over a missing core: leverage is set per market, so with no coin on the
+/// Main chart there is nothing to show whatever the scope. That ordering is what lets AUTO
+/// Overview, which scopes no single core, show the toolbar's no-coin hint instead of a dashed
+/// Leverage pod.
+///
+/// Args:
+///     has_core: Whether a scope-gated leverage core exists.
+///     has_market: Whether the Main chart has a market.
+///
+/// Returns:
+///     The locale key of the reason.
+pub(super) fn lev_unset_reason(has_core: bool, has_market: bool) -> &'static str {
+    if !has_market {
+        "toolbar.lev_unset_no_market"
+    } else if !has_core {
+        "toolbar.lev_unset_no_core"
+    } else {
+        "toolbar.lev_unset_unreported"
+    }
 }
 
 #[cfg(test)]

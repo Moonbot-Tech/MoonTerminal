@@ -8,7 +8,8 @@ use moon_core::util::fmt::compact_order_size;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonDisclosureDirection,
     MoonInput, MoonInputState, MoonMenuItem, MoonPopover, MoonPopoverPlacement, MoonPopupMenu,
-    MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, MoonSize, h_flex,
+    MoonSegmentDensity, MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, MoonSize,
+    h_flex,
 };
 use rust_i18n::t;
 
@@ -22,6 +23,9 @@ const MIN_CELL_W: f32 = 34.0;
 /// An anomalous value cannot stretch the toolbar across the window; MoonUI truncates only the
 /// visible label while the inline editor still exposes the complete value.
 const MAX_CELL_W: f32 = 104.0;
+/// Cell density of both preset strips: the mockup's tight pills (label plus 8px a side, no
+/// hotkey gap). Fitting and rendering must read the same value.
+const STRIP_DENSITY: MoonSegmentDensity = MoonSegmentDensity::Compact;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Action selected by an order-size preset click.
@@ -143,9 +147,7 @@ impl FittedCells {
     ///     Six fitted items with stable, pre-render resolved widths.
     pub(super) fn fit(cx: &App, labels: [String; 6]) -> Self {
         Self {
-            items: labels
-                .clone()
-                .map(|label| MoonSegmentItem::new("", label).fit_width(cx, MIN_CELL_W, MAX_CELL_W)),
+            items: labels.clone().map(|label| fitted_cell(cx, label)),
             labels,
             main: MoonSegmentItem::new("", "").width(0.0),
         }
@@ -153,7 +155,7 @@ impl FittedCells {
 
     /// Also fit the main take-profit value the collapsed sell form shows with no slot engaged.
     pub(super) fn with_main(mut self, cx: &App, label: impl Into<SharedString>) -> Self {
-        self.main = MoonSegmentItem::new("", label).fit_width(cx, MIN_CELL_W, MAX_CELL_W);
+        self.main = fitted_cell(cx, label);
         self
     }
 
@@ -171,6 +173,26 @@ impl FittedCells {
     pub(super) fn main_item(&self) -> MoonSegmentItem {
         self.main.clone()
     }
+}
+
+/// Fit one hotkey-less preset cell at the strips' density and width bounds.
+///
+/// The width is rounded up to a whole pixel: a short label sits at the font-scaled floor, which is
+/// fractional at most scales, and the layout snaps each cell to the pixel grid, so twelve
+/// fractional cells draw wider than the toolbar budget counted them.
+///
+/// Args:
+///     cx: Application context used for theme-aware text measurement.
+///     label: Complete preset value.
+///
+/// Returns:
+///     The fitted cell.
+fn fitted_cell(cx: &App, label: impl Into<SharedString>) -> MoonSegmentItem {
+    let item = MoonSegmentItem::new("", label)
+        .density(STRIP_DENSITY)
+        .fit_width(cx, MIN_CELL_W, MAX_CELL_W);
+    let width = item.resolved_width().ceil();
+    item.width(width)
 }
 
 /// Format six complete group-owned preset values.
@@ -578,6 +600,7 @@ pub(super) fn size_strip(
     };
     let mut segment = MoonSegmentedControl::new("toolbar-size-presets")
         .selection(MoonSegmentSelection::Filled)
+        .density(STRIP_DENSITY)
         .accent(MoonAccent::Blue)
         .item_gap(0.0)
         .items(indices.iter().map(|&index| item(index)));
@@ -694,6 +717,7 @@ pub(super) fn sell_strip(
     };
     let mut segment = MoonSegmentedControl::new("toolbar-sell-presets")
         .selection(MoonSegmentSelection::Filled)
+        .density(STRIP_DENSITY)
         .accent(MoonAccent::Amber)
         .item_gap(0.0)
         .items(items);

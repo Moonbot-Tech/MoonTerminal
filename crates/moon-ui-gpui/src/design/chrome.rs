@@ -18,6 +18,9 @@ pub const TOOLBAR_H: f32 = M.toolbar_h;
 pub const STATUS_H: f32 = M.status_h;
 pub const TABLE_ROW_H: f32 = M.table_row_h;
 pub const HEADER_PAD_X: f32 = 12.0;
+/// Horizontal inset of the trading toolbar row, before the UI scale: the mockup's `.b2` padding.
+/// The row's renderer and its collapse budget both read it.
+pub const TOOLBAR_PAD_X: f32 = 10.0;
 
 /// One spacing rule across both chrome strips: 8px inside a group, 8px + rule + 8px between
 /// groups.

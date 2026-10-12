@@ -84,7 +84,7 @@ pub(crate) fn order_pods_width(
     cx: &App,
 ) -> f32 {
     let gap = design::ui_value(cx, design::CHROME_GAP);
-    let pad = design::ui_value(cx, design::HEADER_PAD_X);
+    let pad = design::ui_value(cx, design::TOOLBAR_PAD_X);
     (widths.width_at(level).min(available) - widths.trailing_at(level) - pad * 2.0 - gap * 2.0)
         .max(0.0)
 }
@@ -109,7 +109,7 @@ pub(crate) fn toolbar_widths(model: &ToolbarModel, cx: &App) -> ToolbarWidths {
     let caption = |word: &str, unit: Option<&str>| pod_label_width(cx, word, unit) + pod_gap;
 
     // The insets, and the gap between the spacer and the trailing cluster.
-    let mut fixed = design::ui_value(cx, design::HEADER_PAD_X) * 2.0 + gap;
+    let mut fixed = design::ui_value(cx, design::TOOLBAR_PAD_X) * 2.0 + gap;
     let mut captions = 0.0;
     let mut strat_controls = 0.0;
     let mut ms_summary = 0.0;

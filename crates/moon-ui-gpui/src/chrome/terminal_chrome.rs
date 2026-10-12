@@ -16,9 +16,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonAccent, MoonButton, MoonButtonIconSlot, MoonButtonVariant, MoonDisclosure, MoonMenuItem,
-    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSegmentItem,
-    MoonSegmentSelection, MoonSegmentedControl, MoonSize, MoonTag, MoonWindowFrame, h_flex,
-    rgba_from,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSegmentDensity,
+    MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, MoonSize, MoonTag,
+    MoonWindowFrame, h_flex, rgba_from,
 };
 use rust_i18n::t;
 
@@ -457,10 +457,12 @@ fn mode_tag_width(cx: &App, label: &str) -> f32 {
         + BORDER_W
 }
 
-/// One AUTO/MANUAL cell, fitted to its label. The ONE builder both the header budget and the
+/// One AUTO/MANUAL cell, fitted to its label at the mockup's compact density. The ONE builder both the header budget and the
 /// rendered control read, so the measured and the drawn cell cannot disagree.
 fn mode_segment_item(cx: &App, label: &str) -> MoonSegmentItem {
-    MoonSegmentItem::new("", label.to_string()).fit_width(cx, 0.0, MODE_SEGMENT_MAX_W)
+    MoonSegmentItem::new("", label.to_string())
+        .density(MoonSegmentDensity::Compact)
+        .fit_width(cx, 0.0, MODE_SEGMENT_MAX_W)
 }
 
 /// Rendered width of one AUTO/MANUAL cell, from the widget's own fitted geometry.
@@ -1397,6 +1399,7 @@ fn workspace_mode_segments(
         .child(
             MoonSegmentedControl::new("header-mode-segments")
                 .selection(MoonSegmentSelection::Filled)
+                .density(MoonSegmentDensity::Compact)
                 .accent(MoonAccent::Blue)
                 .item_gap(0.0)
                 .items(items)
