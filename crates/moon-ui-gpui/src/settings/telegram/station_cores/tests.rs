@@ -2,14 +2,14 @@
 use super::{
     ActionSurface, CoreCache, CoresFilter, CoresSummary, TABLE_MAX_H, action_id, compact_name_cell,
     compact_row, core_address_cell, core_name_cell, cores_summary, differ_card, filter_rows,
-    list_controls_el, removable, retained_arm, show_all_el, state_label, summary_el, table_el,
-    table_fits, table_layout,
+    list_controls_el, push_els, removable, retained_arm, show_all_el, state_label, summary_el,
+    table_el, table_fits, table_layout,
 };
 use crate::backend::station::cores_sync::{self, LocalCore, Row, RowState};
 use crate::design;
 use gpui::{
-    AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, ScrollHandle, Styled, TextOverflow, WhiteSpace, Window, div, px,
+    AnyElement, App, AppContext, ClickEvent, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, ScrollHandle, Styled, TextOverflow, WhiteSpace, Window, div, px,
 };
 use moon_core::config::Language;
 use moon_core::station_api::ListedCore;
@@ -286,6 +286,8 @@ fn probe_actions(row: &Row, index: usize) -> AnyElement {
 struct CoresProbe {
     rows: Vec<Row>,
     width: f32,
+    /// Cores the push button would send; `None` when nothing differs.
+    push: Option<usize>,
     query: Entity<MoonInputState>,
     scroll: ScrollHandle,
 }
@@ -318,6 +320,16 @@ impl Render for CoresProbe {
                 cx,
             ))
             .child(table_el(layout, shown, &self.scroll, cx));
+        for el in push_els(
+            self.push
+                .map(|n| (n, |_: &ClickEvent, _: &mut Window, _: &mut App| {})),
+            false,
+            true,
+            None,
+            cx,
+        ) {
+            section = section.child(el);
+        }
         div()
             .w(px(self.width))
             .debug_selector(|| "probe-col".into())
@@ -338,12 +350,18 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
     for language in Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         for zoom in [1.0, 1.25] {
-            for column in [860.0, 420.0] {
+            for (column, push) in [
+                (860.0, None),
+                (860.0, Some(3)),
+                (420.0, None),
+                (420.0, Some(3)),
+            ] {
                 let width = column * zoom;
                 let window =
                     cx.open_window(gpui::size(px(width), px(4000.0)), |window, cx| CoresProbe {
                         rows: rows(),
                         width,
+                        push,
                         query: cx.new(|cx| MoonInputState::new(window, cx)),
                         scroll: ScrollHandle::new(),
                     });
@@ -354,7 +372,10 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
                         let _ = window.draw(cx);
                     });
                 }
-                let at = format!("{} zoom {zoom} column {column}", language.code());
+                let at = format!(
+                    "{} zoom {zoom} column {column} push {push:?}",
+                    language.code()
+                );
                 let col = visual.debug_bounds("probe-col").expect("column laid out");
                 let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
                     assert!(
@@ -406,6 +427,38 @@ fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppCont
                     f32::from(table.size.height) <= cap + 0.5,
                     "the full list grew past its cap ({at})"
                 );
+                let hint = visual
+                    .debug_bounds("station-cores-sync-hint")
+                    .expect("sync note laid out");
+                inside(hint, "sync note");
+                let gap = 10.0 * zoom + 1.0;
+                match push {
+                    None => {
+                        assert!(
+                            visual.debug_bounds("station-cores-send-all").is_none(),
+                            "a push button with nothing to push ({at})"
+                        );
+                        assert!(
+                            f32::from(hint.origin.y) - f32::from(table.bottom()) <= gap,
+                            "a gap opened above the sync note ({at})"
+                        );
+                    }
+                    Some(_) => {
+                        let button = visual
+                            .debug_bounds("station-cores-send-all")
+                            .expect("push button laid out");
+                        inside(button, "push button");
+                        assert!(
+                            f32::from(button.size.width) < f32::from(col.size.width) - 24.0,
+                            "the push button stretched to the panel ({at})"
+                        );
+                        assert!(
+                            button.origin.y + px(0.5) >= table.bottom()
+                                && hint.origin.y + px(0.5) >= button.bottom(),
+                            "the push button overlaps its neighbours ({at})"
+                        );
+                    }
+                }
             }
         }
     }

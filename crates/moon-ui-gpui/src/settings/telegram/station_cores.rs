@@ -547,6 +547,68 @@ pub(super) fn show_all_el(
         .into_any_element()
 }
 
+/// The block's tail: the push button only while something can be pushed, sized to its label;
+/// the station-only note under it; the last result only when there is one; then the sync note.
+pub(super) fn push_els(
+    push: Option<(usize, impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)>,
+    busy: bool,
+    only_station: bool,
+    result: Option<String>,
+    cx: &App,
+) -> Vec<AnyElement> {
+    let palette = MoonPalette::active(cx);
+    let muted = rgba_from(palette.text_muted, 1.0);
+    let mut els = Vec::new();
+    if let Some((pushable, on_push)) = push {
+        els.push(
+            h_flex()
+                .debug_selector(|| "station-cores-send-all".into())
+                .child(
+                    MoonButton::new("station-cores-send-all")
+                        .primary()
+                        .size(design::CONTROL_TIER)
+                        .label(t!("telegram.server.cores_send_all", n = pushable).to_string())
+                        .disabled(busy)
+                        .on_click(on_push)
+                        .render(),
+                )
+                .into_any_element(),
+        );
+        if only_station {
+            els.push(
+                div()
+                    .text_color(muted)
+                    .child(t!("telegram.server.cores_send_all_hint").to_string())
+                    .into_any_element(),
+            );
+        }
+    }
+    if let Some(result) = result.filter(|result| !result.is_empty()) {
+        els.push(
+            div()
+                .w_full()
+                .min_w_0()
+                .font_family(design::mono())
+                .text_color(muted)
+                .min_h(design::ui_px(cx, 28.0))
+                .p(design::ui_px(cx, 6.0))
+                .rounded(design::ui_px(cx, 5.0))
+                .bg(rgba_from(palette.shell_high, 1.0))
+                .truncate()
+                .child(result)
+                .into_any_element(),
+        );
+    }
+    els.push(
+        div()
+            .text_color(muted)
+            .debug_selector(|| "station-cores-sync-hint".into())
+            .child(t!("telegram.server.cores_sync_hint").to_string())
+            .into_any_element(),
+    );
+    els
+}
+
 /// Search beside the All / Differ chips; wraps under the search when narrow.
 pub(super) fn list_controls_el(
     query: &Entity<MoonInputState>,
@@ -841,55 +903,29 @@ impl SettingsView {
         }
         let upsert = cores_sync::bulk(rows);
         let target = target.clone();
-        section = section.child(
-            MoonButton::new("station-cores-send-all")
-                .primary()
-                .size(design::CONTROL_TIER)
-                .label(if counts.pushable == 0 {
-                    t!("telegram.server.cores_nothing").to_string()
-                } else {
-                    t!("telegram.server.cores_send_all", n = counts.pushable).to_string()
-                })
-                .disabled(busy || upsert.is_empty())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.server_bot_run(
-                        Ok(Job::Cores {
-                            target: target.clone(),
-                            upsert: upsert.clone(),
-                            eligible: eligible.clone(),
-                            started: CoreStart::Bulk,
-                        }),
-                        cx,
-                    );
-                }))
-                .render(),
-        );
-        if counts.only_station != 0 {
-            section = section.child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.cores_send_all_hint").to_string()),
-            );
+        let push = (!upsert.is_empty()).then(|| {
+            let on_push = cx.listener(move |this, _, _, cx| {
+                this.server_bot_run(
+                    Ok(Job::Cores {
+                        target: target.clone(),
+                        upsert: upsert.clone(),
+                        eligible: eligible.clone(),
+                        started: CoreStart::Bulk,
+                    }),
+                    cx,
+                );
+            });
+            (counts.pushable, on_push)
+        });
+        for el in push_els(
+            push,
+            busy,
+            counts.only_station != 0,
+            backend.station.cores_result.clone(),
+            cx,
+        ) {
+            section = section.child(el);
         }
-        section = section
-            .child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .font_family(design::mono())
-                    .text_color(muted)
-                    .min_h(design::ui_px(cx, 28.0))
-                    .p(design::ui_px(cx, 6.0))
-                    .rounded(design::ui_px(cx, 5.0))
-                    .bg(rgba_from(palette.shell_high, 1.0))
-                    .truncate()
-                    .child(backend.station.cores_result.clone().unwrap_or_default()),
-            )
-            .child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.cores_sync_hint").to_string()),
-            );
         Some(section.into_any_element())
     }
 
