@@ -85,7 +85,7 @@ pub(super) fn fetch(
 ///     `Ok(())` on success, or the classified failure.
 pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
     if !(200..300).contains(&status) {
-        return Err(FetchError::Transient(format!("okx HTTP {status}")));
+        return Err(super::request_error(status, format!("okx HTTP {status}")));
     }
     match body.get("code").and_then(Value::as_str) {
         Some("0") => Ok(()),

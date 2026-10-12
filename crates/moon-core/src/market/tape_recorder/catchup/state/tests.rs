@@ -10,6 +10,8 @@ const NOW: i64 = 500 * DAY;
 /// Restore global choices and progress even when an assertion unwinds.
 struct Restore {
     status: crate::station_api::TapeCatchup,
+    margin_s: u32,
+    long_min: u32,
 }
 
 impl Restore {
@@ -17,6 +19,8 @@ impl Restore {
     fn new() -> Self {
         Self {
             status: catchup::status(),
+            margin_s: (crate::market::trade_replay::margin_ms() / 1000) as u32,
+            long_min: (crate::market::trade_replay::long_position_ms() / 60_000) as u32,
         }
     }
 }
@@ -25,6 +29,8 @@ impl Drop for Restore {
     /// Keep later recorder tests independent of switch and status changes in this fixture.
     fn drop(&mut self) {
         catchup::set_switches(self.status.auto.unwrap(), self.status.archives.unwrap());
+        crate::market::trade_replay::set_margin_s(self.margin_s);
+        crate::market::trade_replay::set_long_position_min(self.long_min);
         *STATUS.lock().unwrap() = self.status.clone();
     }
 }
@@ -45,6 +51,185 @@ fn row() -> CatchupTrade {
         open_ms: NOW - DAY - 60_000,
         close_ms: NOW - DAY,
     }
+}
+
+/// Widening must fetch only the newly missing margin, identical snapped values must retain
+/// settlement, and shrinking must preserve held tape without requesting anything new.
+#[test]
+fn margin_changes_replan_settled_rows_without_deleting_held_tape() {
+    use crate::market::trade_replay::{margin_ms, set_margin_s};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    set_margin_s(30);
+    let trade = row();
+    let held = Coverage::one((trade.open_ms - 30_000, trade.close_ms + 30_000));
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    assert_eq!(
+        state
+            .prepare(|_| held.clone(), NOW, margin_ms(), DAY, true)
+            .complete,
+        1
+    );
+    set_margin_s(31);
+    state.submit(vec![trade.clone()]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("same snapped value rechecked disk"),
+                NOW,
+                margin_ms(),
+                DAY,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+    set_margin_s(60);
+    state.submit(vec![trade.clone()]);
+    let plan = state.prepare(|_| held.clone(), NOW, margin_ms(), DAY, true);
+    assert_eq!(plan.jobs.len(), 1);
+    assert_eq!(
+        plan.jobs[0].missing,
+        Coverage::from_spans([
+            (trade.open_ms - 60_000, trade.open_ms - 30_001),
+            (trade.close_ms + 30_001, trade.close_ms + 60_000),
+        ])
+    );
+    let wider = Coverage::one((trade.open_ms - 60_000, trade.close_ms + 60_000));
+    assert_eq!(
+        state
+            .prepare(|_| wider.clone(), NOW, margin_ms(), DAY, true)
+            .complete,
+        1
+    );
+    set_margin_s(30);
+    state.submit(vec![trade]);
+    let plan = state.prepare(|_| wider.clone(), NOW, margin_ms(), DAY, true);
+    assert_eq!(plan.complete, 1);
+    assert!(plan.jobs.is_empty());
+}
+
+/// Permanent request failures must leave the queue and remain latched on later enumeration.
+#[test]
+fn settled_request_fault_is_not_retried_on_the_next_hour() {
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    let trade = row();
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    let job = state
+        .prepare(|_| Coverage::none(), NOW, 0, DAY, true)
+        .jobs
+        .remove(0);
+    let cache = TradeCache::open_evictable(std::path::PathBuf::from(":memory:")).unwrap();
+    state.finish(
+        &cache,
+        PassResult {
+            finished: vec![executor::FinishedJob {
+                job,
+                failure: Some(Failure::Permanent),
+                attempted: true,
+                fault: Some(Fault {
+                    reason: CatchupFailReason::RequestFault,
+                    detail: "request fault: HTTP 400".into(),
+                }),
+            }],
+            archive_bytes: 0,
+        },
+        NOW,
+    );
+    assert_eq!(catchup::status().failed, 1);
+    assert_eq!(
+        catchup::status().failed_by,
+        vec![(CatchupFailReason::RequestFault, 1)]
+    );
+    assert_eq!(catchup::status().pending, 0);
+    state.submit(vec![trade]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("permanent request fault retried"),
+                NOW + HOUR_MS,
+                0,
+                DAY,
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+}
+
+/// Raising the long-position threshold must revisit a settled pair of ends and fetch the
+/// middle; reloading the same clamped threshold must not revisit it again.
+#[test]
+fn long_threshold_changes_replan_only_missing_middle() {
+    use crate::market::trade_replay::{long_position_ms, set_long_position_min};
+    let _lock = SWITCH_LOCK.lock().unwrap();
+    let _restore = Restore::new();
+    set_long_position_min(60);
+    let mut trade = row();
+    trade.open_ms = trade.close_ms - 90 * 60_000;
+    let held = Coverage::from_spans([
+        (trade.open_ms, trade.open_ms),
+        (trade.close_ms, trade.close_ms),
+    ]);
+    let mut state = RecorderCatchup::default();
+    state.submit(vec![trade.clone()]);
+    assert_eq!(
+        state
+            .prepare(|_| held.clone(), NOW, 0, long_position_ms(), true)
+            .complete,
+        1
+    );
+    set_long_position_min(60);
+    state.submit(vec![trade.clone()]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("same threshold rechecked disk"),
+                NOW,
+                0,
+                long_position_ms(),
+                true
+            )
+            .jobs
+            .is_empty()
+    );
+    set_long_position_min(120);
+    state.submit(vec![trade.clone()]);
+    let plan = state.prepare(|_| held.clone(), NOW, 0, long_position_ms(), true);
+    assert_eq!(plan.jobs.len(), 1);
+    assert_eq!(
+        plan.jobs[0].missing,
+        Coverage::one((trade.open_ms + 1, trade.close_ms - 1))
+    );
+    assert_eq!(
+        state
+            .prepare(
+                |_| Coverage::one((trade.open_ms, trade.close_ms)),
+                NOW,
+                0,
+                long_position_ms(),
+                true
+            )
+            .complete,
+        1
+    );
+    set_long_position_min(999);
+    state.submit(vec![trade]);
+    assert!(
+        state
+            .prepare(
+                |_| panic!("same clamped threshold rechecked disk"),
+                NOW,
+                0,
+                long_position_ms(),
+                true
+            )
+            .jobs
+            .is_empty()
+    );
 }
 
 /// Leaving permanent or complete identities latched on a switch change would hide eligible tape.

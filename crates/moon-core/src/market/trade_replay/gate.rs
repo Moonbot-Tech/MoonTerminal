@@ -125,6 +125,7 @@ pub(crate) fn settle_verdict(
 ) -> bool {
     match verdict {
         TickVerdict::Ready(harvest) => match harvest.stop {
+            Some(TickAbandon::RequestFault) => {}
             Some(TickAbandon::Transient) => gate.refuse(host, Instant::now()),
             Some(TickAbandon::RateLimited) => return true,
             _ if !harvest.venue_refused
@@ -139,6 +140,7 @@ pub(crate) fn settle_verdict(
             TickAbandon::Empty | TickAbandon::UnknownSymbol => gate.clear(host, asked_at),
             TickAbandon::RateLimited => return true,
             TickAbandon::Cancelled
+            | TickAbandon::RequestFault
             | TickAbandon::OutOfRetention
             | TickAbandon::Deadline
             | TickAbandon::OverPageBudget

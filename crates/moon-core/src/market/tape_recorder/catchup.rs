@@ -119,6 +119,14 @@ pub fn set_switches(auto: bool, archives: bool) {
     }
 }
 
+/// Invalidate settled source decisions when the effective tape window changes.
+pub(crate) fn window_changed() {
+    let _status = STATUS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    SWITCH_GEN.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Read one coherent generation and its choices under the shared status mutex.
 fn switches() -> (u64, bool, bool) {
     let _status = STATUS
@@ -306,4 +314,4 @@ pub(crate) fn plan_with(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

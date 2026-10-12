@@ -57,6 +57,8 @@ pub enum FetchError {
     OutOfRetention,
     /// Transport, service, or malformed-response failure that may recover.
     Transient(String),
+    /// Invalid request parameters or range; retrying this job cannot repair the request.
+    RequestFault(String),
     /// HTTP 429 or 418. The wait is the venue's `Retry-After` when `retry_after_s` is `Some`,
     /// and the gate's backoff curve otherwise. Recorded on the gate by the worker, not here.
     Throttled {
@@ -383,9 +385,18 @@ pub(super) fn decode_and_classify(
     let body: Value = response
         .into_body()
         .read_json()
-        .map_err(|error| FetchError::Transient(format!("{venue} JSON: {error}")))?;
+        .map_err(|error| request_error(status, format!("{venue} HTTP {status} JSON: {error}")))?;
     classify(status, &body)?;
     Ok(body)
+}
+
+/// Separate deterministic HTTP request errors from outages, timeouts and ambiguous access bans.
+/// Venue classifiers run first so retention, symbols and throttles keep their own meaning.
+fn request_error(status: u16, diagnostic: String) -> FetchError {
+    match status {
+        400 | 401 | 404..=407 | 409..=417 | 422 => FetchError::RequestFault(diagnostic),
+        _ => FetchError::Transient(diagnostic),
+    }
 }
 
 /// Read a numeric cell that a vendor may send as either a JSON number or a quoted string.

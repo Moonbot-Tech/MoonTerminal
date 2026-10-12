@@ -363,6 +363,8 @@ pub(crate) enum TickAbandon {
     Transient,
     Empty,
     UnknownSymbol,
+    /// A deterministic request rejection settles this job without refusing the host.
+    RequestFault,
     /// The venue rejected the requested time range without refusing its host.
     OutOfRetention,
     OverPageBudget,

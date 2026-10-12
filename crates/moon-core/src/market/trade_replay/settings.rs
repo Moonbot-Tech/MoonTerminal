@@ -58,12 +58,13 @@ pub fn margin_ms() -> i64 {
 /// keep the margin they were built with; the next one asks for the new stretch, and the tile
 /// store hands back what earlier windows already fetched of it. Snapped onto the step list like
 /// the file is on load, so the cell never holds a value the tab cannot show.
+/// A changed effective value invalidates the station's settled catch-up windows.
 pub fn set_margin_s(secs: u32) {
     init();
-    MARGIN_S.store(
-        crate::config::storage::snap_trade_margin_s(secs),
-        Ordering::Relaxed,
-    );
+    let secs = crate::config::storage::snap_trade_margin_s(secs);
+    if MARGIN_S.swap(secs, Ordering::Relaxed) != secs {
+        crate::market::tape_recorder::catchup::window_changed();
+    }
 }
 
 /// Whether the terminal fetches the tape of recent closed trades from the VENUES on its own once
@@ -104,12 +105,13 @@ pub fn long_position_ms() -> i64 {
 
 /// Move the live threshold; the Storage tab writes `storage.toml` beside this. Bounded like
 /// the file is on load.
+/// A changed effective value invalidates the station's settled catch-up windows.
 pub fn set_long_position_min(minutes: u32) {
     init();
-    LONG_POSITION_MIN.store(
-        crate::config::storage::clamp_long_position_min(minutes),
-        Ordering::Relaxed,
-    );
+    let minutes = crate::config::storage::clamp_long_position_min(minutes);
+    if LONG_POSITION_MIN.swap(minutes, Ordering::Relaxed) != minutes {
+        crate::market::tape_recorder::catchup::window_changed();
+    }
 }
 
 /// Whether the terminal runs the trade-tape cleanup on its own once the cores are up —

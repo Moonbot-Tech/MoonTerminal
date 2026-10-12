@@ -20,6 +20,8 @@ use super::*;
 /// - A venue's own answer — `Transient`/`UnknownSymbol` — also stops the walk rather than the
 ///   whole stage, and marks the harvest [`TickHarvest::venue_refused`], so [`serve_ticks`] knows
 ///   not to clear a refusal the venue just gave it.
+/// - A deterministic `RequestFault` stops only this job and keeps any paid-for tape, without
+///   setting `venue_refused` or changing the shared host's refusal history.
 /// - The FOCUS tiles (the leading [`TickPlan::focus_len`] entries) are never truncated by the
 ///   tick budget: it is checked only around a NON-focus tile, before it starts and again once it
 ///   finishes, so a tile is walked whole or not at all — never cut mid-body.
@@ -168,6 +170,18 @@ where
                     complete = false;
                     venue_refused = true;
                     stop_reason = Some(TickAbandon::Transient);
+                    interrupted = Some((slice_from, slice_to, start_len, cursor));
+                    break 'walk;
+                }
+                Err(rest::FetchError::RequestFault(diagnostic)) => {
+                    log::warn!(
+                        "[x] trade-replay invalid tick request on {} {}..{}: {diagnostic}",
+                        route.host(),
+                        slice_from,
+                        slice_to
+                    );
+                    complete = false;
+                    stop_reason = Some(TickAbandon::RequestFault);
                     interrupted = Some((slice_from, slice_to, start_len, cursor));
                     break 'walk;
                 }

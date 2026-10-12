@@ -5,7 +5,7 @@ const DAY: i64 = 86_400_000;
 const NOW: i64 = 500 * DAY;
 
 /// Serialize recorder tests because switch generations and progress are process-wide.
-pub(super) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static SWITCH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Synthetic closed positions share no production core or market identity.
 fn trade(id: i64, brand: Brand, kind: MarketKind, age_ms: i64) -> CatchupTrade {
@@ -330,6 +330,75 @@ fn good_rest(
         ticks: vec![tick(from), tick(to)],
         next: None,
     })
+}
+
+/// Reject one synthetic symbol as malformed while a different job on the same host succeeds.
+fn request_fault_rest(
+    route: TradeRoute,
+    market: &str,
+    from: i64,
+    to: i64,
+    cursor: Option<rest::TradeCursor>,
+) -> Result<rest::TradePage, rest::FetchError> {
+    if market == "BADUSDT" {
+        rest::publish_exchange_notice(rest::ExchangeNotice {
+            status: 400,
+            ..Default::default()
+        });
+        Err(rest::FetchError::RequestFault(
+            "bitget HTTP 400 40017: invalid bounds".into(),
+        ))
+    } else {
+        good_rest(route, market, from, to, cursor)
+    }
+}
+
+/// A deterministic rejection must settle one job permanently and let the next same-host job
+/// run through the real paginator rather than inherit the refusal curve.
+#[test]
+fn request_fault_settles_only_its_job_and_next_same_host_proceeds() {
+    let mut bad = job(1, Brand::BitGet, MarketKind::Spot);
+    bad.trade.market = "BADUSDT".into();
+    let good = job(2, Brand::BitGet, MarketKind::Spot);
+    let gate = gate::ReplayGate::new();
+    let mut filed = Vec::new();
+    let result = executor::run_pass_with(
+        vec![bad, good],
+        || NOW,
+        &gate,
+        (request_fault_rest, no_archive),
+        0,
+        executor::run_job_at,
+        |job, outcome| {
+            if !outcome.file.is_empty() {
+                filed.push(job.trade.id.rec_id);
+            }
+        },
+    );
+    assert_eq!(result.finished[0].failure, Some(Failure::Permanent));
+    assert_eq!(
+        result.finished[0].fault.as_ref().unwrap().reason,
+        crate::station_api::CatchupFailReason::RequestFault
+    );
+    assert!(result.finished[0].attempted);
+    assert!(
+        result.finished[0]
+            .fault
+            .as_ref()
+            .unwrap()
+            .detail
+            .contains("request fault: bitget HTTP 400")
+    );
+    assert!(result.finished[1].attempted);
+    assert_eq!(result.finished[1].failure, None);
+    assert_eq!(filed, vec![2]);
+    assert!(
+        gate.claim(
+            TradeRoute::BitgetSpotFills.host(),
+            std::time::Instant::now()
+        )
+        .is_ok()
+    );
 }
 
 /// Unexpected REST work on an archive-only fixture is a regression, not an empty answer.

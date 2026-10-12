@@ -84,12 +84,19 @@ pub(super) fn classify(status: u16, body: &Value) -> Result<(), FetchError> {
     let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
     match code {
         "40034" | "400172" => Err(FetchError::UnknownSymbol),
-        "" => Err(FetchError::Transient(format!("bitget HTTP {status}"))),
+        "40010" | "40725" | "45001" => Err(FetchError::Transient(format!(
+            "bitget HTTP {status} {code}"
+        ))),
+        "" => Err(super::request_error(
+            status,
+            format!("bitget HTTP {status}"),
+        )),
         other => {
             let message = body.get("msg").and_then(Value::as_str).unwrap_or("unknown");
-            Err(FetchError::Transient(format!(
-                "bitget HTTP {status} {other}: {message}"
-            )))
+            Err(super::request_error(
+                status,
+                format!("bitget HTTP {status} {other}: {message}"),
+            ))
         }
     }
 }
@@ -169,12 +176,29 @@ pub(super) fn fetch_trades(
     to_ms: i64,
     cursor: Option<TradeCursor>,
 ) -> Result<Value, FetchError> {
+    let response = fills_request(agent, route, market, from_ms, to_ms, cursor)
+        .call()
+        .map_err(|error| FetchError::Transient(error.to_string()))?;
+    super::decode_and_classify(response, "bitget", classify_fills)
+}
+
+/// Build public-fill queries with outward millisecond bounds for an inclusive slice.
+/// Spot documents prints after/before the bounds; using the same envelope on mix also avoids
+/// its rejection of equal bounds. The paginator clips every returned print to the original slice.
+fn fills_request(
+    agent: &ureq::Agent,
+    route: TradeRoute,
+    market: &str,
+    from_ms: i64,
+    to_ms: i64,
+    cursor: Option<TradeCursor>,
+) -> ureq::RequestBuilder<ureq::typestate::WithoutBody> {
     let futures = matches!(route, TradeRoute::BitgetMixFills);
     let mut request = agent
         .get(route.url())
         .query("symbol", market)
-        .query("startTime", from_ms.to_string())
-        .query("endTime", to_ms.to_string())
+        .query("startTime", from_ms.saturating_sub(1).to_string())
+        .query("endTime", to_ms.saturating_add(1).to_string())
         .query("limit", route.max_rows().to_string());
     if futures {
         request = request.query("productType", "USDT-FUTURES");
@@ -182,10 +206,7 @@ pub(super) fn fetch_trades(
     if let Some(TradeCursor::LessThanId(id)) = cursor {
         request = request.query("idLessThan", id.to_string());
     }
-    let response = request
-        .call()
-        .map_err(|error| FetchError::Transient(error.to_string()))?;
-    super::decode_and_classify(response, "bitget", classify_fills)
+    request
 }
 
 /// Classify a BitGet fills-history response by status and envelope `code`.
@@ -194,9 +215,8 @@ pub(super) fn fetch_trades(
 /// unknown-symbol codes (`40034` mix, `400172` spot) with `history-candles`. No vendor page for
 /// this specific endpoint documents its own unknown-symbol code the way the candle endpoint's
 /// pages do — see [`classify`] for the pair this borrows. If a later reader finds this endpoint
-/// answers a different code for an unknown symbol, that market falls through to `Transient`
-/// below rather than being misclassified as permanent, so the failure mode of a wrong guess here
-/// is a retry loop, not a silently wrong "this market does not exist".
+/// answers a different code for an unknown symbol, its HTTP status decides whether the job
+/// settles as an invalid request or remains retryable; it is never reported as a quiet tape.
 ///
 /// Args:
 ///     status: HTTP status.
@@ -205,20 +225,24 @@ pub(super) fn fetch_trades(
 /// Returns:
 ///     `Ok(())` on success, or the classified failure.
 pub(super) fn classify_fills(status: u16, body: &Value) -> Result<(), FetchError> {
-    if !(200..300).contains(&status) {
-        return Err(FetchError::Transient(format!("bitget HTTP {status}")));
-    }
     let code = body.get("code").and_then(Value::as_str).unwrap_or_default();
+    let message = body.get("msg").and_then(Value::as_str).unwrap_or("unknown");
+    let diagnostic = format!("bitget HTTP {status} {code}: {message}");
+    if status == 429 || status == 418 {
+        return Err(FetchError::Throttled {
+            retry_after_s: None,
+            diagnostic,
+        });
+    }
+    if status >= 500 {
+        return Err(FetchError::Transient(diagnostic));
+    }
     match code {
-        "00000" => Ok(()),
+        "00000" if (200..300).contains(&status) => Ok(()),
         "40034" | "400172" => Err(FetchError::UnknownSymbol),
-        "" => Err(FetchError::Transient(format!(
-            "bitget HTTP {status}: empty code"
-        ))),
-        other => {
-            let message = body.get("msg").and_then(Value::as_str).unwrap_or("unknown");
-            Err(FetchError::Transient(format!("bitget {other}: {message}")))
-        }
+        "40010" | "40725" | "45001" => Err(FetchError::Transient(diagnostic)),
+        "40017" | "40019" => Err(FetchError::RequestFault(diagnostic)),
+        _ => Err(super::request_error(status, diagnostic)),
     }
 }
 

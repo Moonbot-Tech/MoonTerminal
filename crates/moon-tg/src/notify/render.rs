@@ -237,7 +237,7 @@ pub(crate) fn down_line(core_name: &str, since_utc: i64, zone: Tz) -> String {
 /// Args:
 ///     core_name: Configured core name, mapped to the card's hashtag or escaped fallback.
 ///     down_for_secs: Seconds from the recorded loss to now. Negative becomes
-///         zero minutes.
+///         zero seconds (`0s`).
 ///
 /// Returns:
 ///     A single plain line with a leading gain mark. The duration sits in
@@ -416,24 +416,36 @@ fn local_hhmm(since_utc: i64, zone: Tz) -> String {
         .unwrap_or_default()
 }
 
-/// Largest two units, dropping seconds: `3d 4h`, `2h 5m`, or `2m`.
+/// Hold span for the trade card and the restored-connection line.
 ///
-/// A day hides the minutes, an hour hides nothing below it except seconds,
-/// and a span under an hour is whole minutes (zero when shorter than one).
-/// No duration helper in `moon_core::util::fmt` or the report renderer speaks
-/// this shape; the station uptime helper is a different phrase set.
+/// One unit only, the largest, rounded down. Under a minute the span is
+/// whole seconds (`42s`, and `0s` for zero). Under an hour it is whole
+/// minutes (`2m`), with no seconds. Under a day it is whole hours (`3h`),
+/// with no minutes. A day or longer is whole days (`2d`), with no hours.
+/// A negative count is zero.
+///
+/// Args:
+///     secs: Seconds from open to close, or from the recorded loss to now.
+///
+/// Returns:
+///     The card's duration text. No duration helper in `moon_core::util::fmt`
+///     or the report renderer speaks this shape; station uptime is a
+///     different phrase set and stays untouched.
 fn human_duration(secs: i64) -> String {
     let secs = u64::try_from(secs).unwrap_or(0);
     let days = secs / 86_400;
-    let hours = (secs % 86_400) / 3_600;
-    let minutes = (secs % 3_600) / 60;
     if days > 0 {
-        format!("{days}d {hours}h")
-    } else if hours > 0 {
-        format!("{hours}h {minutes}m")
-    } else {
-        format!("{minutes}m")
+        return format!("{days}d");
     }
+    let hours = secs / 3_600;
+    if hours > 0 {
+        return format!("{hours}h");
+    }
+    let minutes = secs / 60;
+    if minutes > 0 {
+        return format!("{minutes}m");
+    }
+    format!("{secs}s")
 }
 
 #[cfg(test)]

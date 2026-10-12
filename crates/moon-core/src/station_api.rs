@@ -340,6 +340,8 @@ pub struct TapeCatchup {
 pub enum CatchupFailReason {
     /// The venue answered with an HTTP error status or its own error code.
     Http,
+    /// Invalid request parameters or bounds permanently settled this job, not its host.
+    RequestFault,
     /// The request timed out or the connection failed.
     Network,
     /// The venue's rate limit or the shared host gate stopped the request.
@@ -360,6 +362,7 @@ impl CatchupFailReason {
     pub fn key(self) -> &'static str {
         match self {
             Self::Http => "http",
+            Self::RequestFault => "request_fault",
             Self::Network => "network",
             Self::Throttled => "throttled",
             Self::Corrupt => "corrupt",

@@ -273,6 +273,29 @@ fn catchup_failure_breakdown_round_trips_and_tolerates_new_reasons() {
     assert_eq!(newer.failed_by, vec![(CatchupFailReason::Other, 2)]);
 }
 
+/// Request faults need their own wire reason so the station's breakdown cannot merge them
+/// with recoverable HTTP failures; future unknown reasons retain the existing fallback.
+#[test]
+fn request_fault_reason_is_distinct_on_the_wire() {
+    let progress: TapeCatchup = serde_json::from_value(serde_json::json!({
+        "pending": 0, "filled": 0, "no_route": 0, "out_of_reach": 0, "failed": 3,
+        "last_pass_ms": null, "archive_bytes": 0,
+        "failed_by": [["request_fault", 2], ["http", 1]]
+    }))
+    .unwrap();
+    assert_eq!(
+        progress.failed_by,
+        vec![
+            (CatchupFailReason::RequestFault, 2),
+            (CatchupFailReason::Http, 1)
+        ]
+    );
+    assert_eq!(
+        serde_json::to_value(progress).unwrap()["failed_by"],
+        serde_json::json!([["request_fault", 2], ["http", 1]])
+    );
+}
+
 #[test]
 fn a_pairing_a_bot_can_run_passes() {
     let access = Access {
