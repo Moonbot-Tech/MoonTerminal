@@ -36,7 +36,7 @@ impl SettingsView {
         if ours.is_empty() && theirs.is_empty() {
             return None;
         }
-        if same_groups(&ours, theirs) {
+        if same_groups(&ours, &seen.report_groups()) {
             return Some(
                 div()
                     .text_color(muted)
@@ -52,7 +52,7 @@ impl SettingsView {
                     div().child(
                         t!(
                             "telegram.server.groups_differ",
-                            station = names(theirs),
+                            station = names(&seen.report_groups()),
                             terminal = names(&ours)
                         )
                         .to_string(),
@@ -77,10 +77,10 @@ impl SettingsView {
     }
 }
 
-/// Whether two group lists are the same set: names and members alike, in any order.
+/// Whether group names and positions match, ignoring member order within each group.
 fn same_groups(a: &[CoreGroup], b: &[CoreGroup]) -> bool {
     let key = |groups: &[CoreGroup]| {
-        let mut keyed: Vec<(String, Vec<u64>)> = groups
+        let keyed: Vec<(String, Vec<u64>)> = groups
             .iter()
             .map(|group| {
                 let mut cores = group.cores.clone();
@@ -88,7 +88,6 @@ fn same_groups(a: &[CoreGroup], b: &[CoreGroup]) -> bool {
                 (group.name.clone(), cores)
             })
             .collect();
-        keyed.sort();
         keyed
     };
     key(a) == key(b)

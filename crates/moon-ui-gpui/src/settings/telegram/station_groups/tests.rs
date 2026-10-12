@@ -9,14 +9,17 @@ fn group(name: &str, cores: &[u64]) -> CoreGroup {
     }
 }
 
-/// The same groups in another order, or with members in another order, are the same set; a
-/// renamed group, a moved core or a missing group is not.
+/// Ignoring group positions would disable sending a reorder; member order is not displayed.
 #[test]
-fn groups_compare_as_sets() {
+fn groups_compare_positions_but_ignore_member_order() {
     let ours = vec![group("main", &[1, 2]), group("AAA", &[3])];
-    assert!(same_groups(
+    assert!(!same_groups(
         &ours,
         &[group("AAA", &[3]), group("main", &[2, 1])]
+    ));
+    assert!(same_groups(
+        &ours,
+        &[group("main", &[2, 1]), group("AAA", &[3])]
     ));
     assert!(!same_groups(&ours, &[group("main", &[1, 2])]));
     assert!(!same_groups(

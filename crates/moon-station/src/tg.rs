@@ -58,6 +58,8 @@ pub struct StationTg {
     zone: Tz,
     /// The zone the terminal pushed (`telegram.json`), kept to be written back with the pairing.
     zone_pushed: Option<String>,
+    /// Synced display order; absent preserves reports from legacy group payloads.
+    groups_order: Option<Vec<String>>,
     /// The report writer's and the valuation worker's generations, which the Mini App's cached
     /// reads are compared on.
     generations: (Arc<AtomicU64>, Option<Arc<AtomicU64>>),
@@ -145,6 +147,7 @@ impl StationTg {
             ),
             zone,
             zone_pushed: pushed.map(|(name, _)| name),
+            groups_order: pairing.groups_order,
             generations,
             pairing_path,
             data_root: data_root.to_path_buf(),
@@ -265,6 +268,7 @@ impl StationTg {
             zone: Some(self.zone.name().to_owned()),
             notify: moon_tg::notify_rows(&self.state, &config.telegram),
             groups: Some(config.core_groups.clone()),
+            groups_order: self.groups_order.clone(),
             ..Access::of(&config.telegram)
         }
     }
@@ -305,6 +309,7 @@ impl StationTg {
         if let Some(groups) = &saved.groups {
             config.core_groups = groups.clone();
         }
+        self.groups_order = saved.groups_order.clone();
         if let Some((name, zone)) = pushed_zone(&saved) {
             if zone != self.zone {
                 log::info!("telegram: report zone now {name}");
@@ -430,6 +435,7 @@ impl StationHost<'_> {
             zone: self.tg.zone_pushed.clone(),
             // A pairing saved from the chat keeps the groups the terminal sent.
             groups: Some(self.config.core_groups.clone()),
+            groups_order: self.tg.groups_order.clone(),
             ..Access::of(&candidate)
         };
         if let Err(e) = write_pairing(&self.tg.pairing_path, &pairing) {
@@ -442,6 +448,16 @@ impl StationHost<'_> {
 }
 
 impl TgHost for StationHost<'_> {
+    /// Resolve the station's synced group order, including pre-order payload fallback.
+    fn report_groups(&self) -> Vec<moon_core::config::CoreGroup> {
+        Access {
+            groups: Some(self.config.core_groups.clone()),
+            groups_order: self.tg.groups_order.clone(),
+            ..Access::default()
+        }
+        .report_groups()
+    }
+
     fn kind(&self) -> HostKind {
         HostKind::Station
     }
@@ -620,6 +636,13 @@ fn plan_access(
         moon_core::config::sanitize_core_groups(&mut groups);
         groups
     });
+    // Order belongs to the group snapshot. An old client replacing groups gets the
+    // legacy fallback; a settings-only edit must retain the existing order.
+    let groups_order = if access.groups.is_some() {
+        access.groups_order.clone()
+    } else {
+        current.groups_order.clone()
+    };
     Ok(Access {
         bot: match &access.bot {
             Some(incoming) => {
@@ -631,6 +654,7 @@ fn plan_access(
         },
         zone: access.zone.or_else(|| pushed.map(str::to_owned)),
         groups: groups.or_else(|| current.groups.clone()),
+        groups_order,
         // Notifications have a file of their own, never `telegram.json`.
         notify: None,
         ..access

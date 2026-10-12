@@ -122,6 +122,7 @@ pub fn set_groups(target: &Target, groups: &[CoreGroup]) -> anyhow::Result<Optio
     let request = Request::AccessSet {
         access: Box::new(Access {
             groups: Some(groups.to_vec()),
+            groups_order: Some(groups.iter().map(|group| group.name.clone()).collect()),
             ..read.clone()
         }),
         base: Box::new(read),

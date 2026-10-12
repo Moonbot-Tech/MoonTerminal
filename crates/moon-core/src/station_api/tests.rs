@@ -472,3 +472,23 @@ fn chats_notifications_ride_an_access_set() {
     let back: Request = serde_json::from_str(&wire).unwrap();
     assert_eq!(back, request);
 }
+
+/// Losing the default would break old payloads; name sorting would override saved arrows.
+#[test]
+fn report_groups_use_saved_order_with_legacy_and_renamed_fallback() {
+    let legacy = r#"{"groups":[{"name":"Zulu","cores":[1]},{"name":"alpha","cores":[2]},{"name":"Renamed","cores":[3]}]}"#;
+    let mut access: Access = serde_json::from_str(legacy).unwrap();
+    let names = |access: &Access| {
+        access
+            .report_groups()
+            .into_iter()
+            .map(|group| group.name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names(&access), ["alpha", "Renamed", "Zulu"]);
+    access.groups_order = Some(vec!["Removed".into(), "Zulu".into(), "Old name".into()]);
+    assert_eq!(names(&access), ["Zulu", "alpha", "Renamed"]);
+    access.groups_order = Some(vec!["Renamed".into(), "Zulu".into(), "alpha".into()]);
+    let back: Access = serde_json::from_str(&serde_json::to_string(&access).unwrap()).unwrap();
+    assert_eq!(names(&back), ["Renamed", "Zulu", "alpha"]);
+}

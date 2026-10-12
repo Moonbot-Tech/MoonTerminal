@@ -185,7 +185,7 @@ pub(crate) fn telegram_report(
     let order = CoreOrder::new(host.config());
     let names = db::CoreNames::from_servers(&host.config().servers);
     let venues = host.session().core_venues().clone();
-    let groups = host.config().core_groups.clone();
+    let groups = host.report_groups();
     let read_access = access.clone();
     host.state_mut().report_pending = true;
     host.spawn(Box::new(move || {

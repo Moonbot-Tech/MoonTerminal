@@ -285,6 +285,7 @@ pub(super) fn access_edited(draft: Option<&TelegramConfig>, base: Option<&Access
                     notify: None,
                     // Groups are sent on their own (`station_groups`), never with an edit.
                     groups: None,
+                    groups_order: None,
                     ..base.clone()
                 }
         }
@@ -418,7 +419,7 @@ impl SettingsView {
     }
 
     /// The terminal's bot handed to the station: its saved token and chats. `None` when the
-    /// terminal has no saved bot.
+    /// terminal has no saved bot. Its saved group order travels with the groups.
     fn server_bot_transfer(&self, cx: &App) -> Option<BotPlan> {
         let saved = &self.backend.read(cx).config.telegram;
         if saved.token.is_empty() {
@@ -434,6 +435,16 @@ impl SettingsView {
                 zone: change.zone.clone(),
                 groups: Some(self.backend.read(cx).config.core_groups.clone())
                     .filter(|groups| !groups.is_empty()),
+                groups_order: Some(
+                    self.backend
+                        .read(cx)
+                        .config
+                        .core_groups
+                        .iter()
+                        .map(|group| group.name.clone())
+                        .collect(),
+                )
+                .filter(|order: &Vec<String>| !order.is_empty()),
                 ..Access::of(saved)
             }),
             change,

@@ -466,6 +466,10 @@ pub struct Access {
     /// are forwarded unchanged and interpreted in the station's own uid namespace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groups: Option<Vec<CoreGroup>>,
+    /// Saved group names in display order, sent with `groups`. Absent keeps legacy
+    /// alphabetical reports; groups not named here follow the saved ones alphabetically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groups_order: Option<Vec<String>>,
 }
 
 /// Read a map keyed by chat id. The ids are a JSON object's keys, strings on the wire; inside an
@@ -507,7 +511,26 @@ impl Access {
             zone: None,
             notify: None,
             groups: None,
+            groups_order: None,
         }
+    }
+
+    /// Resolve report groups in saved order, with deterministic legacy/unknown-group fallback.
+    /// Renamed or removed names in the order list never hide a current group.
+    pub fn report_groups(&self) -> Vec<CoreGroup> {
+        let mut groups = self.groups.clone().unwrap_or_default();
+        groups.sort_by_cached_key(|group| {
+            let position = self
+                .groups_order
+                .as_ref()
+                .and_then(|order| order.iter().position(|name| name == &group.name));
+            (
+                position.unwrap_or(usize::MAX),
+                group.name.to_lowercase(),
+                group.name.clone(),
+            )
+        });
+        groups
     }
 
     /// Put this access into `telegram`, leaving its token and switches as they are; the bot's

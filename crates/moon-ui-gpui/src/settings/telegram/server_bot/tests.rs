@@ -107,6 +107,7 @@ fn the_station_draft_asks_for_what_the_station_knows() {
         owner_chat_id: Some(7),
         bot: Some(Default::default()),
         zone: Some("Europe/Moscow".into()),
+        groups_order: Some(vec!["Zulu".into(), "alpha".into()]),
         ..Access::default()
     };
     let mut draft = super::draft_of(&read);
