@@ -52,7 +52,7 @@ const ROOT: &str = "kb";
 /// Unscaled height of one tree row.
 const ROW_H: f32 = 30.0;
 
-/// Unscaled narrowest width of one column; below two of them the columns stack.
+/// Unscaled narrowest width of one bot box.
 pub(super) const COLUMN_MIN_W: f32 = 320.0;
 
 /// The button order and the language its labels are in: all the tree's items depend on.
@@ -117,25 +117,6 @@ pub(super) fn box_column_el(
                 .gap(10.0)
                 .child(body),
         )
-        .into_any_element()
-}
-
-/// Two bot columns side by side, stacked when both do not fit (the Messages page).
-pub(super) fn bot_columns_el(left: AnyElement, right: AnyElement, cx: &App) -> AnyElement {
-    let column = |child: AnyElement| {
-        div()
-            .flex_1()
-            .min_w(design::ui_px(cx, COLUMN_MIN_W))
-            .child(child)
-    };
-    h_flex()
-        .debug_selector(|| "bot-columns".into())
-        .w_full()
-        .flex_wrap()
-        .items_start()
-        .gap(design::ui_px(cx, 16.0))
-        .child(column(left))
-        .child(column(right))
         .into_any_element()
 }
 

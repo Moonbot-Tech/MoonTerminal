@@ -119,28 +119,32 @@ fn the_notify_box_fits_the_body(cx: &mut gpui::TestAppContext) {
 /// body, in every language at the default and the minimum window.
 #[gpui::test]
 fn the_messages_columns_fit_the_body(cx: &mut gpui::TestAppContext) {
-    use super::{bot_columns_el, box_column_el};
+    use super::box_column_el;
     use crate::settings::layout_probe::{ProbeSpec, sweep};
+    use crate::settings::telegram::card_grid_el;
     use crate::settings::telegram::tests::Host;
     sweep(
         cx,
         |_, _, (width, _)| Host {
             width,
             scroll: gpui::ScrollHandle::new(),
-            build: std::rc::Rc::new(|_, cx| {
-                bot_columns_el(
-                    box_column_el(
-                        "tgms-keys".into(),
-                        rust_i18n::t!("telegram.settings.buttons").to_string(),
-                        stand_in("keys", 8),
-                        cx,
-                    ),
-                    box_column_el(
-                        "tgms-layout".into(),
-                        rust_i18n::t!("telegram.layout.tab_card").to_string(),
-                        stand_in("layout", 8),
-                        cx,
-                    ),
+            build: std::rc::Rc::new(move |_, cx| {
+                card_grid_el(
+                    width,
+                    vec![
+                        box_column_el(
+                            "tgms-keys".into(),
+                            rust_i18n::t!("telegram.settings.buttons").to_string(),
+                            stand_in("keys", 8),
+                            cx,
+                        ),
+                        box_column_el(
+                            "tgms-layout".into(),
+                            rust_i18n::t!("telegram.layout.tab_card").to_string(),
+                            stand_in("layout", 8),
+                            cx,
+                        ),
+                    ],
                     cx,
                 )
             }),
@@ -148,7 +152,7 @@ fn the_messages_columns_fit_the_body(cx: &mut gpui::TestAppContext) {
         |_| ProbeSpec {
             container: "probe-body",
             inside: vec![
-                "bot-columns".into(),
+                "card-grid".into(),
                 "bot-box-tgms-keys".into(),
                 "bot-box-tgms-layout".into(),
             ],
@@ -156,7 +160,7 @@ fn the_messages_columns_fit_the_body(cx: &mut gpui::TestAppContext) {
                 "bot-box-tgms-keys".into(),
                 "bot-box-tgms-layout".into(),
             ]],
-            last: Some("bot-columns".into()),
+            last: Some("card-grid".into()),
             ..Default::default()
         },
     );

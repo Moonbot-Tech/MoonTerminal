@@ -481,19 +481,6 @@ fn badge_outline_indent(expert: bool) -> f32 {
     ord + before.iter().map(|w| w + BADGE_GAP).sum::<f32>()
 }
 
-/// Widths of a wrapped row's two lines: switch, type, code and short code; then colour,
-/// outline, look, delete and the ordinal when expert.
-fn badge_lines_w(expert: bool) -> (f32, f32) {
-    let c = &BADGE_COLS;
-    let one = [c.active, c.name, c.code, c.short];
-    let mut two = vec![c.color, c.outline, c.look, c.delete];
-    if expert {
-        two.push(c.ordinal);
-    }
-    let w = |cols: &[f32]| cols.iter().sum::<f32>() + BADGE_GAP * (cols.len() - 1) as f32;
-    (w(&one), w(&two))
-}
-
 /// Horizontal room the table's box takes beyond its columns: padding and border.
 const BADGE_BOX_PAD: f32 = 26.0;
 
@@ -656,12 +643,6 @@ fn badges_table(expert: bool, wrapped: bool, rows: Vec<AnyElement>, cx: &App) ->
             .child(head(c.look, "badges.col.look"))
             .child(div().w(design::ui_px(cx, c.delete)).flex_none())
         });
-    let width = if wrapped {
-        let (one, two) = badge_lines_w(expert);
-        one.max(two)
-    } else {
-        badge_table_w(expert)
-    };
     div()
         .w_full()
         .min_w_0()
@@ -669,9 +650,8 @@ fn badges_table(expert: bool, wrapped: bool, rows: Vec<AnyElement>, cx: &App) ->
         .child(
             super::general::page_box(Vec::new(), cx)
                 .debug_selector(|| "badges-table-box".into())
-                .w(design::ui_px(cx, width + BADGE_BOX_PAD)
-                    + px(picker_excess(design::ui_value(cx, 1.0))))
-                .max_w_full()
+                // The card takes the page's width; the table inside keeps its own column widths.
+                .w_full()
                 .py(design::ui_px(cx, 8.0))
                 .child(header)
                 .children(rows),

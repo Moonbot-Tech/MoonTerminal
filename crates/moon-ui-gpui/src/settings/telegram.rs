@@ -187,6 +187,90 @@ pub(super) fn confirm_danger(
     );
 }
 
+/// Unscaled gap between a page's cards, across and down.
+const CARD_GAP: f32 = 16.0;
+
+/// Unscaled narrowest card column: below two of them and the gap the cards stack in one column.
+const CARD_COLUMN_MIN_W: f32 = 460.0;
+
+/// Unscaled longest line of prose inside a full-width card, about 90 characters.
+const PROSE_MAX_W: f32 = 640.0;
+
+/// Width of a page column on a page body `width` wide: the body less its two gutters.
+///
+/// Args:
+///     width: The page body's width.
+///     cx: Application context for the zoom-scaled gutters.
+fn page_column_w(width: f32, cx: &App) -> f32 {
+    (width - 2.0 * design::ui_value(cx, super::render::BODY_PAD)).max(0.0)
+}
+
+/// How many card columns a page column holds: two when both reach `min_w` beside `gap`, else one.
+///
+/// Args:
+///     column_w: The page column's width.
+///     min_w: The narrowest card column, scaled.
+///     gap: The gap between the columns, scaled.
+fn card_columns(column_w: f32, min_w: f32, gap: f32) -> usize {
+    if column_w + 0.5 >= 2.0 * min_w + gap {
+        2
+    } else {
+        1
+    }
+}
+
+/// A page's independent cards in equal columns across `column_w`: two on a wide page, dealt in
+/// turn (first card left, second right, third left...), one column below the breakpoint.
+///
+/// Each column gets an explicit width from the measured page width rather than `flex_wrap` with
+/// `flex_1`, which leaves unequal or overlapping columns (CONTRIBUTING, the flex_wrap trap).
+///
+/// Args:
+///     column_w: The page column's width (see [`page_column_w`]).
+///     cards: The cards, in reading order.
+///     cx: Application context for scale.
+pub(super) fn card_grid_el(column_w: f32, cards: Vec<AnyElement>, cx: &App) -> AnyElement {
+    let gap = design::ui_value(cx, CARD_GAP);
+    let cols =
+        card_columns(column_w, design::font_w(cx, CARD_COLUMN_MIN_W), gap).min(cards.len().max(1));
+    let col_w = ((column_w - gap * (cols - 1) as f32) / cols as f32).max(0.0);
+    let mut columns: Vec<Vec<AnyElement>> = (0..cols).map(|_| Vec::new()).collect();
+    for (i, card) in cards.into_iter().enumerate() {
+        columns[i % cols].push(card);
+    }
+    h_flex()
+        .debug_selector(|| "card-grid".into())
+        .w(px(column_w))
+        .items_start()
+        .gap(px(gap))
+        .children(columns.into_iter().enumerate().map(|(i, cards)| {
+            v_flex()
+                .debug_selector(move || format!("card-col-{i}"))
+                .w(px(col_w))
+                .flex_none()
+                .gap(px(gap))
+                .children(cards)
+        }))
+        .into_any_element()
+}
+
+/// Prose inside a card on a page `width` wide, its lines capped near 90 characters so a full-width
+/// card stays readable. The width is explicit (see `render::scrollable_tab_content`).
+///
+/// Args:
+///     width: The page body's width.
+///     text: The prose.
+///     cx: Application context for scale and palette.
+pub(super) fn card_prose_el(width: f32, text: String, cx: &App) -> AnyElement {
+    // The card's padding and border on both sides.
+    let inner = page_column_w(width, cx) - 2.0 * design::ui_value(cx, 15.0);
+    div()
+        .w(px(inner.min(design::font_w(cx, PROSE_MAX_W)).max(0.0)))
+        .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
+        .child(text)
+        .into_any_element()
+}
+
 impl SettingsView {
     /// Whether the bot runs on a known station, which makes its pages apply there.
     pub(super) fn station_known(&self) -> bool {
@@ -198,11 +282,12 @@ impl SettingsView {
         bot_host(self.station_known())
     }
 
-    /// One column of `width` holding `children`, as every Telegram and Station page lays out.
+    /// One column of `width` holding `children`, as every Telegram and Station page lays out: the
+    /// whole content width, like the Overview.
     // An explicit width, not `w_full().max_w(..)`: see `render::scrollable_tab_content` — the
     // bottom of a long page would fall outside the scroll extent.
     fn page_column(&self, width: f32, children: Vec<AnyElement>, cx: &Context<Self>) -> AnyElement {
-        Self::column_of(width, Some(design::font_w(cx, 680.0)), children, cx)
+        Self::column_of(width, None, children, cx)
     }
 
     /// A page column `width` wide less the body gutters, capped at `max` when given.
@@ -212,12 +297,10 @@ impl SettingsView {
         children: Vec<AnyElement>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let column_w = (width - 2.0 * design::ui_value(cx, 18.0))
-            .min(max.unwrap_or(f32::INFINITY))
-            .max(0.0);
+        let column_w = page_column_w(width, cx).min(max.unwrap_or(f32::INFINITY));
         v_flex()
             .w(px(column_w))
-            .gap(design::ui_px(cx, 16.0))
+            .gap(design::ui_px(cx, CARD_GAP))
             .children(children)
             .into_any_element()
     }
@@ -269,22 +352,21 @@ impl SettingsView {
     /// terminal's bot and the station's.
     pub(super) fn tg_bot_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let side = self.bot_side();
+        let column_w = page_column_w(width, cx);
         let children = match side {
-            access::ChatsOf::Terminal => {
-                let mut children = vec![self.bot_host_line(side, cx)];
-                children.extend(self.terminal_bot_sections(cx));
-                children
-            }
-            access::ChatsOf::Station => vec![
+            access::ChatsOf::Terminal => vec![
                 self.bot_host_line(side, cx),
-                v_flex()
-                    .w_full()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(self.server_bot_block(cx))
-                    .children(self.server_bot_sections(cx))
-                    .child(self.server_bot_progress(false, cx))
-                    .into_any_element(),
+                card_grid_el(column_w, self.terminal_bot_sections(cx), cx),
             ],
+            access::ChatsOf::Station => {
+                let mut cards = vec![self.server_bot_block(cx).into_any_element()];
+                cards.extend(self.server_bot_sections(cx));
+                vec![
+                    self.bot_host_line(side, cx),
+                    card_grid_el(column_w, cards, cx),
+                    self.server_bot_progress(false, cx).into_any_element(),
+                ]
+            }
         };
         let body = self.page_column(width, children, cx);
         let mut parts = self.page_parts(Tab::TgBot, body, Vec::new(), cx);
@@ -319,9 +401,12 @@ impl SettingsView {
         let side = self.bot_side();
         let body = self.page_column(
             width,
-            vec![bot_menu::bot_columns_el(
-                self.bot_menu_keys_box(side, cx),
-                self.message_layout_box(side, cx),
+            vec![card_grid_el(
+                page_column_w(width, cx),
+                vec![
+                    self.bot_menu_keys_box(side, cx),
+                    self.message_layout_box(side, cx),
+                ],
                 cx,
             )],
             cx,
@@ -337,7 +422,8 @@ impl SettingsView {
     pub(super) fn st_cores_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let mut parts = vec![self.station_cores_section(width, cx)];
         parts.extend(self.station_groups_row(cx));
-        let body = self.page_column(width, parts, cx);
+        // Not one of the widened pages: the station's cores keep their narrow column.
+        let body = Self::column_of(width, Some(design::font_w(cx, 680.0)), parts, cx);
         let mut parts = self.page_parts(Tab::StCores, body, Vec::new(), cx);
         parts.bar = self.station_cores_bar(cx);
         parts
@@ -353,7 +439,7 @@ impl SettingsView {
 
     /// The station's maintenance page: auto-update and the station's access.
     pub(super) fn st_maint_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
-        let body = self.page_column(width, vec![self.station_maint_section(cx)], cx);
+        let body = self.page_column(width, vec![self.station_maint_section(width, cx)], cx);
         self.page_parts(Tab::StMaint, body, Vec::new(), cx)
     }
 

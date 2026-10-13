@@ -1269,9 +1269,11 @@ impl SettingsView {
             .child(more)
     }
 
-    /// A station page's box: `body` for the known station, else a note that none is set up.
+    /// A station page's box on a page `width` wide: `body` for the known station, else a note that
+    /// none is set up.
     fn station_page_box(
         &self,
+        width: f32,
         id: &'static str,
         title_key: &str,
         body: impl FnOnce(&Target) -> Vec<AnyElement>,
@@ -1286,7 +1288,11 @@ impl SettingsView {
             .gap(10.0);
         match self.telegram.server.known.clone() {
             Some(target) => section.children(body(&target)),
-            None => section.child(self.server_bot_hint("telegram.server.intro", cx)),
+            None => section.child(super::card_prose_el(
+                width,
+                t!("telegram.server.intro").to_string(),
+                cx,
+            )),
         }
         .into_any_element()
     }
@@ -1298,6 +1304,7 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         self.station_page_box(
+            width,
             "station-cores-page",
             "settings.page.st_cores.title",
             |target| {
@@ -1317,6 +1324,7 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         self.station_page_box(
+            width,
             "station-tape-page",
             "settings.page.st_tape.title",
             |target| vec![self.server_tape_block(target, width, cx).into_any_element()],
@@ -1325,8 +1333,13 @@ impl SettingsView {
     }
 
     /// The station's access and auto-update (the Maintenance page).
-    pub(in crate::settings) fn station_maint_section(&self, cx: &Context<Self>) -> AnyElement {
+    pub(in crate::settings) fn station_maint_section(
+        &self,
+        width: f32,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         self.station_page_box(
+            width,
             "station-maint-page",
             "settings.page.st_maint.title",
             |target| {

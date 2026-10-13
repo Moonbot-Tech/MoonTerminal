@@ -165,3 +165,136 @@ fn the_bot_page_table_fits_the_body(cx: &mut gpui::TestAppContext) {
         );
     }
 }
+
+/// A synthetic card: a group box under a title with `n` lines of long text.
+fn synthetic_card(tag: &'static str, n: usize, cx: &gpui::App) -> gpui::AnyElement {
+    use gpui::{InteractiveElement, IntoElement, ParentElement, Styled};
+    let selector = format!("probe-card-{tag}");
+    gpui::div()
+        .w_full()
+        .debug_selector(move || selector.clone())
+        .child(
+            moon_ui::MoonGroupBox::new(gpui::SharedString::from(format!("probe-card-{tag}")))
+                .child(crate::settings::common::group_title(
+                    rust_i18n::t!("telegram.section_bot").to_string(),
+                    cx,
+                ))
+                .padding(14.0)
+                .children((0..n).map(move |i| {
+                    gpui::div().w_full().child(format!(
+                        "{tag} synthetic line {i} with a long caption that wraps"
+                    ))
+                })),
+        )
+        .into_any_element()
+}
+
+/// Draw three synthetic cards through `card_grid_el` in a page column `content_w` wide, in a
+/// window wide enough for it, and return the drawn window.
+fn draw_grid(cx: &mut gpui::TestAppContext, content_w: f32) -> gpui::VisualTestContext {
+    let window = cx.open_window(
+        gpui::size(gpui::px(content_w + 200.0), gpui::px(1200.0)),
+        |_, _| Host {
+            width: content_w,
+            scroll: gpui::ScrollHandle::new(),
+            build: std::rc::Rc::new(move |_, cx| {
+                super::card_grid_el(
+                    content_w,
+                    vec![
+                        synthetic_card("bot", 4, cx),
+                        synthetic_card("chats", 9, cx),
+                        synthetic_card("mini", 2, cx),
+                    ],
+                    cx,
+                )
+            }),
+        },
+    );
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    visual
+}
+
+/// Bounds of `sel` in the drawn window, `None` when it was not laid out.
+fn drawn(visual: &mut gpui::VisualTestContext, sel: &str) -> Option<gpui::Bounds<gpui::Pixels>> {
+    visual.debug_bounds(crate::settings::layout_probe::leak(sel.to_string()))
+}
+
+/// A wide Settings window (1700 px of content) puts a page's cards in two equal, non-overlapping
+/// columns that reach the content's right edge; a re-introduced width cap or a `flex_wrap` grid
+/// would leave the right half empty or the columns uneven. Every language.
+#[gpui::test]
+fn cards_take_two_equal_columns_across_a_wide_page(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let mut visual = draw_grid(cx, 1700.0);
+        let body = drawn(&mut visual, "probe-body").expect("body");
+        let left = drawn(&mut visual, "card-col-0").expect("left column");
+        let right = drawn(&mut visual, "card-col-1").expect("right column");
+        let code = language.code();
+        assert!(
+            (f32::from(left.size.width) - f32::from(right.size.width)).abs() <= 0.5,
+            "[FAIL] {code}: columns differ in width"
+        );
+        assert!(
+            left.right() <= right.origin.x,
+            "[FAIL] {code}: columns overlap"
+        );
+        assert!(
+            f32::from(body.right() - right.right()).abs() <= 24.0,
+            "[FAIL] {code}: right column ends {} px short of the content",
+            f32::from(body.right() - right.right())
+        );
+        for card in ["bot", "chats", "mini"] {
+            let b = drawn(&mut visual, &format!("probe-card-{card}")).expect("card");
+            assert!(
+                b.right() <= body.right() + gpui::px(0.5),
+                "[FAIL] {code}: {card} escapes"
+            );
+        }
+    }
+}
+
+/// A ~900 px content width stacks the cards in one column that spans the content: two columns
+/// there would squeeze each card below its readable width. Every language.
+#[gpui::test]
+fn cards_stack_in_one_full_column_on_a_narrow_page(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let mut visual = draw_grid(cx, 900.0);
+        let code = language.code();
+        let body = drawn(&mut visual, "probe-body").expect("body");
+        assert!(
+            drawn(&mut visual, "card-col-1").is_none(),
+            "[FAIL] {code}: a second column at 900 px"
+        );
+        let column = drawn(&mut visual, "card-col-0").expect("column");
+        assert!(
+            f32::from(body.right() - column.right()).abs() <= 24.0,
+            "[FAIL] {code}: the column ends {} px short of the content",
+            f32::from(body.right() - column.right())
+        );
+        let bot = drawn(&mut visual, "probe-card-bot").expect("bot");
+        let chats = drawn(&mut visual, "probe-card-chats").expect("chats");
+        let mini = drawn(&mut visual, "probe-card-mini").expect("mini");
+        assert!(
+            bot.bottom_left().y <= chats.origin.y && chats.bottom_left().y <= mini.origin.y,
+            "[FAIL] {code}: stacked cards overlap or are out of order"
+        );
+    }
+}
+
+/// The breakpoint: two columns once both reach the minimum beside the gap, never below it.
+#[test]
+fn the_grid_splits_only_when_both_columns_fit() {
+    assert_eq!(super::card_columns(936.0, 460.0, 16.0), 2);
+    assert_eq!(super::card_columns(935.0, 460.0, 16.0), 1);
+    assert_eq!(super::card_columns(900.0, 460.0, 16.0), 1);
+    assert_eq!(super::card_columns(1700.0, 460.0, 16.0), 2);
+}
