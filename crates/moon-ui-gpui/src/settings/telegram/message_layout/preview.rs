@@ -1,5 +1,6 @@
 //! Telegram dark-chat imitation drawn from the production renderer's typed spans and rows.
 use crate::design;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_tg::{PreviewLine, PreviewRowKind, PreviewTable, Span as PreviewSpan, Tone};
 use moon_ui::{MoonPalette, h_flex, rgba_from, v_flex};
@@ -40,12 +41,18 @@ impl RenderOnce for Phone {
     /// Draw native text and table bands in the active theme's colours.
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let p = MoonPalette::active(cx);
+        let card = matches!(self.content.as_ref(), PreviewContent::Card(_));
         let body = match self.content.as_ref() {
             PreviewContent::Card(lines) => v_flex()
                 .w_full()
                 .min_w_0()
                 .gap(design::ui_px(cx, 2.0))
-                .children(lines.iter().map(|line| text_runs(&line.spans, window, &p)))
+                .children(
+                    lines
+                        .iter()
+                        .enumerate()
+                        .map(|(i, line)| card_line(i, &line.spans, window, cx)),
+                )
                 .into_any_element(),
             PreviewContent::Report(table) => report_table(table, window, cx),
         };
@@ -59,9 +66,12 @@ impl RenderOnce for Phone {
                     .child(t!("telegram.layout.preview").to_string()),
             )
             .child(
+                // A card sizes the bubble like Telegram does, from its longest line up to the
+                // message width; a report's fractional columns need the full message width.
                 v_flex()
-                    .w_full()
-                    .max_w(design::ui_px(cx, 280.0))
+                    .debug_selector(|| "tg-preview-bubble".into())
+                    .when(!card, |el| el.w_full())
+                    .max_w(design::ui_px(cx, BUBBLE_MAX_W))
                     .min_w_0()
                     .rounded(design::ui_px(cx, 14.0))
                     .p(design::ui_px(cx, 6.0))
@@ -107,11 +117,90 @@ impl RenderOnce for Phone {
             )
             .child(
                 div()
-                    .max_w(design::ui_px(cx, 280.0))
+                    .max_w(design::ui_px(cx, BUBBLE_MAX_W))
                     .text_color(rgba_from(p.text_muted, 1.0))
                     .child(t!("telegram.layout.preview_hint").to_string()),
             )
     }
+}
+
+/// Widest message bubble, unscaled: a Telegram message on a phone-sized chat.
+const BUBBLE_MAX_W: f32 = 420.0;
+
+/// Gap between two words of a card line, unscaled: one space at the body size.
+const WORD_GAP: f32 = 4.0;
+
+/// The line's spans cut into words that never break: a cut falls only at a space outside
+/// brackets, so a parenthesised figure such as `(+4.96%)` stays whole on one line. Spaces are
+/// dropped; the caller draws them as the gap between words. A word keeps each span's styling.
+///
+/// Args:
+///     spans: The line's spans in reading order.
+///
+/// Returns:
+///     The words, each a run of styled spans.
+fn unbreakable_words(spans: &[PreviewSpan]) -> Vec<Vec<PreviewSpan>> {
+    let mut words: Vec<Vec<PreviewSpan>> = Vec::new();
+    let mut word: Vec<PreviewSpan> = Vec::new();
+    let mut depth = 0_usize;
+    for span in spans {
+        let mut piece = String::new();
+        for ch in span.text.chars() {
+            match ch {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            if ch == ' ' && depth == 0 {
+                if !piece.is_empty() {
+                    word.push(PreviewSpan {
+                        text: std::mem::take(&mut piece),
+                        ..span.clone()
+                    });
+                }
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+            } else {
+                piece.push(ch);
+            }
+        }
+        if !piece.is_empty() {
+            word.push(PreviewSpan {
+                text: piece,
+                ..span.clone()
+            });
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// One card line: its unbreakable words wrapping between each other, never inside one.
+///
+/// Args:
+///     index: The line's position, for its `tg-preview-line-{index}` selector.
+///     spans: The line's spans.
+///     window: Window for the text style.
+///     cx: Application context for theme and scale.
+fn card_line(index: usize, spans: &[PreviewSpan], window: &Window, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    h_flex()
+        .debug_selector(move || format!("tg-preview-line-{index}"))
+        .max_w_full()
+        .flex_wrap()
+        .items_start()
+        .gap_x(design::ui_px(cx, WORD_GAP))
+        .children(unbreakable_words(spans).into_iter().map(|word| {
+            // A word wider than the bubble (a long link) still wraps rather than painting past it.
+            div()
+                .flex_none()
+                .max_w_full()
+                .child(text_runs(&word, window, &p))
+        }))
+        .into_any_element()
 }
 
 /// Convert explicit raw spans to GPUI runs; no string is treated as markup.
@@ -229,3 +318,6 @@ fn local_clock() -> chrono::DateTime<chrono::Utc> {
         .saturating_add(moon_core::util::time::local_utc_offset_ms());
     chrono::DateTime::from_timestamp_millis(millis).unwrap_or(chrono::DateTime::UNIX_EPOCH)
 }
+
+#[cfg(test)]
+mod tests;

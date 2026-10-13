@@ -52,22 +52,22 @@ pub(super) fn auto_update_el(
         .checked(view == AutoUpdateView::Known(true))
         .disabled(busy || !matches!(view, AutoUpdateView::Known(_)))
         .label(label.clone())
-        .description(t!("telegram.server.auto_update_hint").to_string())
         .on_change(on_change);
     let mut block = v_flex()
         .debug_selector(|| "server-auto-update-block".into())
         .w_full()
         .min_w(px(0.0))
         .gap(design::ui_px(cx, 6.0))
-        .child(crate::settings::common::floored_checkbox(
+        .child(crate::settings::common::checkbox_with_caption(
             "server-auto-update",
             &label,
             switch,
+            t!("telegram.server.auto_update_hint").to_string(),
             cx,
         ));
     if let Some(note) = note {
         block = block.child(
-            div()
+            crate::settings::common::cap_prose(div(), cx)
                 .debug_selector(|| "server-auto-update-note".into())
                 .text_color(rgba_from(p.text_muted, 1.0))
                 .child(note.to_string()),

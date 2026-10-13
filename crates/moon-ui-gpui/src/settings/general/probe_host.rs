@@ -70,3 +70,14 @@ pub(in crate::settings) fn stub(id: &'static str, w: f32, h: f32) -> AnyElement 
 pub(in crate::settings) fn all_open(_: &'static str) -> (bool, Action) {
     (true, Rc::new(|_, _| {}))
 }
+
+/// `content` in the text style the Settings window sets on its root (`render.rs`): the UI face
+/// at the body size and line height, so a probe measures text as the window draws it.
+pub(in crate::settings) fn window_text(content: AnyElement, cx: &App) -> AnyElement {
+    div()
+        .font_family(crate::design::ui_font())
+        .text_size(crate::design::t_body(cx))
+        .line_height(crate::design::line_px(cx, 14.0))
+        .child(content)
+        .into_any_element()
+}

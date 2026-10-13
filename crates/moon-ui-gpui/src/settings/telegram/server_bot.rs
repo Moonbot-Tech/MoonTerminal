@@ -992,7 +992,7 @@ impl SettingsView {
 
     /// Already localized text in the hint's style.
     fn server_bot_note(&self, text: String, cx: &Context<Self>) -> impl IntoElement {
-        div()
+        crate::settings::common::cap_prose(div(), cx)
             .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
             .child(text)
     }
@@ -1426,7 +1426,7 @@ impl SettingsView {
             .render()
             .into_any_element();
         let muted = |text: String| {
-            div()
+            crate::settings::common::cap_prose(div(), cx)
                 .text_size(design::t_caption(cx))
                 .text_color(rgba_from(p.text_muted, 1.0))
                 .child(text)

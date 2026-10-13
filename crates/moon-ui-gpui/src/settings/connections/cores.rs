@@ -402,12 +402,19 @@ fn disclosure(
                 .box_size(design::DISCLOSURE_BOX)
                 .on_toggle(move |_, window, cx| caret_act(CoreAction::Disclose(id), window, cx)),
         )
-        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        // A short title kept whole, and the summary taking the rest of the row from a zero basis:
+        // a content-sized text beside it is painted from its min-content measure, one word a line.
         .child(
             div()
-                .min_w_0()
-                .text_color(rgba_from(p.text_muted, 1.0))
-                .child(summary),
+                .flex_none()
+                .whitespace_nowrap()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(title),
+        )
+        .child(
+            crate::settings::common::prose(format!("{id}-summary"), summary, false, cx)
+                .flex_1()
+                .text_color(rgba_from(p.text_muted, 1.0)),
         )
         .into_any_element()
 }

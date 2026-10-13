@@ -434,6 +434,7 @@ impl SettingsView {
             });
         });
         badges_body(
+            content_w,
             badges_table(expert, wrapped, rows, cx),
             add,
             expert,
@@ -662,12 +663,14 @@ fn badges_table(expert: bool, wrapped: bool, rows: Vec<AnyElement>, cx: &App) ->
 /// The Badges page body.
 ///
 /// Args:
+///     content_w: The body's content width in logical pixels.
 ///     table: The badge table.
 ///     add: The Add button.
 ///     expert_open: Whether the expert disclosure is unfolded.
 ///     toggle: Folds or unfolds it.
 ///     cx: Application context for theme and scale.
 fn badges_body(
+    content_w: f32,
     table: AnyElement,
     add: AnyElement,
     expert_open: bool,
@@ -676,6 +679,8 @@ fn badges_body(
 ) -> AnyElement {
     let p = MoonPalette::active(cx);
     let on_caret = toggle.clone();
+    let title = t!("badges.expert.title").to_string();
+    let (title_w, hint_w) = expert_widths(content_w, &title, cx);
     let disclosure = h_flex()
         .id("badges-expert")
         .debug_selector(|| "badges-expert".into())
@@ -683,7 +688,7 @@ fn badges_body(
         .flex_wrap()
         .gap(design::ui_px(cx, 6.0))
         .items_center()
-        .px(design::ui_px(cx, 10.0))
+        .px(design::ui_px(cx, EXPERT_PAD_X))
         .py(design::ui_px(cx, 6.0))
         .border_1()
         .border_color(rgba_from(p.border, 1.0))
@@ -696,12 +701,12 @@ fn badges_body(
                 .box_size(design::DISCLOSURE_BOX)
                 .on_toggle(move |_, window, cx| on_caret(window, cx)),
         )
-        .child(super::common::prose(
-            "badges-expert-title".into(),
-            t!("badges.expert.title").to_string(),
-            false,
-            cx,
-        ))
+        .child(
+            super::common::prose("badges-expert-title".into(), title, false, cx)
+                .flex_none()
+                .w(px(title_w))
+                .max_w_full(),
+        )
         .child(
             super::common::prose(
                 "badges-expert-hint".into(),
@@ -709,6 +714,8 @@ fn badges_body(
                 false,
                 cx,
             )
+            .flex_none()
+            .w(px(hint_w))
             .text_color(rgba_from(p.text_muted, 1.0)),
         );
     v_flex()
@@ -727,6 +734,34 @@ fn badges_body(
             )
         })
         .into_any_element()
+}
+
+/// Horizontal padding of the expert disclosure row, unscaled.
+const EXPERT_PAD_X: f32 = 10.0;
+
+/// Widths of the expert disclosure's title and caption on a body `content_w` wide.
+///
+/// Both are explicit: GPUI paints a text with the lines of its LAST measure, and a content-sized
+/// flex item is last measured at its min-content width, which stacked the caption one word per
+/// line on a full-width card. The caption takes the rest of the row beside the title; a row too
+/// narrow for its longest word wraps it under the title at the full row width instead.
+///
+/// Args:
+///     content_w: The body's content width in logical pixels.
+///     title: The disclosure title.
+///     cx: Application context for scale and text measures.
+///
+/// Returns:
+///     The title's and the caption's widths in logical pixels.
+fn expert_widths(content_w: f32, title: &str, cx: &App) -> (f32, f32) {
+    let title_w = design::ui_body_text_width(cx, title, 400.0) + 2.0;
+    // The row's padding, border and the caret with the two gaps beside it.
+    let row_w = (content_w - 2.0 * design::ui_value(cx, EXPERT_PAD_X) - 2.0).max(0.0);
+    let caret = design::ui_value(cx, design::DISCLOSURE_BOX + 2.0 * 6.0);
+    let beside = row_w - caret - title_w;
+    let floor = super::common::longest_word_w(&t!("badges.expert.hint"), false, cx);
+    let hint_w = if beside >= floor { beside } else { row_w };
+    (title_w.min(row_w), hint_w)
 }
 
 impl SettingsView {

@@ -193,9 +193,6 @@ const CARD_GAP: f32 = 16.0;
 /// Unscaled narrowest card column: below two of them and the gap the cards stack in one column.
 const CARD_COLUMN_MIN_W: f32 = 460.0;
 
-/// Unscaled longest line of prose inside a full-width card, about 90 characters.
-const PROSE_MAX_W: f32 = 640.0;
-
 /// Width of a page column on a page body `width` wide: the body less its two gutters.
 ///
 /// Args:
@@ -265,10 +262,45 @@ pub(super) fn card_prose_el(width: f32, text: String, cx: &App) -> AnyElement {
     // The card's padding and border on both sides.
     let inner = page_column_w(width, cx) - 2.0 * design::ui_value(cx, 15.0);
     div()
-        .w(px(inner.min(design::font_w(cx, PROSE_MAX_W)).max(0.0)))
+        .w(px(inner
+            .min(design::font_w(cx, common::PROSE_MAX_W))
+            .max(0.0)))
         .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
         .child(text)
         .into_any_element()
+}
+
+/// The Station cores page column: the cores card and, under it, the groups line in a card of its
+/// own, both across the whole content width like every other Station page.
+///
+/// Args:
+///     width: The page body's width.
+///     cores: The station's cores card.
+///     groups: The groups line, `None` when there is nothing to say about groups.
+///     cx: Application context for scale.
+fn st_cores_column(
+    width: f32,
+    cores: AnyElement,
+    groups: Option<AnyElement>,
+    cx: &App,
+) -> AnyElement {
+    let groups = groups.map(|row| {
+        div()
+            .debug_selector(|| "station-groups".into())
+            .child(
+                MoonGroupBox::new("station-groups")
+                    .padding(14.0)
+                    .gap(10.0)
+                    .child(row),
+            )
+            .into_any_element()
+    });
+    SettingsView::column_of(
+        width,
+        None,
+        std::iter::once(cores).chain(groups).collect(),
+        cx,
+    )
 }
 
 impl SettingsView {
@@ -291,12 +323,7 @@ impl SettingsView {
     }
 
     /// A page column `width` wide less the body gutters, capped at `max` when given.
-    fn column_of(
-        width: f32,
-        max: Option<f32>,
-        children: Vec<AnyElement>,
-        cx: &Context<Self>,
-    ) -> AnyElement {
+    fn column_of(width: f32, max: Option<f32>, children: Vec<AnyElement>, cx: &App) -> AnyElement {
         let column_w = page_column_w(width, cx).min(max.unwrap_or(f32::INFINITY));
         v_flex()
             .w(px(column_w))
@@ -420,10 +447,12 @@ impl SettingsView {
 
     /// The station's cores page.
     pub(super) fn st_cores_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
-        let mut parts = vec![self.station_cores_section(width, cx)];
-        parts.extend(self.station_groups_row(cx));
-        // Not one of the widened pages: the station's cores keep their narrow column.
-        let body = Self::column_of(width, Some(design::font_w(cx, 680.0)), parts, cx);
+        let body = st_cores_column(
+            width,
+            self.station_cores_section(width, cx),
+            self.station_groups_row(cx),
+            cx,
+        );
         let mut parts = self.page_parts(Tab::StCores, body, Vec::new(), cx);
         parts.bar = self.station_cores_bar(cx);
         parts

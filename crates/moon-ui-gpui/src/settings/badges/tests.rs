@@ -8,8 +8,8 @@ use super::{
     BADGE_COLS, BADGE_GAP, BadgeCells, badge_outline_indent, badge_row_el, badge_table_w,
     badges_body, badges_table, badges_wrapped,
 };
-use crate::settings::general::probe_host::{host, stub};
-use crate::settings::layout_probe::{ProbeSpec, body_box, sweep};
+use crate::settings::general::probe_host::{host, stub, window_text};
+use crate::settings::layout_probe::{ProbeSpec, WIDE, body_box, sweep, sweep_sizes};
 
 /// Catches the outline colours drifting off the colour column, and the expert ordinal column
 /// adding a width other than its own.
@@ -87,6 +87,7 @@ fn badges_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                     })
                     .collect();
                 badges_body(
+                    size.0,
                     badges_table(true, wrapped, rows, cx),
                     stub("probe-add", 120.0, 28.0),
                     true,
@@ -128,6 +129,41 @@ fn badges_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 rust_i18n::t!("badges.expert.hint").to_string(),
             )],
             last: Some("badges-expert-warn".into()),
+            ..Default::default()
+        },
+    );
+}
+
+/// Catches the expert disclosure squeezing again: a content-sized title beside a shrinking
+/// caption stacked the caption one word per line in a ~60 px column on a 1700 px window, though
+/// the card spans the page. Title and caption must share one line there, in every language.
+#[gpui::test]
+fn the_expert_disclosure_reads_on_one_line_when_wide(cx: &mut gpui::TestAppContext) {
+    sweep_sizes(
+        cx,
+        &[WIDE],
+        |window, view, size| {
+            host(move |_, cx| {
+                window_text(
+                    badges_body(
+                        size.0,
+                        badges_table(false, false, Vec::new(), cx),
+                        stub("probe-add", 120.0, 28.0),
+                        false,
+                        Rc::new(|_, _| {}),
+                        cx,
+                    ),
+                    cx,
+                )
+            })(window, view, size)
+        },
+        |_| ProbeSpec {
+            container: "probe-body",
+            inside: vec!["badges-expert".into(), "badges-expert-hint".into()],
+            one_line: vec![vec![
+                "badges-expert-title".into(),
+                "badges-expert-hint".into(),
+            ]],
             ..Default::default()
         },
     );

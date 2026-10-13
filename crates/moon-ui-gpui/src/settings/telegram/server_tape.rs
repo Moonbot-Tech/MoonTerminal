@@ -376,8 +376,7 @@ pub(super) fn catchup_breakdown(catchup: &TapeCatchup) -> Option<String> {
 /// The breakdown under the tiles: one muted wrapping text, never a row of separate pieces.
 pub(super) fn tape_breakdown(text: String, cx: &App) -> AnyElement {
     let p = MoonPalette::active(cx);
-    div()
-        .w_full()
+    crate::settings::common::cap_prose(div().w_full(), cx)
         .min_w_0()
         .font_family(design::ui_font())
         .text_size(design::t_caption(cx))
@@ -604,7 +603,8 @@ pub(super) fn venue_reach_table(
         )
         .child(
             div()
-                .min_w_0()
+                .flex_none()
+                .whitespace_nowrap()
                 .font_family(design::ui_font())
                 .child(t!("telegram.server.catchup_venues").to_string()),
         );
@@ -761,6 +761,8 @@ pub(super) fn catchup_switches(
     on_archives: impl Fn(&bool, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> AnyElement {
+    let auto_label = t!("telegram.server.catchup_auto").to_string();
+    let archives_label = t!("telegram.server.catchup_archives").to_string();
     v_flex()
         .flex_1()
         .flex_basis(design::font_w_px(cx, 220.0))
@@ -768,29 +770,33 @@ pub(super) fn catchup_switches(
         .max_w_full()
         .gap(design::ui_px(cx, 8.0))
         .debug_selector(|| "server-tape-switches".into())
-        .child(
+        .child(crate::settings::common::checkbox_with_caption(
+            "server-tape-auto",
+            &auto_label,
             MoonCheckbox::new("server-tape-auto")
                 .checked(switches.auto)
                 .disabled(!editable)
-                .label(t!("telegram.server.catchup_auto").to_string())
-                .description(t!("telegram.server.catchup_auto_hint").to_string())
+                .label(auto_label.clone())
                 .on_change(on_auto),
-        )
-        .child(
+            t!("telegram.server.catchup_auto_hint").to_string(),
+            cx,
+        ))
+        .child(crate::settings::common::checkbox_with_caption(
+            "server-tape-archives",
+            &archives_label,
             MoonCheckbox::new("server-tape-archives")
                 .checked(switches.archives)
                 .disabled(!editable || !switches.auto)
-                .label(t!("telegram.server.catchup_archives").to_string())
-                .description(
-                    if switches.auto {
-                        t!("telegram.server.catchup_archives_hint")
-                    } else {
-                        t!("telegram.server.catchup_archives_needs_auto")
-                    }
-                    .to_string(),
-                )
+                .label(archives_label.clone())
                 .on_change(on_archives),
-        )
+            if switches.auto {
+                t!("telegram.server.catchup_archives_hint")
+            } else {
+                t!("telegram.server.catchup_archives_needs_auto")
+            }
+            .to_string(),
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -1012,7 +1018,7 @@ impl SettingsView {
             older_service: older,
         });
         let sentence = |text: String, color: u32| {
-            div()
+            crate::settings::common::cap_prose(div(), cx)
                 .font_family(design::ui_font())
                 .text_size(design::t_caption(cx))
                 .text_color(rgba_from(color, 1.0))

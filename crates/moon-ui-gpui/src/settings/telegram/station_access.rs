@@ -124,7 +124,7 @@ pub(super) fn danger_el(
         )
         // What Forget does, in place of a long tooltip: the zone is where it is read before a click.
         .child(
-            div()
+            crate::settings::common::cap_prose(div(), cx)
                 .debug_selector(|| "station-forget-note".into())
                 .min_w_0()
                 .text_color(rgba_from(p.text_muted, 1.0))
@@ -291,7 +291,10 @@ impl SettingsView {
         }
         if ed.editing {
             block = block
-                .child(div().child(t!("telegram.server.address_hint").to_string()))
+                .child(crate::settings::common::cap_prose(
+                    div().child(t!("telegram.server.address_hint").to_string()),
+                    cx,
+                ))
                 .child(
                     div().w_full().max_w(design::font_w_px(cx, 300.0)).child(
                         MoonInput::new("station-new-address")

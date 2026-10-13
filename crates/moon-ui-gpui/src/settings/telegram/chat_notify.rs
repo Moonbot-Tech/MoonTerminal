@@ -27,6 +27,8 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use crate::settings::common::cap_prose;
+
 use super::SettingsView;
 use super::access::ChatsOf;
 use super::server_bot::known_server;
@@ -818,7 +820,7 @@ impl SettingsView {
                 draft.trades.usd_followup,
                 |s, v| s.trades.usd_followup = v,
             ))
-            .child(
+            .child(cap_prose(
                 div().text_color(muted).child(
                     t!(
                         "telegram.notify_editor.trades_hint",
@@ -826,7 +828,8 @@ impl SettingsView {
                     )
                     .to_string(),
                 ),
-            )
+                cx,
+            ))
             .when(side == ChatsOf::Station, |block| {
                 block.child(self.chart_notify_block(side, chat, cx))
             })
@@ -852,11 +855,12 @@ impl SettingsView {
                         |s, v| s.events.detects = v,
                     )),
             )
-            .child(
+            .child(cap_prose(
                 div()
                     .text_color(muted)
                     .child(t!("telegram.notify_editor.events_hint").to_string()),
-            )
+                cx,
+            ))
             .child(
                 h_flex()
                     .flex_wrap()
@@ -896,17 +900,19 @@ impl SettingsView {
                     .gap(design::ui_px(cx, 16.0))
                     .children(AutoReport::ALL.map(auto)),
             )
-            .child(
+            .child(cap_prose(
                 div()
                     .text_color(muted)
                     .child(t!("telegram.auto.hint").to_string()),
-            )
+                cx,
+            ))
             .when(open_basis && draft.reports.any(), |block| {
-                block.child(
+                block.child(cap_prose(
                     div()
                         .text_color(muted)
                         .child(t!("telegram.auto.open_basis").to_string()),
-                )
+                    cx,
+                ))
             })
             .into_any_element()
     }

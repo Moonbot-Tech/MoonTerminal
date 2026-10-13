@@ -298,3 +298,97 @@ fn the_grid_splits_only_when_both_columns_fit() {
     assert_eq!(super::card_columns(900.0, 460.0, 16.0), 1);
     assert_eq!(super::card_columns(1700.0, 460.0, 16.0), 2);
 }
+
+/// Catches the Station cores page falling back to its old narrow column, or the groups line
+/// leaving its card: on a 1700 px window the cores card and the groups card both reach the
+/// content's right edge, in every language.
+#[gpui::test]
+fn station_cores_cards_span_the_content(cx: &mut gpui::TestAppContext) {
+    use crate::settings::general::probe_host::{host, stub, window_text};
+    use crate::settings::layout_probe::{ProbeSpec, WIDE, sweep_sizes};
+    use gpui::{InteractiveElement, IntoElement, ParentElement};
+    sweep_sizes(
+        cx,
+        &[WIDE],
+        |window, view, size| {
+            host(move |_, cx| {
+                let page_w =
+                    size.0 + 2.0 * crate::design::ui_value(cx, crate::settings::render::BODY_PAD);
+                let cores = gpui::div()
+                    .debug_selector(|| "probe-cores".into())
+                    .child(moon_ui::MoonGroupBox::new("probe-cores-box").child(stub(
+                        "probe-cores-body",
+                        200.0,
+                        40.0,
+                    )))
+                    .into_any_element();
+                let groups = gpui::div()
+                    .child(rust_i18n::t!("telegram.server.groups_send").to_string())
+                    .into_any_element();
+                window_text(super::st_cores_column(page_w, cores, Some(groups), cx), cx)
+            })(window, view, size)
+        },
+        |_| ProbeSpec {
+            container: "probe-body",
+            inside: vec!["probe-cores".into(), "station-groups".into()],
+            reaches_right: vec![
+                ("probe-cores".into(), 24.0),
+                ("station-groups".into(), 24.0),
+            ],
+            ..Default::default()
+        },
+    );
+}
+
+/// Catches explanatory prose running the whole width of a full-width card again (a ~1800 px line
+/// on Notifications, Trade tape and Maintenance): on a 1700 px window a Notifications hint, the
+/// Trade tape breakdown and the auto-update switch's caption each stay within the prose cap, in
+/// every language.
+#[gpui::test]
+fn card_prose_keeps_its_line_length_when_wide(cx: &mut gpui::TestAppContext) {
+    use crate::settings::common::{PROSE_MAX_W, cap_prose};
+    use crate::settings::general::probe_host::{host, window_text};
+    use crate::settings::layout_probe::{ProbeSpec, WIDE, sweep_sizes};
+    use gpui::{InteractiveElement, IntoElement, ParentElement};
+    sweep_sizes(
+        cx,
+        &[WIDE],
+        host(|_, cx| {
+            let long = format!(
+                "{} {}",
+                rust_i18n::t!("telegram.notify_editor.trades_hint", minutes = 5),
+                rust_i18n::t!("telegram.auto.hint")
+            );
+            let card = moon_ui::MoonGroupBox::new("probe-card")
+                .child(cap_prose(
+                    gpui::div()
+                        .debug_selector(|| "probe-notify-hint".into())
+                        .child(long.clone()),
+                    cx,
+                ))
+                .child(super::server_tape::tape_breakdown(long, cx))
+                .child(super::server_auto_update::auto_update_el(
+                    super::server_auto_update::AutoUpdateView::Known(true),
+                    false,
+                    Box::new(|_, _, _| {}),
+                    cx,
+                ));
+            window_text(card.into_any_element(), cx)
+        }),
+        |_| ProbeSpec {
+            container: "probe-body",
+            inside: vec![
+                "probe-notify-hint".into(),
+                "server-auto-update-caption".into(),
+            ],
+            max_width: [
+                "probe-notify-hint",
+                "server-tape-breakdown",
+                "server-auto-update-caption",
+            ]
+            .map(|sel| (sel.to_string(), PROSE_MAX_W))
+            .to_vec(),
+            ..Default::default()
+        },
+    );
+}

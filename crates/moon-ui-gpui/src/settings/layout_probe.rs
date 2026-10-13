@@ -96,7 +96,18 @@ pub(super) struct ProbeSpec {
     /// `(upper, lower, gap)`: `lower` starts exactly `gap` unscaled pixels below `upper`'s bottom
     /// (1 px tolerance) — neither a hole between them nor `lower` riding over `upper`.
     pub(super) stacked: Vec<(String, String, f32)>,
+    /// Groups of body-size texts that must share one line: equal top edges (1 px tolerance) and
+    /// no member taller than one body line.
+    pub(super) one_line: Vec<Vec<String>>,
+    /// `(selector, cap)`: the element is at most `cap` font-scaled pixels wide (0.5 px tolerance).
+    pub(super) max_width: Vec<(String, f32)>,
+    /// `(selector, slack)`: the element's right edge lies within `slack` unscaled pixels of the
+    /// container's right edge — it spans the content, not a narrow column.
+    pub(super) reaches_right: Vec<(String, f32)>,
 }
+
+/// The wide window the full-width checks run at: a maximised Settings window on a wide screen.
+pub(super) const WIDE: (f32, f32) = (1700.0, 1190.0);
 
 /// A view a sweep can draw: it lays a page builder out and exposes its scroll handle.
 pub(super) trait Probed: Render + 'static {
@@ -259,6 +270,48 @@ pub(super) fn check(
             ));
         }
     }
+    for group in &spec.one_line {
+        let line = visual.update(|_, cx| f32::from(design::line_px(cx, 14.0)));
+        let boxes = group
+            .iter()
+            .map(|sel| bounds(visual, sel).map(|b| (sel, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (sel, b) in &boxes {
+            let (first, fb) = &boxes[0];
+            let dy = (f32::from(b.origin.y) - f32::from(fb.origin.y)).abs();
+            if dy > 1.0 {
+                return Err(format!("{sel} is {dy} px off the line of {first}"));
+            }
+            if f32::from(b.size.height) > line + 1.0 {
+                return Err(format!(
+                    "{sel} takes more than one line ({} > {line}, {} wide)",
+                    f32::from(b.size.height),
+                    f32::from(b.size.width)
+                ));
+            }
+        }
+    }
+    for (sel, cap) in &spec.max_width {
+        let b = bounds(visual, sel)?;
+        let cap = visual.update(|_, cx| design::font_w(cx, *cap));
+        if f32::from(b.size.width) > cap + 0.5 {
+            return Err(format!(
+                "{sel} is wider than its cap ({} > {cap})",
+                f32::from(b.size.width)
+            ));
+        }
+    }
+    for (sel, slack) in &spec.reaches_right {
+        let b = bounds(visual, sel)?;
+        let slack = visual.update(|_, cx| design::ui_value(cx, *slack));
+        let short = f32::from(container.right()) - f32::from(b.right());
+        if short > slack {
+            return Err(format!(
+                "{sel} ends {short} px short of {} ({slack} allowed)",
+                spec.container
+            ));
+        }
+    }
     if let (Some(last), Some(scroll)) = (&spec.last, scroll) {
         let tail = bounds(visual, last)?;
         let reachable = scroll.bounds().bottom_right().y + scroll.max_offset().y;
@@ -362,11 +415,27 @@ pub(super) fn sweep<V: Probed>(
     make: impl Fn(&mut Window, &mut Context<V>, (f32, f32)) -> V,
     spec: impl Fn(Language) -> ProbeSpec,
 ) {
+    sweep_sizes(cx, &SIZES, make, spec);
+}
+
+/// [`sweep`] over the given window sizes only, every language.
+///
+/// Args:
+///     cx: Test context.
+///     sizes: The window sizes to draw at.
+///     make: Builds the probe view for a body box `(width, viewport height)`.
+///     spec: What to check, per language.
+pub(super) fn sweep_sizes<V: Probed>(
+    cx: &mut TestAppContext,
+    sizes: &[(f32, f32)],
+    make: impl Fn(&mut Window, &mut Context<V>, (f32, f32)) -> V,
+    spec: impl Fn(Language) -> ProbeSpec,
+) {
     cx.update(moon_ui::init);
     for language in Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         let spec = spec(language);
-        for size in SIZES {
+        for &size in sizes {
             if let Err(broken) = probe_once(cx, size, &make, &spec) {
                 panic!("{broken} ({} at {}x{})", language.code(), size.0, size.1);
             }

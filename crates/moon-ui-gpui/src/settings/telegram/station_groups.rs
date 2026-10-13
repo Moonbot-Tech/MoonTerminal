@@ -46,10 +46,13 @@ impl SettingsView {
         }
         let busy = backend.station.busy();
         Some(
+            // The button keeps its label's width rather than the card's.
             v_flex()
+                .w_full()
+                .items_start()
                 .gap(design::ui_px(cx, 6.0))
                 .child(
-                    div().child(
+                    div().w_full().child(
                         t!(
                             "telegram.server.groups_differ",
                             station = names(&seen.report_groups()),

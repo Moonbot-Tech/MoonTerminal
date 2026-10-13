@@ -488,15 +488,20 @@ pub(super) fn builtin(open: bool, on_toggle: Action, cx: &App) -> AnyElement {
                 .box_size(design::DISCLOSURE_BOX)
                 .on_toggle(move |_, window, cx| on_toggle(window, cx)),
         )
+        // Short labels kept whole: a content-sized text in this row is painted from its
+        // min-content measure, one word a line.
         .child(
             div()
+                .flex_none()
+                .whitespace_nowrap()
                 .text_color(rgba_from(p.text, 1.0))
                 .child(t!("hotkeys.builtin.title").to_string()),
         )
-        .child(muted(
-            t!("hotkeys.builtin.count", n = LINES.len()).to_string(),
-            cx,
-        ));
+        .child(
+            muted(t!("hotkeys.builtin.count", n = LINES.len()).to_string(), cx)
+                .flex_none()
+                .whitespace_nowrap(),
+        );
     let lines = open.then(|| {
         v_flex()
             .debug_selector(|| "hotkeys-builtin-body".into())

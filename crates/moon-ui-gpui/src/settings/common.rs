@@ -135,6 +135,61 @@ pub(super) fn floored_checkbox(
         .into_any_element()
 }
 
+/// Longest line of explanatory prose inside a full-width card, unscaled and font-scaled: about
+/// 90 characters at the body size, so a caption on a wide window still reads as a paragraph.
+pub(super) const PROSE_MAX_W: f32 = 500.0;
+
+/// Cap `el` at [`PROSE_MAX_W`]: prose keeps its readable line length however wide its card is.
+/// The cap goes on the text element, never on the card around it.
+///
+/// Args:
+///     el: The prose element.
+///     cx: Application context for the font scale.
+///
+/// Returns:
+///     The element with its maximum width set.
+pub(super) fn cap_prose<E: Styled>(el: E, cx: &App) -> E {
+    el.max_w(design::font_w_px(cx, PROSE_MAX_W))
+}
+
+/// A checkbox with its explanation as a capped muted caption under its label. MoonUI's own
+/// `description` takes no child to cap, so a long one ran across the whole card.
+///
+/// Args:
+///     id: The checkbox id; the caption's selector is `<id>-caption`.
+///     label: The checkbox label, for its word floor (see [`floored_checkbox`]).
+///     checkbox: The checkbox, its label already set to `label` and no description.
+///     caption: The explanation.
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The checkbox over its caption.
+pub(super) fn checkbox_with_caption(
+    id: &str,
+    label: &str,
+    checkbox: impl IntoElement,
+    caption: String,
+    cx: &App,
+) -> AnyElement {
+    let selector = format!("{id}-caption");
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .gap(design::ui_px(cx, 2.0))
+        .child(floored_checkbox(id, label, checkbox, cx))
+        .child(cap_prose(
+            div()
+                .debug_selector(move || selector.clone())
+                .pl(design::ui_px(cx, CHECKBOX_LEAD))
+                .font_family(design::ui_font())
+                .text_size(design::t_caption(cx))
+                .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
+                .child(caption),
+            cx,
+        ))
+        .into_any_element()
+}
+
 /// How many slider-heights of travel a settings track needs to read as a knob.
 ///
 /// Twelve 22 design-px heights is 264, sitting beside the General tab's widest labeled select
