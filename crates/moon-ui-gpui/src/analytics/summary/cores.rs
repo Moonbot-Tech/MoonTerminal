@@ -112,7 +112,7 @@ pub(in crate::analytics) fn row_models(
                     name: c.name.clone(),
                     trades: super::kpi::trades_text(c.trades),
                     winrate: fmt::pct(c.winrate(), 0).map_or_else(|| "—".to_string(), |v| v.0),
-                    pf: fmt::compact(pf, 2),
+                    pf: super::kpi::ratio_text(pf),
                     // Judged on the printed value: "1.00" must not be flagged.
                     pf_low: fmt::round_to(pf, 2).is_some_and(|v| v < 1.0),
                     bar: scale.bar(c.total),
@@ -161,9 +161,8 @@ struct Cols {
 
 impl Cols {
     /// Measure every column against its header and every row's text, each in the font its
-    /// cell sets: names and headers in the UI face, figures in mono.
+    /// cell sets: headers in the UI face, names and figures in mono.
     fn of(lines: &[RowModel], unit: &str, cx: &App) -> Self {
-        let body = |s: &str| design::ui_body_text_width(cx, s, 400.0);
         let mono = |s: &str, w: f32| design::mono_body_text_width(cx, s, w);
         let head = |s: &str| design::ui_caption_text_width(cx, s, 400.0);
         let cores = lines.iter().filter_map(|l| match l {
@@ -186,7 +185,7 @@ impl Cols {
         };
         let square = f32::from(design::ui_px(cx, 10.0)) + f32::from(design::ui_px(cx, 6.0));
         for r in cores {
-            c.name = c.name.max(square + body(&r.name));
+            c.name = c.name.max(square + mono(&r.name, 400.0));
             c.trades = c.trades.max(mono(&r.trades, 400.0));
             c.winrate = c.winrate.max(mono(&r.winrate, 400.0));
             c.pf = c.pf.max(mono(&r.pf, 400.0));
@@ -339,7 +338,7 @@ fn core_row_el(
             // At least the measured column, and never narrower than its own name.
             .min_w(px(cols.name))
             .flex_none()
-            .font_family(design::ui_font())
+            .font_family(design::mono())
             .gap(design::ui_px(cx, 6.0))
             .items_center()
             .child(square)

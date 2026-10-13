@@ -481,3 +481,30 @@ fn prose_tooltips_use_the_ui_family_and_values_stay_mono() {
         );
     }
 }
+
+/// A core name in the Summary per-core table is a value, so its cell and its width measurement
+/// are both mono.
+///
+/// Breakage: switching the name cell back to `design::ui_font()` draws core names in the UI face
+/// beside mono figures; measuring it with the UI width helper clips or pads the name column.
+#[test]
+fn summary_core_names_keep_the_mono_family() {
+    let cores = read_src("analytics/summary/cores.rs");
+    let row = code_only(braced_body(&cores, "fn core_row_el("));
+    let name_cell = chain_between(
+        &row,
+        "\"sum-cores-name-{k}\"",
+        "sum-cores-trades-",
+        "core name cell",
+    );
+    assert!(
+        name_cell.contains(".font_family(design::mono())")
+            && !name_cell.contains("design::ui_font()"),
+        "the Summary core-name cell must draw names in the mono family"
+    );
+    let measure = code_only(braced_body(&cores, "fn of("));
+    assert!(
+        measure.contains("c.name.max(square + mono(&r.name"),
+        "the Summary core-name column must be measured in the mono family it draws in"
+    );
+}

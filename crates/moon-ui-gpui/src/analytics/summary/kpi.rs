@@ -96,9 +96,16 @@ pub(in crate::analytics) fn hero_value(profit: f64, unit: &str) -> String {
     }
 }
 
+/// A ratio (profit factor, recovery factor) at a fixed two decimals, so it reads in step with
+/// the two-decimal figures beside it ("2.90", never "2.9"); an em dash when it has no finite
+/// value.
+pub(in crate::analytics) fn ratio_text(v: f64) -> String {
+    fmt::round_to(v, 2).map_or_else(|| "—".to_string(), |r| format!("{r:.2}"))
+}
+
 /// The recovery-factor figure, or an em dash when drawdown is zero.
 pub(in crate::analytics) fn recovery_text(recovery: Option<f64>) -> String {
-    recovery.map_or_else(|| "—".to_string(), |r| fmt::compact(r, 2))
+    recovery.map_or_else(|| "—".to_string(), ratio_text)
 }
 
 /// The trade count with grouped thousands.
@@ -139,7 +146,7 @@ pub(in crate::analytics) fn metrics(m: &KpiBand, p: MoonPalette) -> [Metric; 6] 
         Metric {
             name: "pf",
             label: t!("analytics.kpi.pf").to_string(),
-            value: fmt::compact(m.quality.pf, 2),
+            value: ratio_text(m.quality.pf),
             color: p.text,
         },
         Metric {
