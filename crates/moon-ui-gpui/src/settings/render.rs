@@ -98,13 +98,12 @@ impl Render for SettingsView {
         // scrollbar wrapper forces its child to flex_1, so expanded descendants can overflow
         // that child's bounds without increasing the scroll extent.
         //
-        // Two tabs are the exception and get a BOUNDED, non-scrolling parent of their own.
-        // Connections owns a virtualized core list: nesting it inside this scrollbar would give it
-        // an effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
-        // its parent hands it. Trade sounds pins its folder block under the exchange table and
-        // scrolls the table alone. Both tabs take `flex_1 + min_h_0` down to their list, matching
-        // every other `MoonVirtualList` call site in this app. Every other tab is unaffected.
-        let bounded = matches!(self.active, Tab::Cores | Tab::Sounds);
+        // Connections is the exception and gets a BOUNDED, non-scrolling parent of its own: it
+        // owns a virtualized core list, and nesting it inside this scrollbar would give it an
+        // effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
+        // its parent hands it. It takes `flex_1 + min_h_0` down to its list, matching every other
+        // `MoonVirtualList` call site in this app. Every other tab scrolls here.
+        let bounded = matches!(self.active, Tab::Cores);
         let body_inner = if bounded {
             div()
                 .id("settings-body")

@@ -10,36 +10,46 @@ use gpui::{
 use moon_core::feed::ExchangeId;
 
 use super::super::layout_probe::{ProbeSpec, Probed, TextFace, sweep};
+use super::super::render::{BODY_PAD, scrollable_tab_content};
 use super::super::sound_folder::{FolderView, folder_el};
 use super::{
     SoundRow, SoundsTab, listed_exchanges, sound_picker_el, sounds_tab_el, sounds_wide, volume_row,
 };
 use crate::media::sound::ScanStats;
 
-/// A probe host laying the page out BOUNDED, as `render.rs` places the Sounds page: the body
-/// gets the window's height and nothing scrolls but the exchange table.
+/// A probe host laying the page out as `render.rs` places the Sounds page: inside the Settings
+/// body's own vertical scroller ([`scrollable_tab_content`]), the content measured at its
+/// natural height. `probe-body` is that content column, so it grows with a long exchange list.
 struct Host {
     width: f32,
     height: f32,
+    scroll: ScrollHandle,
     build: Rc<dyn Fn(&mut Window, &mut App, f32) -> AnyElement>,
 }
 
 impl Render for Host {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = (self.build)(window, cx, self.width);
+        let pad = 2.0 * crate::design::ui_value(cx, BODY_PAD);
         div()
-            .w(px(self.width))
+            .w(px(self.width + pad))
             .h(px(self.height))
-            .debug_selector(|| "probe-body".into())
             .flex()
             .flex_col()
-            .child(content)
+            .child(scrollable_tab_content(
+                moon_ui::v_flex()
+                    .w_full()
+                    .debug_selector(|| "probe-body".into())
+                    .child(content),
+                &self.scroll,
+                cx,
+            ))
     }
 }
 
 impl Probed for Host {
     fn scroll(&self) -> Option<ScrollHandle> {
-        None
+        Some(self.scroll.clone())
     }
 }
 
@@ -97,10 +107,21 @@ const VENUES: [&str; 3] = [
     "Bybit Spot",
 ];
 
-/// The production page: [`sounds_tab_el`] with the real volume row, real pickers (an empty
-/// catalog: every trigger reads "off") and the real folder block with numbered sounds and its help
-/// open — the tallest folder this test can build.
-fn page(volume: &gpui::Entity<moon_ui::MoonSliderState>, width: f32, cx: &App) -> AnyElement {
+/// Exchanges in the user's report: seven rows, as the shipped page listed them.
+const SEVEN: usize = 7;
+/// A "show every exchange" list: far more rows than any window shows at once.
+const SHOW_ALL: usize = 40;
+
+/// The production page: [`sounds_tab_el`] with the real volume row, `count` rows of real pickers
+/// (an empty catalog: every trigger reads "off"; labels cycle through [`VENUES`]) and the real
+/// folder block with numbered sounds and its help open — the tallest folder this test can build.
+fn page(
+    volume: &gpui::Entity<moon_ui::MoonSliderState>,
+    width: f32,
+    count: usize,
+    show_all: bool,
+    cx: &App,
+) -> AnyElement {
     let body_width = width + crate::design::ui_value(cx, 36.0);
     let wide = sounds_wide(body_width, cx);
     let picker = |i: usize, open: bool| {
@@ -116,11 +137,9 @@ fn page(volume: &gpui::Entity<moon_ui::MoonSliderState>, width: f32, cx: &App) -
             cx,
         )
     };
-    let rows = VENUES
-        .iter()
-        .enumerate()
-        .map(|(i, label)| SoundRow {
-            label: (*label).to_string(),
+    let rows = (0..count)
+        .map(|i| SoundRow {
+            label: format!("{} {i}", VENUES[i % VENUES.len()]),
             open: picker(i, true),
             close: picker(i, false),
         })
@@ -152,7 +171,8 @@ fn page(volume: &gpui::Entity<moon_ui::MoonSliderState>, width: f32, cx: &App) -
         SoundsTab {
             rows,
             wide,
-            show_all: false,
+            content_w: width,
+            show_all,
             quiet: true,
             volume: volume_row(volume, cx),
             folder,
@@ -162,103 +182,125 @@ fn page(volume: &gpui::Entity<moon_ui::MoonSliderState>, width: f32, cx: &App) -
     )
 }
 
-/// The production Sounds page — volume, the exchange table with real pickers, the folder block
-/// with its buttons and open help — keeps every region and the rows' last controls inside the
-/// bounded body and apart, with the help uncut, in every language at every swept size. Widen
-/// a picker or lengthen a translated control past the body and a row's last cell leaves it.
-#[gpui::test]
-fn trade_sounds_page_fits_the_body(cx: &mut gpui::TestAppContext) {
-    sweep(
-        cx,
-        |_, cx: &mut Context<Host>, (width, height)| {
-            let volume = cx.new(|_| {
-                moon_ui::MoonSliderState::new()
-                    .max(100.0)
-                    .min(0.0)
-                    .step(1.0)
-                    .default_value(80.0)
-            });
-            Host {
-                width,
-                height,
-                build: Rc::new(move |_, cx, width| page(&volume, width, cx)),
-            }
-        },
-        |_| ProbeSpec {
-            container: "probe-body",
-            wraps: vec![(
-                "trade-sounds-own-folder-more-text".into(),
-                rust_i18n::t!("trade_sounds.own.more").to_string(),
-            )],
-            inside: [
-                "trade-sounds-volume",
-                "trade-sounds-ex",
-                "trade-sounds-show-all",
-                "trade-sounds-help",
-                "probe-sound-0-true-field",
-                "probe-preview-0-false-cell",
-                "trade-sounds-own",
-                "trade-sounds-own-controls",
-                "trade-sounds-own-path",
-                "trade-sounds-own-folder-more-text",
-            ]
-            .map(String::from)
-            .to_vec(),
-            no_overlap: vec![vec![
-                "trade-sounds-volume".into(),
-                "trade-sounds-ex".into(),
-                "trade-sounds-own".into(),
-            ]],
-            ..ProbeSpec::default()
-        },
-    );
+/// Build the probe host drawing [`page`] with `count` exchanges.
+fn host(
+    count: usize,
+    show_all: bool,
+) -> impl Fn(&mut Window, &mut Context<Host>, (f32, f32)) -> Host {
+    move |_, cx: &mut Context<Host>, (width, height)| {
+        let volume = cx.new(|_| {
+            moon_ui::MoonSliderState::new()
+                .max(100.0)
+                .min(0.0)
+                .step(1.0)
+                .default_value(100.0)
+        });
+        Host {
+            width,
+            height,
+            scroll: ScrollHandle::new(),
+            build: Rc::new(move |_, cx, width| page(&volume, width, count, show_all, cx)),
+        }
+    }
 }
 
-/// The Sounds page reads like every other Settings page: the volume label sits on one line in
-/// the shared label column, clear of its slider and of the exchanges heading below; the exchange
-/// table and the custom-sounds card are one width, and the card follows the table directly
-/// instead of being pinned to the window bottom. Every language, every swept size.
-///
-/// Breaks on: the label going back into a `min_w_0` column beside a fixed control (it squeezes
-/// to one glyph per line and paints over the slider caption and the heading), the folder losing
-/// the table's width cap, or the exchanges block growing (`flex_1`) and opening a hole above the
-/// card.
+/// The production Sounds page — volume, the exchange table with real pickers, the folder block
+/// with its buttons and open help — keeps every region and the rows' last controls inside the
+/// body and apart, with the help uncut and the folder card reachable by the body's scroll, in
+/// every language at every swept size. Widen a picker or lengthen a translated control past the
+/// body and a row's last cell leaves it.
 #[gpui::test]
-fn sounds_volume_row_and_cards_line_up(cx: &mut gpui::TestAppContext) {
-    sweep(
-        cx,
-        |_, cx: &mut Context<Host>, (width, height)| {
-            let volume = cx.new(|_| {
-                moon_ui::MoonSliderState::new()
-                    .max(100.0)
-                    .min(0.0)
-                    .step(1.0)
-                    .default_value(100.0)
-            });
-            Host {
-                width,
-                height,
-                build: Rc::new(move |_, cx, width| page(&volume, width, cx)),
-            }
-        },
-        |_| ProbeSpec {
-            container: "probe-body",
-            fits: vec![(
-                "trade-sounds-volume-row-label".into(),
-                rust_i18n::t!("trade_sounds.volume").to_string(),
-                TextFace::Ui,
-            )],
-            inside: vec!["trade-sounds-volume-row-control".into()],
-            no_overlap: vec![vec![
+fn trade_sounds_page_fits_the_body(cx: &mut gpui::TestAppContext) {
+    sweep(cx, host(VENUES.len(), false), |_| ProbeSpec {
+        container: "probe-body",
+        wraps: vec![(
+            "trade-sounds-own-folder-more-text".into(),
+            rust_i18n::t!("trade_sounds.own.more").to_string(),
+        )],
+        inside: [
+            "trade-sounds-volume",
+            "trade-sounds-ex",
+            "trade-sounds-show-all",
+            "trade-sounds-help",
+            "probe-sound-0-true-field",
+            "probe-preview-0-false-cell",
+            "trade-sounds-own",
+            "trade-sounds-own-controls",
+            "trade-sounds-own-path",
+            "trade-sounds-own-folder-more-text",
+        ]
+        .map(String::from)
+        .to_vec(),
+        no_overlap: vec![vec![
+            "trade-sounds-volume".into(),
+            "trade-sounds-ex".into(),
+            "trade-sounds-own".into(),
+        ]],
+        last: Some("trade-sounds-own".into()),
+        ..ProbeSpec::default()
+    });
+}
+
+/// What every sounds-table layout must hold for `count` rows: the volume label on one line in
+/// the shared label column, clear of its slider and of the exchanges heading; the table's LAST
+/// row ending exactly one column gap (12) above the custom-sounds card; the table and the card
+/// one width; the card reachable by the body's scroll.
+fn table_then_card(count: usize) -> ProbeSpec {
+    let last_row = format!("trade-sounds-row-{}", count - 1);
+    ProbeSpec {
+        container: "probe-body",
+        fits: vec![(
+            "trade-sounds-volume-row-label".into(),
+            rust_i18n::t!("trade_sounds.volume").to_string(),
+            TextFace::Ui,
+        )],
+        inside: vec![
+            "trade-sounds-volume-row-control".into(),
+            last_row.clone(),
+            "trade-sounds-own".into(),
+        ],
+        no_overlap: vec![
+            vec![
                 "trade-sounds-volume-row-label".into(),
                 "trade-sounds-volume-row-control".into(),
                 "trade-sounds-ex-heading".into(),
-            ]],
-            same_width: vec![vec!["trade-sounds-table".into(), "trade-sounds-own".into()]],
-            // The page column's own gap (12) is all that may separate the rows' end from the card;
-            // on a page too short for both the table shrinks and the card rises over its rows.
-            stacked: vec![("trade-sounds-rows".into(), "trade-sounds-own".into(), 12.0)],
-            ..ProbeSpec::default()
-        },
-    );
+            ],
+            vec![last_row.clone(), "trade-sounds-own".into()],
+        ],
+        same_width: vec![vec!["trade-sounds-rows".into(), "trade-sounds-own".into()]],
+        // The last row's bottom plus the table's 1 px border is the table's bottom; the column
+        // gap (12) is all that separates it from the card — less is the card riding over rows.
+        stacked: vec![
+            ("trade-sounds-rows".into(), "trade-sounds-own".into(), 12.0),
+            (last_row, "trade-sounds-own".into(), 13.0),
+        ],
+        last: Some("trade-sounds-own".into()),
+        ..ProbeSpec::default()
+    }
+}
+
+/// The Sounds page reads like every other Settings page, and the custom-sounds card follows the
+/// exchange table in flow — with the seven exchanges of the user's report, laid out inside the
+/// Settings body's own scroller exactly as the exe places it. Every language, every swept size.
+///
+/// Breaks on: the table getting a scroller of its own again (MoonUI's `overflow_y_scrollbar`
+/// sizes it `size_full` + `flex_1`, so its column never learns the rows' height and the card is
+/// laid one gap under the table's TOP, over its rows), the card losing the table's width, the
+/// label going back into a `min_w_0` column beside a fixed control, or a hole opening between
+/// the table and the card.
+#[gpui::test]
+fn sounds_volume_row_and_cards_line_up(cx: &mut gpui::TestAppContext) {
+    sweep(cx, host(SEVEN, false), |_| table_then_card(SEVEN));
+}
+
+/// With "show every exchange" on, the long table still pushes the card down rather than
+/// running under it: the card starts one gap under the last of the forty rows. Breaks on a
+/// capped or self-scrolling table whose height its column misreads.
+///
+/// The body's scroll reaches the card's bottom too: a `max_w`-capped column measured the
+/// card's wrapping text at the uncapped width, and in Russian the card painted 26 px past its
+/// slot and out of the scroll extent.
+#[gpui::test]
+fn show_all_keeps_the_card_under_the_table(cx: &mut gpui::TestAppContext) {
+    sweep(cx, host(SHOW_ALL, true), |_| table_then_card(SHOW_ALL));
 }

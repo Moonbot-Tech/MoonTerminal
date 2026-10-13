@@ -6,7 +6,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonCheckbox, MoonDropdown, MoonPalette,
-    MoonScrollableElement, MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
+    MoonSliderEvent, MoonSliderState, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -32,6 +32,8 @@ pub(super) struct SoundsTab {
     pub(super) rows: Vec<SoundRow>,
     /// Columns side by side (`true`) or labelled cards; see [`sounds_wide`].
     pub(super) wide: bool,
+    /// The body's content width (the window's body less its padding), logical pixels.
+    pub(super) content_w: f32,
     /// "Show every exchange" is on.
     pub(super) show_all: bool,
     /// Sleep mode silences sounds: the volume block says so.
@@ -90,9 +92,10 @@ pub(super) fn volume_row(st: &Entity<MoonSliderState>, cx: &App) -> AnyElement {
 /// The sounds tab: volume on top, then the exchange table, and the folder block right under it,
 /// the table and the block one content width.
 ///
-/// The tab is BOUNDED, not scrolled whole (see `render.rs`): the table takes its rows' height
-/// and, when the window is too short for all of them, shrinks and scrolls on its own, so the
-/// folder's buttons never leave the window before the table does.
+/// The tab scrolls whole in the Settings body like every page but Connections: the table takes
+/// its rows' full height in normal flow (no scroller of its own, which would hide that height
+/// from the column and let the card ride over the rows), and a long "show all" list makes the
+/// page longer instead.
 ///
 /// Args:
 ///     tab: What to draw.
@@ -106,6 +109,7 @@ pub(super) fn sounds_tab_el(
     let SoundsTab {
         rows: venues,
         wide,
+        content_w,
         show_all,
         quiet,
         volume,
@@ -232,30 +236,10 @@ pub(super) fn sounds_tab_el(
                 .child(row),
         );
     }
-    // The outer `flex_1 + min_h(0)` takes what the exchanges block holds: its rows' height, since
-    // a 0% basis in a column of indefinite height counts as the content, or less once the block
-    // shrinks on a short page; the inner `size_full` owns the scrollbar. Without both layers Scrollable breaks height layout (`import_preview.rs`
-    // carries the same pair). Volume and the folder stay outside this scroller: the page is
-    // bounded (`render.rs` treats Sounds like Cores), so a whole-page scroll is not available.
-    let table = div()
-        .debug_selector(|| "trade-sounds-table".into())
-        .flex_1()
-        .min_h(px(0.0))
-        .w_full()
-        .child(
-            div()
-                .id("trade-sounds-table")
-                .size_full()
-                .child(v_flex().w_full().max_w(px(table_width)).child(rows))
-                .overflow_y_scrollbar(),
-        );
     let exchanges = v_flex()
         .id("trade-sounds-ex")
         .debug_selector(|| "trade-sounds-ex".into())
-        .flex_shrink(1.0)
-        .min_h(px(0.0))
         .w_full()
-        .max_w(px(table_width))
         .gap(design::ui_px(cx, 8.0))
         .child(heading)
         .child(
@@ -275,22 +259,23 @@ pub(super) fn sounds_tab_el(
                     .child(t!("trade_sounds.ex.empty").to_string()),
             )
         })
-        .when(!empty, |ex| ex.child(table));
-    // `flex_1 + min_h(0)` inside the host's flex column, the one idiom every bounded tab and
-    // `MoonVirtualList` site here uses to be handed a bounded height rather than an
-    // unbounded one.
+        .when(!empty, |ex| ex.child(rows));
+    // Everything sits in normal flow, so the table is exactly as tall as its rows and the folder
+    // card starts one gap under its last row. The table and the card share one column of the
+    // table's width, or the body's when that is narrower. The width is set, not left to a
+    // `max_w` cap: a capped column measures the card's wrapping text at the uncapped width, so
+    // the card paints taller than its slot and its bottom leaves the body's scroll extent.
+    let column_w = table_width.min(content_w).max(0.0);
     v_flex()
-        .flex_1()
-        .min_h(px(0.0))
         .w_full()
         .gap(design::ui_px(cx, 12.0))
         .child(head)
-        .child(exchanges)
         .child(
-            div()
-                .flex_none()
-                .w_full()
-                .max_w(px(table_width))
+            v_flex()
+                .debug_selector(|| "trade-sounds-column".into())
+                .w(px(column_w))
+                .gap(design::ui_px(cx, 12.0))
+                .child(exchanges)
                 .child(folder),
         )
         .into_any_element()
@@ -421,6 +406,7 @@ impl SettingsView {
         let tab = SoundsTab {
             rows,
             wide,
+            content_w: (window_width - design::ui_value(cx, 36.0)).max(0.0),
             show_all,
             quiet,
             volume: volume_row(&self.trade_volume, cx),

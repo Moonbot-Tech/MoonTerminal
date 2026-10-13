@@ -75,8 +75,8 @@ pub(super) struct ProbeSpec {
     pub(super) last: Option<String>,
     /// Groups of elements that must be equally wide (0.5 px tolerance).
     pub(super) same_width: Vec<Vec<String>>,
-    /// `(upper, lower, max_gap)`: `lower` starts at most `max_gap` unscaled pixels below
-    /// `upper`'s bottom — no hole between them. Overlap is `no_overlap`'s to catch.
+    /// `(upper, lower, gap)`: `lower` starts exactly `gap` unscaled pixels below `upper`'s bottom
+    /// (1 px tolerance) — neither a hole between them nor `lower` riding over `upper`.
     pub(super) stacked: Vec<(String, String, f32)>,
 }
 
@@ -230,14 +230,14 @@ pub(super) fn check(
             }
         }
     }
-    for (upper, lower, max_gap) in &spec.stacked {
+    for (upper, lower, gap_px) in &spec.stacked {
         let ub = bounds(visual, upper)?;
         let lb = bounds(visual, lower)?;
         let gap = f32::from(lb.origin.y) - f32::from(ub.bottom_left().y);
-        let max = visual.update(|_, cx| design::ui_value(cx, *max_gap));
-        if gap > max + f32::from(tol) {
+        let want = visual.update(|_, cx| design::ui_value(cx, *gap_px));
+        if (gap - want).abs() > 1.0 {
             return Err(format!(
-                "{lower} sits {gap} px under {upper} (at most {max} expected)"
+                "{lower} sits {gap} px under {upper} ({want} expected)"
             ));
         }
     }
@@ -245,7 +245,10 @@ pub(super) fn check(
         let tail = bounds(visual, last)?;
         let reachable = scroll.bounds().bottom_right().y + scroll.max_offset().y;
         if reachable + tol < tail.bottom_right().y {
-            return Err(format!("{last} lies outside the scroll extent"));
+            return Err(format!(
+                "{last} lies outside the scroll extent ({} > {reachable})",
+                f32::from(tail.bottom_right().y)
+            ));
         }
     }
     Ok(())

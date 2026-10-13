@@ -283,7 +283,7 @@ fn settings_values_and_connections_repin_the_mono_family() {
     );
     let settings = read_src("settings/render.rs");
     let render = render_root(&settings, "impl Render for SettingsView");
-    // The bounded branch hosts Cores and Trade sounds. Neither pins a face on the whole page:
+    // The bounded branch hosts Cores. It pins no face on the whole page:
     // labels and captions are prose in the UI face, and every value sets mono itself.
     let bounded = chain_between(&render, "if bounded {", "} else {", "Settings bounded body");
     assert!(
