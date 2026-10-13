@@ -232,7 +232,8 @@ pub(super) fn watch_query<T: 'static>(query: &Entity<MoonInputState>, cx: &mut C
 
 /// Measured columns of the core table and whether a row fits on one line.
 ///
-/// Ядро, Адрес and Группа take their content's width (the name capped at [`NAME_MAX_W`]);
+/// Ядро, Адрес and Группа take their content's width (the name capped at [`NAME_MAX_W`], and
+/// yielding down to [`NAME_MIN_W`] to what the other columns leave);
 /// Состояние takes the rest and holds the state word and the row's action.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TableLayout {
@@ -278,12 +279,10 @@ pub(super) fn table_layout(rows: &[Row], groups: &[String], width: f32, cx: &App
         .into_iter()
         .map(|state| text_width(state_label(state).0))
         .fold(header("telegram.server.cores_col_state"), f32::max);
-    let name = rows
+    let widest = rows
         .iter()
         .map(|row| mono(&row.name))
-        .fold(header("telegram.server.cores_col_core"), f32::max)
-        .min(design::ui_value(cx, NAME_MAX_W))
-        .ceil();
+        .fold(header("telegram.server.cores_col_core"), f32::max);
     let address = rows
         .iter()
         .map(|row| mono(row.address.as_deref().unwrap_or("\u{2014}")))
@@ -295,11 +294,15 @@ pub(super) fn table_layout(rows: &[Row], groups: &[String], width: f32, cx: &App
         .fold(header("telegram.server.cores_col_group"), f32::max)
         .min(design::ui_value(cx, GROUP_MAX_W))
         .ceil();
-    let wide = table_fits(
-        width - design::ui_value(cx, 2.0 * TABLE_PAD_X + 2.0),
-        &[name, address, group, state, action],
-        design::ui_value(cx, 4.0 * COL_GAP),
-    );
+    let inner = width - design::ui_value(cx, 2.0 * TABLE_PAD_X + 2.0);
+    let gaps = design::ui_value(cx, 4.0 * COL_GAP);
+    // The name takes what the other columns leave, up to its cap and down to its floor.
+    let spare = inner - gaps - address - group - state - action;
+    let name = widest
+        .min(design::ui_value(cx, NAME_MAX_W))
+        .min(spare.max(design::ui_value(cx, NAME_MIN_W)))
+        .floor();
+    let wide = table_fits(inner, &[name, address, group, state, action], gaps);
     TableLayout {
         wide,
         name,
@@ -315,7 +318,9 @@ const TABLE_PAD_X: f32 = 12.0;
 /// Gap between table columns, unscaled.
 const COL_GAP: f32 = 12.0;
 /// Widest the name column grows before a long name truncates, unscaled.
-const NAME_MAX_W: f32 = 260.0;
+const NAME_MAX_W: f32 = 480.0;
+/// Narrowest the name column yields to on a page too narrow for its cap, unscaled.
+const NAME_MIN_W: f32 = 260.0;
 /// Widest the group column grows before its names truncate, unscaled.
 const GROUP_MAX_W: f32 = 180.0;
 /// Shortest the table gets in a low window before the page clips, unscaled: a header and a few

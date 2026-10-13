@@ -695,3 +695,27 @@ fn the_station_cores_card_is_never_blank(cx: &mut gpui::TestAppContext) {
         );
     }
 }
+
+/// At a 1900 px window the Ядро column shows a 40-character name whole, in every language.
+#[gpui::test]
+fn a_long_core_name_fits_its_column_on_a_wide_page(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let name = "CORE_A synthetic subaccount number 31 xx";
+    assert_eq!(name.chars().count(), 40);
+    let mut cores = rows();
+    cores[4].name = name.to_string();
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let (mut visual, _) = open_page(cx, cores.clone(), CoresFilter::All, (1900.0, 900.0, 1.0));
+        let cell = visual
+            .debug_bounds("station-core-name-4")
+            .expect("name cell laid out");
+        let need = visual.update(|_, cx| design::mono_body_text_width(cx, name, 400.0));
+        assert!(
+            f32::from(cell.size.width) + 0.5 >= need,
+            "a 40-character name truncated: {} < {need} ({})",
+            f32::from(cell.size.width),
+            language.code()
+        );
+    }
+}
