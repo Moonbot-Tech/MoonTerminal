@@ -34,8 +34,9 @@ const UNIFORM_KEYS: [&str; 5] = ["tz_off", "cpus", "api_key", "api_quota", "vers
 /// Columns whose known values are identical across the visible cores.
 ///
 /// A value is known when the core is not failed or dropped (`LoadLevel::Critical`) and the
-/// field itself has been reported: a measured clock offset, a logical-CPU count, an API-key
-/// state other than [`ApiKeyState::Unknown`], a quota, or a build number. Fewer than two known
+/// field itself has been reported: a measured clock offset, a logical-CPU count, a quota, or a
+/// build number. The API key is compared on the text its cells display, so it counts every
+/// state other than [`ApiKeyState::Unknown`] (the dash), on a dropped core too. Fewer than two known
 /// values is not agreement — the column stays in the table. Comparison uses the underlying
 /// value. The build letter is the trimmed tag [`build_key`] shares with the version bar, so a
 /// blank suffix and a missing suffix are the same build. `version` is never uniform while any
@@ -161,10 +162,12 @@ fn known_cpus(row: &CoreStatusRow) -> Option<u8> {
     }
 }
 
+/// The API-key state a row's cell displays, or `None` for the dash.
+///
+/// Unlike the telemetry columns, an offline core keeps its key text: expiry is not a live
+/// sample, so `table.rs::api_key_cell` still prints it. A dated key on a dropped core is
+/// therefore on screen and must keep the column.
 fn known_api(row: &CoreStatusRow) -> Option<ApiKeyState> {
-    if !reports(row) {
-        return None;
-    }
     match row.api_key {
         ApiKeyState::Unknown => None,
         state => Some(state),

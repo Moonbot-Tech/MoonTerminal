@@ -4,13 +4,16 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
-    Context, InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, div, px,
+    AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render, Styled,
+    Window, div, px,
 };
 use moon_core::feed::{ConnStatus, CoreTimeOffsetStatus};
 use moon_core::session::core_order::ExchangeSection;
 use moon_core::session::{CoreStartupStatus, CoreSysStatus};
 use moon_core::venue::CoreVenue;
-use moon_ui::{MoonDataTable, MoonDataTableWidthPolicy, MoonPalette, MoonRect, v_flex};
+use moon_ui::{
+    MoonDataTable, MoonDataTableState, MoonDataTableWidthPolicy, MoonPalette, MoonRect, v_flex,
+};
 
 use super::super::columns_fit;
 use super::super::layout_fixture::{self, LOCALES, WIDTHS};
@@ -58,6 +61,43 @@ fn visible_column_keys_drops_uniform_keys_and_keeps_them_when_none_are_uniform()
         kept.len() - 2,
         "only the named uniform keys leave"
     );
+}
+
+/// The API-key column leaves the table when every core in scope shows the same key text, and
+/// stays when one core has a different dated key, in every locale.
+#[test]
+fn api_key_column_follows_the_displayed_key_text() {
+    let fleet = |days: [i32; 3]| -> Vec<CoreStatusRow> {
+        days.iter()
+            .enumerate()
+            .map(|(index, days)| {
+                let mut row = sample_row(ConnStatus::Ready);
+                row.id = index as u64 + 1;
+                row.api_key = ApiKeyState::Days(*days);
+                row
+            })
+            .collect()
+    };
+    let hidden = HashSet::new();
+    for code in LOCALES {
+        let _locale = crate::test_locale::force(code);
+        for (days, shown) in [([30, 30, 30], false), ([30, 30, 9], true)] {
+            let rows = fleet(days);
+            let facts = super::super::uniform::uniform_columns(&rows);
+            let uniform: Vec<&str> = facts.iter().map(|fact| fact.key).collect();
+            let keys = visible_column_keys(&rows, &hidden, &uniform);
+            assert_eq!(
+                keys.contains(&"api_key"),
+                shown,
+                "{code}: api_key column for {days:?}"
+            );
+            assert_eq!(
+                uniform.contains(&"api_key"),
+                !shown,
+                "{code}: same-for-all line for {days:?}"
+            );
+        }
+    }
 }
 
 /// Offline and failed cores show an em dash for every numeric column. A ready core shows the
@@ -110,7 +150,7 @@ fn cell_text_for_keeps_numbers_while_the_core_is_connecting() {
     );
 }
 
-/// A narrow measured width removes the drop tiers in order. Ping, status and the name stay.
+/// A narrow measured width removes the drop tiers in order. Ping and the name stay.
 /// Width 0 has not been measured and removes nothing.
 ///
 /// Breaks when the render helper drops the name, or strips columns before the canvas has a width.
@@ -140,7 +180,7 @@ fn projected_column_keys_follow_drop_tiers_at_a_narrow_width() {
         .filter(|key| !matches!(*key, "cpu_sys" | "startup" | "free_phys" | "ping_exch"))
         .collect();
     assert_eq!(narrow, expected);
-    for kept in ["ping", "status", "core"] {
+    for kept in ["ping", "core"] {
         assert!(narrow.contains(&kept), "{kept} never drops");
     }
 }
@@ -265,7 +305,6 @@ impl Render for MeasureProbe {
 fn expected_keys(width: f32) -> &'static [&'static str] {
     if width >= 1_640.0 {
         &[
-            "status",
             "core",
             "server",
             "version",
@@ -283,7 +322,6 @@ fn expected_keys(width: f32) -> &'static [&'static str] {
         ]
     } else {
         &[
-            "status",
             "core",
             "version",
             "ping",
@@ -549,6 +587,8 @@ struct DockProbe {
     rows: Rc<Vec<CoreStatusRow>>,
     lines: Rc<Vec<FlatLine>>,
     keys: Vec<&'static str>,
+    /// Table state carrying the persisted drags the probe restores.
+    state: Entity<MoonDataTableState>,
 }
 
 impl Render for DockProbe {
@@ -557,7 +597,7 @@ impl Render for DockProbe {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let lines = self.lines.clone();
-        let keys = self.keys.clone();
+        let (keys, columns) = super::filled_columns(&self.keys, &self.state.read(cx).column_widths);
         let count = keys.len();
         let names: HashMap<ServerKey, String> = HashMap::new();
         let table = MoonDataTable::new(
@@ -572,7 +612,8 @@ impl Render for DockProbe {
                 }
             },
         )
-        .columns(super::columns(&self.keys))
+        .columns(columns)
+        .state(&self.state)
         .style(design::table_style(p));
         v_flex()
             .size_full()
@@ -602,6 +643,22 @@ impl Render for DockProbe {
     }
 }
 
+/// Table state as an older build left it: a drag on the status column that no longer exists.
+fn legacy_state() -> MoonDataTableState {
+    let mut state = MoonDataTableState::new();
+    state.set_column_width("status", 130.0);
+    state
+}
+
+/// Table state where the user has dragged every visible column narrow, below even 720 px.
+fn dragged_state(keys: &[&str]) -> MoonDataTableState {
+    let mut state = legacy_state();
+    for key in keys {
+        state.set_column_width(*key, 50.0);
+    }
+    state
+}
+
 /// The Flat view must lay its rows out with real height inside the dock's content slot.
 ///
 /// The measuring host wrapped `data_table_host` in a block box, so the host's `flex_1` had no
@@ -620,17 +677,33 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
     assert_eq!(sections, 2, "fixture must span two exchanges");
     let rows = Rc::new(rows);
     let lines = Rc::new(lines);
+    let keys = visible_column_keys(&rows, &HashSet::new(), &[]);
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
-        for width in WIDTHS {
-            let keys = visible_column_keys(&rows, &HashSet::new(), &[]);
+        for (width, all_dragged) in WIDTHS
+            .into_iter()
+            .flat_map(|width| [(width, false), (width, true)])
+        {
             let mut visual = layout_fixture::open(cx, width, 420.0, {
                 let rows = rows.clone();
                 let lines = lines.clone();
-                move |_, _| DockProbe { rows, lines, keys }
+                let keys = keys.clone();
+                move |_, cx| {
+                    let state = if all_dragged {
+                        dragged_state(&keys)
+                    } else {
+                        legacy_state()
+                    };
+                    DockProbe {
+                        rows,
+                        lines,
+                        keys,
+                        state: cx.new(|_| state),
+                    }
+                }
             });
             layout_fixture::draw(&mut visual);
-            let at = format!("{code} @ {width}");
+            let at = format!("{code} @ {width}, all dragged {all_dragged}");
             let slot = visual.debug_bounds("cs-dock-slot").expect("content slot");
             assert!(
                 layout_fixture::height_of(slot) > 100.0,
@@ -684,6 +757,35 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                     && layout_fixture::inside(dot, slot),
                 "status dot is not an 8 px disc inside the slot at {at}: {dot:?}"
             );
+            // The columns reach the panel edge: the last cell plus its right padding ends where
+            // the row does, whether a column fills or every column is dragged and a spacer does.
+            let last = if all_dragged {
+                format!("cs-filler-{first_core}")
+            } else {
+                format!("cs-tz-off-{first_core}")
+            };
+            let last = visual
+                .debug_bounds(layout_fixture::leak_selector(last))
+                .unwrap_or_else(|| panic!("last cell at {at}"));
+            let edge = f32::from(last.right()) + super::CELL_PAD_RIGHT;
+            let band_edge = f32::from(banner.right());
+            assert!(
+                (edge - band_edge).abs() <= 2.0
+                    && band_edge + SCROLLBAR_SLACK + 2.0 >= f32::from(slot.right()),
+                "columns end at {edge}, band at {band_edge}, panel at {} ({at})",
+                f32::from(slot.right())
+            );
+            // The dot sits right before the name, even with the old status column's width on file.
+            let name = visual
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-core-name-{first_core}"
+                )))
+                .unwrap_or_else(|| panic!("core name at {at}"));
+            let gap = f32::from(name.origin.x) - f32::from(dot.right());
+            assert!(
+                (0.0..=12.0).contains(&gap),
+                "dot-name gap is {gap} px at {at}: {dot:?} / {name:?}"
+            );
             // The dropped core's reason follows its name, whole.
             let dropped = rows
                 .iter()
@@ -699,9 +801,11 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                 .unwrap_or_else(|| panic!("reason text at {at}"));
             let reason_w =
                 visual.update(|_, app| design::ui_caption_text_width(app, &reason_text, 400.0));
-            // Whole wherever the dock leaves the name column room; at 720 px it may ellipsize.
+            // Whole wherever the name column has room; at 720 px or dragged narrow it may ellipsize.
             assert!(
-                (width < 1_000.0 || layout_fixture::width_of(reason) + 0.5 >= reason_w)
+                (all_dragged
+                    || width < 1_000.0
+                    || layout_fixture::width_of(reason) + 0.5 >= reason_w)
                     && layout_fixture::inside(reason, slot),
                 "reason text clipped at {at}: measured {reason_w}, box {reason:?}"
             );

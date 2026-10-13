@@ -34,8 +34,7 @@ use moon_ui::{
 };
 
 /// Canonical Flat column order before data-only API columns are filtered.
-const COLUMN_KEYS: [&str; 15] = [
-    "status",
+const COLUMN_KEYS: [&str; 14] = [
     "core",
     "server",
     "version",
@@ -226,7 +225,7 @@ const CELL_WEIGHT: f32 = 400.0;
 
 /// Widest rendered figure of each column, plus the table's 12+8 px cell padding.
 ///
-/// Name, server and the status dot are omitted: those cells truncate or are not a figure.
+/// Name and server are omitted: those cells truncate.
 /// The result is cached by the caller on the row generation and the locale, because the
 /// strings move with the language and with the snapshot, not with the frame.
 ///
@@ -256,11 +255,11 @@ pub(super) fn content_floors(rows: &[CoreStatusRow], cx: &App) -> HashMap<String
 
 /// The string whose width is the column's content floor.
 ///
-/// Identity columns that truncate, and the status dot, contribute nothing. The build column
+/// Identity columns that truncate contribute nothing. The build column
 /// measures the joined number and letter. Every other key measures the same text the cell draws.
 fn figure_for_floor(row: &CoreStatusRow, key: &str) -> String {
     match key {
-        "server" | "core" | "status" => String::new(),
+        "server" | "core" => String::new(),
         "version" => super::presentation::build_label(&build_parts(
             row.server_version,
             row.server_version_suffix.as_deref(),
@@ -335,14 +334,12 @@ pub(super) fn respect_content_floors(
 
 /// Declared width of one Flat column, in logical pixels.
 ///
-/// The status column is a dot, so it stays narrow and does not grow. The core column is wider
-/// than the old name column because a problem reason sits beside the name. The CPU columns are
-/// wide enough for a mini bar plus the percent.
+/// The core column carries the status dot, the name and, for a core that is not healthy, the
+/// short reason beside it. The CPU columns are wide enough for a mini bar plus the percent.
 fn default_column_width(key: &str) -> f32 {
     match key {
-        // The 12+8 px cell padding plus the 8 px dot.
-        "status" => 28.0,
-        "core" => 180.0,
+        // The name's 180 plus the 8 px dot and its gap, which used to be a column of their own.
+        "core" => 196.0,
         "server" => 110.0,
         "version" => 128.0,
         "cpu_proc" | "cpu_sys" => 120.0,
@@ -389,18 +386,9 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
                 default_column_width("core"),
             )
             .sortable(true),
-            // A dot right before the name, under an empty heading: the word would set the column
-            // width. It stays on the header tooltip. `no_grow` keeps the extra dock width for the
-            // name and the metrics.
-            "status" => {
-                MoonDataTableColumn::new("status", String::new(), default_column_width("status"))
-                    .no_grow()
-                    .sortable(true)
-                    .tooltip(t!("core_status.col.status").to_string())
-            }
             // Left-aligned. The letter tag keeps a reserved slot, so a named build does not
             // shift the digits. Wide enough for that slot plus the update glyph and the hover
-            // button. It follows `status` because it completes the identity block — what this
+            // button. It sits with `core` and `server` because it completes the identity block — what this
             // core IS — rather than reporting how it is doing. Mid-list insertion costs nothing:
             // persisted widths are keyed by column key, never by index.
             "version" => column(
@@ -475,9 +463,76 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
             )
             .sortable(true)
             .tooltip(t!("core_status.col_tip.tz_off").to_string()),
+            FILLER_KEY => {
+                let mut column = MoonDataTableColumn::new(FILLER_KEY, String::new(), 0.0);
+                column.resizable = false;
+                column.movable = false;
+                column
+            }
             _ => unreachable!("canonical Flat column key"),
         })
         .collect()
+}
+
+/// Id of the empty trailing column that takes the leftover width when every column is dragged.
+///
+/// Render-only: it is never in [`COLUMN_KEYS`], so persistence drops it on the next restore.
+const FILLER_KEY: &str = "filler";
+
+/// Column that takes the width the others leave, so the header and rows end at the panel edge.
+///
+/// The core name when the user has not dragged it, otherwise the last column without a drag.
+/// A dragged column keeps its width: `fill` would render it as a minimum and a drag narrower
+/// than its slot would no longer stick. `None` when every column is dragged.
+///
+/// Args:
+///     keys: Visible column keys, in source order.
+///     dragged: User-dragged widths keyed by column id.
+///
+/// Returns:
+///     The column to mark `fill`, or `None`.
+fn fill_target(keys: &[&'static str], dragged: &HashMap<String, f32>) -> Option<&'static str> {
+    if keys.contains(&"core") && !dragged.contains_key("core") {
+        return Some("core");
+    }
+    keys.iter()
+        .rev()
+        .copied()
+        .find(|key| !dragged.contains_key(*key))
+}
+
+/// Keys and descriptors whose widths reach the panel edge.
+///
+/// [`fill_target`] gets `fill`. When every column is dragged, an empty [`FILLER_KEY`] column
+/// is appended instead: it cannot be dragged or moved, and rows emit an empty cell for it.
+///
+/// Args:
+///     keys: Visible column keys, in source order.
+///     dragged: User-dragged widths keyed by column id.
+///
+/// Returns:
+///     The keys rows render, and one descriptor per key.
+pub(super) fn filled_columns(
+    keys: &[&'static str],
+    dragged: &HashMap<String, f32>,
+) -> (Vec<&'static str>, Vec<MoonDataTableColumn>) {
+    let target = fill_target(keys, dragged);
+    let mut keys = keys.to_vec();
+    if target.is_none() && !keys.is_empty() {
+        keys.push(FILLER_KEY);
+    }
+    let fill = target.unwrap_or(FILLER_KEY);
+    let descriptors = columns(&keys)
+        .into_iter()
+        .map(|column| {
+            if column.key.as_ref() == fill {
+                column.fill()
+            } else {
+                column
+            }
+        })
+        .collect();
+    (keys, descriptors)
 }
 
 /// Render the telemetry table: one row per core, under a heading per exchange.
@@ -543,7 +598,8 @@ pub(super) fn core_status_table(
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
-    let table_columns = columns(&column_keys);
+    let (keys, table_columns) = filled_columns(&column_keys, &state.read(cx).column_widths);
+    let column_keys = Rc::new(keys);
     let table_columns = respect_content_floors(table_columns, floors, available);
     let section_column_count = column_keys.len();
     let row_column_keys = column_keys.clone();
@@ -716,7 +772,6 @@ fn core_status_row(
     let row = MoonDataRow::new(column_keys.iter().map(|key| match *key {
         "server" => server_cell(server.clone(), offline, p, SharedString::from(format!("cs-srv-{}", r.id)), app),
         "core" => name_cell(r, diag.as_ref(), column_keys, offline, p, app),
-        "status" => status_dot_cell(r, level_color(status_level(&r.status), p), offline, p),
         "version" => MoonDataCell::element(version_hover_cell(r, backend, offline, p, app)),
         "cpu_proc" => cpu_bar_cell(r, "proc", sys.process_cpu_percent, cell_text_for(r, "cpu_proc"), level_color(cpu_level(sys.process_cpu_percent), p), offline, p, app),
         "cpu_sys" => cpu_bar_cell(r, "sys", sys.system_cpu_percent, cell_text_for(r, "cpu_sys"), level_color(cpu_level(sys.system_cpu_percent), p), offline, p, app),
@@ -729,6 +784,7 @@ fn core_status_row(
         "api_quota" => metric_cell(cell_text_for(r, "api_quota"), level_color(api_quota_level(r.api_quota, r.api_quota_warn), p), offline, p, SharedString::from(format!("cs-quota-{}", r.id)), MetricAlign::Center),
         "startup" => MoonDataCell::element(startup_hover_cell(r, offline, p)).text_color(level_color(startup_level(startup_cell(&r.status, &r.startup)), p)),
         "tz_off" => MoonDataCell::element(tz_offset_hover_cell(r, offline, p)).text_color(level_color(LoadLevel::Normal, p)),
+        FILLER_KEY => MoonDataCell::element(div().size_full().debug_selector(move || format!("cs-filler-{}", r.id))),
         _ => unreachable!("canonical Flat column key"),
     }));
     // Applied HERE, not inside the match above: `tests/theme_contract/core_status.rs` pins that
@@ -1160,50 +1216,35 @@ fn cpu_bar_cell(
     .text_color(color)
 }
 
-/// Status column: a dot coloured by the connection level.
+/// Status dot drawn right before the core name, coloured by the connection level.
 ///
 /// A ready core is green. [`level_color`] of a normal level is the resting text grey, which
 /// would leave a healthy dot looking uncolored, so that one case uses the palette green. Warning
-/// and critical use the colour the row already computed from [`level_color`].
-fn status_dot_cell(
-    r: &CoreStatusRow,
-    level_paint: u32,
-    offline: bool,
-    p: MoonPalette,
-) -> MoonDataCell {
+/// and critical use [`level_color`].
+fn status_dot(r: &CoreStatusRow, p: MoonPalette) -> Div {
     let level = status_level(&r.status);
     let color = if matches!(level, LoadLevel::Normal) {
         p.green
     } else {
-        level_paint
+        level_color(level, p)
     };
     let selector = format!("cs-status-dot-{}", r.id);
-    // A plain 8 px disc: the badge's dot variant laid out as a ~20 px filled square here.
-    MoonDataCell::element(
-        div()
-            .id(SharedString::from(format!("cs-status-{}", r.id)))
-            .relative()
-            .size_full()
-            .flex()
-            .items_center()
-            .when(offline, |cell| cell.child(offline_band(p)))
-            .child(
-                div()
-                    .debug_selector(move || selector)
-                    .flex_none()
-                    .size(px(STATUS_DOT))
-                    .rounded_full()
-                    .bg(rgb(color)),
-            ),
-    )
+    div()
+        .debug_selector(move || selector)
+        .flex_none()
+        .size(px(STATUS_DOT))
+        .rounded_full()
+        .bg(rgb(color))
 }
 
 /// Status dot diameter, in logical pixels.
 const STATUS_DOT: f32 = 8.0;
 
-/// Name cell: the core name, and for a core that is not healthy the short reason beside it.
+/// Name cell: the status dot, the core name, and for a core that is not healthy the short reason.
 ///
-/// The hover is the fault tooltip the status column used to carry. When startup or the clock
+/// The dot sits [`DOT_GAP`] before the name inside this cell; it used to be a column of its own,
+/// and a width persisted for that column left a wide hole between the two. The hover is the
+/// fault tooltip the status column used to carry. When startup or the clock
 /// offset is not on screen, those hovers are appended here so the facts stay reachable.
 fn name_cell(
     r: &CoreStatusRow,
@@ -1216,6 +1257,7 @@ fn name_cell(
     let reason = problem_reason(r, diag);
     let tip = name_hover(r, diag, column_keys);
     let cell_selector = format!("cs-core-cell-{}", r.id);
+    let name_selector = format!("cs-core-name-{}", r.id);
     let mut cell = div()
         .id(SharedString::from(format!("cs-core-{}", r.id)))
         .debug_selector(move || cell_selector)
@@ -1226,9 +1268,11 @@ fn name_cell(
         .items_center()
         .gap(design::ui_px(app, 6.0))
         .when(offline, |cell| cell.child(offline_band(p)))
+        .child(status_dot(r, p).mr(design::ui_px(app, DOT_GAP - 6.0)))
         .child(
             div()
                 .min_w_0()
+                .debug_selector(move || name_selector)
                 // Shrink weight is shrink times width, so a large factor makes the name give way
                 // before the reason starts to ellipsize.
                 .flex_shrink(NAME_SHRINK)
@@ -1256,6 +1300,9 @@ fn name_cell(
     }
     MoonDataCell::element(cell)
 }
+
+/// Space between the status dot and the core name, in design pixels.
+const DOT_GAP: f32 = 8.0;
 
 /// Shrink factor of the core name against its problem reason in the name cell.
 const NAME_SHRINK: f32 = 1000.0;
@@ -1445,8 +1492,10 @@ fn startup_hover_cell(r: &CoreStatusRow, offline: bool, p: MoonPalette) -> State
 /// Returns:
 ///     The cell element.
 fn tz_offset_hover_cell(r: &CoreStatusRow, offline: bool, p: MoonPalette) -> Stateful<Div> {
+    let selector = format!("cs-tz-off-{}", r.id);
     div()
         .id(SharedString::from(format!("cs-tz-off-{}", r.id)))
+        .debug_selector(move || selector)
         .relative()
         .size_full()
         .flex()

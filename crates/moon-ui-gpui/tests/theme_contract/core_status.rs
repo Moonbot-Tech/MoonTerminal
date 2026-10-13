@@ -37,7 +37,6 @@ fn core_status_flat_cells_apply_the_shared_level_colour() {
     let table = read_src("panels/core_status/table.rs");
     let row = code_only(braced_body(&table, "fn core_status_row("));
     let classified_arms = [
-        "\"status\" => status_dot_cell(r, level_color(status_level(&r.status), p), offline, p),",
         "\"cpu_proc\" => cpu_bar_cell(r, \"proc\", sys.process_cpu_percent, cell_text_for(r, \"cpu_proc\"), level_color(cpu_level(sys.process_cpu_percent), p), offline, p, app),",
         "\"cpu_sys\" => cpu_bar_cell(r, \"sys\", sys.system_cpu_percent, cell_text_for(r, \"cpu_sys\"), level_color(cpu_level(sys.system_cpu_percent), p), offline, p, app),",
         "\"free_phys\" => metric_cell(cell_text_for(r, \"free_phys\"), level_color(free_mem_level(sys.free_physical_memory_mb), p), offline, p, SharedString::from(format!(\"cs-free-{}\", r.id)), MetricAlign::End),",
@@ -66,7 +65,7 @@ fn core_status_section_row_derives_its_cell_count_from_declared_columns() {
     let section = code_only(braced_body(&table, "fn section_row("));
 
     assert!(
-        host.contains("let table_columns = columns(&column_keys);")
+        host.contains("filled_columns(&column_keys, &state.read(cx).column_widths);")
             && host.contains("let section_column_count = column_keys.len();")
             && host.contains("section_column_count,")
             && host.contains(".columns(table_columns)"),

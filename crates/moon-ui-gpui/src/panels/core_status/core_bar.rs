@@ -654,14 +654,14 @@ fn counted_segment(
         .selected(selected)
 }
 
-/// Pill tone of a view's count: Problems red, Updates amber, the rest neutral.
+/// Pill tone of a view's count: Problems red, Alarms and Updates amber, the rest neutral.
+///
+/// [`counted_segment`] keeps a zero count neutral whatever this returns.
 fn mode_count_tone(mode: CoreStatusMode) -> MoonTone {
     match mode {
         CoreStatusMode::Problems => MoonTone::Danger,
-        CoreStatusMode::Updates => MoonTone::Warning,
-        CoreStatusMode::Flat | CoreStatusMode::Servers | CoreStatusMode::Warnings => {
-            MoonTone::Default
-        }
+        CoreStatusMode::Warnings | CoreStatusMode::Updates => MoonTone::Warning,
+        CoreStatusMode::Flat | CoreStatusMode::Servers => MoonTone::Default,
     }
 }
 
@@ -676,7 +676,6 @@ fn column_label(key: &str) -> String {
     match key {
         "server" => t!("core_status.col.server").to_string(),
         "core" => t!("core_status.col.core").to_string(),
-        "status" => t!("core_status.col.status").to_string(),
         "version" => t!("core_status.col.version").to_string(),
         "cpu_proc" => t!("core_status.col.cpu_proc").to_string(),
         "cpu_sys" => t!("core_status.col.cpu_sys").to_string(),

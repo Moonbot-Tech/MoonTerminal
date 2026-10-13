@@ -5,12 +5,12 @@
 use std::collections::HashSet;
 
 use gpui::{AppContext, Context, Entity, IntoElement, Render, Styled, Window, div, px};
-use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputState};
+use moon_ui::{MoonButton, MoonButtonSize, MoonButtonVariant, MoonInput, MoonInputState, MoonTone};
 use rust_i18n::t;
 
 use super::super::layout_fixture::{self, LOCALES, WIDTHS};
 use super::super::mode::CoreStatusMode;
-use super::{columns_menu_el, mode_switch_control, toolbar_row, toolbar_tail_el};
+use super::{columns_menu_el, mode_count_tone, mode_switch_control, toolbar_row, toolbar_tail_el};
 use crate::design;
 
 /// Production toolbar slots. The scope chip is a fixed stand-in for the combo, which needs a
@@ -189,4 +189,21 @@ fn narrow_dock_keeps_every_mode_inside_the_toolbar(cx: &mut gpui::TestAppContext
             "300px kept a wider tier at {at}"
         );
     }
+}
+
+/// The Alarms count is amber like the design's, next to red Problems and amber Updates.
+#[test]
+fn alarms_count_pill_is_amber() {
+    assert!(matches!(
+        mode_count_tone(CoreStatusMode::Warnings),
+        MoonTone::Warning
+    ));
+    assert!(matches!(
+        mode_count_tone(CoreStatusMode::Problems),
+        MoonTone::Danger
+    ));
+    assert!(matches!(
+        mode_count_tone(CoreStatusMode::Flat),
+        MoonTone::Default
+    ));
 }

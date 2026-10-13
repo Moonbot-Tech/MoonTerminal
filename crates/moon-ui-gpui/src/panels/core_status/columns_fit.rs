@@ -1,8 +1,8 @@
 //! How many Flat-column tiers a narrow Core Status dock drops.
 //!
-//! Dropping follows measured widths, in a fixed order. Core ping, the core name and the status
-//! column are never in a tier, so a dock that is only a few pixels wide still shows who is
-//! offline and what their ping is.
+//! Dropping follows measured widths, in a fixed order. Core ping and the core name (which carries
+//! the status dot) are never in a tier, so a dock that is only a few pixels wide still shows who
+//! is offline and what their ping is.
 
 /// Column ids removed together, cheapest tier first.
 ///

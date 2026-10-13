@@ -240,6 +240,27 @@ fn api_key_ignores_unknown_and_compares_the_classified_state() {
     assert!(uniform_columns(&[a, dated]).is_empty());
 }
 
+/// The key cell keeps its text on a dropped core, so a dated key there is on screen and keeps
+/// the column, while a dropped core with the same perpetual key still agrees.
+#[test]
+fn api_key_compares_what_a_dropped_core_still_displays() {
+    let mut a = row("CORE-A1", ConnStatus::Ready);
+    let mut b = row("CORE-A2", ConnStatus::Ready);
+    a.api_key = ApiKeyState::Perpetual;
+    b.api_key = ApiKeyState::Perpetual;
+    let mut dropped = row("CORE-A3", ConnStatus::Disconnected);
+    dropped.api_key = ApiKeyState::Days(5);
+    let keys = |rows: &[CoreStatusRow]| -> Vec<&'static str> {
+        uniform_columns(rows)
+            .into_iter()
+            .map(|fact| fact.key)
+            .collect()
+    };
+    assert!(!keys(&[a.clone(), b.clone(), dropped.clone()]).contains(&"api_key"));
+    dropped.api_key = ApiKeyState::Perpetual;
+    assert!(keys(&[a, b, dropped]).contains(&"api_key"));
+}
+
 /// Answered cores that publish no quota put "not set" on the line, so the vanished quota column
 /// is explained. Cores that have not answered yet say nothing about a quota.
 #[test]
