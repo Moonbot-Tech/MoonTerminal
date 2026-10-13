@@ -368,12 +368,13 @@ pub(super) fn hint_row(
 }
 
 /// A [`hint_row`] laid out in columns, as in a form card: the label column `label_w` wide
-/// (unscaled), the control right beside it filling the rest, and a hairline under the row.
+/// (unscaled), the control right beside it filling the rest with its hint under it as a muted
+/// caption, and a hairline under the row.
 ///
 /// Args:
 ///     id: Stable element id; the disclosure derives its own from it.
 ///     label: Setting name.
-///     hint: One short line under the label, or `None`.
+///     hint: One short line under the control (selector `{id}-hint`), or `None`.
 ///     more: Longer help shown only while `open`, or `None` for no disclosure at all.
 ///     control: The editor; it gets the remaining width and may fill it.
 ///     open: Whether the long help is shown.
@@ -450,6 +451,19 @@ fn row_layout(
                 .to_string(),
             )
     });
+    // Hints and help are captions: smaller and muted under the body-size label. In a column row
+    // the hint goes under the control instead: the label column is too narrow for a sentence, and
+    // there it would wrap to three or four lines.
+    let caption = move |hint: String| {
+        div()
+            .debug_selector(move || format!("{id}-hint"))
+            .min_w_0()
+            .font_family(design::ui_font())
+            .text_size(design::t_caption(cx))
+            .text_color(muted)
+            .child(hint)
+    };
+    let field_hint = hint.clone().filter(|_| label_w.is_some()).map(caption);
     let text = v_flex()
         .map(|el| match label_w {
             Some(w) => el.flex_none().w(design::ui_px(cx, w)),
@@ -465,14 +479,7 @@ fn row_layout(
                 .min_w_0()
                 .child(label),
         )
-        // Hints and help are captions: smaller and muted under the body-size label.
-        .children(hint.map(|hint| {
-            div()
-                .min_w_0()
-                .text_size(design::t_caption(cx))
-                .text_color(muted)
-                .child(hint)
-        }))
+        .children(hint.filter(|_| label_w.is_none()).map(caption))
         .children(toggle)
         .children(more.filter(|_| open).map(|more| {
             div()
@@ -493,8 +500,20 @@ fn row_layout(
             Some(_) => el
                 .border_b_1()
                 .border_color(rgba_from(p.border, 1.0))
-                .child(div().flex_1().min_w_0().child(control)),
-            None => el.child(div().flex_none().child(control)),
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(design::ui_px(cx, 2.0))
+                        .child(control)
+                        .children(field_hint),
+                ),
+            None => el.child(
+                div()
+                    .debug_selector(move || format!("{id}-control"))
+                    .flex_none()
+                    .child(control),
+            ),
         })
         .into_any_element()
 }
@@ -510,7 +529,7 @@ pub(super) fn count_label(base: &str, n: u64) -> String {
 /// `MoonInputEvent::Change`, reading the number with [`MoonNumberInput::read_value`].
 ///
 /// Args:
-///     id: Stable element id.
+///     id: Stable element id; also the field's `debug_selector`.
 ///     state: The field's input state.
 ///     range: Allowed values; the field clamps on blur.
 ///     step: Increment of one -/+ press or arrow key.
@@ -525,19 +544,83 @@ pub(super) fn num_input(
     step: f64,
     unit: Option<String>,
 ) -> AnyElement {
-    let field = MoonNumberInput::new(id)
-        .state(state)
-        .range(*range.start(), *range.end())
-        .step(step)
-        .size(design::CONTROL_TIER);
-    // A typed number is a compared value: mono, like every value Settings shows.
-    div()
-        .font_family(design::mono())
-        .child(match unit {
-            Some(unit) => field.unit(unit),
-            None => field,
-        })
-        .into_any_element()
+    NumField {
+        id,
+        state: state.clone(),
+        range,
+        step,
+        unit,
+        enabled: true,
+    }
+    .into_any_element()
+}
+
+/// A Settings number field, laid out at render time so it can measure its own floor width.
+///
+/// [`num_input`] and `general::num_input_on` build it.
+#[derive(IntoElement)]
+pub(super) struct NumField {
+    pub(super) id: &'static str,
+    pub(super) state: Entity<MoonInputState>,
+    pub(super) range: RangeInclusive<f64>,
+    pub(super) step: f64,
+    pub(super) unit: Option<String>,
+    /// A switched-off field stays visible, greyed, and keeps its value.
+    pub(super) enabled: bool,
+}
+
+/// The narrowest a number field may be drawn: both square step buttons, the field's side
+/// padding, the wider range end and the unit.
+///
+/// A content-sized row (`hint_row`) gives the field no width of its own, and a MoonUI build
+/// without its own floor then collapses the value box to a few pixels: the digits vanish between
+/// `-` and `+`. This floor is measured here so Settings never depends on that.
+///
+/// Args:
+///     range: Allowed values; the longer end's digits are measured.
+///     unit: Suffix drawn after the value, or `None`.
+///     cx: Application context for the scale and the text system.
+///
+/// Returns:
+///     The minimum rendered width in pixels.
+pub(super) fn num_field_min_w(range: &RangeInclusive<f64>, unit: Option<&str>, cx: &App) -> f32 {
+    let m = design::CONTROL_TIER.control_metrics();
+    let (lo, hi) = (range.start().to_string(), range.end().to_string());
+    let widest = if lo.chars().count() > hi.chars().count() {
+        lo
+    } else {
+        hi
+    };
+    // The value is semibold-ish (500) mono; the unit is mono two points smaller.
+    let value_w = design::ui_text_width_zoomed(cx, &widest, m.font_size, 500.0, true);
+    let unit_w = unit.map_or(0.0, |unit| {
+        design::ui_text_width_zoomed(cx, unit, m.font_size - 2.0, 400.0, true)
+            + design::ui_value(cx, 4.0)
+    });
+    2.0 * design::ui_value(cx, m.height) + 2.0 * design::ui_value(cx, m.pad_x) + value_w + unit_w
+}
+
+impl RenderOnce for NumField {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let min_w = num_field_min_w(&self.range, self.unit.as_deref(), cx);
+        let field = MoonNumberInput::new(self.id)
+            .state(&self.state)
+            .range(*self.range.start(), *self.range.end())
+            .step(self.step)
+            .size(design::CONTROL_TIER)
+            .disabled(!self.enabled);
+        let id = self.id;
+        // A typed number is a compared value: mono, like every value Settings shows. A flex row
+        // so the control (itself `flex_1`) fills the floor width.
+        h_flex()
+            .debug_selector(move || id.to_string())
+            .min_w(px(min_w))
+            .font_family(design::mono())
+            .child(match self.unit {
+                Some(unit) => field.unit(unit),
+                None => field,
+            })
+    }
 }
 
 /// Progress through a short sequence (TG login, station install) over [`MoonSteps`].

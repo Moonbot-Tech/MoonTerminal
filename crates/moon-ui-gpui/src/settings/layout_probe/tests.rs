@@ -370,3 +370,89 @@ fn every_page_header_shows_its_full_title(cx: &mut gpui::TestAppContext) {
         },
     );
 }
+
+/// The shared number field shows its widest value and unit between both step buttons whether a
+/// row sizes it to its content (`hint_row`: Storage, General, Telegram) or hands it a column
+/// (`column_row`: Theme's book width, Lines), in every language at every swept size.
+///
+/// The oracle is two control heights for the buttons plus the mono widths of the widest value and
+/// the unit, measured here rather than through the field's own floor helper.
+///
+/// Breaks on: the field dropping its measured floor, so a MoonUI build without one collapses the
+/// value box to a few pixels and the digits disappear (the live Storage and Theme symptom).
+#[gpui::test]
+fn number_fields_keep_room_for_their_digits(cx: &mut gpui::TestAppContext) {
+    use crate::settings::common::column_row;
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for size in super::SIZES {
+            let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
+                let (width, height) = super::body_box(size, cx);
+                let a = cx.new(|cx| MoonInputState::new(window, cx).default_value("250"));
+                let b = cx.new(|cx| MoonInputState::new(window, cx).default_value("7"));
+                host(move |_, cx, _| {
+                    let noop: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(|_, _| {});
+                    div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .child(hint_row(
+                            "probe-hint-num",
+                            rust_i18n::t!("settings.page.sounds.title").to_string(),
+                            None,
+                            None,
+                            num_input("probe-num-a", &a, 0.0..=100000.0, 1.0, Some("px".into())),
+                            false,
+                            noop.clone(),
+                            cx,
+                        ))
+                        .child(column_row(
+                            "probe-col-num",
+                            rust_i18n::t!("settings.page.general.title").to_string(),
+                            None,
+                            None,
+                            num_input("probe-num-b", &b, 1.0..=120.0, 1.0, None),
+                            false,
+                            noop,
+                            200.0,
+                            cx,
+                        ))
+                        .into_any_element()
+                })(window, cx, (width, height))
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            for (sel, widest, unit) in [("probe-num-a", "100000", "px"), ("probe-num-b", "120", "")]
+            {
+                let got = visual
+                    .debug_bounds(super::leak(sel.to_string()))
+                    .unwrap_or_else(|| panic!("{sel} was not laid out"));
+                let need = visual.update(|_, cx| {
+                    let m = crate::design::CONTROL_TIER.control_metrics();
+                    2.0 * crate::design::ui_value(cx, m.height)
+                        + crate::design::ui_text_width_zoomed(cx, widest, m.font_size, 500.0, true)
+                        + crate::design::ui_text_width_zoomed(
+                            cx,
+                            unit,
+                            m.font_size - 2.0,
+                            400.0,
+                            true,
+                        )
+                });
+                assert!(
+                    f32::from(got.size.width) + 0.5 >= need,
+                    "{sel} is {} wide, needs {need} ({} at {}x{})",
+                    f32::from(got.size.width),
+                    language.code(),
+                    size.0,
+                    size.1
+                );
+            }
+        }
+    }
+}

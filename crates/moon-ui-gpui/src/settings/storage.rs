@@ -487,11 +487,12 @@ pub(super) fn storage_body_el(view: StorageView, s: &StorageCtx, cx: &App) -> An
         .child(usage_panel(&parts, path, refresh, cx))
         // The mockup's grid: cards at least 300 wide wrap two to a row in a Settings body and to
         // one column in a narrow window.
+        // Cards sharing a row stretch to the tallest one, as the mockup's grid draws them.
         .child(
             h_flex()
                 .w_full()
                 .flex_wrap()
-                .items_start()
+                .items_stretch()
                 .gap(design::ui_px(cx, 10.0))
                 .child(reports_card(s, &info, busy, cx))
                 .child(strategies_card(s, &info, &cfg, &version_limit, busy, cx))
@@ -584,7 +585,7 @@ fn reports_card(s: &StorageCtx, info: &StorageInfo, busy: bool, cx: &App) -> Any
         s,
         "storage-reports-rows",
         rows,
-        None,
+        Some(t!("storage.db.reports.note").to_string()),
         t!("storage.reports_hint").to_string(),
         div().into_any_element(),
         cx,
@@ -593,7 +594,6 @@ fn reports_card(s: &StorageCtx, info: &StorageInfo, busy: bool, cx: &App) -> Any
         "storage-card-reports",
         t!("storage.db.reports.title").to_string(),
         size_line(info.reports),
-        t!("storage.db.reports.note").to_string(),
         vec![compact],
         readout,
         cx,
@@ -636,7 +636,7 @@ fn strategies_card(
             SettingsView::set_strategies_enabled,
             cx,
         ))
-        .child(mono_readout(rows, cx))
+        .child(mono_readout("storage-strat-rows", rows, cx))
         .child(setting_row(
             s,
             "storage-version-limit",
@@ -670,7 +670,6 @@ fn strategies_card(
         "storage-card-strategies",
         t!("storage.db.strategies.title").to_string(),
         size_line(info.strategies),
-        t!("storage.db.strategies.note").to_string(),
         vec![compact, backup],
         body,
         cx,
@@ -784,7 +783,6 @@ fn trades_card(
         "storage-card-trades",
         t!("storage.db.trades.title").to_string(),
         size_line(info.trades),
-        t!("storage.db.trades.note").to_string(),
         vec![compact],
         body,
         cx,
@@ -824,6 +822,8 @@ fn margin_picker(s: &StorageCtx, secs: u32, cx: &App) -> MoonDropdown {
     MoonDropdown::new("storage-margin")
         .label(trigger)
         .trigger_caret(true)
+        // Label left, chevron at the right edge, as the page's selects read.
+        .trigger_caret_end(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width(design::font_w(cx, 120.0))
@@ -845,7 +845,6 @@ fn klines_card(s: &StorageCtx, info: &StorageInfo, cx: &App) -> AnyElement {
         "storage-card-klines",
         t!("storage.db.klines.title").to_string(),
         size_line(info.klines),
-        t!("storage.db.klines.note").to_string(),
         Vec::new(),
         more,
         cx,
@@ -880,12 +879,54 @@ fn size_line(size: Option<(u64, u64)>) -> String {
     }
 }
 
-fn mono_readout(text: String, cx: &App) -> impl IntoElement {
+/// A muted mono readout of figures. It wraps only between [`figure_chunks`], so a figure never
+/// breaks mid-number or away from its label.
+fn mono_readout(id: &'static str, text: String, cx: &App) -> impl IntoElement {
     let p = MoonPalette::active(cx);
-    div()
+    h_flex()
+        .debug_selector(move || id.into())
+        .w_full()
+        .flex_wrap()
+        .gap_x(design::ui_px(cx, 6.0))
         .font_family(design::mono())
         .text_color(rgba_from(p.text_muted, 1.0))
-        .child(text)
+        .children(
+            figure_chunks(&text)
+                .into_iter()
+                .enumerate()
+                .map(|(i, chunk)| {
+                    div()
+                        .debug_selector(move || format!("{id}-{i}"))
+                        .flex_none()
+                        .whitespace_nowrap()
+                        .child(chunk)
+                }),
+        )
+}
+
+/// Split a figures line into the pieces it may wrap between: before each ` (` and each ` · `.
+/// `"Strategies: 12 (deleted: 3) · Versions: 40"` gives `"Strategies: 12"`, `"(deleted: 3)"` and
+/// `"· Versions: 40"`, so every figure stays on the line of its label.
+///
+/// Args:
+///     text: The localized line.
+///
+/// Returns:
+///     The pieces in order; the whole text when it has no break point.
+pub(super) fn figure_chunks(text: &str) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut rest = text;
+    while let Some(at) = [" (", " \u{b7} "]
+        .iter()
+        .filter_map(|sep| rest.find(sep))
+        .min()
+    {
+        chunks.push(rest[..at].to_string());
+        rest = &rest[at + 1..];
+    }
+    chunks.push(rest.to_string());
+    chunks.retain(|chunk| !chunk.is_empty());
+    chunks
 }
 
 /// The usage overview: total, path, stacked bar, legend.
@@ -974,12 +1015,12 @@ fn usage_panel(parts: &[UsagePart], path: String, refresh: AnyElement, cx: &App)
         .into_any_element()
 }
 
-/// One database card: title and size, the short note, actions, then the card's settings.
+/// One database card: a header with the title and size and the actions at its top right, then
+/// the card's settings.
 fn settings_card(
     id: &'static str,
     title: String,
     size: String,
-    note: String,
     actions: Vec<AnyElement>,
     body: impl IntoElement,
     cx: &App,
@@ -991,29 +1032,30 @@ fn settings_card(
         .items_start()
         .gap(design::ui_px(cx, 8.0))
         .child(
-            v_flex()
+            h_flex()
+                .debug_selector(move || format!("{id}-head"))
                 .flex_1()
                 .min_w_0()
-                .gap(design::ui_px(cx, 2.0))
+                .flex_wrap()
+                .gap_x(design::ui_px(cx, 8.0))
+                .items_center()
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title),
+                )
                 .child(
                     h_flex()
                         .flex_wrap()
-                        .gap(design::ui_px(cx, 8.0))
-                        .items_center()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-                        .child(
-                            div()
-                                .font_family(design::mono())
-                                .text_color(muted)
-                                .child(size),
-                        ),
-                )
-                .child(
-                    div()
-                        .debug_selector(move || format!("{id}-note"))
-                        .min_w_0()
+                        .gap_x(design::ui_px(cx, 6.0))
+                        .font_family(design::mono())
                         .text_color(muted)
-                        .child(note),
+                        .children(
+                            figure_chunks(&size)
+                                .into_iter()
+                                .map(|chunk| div().whitespace_nowrap().child(chunk)),
+                        ),
                 ),
         );
     if !actions.is_empty() {

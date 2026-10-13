@@ -443,3 +443,64 @@ fn a_wide_cores_page_follows_the_mockup_split(cx: &mut gpui::TestAppContext) {
     let offset = f32::from(key.origin.x - card.origin.x);
     assert!(offset <= lead, "key field starts {offset} px into the card");
 }
+
+/// The card's captions sit under their field, not under the narrow label column, and a caption
+/// that fits the field column is one line, in every language at every swept size and a wide
+/// window.
+///
+/// The one-line oracle is the caption's own measured width against its box: when the text is no
+/// wider than the box, the box must be shorter than two caption lines.
+///
+/// Breaks on: the hint moving back under the label, where "Каждая группа открывается в своём
+/// главном окне." wrapped to three or four lines in a ~120 px column.
+#[gpui::test]
+fn card_captions_sit_under_their_field_on_one_line(cx: &mut gpui::TestAppContext) {
+    use crate::settings::layout_probe::{SIZES, body_box, leak};
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for size in SIZES.into_iter().chain([(1600.0, 900.0)]) {
+            let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
+                let (width, _) = body_box(size, cx);
+                let fields = inputs(window, cx);
+                Host {
+                    scroll: ScrollHandle::new(),
+                    width,
+                    build: Rc::new(move |window, cx| body(window, cx, &fields)),
+                }
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let at = format!("{} at {}x{}", language.code(), size.0, size.1);
+            let label = visual
+                .debug_bounds(leak("core-card-group-label".into()))
+                .unwrap_or_else(|| panic!("group label was not laid out ({at})"));
+            let hint = visual
+                .debug_bounds(leak("core-card-group-hint".into()))
+                .unwrap_or_else(|| panic!("group hint was not laid out ({at})"));
+            assert!(
+                hint.origin.x >= label.right(),
+                "the group hint starts under the label column ({at})"
+            );
+            let text = rust_i18n::t!("conn.card.group_hint").to_string();
+            let (text_w, line) = visual.update(|_, cx| {
+                (
+                    crate::design::ui_caption_text_width(cx, &text, 400.0),
+                    f32::from(crate::design::line_px(cx, 12.0)),
+                )
+            });
+            let box_w = f32::from(hint.size.width);
+            if text_w <= box_w {
+                assert!(
+                    f32::from(hint.size.height) < 2.0 * line,
+                    "the group hint wraps although it fits {box_w} px: {} tall ({at})",
+                    f32::from(hint.size.height)
+                );
+            }
+        }
+    }
+}

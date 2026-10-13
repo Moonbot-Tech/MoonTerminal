@@ -107,20 +107,15 @@ pub(super) fn num_input_on(
     unit: Option<String>,
     enabled: bool,
 ) -> AnyElement {
-    let field = MoonNumberInput::new(id)
-        .state(state)
-        .range(*range.start(), *range.end())
-        .step(step)
-        .size(design::CONTROL_TIER)
-        .disabled(!enabled);
-    // A typed number is a compared value: mono, like every value Settings shows.
-    div()
-        .font_family(design::mono())
-        .child(match unit {
-            Some(unit) => field.unit(unit),
-            None => field,
-        })
-        .into_any_element()
+    super::common::NumField {
+        id,
+        state: state.clone(),
+        range,
+        step,
+        unit,
+        enabled,
+    }
+    .into_any_element()
 }
 
 /// A number field bound to the Settings draft.

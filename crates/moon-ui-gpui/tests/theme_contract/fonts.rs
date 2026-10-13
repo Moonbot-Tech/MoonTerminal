@@ -246,15 +246,21 @@ fn sells_zone_cursor_badge_uses_the_ui_face() {
 fn settings_values_and_connections_repin_the_mono_family() {
     let general = read_src("settings/general.rs");
     let common = read_src("settings/common.rs");
+    // Both number-field builders draw through `NumField`, whose render re-pins the mono face.
     for (source, signature) in [
         (&common, "pub(super) fn num_input("),
         (&general, "pub(super) fn num_input_on("),
     ] {
         assert!(
-            code_only(braced_body(source, signature)).contains(".font_family(design::mono())"),
-            "settings number fields must keep their compared values mono: {signature}"
+            code_only(braced_body(source, signature)).contains("NumField {"),
+            "settings number fields must draw through NumField: {signature}"
         );
     }
+    assert!(
+        code_only(braced_body(&common, "impl RenderOnce for NumField"))
+            .contains(".font_family(design::mono())"),
+        "settings number fields must keep their compared values mono: NumField"
+    );
     let badges = read_src("settings/badges.rs");
     let badge_row = code_only(braced_body(&badges, "fn badge_row("));
     // The ordinal, name and code inputs share one mono builder; the short code and the status

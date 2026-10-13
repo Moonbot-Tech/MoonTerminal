@@ -417,6 +417,8 @@ fn dropdown(id: &'static str, label: String, items: Vec<MoonMenuItem>, cx: &App)
     MoonDropdown::new(id)
         .label(label)
         .trigger_caret(true)
+        // Label left, chevron at the right edge, as the page's selects read.
+        .trigger_caret_end(true)
         .trigger_variant(MoonButtonVariant::Neutral)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(FIELD_W)
