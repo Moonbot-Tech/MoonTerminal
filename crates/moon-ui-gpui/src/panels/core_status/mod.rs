@@ -105,6 +105,12 @@ pub struct CoreStatusView {
     /// earlier stays in the list and does not count. The list is capped at `WARN_LIST_LIMIT`.
     /// Rebuilt only in [`Self::rebuild_cache`].
     cached_alarm_starts: Rc<Vec<i64>>,
+    /// The Warnings list itself, with resolved names. Rebuilt only in [`Self::rebuild_cache`]:
+    /// `render` runs on every row hover transition and scroll tick, and this list is a SQLite
+    /// query.
+    alarms: warnings::AlarmsList,
+    /// Row scroll of the Warnings list, shared by the table and its always-visible scrollbar.
+    warn_scroll: moon_ui::MoonVirtualListScrollHandle,
     /// Revision of the row/group snapshot, advanced only by cache rebuilds.
     rows_generation: u64,
     /// Sorted rows for the current revision and sort; headings are always rebuilt.
@@ -418,6 +424,8 @@ impl CoreStatusView {
             flat_cache: std::cell::RefCell::new(cache::FlatViewCache::default()),
             cached_groups: Rc::new(Vec::new()),
             cached_alarm_starts: Rc::new(Vec::new()),
+            alarms: warnings::AlarmsList::default(),
+            warn_scroll: moon_ui::MoonVirtualListScrollHandle::new(),
             ip_masked: false,
             health_filter: None,
             search_input,

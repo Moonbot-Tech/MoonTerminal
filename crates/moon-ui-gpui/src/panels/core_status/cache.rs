@@ -12,7 +12,7 @@ use super::health::{self, HealthFilter};
 use super::mode::WARN_LIST_LIMIT;
 use super::model::{self, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
 use super::ordering::{self, assign_server_names, compare_flat_rows, natural_cmp};
-use super::{CoreStatusView, table, uniform};
+use super::{CoreStatusView, table, uniform, warnings};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
@@ -468,7 +468,7 @@ impl CoreStatusView {
         // Recounted with the rest of the cache, not inside `title_suffix`: the dock asks that on a
         // per-frame path, and it must read a field rather than walk the fleet's findings.
         self.unseen_problems = self.count_unseen_problems(backend.read(cx));
-        let (groups, rows, alarm_starts) = {
+        let (groups, rows, alarm_starts, alarms) = {
             let b = backend.read(cx);
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
             // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
@@ -497,15 +497,28 @@ impl CoreStatusView {
             let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
             let server_addresses: HashSet<IpAddr> =
                 groups.iter().filter_map(|group| group.address).collect();
-            // Same list the Warnings view draws, capped once. The strip counts starts inside
-            // 24 hours; an episode that is still open but started earlier does not count.
-            let alarm_starts: Vec<i64> = b
-                .warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT)
+            // The one query for the list the Warnings view draws, capped once. The strip counts
+            // starts inside 24 hours; an episode that is still open but started earlier does not
+            // count. Resolved here rather than in `render`, which runs on every row hover
+            // transition and scroll tick.
+            let episodes =
+                b.warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT);
+            let alarm_starts: Vec<i64> = episodes.iter().map(|episode| episode.start_ms).collect();
+            let core_names: HashMap<CoreId, String> = b
+                .config
+                .servers
                 .iter()
-                .map(|episode| episode.start_ms)
+                .map(|server| (server.id, server.name.clone()))
                 .collect();
-            (groups, rows, alarm_starts)
+            let alarms = warnings::AlarmsList::new(
+                episodes,
+                &groups,
+                &b.layout.core_server_names,
+                core_names,
+            );
+            (groups, rows, alarm_starts, alarms)
         };
+        self.alarms = alarms;
         self.has_warn = groups.iter().any(|group| group.has_warn());
         replace_snapshots(
             &mut self.cached_rows,

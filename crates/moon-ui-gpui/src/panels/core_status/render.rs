@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::rc::Rc;
 
-use super::mode::{UPDATE_LIST_LIMIT, WARN_LIST_LIMIT};
+use super::mode::UPDATE_LIST_LIMIT;
 use super::model::{CoreStatusRow, ServerKey};
 use super::{
     CoreStatusMode, CoreStatusView, chart, health, health_strip, interactions, problems, same_line,
@@ -312,50 +312,21 @@ impl Render for CoreStatusView {
                     .into_any_element()
                 }
                 CoreStatusMode::Warnings => {
-                    let b = self.backend.read(cx);
-                    let scope = self.effective_scope(b);
-                    let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
-                    let server_addresses: HashSet<IpAddr> =
-                        groups.iter().filter_map(|group| group.address).collect();
-                    let episodes = b.warn_episodes_recent_for_scope(
-                        &core_ids,
-                        &server_addresses,
-                        WARN_LIST_LIMIT,
+                    // The list and its names come from the cache rebuild, never from here: this
+                    // arm runs again on every row hover transition and every scroll tick.
+                    let zone = moon_core::util::display_time::zone_or_utc(
+                        self.backend.read(cx).header_clock_zone(),
                     );
-                    // Resolve each server IP to its display name (connected group, then a saved custom
-                    // name), never the raw IP — matching how the panel masks addresses.
-                    let server_names: HashMap<IpAddr, String> = episodes
-                        .iter()
-                        .filter_map(|episode| episode.server_ip)
-                        .map(|ip| {
-                            let name = groups
-                                .iter()
-                                .find(|group| group.address == Some(ip))
-                                .map(|group| group.display_name.clone())
-                                .or_else(|| {
-                                    b.layout.core_server_names.get(&ip.to_string()).cloned()
-                                })
-                                .unwrap_or_else(|| "—".to_string());
-                            (ip, name)
-                        })
-                        .collect();
-                    let core_names: HashMap<CoreId, String> = b
-                        .config
-                        .servers
-                        .iter()
-                        .map(|server| (server.id, server.name.clone()))
-                        .collect();
                     warnings::warnings_table(
                         "core-status-warnings",
-                        Rc::new(episodes),
-                        Rc::new(server_names),
-                        Rc::new(core_names),
+                        &self.alarms,
                         &self.warn_table_state,
-                        moon_core::util::display_time::zone_or_utc(b.header_clock_zone()),
+                        &self.warn_scroll,
+                        zone,
                         now_ms,
+                        window,
                         cx,
                     )
-                    .into_any_element()
                 }
                 CoreStatusMode::Updates => {
                     let visible = self.visible_cores(cx);
