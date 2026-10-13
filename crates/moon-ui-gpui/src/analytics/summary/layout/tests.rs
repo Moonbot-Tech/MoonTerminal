@@ -1326,7 +1326,7 @@ fn profit_legend_keeps_five_long_names_whole(cx: &mut gpui::TestAppContext) {
     use super::super::state::{CoreLines, SummaryUi};
     let mut d = (*chart_summary()).clone();
     for (i, c) in d.core_days.iter_mut().enumerate() {
-        c.name = format!("XALPHA$2{i} ~ F-XX / SHOT_FUT LONG VOLUMES (SUB_0{i})");
+        c.name = format!("CORE_A{i} ~ EX-XX / ALPHA_GRID LONG VOLUMES (UNIT_0{i})");
     }
     let data = std::sync::Arc::new(d);
     let picked: BTreeSet<u64> = data.core_days[..5].iter().map(|c| c.uid).collect();
