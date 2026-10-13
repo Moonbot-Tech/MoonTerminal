@@ -597,7 +597,7 @@ impl Render for DockProbe {
         let p = MoonPalette::active(cx);
         let rows = self.rows.clone();
         let lines = self.lines.clone();
-        let (keys, columns) = super::filled_columns(&self.keys, &self.state.read(cx).column_widths);
+        let (keys, columns) = super::filled_columns(&self.keys, self.state.read(cx));
         let count = keys.len();
         let names: HashMap<ServerKey, String> = HashMap::new();
         let table = MoonDataTable::new(
@@ -758,14 +758,12 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                 "status dot is not an 8 px disc inside the slot at {at}: {dot:?}"
             );
             // The columns reach the panel edge: the last cell plus its right padding ends where
-            // the row does, whether a column fills or every column is dragged and a spacer does.
-            let last = if all_dragged {
-                format!("cs-filler-{first_core}")
-            } else {
-                format!("cs-tz-off-{first_core}")
-            };
+            // the row does, whether the name column fills or every column is dragged and the
+            // last one does.
             let last = visual
-                .debug_bounds(layout_fixture::leak_selector(last))
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-tz-off-{first_core}"
+                )))
                 .unwrap_or_else(|| panic!("last cell at {at}"));
             let edge = f32::from(last.right()) + super::CELL_PAD_RIGHT;
             let band_edge = f32::from(banner.right());
@@ -839,6 +837,146 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
                     "heading {suffix} clipped at {at}: measured {measured}, box {bounds:?}, banner {banner:?}"
                 );
             }
+        }
+    }
+}
+
+/// A persisted layout narrower than the panel must still reach the panel's right edge.
+///
+/// Every column carries a saved drag, so no column is `fill` by default and an earlier build
+/// left an empty strip (or an empty spacer column) at the right. The last VISIBLE column in
+/// display order now absorbs the leftover. Mutations this catches: filling the last SOURCE
+/// column after the user moved another one to the end, ignoring a hidden column, stretching
+/// the other columns away from their saved widths, and writing the rendered width back into
+/// the table state, which would mark the saved layout dirty on every render.
+#[gpui::test]
+fn persisted_layout_last_column_reaches_the_panel_edge(cx: &mut gpui::TestAppContext) {
+    crate::test_locale::warm();
+    layout_fixture::install_dark(cx);
+    let (rows, lines) = dock_fixture();
+    let rows = Rc::new(rows);
+    let lines = Rc::new(lines);
+    let all_keys = visible_column_keys(&rows, &HashSet::new(), &[]);
+    let first_core = match &lines[1] {
+        FlatLine::Core(index) => rows[*index].id,
+        FlatLine::Section(_) => panic!("a heading must be followed by its members"),
+    };
+    // (case, visible keys, column order, selector of the cell that must reach the edge)
+    let without_tz: Vec<&'static str> = all_keys
+        .iter()
+        .copied()
+        .filter(|key| *key != "tz_off")
+        .collect();
+    let mut core_last: Vec<&'static str> = all_keys
+        .iter()
+        .copied()
+        .filter(|key| *key != "core")
+        .collect();
+    core_last.push("core");
+    let cases: [(&str, Vec<&'static str>, Vec<&'static str>, String); 3] = [
+        (
+            "source order",
+            all_keys.clone(),
+            Vec::new(),
+            format!("cs-tz-off-{first_core}"),
+        ),
+        (
+            "tz_off hidden",
+            without_tz,
+            Vec::new(),
+            format!("cs-startup-{first_core}"),
+        ),
+        (
+            "core moved last",
+            all_keys.clone(),
+            core_last,
+            format!("cs-core-cell-{first_core}"),
+        ),
+    ];
+    let width = WIDTHS[0];
+    for code in LOCALES {
+        let _locale = crate::test_locale::force(code);
+        for (case, keys, order, last_selector) in &cases {
+            // Saved widths at 60% of the defaults: well under the panel, like a layout saved
+            // on a narrower monitor.
+            let mut seeded = MoonDataTableState::new();
+            for key in keys {
+                seeded.set_column_width(*key, (default_column_width(key) * 0.6).round());
+            }
+            seeded.set_column_order(order.iter().map(|key| gpui::SharedString::from(*key)));
+            let saved = seeded.column_widths.clone();
+            let saved_order = seeded.column_order.clone();
+            let state_slot: Rc<std::cell::RefCell<Option<Entity<MoonDataTableState>>>> =
+                Rc::default();
+            let mut visual = layout_fixture::open(cx, width, 420.0, {
+                let rows = rows.clone();
+                let lines = lines.clone();
+                let keys = keys.clone();
+                let state_slot = state_slot.clone();
+                move |_, cx| {
+                    let state = cx.new(|_| seeded);
+                    *state_slot.borrow_mut() = Some(state.clone());
+                    DockProbe {
+                        rows,
+                        lines,
+                        keys,
+                        state,
+                    }
+                }
+            });
+            layout_fixture::draw(&mut visual);
+            let at = format!("{code}, {case} @ {width}");
+            let slot = visual.debug_bounds("cs-dock-slot").expect("content slot");
+            let last = visual
+                .debug_bounds(layout_fixture::leak_selector(last_selector.clone()))
+                .unwrap_or_else(|| panic!("last cell at {at}"));
+            let edge = f32::from(last.right()) + super::CELL_PAD_RIGHT;
+            let FlatLine::Section(section) = &lines[0] else {
+                panic!("the first line must be a heading");
+            };
+            let banner_key = match section.section {
+                ExchangeSection::Venue(id) => format!("cs-section-{}-{}", id.code, id.dex),
+                ExchangeSection::Unidentified => "cs-section-unknown".to_string(),
+            };
+            let banner = visual
+                .debug_bounds(layout_fixture::leak_selector(banner_key))
+                .unwrap_or_else(|| panic!("heading at {at}"));
+            let band_edge = f32::from(banner.right());
+            assert!(
+                (edge - band_edge).abs() <= 2.0
+                    && band_edge + SCROLLBAR_SLACK + 2.0 >= f32::from(slot.right()),
+                "last column ends at {edge}, band at {band_edge}, panel at {} ({at})",
+                f32::from(slot.right())
+            );
+            // The name column keeps its saved width unless it is the one that fills.
+            if *case != "core moved last" {
+                let name_cell = visual
+                    .debug_bounds(layout_fixture::leak_selector(format!(
+                        "cs-core-cell-{first_core}"
+                    )))
+                    .unwrap_or_else(|| panic!("name cell at {at}"));
+                let rendered = layout_fixture::width_of(name_cell)
+                    + super::CELL_PAD_LEFT
+                    + super::CELL_PAD_RIGHT;
+                let saved_core = saved["core"];
+                assert!(
+                    (rendered - saved_core).abs() <= 1.0,
+                    "name column drew {rendered} px instead of its saved {saved_core} at {at}"
+                );
+            }
+            // Rendering wrote nothing back: the saved layout is not dirtied by a paint.
+            let state = state_slot.borrow().clone().expect("probe state");
+            visual.update(|_, app| {
+                let now = state.read(app);
+                assert_eq!(
+                    now.column_widths, saved,
+                    "widths changed by rendering at {at}"
+                );
+                assert_eq!(
+                    now.column_order, saved_order,
+                    "order changed by rendering at {at}"
+                );
+            });
         }
     }
 }

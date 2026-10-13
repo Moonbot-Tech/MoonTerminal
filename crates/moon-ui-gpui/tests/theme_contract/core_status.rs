@@ -65,7 +65,7 @@ fn core_status_section_row_derives_its_cell_count_from_declared_columns() {
     let section = code_only(braced_body(&table, "fn section_row("));
 
     assert!(
-        host.contains("filled_columns(&column_keys, &state.read(cx).column_widths);")
+        host.contains("filled_columns(&column_keys, state.read(cx));")
             && host.contains("let section_column_count = column_keys.len();")
             && host.contains("section_column_count,")
             && host.contains(".columns(table_columns)"),

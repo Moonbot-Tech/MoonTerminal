@@ -463,76 +463,68 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
             )
             .sortable(true)
             .tooltip(t!("core_status.col_tip.tz_off").to_string()),
-            FILLER_KEY => {
-                let mut column = MoonDataTableColumn::new(FILLER_KEY, String::new(), 0.0);
-                column.resizable = false;
-                column.movable = false;
-                column
-            }
             _ => unreachable!("canonical Flat column key"),
         })
         .collect()
 }
 
-/// Id of the empty trailing column that takes the leftover width when every column is dragged.
-///
-/// Render-only: it is never in [`COLUMN_KEYS`], so persistence drops it on the next restore.
-const FILLER_KEY: &str = "filler";
-
 /// Column that takes the width the others leave, so the header and rows end at the panel edge.
 ///
 /// The core name when the user has not dragged it, otherwise the last column without a drag.
-/// A dragged column keeps its width: `fill` would render it as a minimum and a drag narrower
-/// than its slot would no longer stick. `None` when every column is dragged.
+/// When every visible column is dragged, the last one in DISPLAY order (after the user's column
+/// moves). `fill` renders a column as `min_w(width) + flex_1`, so that column's persisted width
+/// becomes its minimum: it absorbs the leftover only while the others leave some, and nothing is
+/// written back to the table state, so rendering never changes the saved layout.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
-///     dragged: User-dragged widths keyed by column id.
+///     state: Table state carrying the user-dragged widths and the dragged column order.
 ///
 /// Returns:
-///     The column to mark `fill`, or `None`.
-fn fill_target(keys: &[&'static str], dragged: &HashMap<String, f32>) -> Option<&'static str> {
+///     The column to mark `fill`, or `None` when no column is visible.
+fn fill_target(keys: &[&'static str], state: &MoonDataTableState) -> Option<&'static str> {
+    let dragged = &state.column_widths;
     if keys.contains(&"core") && !dragged.contains_key("core") {
         return Some("core");
     }
-    keys.iter()
+    if let Some(key) = keys
+        .iter()
         .rev()
         .copied()
         .find(|key| !dragged.contains_key(*key))
+    {
+        return Some(key);
+    }
+    let last = MoonDataTable::ordered_columns(columns(keys), state).pop()?;
+    keys.iter().copied().find(|key| *key == last.key.as_ref())
 }
 
 /// Keys and descriptors whose widths reach the panel edge.
 ///
-/// [`fill_target`] gets `fill`. When every column is dragged, an empty [`FILLER_KEY`] column
-/// is appended instead: it cannot be dragged or moved, and rows emit an empty cell for it.
+/// [`fill_target`] gets `fill`; every other descriptor keeps its declared width.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
-///     dragged: User-dragged widths keyed by column id.
+///     state: Table state carrying the user-dragged widths and the dragged column order.
 ///
 /// Returns:
 ///     The keys rows render, and one descriptor per key.
 pub(super) fn filled_columns(
     keys: &[&'static str],
-    dragged: &HashMap<String, f32>,
+    state: &MoonDataTableState,
 ) -> (Vec<&'static str>, Vec<MoonDataTableColumn>) {
-    let target = fill_target(keys, dragged);
-    let mut keys = keys.to_vec();
-    if target.is_none() && !keys.is_empty() {
-        keys.push(FILLER_KEY);
-    }
-    let fill = target.unwrap_or(FILLER_KEY);
-    let descriptors = columns(&keys)
+    let fill = fill_target(keys, state);
+    let descriptors = columns(keys)
         .into_iter()
         .map(|column| {
-            if column.key.as_ref() == fill {
+            if Some(column.key.as_ref()) == fill {
                 column.fill()
             } else {
                 column
             }
         })
         .collect();
-    (keys, descriptors)
+    (keys.to_vec(), descriptors)
 }
 
 /// Render the telemetry table: one row per core, under a heading per exchange.
@@ -598,7 +590,7 @@ pub(super) fn core_status_table(
     // Taken from `columns()` rather than written as a literal: a heading row must emit EXACTLY as
     // many cells as there are columns, or `MoonDataTable` skips the whole cell permutation for it.
     // Deriving the count keeps a column added elsewhere in this table a no-op for the headings.
-    let (keys, table_columns) = filled_columns(&column_keys, &state.read(cx).column_widths);
+    let (keys, table_columns) = filled_columns(&column_keys, state.read(cx));
     let column_keys = Rc::new(keys);
     let table_columns = respect_content_floors(table_columns, floors, available);
     let section_column_count = column_keys.len();
@@ -784,7 +776,6 @@ fn core_status_row(
         "api_quota" => metric_cell(cell_text_for(r, "api_quota"), level_color(api_quota_level(r.api_quota, r.api_quota_warn), p), offline, p, SharedString::from(format!("cs-quota-{}", r.id)), MetricAlign::Center),
         "startup" => MoonDataCell::element(startup_hover_cell(r, offline, p)).text_color(level_color(startup_level(startup_cell(&r.status, &r.startup)), p)),
         "tz_off" => MoonDataCell::element(tz_offset_hover_cell(r, offline, p)).text_color(level_color(LoadLevel::Normal, p)),
-        FILLER_KEY => MoonDataCell::element(div().size_full().debug_selector(move || format!("cs-filler-{}", r.id))),
         _ => unreachable!("canonical Flat column key"),
     }));
     // Applied HERE, not inside the match above: `tests/theme_contract/core_status.rs` pins that
@@ -1468,8 +1459,10 @@ fn version_hover_cell(
 /// Returns:
 ///     The cell element.
 fn startup_hover_cell(r: &CoreStatusRow, offline: bool, p: MoonPalette) -> Stateful<Div> {
+    let selector = format!("cs-startup-{}", r.id);
     div()
         .id(SharedString::from(format!("cs-startup-{}", r.id)))
+        .debug_selector(move || selector)
         .relative()
         .size_full()
         .flex()
