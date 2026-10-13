@@ -171,17 +171,7 @@ pub(super) fn nav_sidebar(
                 .child(MoonSidebarMenu::new().children(entries))
         })
     });
-    let footer = MoonButton::new("settings-nav-import")
-        .ghost()
-        .label(t!("import.button").to_string())
-        .on_click(move |_, window, cx| on_import(window, cx))
-        .render()
-        .into_any_element();
-    let footer = tipped(
-        "settings-nav-import-tip".into(),
-        t!("import.hint").to_string(),
-        footer,
-    );
+    let footer = import_entry("settings-nav-import", true, on_import);
     MoonSidebar::new("settings-nav")
         .collapsible(false)
         .w(design::ui_px(cx, NAV_W))
@@ -190,6 +180,38 @@ pub(super) fn nav_sidebar(
         .children(groups)
         .footer(footer)
         .into_any_element()
+}
+
+/// The one MoonBot import control, with its hint: the sidebar's footer link (`ghost`), or the
+/// General page's header button while the narrow window hides the sidebar.
+///
+/// Args:
+///     id: Element id; the tooltip derives its own from it.
+///     ghost: The sidebar's borderless look rather than a header button.
+///     on_import: Called on click.
+///
+/// Returns:
+///     The tipped button.
+pub(super) fn import_entry(
+    id: &'static str,
+    ghost: bool,
+    on_import: Rc<dyn Fn(&mut Window, &mut App)>,
+) -> AnyElement {
+    let button = MoonButton::new(id).label(t!("import.button").to_string());
+    let button = if ghost {
+        button.ghost()
+    } else {
+        button.variant(moon_ui::MoonButtonVariant::Neutral)
+    };
+    let button = button
+        .on_click(move |_, window, cx| on_import(window, cx))
+        .render()
+        .into_any_element();
+    tipped(
+        SharedString::from(format!("{id}-tip")),
+        t!("import.hint").to_string(),
+        button,
+    )
 }
 
 /// The sidebar icon of `tab`, one of the icons MoonUI ships.

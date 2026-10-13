@@ -20,7 +20,7 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use super::common::{UsageShare, hint_row, num_input, usage_bar};
+use super::common::{LabelCol, UsageShare, hint_row_in, label_col, num_input, usage_bar};
 use super::{SettingsView, StatusMsg, open_folder};
 use crate::design;
 use crate::panels::{RadioMark, radio_items};
@@ -549,8 +549,10 @@ fn compact_btn(
 }
 
 /// A checkbox row. The long explanation sits behind "подробнее".
+#[allow(clippy::too_many_arguments)]
 fn flag_row(
     s: &StorageCtx,
+    col: LabelCol,
     id: &'static str,
     label: String,
     more: String,
@@ -565,12 +567,15 @@ fn flag_row(
             let _ = weak.update(app, |this, cx| change(this, *v, cx));
         })
         .into_any_element();
-    setting_row(s, id, label, None, more, check, cx)
+    setting_row(s, col, id, label, None, more, check, cx)
 }
 
-/// A labelled row with its control on the right and longer help behind "подробнее".
+/// A labelled row with its control on the right and longer help behind "подробнее"; `col` is
+/// its card's label column.
+#[allow(clippy::too_many_arguments)]
 fn setting_row(
     s: &StorageCtx,
+    col: LabelCol,
     id: &'static str,
     label: String,
     hint: Option<String>,
@@ -588,7 +593,7 @@ fn setting_row(
             cx.notify();
         });
     });
-    hint_row(id, label, hint, Some(more), control, open, toggle, cx)
+    hint_row_in(col, id, label, hint, Some(more), control, open, toggle, cx)
 }
 
 fn reports_card(s: &StorageCtx, info: &StorageInfo, busy: bool, cx: &App) -> AnyElement {
@@ -600,6 +605,7 @@ fn reports_card(s: &StorageCtx, info: &StorageInfo, busy: bool, cx: &App) -> Any
     let compact = compact_btn(s, "reports-compact", paths::reports_db_path(), busy);
     let readout = setting_row(
         s,
+        LabelCol::Full,
         "storage-reports-rows",
         rows,
         Some(t!("storage.db.reports.note").to_string()),
@@ -646,10 +652,19 @@ fn strategies_card(
         limit == 0,
         cx,
     );
+    // One label column for the card's labelled rows; its control-less note takes the full width.
+    let col = label_col(
+        &[
+            t!("storage.strategies_enabled"),
+            t!("storage.version_limit"),
+        ],
+        cx,
+    );
     let body = v_flex()
         .w_full()
         .child(flag_row(
             s,
+            col,
             "storage-strat-enabled",
             t!("storage.strategies_enabled").to_string(),
             t!("storage.strategies_enabled_hint").to_string(),
@@ -660,6 +675,7 @@ fn strategies_card(
         .child(mono_readout("storage-strat-rows", rows, cx))
         .child(setting_row(
             s,
+            col,
             "storage-version-limit",
             t!("storage.version_limit").to_string(),
             None,
@@ -669,6 +685,7 @@ fn strategies_card(
         ))
         .child(setting_row(
             s,
+            LabelCol::Full,
             "storage-strategies-more",
             t!("storage.db.strategies.note").to_string(),
             None,
@@ -728,10 +745,25 @@ fn trades_card(
         1.0,
         Some(t!("storage.unit_min").to_string()),
     );
+    // One label column for the card's labelled rows; its control-less note takes the full width.
+    let col = label_col(
+        &[
+            t!("storage.trades_enabled"),
+            t!("storage.trades_margin"),
+            t!("storage.trades_max_mb"),
+            t!("storage.trades_long_position"),
+            t!("storage.trades_autoload_cores"),
+            t!("storage.trades_autoload"),
+            t!("storage.trades_cleanup_at_startup"),
+            t!("storage.trades_cleanup"),
+        ],
+        cx,
+    );
     let body = v_flex()
         .w_full()
         .child(flag_row(
             s,
+            col,
             "storage-trades-enabled",
             t!("storage.trades_enabled").to_string(),
             t!("storage.trades_enabled_hint").to_string(),
@@ -741,6 +773,7 @@ fn trades_card(
         ))
         .child(setting_row(
             s,
+            col,
             "storage-trades-margin",
             t!("storage.trades_margin").to_string(),
             None,
@@ -750,6 +783,7 @@ fn trades_card(
         ))
         .child(setting_row(
             s,
+            col,
             "storage-trades-max",
             t!("storage.trades_max_mb").to_string(),
             None,
@@ -759,6 +793,7 @@ fn trades_card(
         ))
         .child(setting_row(
             s,
+            col,
             "storage-trades-long",
             t!("storage.trades_long_position").to_string(),
             None,
@@ -768,6 +803,7 @@ fn trades_card(
         ))
         .child(flag_row(
             s,
+            col,
             "storage-trades-autoload-cores",
             t!("storage.trades_autoload_cores").to_string(),
             t!("storage.trades_autoload_cores_hint").to_string(),
@@ -777,6 +813,7 @@ fn trades_card(
         ))
         .child(flag_row(
             s,
+            col,
             "storage-trades-autoload",
             t!("storage.trades_autoload").to_string(),
             t!("storage.trades_autoload_hint").to_string(),
@@ -786,6 +823,7 @@ fn trades_card(
         ))
         .child(flag_row(
             s,
+            col,
             "storage-trades-cleanup-startup",
             t!("storage.trades_cleanup_at_startup").to_string(),
             t!("storage.trades_cleanup_at_startup_hint").to_string(),
@@ -793,9 +831,10 @@ fn trades_card(
             SettingsView::set_cleanup_at_startup,
             cx,
         ))
-        .child(trades_cleanup::cleanup_el(s, cleanup, busy, cx))
+        .child(trades_cleanup::cleanup_el(s, col, cleanup, busy, cx))
         .child(setting_row(
             s,
+            LabelCol::Full,
             "storage-trades-more",
             t!("storage.db.trades.note").to_string(),
             None,
@@ -880,6 +919,7 @@ fn margin_picker(s: &StorageCtx, secs: u32, cx: &App) -> MoonDropdown {
 fn klines_card(s: &StorageCtx, info: &StorageInfo, cx: &App) -> AnyElement {
     let more = setting_row(
         s,
+        LabelCol::Full,
         "storage-klines-more",
         t!("storage.db.klines.note").to_string(),
         None,

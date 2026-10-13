@@ -131,3 +131,68 @@ fn general_page_fits_the_body(cx: &mut gpui::TestAppContext) {
         },
     );
 }
+
+/// In a wide window every General label sits on one line: each section's label column grows to
+/// its longest label instead of stopping at 240 and wrapping «Отдельная чарт-вкладка на / каждое
+/// ядро» while the card's right side stays empty. Every language.
+#[gpui::test]
+fn general_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
+    use super::probe_host::{all_open, host, stub};
+    use super::{GENERAL_ROWS, GeneralControls, general_body};
+    use crate::settings::layout_probe::{ProbeSpec, TextFace, probe_once};
+
+    let keys = [
+        "general.language",
+        "general.valuation.label",
+        "general.charts_split_by_core",
+        "general.book_pan.label",
+        "general.idle_close.label",
+        "general.log_files.label",
+        "general.log_retention.label",
+    ];
+    cx.update(moon_ui::init);
+    let make = host(|_, cx| {
+        let controls = GeneralControls {
+            language: stub("probe-language", 220.0, 28.0),
+            valuation: stub("probe-valuation", 260.0, 28.0),
+            tab_per_core: stub("probe-split", 18.0, 18.0),
+            book_pan: stub("probe-pan", 18.0, 18.0),
+            idle_on: stub("probe-idle-on", 18.0, 18.0),
+            idle_secs: stub("probe-idle-secs", 130.0, 28.0),
+            log_files: stub("probe-logf", 18.0, 18.0),
+            retention: stub("probe-retention", 130.0, 28.0),
+        };
+        general_body(controls, &all_open, cx)
+    });
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let fits: Vec<_> = GENERAL_ROWS
+            .iter()
+            .zip(keys)
+            .map(|(id, key)| {
+                (
+                    format!("{id}-label"),
+                    rust_i18n::t!(key).to_string(),
+                    TextFace::Ui,
+                )
+            })
+            .collect();
+        // The brief's cap is about 380 design px: every label up to it must fit one line, whatever
+        // the column's own cap is (a longer one may wrap by design).
+        let cap = cx.update(|cx| crate::design::ui_value(cx, 380.0));
+        let fits: Vec<_> = fits
+            .into_iter()
+            .filter(|(_, text, _): &(String, String, TextFace)| {
+                cx.update(|cx| crate::design::ui_body_text_width(cx, text, 400.0)) <= cap
+            })
+            .collect();
+        let spec = ProbeSpec {
+            container: "probe-body",
+            fits,
+            ..Default::default()
+        };
+        if let Err(broken) = probe_once(cx, (1900.0, 1000.0), &make, &spec) {
+            panic!("{broken} ({} at 1900x1000)", language.code());
+        }
+    }
+}

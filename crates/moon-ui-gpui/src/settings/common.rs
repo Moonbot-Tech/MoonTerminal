@@ -51,6 +51,41 @@ const SLIDER_TRACK_HEIGHTS: f32 = 12.0;
 pub(super) const HINT_LABEL_MIN_W: f32 = 150.0;
 /// See [`HINT_LABEL_MIN_W`].
 pub(super) const HINT_LABEL_MAX_W: f32 = 240.0;
+/// The widest a card's label column grows to fit its longest label (see [`label_col`]), unscaled.
+pub(super) const HINT_LABEL_FIT_MAX_W: f32 = 420.0;
+
+/// How far a [`hint_row`]'s label column may grow before the control.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum LabelCol {
+    /// Up to this width, unscaled: [`HINT_LABEL_MAX_W`], or what [`label_col`] measured.
+    Fit(f32),
+    /// The whole row: for a row with no control, whose caption would otherwise wrap mid-card.
+    Full,
+}
+
+/// The label column one card's rows share: wide enough for its longest label on one line,
+/// between [`HINT_LABEL_MAX_W`] and [`HINT_LABEL_FIT_MAX_W`].
+///
+/// One width for the whole card keeps its controls in one column; the floor and the wrap under a
+/// narrow card stay [`hint_row`]'s.
+///
+/// Args:
+///     labels: The card's row labels.
+///     cx: Application context for the UI face, size and scale.
+///
+/// Returns:
+///     The column's upper bound for [`hint_row_in`].
+pub(super) fn label_col<S: AsRef<str>>(labels: &[S], cx: &App) -> LabelCol {
+    let scale = design::ui_value(cx, 1.0);
+    let widest = labels
+        .iter()
+        .map(|l| design::ui_body_text_width(cx, l.as_ref(), 400.0))
+        .fold(0.0_f32, f32::max);
+    // A pixel of slack per side: the estimate rounds glyph advances, and a column a hair short
+    // breaks the label's last word onto a line of its own.
+    let need = (widest + 2.0) / scale;
+    LabelCol::Fit(need.clamp(HINT_LABEL_MAX_W, HINT_LABEL_FIT_MAX_W))
+}
 
 /// Upper bound for the settings slider track: captions-plus-gap, or a run of slider heights.
 ///
@@ -369,7 +404,44 @@ pub(super) fn hint_row(
     on_toggle: Action,
     cx: &App,
 ) -> AnyElement {
-    row_layout(id, label, hint, more, control, open, on_toggle, None, cx)
+    hint_row_in(
+        LabelCol::Fit(HINT_LABEL_MAX_W),
+        id,
+        label,
+        hint,
+        more,
+        control,
+        open,
+        on_toggle,
+        cx,
+    )
+}
+
+/// A [`hint_row`] whose label column grows as far as `col` allows: one card's [`label_col`], or
+/// [`LabelCol::Full`] for a row without a control.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn hint_row_in(
+    col: LabelCol,
+    id: &'static str,
+    label: String,
+    hint: Option<String>,
+    more: Option<String>,
+    control: AnyElement,
+    open: bool,
+    on_toggle: Action,
+    cx: &App,
+) -> AnyElement {
+    row_layout(
+        id,
+        label,
+        hint,
+        more,
+        control,
+        open,
+        on_toggle,
+        Err(col),
+        cx,
+    )
 }
 
 /// A [`hint_row`] laid out in columns, as in a form card: the label column `label_w` wide
@@ -409,13 +481,14 @@ pub(super) fn column_row(
         control,
         open,
         on_toggle,
-        Some(label_w),
+        Ok(label_w),
         cx,
     )
 }
 
-/// Shared body of [`hint_row`] (`label_w` `None`: a 150–240 label column, the control at its own
-/// width right after it) and [`column_row`] (`Some`: a fixed label column and the control filling the rest).
+/// Shared body of [`hint_row_in`] (`label_w` `Err`: a label column from 150 up to its
+/// [`LabelCol`], the control at its own width right after it) and [`column_row`] (`Ok`: a fixed
+/// label column and the control filling the rest).
 #[allow(clippy::too_many_arguments)]
 fn row_layout(
     id: &'static str,
@@ -425,9 +498,10 @@ fn row_layout(
     control: AnyElement,
     open: bool,
     on_toggle: Action,
-    label_w: Option<f32>,
+    label_w: Result<f32, LabelCol>,
     cx: &App,
 ) -> AnyElement {
+    let label_w_fixed = label_w.ok();
     let p = MoonPalette::active(cx);
     let muted = rgba_from(p.text_muted, 1.0);
     let toggle = more.is_some().then(|| {
@@ -468,17 +542,19 @@ fn row_layout(
             .text_color(muted)
             .child(hint)
     };
-    let field_hint = hint.clone().filter(|_| label_w.is_some()).map(caption);
+    let field_hint = hint.clone().filter(|_| label_w.is_ok()).map(caption);
     let text = v_flex()
         .map(|el| match label_w {
-            Some(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
-            // The mockup's label column, `minmax(150px, 240px)`: the label takes up to 240 and the
-            // control follows right after it, so a short label never leaves a hole across the card.
-            // The floor holds: a control that does not fit beside it wraps under the label.
-            None => el
+            Ok(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
+            // The mockup's label column, `minmax(150px, 240px)`, widened to the card's longest
+            // label when there is room: the label takes up to its cap and the control follows
+            // right after it, so a short label never leaves a hole across the card. The floor
+            // holds: a control that does not fit beside it wraps under the label.
+            Err(LabelCol::Fit(cap)) => el
                 .flex_1()
                 .min_w(design::ui_px(cx, HINT_LABEL_MIN_W))
-                .max_w(design::ui_px(cx, HINT_LABEL_MAX_W)),
+                .max_w(design::ui_px(cx, cap)),
+            Err(LabelCol::Full) => el.flex_1().min_w(design::ui_px(cx, HINT_LABEL_MIN_W)),
         })
         // A row's label and hint are prose in the UI face, whatever face the page sets.
         .font_family(design::ui_font())
@@ -489,7 +565,7 @@ fn row_layout(
                 .min_w_0()
                 .child(label),
         )
-        .children(hint.filter(|_| label_w.is_none()).map(caption))
+        .children(hint.filter(|_| label_w_fixed.is_none()).map(caption))
         .children(toggle)
         .children(more.filter(|_| open).map(|more| {
             div()
@@ -506,7 +582,7 @@ fn row_layout(
         .gap(design::ui_px(cx, 16.0))
         .py(design::ui_px(cx, 6.0))
         .child(text)
-        .map(|el| match label_w {
+        .map(|el| match label_w_fixed {
             Some(_) => el
                 .border_b_1()
                 .border_color(rgba_from(p.border, 1.0))

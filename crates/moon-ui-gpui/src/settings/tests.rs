@@ -131,3 +131,40 @@ fn page_dirt_appears_exactly_when_the_draft_is_dirty() {
         assert_eq!(super::dirty_pages(&saved, &draft).len(), 1);
     }
 }
+
+/// MoonBot import has ONE builder, `nav.rs:import_entry`: the sidebar footer, or the Main page
+/// header only while the narrow window hides the sidebar — never both on screen. Counts the files
+/// building a control from the import caption across the Settings sources.
+#[test]
+fn moonbot_import_has_one_entry() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir).expect("settings sources") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && path.file_name().is_some_and(|n| n != "tests.rs")
+            {
+                let text = std::fs::read_to_string(&path).expect("source");
+                out.push((path.display().to_string(), text));
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/settings");
+    let mut files = Vec::new();
+    walk(&root, &mut files);
+    let sites: Vec<&str> = files
+        .iter()
+        .filter(|(_, text)| text.contains("t!(\"import.button\")"))
+        .map(|(path, _)| path.as_str())
+        .collect();
+    assert_eq!(
+        sites.len(),
+        1,
+        "MoonBot import is built in {sites:?}; only the sidebar footer may"
+    );
+    assert!(
+        sites[0].ends_with("nav.rs"),
+        "the one import entry is {sites:?}"
+    );
+}

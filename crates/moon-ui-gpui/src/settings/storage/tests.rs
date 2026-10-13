@@ -504,3 +504,81 @@ fn storage_page_fits_the_body(cx: &mut gpui::TestAppContext) {
         },
     );
 }
+
+/// In a wide window the Storage cards' labels sit on one line — the card's label column grows to
+/// its longest label («Подгружать недостающую ленту из ядер при старте») — and the Reports card's
+/// caption spans the card instead of wrapping at half its width. Every language.
+#[gpui::test]
+fn storage_labels_fit_one_line_in_a_wide_window(cx: &mut gpui::TestAppContext) {
+    use super::super::layout_probe::{TextFace, probe_once};
+
+    cx.update(moon_ui::init);
+    let make = |window: &mut Window, cx: &mut Context<Host>, (width, height): (f32, f32)| {
+        let fields = [
+            super::super::common::number_state(100u32, window, cx),
+            super::super::common::number_state(256u32, window, cx),
+            super::super::common::number_state(5u32, window, cx),
+        ];
+        Host {
+            width,
+            height,
+            scroll: ScrollHandle::new(),
+            build: Rc::new(move |_, cx, _| page(&fields, cx)),
+        }
+    };
+    let rows = [
+        ("storage-strat-enabled", "storage.strategies_enabled"),
+        ("storage-version-limit", "storage.version_limit"),
+        ("storage-trades-enabled", "storage.trades_enabled"),
+        ("storage-trades-margin", "storage.trades_margin"),
+        ("storage-trades-max", "storage.trades_max_mb"),
+        ("storage-trades-long", "storage.trades_long_position"),
+        (
+            "storage-trades-autoload-cores",
+            "storage.trades_autoload_cores",
+        ),
+        ("storage-trades-autoload", "storage.trades_autoload"),
+        (
+            "storage-trades-cleanup-startup",
+            "storage.trades_cleanup_at_startup",
+        ),
+        ("storage-trades-cleanup", "storage.trades_cleanup"),
+    ];
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let fits: Vec<_> = rows
+            .iter()
+            .map(|(id, key)| {
+                (
+                    format!("{id}-label"),
+                    rust_i18n::t!(*key).to_string(),
+                    TextFace::Ui,
+                )
+            })
+            .collect();
+        // The brief's cap is about 380 design px: every label up to it must fit one line, whatever
+        // the column's own cap is (a longer one may wrap by design).
+        let cap = cx.update(|cx| crate::design::ui_value(cx, 380.0));
+        let fits: Vec<_> = fits
+            .into_iter()
+            .filter(|(_, text, _): &(String, String, TextFace)| {
+                cx.update(|cx| crate::design::ui_body_text_width(cx, text, 400.0)) <= cap
+            })
+            .collect();
+        // The Reports caption has no column cap at all: it spans the card in every language.
+        let mut fits = fits;
+        fits.push((
+            "storage-reports-rows-hint".into(),
+            rust_i18n::t!("storage.db.reports.note").to_string(),
+            TextFace::Ui,
+        ));
+        let spec = ProbeSpec {
+            container: "probe-body",
+            fits,
+            ..ProbeSpec::default()
+        };
+        if let Err(broken) = probe_once(cx, (1900.0, 1000.0), &make, &spec) {
+            panic!("{broken} ({} at 1900x1000)", language.code());
+        }
+    }
+}

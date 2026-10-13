@@ -17,7 +17,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::SettingsView;
-use super::common::{Action, hint_row};
+use super::common::{Action, hint_row_in, label_col};
 use crate::{Backend, design};
 
 /// Zoom endpoints shared by the slider state and its displayed captions.
@@ -194,6 +194,9 @@ pub(super) struct GeneralControls {
     pub(super) retention: AnyElement,
 }
 
+/// One General row before layout: id, label, hint, long help, control.
+type GeneralRow = (&'static str, String, String, Option<String>, AnyElement);
+
 /// The General page body: language and money, charts, logs.
 ///
 /// Args:
@@ -210,21 +213,32 @@ pub(super) fn general_body(
                label: String,
                hint: String,
                long: Option<String>,
-               control: AnyElement| {
-        let (open, toggle) = more(id);
-        div()
-            .debug_selector(move || id.to_string())
-            .child(hint_row(
-                id,
-                label,
-                Some(hint),
-                long,
-                control,
-                open,
-                toggle,
-                cx,
-            ))
-            .into_any_element()
+               control: AnyElement| (id, label, hint, long, control);
+    // One label column per section, wide enough for its longest label.
+    let section = |id: &'static str, title: String, rows: Vec<GeneralRow>| {
+        let labels: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
+        let col = label_col(&labels, cx);
+        let rows = rows
+            .into_iter()
+            .map(|(id, label, hint, long, control)| {
+                let (open, toggle) = more(id);
+                div()
+                    .debug_selector(move || id.to_string())
+                    .child(hint_row_in(
+                        col,
+                        id,
+                        label,
+                        Some(hint),
+                        long,
+                        control,
+                        open,
+                        toggle,
+                        cx,
+                    ))
+                    .into_any_element()
+            })
+            .collect();
+        page_section(id, title, rows, cx)
     };
     let idle = h_flex()
         .flex_wrap()
@@ -242,7 +256,7 @@ pub(super) fn general_body(
         .w_full()
         .min_w_0()
         .gap(design::ui_px(cx, 16.0))
-        .child(page_section(
+        .child(section(
             "general-sec-lang",
             s("general.sec.lang_money"),
             vec![
@@ -261,9 +275,8 @@ pub(super) fn general_body(
                     c.valuation,
                 ),
             ],
-            cx,
         ))
-        .child(page_section(
+        .child(section(
             "general-sec-charts",
             s("general.sec.charts"),
             vec![
@@ -289,9 +302,8 @@ pub(super) fn general_body(
                     idle,
                 ),
             ],
-            cx,
         ))
-        .child(page_section(
+        .child(section(
             "general-sec-logs",
             s("general.sec.logs"),
             vec![
@@ -310,7 +322,6 @@ pub(super) fn general_body(
                     c.retention,
                 ),
             ],
-            cx,
         ))
         .into_any_element()
 }
@@ -483,21 +494,23 @@ impl SettingsView {
         general_body(controls, &|key| self.more_toggle(key, cx), cx)
     }
 
-    /// The Main page: language, money, charts and logs, MoonBot import in its header.
-    pub(super) fn general_page(&self, cx: &Context<Self>) -> super::frame::PageParts {
+    /// The Main page: language, money, charts and logs. MoonBot import is the sidebar's footer
+    /// link; only while the narrow window hides the sidebar does it move into this header.
+    pub(super) fn general_page(&self, narrow: bool, cx: &Context<Self>) -> super::frame::PageParts {
         let body = self.general_tab(cx);
-        let import = moon_ui::MoonButton::new("moonbot-import")
-            .variant(moon_ui::MoonButtonVariant::Neutral)
-            .label(t!("import.button").to_string())
-            .on_click(cx.listener(|this, _, _, cx| this.start_moonbot_import(cx)))
-            .render()
-            .into_any_element();
-        let import = super::nav::tipped(
-            "moonbot-import-tip".into(),
-            t!("import.hint").to_string(),
-            import,
-        );
-        self.page_parts(super::Tab::General, body, vec![import], cx)
+        let actions = if narrow {
+            let this = cx.entity().downgrade();
+            vec![super::nav::import_entry(
+                "moonbot-import",
+                false,
+                Rc::new(move |_, cx| {
+                    let _ = this.update(cx, |this, cx| this.start_moonbot_import(cx));
+                }),
+            )]
+        } else {
+            Vec::new()
+        };
+        self.page_parts(super::Tab::General, body, actions, cx)
     }
 }
 

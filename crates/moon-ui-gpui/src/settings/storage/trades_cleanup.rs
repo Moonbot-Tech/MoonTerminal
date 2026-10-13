@@ -411,6 +411,7 @@ impl SettingsView {
 ///     cx: Application context for theme and scale.
 pub(super) fn cleanup_el(
     s: &super::StorageCtx,
+    col: crate::settings::common::LabelCol,
     preview: Option<Result<CleanupPreview, String>>,
     busy: bool,
     cx: &App,
@@ -460,6 +461,7 @@ pub(super) fn cleanup_el(
         .into_any_element();
     super::setting_row(
         s,
+        col,
         "storage-trades-cleanup",
         t!("storage.trades_cleanup").to_string(),
         None,

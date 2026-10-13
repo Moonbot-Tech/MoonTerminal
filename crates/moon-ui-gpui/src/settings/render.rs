@@ -79,7 +79,7 @@ impl Render for SettingsView {
             Tab::Lines => self.lines_page(cx),
             Tab::Badges => self.badges_page(body_width, cx),
             Tab::Hotkeys => self.hotkeys_page(window, cx),
-            Tab::General => self.general_page(cx),
+            Tab::General => self.general_page(narrow, cx),
             Tab::Security => self.security_page(cx),
             Tab::Storage => self.storage_page(cx),
             Tab::Sounds => self.sounds_page(body_width, cx),
