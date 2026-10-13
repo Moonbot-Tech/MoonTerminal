@@ -843,14 +843,15 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
 
 /// A persisted layout narrower than the panel must still reach the panel's right edge.
 ///
-/// Every column carries a saved drag, so no column is `fill` by default and an earlier build
-/// left an empty strip (or an empty spacer column) at the right. The last VISIBLE column in
-/// display order now absorbs the leftover. Mutations this catches: filling the last SOURCE
-/// column after the user moved another one to the end, ignoring a hidden column, stretching
-/// the other columns away from their saved widths, and writing the rendered width back into
-/// the table state, which would mark the saved layout dirty on every render.
+/// Every column carries a saved drag. The name column absorbs the leftover whenever it is
+/// visible, so the numeric columns keep their saved widths and stay packed together; only with
+/// the name hidden does the last VISIBLE column in display order take it. Mutations this
+/// catches: filling the last column while the name is shown, filling the last SOURCE column
+/// after the user moved another one to the end, stretching a column away from its saved width,
+/// and writing the rendered width back into the table state, which would mark the saved layout
+/// dirty on every render.
 #[gpui::test]
-fn persisted_layout_last_column_reaches_the_panel_edge(cx: &mut gpui::TestAppContext) {
+fn persisted_layout_name_column_absorbs_the_leftover(cx: &mut gpui::TestAppContext) {
     crate::test_locale::warm();
     layout_fixture::install_dark(cx);
     let (rows, lines) = dock_fixture();
@@ -861,42 +862,61 @@ fn persisted_layout_last_column_reaches_the_panel_edge(cx: &mut gpui::TestAppCon
         FlatLine::Core(index) => rows[*index].id,
         FlatLine::Section(_) => panic!("a heading must be followed by its members"),
     };
-    // (case, visible keys, column order, selector of the cell that must reach the edge)
-    let without_tz: Vec<&'static str> = all_keys
-        .iter()
-        .copied()
-        .filter(|key| *key != "tz_off")
-        .collect();
-    let mut core_last: Vec<&'static str> = all_keys
-        .iter()
-        .copied()
-        .filter(|key| *key != "core")
-        .collect();
+    let without = |gone: &str| -> Vec<&'static str> {
+        all_keys
+            .iter()
+            .copied()
+            .filter(|key| *key != gone)
+            .collect()
+    };
+    let mut core_last = without("core");
     core_last.push("core");
-    let cases: [(&str, Vec<&'static str>, Vec<&'static str>, String); 3] = [
+    let tz = format!("cs-tz-off-{first_core}");
+    let startup = format!("cs-startup-{first_core}");
+    let name = format!("cs-core-cell-{first_core}");
+    // (case, visible keys, column order, (key, selector) of the cell reaching the edge,
+    // (key, selector) of the cell that fills, or `None` when it is the edge cell itself)
+    type Cell = (&'static str, String);
+    let cases: [(
+        &str,
+        Vec<&'static str>,
+        Vec<&'static str>,
+        Cell,
+        Option<Cell>,
+    ); 4] = [
         (
             "source order",
             all_keys.clone(),
             Vec::new(),
-            format!("cs-tz-off-{first_core}"),
+            ("tz_off", tz.clone()),
+            Some(("core", name.clone())),
         ),
         (
             "tz_off hidden",
-            without_tz,
+            without("tz_off"),
             Vec::new(),
-            format!("cs-startup-{first_core}"),
+            ("startup", startup),
+            Some(("core", name.clone())),
         ),
         (
             "core moved last",
             all_keys.clone(),
             core_last,
-            format!("cs-core-cell-{first_core}"),
+            ("core", name.clone()),
+            None,
+        ),
+        (
+            "core hidden",
+            without("core"),
+            Vec::new(),
+            ("tz_off", tz),
+            None,
         ),
     ];
     let width = WIDTHS[0];
     for code in LOCALES {
         let _locale = crate::test_locale::force(code);
-        for (case, keys, order, last_selector) in &cases {
+        for (case, keys, order, (last_key, last_selector), filler) in &cases {
             // Saved widths at 60% of the defaults: well under the panel, like a layout saved
             // on a narrower monitor.
             let mut seeded = MoonDataTableState::new();
@@ -948,20 +968,25 @@ fn persisted_layout_last_column_reaches_the_panel_edge(cx: &mut gpui::TestAppCon
                 "last column ends at {edge}, band at {band_edge}, panel at {} ({at})",
                 f32::from(slot.right())
             );
-            // The name column keeps its saved width unless it is the one that fills.
-            if *case != "core moved last" {
-                let name_cell = visual
-                    .debug_bounds(layout_fixture::leak_selector(format!(
-                        "cs-core-cell-{first_core}"
-                    )))
-                    .unwrap_or_else(|| panic!("name cell at {at}"));
-                let rendered = layout_fixture::width_of(name_cell)
-                    + super::CELL_PAD_LEFT
-                    + super::CELL_PAD_RIGHT;
-                let saved_core = saved["core"];
+            let mut drawn = |selector: &String| {
+                let cell = visual
+                    .debug_bounds(layout_fixture::leak_selector(selector.clone()))
+                    .unwrap_or_else(|| panic!("{selector} at {at}"));
+                layout_fixture::width_of(cell) + super::CELL_PAD_LEFT + super::CELL_PAD_RIGHT
+            };
+            // The edge cell keeps its saved width unless it is the one that fills.
+            if let Some((fill_key, fill_selector)) = filler {
+                let rendered = drawn(last_selector);
+                let saved_last = saved[*last_key];
                 assert!(
-                    (rendered - saved_core).abs() <= 1.0,
-                    "name column drew {rendered} px instead of its saved {saved_core} at {at}"
+                    (rendered - saved_last).abs() <= 1.0,
+                    "{last_key} drew {rendered} px instead of its saved {saved_last} at {at}"
+                );
+                let grown = drawn(fill_selector);
+                let saved_fill = saved[*fill_key];
+                assert!(
+                    grown > saved_fill + 2.0,
+                    "{fill_key} drew {grown} px, not wider than its saved {saved_fill} at {at}"
                 );
             }
             // Rendering wrote nothing back: the saved layout is not dirtied by a paint.

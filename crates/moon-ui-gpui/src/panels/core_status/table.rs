@@ -470,11 +470,13 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
 
 /// Column that takes the width the others leave, so the header and rows end at the panel edge.
 ///
-/// The core name when the user has not dragged it, otherwise the last column without a drag.
-/// When every visible column is dragged, the last one in DISPLAY order (after the user's column
-/// moves). `fill` renders a column as `min_w(width) + flex_1`, so that column's persisted width
-/// becomes its minimum: it absorbs the leftover only while the others leave some, and nothing is
-/// written back to the table state, so rendering never changes the saved layout.
+/// The core name whenever it is visible, dragged or not, so the extra width lands after the
+/// left-aligned name and the numeric columns stay packed together at their own widths. Only
+/// when the name is hidden does the last column in DISPLAY order (after the user's column
+/// moves) take it. `fill` renders a column as `min_w(width) + flex_1`, so that column's
+/// persisted width becomes its minimum: it absorbs the leftover only while the others leave
+/// some, and nothing is written back to the table state, so rendering never changes the saved
+/// layout.
 ///
 /// Args:
 ///     keys: Visible column keys, in source order.
@@ -483,17 +485,8 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
 /// Returns:
 ///     The column to mark `fill`, or `None` when no column is visible.
 fn fill_target(keys: &[&'static str], state: &MoonDataTableState) -> Option<&'static str> {
-    let dragged = &state.column_widths;
-    if keys.contains(&"core") && !dragged.contains_key("core") {
+    if keys.contains(&"core") {
         return Some("core");
-    }
-    if let Some(key) = keys
-        .iter()
-        .rev()
-        .copied()
-        .find(|key| !dragged.contains_key(*key))
-    {
-        return Some(key);
     }
     let last = MoonDataTable::ordered_columns(columns(keys), state).pop()?;
     keys.iter().copied().find(|key| *key == last.key.as_ref())
