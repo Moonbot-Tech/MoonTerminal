@@ -6,6 +6,30 @@
 use super::{PendingOrder, folder_subject};
 use std::collections::HashSet;
 
+/// A plain folder click must transfer the move subject from the previously selected strategy.
+#[test]
+fn folder_click_transfers_the_arrow_subject() {
+    let mut selected = Some((7, 42));
+    let mut anchor = selected;
+    let mut strategies = HashSet::from([(7, 42)]);
+    crate::strategies::selection::retire_strategy_for_folder(
+        "Target",
+        false,
+        false,
+        &mut selected,
+        &mut anchor,
+        &mut strategies,
+    );
+    assert_eq!(
+        folder_subject(
+            &HashSet::from([(7, "Target".into())]),
+            !strategies.is_empty() || selected.is_some(),
+            None
+        ),
+        Some((7, vec!["Target".into()]))
+    );
+}
+
 /// Dropping any subject guard would let arrows move multiple folders, a stale hidden core,
 /// or a folder while the existing strategy selection still owns the command.
 #[test]
