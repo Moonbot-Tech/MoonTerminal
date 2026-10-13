@@ -410,12 +410,19 @@ pub(in crate::analytics) fn data_page_el(cols: KpiCols, b: DataBlocks, cx: &App)
             .child(el)
     };
     let main = match cols {
+        // The row stretches its columns to the taller one, and the chart slot is a column, so
+        // the chart card fills the side column's height instead of leaving a hole under it.
         KpiCols::Four => h_flex()
             .debug_selector(|| "sum-main".into())
             .w_full()
-            .items_start()
+            .items_stretch()
             .gap(gap)
-            .child(slot("sum-main-chart", b.chart).flex_grow(2.0))
+            .child(
+                slot("sum-main-chart", b.chart)
+                    .flex_grow(2.0)
+                    .flex()
+                    .flex_col(),
+            )
             .child(
                 v_flex()
                     .debug_selector(|| "sum-side".into())

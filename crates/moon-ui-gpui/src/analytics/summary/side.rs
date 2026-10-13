@@ -20,6 +20,9 @@ pub(in crate::analytics) struct TradesActs {
     pub(in crate::analytics) on_side: Rc<dyn Fn(TradeSide, &mut Window, &mut App)>,
 }
 
+/// Line height of an insight row's text lines, as a multiple of each line's font size.
+const INSIGHT_LINE: f32 = 1.25;
+
 /// Shared card frame of the side column.
 fn card(selector: &'static str, cx: &App, p: MoonPalette) -> Div {
     v_flex()
@@ -165,8 +168,11 @@ pub(in crate::analytics) fn insights_el(
             .debug_selector(move || format!("sum-ins-text-{i}"))
             .flex_1()
             .min_w_0()
-            .py(design::ui_px(cx, 8.0))
+            // Dense rows as in the mockup: 6 px above and below, and one tight line box per line
+            // instead of GPUI's loose default, so five insights stay about pill height.
+            .py(design::ui_px(cx, 6.0))
             .gap(design::ui_px(cx, 1.0))
+            .line_height(relative(INSIGHT_LINE))
             .child(
                 line("cat")
                     .font_family(design::ui_font())

@@ -331,6 +331,8 @@ pub(in crate::analytics) fn profit_chart_el(
         .child(header_el(m, acts, p, cx))
         .child(legend_el(m, p, cx))
         .child(plot_el(m, hover, acts, p, cx))
+        // Fills a stretched slot; the plot below takes the extra height.
+        .flex_1()
         .into_any_element()
 }
 
@@ -567,12 +569,13 @@ fn plot_el(
     // Absolutely placed mono labels inside the inset plot; edge labels hug their side.
     let cap_h = f32::from(design::t_caption(cx)) * 1.4;
     // Measured with the weight it is drawn with, so centring and edge hugging use the real width.
-    let label = |frac: f32, y: f32, text: String, color: u32, sel: String, weight: FontWeight| {
+    // The caller places it vertically: the cumulative pane grows with the card, so its labels
+    // anchor to fractions of that pane and everything below it anchors to the bottom edge.
+    let label = |frac: f32, text: String, color: u32, sel: String, weight: FontWeight| {
         let w = design::mono_caption_text_width(cx, &text, weight.0);
         let el = div()
             .debug_selector(move || sel)
             .absolute()
-            .top(px(y))
             .flex_none()
             .whitespace_nowrap()
             .font_family(design::mono())
@@ -590,29 +593,48 @@ fn plot_el(
             el.left(relative(frac)).ml(px(-w / 2.0))
         }
     };
-    let mut labels: Vec<Div> = Vec::new();
+    // Peak and trough labels live in an overlay over the cumulative pane only. A label that
+    // fits beside its point at the minimum pane height rides the point's fraction of the pane;
+    // one that does not hugs the pane's edge, which only moves further from the point as the
+    // pane grows.
+    let mut pane_labels: Vec<Div> = Vec::new();
     if let Some(k) = m.dd_peak_ix.filter(|&k| k < n) {
         let v = m.cum[k];
-        labels.push(label(
+        let el = label(
             bucket_frac(k, n),
-            (y_top(m.total[k]) - cap_h - 2.0).max(0.0),
             fmt_signed(v),
             sign_color(p, v),
             "sum-chart-peak".into(),
             FontWeight::SEMIBOLD,
-        ));
+        );
+        let y = y_top(m.total[k]);
+        pane_labels.push(if y - cap_h - 2.0 >= 0.0 {
+            el.top(relative(y / top_h)).mt(px(-cap_h - 2.0))
+        } else {
+            el.top(px(0.0))
+        });
     }
     if let Some(k) = m.dd_trough_ix.filter(|&k| k < n) {
         let v = m.cum[k];
-        labels.push(label(
+        let el = label(
             bucket_frac(k, n),
-            (y_top(m.total[k]) + 4.0).min(top_h - cap_h),
             fmt_signed(v),
             sign_color(p, v),
             "sum-chart-trough".into(),
             FontWeight::SEMIBOLD,
-        ));
+        );
+        let y = y_top(m.total[k]);
+        pane_labels.push(if y + 4.0 + cap_h <= top_h {
+            el.top(relative(y / top_h)).mt(px(4.0))
+        } else {
+            el.bottom(px(0.0))
+        });
     }
+    // Bars and axis keep their fixed heights at the bottom of the plot, so their labels are
+    // computed at the minimum height and anchored to the bottom edge.
+    let full_h = top_h + gap + bot_h + axis_h;
+    let from_bottom = |y: f32| px(full_h - y - cap_h);
+    let mut labels: Vec<Div> = Vec::new();
     for (k, above) in [(m.day_max_ix, true), (m.day_min_ix, false)]
         .into_iter()
         .filter_map(|(k, above)| k.filter(|&k| k < n).map(|k| (k, above)))
@@ -629,25 +651,27 @@ fn plot_el(
             top_h + gap + bot_h,
             cap_h,
         );
-        labels.push(label(
-            bucket_frac(k, n),
-            y,
-            fmt_signed(v),
-            sign_color(p, v),
-            format!("sum-chart-bar-{}", if above { "max" } else { "min" }),
-            FontWeight::SEMIBOLD,
-        ));
+        labels.push(
+            label(
+                bucket_frac(k, n),
+                fmt_signed(v),
+                sign_color(p, v),
+                format!("sum-chart-bar-{}", if above { "max" } else { "min" }),
+                FontWeight::SEMIBOLD,
+            )
+            .bottom(from_bottom(y)),
+        );
     }
     for (i, (k, text)) in m.ticks.iter().enumerate() {
         let frac = bucket_frac(*k, n);
         let el = label(
             frac,
-            top_h + gap + bot_h + 2.0,
             text.clone(),
             p.text_muted,
             format!("sum-chart-tick-{i}"),
             FontWeight::NORMAL,
-        );
+        )
+        .bottom(from_bottom(top_h + gap + bot_h + 2.0));
         labels.push(el);
     }
 
@@ -681,7 +705,7 @@ fn plot_el(
     .left_0()
     .top_0()
     .w_full()
-    .h(px(top_h + gap + bot_h));
+    .bottom(px(axis_h));
 
     let (on_area, on_bucket) = (acts.on_area.clone(), acts.on_bucket.clone());
     let surface = div()
@@ -690,7 +714,7 @@ fn plot_el(
         .left_0()
         .top_0()
         .w_full()
-        .h(px(top_h + gap + bot_h))
+        .bottom(px(axis_h))
         .on_hover(move |hovered, window, cx| on_area(*hovered, window, cx))
         .on_mouse_move(move |event: &MouseMoveEvent, window, cx| {
             // A drag must not reopen the source popup, matching GPUI's own hover gate.
@@ -721,16 +745,31 @@ fn plot_el(
         )
     });
 
-    div()
+    // The plot takes whatever height the card has beyond its header and legend, never less
+    // than the reference panes; the cumulative pane absorbs all of the growth.
+    v_flex()
         .debug_selector(|| "sum-chart-plot".into())
         .w_full()
+        .flex_1()
         .px(px(pad))
         .child(
             div()
+                .debug_selector(|| "sum-chart-area".into())
                 .relative()
                 .w_full()
-                .h(px(top_h + gap + bot_h + axis_h))
+                .flex_1()
+                .min_h(px(full_h))
                 .child(chart)
+                .child(
+                    div()
+                        .debug_selector(|| "sum-chart-pane".into())
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .w_full()
+                        .bottom(px(gap + bot_h + axis_h))
+                        .children(pane_labels),
+                )
                 .children(labels)
                 .child(surface)
                 .children(popup),
@@ -799,6 +838,7 @@ struct PaintData {
     vmin: f32,
     vmax: f32,
     bar_max: f64,
+    /// Cumulative pane height at the minimum plot size; the paint grows it to the bounds.
     top_h: f32,
     gap: f32,
     bot_h: f32,
@@ -820,9 +860,12 @@ impl PaintData {
         if w < 4.0 || n == 0 {
             return;
         }
+        // The canvas grows with the card while the bars pane keeps its height, so the cumulative
+        // pane is whatever is left above it, never less than the reference height.
+        let top_h = (f32::from(b.size.height) - self.gap - self.bot_h).max(self.top_h);
         let span = (self.vmax - self.vmin).max(1e-6);
         let x = |k: usize| b.origin.x + px(bucket_frac(k, n) * w);
-        let y = |v: f32| b.origin.y + px((self.vmax - v) / span * self.top_h);
+        let y = |v: f32| b.origin.y + px((self.vmax - v) / span * top_h);
         let rule = |yy: Pixels, color: Hsla, window: &mut Window| {
             window.paint_quad(gpui::fill(
                 Bounds::new(gpui::point(b.origin.x, yy), gpui::size(px(w), px(1.0))),
@@ -830,11 +873,7 @@ impl PaintData {
             ));
         };
         for i in 0..=4 {
-            rule(
-                b.origin.y + px(self.top_h * i as f32 / 4.0),
-                self.grid,
-                window,
-            );
+            rule(b.origin.y + px(top_h * i as f32 / 4.0), self.grid, window);
         }
         if self.vmin < 0.0 && self.vmax > 0.0 {
             let zy = y(0.0);
@@ -909,7 +948,7 @@ impl PaintData {
             .corner_radii(px(3.0)),
         );
         // Day bars on the same x mapping, around the bottom pane's zero line.
-        let zero_y = self.top_h + self.gap + self.bot_h / 2.0;
+        let zero_y = top_h + self.gap + self.bot_h / 2.0;
         let bw = (w / n as f32 * BAR_FILL).clamp(1.0, 24.0);
         for (k, &v) in self.profits.iter().enumerate() {
             if !v.is_finite() || v == 0.0 {
@@ -930,7 +969,7 @@ impl PaintData {
         if let Some(bi) = self.hover.filter(|&bi| bi < n) {
             let cx_ = x(bi).min(b.origin.x + px(w - 1.0));
             let mut yy = 0.0;
-            let full = self.top_h + self.gap + self.bot_h;
+            let full = top_h + self.gap + self.bot_h;
             while yy < full {
                 window.paint_quad(gpui::fill(
                     Bounds::new(

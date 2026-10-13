@@ -229,6 +229,10 @@ fn probe_widths(
     }
 }
 
+/// Tight line height of the mockup's insight rows (`.ins` lines at 1.25), as a multiple of
+/// the font size: the ceiling a row's three lines are held to, independent of the renderer.
+const MOCKUP_TIGHT_LINE: f32 = 1.25;
+
 /// Group a KPI box belongs to, by its metric name.
 fn kpi_home(name: &str) -> usize {
     match name {
@@ -736,6 +740,19 @@ fn side_column_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext
                     (stripe.size.height - row.size.height).abs() < px(1.5),
                     "insight {i} stripe does not run the row's height ({at})"
                 );
+                // Loose default line boxes or roomy padding made five rows ~370 px tall and
+                // pushed the side column far below the chart.
+                let (tight, slack) = visual.update(|_, cx| {
+                    (
+                        f32::from(design::t_body(cx)) * MOCKUP_TIGHT_LINE,
+                        f32::from(design::ui_px(cx, 16.0)),
+                    )
+                });
+                assert!(
+                    f32::from(row.size.height) <= 3.0 * tight + slack,
+                    "insight {i} row {} px tall, over three tight lines ({at})",
+                    f32::from(row.size.height)
+                );
                 let mut lines = vec!["cat", "what"];
                 if it.why.is_some() {
                     lines.push("why");
@@ -753,6 +770,18 @@ fn side_column_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext
                     assert!(
                         f32::from(b.size.height) <= line_h,
                         "insight {i} {name} wrapped instead of ending in an ellipsis ({at})"
+                    );
+                    // A line box shorter than its own font clips the glyphs vertically.
+                    let font = visual.update(|_, cx| {
+                        f32::from(if name == "what" {
+                            design::t_body(cx)
+                        } else {
+                            design::t_caption(cx)
+                        })
+                    });
+                    assert!(
+                        f32::from(b.size.height) + 0.5 >= font,
+                        "insight {i} {name} clipped vertically ({at})"
                     );
                 }
                 let need = visual
@@ -1140,6 +1169,21 @@ fn summary_tab_blocks_never_overlap_every_language_theme_and_width(cx: &mut gpui
                                 assert!(
                                     chart.right() <= side.origin.x + px(0.5),
                                     "wide: side not beside the chart ({at})"
+                                );
+                                // A row that aligns its columns to the top (or a chart slot
+                                // that is not a column) leaves a hole under the chart card
+                                // whenever the side column is the taller one.
+                                let card = bounds(visual, "sum-chart-card", at);
+                                assert!(
+                                    (card.bottom() - side.bottom()).abs() <= px(2.0)
+                                        && card.bottom() + px(2.0) >= tr.bottom(),
+                                    "wide: chart card ends {} above the side column ({at})",
+                                    f32::from(side.bottom() - card.bottom())
+                                );
+                                let plot = bounds(visual, "sum-chart-area", at);
+                                assert!(
+                                    inside(plot, card),
+                                    "wide: grown plot escaped its card ({at})"
                                 );
                                 assert!(
                                     chart.size.width > side.size.width,
