@@ -95,14 +95,13 @@ pub(super) fn shown_server_groups(
 /// The Servers grid.
 ///
 /// Args:
-///     groups: Cached server snapshots.
+///     groups: Cards to draw, already searched and in card order (`frame_server_cards`).
 ///     ip_masked: Whether addresses are hidden for the whole panel.
 ///     editing: Server whose name is being renamed, if any.
 ///     edit_input: The rename field, present only while `editing` is set.
 ///     chart_server: Server the detached chart follows.
 ///     chart_core: Core the detached chart follows, when a chip is selected.
 ///     cpu_history: CPU series already read off `core_chart_hist`, keyed by address.
-///     query: Toolbar search, already stored by the panel. Empty keeps every card.
 ///     cx: Panel context. Used to downgrade a callback handle and to read the palette.
 ///         Never to read the view.
 ///
@@ -117,15 +116,13 @@ pub(super) fn servers_view(
     chart_server: Option<ServerKey>,
     chart_core: Option<CoreId>,
     cpu_history: &HashMap<IpAddr, Vec<(f32, f32)>>,
-    query: &str,
     selection: RowSelection<CoreId>,
     available_w: f32,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement + use<> {
     let weak_view = cx.entity().downgrade();
-    let shown = shown_server_groups(groups, query, ip_masked);
-    server_grid(
-        &shown,
+    ordered_server_grid(
+        groups.iter().collect(),
         ip_masked,
         editing,
         edit_input,
@@ -174,16 +171,19 @@ pub(super) fn servers_measure_host(
         )
 }
 
-/// The card grid, given a callback handle the caller already downgraded.
+/// The card grid over cards already in [`card_order`], given a callback handle the caller
+/// already downgraded.
 ///
 /// Args:
-///     groups: Cached server snapshots.
+///     cards: Server snapshots in paint order, as the panel's memo stores them.
 ///     ip_masked: Whether addresses are hidden for the whole panel.
 ///     editing: Server whose name is being renamed, if any.
 ///     edit_input: The rename field, present only while `editing` is set.
 ///     chart_server: Server the detached chart follows.
 ///     chart_core: Core the detached chart follows, when a chip is selected.
 ///     cpu_history: CPU series already read off `core_chart_hist`, keyed by address.
+///     selection: Core-row selection the chips tint.
+///     available_w: Measured grid width, `0` before the first measure.
 ///     weak_view: Panel handle, moved in so the grid does not borrow the caller's local.
 ///         Clicks no-op when it cannot upgrade.
 ///     cx: Application context used for the palette and the density scale. Never the view.
@@ -191,8 +191,8 @@ pub(super) fn servers_measure_host(
 /// Returns:
 ///     A wrapping grid of server cards.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn server_grid(
-    groups: &[ServerStatusGroup],
+pub(super) fn ordered_server_grid(
+    cards: Vec<&ServerStatusGroup>,
     ip_masked: bool,
     editing: Option<ServerKey>,
     edit_input: Option<Entity<MoonInputState>>,
@@ -205,7 +205,6 @@ pub(super) fn server_grid(
     cx: &App,
 ) -> impl IntoElement + use<> {
     let p = MoonPalette::active(cx);
-    let cards = card_order(groups);
     div()
         .id("core-status-servers")
         .debug_selector(|| "cs-servers".into())

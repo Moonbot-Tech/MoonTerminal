@@ -70,6 +70,10 @@ pub(super) struct FlatViewCache {
     query: String,
     ip_masked: bool,
     rows: Option<Rc<Vec<CoreStatusRow>>>,
+    /// Exchange heading and member lines over `rows`, built on the first render after `rows`
+    /// changes and dropped with them. Venues ride the same snapshot: the session's venue map
+    /// moves only with a backend notify, which also rebuilds the snapshot.
+    lines: Option<Rc<Vec<ordering::FlatLine>>>,
     /// Uniform facts for the filtered projection. Keyed by generation, chip, search, and the
     /// IP mask. Sort is not part of the key: agreement does not depend on row order.
     uniform: Option<(
@@ -122,6 +126,7 @@ impl FlatViewCache {
         self.query = query.to_string();
         self.ip_masked = ip_masked;
         self.rows = Some(rows.clone());
+        self.lines = None;
         rows
     }
 
@@ -619,16 +624,35 @@ impl CoreStatusView {
         };
         // One list for the header and every row. The drag map is read inside this block so the
         // borrow ends before the venue read below. Width 0 (not measured yet) keeps every key.
-        let visible = {
-            let dragged = &self.table_state.read(cx).column_widths;
-            table::projected_column_keys(
-                &self.cached_rows,
-                hidden,
-                &uniform_keys,
-                dragged,
-                self.flat_measured_w,
-                &floors,
-            )
+        // Keyed on every input but the rows, which the generation stands for. The dragged widths
+        // and the measured width move during a column drag; the rest only with the snapshot.
+        let columns_key = super::frame_cache::ColumnsKey {
+            generation,
+            hidden: hidden.clone(),
+            uniform: uniform.iter().map(|fact| fact.key).collect(),
+            dragged: self.table_state.read(cx).column_widths.clone(),
+            measured_w_bits: self.flat_measured_w.to_bits(),
+            locale,
+        };
+        let cached_columns = self.frame.borrow_mut().columns.cached(&columns_key);
+        let visible: Vec<&'static str> = match cached_columns {
+            Some(columns) => columns.as_ref().clone(),
+            None => {
+                let built = table::projected_column_keys(
+                    &self.cached_rows,
+                    hidden,
+                    &uniform_keys,
+                    &columns_key.dragged,
+                    self.flat_measured_w,
+                    &floors,
+                );
+                self.frame
+                    .borrow_mut()
+                    .columns
+                    .store(columns_key, built)
+                    .as_ref()
+                    .clone()
+            }
         };
         let sort = self
             .flat_sort
@@ -676,9 +700,16 @@ impl CoreStatusView {
                 )
             }
         };
-        let backend = self.backend.read(cx);
-        let venues = backend.session.core_venues();
-        let lines = Rc::new(ordering::flat_lines(&rows, venues));
+        let cached_lines = self.flat_cache.borrow().lines.clone();
+        let lines = match cached_lines {
+            Some(lines) => lines,
+            None => {
+                let venues = self.backend.read(cx).session.core_venues();
+                let lines = Rc::new(ordering::flat_lines(&rows, venues));
+                self.flat_cache.borrow_mut().lines = Some(lines.clone());
+                lines
+            }
+        };
         (rows, lines, visible)
     }
 

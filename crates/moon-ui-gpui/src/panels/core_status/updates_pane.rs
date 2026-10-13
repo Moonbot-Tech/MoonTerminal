@@ -70,6 +70,7 @@ pub(super) fn updates_blocks(lagging: bool, live: bool, history: bool) -> Update
 ///     lags: Any scoped core has `version_behind`. History alone does not count.
 ///     live_rows: In-flight queue rows.
 ///     history: Closed records, newest first.
+///     history_newest: Per history row, whether it is its core's newest record.
 ///     phases: Current update phase per scoped core. The history retry reads this.
 ///     server_names: Display name per lane address.
 ///     state: Persisted updates-table state.
@@ -93,6 +94,7 @@ pub(super) fn updates_pane(
     lags: bool,
     live_rows: Rc<Vec<CoreStatusRow>>,
     history: Rc<Vec<CoreUpdateRecord>>,
+    history_newest: Rc<Vec<bool>>,
     phases: Rc<HashMap<CoreId, CoreUpdatePhase>>,
     server_names: Rc<HashMap<IpAddr, String>>,
     state: &Entity<MoonDataTableState>,
@@ -116,6 +118,7 @@ pub(super) fn updates_pane(
                 "core-status-updates",
                 live_rows,
                 history,
+                history_newest,
                 phases,
                 server_names,
                 state,
@@ -129,6 +132,7 @@ pub(super) fn updates_pane(
             "core-status-updates",
             live_rows,
             history,
+            history_newest,
             phases,
             server_names,
             state,

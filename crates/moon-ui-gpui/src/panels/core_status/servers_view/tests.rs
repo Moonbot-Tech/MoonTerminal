@@ -14,7 +14,7 @@ use moon_ui::v_flex;
 use super::super::CoreStatusView;
 use super::super::layout_fixture::{self, LOCALES, WIDTHS};
 use super::super::presentation::{cpu_load, memory_free};
-use super::{card_core_order, card_order, server_grid};
+use super::{card_core_order, card_order, ordered_server_grid};
 use crate::backend::core_warn::LatencySeverity;
 use crate::controls::row_selection::RowSelection;
 use crate::design;
@@ -121,8 +121,8 @@ impl Render for GridProbe {
     /// Paint the production grid.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = WeakEntity::<CoreStatusView>::new_invalid();
-        v_flex().size_full().child(server_grid(
-            &self.groups,
+        v_flex().size_full().child(ordered_server_grid(
+            card_order(&self.groups),
             false,
             None,
             None,

@@ -17,6 +17,7 @@ mod chart;
 mod columns_fit;
 mod config_popup;
 mod core_bar;
+mod frame_cache;
 mod health;
 mod health_strip;
 mod interactions;
@@ -115,6 +116,9 @@ pub struct CoreStatusView {
     rows_generation: u64,
     /// Sorted rows for the current revision and sort; headings are always rebuilt.
     flat_cache: std::cell::RefCell<cache::FlatViewCache>,
+    /// Every other projection `render` draws, memoized per snapshot generation and view state:
+    /// GPUI re-renders this whole view on each row hover and scroll tick of any list inside it.
+    frame: std::cell::RefCell<frame_cache::FrameCache>,
     /// Whether server addresses are hidden behind the toolbar mask.
     ///
     /// Panel-wide rather than per-server, and it starts FALSE: this view exists to show addresses,
@@ -422,6 +426,7 @@ impl CoreStatusView {
             cached_rows: Rc::new(Vec::new()),
             rows_generation: 0,
             flat_cache: std::cell::RefCell::new(cache::FlatViewCache::default()),
+            frame: std::cell::RefCell::new(frame_cache::FrameCache::default()),
             cached_groups: Rc::new(Vec::new()),
             cached_alarm_starts: Rc::new(Vec::new()),
             alarms: warnings::AlarmsList::default(),

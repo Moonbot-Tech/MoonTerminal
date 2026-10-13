@@ -80,6 +80,32 @@ pub(super) fn behind_in_scope(rows: &[CoreStatusRow]) -> usize {
         .count()
 }
 
+/// Server lane a bulk update would run one core on, or `None` when the core is not offerable.
+///
+/// The one eligibility rule [`CoreStatusView::fleet_update_plan`] and the Updates footer counts
+/// share: a stored core with a known endpoint whose update offer state is `Offerable`.
+///
+/// Args:
+///     b: Backend snapshot.
+///     id: Core to test.
+///
+/// Returns:
+///     The core's endpoint address when it may be enqueued.
+pub(super) fn update_lane(b: &crate::Backend, id: CoreId) -> Option<IpAddr> {
+    let data = b.session.store().core(id)?;
+    let endpoint = data.endpoint?;
+    matches!(
+        crate::controls::core_update::offer_state(
+            &data.status,
+            data.server_version,
+            true,
+            b.session.core_update_phase(id),
+        ),
+        crate::controls::core_update::OfferState::Offerable
+    )
+    .then_some(endpoint.address)
+}
+
 impl CoreStatusView {
     /// Switch the detached-window chart span and repaint.
     ///
@@ -665,27 +691,6 @@ impl CoreStatusView {
         self.visible_order(cx).into_iter().flatten().collect()
     }
 
-    /// How many SELECTED cores the current presentation is actually drawing.
-    ///
-    /// Not `core_selection.len()`: collapsing a By-IP group hides its cores from the rendered
-    /// order without rebuilding the cache, so the raw set can outnumber what is on screen. The
-    /// footer labels its button with this, so the count it shows is the count its own confirm
-    /// will name and its own press will enqueue.
-    ///
-    /// Args:
-    ///     visible: Cores the presentation is drawing, from [`Self::visible_cores`].
-    ///
-    /// Returns:
-    ///     Size of the visible part of the selection.
-    pub(super) fn visible_selected(&self, visible: &[CoreId]) -> usize {
-        if self.core_selection.len() == 0 {
-            return 0;
-        }
-        visible
-            .iter()
-            .filter(|core| self.core_selection.contains(Some(**core)))
-            .count()
-    }
     /// What a footer bulk update would actually enqueue, and across how many server lanes.
     ///
     /// Built from the cores this panel SHOWS -- its selection when the operator has made one, its
@@ -714,7 +719,6 @@ impl CoreStatusView {
     ) -> FleetUpdatePlan {
         let scope = self.selected_or_visible(visible);
         let b = self.backend.read(cx);
-        let store = b.session.store();
         let behind: Option<HashSet<CoreId>> =
             only_behind.then(|| b.session.cores_behind().into_iter().collect());
         let mut lanes: HashSet<IpAddr> = HashSet::new();
@@ -723,25 +727,11 @@ impl CoreStatusView {
             if behind.as_ref().is_some_and(|behind| !behind.contains(&id)) {
                 continue;
             }
-            let Some(data) = store.core(id) else {
+            let Some(lane) = update_lane(b, id) else {
                 continue;
             };
-            let Some(endpoint) = data.endpoint else {
-                continue;
-            };
-            if !matches!(
-                crate::controls::core_update::offer_state(
-                    &data.status,
-                    data.server_version,
-                    true,
-                    b.session.core_update_phase(id),
-                ),
-                crate::controls::core_update::OfferState::Offerable
-            ) {
-                continue;
-            }
             cores.push(id);
-            lanes.insert(endpoint.address);
+            lanes.insert(lane);
         }
         FleetUpdatePlan {
             cores: Rc::from(cores),

@@ -4,7 +4,7 @@
 //! column is non-sortable: order comes from the merge itself, never from the table. Modeled
 //! directly on `warnings.rs`, the sibling read-only log surface.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::rc::Rc;
 
@@ -61,6 +61,8 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///         core selection. Drawn first.
 ///     history: Closed history records, already scoped, capped and ordered newest first. Drawn
 ///         after every in-flight row.
+///     newest: Per history row, whether it is its core's newest record, the only one that may
+///         offer a retry. Built once per snapshot by `frame_cache::history_newest`.
 ///     phases: Current update phase per scoped core. A history retry is offered only when this
 ///         phase is `Done(Failed)` for that core.
 ///     server_names: Server display name per lane/endpoint IP -- never the raw address.
@@ -77,6 +79,7 @@ pub(super) fn updates_table(
     id: &'static str,
     live_rows: Rc<Vec<CoreStatusRow>>,
     history: Rc<Vec<CoreUpdateRecord>>,
+    newest: Rc<Vec<bool>>,
     phases: Rc<HashMap<CoreId, CoreUpdatePhase>>,
     server_names: Rc<HashMap<IpAddr, String>>,
     state: &Entity<MoonDataTableState>,
@@ -90,12 +93,6 @@ pub(super) fn updates_table(
     let empty = row_count == 0;
     let p = MoonPalette::active(cx);
     let backend = backend.clone();
-    // History is newest-first. The first row for a core is the only one that may offer a retry.
-    let mut seen_cores = HashSet::new();
-    let newest: Vec<bool> = history
-        .iter()
-        .map(|record| seen_cores.insert(record.core))
-        .collect();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),

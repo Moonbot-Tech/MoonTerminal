@@ -108,6 +108,7 @@ impl CoreStatusView {
     ///
     /// Args:
     ///     rows: The findings being rendered, already scoped and capped.
+    ///     sig: [`problems::mark_signature`] of `rows`, computed once when they were built.
     ///     cx: View context used to mutate the backend and repaint.
     ///
     /// Returns:
@@ -115,11 +116,11 @@ impl CoreStatusView {
     pub(super) fn mark_problems_seen(
         &mut self,
         rows: &[problems::ProblemRow],
+        sig: u64,
         cx: &mut Context<Self>,
     ) {
         // Skips only a REPEAT of the same rows. See `problems_mark_sig` for why a "nothing unseen"
         // test cannot stand in for this.
-        let sig = problems::mark_signature(rows);
         if sig == self.problems_mark_sig {
             return;
         }
