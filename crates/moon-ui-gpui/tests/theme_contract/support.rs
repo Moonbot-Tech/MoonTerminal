@@ -115,7 +115,6 @@ const SPLIT_SOURCES: &[(&str, &[&str])] = &[
             "design.rs",
             "design/chrome.rs",
             "design/window.rs",
-            "design/collapse.rs",
             "design/logo.rs",
             "design/color.rs",
             "design/scale.rs",
@@ -133,7 +132,7 @@ const SPLIT_SOURCES: &[(&str, &[&str])] = &[
             "controls/toolbar/fit.rs",
             "controls/toolbar/cores.rs",
             "controls/toolbar/compose.rs",
-            "controls/launch.rs",
+            "controls/toolbar/launch.rs",
         ],
     ),
     (

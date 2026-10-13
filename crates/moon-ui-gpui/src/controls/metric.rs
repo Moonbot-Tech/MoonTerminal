@@ -7,9 +7,9 @@ use gpui::*;
 use rust_i18n::t;
 
 use moon_ui::{
-    MoonButton, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState, MoonPalette,
-    MoonPopover, MoonPopoverPlacement, MoonSlider, MoonSliderState, MoonToggle, MoonToggleSize,
-    MoonToggleVariant, h_flex, v_flex,
+    MoonButton, MoonButtonSegment, MoonButtonVariant, MoonCheckbox, MoonInput, MoonInputState,
+    MoonPalette, MoonPopover, MoonPopoverPlacement, MoonSlider, MoonSliderState, MoonToggle,
+    MoonToggleLabelSide, h_flex, v_flex,
 };
 
 use moon_core::feed::ClientSettingsEdit;
@@ -58,6 +58,14 @@ impl TradeMetric {
         }
     }
 
+    fn label(self) -> &'static str {
+        match self {
+            TradeMetric::Tp => "TP",
+            TradeMetric::Sl => "SL",
+            TradeMetric::Lev => "Lev",
+        }
+    }
+
     /// Element id of this metric's popover. A `&'static str` like [`Self::id`] rather than a
     /// `format!`, which would allocate three strings on every frame for three constants.
     fn popover_id(self) -> &'static str {
@@ -75,6 +83,12 @@ impl TradeMetric {
             TradeMetric::Sl => "toolbar-sl-tooltip",
             TradeMetric::Lev => "toolbar-lev-tooltip",
         }
+    }
+
+    /// Whether the button draws this metric's own label beside its value. SL's label lives on the
+    /// toggle standing next to it, so the button would repeat it.
+    fn shows_label(self) -> bool {
+        !matches!(self, TradeMetric::Sl)
     }
 
     fn unit(self) -> &'static str {
@@ -170,8 +184,9 @@ impl TradeMetric {
 
     /// Return the localized explanation key for an unavailable leverage value.
     ///
-    /// The reason is [`lev_unset_reason`]'s, so the disabled chip, its tooltip and the toolbar's
-    /// no-coin hint explain the same state the popup open guard rejects.
+    /// The checks follow [`Self::seed_value`] from broadest missing address to narrowest missing
+    /// value, so the disabled chip and its tooltip explain the same state the popup open guard
+    /// rejects.
     ///
     /// Args:
     ///     b: Backend providing the visible core, Main-chart market, and leverage snapshot.
@@ -183,10 +198,13 @@ impl TradeMetric {
         if !matches!(self, TradeMetric::Lev) || self.seed_value(b, group).is_some() {
             return None;
         }
-        Some(lev_unset_reason(
-            scoped_lev_core(b, group).is_some(),
-            b.main_chart_target(group).is_some(),
-        ))
+        if scoped_lev_core(b, group).is_none() {
+            Some("toolbar.lev_unset_no_core")
+        } else if b.main_chart_target(group).is_none() {
+            Some("toolbar.lev_unset_no_market")
+        } else {
+            Some("toolbar.lev_unset_unreported")
+        }
     }
 
     /// Where an edit from this metric's popup is addressed right now, or `None` if nowhere.
@@ -423,84 +441,49 @@ fn lev_input(input: &Entity<MoonInputState>, cx: &App) -> Option<f64> {
 /// component-owned popup padding and border.
 const POPUP_CONTENT_W: f32 = 220.0;
 
-/// Horizontal inset of a value-only metric trigger, before the UI scale (the mockup's 6px).
-const METRIC_PAD_X: f32 = 6.0;
-/// Weight of a metric trigger's value: semibold, as the mockup's pod values.
-const METRIC_VALUE_WEIGHT: f32 = 600.0;
-
-/// Rendered width of a value-only metric trigger carrying `value`: the mono value it draws, its
-/// two insets and its two raw one-pixel borders. The ONE measurement the toolbar budget and the
-/// trigger itself read.
-pub(super) fn metric_value_width(cx: &App, value: &str) -> f32 {
-    design::mono_body_text_width(cx, value, METRIC_VALUE_WEIGHT)
-        + design::ui_value(cx, METRIC_PAD_X) * 2.0
-        + 2.0
-}
-
-/// The mini stop switch's track, at the size it renders: the slim variant of the control tier.
-fn sl_switch_size() -> (MoonToggleSize, MoonToggleVariant) {
-    (
-        MoonToggleSize::Tier(design::CONTROL_TIER),
-        MoonToggleVariant::Slim,
-    )
-}
-
-/// Rendered width of the unlabeled mini stop switch.
-pub(super) fn sl_switch_width(cx: &App) -> f32 {
-    let (size, variant) = sl_switch_size();
-    design::ui_value(cx, size.reference_metrics_for(variant).track_width)
-}
-
 /// A trading-metric button together with its anchored popup.
-///
-/// Value-only: the pod around it carries the metric's caption. `struck` draws the value muted and
-/// struck through — the stop while its switch is off.
 ///
 /// The button IS the `MoonPopover` trigger, so the popup sits under its own button by construction
 /// and no toolbar layout change can detach it.
 ///
 /// `popup` comes from `Shell` and only for the OPEN metric: the content owns that metric's sliders
-/// and input, and `AnyElement` does not clone. `on_open` is the popup's open/close, shared with
-/// the metric's "More" row; `None` draws the same trigger inert.
+/// and input, and `AnyElement` does not clone.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn metric_button(
     metric: TradeMetric,
     value_str: String,
     color: u32,
-    struck: bool,
+    width: f32,
     open: bool,
     engaged: bool,
     enabled: bool,
     tooltip: Option<SharedString>,
     popup: Option<AnyElement>,
-    on_open: Option<MetricOpen>,
+    shell: Entity<Shell>,
     p: MoonPalette,
-    cx: &App,
+    _cx: &App,
 ) -> impl IntoElement {
     // "Lit" = the popup is open OR the metric is engaged (for TP: fixed-sell is off). That is what
     // makes TP and the S slots mutually exclusive — either TP is lit or exactly one S slot is. A
     // disabled button (SL with its toggle off) never lights up.
     let lit = enabled && (open || engaged);
-    let width = metric_value_width(cx, &value_str);
-    let color = if struck { p.text_muted } else { color };
-    // Plain text inside its pod: the pod is the frame, so the value draws no box of its own —
-    // a ghost button, only a hover tint marks it clickable. "Lit" is the ghost's selected tint.
-    let btn = MoonButton::new(metric.id())
+    let mut btn = MoonButton::new(metric.id())
         .width(width)
-        .padding_x(METRIC_PAD_X)
-        .mono(true)
-        .variant(MoonButtonVariant::Ghost)
-        // Not `.disabled`: MoonUI paints every disabled button with a border and a fill, which
-        // would box the value again. The popover below is what refuses to open, and the caller
-        // already mutes an unavailable value's colour.
-        .selected(lit);
-    let trigger = div()
-        .flex_none()
-        .when(struck, |el| el.line_through())
-        .child(
-            btn.text_segment(value_str, color, METRIC_VALUE_WEIGHT)
-                .render(),
+        .variant(if lit {
+            MoonButtonVariant::Blue
+        } else {
+            MoonButtonVariant::Neutral
+        })
+        .selected(lit)
+        .disabled(!enabled);
+    if metric.shows_label() {
+        btn = btn.segment(
+            MoonButtonSegment::new(metric.label())
+                .color(p.text_muted)
+                .weight(400.0),
         );
+    }
+    let trigger = btn.text_segment(value_str, color, 500.0).render();
     let popover = MoonPopover::new(SharedString::from(metric.popover_id()))
         .placement(MoonPopoverPlacement::BottomStart)
         .content_width_font(POPUP_CONTENT_W)
@@ -515,121 +498,54 @@ pub(super) fn metric_button(
         // A click on the CONTENT must not close it: inside are sliders, checkboxes and an Apply
         // button, and closing on the first click would put all of them out of reach.
         .close_on_content_click(false)
-        // `None` is the inert path: same trigger, same geometry, nothing to open.
-        .when_some(on_open, |popover, on_open| {
-            popover.on_open_change(move |open, window, cx| on_open(open, window, cx))
+        .on_open_change(move |open, window, cx| {
+            shell.update(cx, |s, cx| {
+                s.set_metric_popup_open(metric, open, window, cx);
+            });
         })
         .trigger(trigger)
         .content(popup.unwrap_or_else(|| div().into_any_element()));
-    let mut element = div()
-        .id(metric.tooltip_id())
-        .debug_selector(|| metric.id().to_string())
-        .child(popover);
+    let mut element = div().id(metric.tooltip_id()).child(popover);
     if let Some(tooltip) = tooltip {
         element = element.tooltip(crate::panels::common::text_tooltip(tooltip));
     }
     element
 }
 
-/// Build the `panic_if_price_drop` mini switch to the left of the stop value.
+/// Build the `panic_if_price_drop` toggle to the left of the SL button.
 ///
-/// Unlabeled: the Stop pod's caption names it. When off, the adjacent value is struck through and
-/// its popup button is disabled.
-/// `disabled` represents a stop the terminal may not move: the manual strategy's, or a locked row.
+/// The toggle owns the `SL` label. When off, the adjacent value and popup button are disabled.
+/// `disabled` represents manual-strategy mode, in which toolbar SL does not apply to new orders.
 ///
 /// Args:
 ///     on: Current `panic_if_price_drop` value.
-///     disabled: Whether the switch takes no edit.
-///     on_change: The switch's write, shared with its "More" row; `None` renders it inert.
+///     disabled: Whether manual-strategy mode prevents editing toolbar SL.
+///     backend: Backend that owns the group-local exit settings.
+///     group: Window group whose local SL toggle receives the edit.
 ///
 /// Returns:
 ///     The configured SL toggle element.
 pub(super) fn sl_toggle(
     on: bool,
     disabled: bool,
-    on_change: Option<SlWrite>,
+    backend: Entity<Backend>,
+    group: String,
     roles: bool,
 ) -> impl IntoElement {
-    let (size, variant) = sl_switch_size();
     MoonToggle::new("toolbar-sl-toggle")
-        .size(size)
-        .variant(variant)
+        .label("SL")
+        .label_side(MoonToggleLabelSide::Left)
         .checked(on)
         .disabled(disabled)
         .when_some(design::chrome_toggle_tone(on, false, roles), |t, tone| {
             t.tone(tone)
         })
-        .when_some(on_change, |toggle, on_change| {
-            toggle.on_change(move |ch: &bool, _w, app| on_change(*ch, app))
+        .on_change(move |ch: &bool, _w, app| {
+            let v = *ch;
+            backend.update(app, |b, _| {
+                b.edit_group_exit(&group, ClientSettingsEdit::PanicIfPriceDrop(v));
+            });
         })
-}
-
-/// The anchor a folded metric's popup opens under: a zero-size `MoonPopover` trigger at the
-/// bottom-right corner of the "More" button it sits beside, so the popup hangs left under "More".
-///
-/// No click reaches a zero-size trigger; the popup opens only from its "More" row and closes
-/// through its own outside click, which this popover — drawn whenever the pod is folded — handles.
-pub(super) fn metric_popup_anchor(
-    metric: TradeMetric,
-    popup: Option<AnyElement>,
-    on_open: Option<MetricOpen>,
-) -> AnyElement {
-    let open = popup.is_some();
-    // The pod's own popover id: the pod is not drawn while it is folded, so the two never coexist,
-    // and a popup that is open as its pod folds keeps one identity (and its focus) across the move.
-    let popover = MoonPopover::new(SharedString::from(metric.popover_id()))
-        .placement(MoonPopoverPlacement::BottomEnd)
-        .content_width_font(POPUP_CONTENT_W)
-        .open(open)
-        .close_on_content_click(false)
-        .when_some(on_open, |popover, on_open| {
-            popover.on_open_change(move |open, window, cx| on_open(open, window, cx))
-        })
-        .trigger(div().size_0())
-        .content(popup.unwrap_or_else(|| div().into_any_element()));
-    div()
-        .absolute()
-        .right_0()
-        .bottom_0()
-        .size_0()
-        .debug_selector(move || format!("{}-more-anchor", metric.id()))
-        .child(popover)
-        .into_any_element()
-}
-
-/// A metric popup's open/close, shared by the pod's button and its "More" row.
-pub(super) type MetricOpen = std::rc::Rc<dyn Fn(bool, &mut Window, &mut App)>;
-
-/// The stop switch's write of the new state, shared by the pod's switch and its "More" row.
-pub(super) type SlWrite = std::rc::Rc<dyn Fn(bool, &mut App)>;
-
-/// The open/close of `metric`'s popup through `Shell`, or `None` where the metric takes no edit.
-pub(super) fn open_metric_action(
-    metric: TradeMetric,
-    enabled: bool,
-    shell: Option<&Entity<Shell>>,
-) -> Option<MetricOpen> {
-    let shell = shell.filter(|_| enabled)?.clone();
-    Some(std::rc::Rc::new(move |open, window, cx| {
-        shell.update(cx, |s, cx| {
-            s.set_metric_popup_open(metric, open, window, cx)
-        });
-    }))
-}
-
-/// The `PanicIfPriceDrop` write for `group`, or `None` where the switch takes no edit.
-pub(super) fn sl_toggle_action(
-    enabled: bool,
-    group: &str,
-    backend: Option<&Entity<Backend>>,
-) -> Option<SlWrite> {
-    let backend = backend.filter(|_| enabled)?.clone();
-    let group = group.to_string();
-    Some(std::rc::Rc::new(move |on, app| {
-        backend.update(app, |b, _| {
-            b.edit_group_exit(&group, ClientSettingsEdit::PanicIfPriceDrop(on));
-        });
-    }))
 }
 
 /// Build a metric popup's heading, slider, and input; TP also gets its `x_tmode`/`s9` extended-range
@@ -999,29 +915,6 @@ pub fn metric_popup_content(
         );
     }
     content.into_any_element()
-}
-
-/// The locale key explaining why no leverage value is shown.
-///
-/// A missing coin wins over a missing core: leverage is set per market, so with no coin on the
-/// Main chart there is nothing to show whatever the scope. That ordering is what lets AUTO
-/// Overview, which scopes no single core, show the toolbar's no-coin hint instead of a dashed
-/// Leverage pod.
-///
-/// Args:
-///     has_core: Whether a scope-gated leverage core exists.
-///     has_market: Whether the Main chart has a market.
-///
-/// Returns:
-///     The locale key of the reason.
-pub(super) fn lev_unset_reason(has_core: bool, has_market: bool) -> &'static str {
-    if !has_market {
-        "toolbar.lev_unset_no_market"
-    } else if !has_core {
-        "toolbar.lev_unset_no_core"
-    } else {
-        "toolbar.lev_unset_unreported"
-    }
 }
 
 #[cfg(test)]

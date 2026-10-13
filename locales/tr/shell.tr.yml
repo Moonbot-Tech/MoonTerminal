@@ -21,6 +21,8 @@ status.license: "Lisans: %{value}"
 # for a build with no release tag reachable from HEAD) — a value, not prose, so it is not stored
 # here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
 status.version_tooltip: "Sürüm %{release} · derleme %{build} · MoonUI %{moonui}"
+# Active trading-core selector in the header: text shown when the group has no cores.
+header.no_cores: "çekirdek yok"
 # Visible core's emulator vs real mode, in the header cluster beside the core pill.
 # Both states stay on the chrome so the operator does not have to open core settings.
 header.trade_emu: "Emülatör"
@@ -29,13 +31,6 @@ header.trade_emu_tip: "Emülatör kipi. Çekirdek ayarlarından değişir (dişl
 header.trade_real_tip: "Gerçek kip. Çekirdek ayarlarından değişir (dişli)."
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip: "Çift tıklama Varlıkları açar"
-header.balance_caption: "Bakiye"
-header.balance_free: "serbest"
-header.balance_partial: "sayılmadı: %{n}"
-header.balance_none: "Bakiye bir çekirdek bağlanınca görünür"
-header.add_core: "Çekirdek ekle"
-header.add_core_tip: "Çekirdek eklemek için ayarları aç"
-header.core_card_tip: "Grubun etkin çekirdeği — değiştirmek için tıklayın"
 # Price ticker in the header, on the right beside the clock.
 header.ticker_tip: "Fiyat ve 1sa / 24sa deltaları. Tıklama grafiği açar, çift tıklama coin ve çekirdek seçer"
 header.ticker_pick: "Ticker coin'i (çekirdekler arası arama)"
@@ -48,9 +43,8 @@ header.clock_pick: "Saat dilimi"
 header.clock_system: "Sistem · %{zone}"
 
 # --- Toolbar ---
-# Tooltips for preset strips. The toolbar's pod captions are translated (toolbar.*_caption:
-# Size, Leverage, Stop, Take, Sell, Strategy); only USDT, MAX and Live stay literal. The prose
-# tooltips are translated too.
+# Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
+# Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
 # `unit` is the fixed USDT-equivalent label and preserves it in narrow windows where the full
 # "Size, USDT eq." group caption has collapsed.
 toolbar.size_hint: "Emir büyüklüğü B%{n}, %{unit} · seçmek için tık · düzenlemek için çift tık · Ctrl+tekerlek değiştirir"
@@ -58,18 +52,6 @@ toolbar.sell_hint: "Sabit satış S%{n} · devreye almak için tık · düzenlem
 toolbar.lev_unset_no_core: "Kaldıracı görmek için bir sunucu seçin."
 toolbar.lev_unset_no_market: "Main grafikte bir coin seçin."
 toolbar.lev_unset_unreported: "Borsa bu piyasa için kaldıraç bildirmiyor."
-toolbar.size_caption: "Hacim"
-toolbar.lev_caption: "Kaldıraç"
-toolbar.sl_caption: "Stop"
-toolbar.tp_caption: "Kâr al"
-toolbar.sell_caption: "Satış"
-toolbar.strategy_caption: "Strateji"
-toolbar.lev_of: "/ ×%{max}"
-toolbar.max_order_inline: "maks. emir"
-toolbar.no_coin_hint: "Kaldıraç ve emir sınırını görmek için grafikte bir coin seçin"
-toolbar.locked_other_core: "İmlecin altındaki grafik %{name} çekirdeğine ait — etkin çekirdek değişmesin diye düzenleme kapalı"
-toolbar.locked_no_cores: "Bir çekirdek ekleyin — hacim, stop, kâr al ve satış burada görünecek"
-toolbar.own_trade_menu: "Çekirdeğin kendi seti"
 toolbar.sl_unset_tip: "Stopu strateji belirler, ama değeri şu an çekirdekten gelmiyor."
 toolbar.tp_main_active_hint: "Ana TP açık. Bir S yuvası seçmek mavi vurguyu o yuvaya taşır."
 toolbar.tp_fixed_active_hint: "S%{n} açık. Ana kâr al seviyesine dönmek için TP'ye tıklayın."
@@ -133,6 +115,10 @@ toolbar.apply: "Uygula"
 # shares its group's. Two texts, because the tooltip states what a click would do next.
 toolbar.own_trade_on: "Bu çekirdek kendi büyüklük ve TP/SL ayarlarını tutar — ortak takıma dönmek için kapatın"
 toolbar.own_trade_off: "Bu çekirdek ortak takımı kullanır — kendisininkini vermek için açın"
+# The hovered chart's core differs from the group's active trading core (or their per-core opt-in
+# disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
+# Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
+toolbar.core_manual_mismatch: "İmlecin altında başka bir çekirdek görünüyor — etkin çekirdek değişmesin diye düzenleme kapalı"
 
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
@@ -154,6 +140,11 @@ toolbar.core_config_area_manual: "Elle işlem"
 # --- Exchange limits for the coin on the Main chart (leverage popup + toolbar readout) ---
 # Row label for the exchange's maximum order size, denominated in the market's quote currency.
 toolbar.max_order: "Maks. emir"
+# Toolbar caption for the same figure, where the row competes for width with every trading control.
+# Deliberately untranslated: it is the industry abbreviation, like BUY/SELL and LONG/SHORT in
+# `locales/README.md`'s untranslated list, and a translated word here would be the longest thing on
+# the row. The full label above stays in the popover, where there is room to say it properly.
+toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Maks. kaldıraç"
 # Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
@@ -565,7 +556,6 @@ alerts.fig.ray: "Işın"
 # The toggle's label is the SAME in both states on purpose: the header positions the ticker popup
 # by summing the widths beside it, so a label that changed on click would move that popup.
 quiet.toggle: "Uyku"
-quiet.label_off: "Sesler"
 quiet.tip_on: "Uyku açık: tespit ve uyarı sesleri suskun. Uyandırmak için tıklayın."
 quiet.tip_off: "Çalışıyor: sesler açık. Uykuya geçmek için tıklayın."
 quiet.gear_tip: "Uyku ayarları"

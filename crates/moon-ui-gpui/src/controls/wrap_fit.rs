@@ -3,10 +3,10 @@
 //! A `flex_wrap` row gives a narrowing host exactly one answer: move a section to a second line.
 //! The controls themselves never yield first, so a row loses a whole line while its selectors are
 //! still carrying words the icon beside them already says. The toolbar solves the same problem by
-//! BUDGET (`controls::toolbar::toolbar_widths` and its collapse levels): it knows every width on
-//! the row and sheds groups by an explicit ladder. A panel row cannot — it is composed of localized
-//! dropdowns, inputs and pickers whose widths differ per host, per locale and per font step, and
-//! it lives in a dock whose width is not the window's.
+//! BUDGET (`controls::toolbar::row_fit`): it knows every width on the row and sheds labels by an
+//! explicit ladder. A panel row cannot — it is composed of localized dropdowns, inputs and pickers
+//! whose widths differ per host, per locale and per font step, and it lives in a dock whose width
+//! is not the window's.
 //!
 //! So this resolves the same question by MEASUREMENT instead, which is also the only honest way to
 //! ask it here: the row reports what it actually got, and a pure decision function answers whether

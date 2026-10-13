@@ -1,4 +1,4 @@
-//! Header ticker-source popup hosted under the header's rate ticker.
+//! Header ticker-source popup hosted beside the right-aligned clock.
 //!
 //! The popup reuses [`crate::chart_tabs::coin_search`] and persists the selected market and stable
 //! core ID through `Backend::set_header_ticker`. Its overlay and dismiss layers follow the other
@@ -6,7 +6,7 @@
 
 use gpui::*;
 
-use moon_ui::{MoonInput, MoonPalette, v_flex};
+use moon_ui::{MoonInput, MoonPalette, MoonWindowFrame, v_flex};
 use rust_i18n::t;
 
 use crate::chart_tabs::coin_search;
@@ -54,22 +54,19 @@ impl Shell {
 
     /// Build the right-anchored ticker popup and its full-window dismiss layer.
     ///
-    /// Both elements are `None` when the popup is closed or the header `level` hides the ticker
-    /// trigger. `widths` are the header's measured widths for this frame, the same the header was
-    /// drawn from.
+    /// Both elements are `None` when the popup is closed or `chrome_width` hides the ticker trigger.
     pub(super) fn ticker_popup_layers(
         &mut self,
-        level: design::HeaderLevel,
-        widths: &design::HeaderWidths,
+        chrome_width: f32,
         p: MoonPalette,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
-        // Collapsing past the ticker's level takes the trigger away, so the open state has to go with it:
+        // Narrowing past the threshold takes the trigger away, so the open state has to go with it:
         // returning the layers as `None` while leaving the flag set means widening the window later
         // resurrects the popup — full-window dismiss layer and all — with no user action.
         // No `notify` needed: this frame renders nothing either way, and the flag only decides
         // subsequent frames.
-        if !design::ticker_visible(level) {
+        if !design::ticker_visible(cx, chrome_width) {
             self.ticker_popup_open = false;
             return (None, None);
         }
@@ -119,15 +116,48 @@ impl Shell {
         );
 
         // Anchored to the window's RIGHT edge and offset inward past everything that stands to the
-        // ticker's right in the header: the sleep cluster, the clock, the rule, the launchers, the
-        // window controls, every gap between them and the row's own padding. `right_of_ticker`
-        // is that sum, from the same measured widths the header was laid out with this frame, so
-        // the popup cannot detach from its trigger by a header tweak that forgets this file.
+        // ticker's right in the header cluster (see `terminal_chrome`): the divider, the gaps, the
+        // clock, and the window controls when they are shown.
         //
-        // A MoonUI Root-owned anchored layer that follows the trigger would delete this arithmetic
-        // outright; `MoonPopover` alone does not fit, because it cannot preserve this popup's
-        // double-click-only opening.
-        let right = widths.right_of_ticker(level);
+        // TEMPORARY, and deliberately so: hand-summing a chain of layout terms is fragile — every
+        // one of them is a place a future header tweak can silently desync the popup from its
+        // trigger, and nothing here can fail at compile time. The right shape is a MoonUI
+        // Root-owned anchored layer that follows the trigger, which would delete this arithmetic
+        // outright. `MoonPopover` alone does not fit: it cannot preserve this popup's
+        // double-click-only opening, so that migration needs a MoonUI-side API first.
+        let cluster_gap = f32::from(design::ui_px(cx, design::CHROME_GAP));
+        let controls_w = if design::show_custom_window_controls() {
+            // The controls themselves, plus the cluster gap between them and the clock. That gap
+            // exists only when the controls do — adding it unconditionally shifted the popup a
+            // full gap left on builds that hide them.
+            cluster_gap
+                + f32::from(design::ui_px(
+                    cx,
+                    MoonWindowFrame::main("header-ticker-popup-metrics", 0.0)
+                        .show_controls(true)
+                        .controls_width(),
+                ))
+        } else {
+            0.0
+        };
+        // The clock's rendered width floats with the Font slider, so it is measured rather than
+        // assumed — and measured through the clock's own model, so a change to what it draws
+        // cannot leave this arithmetic behind. `vline` is a fixed `px(1.0)` and is deliberately
+        // NOT font-scaled, so the divider term stays raw.
+        // Right to left: window padding, the window controls, the clock, then the quiet-mode
+        // cluster with a divider on each side of it, then the ticker's own divider. The quiet
+        // cluster renders at exactly `header_quiet_width`, so this term is its layout width rather
+        // than an estimate of it.
+        let right = f32::from(design::ui_px(cx, design::HEADER_PAD_X))
+            + controls_w
+            + crate::chrome::clock::header_clock_width(&self.backend, cx)
+            + cluster_gap
+            + 1.0
+            + cluster_gap
+            + crate::chrome::quiet::header_quiet_width(cx)
+            + cluster_gap
+            + 1.0
+            + cluster_gap;
         // Start below the drawn header, whatever height the font delta gives it, so the popup
         // never overlaps chrome.
         let top = design::header_height(cx);

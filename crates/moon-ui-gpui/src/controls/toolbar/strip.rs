@@ -1,49 +1,32 @@
-//! The row's text recipes: pod captions and read-outs.
+//! Captioned strips: the preset-group captions and their text.
 
 use super::*;
 
-/// Gap between a pod caption's word and its unit, before the UI scale.
-const POD_UNIT_GAP: f32 = 3.0;
-/// Weight of a pod caption's word.
-const POD_WORD_WEIGHT: f32 = 500.0;
-
-/// A pod's caption: its word in the UI face, emphasized, and an optional literal unit after it,
-/// muted (`Size USDT`). Measured by [`pod_label_width`].
-pub(super) fn pod_label(
-    word: impl Into<SharedString>,
-    unit: Option<&'static str>,
+/// Caption for a preset group, muted, sharing the control-tier body size with the chips beside it.
+///
+/// `MoonText` with [`design::text_metrics`] rather than a hand-rolled text div: it applies
+/// the theme's mono family and already-scaled metrics, so the caption lands on the same size and
+/// baseline as the neighbouring control-tier controls. Colour is the remaining caption cue.
+///
+/// The text is a literal, not `t!`: `Size`/`Sell` are on the deliberately-untranslated list
+/// (`locales/README.md`), as are the neighbouring `Lev`/`SL`/`TP`. The tooltip is translated, the
+/// caption is not. The appended `USDT eq.` is a deliberately-untranslated technical unit.
+pub(super) fn strip_caption(
+    text: impl Into<SharedString>,
     p: MoonPalette,
     cx: &App,
 ) -> impl IntoElement {
-    h_flex()
-        .flex_none()
-        .items_center()
-        .gap(design::ui_px(cx, POD_UNIT_GAP))
-        .child(
-            design::pod_caption(word, p, cx)
-                .text_color(rgb(p.text_soft))
-                .font_weight(FontWeight(POD_WORD_WEIGHT)),
-        )
-        .children(unit.map(|unit| design::pod_caption(unit, p, cx)))
+    strip_text(text, p.text_muted, cx)
 }
 
-/// Rendered width of [`pod_label`] for `word` and `unit`, each text run at its whole-pixel box.
-pub(super) fn pod_label_width(cx: &App, word: &str, unit: Option<&str>) -> f32 {
-    use crate::chrome::terminal_chrome::text_box;
-    text_box(design::ui_caption_text_width(cx, word, POD_WORD_WEIGHT))
-        + unit.map_or(0.0, |unit| {
-            design::ui_value(cx, POD_UNIT_GAP)
-                + text_box(design::ui_caption_text_width(cx, unit, 400.0))
-        })
-}
-
-/// The row's shared read-out recipe: a mono figure at the control-tier body size.
+/// The row's shared text recipe, used by every label and readout on it.
 ///
-/// One home for the MoonUI call so a second read-out cannot drift to a different family, size or
-/// casing while looking the same in the source. `color` is the only thing that legitimately varies.
+/// One home for the MoonUI call so a second text cell cannot drift to a different family, size or
+/// casing while looking the same in the source. `color` is the only thing that legitimately varies:
+/// a caption NAMES something and is muted, while a readout STATES something and is not.
 ///
 /// Args:
-///     text: Read-out text rendered at the toolbar's shared text scale.
+///     text: Caption or readout text rendered at the toolbar's shared text scale.
 ///     color: Active palette color for the text's semantic role.
 ///     cx: Application context used to resolve control-tier text metrics.
 ///
@@ -58,4 +41,33 @@ pub(super) fn strip_text(text: impl Into<SharedString>, color: u32, cx: &App) ->
             .rendered_metrics(design::text_metrics(cx, 0.0, 11.0))
             .render(),
     )
+}
+
+/// A preset strip with its caption in front, as one flex group. `caption = None` collapses it.
+///
+/// Both preset groups are laid out identically and only differ in caption text and the strip
+/// itself; keeping the grouping in one place is what stops a gap or ordering tweak from being
+/// applied to Size and forgotten on Sell, a drift that only shows up once a window is narrow enough
+/// to render the two differently.
+///
+/// `tip`, when present, attaches a tooltip to the whole group WITHOUT affecting its measured
+/// width — the freshness/rejection marker for a core-sourced manual block goes here rather than
+/// into the caption text itself, which `row_fit` has already measured and budgeted by the time
+/// this runs. `id` gives the group the stable element identity a tooltip requires.
+pub(super) fn captioned_strip(
+    id: &'static str,
+    caption: Option<SharedString>,
+    p: MoonPalette,
+    strip: impl IntoElement,
+    tip: Option<SharedString>,
+    caption_gap: f32,
+    cx: &App,
+) -> impl IntoElement {
+    h_flex()
+        .id(id)
+        .flex_none()
+        .gap(design::ui_px(cx, caption_gap))
+        .children(caption.map(|text| strip_caption(text, p, cx)))
+        .child(strip)
+        .when_some(tip, |el, tip| el.tooltip(text_tooltip(tip)))
 }

@@ -6,8 +6,7 @@
 use moon_core::session::CoreId;
 
 use super::draft::{fmt_hhmm, parse_num};
-use super::{gear_popup_unavailable_at, resolve_core_settings_write};
-use crate::design::HeaderLevel;
+use super::resolve_core_settings_write;
 
 /// Dropping finite filtering or zero normalization changes the draft's wire comparisons.
 #[test]
@@ -77,32 +76,5 @@ fn resolve_core_settings_write_only_permits_the_seeded_core() {
     assert_ne!(
         resolve_core_settings_write(Some(SEEDED), Some(ACTIVE_SAME)),
         Some(OTHER)
-    );
-}
-
-/// Overview and expert mode take the popover away at every level; a level that hides the gear
-/// does not — it moves the popup to the core card, so an open draft survives a narrowing window.
-#[test]
-fn gear_popup_is_unavailable_only_in_overview_or_expert_mode() {
-    use crate::chrome::terminal_chrome::{CoreSettingsAnchor, core_settings_anchor};
-    assert!(gear_popup_unavailable_at(true, false));
-    assert!(gear_popup_unavailable_at(false, true));
-    assert!(!gear_popup_unavailable_at(false, false));
-    for n in 0..=HeaderLevel::MAX {
-        let level = HeaderLevel(n);
-        let expected = if level.core_gear() {
-            CoreSettingsAnchor::Gear
-        } else {
-            CoreSettingsAnchor::Card
-        };
-        assert_eq!(core_settings_anchor(level), expected, "level {n}");
-    }
-    assert_eq!(
-        core_settings_anchor(HeaderLevel(5)),
-        CoreSettingsAnchor::Gear
-    );
-    assert_eq!(
-        core_settings_anchor(HeaderLevel(6)),
-        CoreSettingsAnchor::Card
     );
 }

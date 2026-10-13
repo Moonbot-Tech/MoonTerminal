@@ -44,20 +44,6 @@ pub(crate) fn resolve_core_settings_write(
     }
 }
 
-/// The pure form of `Shell::gear_popup_unavailable`.
-///
-/// Args:
-///     expert: Whether the gear opens the expert settings window instead of the popover.
-///     overview: Whether the row names the whole Auto group rather than one core.
-///
-/// Returns:
-///     `true` when the header draws no core-settings popover. The collapse level is not a reason:
-///     the level that hides the gear anchors the popup to the core card instead
-///     (`terminal_chrome::core_settings_anchor`).
-pub(crate) fn gear_popup_unavailable_at(expert: bool, overview: bool) -> bool {
-    expert || overview
-}
-
 impl Shell {
     /// Handle `MoonPopover::on_open_change` for the core-settings gear button.
     ///
@@ -91,21 +77,18 @@ impl Shell {
 
     /// Whether the header still draws the gear as a `MoonPopover` at all.
     ///
-    /// Two conditions take the popover away, and everything that has to react to one has to
-    /// react to the other: expert mode replaces it with a plain button that opens
+    /// Two conditions take the popover away, and everything that has to react to one has to react
+    /// to the other: expert mode replaces it with a plain button that opens
     /// [`crate::core_expert`]'s window, and Auto Overview drops the whole per-core cluster. An open
     /// popup then has nothing rendering it and no `on_open_change` to dismiss it, `Shell::render`
     /// keeps rebuilding two dozen editors for it every repaint, and focus is left on a handle
-    /// nothing draws. A collapse level hiding the gear is not one: the popup moves to the card.
+    /// nothing draws.
     ///
-    /// Named once here (see [`gear_popup_unavailable_at`]) so a third reason is one edit rather
-    /// than three.
+    /// Named once here so a third face of the gear — or a third reason to hide it — is one edit
+    /// rather than four.
     pub(crate) fn gear_popup_unavailable(&self, cx: &App) -> bool {
         let b = self.backend.read(cx);
-        gear_popup_unavailable_at(
-            b.core_settings_expert(),
-            b.is_auto_overview_scope(&self.group),
-        )
+        b.core_settings_expert() || b.is_auto_overview_scope(&self.group)
     }
 
     /// Drop the gear popup once it no longer belongs to the core it was seeded from — or once the

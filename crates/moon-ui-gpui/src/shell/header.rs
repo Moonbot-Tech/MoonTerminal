@@ -21,20 +21,19 @@ impl Shell {
         cx.notify();
     }
 
-    /// Open or close the clock's zone picker under the header's "More", where it opens once the
-    /// clock is hidden.
+    /// Open or close the header workspace-mode picker.
     ///
     /// Args:
-    ///     open: Whether the picker should remain visible.
+    ///     open: Whether the picker menu should be visible.
     ///     cx: Shell context used to request a repaint after state changes.
     ///
     /// Returns:
     ///     Nothing; the controlled popover state is updated in place.
-    pub(crate) fn set_header_clock_picker_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        if self.header_clock_picker_open == open {
+    pub(crate) fn set_header_workspace_mode_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.header_workspace_mode_open == open {
             return;
         }
-        self.header_clock_picker_open = open;
+        self.header_workspace_mode_open = open;
         cx.notify();
     }
 }

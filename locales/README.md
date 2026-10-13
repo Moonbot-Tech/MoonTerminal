@@ -86,9 +86,8 @@ Industry standard / tech metrics we leave as they are in every language:
 
     BUY · SELL · Cancel Buy · PANIC SELL · LONG · SHORT · ON · OFF · Live
     Spot · Futures · Quarterly (market kinds in exchange names)
-    SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port (compact metric tokens)
-    USDT · MAX (units beside a figure) — the trading toolbar's pod captions themselves
-    (Size, Leverage, Stop, Take, Sell, Strategy) ARE translated: toolbar.*_caption
+    Size · Sell · SL · TP · Lev · TS · VStop · Buy · Fill · Strat · Host · Port
+    USDT eq. in the Size, USDT eq. caption — a technical equivalent label
     PRO · FREE (plan names)
     Hotkeys (the tab label in expert core settings — labelled the same in Moonbot itself)
     Copy to ClipBoard · Paste (the Settings transfer buttons — in Moonbot they are Latin in every language)

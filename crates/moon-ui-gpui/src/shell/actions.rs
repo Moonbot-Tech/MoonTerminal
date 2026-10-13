@@ -66,15 +66,6 @@ impl Shell {
         self.strat_slot_menu = None;
     }
 
-    /// Record a toolbar strip's caret menu opening or closing.
-    pub(crate) fn set_toolbar_caret(&mut self, kind: crate::controls::StripCaret, open: bool) {
-        if open {
-            self.toolbar_caret = Some(kind);
-        } else if self.toolbar_caret == Some(kind) {
-            self.toolbar_caret = None;
-        }
-    }
-
     /// Open or close the quick-select settings popup.
     ///
     /// The popup reads the group's active trade core as it renders, so there is nothing to capture

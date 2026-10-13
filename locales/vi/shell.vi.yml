@@ -21,6 +21,8 @@ status.license: "Giấy phép: %{value}"
 # for a build with no release tag reachable from HEAD) — a value, not prose, so it is not stored
 # here. This is the full build line a tester is asked to quote, matching what startup.rs logs.
 status.version_tooltip: "Bản %{release} · bản dựng %{build} · MoonUI %{moonui}"
+# Active trading-core selector in the header: text shown when the group has no cores.
+header.no_cores: "không có core"
 # Visible core's emulator vs real mode, in the header cluster beside the core pill.
 # Both states stay on the chrome so the operator does not have to open core settings.
 header.trade_emu: "Giả lập"
@@ -29,13 +31,6 @@ header.trade_emu_tip: "Chế độ giả lập. Đổi trong cài đặt core (b
 header.trade_real_tip: "Chế độ thật. Đổi trong cài đặt core (bánh răng)."
 # Header balance double-click: Auto reveals the group Assets surface; Classic opens the window.
 header.balance_tip: "Nhấp đúp mở Tài sản"
-header.balance_caption: "Số dư"
-header.balance_free: "khả dụng"
-header.balance_partial: "chưa tính: %{n}"
-header.balance_none: "Số dư sẽ hiện khi lõi kết nối"
-header.add_core: "Thêm lõi"
-header.add_core_tip: "Mở cài đặt để thêm lõi"
-header.core_card_tip: "Lõi đang hoạt động của nhóm — nhấp để đổi"
 # Price ticker in the header, on the right beside the clock.
 header.ticker_tip: "Giá và delta 1 giờ / 24 giờ. Nhấp mở biểu đồ, nhấp đúp chọn coin và core"
 header.ticker_pick: "Coin ticker (tìm trên các core)"
@@ -48,9 +43,8 @@ header.clock_pick: "Múi giờ"
 header.clock_system: "Hệ thống · %{zone}"
 
 # --- Toolbar ---
-# Tooltips for preset strips. The toolbar's pod captions are translated (toolbar.*_caption:
-# Size, Leverage, Stop, Take, Sell, Strategy); only USDT, MAX and Live stay literal. The prose
-# tooltips are translated too.
+# Tooltips for preset strips. The group label itself is a literal (Size/Sell), like the adjacent
+# Lev/SL/TP labels; the prose tooltip is translated because it is not a technical token.
 # `unit` is the fixed USDT-equivalent label and preserves it in narrow windows where the full
 # "Size, USDT eq." group caption has collapsed.
 toolbar.size_hint: "Cỡ lệnh B%{n} theo %{unit} · nhấp để chọn · nhấp đúp để sửa · Ctrl+con lăn để đổi"
@@ -58,18 +52,6 @@ toolbar.sell_hint: "Giá bán cố định S%{n} · nhấp để dùng · nhấp
 toolbar.lev_unset_no_core: "Chọn một máy chủ để hiện đòn bẩy."
 toolbar.lev_unset_no_market: "Chọn một coin trên biểu đồ Main."
 toolbar.lev_unset_unreported: "Sàn không báo đòn bẩy của thị trường này."
-toolbar.size_caption: "Khối lượng"
-toolbar.lev_caption: "Đòn bẩy"
-toolbar.sl_caption: "Cắt lỗ"
-toolbar.tp_caption: "Chốt lời"
-toolbar.sell_caption: "Bán"
-toolbar.strategy_caption: "Chiến lược"
-toolbar.lev_of: "trên ×%{max}"
-toolbar.max_order_inline: "lệnh tối đa"
-toolbar.no_coin_hint: "Chọn một coin trên biểu đồ để thấy đòn bẩy và giới hạn lệnh"
-toolbar.locked_other_core: "Biểu đồ dưới con trỏ thuộc lõi %{name} — đã tắt chỉnh sửa để không đổi lõi đang hoạt động"
-toolbar.locked_no_cores: "Thêm một lõi — khối lượng, cắt lỗ, chốt lời và bán sẽ hiện ở đây"
-toolbar.own_trade_menu: "Bộ riêng của lõi"
 toolbar.sl_unset_tip: "Cắt lỗ do chiến lược đặt, nhưng core hiện chưa gửi giá trị đó."
 toolbar.tp_main_active_hint: "TP chính đang bật. Chọn ô S sẽ chuyển viền xanh sang ô đó."
 toolbar.tp_fixed_active_hint: "S%{n} đang bật. Nhấp TP để trả chốt lời chính."
@@ -133,6 +115,10 @@ toolbar.apply: "Áp dụng"
 # shares its group's. Two texts, because the tooltip states what a click would do next.
 toolbar.own_trade_on: "Core này giữ cỡ lệnh và TP/SL riêng — tắt để về bộ dùng chung"
 toolbar.own_trade_off: "Core này dùng bộ chung — bật để cho nó bộ riêng"
+# The hovered chart's core differs from the group's active trading core (or their per-core opt-in
+# disagrees), so a click, wheel, or edit here would write somewhere other than the values shown.
+# Disabled on purpose rather than silently mutating the wrong core (goal A2 FIX-3).
+toolbar.core_manual_mismatch: "Đang hiện core khác dưới con trỏ — tắt sửa để khỏi đổi core đang hoạt động"
 
 # Coarse-area rejection (CoreConfigRejection::Areas) the display core's edit carries; %{areas} is
 # a comma-joined list built from the toolbar.core_config_area_* keys below.
@@ -154,6 +140,11 @@ toolbar.core_config_area_manual: "Giao dịch thủ công"
 # --- Exchange limits for the coin on the Main chart (leverage popup + toolbar readout) ---
 # Row label for the exchange's maximum order size, denominated in the market's quote currency.
 toolbar.max_order: "Lệnh tối đa"
+# Toolbar caption for the same figure, where the row competes for width with every trading control.
+# Deliberately untranslated: it is the industry abbreviation, like BUY/SELL and LONG/SHORT in
+# `locales/README.md`'s untranslated list, and a translated word here would be the longest thing on
+# the row. The full label above stays in the popover, where there is room to say it properly.
+toolbar.max_order_short: "MAX"
 # Row label for the coin's maximum leverage as stated by the exchange.
 toolbar.lev_max: "Đòn bẩy tối đa"
 # Row label for the exchange's cap on the whole position at the current leverage (MoonBot's <max. N>).
@@ -565,7 +556,6 @@ alerts.fig.ray: "Tia"
 # The toggle's label is the SAME in both states on purpose: the header positions the ticker popup
 # by summing the widths beside it, so a label that changed on click would move that popup.
 quiet.toggle: "Ngủ"
-quiet.label_off: "Âm thanh"
 quiet.tip_on: "Ngủ đang bật: tiếng tín hiệu và cảnh báo bị tắt. Nhấp để thức."
 quiet.tip_off: "Đang làm: tiếng đang bật. Nhấp để ngủ."
 quiet.gear_tip: "Cài đặt ngủ"

@@ -91,37 +91,51 @@ fn auto_workspace_keeps_one_dock_and_the_chart_route() {
 }
 
 /// Catches swapping the `WorkspaceMode` values in
-/// `chrome/terminal_chrome.rs:workspace_mode_segments`; clicking AUTO or MANUAL would silently save
-/// the opposite workspace mode, or the filled segment would name the wrong one.
+/// `chrome/terminal_chrome.rs:workspace_mode_selector`'s picker rows; choosing AUTO or MANUAL
+/// would silently save the opposite workspace mode.
 #[test]
 fn header_workspace_mode_maps_dropdown_rows_and_current_trigger() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let selector = code_only(braced_body(&chrome, "fn workspace_mode_segments("));
-    let segment_for = |label_key: &str| {
-        let key_at = selector
-            .find(&format!("t!(\"{label_key}\")"))
-            .unwrap_or_else(|| panic!("workspace-mode segment must contain `{label_key}`"));
-        let start = selector[..key_at]
-            .rfind("segment(")
-            .unwrap_or_else(|| panic!("workspace-mode segment `{label_key}` must start a call"));
-        &selector[start..key_at]
+    let selector = code_only(braced_body(&chrome, "fn workspace_mode_selector("));
+    let trigger = chain_between(
+        &selector,
+        "let (label, tooltip) = if auto {",
+        "    let backend = backend.clone();",
+        "workspace-mode trigger label",
+    );
+    let row_for = |row_id: &str| {
+        let id_at = selector
+            .find(row_id)
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row must contain `{row_id}`"));
+        let start = selector[..id_at]
+            .rfind("(\n")
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row `{row_id}` must start a tuple"));
+        let end = selector[id_at..]
+            .find("\n            ),")
+            .unwrap_or_else(|| panic!("workspace-mode dropdown row `{row_id}` must end a tuple"));
+        &selector[start..id_at + end]
     };
-    let auto_segment = segment_for("workspace.mode.auto");
-    let manual_segment = segment_for("workspace.mode.classic");
+    let auto_row = row_for("header-workspace-mode-auto");
+    let manual_row = row_for("header-workspace-mode-manual");
 
     assert!(
-        auto_segment.contains("WorkspaceMode::AutoTrading")
-            && !auto_segment.contains("WorkspaceMode::Classic")
-            && manual_segment.contains("WorkspaceMode::Classic")
-            && !manual_segment.contains("WorkspaceMode::AutoTrading"),
-        "AUTO and MANUAL segments must retain their distinct workspace-mode mappings"
+        selector.contains("let auto = mode == WorkspaceMode::AutoTrading;")
+            && selector.contains("t!(\"workspace.mode.auto_item\").to_string()")
+            && selector.contains("t!(\"workspace.mode.classic_item\").to_string()")
+            && trigger.contains("auto_label.clone()")
+            && trigger.contains("manual_label.clone()"),
+        "the trigger must name AUTO for AutoTrading and MANUAL for Classic"
     );
     assert!(
-        selector.contains("let active = mode == target;")
-            && selector.contains("MoonSegmentSelection::Filled")
-            && selector.contains("backend.set_workspace_mode(&group, target, backend_cx)"),
-        "the filled segment must be the current mode, and a pick must keep using the shared \
-         workspace-mode persistence authority"
+        auto_row.contains("WorkspaceMode::AutoTrading")
+            && auto_row.contains("auto_label.into()")
+            && manual_row.contains("WorkspaceMode::Classic")
+            && manual_row.contains("manual_label.into()"),
+        "AUTO and MANUAL dropdown rows must retain their distinct workspace-mode mappings"
+    );
+    assert!(
+        selector.contains("backend.set_workspace_mode(&group, mode, backend_cx)"),
+        "dropdown selection must keep using the shared workspace-mode persistence authority"
     );
 }
 
@@ -930,26 +944,20 @@ fn delayed_workspace_actions_revalidate_inside_the_dispatch_path() {
 }
 
 /// Catches restoring the Auto header popover branch or its remembered-Classic fallback in
-/// `chrome/terminal_chrome.rs:core_card` / `core_selector`; the header would become a second server
-/// selector and Overview would misleadingly display the Classic server. The one menu an Auto card
-/// may open is the core-settings entry at the level that hides the gear — never a core row.
+/// `chrome/terminal_chrome.rs:core_selector`; the header would become a second server selector and
+/// Overview would misleadingly display the Classic server.
 #[test]
 fn auto_header_core_is_a_passive_overview_aware_indicator() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let card = code_only(braced_body(&chrome, "fn core_card("));
     let selector = code_only(braced_body(&chrome, "fn core_selector("));
     assert!(
-        card.contains("let auto = b.workspace_mode(group) == WorkspaceMode::AutoTrading")
-            && card.contains("b.valid_auto_workspace_core(group)")
-            && card.contains("t!(\"workspace.overview\").to_string()")
-            && selector.contains("let clickable = !auto || settings_item.is_some();")
-            && selector.contains(".when(clickable, |card| card.cursor_pointer())")
-            && selector.contains(".when(!auto, |card| {\n            card.child(")
-            && selector.contains(
-                "if auto && settings_item.is_none() {\n        return card.into_any_element();"
-            )
-            && selector.contains("let cores = if auto {\n            Vec::new()"),
-        "Auto must render a passive, caret-free scope card from its own selected core or Overview"
+        selector.contains("let auto = b.workspace_mode(group) == WorkspaceMode::AutoTrading")
+            && selector.contains("b.valid_auto_workspace_core(group)")
+            && selector.contains("t!(\"workspace.overview\").to_string()")
+            && selector.contains(".disabled(auto)")
+            && selector.contains(".caret(!auto)")
+            && selector.contains("if auto {\n        return pill.into_any_element();"),
+        "Auto must render a passive scope pill from its own selected core or Overview"
     );
 }
 
@@ -958,9 +966,9 @@ fn auto_header_core_is_a_passive_overview_aware_indicator() {
 #[test]
 fn fixed_header_rows_cannot_flex_shrink_between_modes() {
     let chrome = code_only(&read_src("chrome/terminal_chrome.rs"));
-    let header = code_only(braced_body(&chrome, "pub(crate) fn render_header("));
+    let header = code_only(braced_body(&chrome, "pub fn header("));
     let toolbar_src = code_only(&read_unsplit("controls/toolbar.rs"));
-    let toolbar = code_only(braced_body(&toolbar_src, "pub(crate) fn render_toolbar("));
+    let toolbar = code_only(braced_body(&toolbar_src, "pub fn toolbar("));
     assert!(
         header.contains(".h(design::header_height_px(cx))\n        .flex_none()"),
         "the explicit-height header must be a non-shrinking flex child"

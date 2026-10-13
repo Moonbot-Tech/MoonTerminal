@@ -21,7 +21,6 @@
 use std::rc::Rc;
 
 use chrono::{DateTime, Utc};
-use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
     MoonMenuItem, MoonPalette, MoonPopover, MoonPopoverPlacement, MoonPopupMenu, MoonSize,
@@ -30,7 +29,6 @@ use moon_ui::{
 use rust_i18n::t;
 
 use crate::Backend;
-use crate::chrome::terminal_chrome::text_box;
 use crate::design;
 
 mod cities;
@@ -100,7 +98,7 @@ pub(crate) fn system_zone() -> Option<chrono_tz::Tz> {
 ///
 /// Returns:
 ///     Matching curated or uncurated zone, or UTC when the saved value is invalid.
-pub(crate) fn selected_zone(backend: &Entity<Backend>, cx: &App) -> chrono_tz::Tz {
+fn selected_zone(backend: &Entity<Backend>, cx: &App) -> chrono_tz::Tz {
     moon_core::util::display_time::zone_or_utc(backend.read(cx).header_clock_zone())
 }
 
@@ -192,9 +190,6 @@ fn clock_parts(
 ///
 /// Returns:
 ///     Full `HH:MM:SS CODE` trigger width used by the main-header ticker offset.
-// No caller since the main header measures its clock in parts (`header_clock_part_widths`); kept
-// with its signature because it is the full-clock partner of `header_clock`, which other hosts use.
-#[allow(dead_code)]
 pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
     let (time, code) = clock_parts(
         selected_zone(backend, cx),
@@ -203,59 +198,7 @@ pub(crate) fn header_clock_width(backend: &Entity<Backend>, cx: &App) -> f32 {
     );
     design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)
         + design::ui_value(cx, CLOCK_GAP)
-        + design::mono_caption_text_width(cx, &code, CLOCK_TZ_WEIGHT)
-}
-
-/// Rendered widths of the main header's clock parts: the time, and the city code with the gap
-/// before it.
-///
-/// The main header budgets the two apart because its collapse drops the city while the time
-/// stays. Measured through [`clock_parts`] and the `CLOCK_*` constants at full precision, like
-/// [`header_clock_width`], so it cannot disagree with what [`header_clock_city`] draws.
-///
-/// Args:
-///     zone: Selected display zone.
-///     cx: Application context used to measure the active typography.
-///
-/// Returns:
-///     `(time, gap + code)` widths.
-pub(crate) fn header_clock_part_widths(zone: chrono_tz::Tz, cx: &App) -> (f32, f32) {
-    let (time, code) = clock_parts(zone, now_utc(), ClockPrecision::Seconds);
-    (
-        text_box(design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT)),
-        design::ui_value(cx, CLOCK_GAP)
-            + text_box(design::mono_caption_text_width(cx, &code, CLOCK_TZ_WEIGHT)),
-    )
-}
-
-/// Rendered width of the main header's clock time at minute precision, the form the narrowest
-/// header falls back to (see [`header_clock_minutes`]).
-pub(crate) fn header_clock_minutes_width(zone: chrono_tz::Tz, cx: &App) -> f32 {
-    let (time, _) = clock_parts(zone, now_utc(), ClockPrecision::Minutes);
-    text_box(design::mono_body_text_width(cx, &time, CLOCK_TIME_WEIGHT))
-}
-
-/// The main header's clock at minute precision without the city: what the narrowest header draws
-/// once even the shortest core name does not make the row fit. The same picker as
-/// [`header_clock_city`].
-pub(crate) fn header_clock_minutes(
-    backend: Option<&Entity<Backend>>,
-    zone: chrono_tz::Tz,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
-    clock_with_picker(
-        MoonPopover::new("header-clock-popover"),
-        backend,
-        zone,
-        ClockStyle {
-            precision: ClockPrecision::Minutes,
-            show_city: false,
-            digits: p.text_soft,
-        },
-        p,
-        cx,
-    )
+        + design::mono_body_text_width(cx, &code, CLOCK_TZ_WEIGHT)
 }
 
 /// Write a picker city into the layout, deriving its compatibility offset from the same instant.
@@ -359,157 +302,12 @@ fn render_header_clock(
     cx: &App,
 ) -> AnyElement {
     let selected = selected_zone(backend, cx);
-    clock_with_picker(
-        MoonPopover::new("header-clock-popover"),
-        Some(backend),
-        selected,
-        ClockStyle {
-            precision,
-            show_city: true,
-            digits: p.text,
-        },
-        p,
-        cx,
-    )
-}
-
-/// Render the main header's clock: muted digits, the city code only when `show_city`.
-///
-/// The main header is the one host that collapses the city away and reads the clock as an ambient
-/// readout, so it has its own entry; [`header_clock`] keeps its shape for the other hosts. Both go
-/// through the one renderer and picker, [`clock_with_picker`]. With no `backend` the clock keeps
-/// its geometry but opens no picker (layout tests draw the header without a backend).
-///
-/// Args:
-///     backend: Shared state the picker writes to; `None` renders the trigger alone.
-///     zone: Selected display zone.
-///     show_city: Whether the city code is drawn.
-///     p: Active palette.
-///     cx: Application context used to build the shared popover.
-///
-/// Returns:
-///     `HH:MM:SS [CODE]` trigger, with the city picker when a backend is given.
-pub(crate) fn header_clock_city(
-    backend: Option<&Entity<Backend>>,
-    zone: chrono_tz::Tz,
-    show_city: bool,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
-    clock_with_picker(
-        MoonPopover::new("header-clock-popover"),
-        backend,
-        zone,
-        ClockStyle {
-            precision: ClockPrecision::Seconds,
-            show_city,
-            digits: p.text_soft,
-        },
-        p,
-        cx,
-    )
-}
-
-/// How one host draws the shared clock.
-#[derive(Clone, Copy)]
-struct ClockStyle {
-    /// Time fields retained by the host.
-    precision: ClockPrecision,
-    /// Whether the city code is drawn.
-    show_city: bool,
-    /// Colour of the time digits.
-    digits: u32,
-}
-
-/// The one clock trigger and city picker every host renders through.
-///
-/// Args:
-///     popover: The picker's popover, identity already set by the caller.
-///     backend: Shared state the picker writes to; `None` renders the trigger alone.
-///     selected: Selected display zone.
-///     style: Precision, city visibility and digit colour of this host.
-///     p: Active palette.
-///     cx: Application context used to build the shared popover.
-///
-/// Returns:
-///     Clock trigger and eagerly prepared city-selection popover.
-fn clock_with_picker(
-    popover: MoonPopover,
-    backend: Option<&Entity<Backend>>,
-    selected: chrono_tz::Tz,
-    style: ClockStyle,
-    p: MoonPalette,
-    cx: &App,
-) -> AnyElement {
     // One instant for the header and every menu row, so no row can straddle a second and disagree
     // with the clock above it. `MoonPopover` builds its content eagerly, so this loop runs whether
     // the popup is open or not — reading the system clock per row would be that cost per frame.
     let now = now_utc();
-    let (time, code) = clock_parts(selected, now, style.precision);
-    let row = h_flex()
-        .id("header-clock")
-        .debug_selector(|| "header-clock".into())
-        .flex_none()
-        // The city is a smaller caption: it sits on the time's baseline, as in the mockup.
-        .items_baseline()
-        .gap(design::ui_px(cx, CLOCK_GAP))
-        .font_family(design::mono())
-        .text_size(design::t_body(cx))
-        .cursor_pointer()
-        .tooltip(|_w, cx| {
-            cx.new(|_| MoonTooltipView::new(t!("header.clock_tip").to_string()))
-                .into()
-        })
-        .child(
-            div()
-                .debug_selector(|| "header-clock-time".into())
-                .text_color(rgb(style.digits))
-                .font_weight(FontWeight(CLOCK_TIME_WEIGHT))
-                .child(time),
-        )
-        .when(style.show_city, |row| {
-            row.child(
-                // Reference info: the muted caption tier, not a second value.
-                div()
-                    .text_size(design::t_caption(cx))
-                    .text_color(rgb(p.text_muted))
-                    .font_weight(FontWeight(CLOCK_TZ_WEIGHT))
-                    .child(code),
-            )
-        });
-    let Some(backend) = backend else {
-        return row.into_any_element();
-    };
-    zone_popover(popover)
-        .trigger(row)
-        .content(zone_picker_menu(backend, selected, now))
-        .into_any_element()
-}
+    let (time, code) = clock_parts(selected, now, precision);
 
-/// Give `popover` the zone picker's placement and dismissal, shared by the clock and its folded
-/// "More" anchor so both surfaces open the same picker.
-fn zone_popover(popover: MoonPopover) -> MoonPopover {
-    popover
-        .placement(MoonPopoverPlacement::BottomEnd)
-        .fit_content()
-        .close_on_content_click(true)
-}
-
-/// Build the zone picker's menu: the curated cities, each with its wall clock, the selected one
-/// checked, led by a checked system row when the selected zone is not curated.
-///
-/// Args:
-///     backend: Shared state a pick writes to.
-///     selected: Selected display zone.
-///     now: The one instant every row's clock reads.
-///
-/// Returns:
-///     The picker's popup menu element.
-fn zone_picker_menu(
-    backend: &Entity<Backend>,
-    selected: chrono_tz::Tz,
-    now: DateTime<Utc>,
-) -> AnyElement {
     // One shared handle for all 47 rows: cloning an `Entity` takes a read lock on the entity map,
     // so a clone per row is not the refcount bump it reads as.
     let backend = Rc::new(backend.clone());
@@ -550,63 +348,50 @@ fn zone_picker_menu(
         );
     }
 
-    MoonPopupMenu::new("header-clock-menu")
-        // One compact row: the caption is a single line, and the pinned header is now
-        // held out of the scrolling region, so its height has to be declared for the row
-        // list's budget. MoonUI floors it at the menu's own row height regardless.
-        .header(20.0, t!("header.clock_pick").to_string())
-        .fit_width(200.0, 560.0)
-        .size(MoonSize::Xs)
-        .mono(true)
-        // Cap the viewport at about 11 cities so the full curated list cannot overrun a
-        // short window; the remaining rows stay reachable by scrolling.
-        .max_height_ui(300.0)
-        .items(items)
-        .render()
-        .into_any_element()
-}
-
-/// The shared picker's open/close, held by `Shell` while the clock is folded into "More".
-pub(crate) type ClockPickerOpen = Rc<dyn Fn(bool, &mut Window, &mut App)>;
-
-/// The anchor the zone picker opens under once the clock is hidden: a zero-size trigger at the
-/// bottom-right corner of the header's "More", so the picker hangs left under it.
-///
-/// No click reaches a zero-size trigger; the picker opens only from the "More" row and closes
-/// through its own outside click or a pick. Same popover id as the clock's: the two never draw at
-/// once, and the picker keeps one identity across both surfaces.
-///
-/// Args:
-///     backend: Shared state the picker writes to; `None` renders the anchor inert.
-///     zone: Selected display zone.
-///     open: Whether `Shell` holds the picker open.
-///     on_open: The picker's open/close through `Shell`.
-///
-/// Returns:
-///     The absolutely positioned anchor element.
-pub(crate) fn header_clock_picker_anchor(
-    backend: Option<&Entity<Backend>>,
-    zone: chrono_tz::Tz,
-    open: bool,
-    on_open: Option<ClockPickerOpen>,
-) -> AnyElement {
-    // The menu is built only while it is up: `MoonPopover` takes content eagerly.
-    let content = backend
-        .filter(|_| open)
-        .map(|backend| zone_picker_menu(backend, zone, now_utc()));
-    let popover = zone_popover(MoonPopover::new("header-clock-popover"))
-        .open(content.is_some())
-        .when_some(on_open, |popover, on_open| {
-            popover.on_open_change(move |open, window, cx| on_open(open, window, cx))
+    let row = h_flex()
+        .id("header-clock")
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, CLOCK_GAP))
+        .font_family(design::mono())
+        .text_size(design::t_body(cx))
+        .cursor_pointer()
+        .tooltip(|_w, cx| {
+            cx.new(|_| MoonTooltipView::new(t!("header.clock_tip").to_string()))
+                .into()
         })
-        .trigger(div().size_0())
-        .content(content.unwrap_or_else(|| div().into_any_element()));
-    div()
-        .absolute()
-        .right_0()
-        .bottom_0()
-        .size_0()
-        .debug_selector(|| "header-clock-more-anchor".into())
-        .child(popover)
+        .child(
+            div()
+                .text_color(rgb(p.text))
+                .font_weight(FontWeight(CLOCK_TIME_WEIGHT))
+                .child(time),
+        )
+        .child(
+            div()
+                .text_color(rgb(p.text_soft))
+                .font_weight(FontWeight(CLOCK_TZ_WEIGHT))
+                .child(code),
+        );
+
+    MoonPopover::new("header-clock-popover")
+        .placement(MoonPopoverPlacement::BottomEnd)
+        .fit_content()
+        .close_on_content_click(true)
+        .trigger(row)
+        .content(
+            MoonPopupMenu::new("header-clock-menu")
+                // One compact row: the caption is a single line, and the pinned header is now
+                // held out of the scrolling region, so its height has to be declared for the row
+                // list's budget. MoonUI floors it at the menu's own row height regardless.
+                .header(20.0, t!("header.clock_pick").to_string())
+                .fit_width(200.0, 560.0)
+                .size(MoonSize::Xs)
+                .mono(true)
+                // Cap the viewport at about 11 cities so the full curated list cannot overrun a
+                // short window; the remaining rows stay reachable by scrolling.
+                .max_height_ui(300.0)
+                .items(items)
+                .render(),
+        )
         .into_any_element()
 }
