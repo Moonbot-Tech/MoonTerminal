@@ -1,6 +1,8 @@
 //! Appearance page: theme picking, the edited colour set, and the layout.
 
-use gpui::{AppContext as _, IntoElement};
+use gpui::{
+    AppContext as _, InteractiveElement as _, IntoElement, ParentElement as _, Styled as _,
+};
 use moon_core::config::{AppConfig, UiThemeMode};
 
 use super::{
@@ -238,5 +240,132 @@ fn colour_labels_wrap_inside_their_card(cx: &mut gpui::TestAppContext) {
                 },
             );
         }
+    }
+}
+
+/// Catches the interface-scale slider pinned to the far edge with a hole across its card: in
+/// every language at every swept size and a wide window, the slider starts right after the
+/// label column — one row gap from the label's right edge, or under the label when the row
+/// wrapped — and the label column is no wider than its 240 cap.
+#[gpui::test]
+fn the_zoom_slider_sits_beside_its_label(cx: &mut gpui::TestAppContext) {
+    use crate::settings::layout_probe::{SIZES, body_box, leak};
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
+            let at = format!("{} at {}x{}", language.code(), size.0, size.1);
+            let make = host(|_, cx| {
+                let parts = AppearanceParts {
+                    cards: Vec::new(),
+                    experimental: stub("probe-experimental", 220.0, 18.0),
+                    zoom: stub("probe-zoom", 300.0, 22.0),
+                    set_note: String::new(),
+                    groups: Vec::new(),
+                    preview: stub("probe-preview", 300.0, 200.0),
+                    book_width: stub("probe-book-width", 130.0, 28.0),
+                    dock_reset: stub("probe-dock-reset", 200.0, 28.0),
+                };
+                appearance_body(parts, &all_open, cx).into_any_element()
+            });
+            let window = cx.open_window(gpui::size(gpui::px(size.0), gpui::px(size.1)), |w, cx| {
+                let body = body_box(size, cx);
+                make(w, cx, body)
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let (gap, cap) = visual.update(|_, cx| {
+                (
+                    crate::design::ui_value(cx, 16.0),
+                    crate::design::ui_value(cx, crate::settings::common::HINT_LABEL_MAX_W),
+                )
+            });
+            let mut get = |sel: &str| {
+                visual
+                    .debug_bounds(leak(sel.to_string()))
+                    .unwrap_or_else(|| panic!("{sel} was not laid out ({at})"))
+            };
+            let label = get("iface-zoom-label");
+            let slider = get("probe-zoom");
+            assert!(
+                f32::from(label.size.width) <= cap + 0.5,
+                "zoom label column is {} wide, over the {cap} cap ({at})",
+                f32::from(label.size.width)
+            );
+            let beside = slider.origin.y < label.bottom_left().y;
+            if beside {
+                let hole = f32::from(slider.origin.x - label.right());
+                assert!(
+                    (hole - gap).abs() <= 0.5,
+                    "zoom slider is {hole} px from its label column, not one {gap} gap ({at})"
+                );
+            } else {
+                let dx = f32::from(slider.origin.x - label.origin.x).abs();
+                assert!(
+                    dx <= 0.5,
+                    "wrapped zoom slider is not under its label ({at})"
+                );
+            }
+        }
+    }
+}
+
+/// Catches a colour-group slider pinned to the far edge of a wide group: in a 900-wide group the
+/// slider follows the label column, which stops at its cap, and the value sits right after the
+/// track.
+#[gpui::test]
+fn a_group_slider_follows_its_label(cx: &mut gpui::TestAppContext) {
+    use crate::settings::layout_probe::leak;
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let window = cx.open_window(
+            gpui::size(gpui::px(1000.0), gpui::px(300.0)),
+            |window, cx| {
+                let slider = cx.new(|_| moon_ui::MoonSliderState::new().max(100.0).min(0.0));
+                crate::settings::general::probe_host::host(move |_, cx| {
+                    gpui::div()
+                        .w(gpui::px(900.0))
+                        .debug_selector(|| "probe-group".into())
+                        .child(color_line(
+                            gpui::div()
+                                .debug_selector(|| "probe-label".into())
+                                .child(rust_i18n::t!("iface.book_level_alpha").to_string())
+                                .into_any_element(),
+                            Some(
+                                gpui::div()
+                                    .debug_selector(|| "probe-slider".into())
+                                    .child(slider_ctl(&slider, &|v| format!("{v:.0}%"), cx))
+                                    .into_any_element(),
+                            ),
+                            cx,
+                        ))
+                        .into_any_element()
+                })(window, cx, (950.0, 280.0))
+            },
+        );
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let group = visual
+            .debug_bounds(leak("probe-group".into()))
+            .expect("group");
+        let slider = visual
+            .debug_bounds(leak("probe-slider".into()))
+            .expect("slider");
+        let width = f32::from(group.size.width);
+        let start = f32::from(slider.origin.x - group.origin.x);
+        assert!(
+            start <= 0.5 * width,
+            "slider starts {start} px into a {width} group: pinned to the far edge ({})",
+            language.code()
+        );
     }
 }

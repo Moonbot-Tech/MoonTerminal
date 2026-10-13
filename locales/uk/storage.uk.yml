@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Історія версій реальних �
 storage.strategies_rows: "Стратегій: %{live} (видалених: %{deleted}) · Версій: %{versions}"
 storage.version_limit: "Ліміт версій на стратегію"
 storage.version_limit_off: "без ліміту"
+storage.unit_mb: "МБ"
+storage.unit_min: "хв"
 storage.version_limit_hint: "0 — зберігати всі версії (рекомендовано: історію не відновити). Ліміт обрізає старі, коли пишуться нові."
 storage.strategies_hint: "Єдина копія історії — повторна синхронізація її не відновить. Щоб не втратити, натисніть Резервна копія."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "Чого немає в архіві ядра — 
 storage.trades_cleanup_at_startup: "Очищення під час запуску"
 storage.trades_cleanup_at_startup_hint: "Те саме, що кнопка \"Очищення\", перед підвантаженням стрічки. З наступного запуску."
 storage.trades_cleanup: "Очищення"
+storage.trades_cleanup_run: "Почистити"
 storage.trades_cleanup_hint: "Лишає принти угод стратегій, які стратегія закрила сама (те, що читає тюнер), у межах кроку \"Принти навколо угоди\". Ручні продажі, фандинг, ліквідації і принти без угоди у звіті зникають. Файл стискається одразу."
 storage.trades_cleanup_preview: "зникне ≈ %{prints} принтів, звільниться ≈ %{size}"
 storage.trades_cleanup_empty: "нічого видаляти"

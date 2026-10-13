@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::*;
-use moon_ui::{MoonButton, MoonPalette, h_flex, rgba_from, v_flex};
+use moon_ui::{MoonButton, MoonPalette, h_flex, rgba_from};
 use rust_i18n::t;
 
 use super::super::SettingsView;
@@ -402,7 +402,7 @@ impl SettingsView {
     }
 }
 
-/// The cleanup button with the count beside it.
+/// The cleanup row: the button with the count beside it, its explanation behind "подробнее".
 ///
 /// Args:
 ///     s: Where the press goes.
@@ -432,42 +432,41 @@ pub(super) fn cleanup_el(
     // Pressable only with something counted to remove: an empty count is "nothing to do",
     // a pending one may still be a large file being read.
     let armed = !busy && matches!(&preview, Some(Ok(preview)) if !preview.report.is_empty());
-    v_flex()
-        .gap_1()
+    let control = h_flex()
+        .flex_wrap()
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
         .child(
-            h_flex()
-                .flex_wrap()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
-                .child(
-                    // Spaces around the label: the fork's `MoonButton` `pad_x=0` bug, as
-                    // the other tool buttons of the tab work around it.
-                    MoonButton::new("trades-cleanup")
-                        .variant(moon_ui::MoonButtonVariant::Neutral)
-                        .label(format!("  {}  ", t!("storage.trades_cleanup")))
-                        .disabled(!armed)
-                        .on_click(s.click(|this, _, cx| this.trades_cleanup_press(cx)))
-                        .render(),
-                )
-                // MIXED NODE: the count combines a localized label with figures in one
-                // text node — stays mono, like the tab's other readouts.
-                // It shrinks and wraps beside the button rather than painting past the card.
-                .child(
-                    div()
-                        .debug_selector(|| "trades-cleanup-estimate".into())
-                        .flex_1()
-                        .min_w_0()
-                        .text_color(muted)
-                        .font_family(design::mono())
-                        .child(line),
-                ),
+            // Spaces around the label: the fork's `MoonButton` `pad_x=0` bug, as
+            // the other tool buttons of the tab work around it.
+            MoonButton::new("trades-cleanup")
+                .variant(moon_ui::MoonButtonVariant::Neutral)
+                .label(format!("  {}  ", t!("storage.trades_cleanup_run")))
+                .disabled(!armed)
+                .on_click(s.click(|this, _, cx| this.trades_cleanup_press(cx)))
+                .render(),
         )
+        // MIXED NODE: the count combines a localized label with figures in one
+        // text node — stays mono, like the tab's other readouts.
+        // It shrinks and wraps beside the button rather than painting past the card.
         .child(
             div()
+                .debug_selector(|| "trades-cleanup-estimate".into())
+                .min_w_0()
                 .text_color(muted)
-                .child(t!("storage.trades_cleanup_hint").to_string()),
+                .font_family(design::mono())
+                .child(line),
         )
-        .into_any_element()
+        .into_any_element();
+    super::setting_row(
+        s,
+        "storage-trades-cleanup",
+        t!("storage.trades_cleanup").to_string(),
+        None,
+        t!("storage.trades_cleanup_hint").to_string(),
+        control,
+        cx,
+    )
 }
 
 #[cfg(test)]

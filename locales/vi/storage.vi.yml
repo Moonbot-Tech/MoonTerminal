@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Lịch sử phiên bản theo các lần sửa
 storage.strategies_rows: "Chiến lược: %{live} (đã xóa: %{deleted}) · Phiên bản: %{versions}"
 storage.version_limit: "Giới hạn phiên bản mỗi chiến lược"
 storage.version_limit_off: "không giới hạn"
+storage.unit_mb: "MB"
+storage.unit_min: "phút"
 storage.version_limit_hint: "0 — giữ mọi phiên bản (nên dùng: lịch sử không khôi phục được). Giới hạn sẽ cắt bản cũ khi ghi bản mới."
 storage.strategies_hint: "Bản duy nhất của lịch sử — đồng bộ lại không khôi phục được. Dùng Sao lưu để giữ an toàn."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "Phần kho core không có — lấy từ sàn, x
 storage.trades_cleanup_at_startup: "Dọn lúc khởi động"
 storage.trades_cleanup_at_startup_hint: "Giống nút “Dọn”, trước khi tải tape. Từ lần mở sau."
 storage.trades_cleanup: "Dọn"
+storage.trades_cleanup_run: "Dọn ngay"
 storage.trades_cleanup_hint: "Giữ print của giao dịch chiến lược do chính chiến lược đóng (thứ tinh chỉnh ngưỡng đọc), trong bước “Print quanh giao dịch”. Bán thủ công, funding, thanh lý và print không có giao dịch trong báo cáo sẽ bị bỏ. File được nén ngay."
 storage.trades_cleanup_preview: "sẽ xóa ≈ %{prints} print, giải phóng ≈ %{size}"
 storage.trades_cleanup_empty: "không có gì để xóa"

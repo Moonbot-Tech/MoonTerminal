@@ -13,7 +13,9 @@ use super::super::layout_probe::{ProbeSpec, Probed, sweep};
 use super::core_data::{
     CoreCounts, CoreLine, CoreView, Group, Kinds, core_section_el, lines as core_lines,
 };
-use super::{StorageCtx, StorageInfo, StorageView, figure_chunks, storage_body_el, usage_parts};
+use super::{
+    StorageCtx, StorageInfo, StorageView, figure_chunks, stat_items, storage_body_el, usage_parts,
+};
 
 /// A probe host drawing whatever `build` returns inside the body box.
 struct Host {
@@ -146,13 +148,17 @@ fn page(fields: &[gpui::Entity<moon_ui::MoonInputState>; 3], cx: &App) -> AnyEle
         strat_versions: 4_321,
     };
     let [version_limit, max_mb, long_min] = fields.clone();
+    // No version limit (the field says so in place of a unit) and a 256 MB file ceiling.
+    let mut cfg = moon_core::config::storage::StorageCfg::default();
+    cfg.strategies.version_limit = 0;
+    cfg.trade_replay.max_mb = 256;
     storage_body_el(
         StorageView {
             info,
             busy: false,
             path: "C:/Users/synthetic-user-with-a-long-name/AppData/Roaming/MoonTerminal/data"
                 .into(),
-            cfg: Default::default(),
+            cfg,
             version_limit,
             max_mb,
             long_min,
@@ -220,75 +226,104 @@ fn figure_chunks_keep_each_figure_with_its_label() {
     assert_eq!(figure_chunks("No file yet"), ["No file yet"]);
 }
 
-/// The Storage cards follow the mockup's grid: cards sharing a row are equally tall, every
-/// setting row's control ends at the same right edge within its card, and each figure of the
-/// strategies line stays on one line, in every language at every swept size and a wide window.
+/// The strategies figures become three stat items without the single-line separators.
 ///
-/// Breaks on: the card row going back to top-aligned cards of different heights, a control
-/// drawn short of the row's right edge (the collapsed number field), or the figures line
-/// wrapping inside "1699".
+/// Breaks on: a stat item keeping its `·` or its parentheses, or a figure lost.
+#[test]
+fn stat_items_drop_the_line_separators() {
+    assert_eq!(
+        stat_items("Strategies: 1699 (deleted: 211) \u{b7} Versions: 2822"),
+        ["Strategies: 1699", "deleted: 211", "Versions: 2822"]
+    );
+}
+
+/// The Storage cards follow the mockup's two-wide grid: the light column and the trades column
+/// side by side end on one line, each column's last card reaching its bottom, so no card stands
+/// as an empty box; every setting row's control starts one row gap after its label column (or
+/// under it when the row wrapped); and each strategies stat item stays on one line — in every
+/// language at every swept size and a wide window.
+///
+/// Breaks on: columns of different heights, a control pinned to the card's far edge with a hole
+/// after the label, or a stat item wrapping inside "1699".
 #[gpui::test]
 fn storage_cards_align_to_the_grid(cx: &mut gpui::TestAppContext) {
     use super::super::layout_probe::{SIZES, leak};
     cx.update(moon_ui::init);
-    let cards = [
-        "storage-card-reports",
-        "storage-card-strategies",
-        "storage-card-trades",
-        "storage-card-klines",
-    ];
-    let columns: [&[&str]; 2] = [
-        &["storage-strat-enabled", "storage-version-limit"],
-        &[
-            "storage-trades-enabled",
-            "storage-trades-margin",
-            "storage-trades-max",
-            "storage-trades-long",
-            "storage-trades-autoload",
-        ],
+    let rows = [
+        "storage-strat-enabled",
+        "storage-version-limit",
+        "storage-trades-enabled",
+        "storage-trades-margin",
+        "storage-trades-max",
+        "storage-trades-long",
+        "storage-trades-autoload",
+        "storage-trades-cleanup",
     ];
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
             let at = format!("{} at {}x{}", language.code(), size.0, size.1);
             let (mut visual, _states) = draw_page(cx, size, [100, 256, 5]);
-            let line = visual.update(|_, cx| f32::from(crate::design::line_px(cx, 14.0)));
+            let (line, gap) = visual.update(|_, cx| {
+                (
+                    f32::from(crate::design::line_px(cx, 14.0)),
+                    crate::design::ui_value(cx, 16.0),
+                )
+            });
             let mut get = |sel: String| {
                 visual
                     .debug_bounds(leak(sel.clone()))
                     .unwrap_or_else(|| panic!("{sel} was not laid out ({at})"))
             };
-            let boxes: Vec<_> = cards.iter().map(|c| get(c.to_string())).collect();
-            for (i, a) in boxes.iter().enumerate() {
-                for b in &boxes[i + 1..] {
-                    let same_row = a.origin.y < b.bottom_left().y && b.origin.y < a.bottom_left().y;
-                    if same_row {
-                        let dh = (f32::from(a.size.height) - f32::from(b.size.height)).abs();
-                        assert!(
-                            dh <= 0.5,
-                            "cards in one row differ in height by {dh} ({at})"
-                        );
-                    }
+            let light = get("storage-col-light".into());
+            let trades = get("storage-col-trades".into());
+            if light.origin.y == trades.origin.y {
+                let dh = (f32::from(light.size.height) - f32::from(trades.size.height)).abs();
+                assert!(
+                    dh <= 0.5,
+                    "the two card columns differ in height by {dh} ({at})"
+                );
+                for (column, last) in [
+                    (light, "storage-card-klines"),
+                    (trades, "storage-card-trades"),
+                ] {
+                    let gap = f32::from(column.bottom_left().y - get(last.into()).bottom_left().y);
+                    assert!(
+                        gap.abs() <= 0.5,
+                        "{last} ends {gap} px above its column ({at})"
+                    );
                 }
             }
-            for rows in columns {
-                let rights: Vec<f32> = rows
-                    .iter()
-                    .map(|row| f32::from(get(format!("{row}-control")).right()))
-                    .collect();
-                let (lo, hi) = rights
-                    .iter()
-                    .fold((f32::MAX, f32::MIN), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
-                assert!(
-                    hi - lo <= 0.5,
-                    "controls of {rows:?} end {lo}..{hi}, not on one edge ({at})"
-                );
+            for row in rows {
+                let label = get(format!("{row}-label"));
+                let control = get(format!("{row}-control"));
+                if control.origin.y < label.bottom_left().y {
+                    let hole = f32::from(control.origin.x - label.right());
+                    assert!(
+                        (hole - gap).abs() <= 0.5,
+                        "{row}'s control is {hole} px from its label column, not one {gap} gap ({at})"
+                    );
+                } else {
+                    let dx = f32::from(control.origin.x - label.origin.x).abs();
+                    assert!(
+                        dx <= 0.5,
+                        "{row}'s wrapped control is not under its label ({at})"
+                    );
+                }
             }
+            // The zero version limit reads «без лимита» on one line beside its field, in the card.
+            let note = get("storage-version-limit-off".into());
+            let card = get("storage-card-strategies".into());
+            assert!(
+                f32::from(note.right()) <= f32::from(card.right()) + 0.5
+                    && f32::from(note.size.height) < 2.0 * line,
+                "the no-limit note is cut or past its card ({at})"
+            );
             for i in 0..3 {
                 let chunk = get(format!("storage-strat-rows-{i}"));
                 assert!(
                     f32::from(chunk.size.height) < 2.0 * line,
-                    "figure piece {i} wraps: {} tall ({at})",
+                    "stat item {i} wraps: {} tall ({at})",
                     f32::from(chunk.size.height)
                 );
             }
@@ -297,30 +332,41 @@ fn storage_cards_align_to_the_grid(cx: &mut gpui::TestAppContext) {
 }
 
 /// Every number field on the production Storage page holds its seeded digits after drawing, and
-/// its box fits both step buttons plus the widest value the field accepts, in every language at
-/// every swept size.
+/// its box fits both step buttons plus the widest value the field accepts plus its unit (МБ, мин)
+/// and stays inside its card; a zero version limit shows «без лимита» beside its field, inside
+/// the card, in every language
+/// at every swept size.
 ///
 /// The oracle is built here from the control's own metrics: two square buttons (one control
-/// height each) plus the mono width of the range's widest end. It does not call the field helper.
+/// height each) plus the mono width of the range's widest end and of the unit. It does not call
+/// the field helper.
 ///
 /// Breaks on: a field seeded empty or only on blur, a field drawn over a state other than the
 /// page's, or a row/card that squeezes the field so the value has no room between `-` and `+`
-/// (the live symptom: an empty ~12 px box).
+/// (the live symptom: an empty ~12 px box), or a field drawn without its unit.
 #[gpui::test]
 fn storage_number_fields_show_their_digits(cx: &mut gpui::TestAppContext) {
     use super::super::layout_probe::{SIZES, leak};
     cx.update(moon_ui::init);
+    // The unit each field must show beside its digits; a bare count has none.
     let fields = [
-        ("storage-version-limit-n", 100u32, "10000"),
-        ("storage-trades-max-n", 256, "100000"),
-        ("storage-trades-long-n", 5, "120"),
+        ("storage-version-limit-n", 100u32, "10000", ""),
+        ("storage-trades-max-n", 256, "100000", "storage.unit_mb"),
+        ("storage-trades-long-n", 5, "120", "storage.unit_min"),
+    ];
+    let cards = [
+        "storage-card-strategies",
+        "storage-card-trades",
+        "storage-card-trades",
     ];
     for language in moon_core::config::Language::ALL {
         let _locale = crate::test_locale::force(language.code());
-        // The swept sizes plus a wide window, where the four cards share one row.
+        // The swept sizes plus a wide window, where the card columns sit side by side.
         for size in SIZES.into_iter().chain([(1940.0, 1180.0)]) {
             let (mut visual, states) = draw_page(cx, size, [fields[0].1, fields[1].1, fields[2].1]);
-            for ((sel, seeded, widest), state) in fields.iter().zip(states.iter()) {
+            for (((sel, seeded, widest, unit_key), state), card) in
+                fields.iter().zip(states.iter()).zip(cards)
+            {
                 let text = visual.update(|_, cx| state.read(cx).value().to_string());
                 assert_eq!(
                     text,
@@ -333,14 +379,36 @@ fn storage_number_fields_show_their_digits(cx: &mut gpui::TestAppContext) {
                 let b = visual
                     .debug_bounds(leak(sel.to_string()))
                     .unwrap_or_else(|| panic!("{sel} was not laid out"));
+                let unit = if unit_key.is_empty() {
+                    String::new()
+                } else {
+                    rust_i18n::t!(*unit_key).to_string()
+                };
                 let need = visual.update(|_, cx| {
                     let m = crate::design::CONTROL_TIER.control_metrics();
                     2.0 * crate::design::ui_value(cx, m.height)
                         + crate::design::ui_text_width_zoomed(cx, widest, m.font_size, 500.0, true)
+                        + crate::design::ui_text_width_zoomed(
+                            cx,
+                            &unit,
+                            m.font_size - 2.0,
+                            400.0,
+                            true,
+                        )
                 });
+                let card_box = visual
+                    .debug_bounds(card)
+                    .unwrap_or_else(|| panic!("{card} was not laid out"));
+                assert!(
+                    f32::from(b.right()) <= f32::from(card_box.right()) + 0.5,
+                    "{sel} with its unit {unit:?} paints past {card} ({} at {}x{})",
+                    language.code(),
+                    size.0,
+                    size.1
+                );
                 assert!(
                     f32::from(b.size.width) + 0.5 >= need,
-                    "{sel} is {} wide, needs {need} for {widest:?} between its buttons ({} at {}x{})",
+                    "{sel} is {} wide, needs {need} for {widest:?} and {unit:?} between its buttons ({} at {}x{})",
                     f32::from(b.size.width),
                     language.code(),
                     size.0,
@@ -350,7 +418,11 @@ fn storage_number_fields_show_their_digits(cx: &mut gpui::TestAppContext) {
                 // to some other state. A click just inside the wrapper's right edge must land on
                 // `+` and step THIS state: the control spans the whole box and draws its value.
                 // Only where the field is on screen without scrolling (the wide window always).
-                if f32::from(b.bottom_left().y) < size.1 {
+                // On screen means inside the scrolled body, not merely above the window's edge.
+                let body = visual
+                    .debug_bounds("probe-body")
+                    .expect("probe body laid out");
+                if b.bottom_left().y < body.bottom_left().y {
                     let plus =
                         gpui::point(b.right() - gpui::px(4.0), b.origin.y + b.size.height / 2.0);
                     visual.simulate_click(plus, gpui::Modifiers::none());

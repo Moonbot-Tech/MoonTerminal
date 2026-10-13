@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Historial de versiones de cambios reales de pa
 storage.strategies_rows: "Estrategias: %{live} (eliminadas: %{deleted}) · Versiones: %{versions}"
 storage.version_limit: "Límite de versiones por estrategia"
 storage.version_limit_off: "sin límite"
+storage.unit_mb: "MB"
+storage.unit_min: "min"
 storage.version_limit_hint: "0 — conservar todas las versiones (recomendado: el historial es irrecuperable). Un límite recorta las antiguas al escribir nuevas."
 storage.strategies_hint: "La única copia del historial — una resincronización no lo restaura. Usa «Copia» para conservarlo."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "Lo que el archivo del núcleo no tiene — desde 
 storage.trades_cleanup_at_startup: "Limpiar al arrancar"
 storage.trades_cleanup_at_startup_hint: "Lo mismo que el botón «Limpiar», antes de descargar la cinta. Desde el próximo arranque."
 storage.trades_cleanup: "Limpiar"
+storage.trades_cleanup_run: "Limpiar ahora"
 storage.trades_cleanup_hint: "Conserva las operaciones de posiciones de estrategias cerradas por la propia estrategia (lo que lee el afinador), dentro del paso «Operaciones alrededor de una posición». Ventas manuales, funding, liquidaciones y operaciones sin posición en el informe se van. El archivo se compacta al instante."
 storage.trades_cleanup_preview: "se borrarán ≈ %{prints} operaciones, se liberarán ≈ %{size}"
 storage.trades_cleanup_empty: "nada que borrar"

@@ -47,6 +47,11 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
 /// (260 design units). The multiple is the control's own size, not a monitor-specific pixel guess.
 const SLIDER_TRACK_HEIGHTS: f32 = 12.0;
 
+/// The label column of a [`hint_row`], unscaled: the mockup's `minmax(150px, 240px)`.
+pub(super) const HINT_LABEL_MIN_W: f32 = 150.0;
+/// See [`HINT_LABEL_MIN_W`].
+pub(super) const HINT_LABEL_MAX_W: f32 = 240.0;
+
 /// Upper bound for the settings slider track: captions-plus-gap, or a run of slider heights.
 ///
 /// The floor is the two endpoint captions so they cannot collide. The ceiling is twelve times the
@@ -409,8 +414,8 @@ pub(super) fn column_row(
     )
 }
 
-/// Shared body of [`hint_row`] (`label_w` `None`: label flexes, control at its own width on the
-/// right) and [`column_row`] (`Some`: a fixed label column and the control filling the rest).
+/// Shared body of [`hint_row`] (`label_w` `None`: a 150–240 label column, the control at its own
+/// width right after it) and [`column_row`] (`Some`: a fixed label column and the control filling the rest).
 #[allow(clippy::too_many_arguments)]
 fn row_layout(
     id: &'static str,
@@ -466,10 +471,15 @@ fn row_layout(
     let field_hint = hint.clone().filter(|_| label_w.is_some()).map(caption);
     let text = v_flex()
         .map(|el| match label_w {
-            Some(w) => el.flex_none().w(design::ui_px(cx, w)),
-            None => el.flex_1(),
+            Some(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
+            // The mockup's label column, `minmax(150px, 240px)`: the label takes up to 240 and the
+            // control follows right after it, so a short label never leaves a hole across the card.
+            // The floor holds: a control that does not fit beside it wraps under the label.
+            None => el
+                .flex_1()
+                .min_w(design::ui_px(cx, HINT_LABEL_MIN_W))
+                .max_w(design::ui_px(cx, HINT_LABEL_MAX_W)),
         })
-        .min_w_0()
         // A row's label and hint are prose in the UI face, whatever face the page sets.
         .font_family(design::ui_font())
         .gap(design::ui_px(cx, 2.0))
@@ -508,10 +518,13 @@ fn row_layout(
                         .child(control)
                         .children(field_hint),
                 ),
-            None => el.child(
+            // Below the label column's floor the control wraps under the label instead of
+            // painting past the card.
+            None => el.flex_wrap().gap_y(design::ui_px(cx, 4.0)).child(
                 div()
                     .debug_selector(move || format!("{id}-control"))
                     .flex_none()
+                    .max_w_full()
                     .child(control),
             ),
         })

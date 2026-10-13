@@ -41,6 +41,7 @@ iface.dock_reset_tip: "Devolver los paneles del modo actual a sus lugares por de
 iface.book_level_bid: "Color de líneas de niveles bid"
 iface.book_level_ask: "Color de líneas de niveles ask"
 iface.book_level_auto: "Restablecer a automático"
+iface.book_level_is_auto: "auto"
 iface.book_level_width: "Grosor de líneas de niveles, px"
 
 iface.order_book_width: "Ancho del libro de órdenes, px"

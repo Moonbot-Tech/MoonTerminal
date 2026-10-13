@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Histórico de versões das edições reais de 
 storage.strategies_rows: "Estratégias: %{live} (excluídas: %{deleted}) · Versões: %{versions}"
 storage.version_limit: "Limite de versões por estratégia"
 storage.version_limit_off: "sem limite"
+storage.unit_mb: "MB"
+storage.unit_min: "min"
 storage.version_limit_hint: "0 — guardar todas as versões (recomendado: o histórico não se recupera). Um limite corta as antigas quando as novas são gravadas."
 storage.strategies_hint: "A única cópia do histórico — uma nova sincronização não restaura. Use Backup para guardá-la."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "O que o acervo do núcleo não tem — da correto
 storage.trades_cleanup_at_startup: "Limpar ao iniciar"
 storage.trades_cleanup_at_startup_hint: "O mesmo que o botão \"Limpar\", antes de buscar os negócios. A partir da próxima abertura."
 storage.trades_cleanup: "Limpar"
+storage.trades_cleanup_run: "Limpar agora"
 storage.trades_cleanup_hint: "Mantém os prints das operações de estratégia que a própria estratégia fechou (o que o ajuste lê), dentro do passo \"Prints em volta da operação\". Vendas manuais, funding, liquidações e prints sem operação no relatório saem. O arquivo é compactado na hora."
 storage.trades_cleanup_preview: "≈ %{prints} prints saem, ≈ %{size} liberados"
 storage.trades_cleanup_empty: "nada a excluir"

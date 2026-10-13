@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Version history of real parameter edits (cosme
 storage.strategies_rows: "Strategies: %{live} (deleted: %{deleted}) · Versions: %{versions}"
 storage.version_limit: "Version limit per strategy"
 storage.version_limit_off: "unlimited"
+storage.unit_mb: "MB"
+storage.unit_min: "min"
 storage.version_limit_hint: "0 — keep all versions (recommended: the history is unrecoverable). A limit trims old ones as new are written."
 storage.strategies_hint: "The only copy of the history — a re-sync cannot restore it. Use Backup to keep it safe."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "What the core's archive does not hold — from th
 storage.trades_cleanup_at_startup: "Clean up at startup"
 storage.trades_cleanup_at_startup_hint: "Same as the \"Clean up\" button, before the tape fetch. From the next launch."
 storage.trades_cleanup: "Clean up"
+storage.trades_cleanup_run: "Clean now"
 storage.trades_cleanup_hint: "Keeps the prints of strategy trades the strategy closed itself (what the tuner reads), within the \"Prints around a trade\" step. Manual sells, funding, liquidations and prints with no trade in the report go. The file is compacted at once."
 storage.trades_cleanup_preview: "≈ %{prints} prints go, ≈ %{size} freed"
 storage.trades_cleanup_empty: "nothing to delete"

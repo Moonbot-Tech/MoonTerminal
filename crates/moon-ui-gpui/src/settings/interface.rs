@@ -355,8 +355,9 @@ pub(super) fn build(
 
 impl SettingsView {
     /// Render a level-colour picker with a per-side reset because MoonUI has no clear event.
-    /// The controls wrap at narrow widths; resetting rebuilds the retained picker from the wall.
-    fn book_level_row(&self, bid: bool, cx: &Context<Self>) -> impl IntoElement {
+    /// The reset is offered only for a picked colour; resetting rebuilds the retained picker from
+    /// the wall.
+    fn book_level_row(&self, bid: bool, cx: &Context<Self>) -> AnyElement {
         let p = MoonPalette::active(cx);
         let (label, state, id) = if bid {
             (
@@ -381,17 +382,29 @@ impl SettingsView {
                 theme.book_level_ask.is_none()
             }
         };
-        h_flex()
-            .w_full()
-            .flex_wrap()
-            .items_center()
-            .gap(design::ui_px(cx, 10.0))
-            .child(color_row(&label, state, p, cx))
+        // Automatic already: a muted note, not a greyed button that reads as a dead action.
+        if automatic {
+            let note = div()
+                .debug_selector(move || id.to_string())
+                .flex_none()
+                .font_family(design::mono())
+                .text_size(design::t_caption(cx))
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(t!("iface.book_level_is_auto").to_string())
+                .into_any_element();
+            return color_line(
+                color_row(&label, state, p, cx).into_any_element(),
+                Some(note),
+                cx,
+            );
+        }
+        let reset = div()
+            .debug_selector(move || id.to_string())
+            .flex_none()
             .child(
                 MoonButton::new(id)
                     .variant(moon_ui::MoonButtonVariant::Neutral)
-                    .label(t!("iface.book_level_auto"))
-                    .disabled(automatic)
+                    .label(format!("  {}  ", t!("iface.book_level_auto")))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.backend.update(cx, |b, bcx| {
                             if let Some(draft) = b.preview.as_mut() {
@@ -414,6 +427,13 @@ impl SettingsView {
                     }))
                     .render(),
             )
+            .into_any_element();
+        // The reset sits inline at the row's right, like a slider beside its colour.
+        color_line(
+            color_row(&label, state, p, cx).into_any_element(),
+            Some(reset),
+            cx,
+        )
     }
 
     /// Switch the interface theme from a theme card.
@@ -538,8 +558,8 @@ impl SettingsView {
                     color("iface.book_bg", &i.book_bg),
                     color("iface.book_bid", &i.book_bid),
                     color("iface.book_ask", &i.book_ask),
-                    self.book_level_row(true, cx).into_any_element(),
-                    self.book_level_row(false, cx).into_any_element(),
+                    self.book_level_row(true, cx),
+                    self.book_level_row(false, cx),
                     slider("iface.book_level_alpha", &i.book_level_alpha, &pct),
                     slider("iface.book_level_width", &i.book_level_width, &px1),
                 ],
@@ -601,7 +621,7 @@ impl SettingsView {
         let parts = AppearanceParts {
             cards: self.theme_cards(mode, cx),
             experimental,
-            zoom: slider_ctl(&self.ui_zoom, &super::general::zoom_text, cx),
+            zoom: slider_ctl_w(&self.ui_zoom, &super::general::zoom_text, ZOOM_TRACK_W, cx),
             set_note: t!(set_note_key(mode)).to_string(),
             groups: self.color_groups(cx),
             preview: chart_preview(&theme, cx),
@@ -773,10 +793,26 @@ fn theme_card(
         .into_any_element()
 }
 
+/// Track width of a colour-group slider, unscaled.
+const SLIDER_TRACK_W: f32 = 110.0;
+/// Track width of the interface-scale slider, unscaled: a page-level row has room for more.
+const ZOOM_TRACK_W: f32 = 220.0;
+
 /// A compact slider for a colour-group row: the track and its value in the mono face.
 pub(super) fn slider_ctl(
     st: &Entity<MoonSliderState>,
     format: &dyn Fn(f32) -> String,
+    cx: &App,
+) -> AnyElement {
+    slider_ctl_w(st, format, SLIDER_TRACK_W, cx)
+}
+
+/// [`slider_ctl`] with a `track_w` (unscaled) track. The value is left-aligned in its fixed
+/// box, right beside the track, so values of stacked rows line up and none drifts away.
+pub(super) fn slider_ctl_w(
+    st: &Entity<MoonSliderState>,
+    format: &dyn Fn(f32) -> String,
+    track_w: f32,
     cx: &App,
 ) -> AnyElement {
     let p = MoonPalette::active(cx);
@@ -788,28 +824,30 @@ pub(super) fn slider_ctl(
         .items_center()
         .child(
             div()
-                .w(design::ui_px(cx, 110.0))
+                .w(design::ui_px(cx, track_w))
                 .child(MoonSlider::new(st).height(design::ui_value(cx, 22.0))),
         )
         .child(
             div()
                 .w(design::font_w_px(cx, 56.0))
                 .font_family(design::mono())
-                .text_align(TextAlign::Right)
+                .text_align(TextAlign::Left)
                 .text_color(rgba_from(p.text_muted, 1.0))
                 .child(format(value)),
         )
         .into_any_element()
 }
 
-/// One colour-group row: what it edits on the left, an optional slider on the right; the
-/// slider drops under the label when the group is narrow.
+/// One colour-group row: what it edits in a label column, an optional slider or action right
+/// after it; the control drops under the label when the group is narrow.
+///
+/// The label column stops at [`COLOR_LABEL_MAX_W`], so in a wide group the control stays beside
+/// its label rather than pinned to the far edge, and the controls of a group start on one line.
 pub(super) fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) -> AnyElement {
     h_flex()
         .w_full()
         .min_w_0()
         .flex_wrap()
-        .justify_between()
         .items_center()
         .gap(design::ui_px(cx, 8.0))
         .py(design::ui_px(cx, 2.0))
@@ -818,11 +856,15 @@ pub(super) fn color_line(left: AnyElement, right: Option<AnyElement>, cx: &App) 
             div()
                 .flex_1()
                 .min_w(design::font_w_px(cx, 140.0))
+                .max_w(design::font_w_px(cx, COLOR_LABEL_MAX_W))
                 .child(left),
         )
         .children(right)
         .into_any_element()
 }
+
+/// The widest a [`color_line`] label column grows, unscaled.
+const COLOR_LABEL_MAX_W: f32 = 260.0;
 
 /// A colour group of the Appearance page.
 pub(super) struct ColorGroup {

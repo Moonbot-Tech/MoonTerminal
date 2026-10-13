@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "История версий по реальн�
 storage.strategies_rows: "Стратегий: %{live} (удалённых: %{deleted}) · Версий: %{versions}"
 storage.version_limit: "Лимит версий на стратегию"
 storage.version_limit_off: "без лимита"
+storage.unit_mb: "МБ"
+storage.unit_min: "мин"
 storage.version_limit_hint: "0 — хранить все версии (рекомендуется: история невосстановима). Лимит обрезает старые при записи новых."
 storage.strategies_hint: "Единственный экземпляр истории — пересинхроном не восстанавливается. Для сохранности — «Бэкап»."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "Что не нашлось в архиве ядр
 storage.trades_cleanup_at_startup: "Чистка при старте"
 storage.trades_cleanup_at_startup_hint: "То же, что кнопка «Чистка», перед подгрузкой ленты. Со следующего запуска."
 storage.trades_cleanup: "Чистка"
+storage.trades_cleanup_run: "Почистить"
 storage.trades_cleanup_hint: "Оставляет трейды сделок стратегий, закрытых самой стратегией (что читает тюнер), в пределах ступени «Трейды вокруг сделки». Ручные продажи, фандинг, ликвидации и трейды без сделки в отчёте уходят. Файл сжимается сразу."
 storage.trades_cleanup_preview: "удалится ≈ %{prints} трейдов, освободится ≈ %{size}"
 storage.trades_cleanup_empty: "нечего удалять"

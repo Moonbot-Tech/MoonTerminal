@@ -17,6 +17,8 @@ storage.strategies_enabled_hint: "Gerçek parametre düzenlemelerinin sürüm ge
 storage.strategies_rows: "Strateji: %{live} (silinen: %{deleted}) · Sürüm: %{versions}"
 storage.version_limit: "Strateji başına sürüm sınırı"
 storage.version_limit_off: "sınırsız"
+storage.unit_mb: "MB"
+storage.unit_min: "dk"
 storage.version_limit_hint: "0 — tüm sürümleri tut (önerilir: geçmiş kurtarılamaz). Sınır, yeniler yazılınca eskileri keser."
 storage.strategies_hint: "Geçmişin tek kopyası — yeniden eşitleme onu geri getirmez. Saklamak için Yedekle'yi kullanın."
 
@@ -39,6 +41,7 @@ storage.trades_autoload_hint: "Çekirdek arşivinde olmayan — borsadan, hâlâ
 storage.trades_cleanup_at_startup: "Açılışta temizle"
 storage.trades_cleanup_at_startup_hint: "Bant alınmadan önce “Temizle” düğmesiyle aynı. Sonraki açılıştan itibaren."
 storage.trades_cleanup: "Temizle"
+storage.trades_cleanup_run: "Şimdi temizle"
 storage.trades_cleanup_hint: "Stratejinin kendisinin kapattığı strateji işlemlerinin piyasa işlemlerini tutar (eşik ayarının okuduğu), “İşlem çevresindeki piyasa işlemleri” adımı içinde. Elle satışlar, fonlama, likidasyonlar ve raporda işlemi olmayan piyasa işlemleri gider. Dosya hemen sıkıştırılır."
 storage.trades_cleanup_preview: "≈ %{prints} piyasa işlemi gider, ≈ %{size} boşalır"
 storage.trades_cleanup_empty: "silinecek bir şey yok"

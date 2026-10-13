@@ -76,6 +76,9 @@ pub(super) struct UsagePart {
     pub(super) label: String,
 }
 
+/// A database card's narrowest width, unscaled; two of them side by side or one column.
+const CARD_MIN_W: f32 = 300.0;
+
 /// Segment colours from the storage mockup. Mid saturation so they read on light, dark and graphite.
 const USAGE_COLOR: [u32; 4] = [0x3b82c4, 0x7c3aed, 0x0f9488, 0xb45309];
 
@@ -459,8 +462,8 @@ pub(super) struct StorageView {
     pub(super) core: AnyElement,
 }
 
-/// The Storage page: the usage panel, the four database cards wrapping two by two, then the
-/// per-core table.
+/// The Storage page: the usage panel, the four database cards in two columns, then the per-core
+/// table.
 pub(super) fn storage_body_el(view: StorageView, s: &StorageCtx, cx: &App) -> AnyElement {
     let StorageView {
         info,
@@ -485,21 +488,35 @@ pub(super) fn storage_body_el(view: StorageView, s: &StorageCtx, cx: &App) -> An
         .w_full()
         .gap(design::ui_px(cx, 12.0))
         .child(usage_panel(&parts, path, refresh, cx))
-        // The mockup's grid: cards at least 300 wide wrap two to a row in a Settings body and to
-        // one column in a narrow window.
-        // Cards sharing a row stretch to the tallest one, as the mockup's grid draws them.
+        // Two columns of equal height, as the mockup's two-wide grid: the three light cards
+        // stacked on the left beside the heavy trades card, so no light card stands as an empty
+        // box next to it. Below two 300-wide columns they wrap into one.
         .child(
             h_flex()
+                .debug_selector(|| "storage-cards".into())
                 .w_full()
                 .flex_wrap()
                 .items_stretch()
                 .gap(design::ui_px(cx, 10.0))
-                .child(reports_card(s, &info, busy, cx))
-                .child(strategies_card(s, &info, &cfg, &version_limit, busy, cx))
-                .child(trades_card(
-                    s, &info, &cfg, &max_mb, &long_min, cleanup, busy, cx,
-                ))
-                .child(klines_card(s, &info, cx)),
+                .child(
+                    v_flex()
+                        .debug_selector(|| "storage-col-light".into())
+                        .flex_1()
+                        .min_w(design::ui_px(cx, CARD_MIN_W))
+                        .gap(design::ui_px(cx, 10.0))
+                        .child(reports_card(s, &info, busy, cx))
+                        .child(strategies_card(s, &info, &cfg, &version_limit, busy, cx))
+                        .child(klines_card(s, &info, cx)),
+                )
+                .child(
+                    v_flex()
+                        .debug_selector(|| "storage-col-trades".into())
+                        .flex_1()
+                        .min_w(design::ui_px(cx, CARD_MIN_W))
+                        .child(trades_card(
+                            s, &info, &cfg, &max_mb, &long_min, cleanup, busy, cx,
+                        )),
+                ),
         )
         .child(core)
         .into_any_element()
@@ -617,13 +634,17 @@ fn strategies_card(
         versions = info.strat_versions
     )
     .to_string();
-    let limit_hint = (limit == 0).then(|| t!("storage.version_limit_off").to_string());
-    let field = num_input(
-        "storage-version-limit-n",
-        version_limit,
-        0.0..=10_000.0,
-        1.0,
-        None,
+    let field = no_limit_note(
+        "storage-version-limit-off",
+        num_input(
+            "storage-version-limit-n",
+            version_limit,
+            0.0..=10_000.0,
+            1.0,
+            None,
+        ),
+        limit == 0,
+        cx,
     );
     let body = v_flex()
         .w_full()
@@ -641,7 +662,7 @@ fn strategies_card(
             s,
             "storage-version-limit",
             t!("storage.version_limit").to_string(),
-            limit_hint,
+            None,
             t!("storage.version_limit_hint").to_string(),
             field,
             cx,
@@ -688,20 +709,24 @@ fn trades_card(
     cx: &App,
 ) -> AnyElement {
     let cfg = &cfg.trade_replay;
-    let max_hint = (cfg.max_mb == 0).then(|| t!("storage.version_limit_off").to_string());
-    let max_field = num_input(
-        "storage-trades-max-n",
-        max_mb_state,
-        0.0..=100_000.0,
-        1.0,
-        None,
+    let max_field = no_limit_note(
+        "storage-trades-max-off",
+        num_input(
+            "storage-trades-max-n",
+            max_mb_state,
+            0.0..=100_000.0,
+            1.0,
+            Some(t!("storage.unit_mb").to_string()),
+        ),
+        cfg.max_mb == 0,
+        cx,
     );
     let long_field = num_input(
         "storage-trades-long-n",
         long_min_state,
         1.0..=120.0,
         1.0,
-        None,
+        Some(t!("storage.unit_min").to_string()),
     );
     let body = v_flex()
         .w_full()
@@ -727,7 +752,7 @@ fn trades_card(
             s,
             "storage-trades-max",
             t!("storage.trades_max_mb").to_string(),
-            max_hint,
+            None,
             t!("storage.trades_max_mb_hint").to_string(),
             max_field,
             cx,
@@ -787,6 +812,27 @@ fn trades_card(
         body,
         cx,
     )
+}
+
+/// A limit field followed by «без лимита» while its value is the zero that means no limit.
+/// The note sits after the field, not in it: a long translation would squeeze the steppers.
+fn no_limit_note(id: &'static str, field: AnyElement, off: bool, cx: &App) -> AnyElement {
+    if !off {
+        return field;
+    }
+    h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .child(field)
+        .child(
+            div()
+                .debug_selector(move || id.into())
+                .whitespace_nowrap()
+                .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
+                .child(t!("storage.version_limit_off").to_string()),
+        )
+        .into_any_element()
 }
 
 /// The margin is one of [`storage_cfg::TRADE_MARGIN_STEPS_S`], not a uniform increment.
@@ -879,29 +925,25 @@ fn size_line(size: Option<(u64, u64)>) -> String {
     }
 }
 
-/// A muted mono readout of figures. It wraps only between [`figure_chunks`], so a figure never
-/// breaks mid-number or away from its label.
+/// A muted mono readout of figures as separate stat items: it wraps only between
+/// [`stat_items`], so a figure never breaks mid-number or away from its label.
 fn mono_readout(id: &'static str, text: String, cx: &App) -> impl IntoElement {
     let p = MoonPalette::active(cx);
     h_flex()
         .debug_selector(move || id.into())
         .w_full()
         .flex_wrap()
-        .gap_x(design::ui_px(cx, 6.0))
+        .py(design::ui_px(cx, 4.0))
+        .gap_x(design::ui_px(cx, 14.0))
         .font_family(design::mono())
         .text_color(rgba_from(p.text_muted, 1.0))
-        .children(
-            figure_chunks(&text)
-                .into_iter()
-                .enumerate()
-                .map(|(i, chunk)| {
-                    div()
-                        .debug_selector(move || format!("{id}-{i}"))
-                        .flex_none()
-                        .whitespace_nowrap()
-                        .child(chunk)
-                }),
-        )
+        .children(stat_items(&text).into_iter().enumerate().map(|(i, chunk)| {
+            div()
+                .debug_selector(move || format!("{id}-{i}"))
+                .flex_none()
+                .whitespace_nowrap()
+                .child(chunk)
+        }))
 }
 
 /// Split a figures line into the pieces it may wrap between: before each ` (` and each ` · `.
@@ -927,6 +969,30 @@ pub(super) fn figure_chunks(text: &str) -> Vec<String> {
     chunks.push(rest.to_string());
     chunks.retain(|chunk| !chunk.is_empty());
     chunks
+}
+
+/// The figures of a readout line as stat items: its [`figure_chunks`] without the separators a
+/// single line needs, `"Strategies: 12 (deleted: 3) · Versions: 40"` giving `"Strategies: 12"`,
+/// `"deleted: 3"` and `"Versions: 40"`.
+///
+/// Args:
+///     text: The localized line.
+///
+/// Returns:
+///     The items in order.
+pub(super) fn stat_items(text: &str) -> Vec<String> {
+    figure_chunks(text)
+        .into_iter()
+        .map(|chunk| {
+            let chunk = chunk.trim_start_matches('\u{b7}').trim();
+            chunk
+                .strip_prefix('(')
+                .and_then(|inner| inner.strip_suffix(')'))
+                .unwrap_or(chunk)
+                .to_string()
+        })
+        .filter(|item| !item.is_empty())
+        .collect()
 }
 
 /// The usage overview: total, path, stacked bar, legend.
@@ -1071,8 +1137,10 @@ fn settings_card(
     v_flex()
         .id(SharedString::from(id))
         .debug_selector(move || id.into())
+        // Grows in its column: the cards of the shorter column share what the other is taller by,
+        // so both columns end on one line.
         .flex_1()
-        .min_w(design::ui_px(cx, 300.0))
+        .w_full()
         .gap(design::ui_px(cx, 2.0))
         .p(design::ui_px(cx, 12.0))
         .border_1()

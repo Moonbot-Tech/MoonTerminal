@@ -41,6 +41,7 @@ iface.dock_reset_tip: "Повернути панелі поточного реж
 iface.book_level_bid: "Колір ліній рівнів bid"
 iface.book_level_ask: "Колір ліній рівнів ask"
 iface.book_level_auto: "Скинути на авто"
+iface.book_level_is_auto: "авто"
 iface.book_level_width: "Товщина ліній рівнів, px"
 
 iface.order_book_width: "Ширина стакана, px"
