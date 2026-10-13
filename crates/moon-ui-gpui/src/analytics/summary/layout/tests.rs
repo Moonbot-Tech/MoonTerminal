@@ -19,8 +19,8 @@ use moon_ui::{MoonPalette, MoonTheme, v_flex};
 use rust_i18n::t;
 
 use super::super::kpi::{KpiCols, hero_value, hold_text, kpi_band_el, kpi_cols, metrics};
-use super::super::model::{KpiBand, insights};
-use super::{KPI_BAND, kpi_delta, kpi_group, kpi_label, kpi_value};
+use super::super::model::{DeltaLine, KpiBand, insights};
+use super::{KPI_BAND, kpi_delta, kpi_delta_part, kpi_group, kpi_label, kpi_tile, kpi_value};
 use crate::analytics::set_pnl_unit;
 use crate::design;
 
@@ -30,6 +30,30 @@ const THEMES: [UiThemeMode; 3] = [UiThemeMode::Light, UiThemeMode::Dark, UiTheme
 const ZOOMS: [f32; 2] = [1.0, 1.25];
 /// Window widths the probe walks, at the design reference size: four, two and one column.
 const WIDTHS: [f32; 3] = [1400.0, 900.0, 600.0];
+
+/// The KPI band also walks the narrowest four-column width, where its cards are tightest.
+const KPI_WIDTHS: [f32; 4] = [1400.0, 1100.0, 900.0, 600.0];
+
+/// The text of one comparison part as the band draws it: 0 is the change, 1 the previous
+/// value or the extra fact.
+fn delta_part_text(m: &KpiBand, name: &str, k: usize) -> String {
+    let (line, extra) = match name {
+        "wr" => (m.quality.wr_delta.as_ref(), None),
+        "pf" => (m.quality.pf_delta.as_ref(), None),
+        "dd" => (m.risk.dd_line.as_ref(), m.risk.dd_of_profit.clone()),
+        "tr" => (m.activity.trades_delta.as_ref(), None),
+        _ => (
+            m.activity.avg_delta.as_ref(),
+            Some(hold_text(m.activity.hold_min)),
+        ),
+    };
+    let line = line.expect("a drawn part has a comparison");
+    if k == 0 {
+        line.text.clone()
+    } else {
+        line.prev_text.clone().or(extra).unwrap_or_default()
+    }
+}
 
 /// A loss-making period with long figures, so every value is as wide as it realistically gets.
 fn long_summary() -> Summary {
@@ -160,6 +184,17 @@ fn probe_in(
     cx: &mut gpui::TestAppContext,
     unit: fn(),
     build: impl Fn(f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> AnyElement>,
+    check: impl FnMut(&mut VisualTestContext, &str, f32),
+) {
+    probe_widths(cx, &WIDTHS, unit, build, check);
+}
+
+/// [`probe_in`] over an explicit list of design widths.
+fn probe_widths(
+    cx: &mut gpui::TestAppContext,
+    widths: &[f32],
+    unit: fn(),
+    build: impl Fn(f32) -> Rc<dyn Fn(MoonPalette, &gpui::App) -> AnyElement>,
     mut check: impl FnMut(&mut VisualTestContext, &str, f32),
 ) {
     for mode in THEMES {
@@ -173,7 +208,7 @@ fn probe_in(
             let _locale = crate::test_locale::force(language.code());
             unit();
             for zoom in ZOOMS {
-                for width in WIDTHS {
+                for &width in widths {
                     let build = build(width);
                     let window = cx
                         .open_window(gpui::size(px(width * zoom), px(1200.0 * zoom)), |_, _| {
@@ -204,9 +239,9 @@ fn kpi_home(name: &str) -> usize {
     }
 }
 
-/// One frame of the band: groups inside and apart and stacked by width; every value, label and
-/// caption line inside ITS group; no label running under its value; the hero clear of its unit.
-/// Nothing here compares a box with the width the code itself requested.
+/// One frame of the band: cards inside and apart and stacked by width; every tile inside ITS
+/// card, the paired tiles apart and equally tall; label above value, value as wide as its
+/// measured text, each comparison part one line; the hero clear of its unit.
 fn kpi_check(visual: &mut VisualTestContext, at: &str, width: f32) {
     let col = bounds(visual, "probe-col", at);
     let band_b = bounds(visual, KPI_BAND, at);
@@ -233,25 +268,31 @@ fn kpi_check(visual: &mut VisualTestContext, at: &str, width: f32) {
             "one column must stack ({at})"
         ),
     }
-    let (names, deltas) = visual.update(|_, cx| {
+    // (name, measured value width, has a change line, has a second line)
+    let (tiles, line_h) = visual.update(|_, cx| {
         let m = band(true);
-        let names: Vec<&'static str> = metrics(&m, MoonPalette::active(cx))
+        let parts = |d: Option<&DeltaLine>, extra: bool| {
+            d.map_or((false, false), |d| (true, d.prev_text.is_some() || extra))
+        };
+        let tiles: Vec<(&'static str, f32, (bool, bool))> = metrics(&m, MoonPalette::active(cx))
             .iter()
-            .map(|x| x.name)
+            .map(|x| {
+                let lines = match x.name {
+                    "wr" => parts(m.quality.wr_delta.as_ref(), false),
+                    "pf" => parts(m.quality.pf_delta.as_ref(), false),
+                    "dd" => parts(m.risk.dd_line.as_ref(), m.risk.dd_of_profit.is_some()),
+                    "tr" => parts(m.activity.trades_delta.as_ref(), false),
+                    "avg" => parts(m.activity.avg_delta.as_ref(), true),
+                    _ => (false, false),
+                };
+                (
+                    x.name,
+                    design::mono_title_text_width(cx, &x.value, 600.0),
+                    lines,
+                )
+            })
             .collect();
-        let mut deltas = vec!["rf", "avg"];
-        for (name, present) in [
-            ("hero", m.result.was.is_some()),
-            ("wr", m.quality.wr_delta.is_some()),
-            ("pf", m.quality.pf_delta.is_some()),
-            ("dd", m.risk.dd_line.is_some()),
-            ("tr", m.activity.trades_delta.is_some()),
-        ] {
-            if present {
-                deltas.push(name);
-            }
-        }
-        (names, deltas)
+        (tiles, f32::from(design::t_caption(cx)) * 1.8)
     });
     let hero = bounds(visual, &kpi_value("hero"), at);
     let unit = bounds(visual, &kpi_value("unit"), at);
@@ -263,38 +304,97 @@ fn kpi_check(visual: &mut VisualTestContext, at: &str, width: f32) {
         hero.right() <= unit.origin.x + px(0.5),
         "hero runs under its unit ({at})"
     );
-    for name in names {
+    if let Some(d) = visual.debug_bounds("sum-kpi-dhero") {
+        assert!(inside(d, groups[0]), "hero comparison escaped ({at})");
+    }
+    for &(name, value_w, (change, tail)) in &tiles {
         let g = groups[kpi_home(name)];
+        let t = bounds(visual, &kpi_tile(name), at);
         let v = bounds(visual, &kpi_value(name), at);
         let k = bounds(visual, &kpi_label(name), at);
-        assert!(inside(v, g), "value {name} escaped its group ({at})");
-        assert!(inside(k, g), "label {name} escaped its group ({at})");
+        assert!(inside(t, g), "tile {name} escaped its card ({at})");
+        assert!(inside(v, t), "value {name} escaped its tile ({at})");
+        assert!(inside(k, t), "label {name} escaped its tile ({at})");
+        assert!(fits(v, value_w * 0.98), "value {name} clipped ({at})");
         assert!(
-            k.right() <= v.origin.x + px(0.5),
-            "label {name} runs under its value ({at})"
+            k.bottom() <= v.origin.y + px(0.5),
+            "label {name} not above its value ({at})"
         );
-    }
-    for name in deltas {
         let d = bounds(visual, &kpi_delta(name), at);
+        assert!(inside(d, t), "caption {name} escaped its tile ({at})");
         assert!(
-            inside(d, groups[kpi_home(name)]),
-            "caption line {name} escaped its group ({at})"
+            v.bottom() <= d.origin.y + px(0.5),
+            "caption {name} not under its value ({at})"
         );
+        let mut prev: Option<Bounds<Pixels>> = None;
+        for (k, present) in [(0, change), (1, tail)] {
+            if !present {
+                continue;
+            }
+            let part = bounds(visual, &kpi_delta_part(name, k), at);
+            assert!(
+                inside(part, d),
+                "{name} part {k} escaped its caption ({at})"
+            );
+            let need = visual.update(|_, cx| {
+                let text = delta_part_text(&band(true), name, k);
+                design::mono_caption_text_width(cx, &text, 400.0) * 0.98
+            });
+            assert!(fits(part, need), "{name} part {k} cut ({at})");
+            assert!(
+                f32::from(part.size.height) <= line_h,
+                "{name} part {k} split over two lines ({at})"
+            );
+            if let Some(prev) = prev {
+                assert!(
+                    prev.bottom() <= part.origin.y + px(0.5),
+                    "{name} change and comparison not on two lines ({at})"
+                );
+            }
+            prev = Some(part);
+        }
+    }
+    // Each card's two tiles sit apart; side by side they are equally tall, and a card too
+    // narrow for both stacks them rather than letting one escape.
+    for pair in tiles.chunks(2) {
+        let a = bounds(visual, &kpi_tile(pair[0].0), at);
+        let b = bounds(visual, &kpi_tile(pair[1].0), at);
+        assert!(no_overlap(a, b), "tiles {} overlap ({at})", pair[0].0);
+        if a.origin.y == b.origin.y {
+            assert!(
+                a.right() <= b.origin.x + px(0.5),
+                "tiles {} out of order ({at})",
+                pair[0].0
+            );
+            assert!(
+                (a.size.height - b.size.height).abs() < px(0.5),
+                "tiles {} unequal height ({at})",
+                pair[0].0
+            );
+        } else {
+            assert!(
+                a.bottom() <= b.origin.y + px(0.5),
+                "tiles {} neither paired nor stacked ({at})",
+                pair[0].0
+            );
+        }
     }
 }
 
-/// The band keeps its groups inside and apart, stacks 4 / 2x2 / 1 by width, and keeps every
-/// known-wide value, label and caption line inside its own group, in money and percent mode and
-/// in every theme, language and zoom. Letting a value overflow, a label run under its value,
-/// dropping a group's border split or moving a breakpoint breaks it.
+/// The band keeps its four cards inside and apart and stacks them 4 / 2x2 / 1 by width; in each
+/// card the two metric tiles sit side by side, apart and equally tall, with the label above an
+/// unclipped value and a comparison whose change and previous value are two whole lines, in
+/// money and percent mode and in every theme, language and zoom. Letting a value overflow its
+/// tile, putting the delta back on one wrapping line, dropping the tiles' stretch or moving a
+/// breakpoint breaks it.
 #[gpui::test]
 fn kpi_band_fits_every_language_theme_zoom_and_width(cx: &mut gpui::TestAppContext) {
     let build = |width| -> Rc<dyn Fn(MoonPalette, &gpui::App) -> AnyElement> {
         let cols = kpi_cols(width, 1.0);
         Rc::new(move |p, cx| kpi_band_el(&band(true), cols, p, cx))
     };
-    probe_in(cx, usdt, build, kpi_check);
-    probe_in(cx, percent, build, kpi_check);
+    probe_widths(cx, &KPI_WIDTHS, usdt, build, kpi_check);
+    probe_widths(cx, &KPI_WIDTHS, percent, build, kpi_check);
 }
 
 /// In percent mode the caption beside the hero is "%", so the hero itself carries no unit (F11);
@@ -534,6 +634,7 @@ fn side_summary() -> Summary {
     let mut d = long_summary();
     d.cur.profit = 45_678.91;
     d.cur.pf = 1.21;
+    d.strategies[0].name = "XSTRAT ".repeat(30).trim_end().to_string();
     d.coins = vec![GroupStat {
         key: "XVERYLONGCOINNAMEUSDT".into(),
         name: "XVERYLONGCOINNAMEUSDT".into(),
@@ -566,9 +667,12 @@ fn side_trades() -> Vec<moon_core::db::analytics::TopTrade> {
         .collect()
 }
 
-/// The side column: every insight keeps tag, fact and value apart and inside its row with the
-/// value at its full text width; the why line stays inside the card; the trades table sits in
-/// its own scroll, each coin cell holds the whole coin and stays clear of the profit cell.
+/// The side column: every insight row holds its tone stripe, a text column and the value in that
+/// order; the category, subject and reason lines stay one line each and end before the value
+/// column (the fixture's strategy name is far too long, so only an ellipsis passes), and every
+/// value keeps its full width on one shared right edge. The trades table sits in its own scroll,
+/// each coin cell holds the whole coin and stays clear of the profit cell. Letting the subject
+/// wrap or overflow, or sizing each value column to its own text, breaks it.
 #[gpui::test]
 fn side_column_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext) {
     use super::super::side::{TradesActs, insights_el, period_caption, trades_el};
@@ -609,27 +713,56 @@ fn side_column_fits_every_language_theme_and_width(cx: &mut gpui::TestAppContext
             assert!(inside(card, col), "insights card escaped ({at})");
             let items = insights(&side_summary(), chrono_tz::UTC);
             assert!(items.len() >= 3, "fixture lost its insights ({at})");
+            let line_h = visual.update(|_, cx| f32::from(design::t_body(cx)) * 1.8);
+            let mut value_right: Option<Pixels> = None;
             for (i, it) in items.iter().enumerate() {
-                let row = bounds(visual, &format!("sum-ins-row-{i}"), at);
-                let tag = bounds(visual, &format!("sum-ins-tag-{i}"), at);
-                let what = bounds(visual, &format!("sum-ins-what-{i}"), at);
-                let value = bounds(visual, &format!("sum-ins-value-{i}"), at);
+                let get = |visual: &mut VisualTestContext, part: &str| {
+                    bounds(visual, &format!("sum-ins-{part}-{i}"), at)
+                };
+                let row = get(visual, "row");
+                let stripe = get(visual, "stripe");
+                let text = get(visual, "text");
+                let value = get(visual, "value");
                 assert!(inside(row, card), "insight {i} escaped the card ({at})");
-                for (name, b) in [("tag", tag), ("what", what), ("value", value)] {
+                for (name, b) in [("stripe", stripe), ("text", text), ("value", value)] {
                     assert!(inside(b, row), "insight {i} {name} escaped its row ({at})");
                 }
                 assert!(
-                    no_overlap(tag, what) && no_overlap(what, value) && no_overlap(tag, value),
-                    "insight {i} cells overlap ({at})"
+                    stripe.right() <= text.origin.x + px(0.5)
+                        && text.right() <= value.origin.x + px(0.5),
+                    "insight {i} stripe, text and value out of order ({at})"
                 );
+                assert!(
+                    (stripe.size.height - row.size.height).abs() < px(1.5),
+                    "insight {i} stripe does not run the row's height ({at})"
+                );
+                let mut lines = vec!["cat", "what"];
                 if it.why.is_some() {
-                    let why = bounds(visual, &format!("sum-ins-why-{i}"), at);
-                    assert!(inside(why, card), "insight {i} why line escaped ({at})");
+                    lines.push("why");
+                }
+                for name in lines {
+                    let b = get(visual, name);
                     assert!(
-                        why.origin.y + px(0.5) >= row.bottom(),
-                        "why above its fact ({at})"
+                        inside(b, text),
+                        "insight {i} {name} escaped its text ({at})"
+                    );
+                    assert!(
+                        b.right() <= value.origin.x + px(0.5),
+                        "insight {i} {name} runs into the value column ({at})"
+                    );
+                    assert!(
+                        f32::from(b.size.height) <= line_h,
+                        "insight {i} {name} wrapped instead of ending in an ellipsis ({at})"
                     );
                 }
+                let need = visual
+                    .update(|_, cx| design::mono_body_text_width(cx, &it.value, 600.0) * 0.98);
+                assert!(fits(value, need), "insight {i} value cut ({at})");
+                let right = *value_right.get_or_insert(value.right());
+                assert!(
+                    (value.right() - right).abs() < px(0.5),
+                    "insight {i} value off the shared right edge ({at})"
+                );
             }
             let tcard = bounds(visual, "sum-trades-card", at);
             let title = bounds(visual, "sum-trades-title", at);

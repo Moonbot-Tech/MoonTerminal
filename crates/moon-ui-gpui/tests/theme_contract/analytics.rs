@@ -560,13 +560,17 @@ fn per_core_summary_rankings_stay_virtualized_and_moonui_first() {
     );
 }
 
-/// The Summary side column must keep each insight's tag, wrapping fact, never-shortened value and
-/// muted why line, and ONE trades table switched by the best/worst control.
+/// The Summary side column must draw each insight as a striped row: a tone stripe, a text column
+/// whose category, subject and reason lines each end in an ellipsis, and a never-shortened value
+/// behind a thin rule in one shared column; plus ONE trades table switched by the best/worst
+/// control.
 ///
-/// Breakage: dropping the why child hides the explanation the mockup puts under every fact;
-/// truncating the value cuts the figure the row exists to show; replacing the MoonTag with plain
-/// text loses the category colour; a second trades card (the old best/worst pair) or a missing
-/// `analytics.sum.trades.*` label brings back the two-table layout the mockup replaced.
+/// Breakage: bringing back the MoonTag pills or dropping the stripe loses the tone the mockup
+/// gives every row; letting the subject wrap instead of truncating pushes the row taller and
+/// into the value column; truncating the value cuts the figure the row exists to show; sizing the
+/// value cell per row breaks the shared right edge; a second trades card (the old best/worst
+/// pair) or a missing `analytics.sum.trades.*` label brings back the two-table layout the mockup
+/// replaced.
 #[test]
 fn summary_side_column_keeps_insight_why_lines_and_one_trades_table() {
     let side = read_src("analytics/summary/side.rs");
@@ -581,33 +585,37 @@ fn summary_side_column_keeps_insight_why_lines_and_one_trades_table() {
         ".child(it.value.clone())",
         "insight value cell",
     );
-    let what = chain_between(
+    let line = chain_between(
         &ins,
-        "format!(\"sum-ins-what-{i}\")",
-        ".child(it.what.clone())",
-        "insight fact cell",
+        "format!(\"sum-ins-{part}-{i}\")",
+        "};",
+        "insight text line",
     );
 
     assert!(
-        side.contains("MoonTag::positive()")
-            && side.contains("MoonTag::warning()")
-            && side.contains("MoonTag::info()")
-            && ins.contains(".child(tag_el(it.tag))"),
-        "each insight must open with its MoonTag category"
+        !side.contains("MoonTag")
+            && ins.contains("format!(\"sum-ins-stripe-{i}\")")
+            && ins.contains(".bg(moon(tone))")
+            && ins.contains("let (tone, cat) = category(it.tag, p);"),
+        "each insight must open with a tone stripe and a tone-coloured category line, not a pill"
     );
     assert!(
-        ins.contains("if let Some(why) = &it.why")
-            && ins.contains("format!(\"sum-ins-why-{i}\")")
+        line.contains(".min_w_0()") && line.contains(".truncate()"),
+        "the category, subject and reason lines must end in an ellipsis instead of wrapping"
+    );
+    assert!(
+        ins.contains("line(\"what\")")
+            && ins.contains(".child(it.what.clone())")
+            && ins.contains("line(\"why\")")
             && ins.contains(".child(why.clone())"),
-        "an insight with an explanation must draw it as its own line under the fact"
+        "an insight must draw its subject and, when it has one, its reason line"
     );
     assert!(
-        value.contains(".flex_none()") && !value.contains(".truncate()"),
-        "the insight value must never shrink or shorten"
-    );
-    assert!(
-        what.contains(".flex_1()") && what.contains(".min_w_0()") && !what.contains(".truncate()"),
-        "the insight fact must wrap beside the value instead of truncating"
+        value.contains(".flex_none()")
+            && value.contains(".w(px(value_w) + gap)")
+            && value.contains(".border_l_1()")
+            && !value.contains(".truncate()"),
+        "the insight value must keep its full text in one shared column behind a rule"
     );
     assert!(
         ins.contains("analytics.sum.ins.none"),

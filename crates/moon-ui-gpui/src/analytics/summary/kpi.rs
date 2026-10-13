@@ -1,8 +1,9 @@
 //! The Summary's KPI band: four groups (Result, Quality, Risk, Activity) drawn from a
 //! [`KpiBand`] as a free function over `&App`, so the layout probe renders it without a view.
 //!
-//! Values never truncate: every value cell is `flex_none` with a minimum width equal to its
-//! measured text. Only metric labels and group captions may shorten.
+//! Each group is its own bordered card; Quality, Risk and Activity hold two metric tiles each.
+//! Values never truncate: every value cell has a minimum width equal to its measured text.
+//! Labels wrap, group captions may shorten, and each comparison part stays on one line.
 
 use gpui::{
     AnyElement, App, Bounds, Div, FontWeight, InteractiveElement, IntoElement, ParentElement,
@@ -118,9 +119,9 @@ pub(in crate::analytics) fn hold_text(minutes: f64) -> String {
 pub(in crate::analytics) struct Metric {
     /// Debug-selector stem; boxes are `sum-kpi-k{name}` and `sum-kpi-v{name}`.
     pub(in crate::analytics) name: &'static str,
-    /// Label on the left, the only part allowed to shorten.
+    /// Label on top of the tile; it may wrap.
     pub(in crate::analytics) label: String,
-    /// Mono value on the right, never shortened.
+    /// Mono value under the label, never shortened.
     pub(in crate::analytics) value: String,
     /// Value colour token.
     pub(in crate::analytics) color: u32,
@@ -181,7 +182,7 @@ pub(in crate::analytics) fn metrics(m: &KpiBand, p: MoonPalette) -> [Metric; 6] 
 ///     cx: App context for scaled sizes and text measurement.
 ///
 /// Returns:
-///     One bordered band of four groups; it schedules nothing.
+///     Four separately bordered group cards with a gap between them; it schedules nothing.
 pub(in crate::analytics) fn kpi_band_el(
     m: &KpiBand,
     cols: KpiCols,
@@ -189,113 +190,130 @@ pub(in crate::analytics) fn kpi_band_el(
     cx: &App,
 ) -> AnyElement {
     let [wr, pf, dd, rf, tr, avg] = metrics(m, p);
+    let pair = |a: Div, b: Div| {
+        h_flex()
+            .w_full()
+            .flex_1()
+            .flex_wrap()
+            .items_stretch()
+            .gap(design::ui_px(cx, 8.0))
+            .child(a)
+            .child(b)
+    };
     let groups = [
         group(0, t!("analytics.sum.kpi.result").to_string(), p, cx).child(result_body(m, p, cx)),
-        group(1, t!("analytics.sum.kpi.quality").to_string(), p, cx)
-            .child(metric_el(&wr, p, cx))
-            .children(meter_el(m, p, cx))
-            .children(detail_el("wr", m.quality.wr_delta.as_ref(), None, p, cx))
-            .child(metric_el(&pf, p, cx))
-            .children(detail_el("pf", m.quality.pf_delta.as_ref(), None, p, cx)),
-        group(2, t!("analytics.sum.kpi.risk").to_string(), p, cx)
-            .child(metric_el(&dd, p, cx))
-            .children(detail_el(
-                "dd",
-                m.risk.dd_line.as_ref(),
-                m.risk.dd_of_profit.clone(),
+        group(1, t!("analytics.sum.kpi.quality").to_string(), p, cx).child(pair(
+            tile(
+                &wr,
+                meter_el(m, p, cx),
+                delta_el("wr", m.quality.wr_delta.as_ref(), None, p, cx),
                 p,
                 cx,
-            ))
-            .child(metric_el(&rf, p, cx))
-            .child(muted_line(
-                "rf",
-                t!("analytics.sum.kpi.recovery_hint").to_string(),
-                p,
-                cx,
-            )),
-        group(3, t!("analytics.sum.kpi.activity").to_string(), p, cx)
-            .child(metric_el(&tr, p, cx))
-            .children(detail_el(
-                "tr",
-                m.activity.trades_delta.as_ref(),
+            ),
+            tile(
+                &pf,
                 None,
+                delta_el("pf", m.quality.pf_delta.as_ref(), None, p, cx),
                 p,
                 cx,
-            ))
-            .child(metric_el(&avg, p, cx))
-            .child(
-                detail_el(
+            ),
+        )),
+        group(2, t!("analytics.sum.kpi.risk").to_string(), p, cx).child(pair(
+            tile(
+                &dd,
+                None,
+                delta_el(
+                    "dd",
+                    m.risk.dd_line.as_ref(),
+                    m.risk.dd_of_profit.clone(),
+                    p,
+                    cx,
+                ),
+                p,
+                cx,
+            ),
+            tile(
+                &rf,
+                None,
+                Some((
+                    muted_line(
+                        "rf",
+                        t!("analytics.sum.kpi.recovery_hint").to_string(),
+                        p,
+                        cx,
+                    ),
+                    0.0,
+                )),
+                p,
+                cx,
+            ),
+        )),
+        group(3, t!("analytics.sum.kpi.activity").to_string(), p, cx).child(pair(
+            tile(
+                &tr,
+                None,
+                delta_el("tr", m.activity.trades_delta.as_ref(), None, p, cx),
+                p,
+                cx,
+            ),
+            tile(
+                &avg,
+                None,
+                delta_el(
                     "avg",
                     m.activity.avg_delta.as_ref(),
                     Some(hold_text(m.activity.hold_min)),
                     p,
                     cx,
-                )
-                .unwrap_or_else(|| muted_line("avg", hold_text(m.activity.hold_min), p, cx)),
+                ),
+                p,
+                cx,
             ),
+        )),
     ];
-    let band = div()
+    let gap = design::ui_px(cx, 12.0);
+    let row = || h_flex().w_full().items_stretch().gap(gap);
+    let band = v_flex()
         .debug_selector(|| layout::KPI_BAND.into())
         .w_full()
-        .border_1()
-        .border_color(moon(p.border))
-        .rounded(design::ui_px(cx, 6.0));
+        .gap(gap);
     let [g0, g1, g2, g3] = groups;
     match cols {
         KpiCols::Four => band
             .child(
-                h_flex()
-                    .w_full()
-                    .items_stretch()
-                    .child(g0.flex_1().flex_grow(1.35))
-                    .child(g1.flex_1().border_l_1().border_color(moon(p.border)))
-                    .child(g2.flex_1().border_l_1().border_color(moon(p.border)))
-                    .child(g3.flex_1().border_l_1().border_color(moon(p.border))),
+                row()
+                    .child(g0.flex_basis(px(0.0)).flex_grow(1.2))
+                    .child(g1.flex_1())
+                    .child(g2.flex_1())
+                    .child(g3.flex_1()),
             )
             .into_any_element(),
         KpiCols::Two => band
-            .child(
-                v_flex()
-                    .w_full()
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_stretch()
-                            .child(g0.flex_1())
-                            .child(g1.flex_1().border_l_1().border_color(moon(p.border))),
-                    )
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_stretch()
-                            .border_t_1()
-                            .border_color(moon(p.border))
-                            .child(g2.flex_1())
-                            .child(g3.flex_1().border_l_1().border_color(moon(p.border))),
-                    ),
-            )
+            .child(row().child(g0.flex_1()).child(g1.flex_1()))
+            .child(row().child(g2.flex_1()).child(g3.flex_1()))
             .into_any_element(),
         KpiCols::One => band
-            .child(
-                v_flex()
-                    .w_full()
-                    .child(g0)
-                    .child(g1.border_t_1().border_color(moon(p.border)))
-                    .child(g2.border_t_1().border_color(moon(p.border)))
-                    .child(g3.border_t_1().border_color(moon(p.border))),
-            )
+            .child(g0)
+            .child(g1)
+            .child(g2)
+            .child(g3)
             .into_any_element(),
     }
 }
 
-/// One group shell: padding plus an uppercase caption header.
+/// One group card: its own border and radius, padding, and an uppercase caption header.
 fn group(i: usize, title: String, p: MoonPalette, cx: &App) -> Div {
     v_flex()
         .debug_selector(move || layout::kpi_group(i))
         .min_w_0()
-        .px(design::ui_px(cx, 14.0))
-        .py(design::ui_px(cx, 12.0))
-        .gap(design::ui_px(cx, 6.0))
+        .bg(moon(p.panel))
+        .border_1()
+        .border_color(moon(p.border))
+        .rounded(design::ui_px(cx, 6.0))
+        .px(design::ui_px(cx, 12.0))
+        .pt(design::ui_px(cx, 10.0))
+        .pb(design::ui_px(cx, 12.0))
+        .gap(design::ui_px(cx, 8.0))
         .child(
             div()
                 .min_w_0()
@@ -434,22 +452,48 @@ fn sparkline(pts: std::rc::Rc<[f32]>, profit: f64, p: MoonPalette, cx: &App) -> 
         .into_any_element()
 }
 
-/// One metric row: label that may shorten, value that never does.
-fn metric_el(metric: &Metric, p: MoonPalette, cx: &App) -> Div {
+/// One metric tile on the soft panel: the label on top (it may wrap), the value under it, an
+/// optional meter, and the comparison pinned to the tile bottom so paired tiles line up.
+///
+/// Args:
+///     metric: The metric's label, value and colour.
+///     meter: Drawn under the value when present (the winrate meter).
+///     delta: The caption at the tile bottom with the width its unbreakable lines need, when the
+///         metric has one.
+///     p: Active palette.
+///     cx: App context for scaled sizes and text measurement.
+///
+/// Returns:
+///     The tile; it takes an equal share of its pair and the pair's full height, and never gets
+///     narrower than its value or a comparison line, so a narrow card wraps its tiles instead.
+fn tile(
+    metric: &Metric,
+    meter: Option<AnyElement>,
+    delta: Option<(Div, f32)>,
+    p: MoonPalette,
+    cx: &App,
+) -> Div {
     let name = metric.name;
-    let value_w = design::mono_body_text_width(cx, &metric.value, 600.0);
-    h_flex()
-        .w_full()
-        .items_baseline()
-        .gap(design::ui_px(cx, 10.0))
+    let value_w = design::mono_title_text_width(cx, &metric.value, 600.0);
+    let need = delta.as_ref().map_or(value_w, |d| value_w.max(d.1)).ceil() + 1.0;
+    v_flex()
+        .debug_selector(move || layout::kpi_tile(name))
+        .flex_1()
+        .min_w(px(need) + design::ui_px(cx, 22.0))
+        .gap(design::ui_px(cx, 3.0))
+        .px(design::ui_px(cx, 10.0))
+        .py(design::ui_px(cx, 8.0))
+        .bg(moon(p.panel_head))
+        .border_1()
+        .border_color(moon(p.border_soft))
+        .rounded(design::ui_px(cx, 5.0))
         .child(
             div()
                 .debug_selector(move || layout::kpi_label(name))
-                .flex_1()
+                .w_full()
                 .min_w_0()
-                .truncate()
                 .font_family(design::ui_font())
-                .text_size(design::t_body(cx))
+                .text_size(design::t_caption(cx))
                 .text_color(moon(p.text_soft))
                 .child(metric.label.clone()),
         )
@@ -458,13 +502,15 @@ fn metric_el(metric: &Metric, p: MoonPalette, cx: &App) -> Div {
                 .debug_selector(move || layout::kpi_value(name))
                 .flex_none()
                 .min_w(px(value_w))
-                .text_right()
+                .whitespace_nowrap()
                 .font_family(design::mono())
-                .text_size(design::t_body(cx))
+                .text_size(design::t_title(cx))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(moon(metric.color))
                 .child(metric.value.clone()),
         )
+        .children(meter)
+        .children(delta.map(|d| d.0.mt_auto().pt(design::ui_px(cx, 2.0))))
 }
 
 /// Winrate meter with the previous period's tick; the tick only exists when comparing.
@@ -499,39 +545,53 @@ fn meter_el(m: &KpiBand, p: MoonPalette, cx: &App) -> Option<AnyElement> {
     })
 }
 
-/// A comparison caption: the coloured change, then the muted previous value or extra fact.
+/// A tile's comparison caption on two lines: the coloured change first, then the muted previous
+/// value or extra fact. Each part stays whole on one line; no separator dot is drawn.
 /// Without a comparison the extra fact still shows, alone on a muted line.
-fn detail_el(
+///
+/// Args:
+///     name: Metric name for the debug selectors.
+///     line: The comparison, when one is shown.
+///     extra: A fact shown when the comparison has no previous value, or without a comparison.
+///     p: Active palette.
+///     cx: App context for scaled sizes.
+///
+/// Returns:
+///     The caption with the measured width of its widest unbreakable line (0 for a muted fact,
+///     which may wrap), or nothing when there is neither a comparison nor a fact.
+fn delta_el(
     name: &'static str,
     line: Option<&DeltaLine>,
     extra: Option<String>,
     p: MoonPalette,
     cx: &App,
-) -> Option<Div> {
+) -> Option<(Div, f32)> {
     let Some(line) = line else {
-        return extra.map(|extra| muted_line(name, extra, p, cx));
+        return extra.map(|extra| (muted_line(name, extra, p, cx), 0.0));
     };
     let tail = line.prev_text.clone().or(extra);
-    Some(
-        h_flex()
+    let width = std::iter::once(&line.text)
+        .chain(tail.as_ref())
+        .map(|text| design::mono_caption_text_width(cx, text, 400.0))
+        .fold(0.0, f32::max);
+    let part = |k: usize, text: String, color: u32| {
+        div()
+            .debug_selector(move || layout::kpi_delta_part(name, k))
+            .whitespace_nowrap()
+            .text_color(moon(color))
+            .child(text)
+    };
+    Some((
+        v_flex()
             .debug_selector(move || layout::kpi_delta(name))
-            .flex_wrap()
-            .gap_x(design::ui_px(cx, 6.0))
+            .w_full()
+            .min_w_0()
             .font_family(design::mono())
             .text_size(design::t_caption(cx))
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(moon(line.tone.color(p)))
-                    .child(line.text.clone()),
-            )
-            .children(tail.map(|tail| {
-                div()
-                    .flex_none()
-                    .text_color(moon(p.text_soft))
-                    .child(format!("· {tail}"))
-            })),
-    )
+            .child(part(0, line.text.clone(), line.tone.color(p)))
+            .children(tail.map(|tail| part(1, tail, p.text_soft))),
+        width,
+    ))
 }
 
 /// A muted caption under a metric (recovery hint, hold time without a comparison).

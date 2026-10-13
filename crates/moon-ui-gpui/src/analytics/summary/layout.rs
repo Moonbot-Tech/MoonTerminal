@@ -11,6 +11,11 @@ pub(in crate::analytics) fn kpi_group(i: usize) -> String {
     format!("sum-kpi-g{i}")
 }
 
+/// A KPI metric's tile in the Quality, Risk or Activity card.
+pub(in crate::analytics) fn kpi_tile(name: &str) -> String {
+    format!("sum-kpi-t{name}")
+}
+
 /// A KPI metric's label box.
 pub(in crate::analytics) fn kpi_label(name: &str) -> String {
     format!("sum-kpi-k{name}")
@@ -24,6 +29,11 @@ pub(in crate::analytics) fn kpi_value(name: &str) -> String {
 /// A KPI metric's comparison, tail or muted caption line; `hero` is the Result group's.
 pub(in crate::analytics) fn kpi_delta(name: &str) -> String {
     format!("sum-kpi-d{name}")
+}
+
+/// One part of a tile's two-line comparison: 0 is the change, 1 the previous value or fact.
+pub(in crate::analytics) fn kpi_delta_part(name: &str, k: usize) -> String {
+    format!("sum-kpi-d{name}-{k}")
 }
 
 // Explicit imports in the probe, never `use super::*` through a `gpui::*` glob.

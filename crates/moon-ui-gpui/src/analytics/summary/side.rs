@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use gpui::*;
 use moon_core::db::analytics::{Summary, TopTrade};
-use moon_ui::{MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonTag, h_flex, v_flex};
+use moon_ui::{MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex, v_flex};
 use rust_i18n::t;
 
 use super::model::{Insight, InsightTag, InsightTone};
@@ -46,16 +46,23 @@ fn title(selector: &'static str, text: String, cx: &App) -> Div {
         .child(text)
 }
 
-/// MoonTag face of one insight category: gains positive, losses warning, timing and quality info.
-fn tag_el(tag: InsightTag) -> MoonTag {
-    let (tag, key) = match tag {
-        InsightTag::Leader => (MoonTag::positive(), "analytics.sum.ins.tag.leader"),
-        InsightTag::Minus => (MoonTag::warning(), "analytics.sum.ins.tag.minus"),
-        InsightTag::Day => (MoonTag::warning(), "analytics.sum.ins.tag.day"),
-        InsightTag::Time => (MoonTag::info(), "analytics.sum.ins.tag.time"),
-        InsightTag::Quality => (MoonTag::info(), "analytics.sum.ins.tag.quality"),
+/// Tone token and category line of one insight: gains green, losses amber, facts blue.
+///
+/// Args:
+///     tag: The insight's category.
+///     p: Active palette.
+///
+/// Returns:
+///     The stripe and category colour, and the uppercase category text.
+fn category(tag: InsightTag, p: MoonPalette) -> (u32, String) {
+    let (color, key) = match tag {
+        InsightTag::Leader => (p.green, "analytics.sum.ins.tag.leader"),
+        InsightTag::Minus => (p.orange, "analytics.sum.ins.tag.minus"),
+        InsightTag::Day => (p.orange, "analytics.sum.ins.tag.day"),
+        InsightTag::Time => (p.blue, "analytics.sum.ins.tag.time"),
+        InsightTag::Quality => (p.blue, "analytics.sum.ins.tag.quality"),
     };
-    tag.mono(false).label(t!(key).to_string())
+    (color, t!(key).to_uppercase())
 }
 
 /// Palette token of an insight value.
@@ -119,60 +126,106 @@ pub(in crate::analytics) fn insights_el(
                 .text_color(moon(p.text_muted))
                 .child(period_caption),
         );
-    let mut list = v_flex().w_full().gap(design::ui_px(cx, 8.0));
+    let mut list = v_flex()
+        .debug_selector(|| "sum-ins-list".into())
+        .w_full()
+        .border_t_1()
+        .border_color(moon(p.border));
     if items.is_empty() {
         list = list.child(
             div()
                 .debug_selector(|| "sum-ins-none".into())
+                .pt(design::ui_px(cx, 8.0))
                 .text_size(design::t_body(cx))
                 .text_color(moon(p.text_muted))
                 .child(t!("analytics.sum.ins.none").to_string()),
         );
     }
+    // One value column for every row: the widest value, so the values share one right edge and
+    // the rules before them one vertical.
+    let value_w = items
+        .iter()
+        .map(|it| design::mono_body_text_width(cx, &it.value, 600.0))
+        .fold(f32::from(design::ui_px(cx, 72.0)), f32::max)
+        .ceil()
+        + 1.0;
+    let gap = design::ui_px(cx, 12.0);
     for (i, it) in items.iter().enumerate() {
-        let row = h_flex()
-            .debug_selector(move || format!("sum-ins-row-{i}"))
-            .w_full()
-            .items_start()
-            .gap(design::ui_px(cx, 8.0))
+        let (tone, cat) = category(it.tag, p);
+        // Every text line is a direct child of the text column that owns the width, and each
+        // one truncates on its own: a long subject never runs into the value column.
+        let line = |part: &'static str| {
+            div()
+                .debug_selector(move || format!("sum-ins-{part}-{i}"))
+                .w_full()
+                .min_w_0()
+                .truncate()
+        };
+        let text = v_flex()
+            .debug_selector(move || format!("sum-ins-text-{i}"))
+            .flex_1()
+            .min_w_0()
+            .py(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, 1.0))
             .child(
-                div()
-                    .debug_selector(move || format!("sum-ins-tag-{i}"))
-                    .flex_none()
-                    .child(tag_el(it.tag)),
+                line("cat")
+                    .font_family(design::ui_font())
+                    .text_size(design::t_caption(cx))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(moon(tone))
+                    .child(cat),
             )
-            // The fact wraps rather than truncates; the value beside it keeps its full width.
             .child(
-                div()
-                    .debug_selector(move || format!("sum-ins-what-{i}"))
-                    .flex_1()
-                    .min_w_0()
+                line("what")
+                    .font_family(design::mono())
                     .text_size(design::t_body(cx))
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(moon(p.text))
                     .child(it.what.clone()),
             )
+            .children(it.why.as_ref().map(|why| {
+                line("why")
+                    .font_family(design::ui_font())
+                    .text_size(design::t_caption(cx))
+                    .text_color(moon(p.text_muted))
+                    .child(why.clone())
+            }));
+        let mut row = h_flex()
+            .debug_selector(move || format!("sum-ins-row-{i}"))
+            .w_full()
+            .items_stretch()
+            .gap(gap)
+            .pr(design::ui_px(cx, 4.0))
             .child(
                 div()
+                    .debug_selector(move || format!("sum-ins-stripe-{i}"))
+                    .flex_none()
+                    .w(px(3.0))
+                    .rounded_r(px(2.0))
+                    .bg(moon(tone)),
+            )
+            .child(text)
+            .child(
+                h_flex()
                     .debug_selector(move || format!("sum-ins-value-{i}"))
                     .flex_none()
+                    .w(px(value_w) + gap)
+                    .pl(gap)
+                    .justify_end()
+                    .items_center()
+                    .border_l_1()
+                    .border_color(moon(p.border_soft))
+                    .whitespace_nowrap()
                     .font_family(design::mono())
                     .text_size(design::t_body(cx))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(moon(tone_color(it.value_tone, p)))
                     .child(it.value.clone()),
             );
-        let mut entry = v_flex().w_full().gap(design::ui_px(cx, 2.0)).child(row);
-        if let Some(why) = &it.why {
-            entry = entry.child(
-                div()
-                    .debug_selector(move || format!("sum-ins-why-{i}"))
-                    .w_full()
-                    .text_size(design::t_caption(cx))
-                    .text_color(moon(p.text_muted))
-                    .child(why.clone()),
-            );
+        if i + 1 < items.len() {
+            row = row.border_b_1().border_color(moon(p.border_soft));
         }
-        list = list.child(entry);
+        list = list.child(row);
     }
     card("sum-ins-card", cx, p)
         .child(header)
