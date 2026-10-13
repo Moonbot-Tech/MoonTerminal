@@ -8,17 +8,20 @@
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_core::feed::{AuthStep, ConnStatus, CoreTelegramState, auth_step};
-use moon_ui::{MoonPalette, MoonTag, h_flex, rgba_from, v_flex};
+use moon_ui::{MoonPalette, MoonTag, MoonTone, h_flex, rgba_from, v_flex};
 use rust_i18n::t;
 
 use crate::design;
+use crate::panels::common::text_tooltip_value;
 
-/// List width, unscaled; font-scaled at draw time.
-pub(super) const LIST_W: f32 = 250.0;
+/// List width beside the card, unscaled; font-scaled at draw time.
+pub(super) const LIST_W: f32 = 420.0;
+/// Narrowest the list shrinks to beside the card before the two stack, unscaled.
+pub(super) const LIST_MIN_W: f32 = 250.0;
 /// Narrowest card that keeps the proxy fields and the action row inside it, unscaled.
 pub(super) const CARD_MIN_W: f32 = 380.0;
-/// Tallest the list grows before it scrolls on its own, unscaled: a long setup keeps the card in
-/// view beside it and, stacked, under it.
+/// Tallest the list grows when stacked over the card before it scrolls on its own, unscaled: a
+/// long setup keeps the card in view under it. Beside the card the list fills the page height.
 pub(super) const LIST_MAX_H: f32 = 420.0;
 /// Gap between the list and the card, unscaled.
 pub(super) const SPLIT_GAP: f32 = 14.0;
@@ -132,6 +135,45 @@ pub(super) fn tag_el(tag: TgTag, selector: String) -> AnyElement {
         .into_any_element()
 }
 
+/// The tag's short words for a list row, in the current language.
+pub(super) fn short_tag_text(tag: TgTag) -> String {
+    match tag {
+        TgTag::LoggedIn => t!("telegram_core.tag_short.logged_in").to_string(),
+        TgTag::NotLoggedIn => t!("telegram_core.tag_short.not_logged_in").to_string(),
+        TgTag::ProxyError => t!("telegram_core.tag_short.proxy_error").to_string(),
+        TgTag::ReaderOff => t!("telegram_core.tag_short.reader_off").to_string(),
+        TgTag::NoCore => t!("telegram_core.tag_short.no_core").to_string(),
+        TgTag::Unsupported => t!("telegram_core.tag_short.unsupported").to_string(),
+        TgTag::Unknown => UNKNOWN_TAG.to_string(),
+    }
+}
+
+/// Tone of a tag's words in a list row.
+fn tag_tone(tag: TgTag) -> MoonTone {
+    match tag {
+        TgTag::LoggedIn => MoonTone::Positive,
+        TgTag::NotLoggedIn => MoonTone::Warning,
+        TgTag::ProxyError | TgTag::NoCore => MoonTone::Negative,
+        TgTag::ReaderOff | TgTag::Unsupported | TgTag::Unknown => MoonTone::Muted,
+    }
+}
+
+/// The tag in a list row: short tone-coloured words, the full meaning on hover.
+pub(super) fn list_tag_el(id: u64, tag: TgTag, cx: &App) -> AnyElement {
+    div()
+        .id(("tgcore-tag", id))
+        .debug_selector(move || format!("tgcore-tag-{id}"))
+        .flex_none()
+        .whitespace_nowrap()
+        .font_family(design::ui_font())
+        .text_color(rgba_from(tag_tone(tag).color(MoonPalette::active(cx)), 1.0))
+        .when(tag != TgTag::Unknown, |el| {
+            el.tooltip(text_tooltip_value(tag_text(tag)))
+        })
+        .child(short_tag_text(tag))
+        .into_any_element()
+}
+
 /// Connection dot color of a list row.
 pub(super) fn dot_color(status: Option<&ConnStatus>, p: MoonPalette) -> u32 {
     match status {
@@ -190,7 +232,7 @@ pub(super) fn core_row(
                 .font_family(design::mono())
                 .child(name),
         )
-        .child(tag_el(tag, format!("tgcore-tag-{id}")))
+        .child(list_tag_el(id, tag, cx))
 }
 
 /// The list frame: a caption header over the rows.
@@ -231,42 +273,71 @@ pub(super) fn core_list(rows: Vec<AnyElement>, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// Side by side when the list and the card's minimum both fit `column_w`; stacked otherwise.
+/// Side by side when the narrowest list and the card's minimum both fit `column_w`; stacked
+/// otherwise.
 pub(super) fn split_side(column_w: f32, cx: &App) -> bool {
     column_w + 0.5
-        >= design::font_w(cx, LIST_W)
+        >= design::font_w(cx, LIST_MIN_W)
             + design::ui_value(cx, SPLIT_GAP)
             + design::font_w(cx, CARD_MIN_W)
 }
 
-/// Place the list and the card in a page column `column_w` wide.
+/// Place the list and the card in a page column `column_w` wide that takes the page body's
+/// height.
+///
+/// Side by side, the list fills the column's height and scrolls inside it; it gives way from
+/// [`LIST_W`] down to [`LIST_MIN_W`] before the card goes under [`CARD_MIN_W`], and the card keeps
+/// its natural height, scrolling on its own only when the window is lower than it. Stacked, the
+/// list is capped at [`LIST_MAX_H`] and the column scrolls as a whole.
 pub(super) fn split(list: AnyElement, card: AnyElement, column_w: f32, cx: &App) -> AnyElement {
     let gap = design::ui_px(cx, SPLIT_GAP);
-    let list = div()
-        .id("tgcore-list-scroll")
-        .w_full()
-        .max_h(design::ui_px(cx, LIST_MAX_H))
-        .overflow_y_scroll()
-        .child(list);
     if !split_side(column_w, cx) {
         return v_flex()
+            .id("tgcore-stack")
             .w(px(column_w))
+            .flex_1()
+            .min_h(px(0.0))
+            .overflow_y_scroll()
             .gap(gap)
-            .child(list)
-            .child(card)
+            .child(
+                div()
+                    .id("tgcore-list-scroll")
+                    .debug_selector(|| "tgcore-list-scroll".into())
+                    .flex_none()
+                    .w_full()
+                    .max_h(design::ui_px(cx, LIST_MAX_H))
+                    .overflow_y_scroll()
+                    .child(list),
+            )
+            .child(div().flex_none().w_full().child(card))
             .into_any_element();
     }
     h_flex()
         .w(px(column_w))
+        .flex_1()
+        .min_h(px(0.0))
         .items_start()
         .gap(gap)
         .child(
             div()
-                .flex_none()
-                .w(design::font_w_px(cx, LIST_W))
+                .id("tgcore-list-scroll")
+                .debug_selector(|| "tgcore-list-scroll".into())
+                .flex_basis(design::font_w_px(cx, LIST_W))
+                .flex_shrink_1()
+                .min_w(design::font_w_px(cx, LIST_MIN_W))
+                .h_full()
+                .overflow_y_scroll()
                 .child(list),
         )
-        .child(div().flex_1().min_w_0().child(card))
+        .child(
+            div()
+                .id("tgcore-card-scroll")
+                .flex_1()
+                .min_w(design::font_w_px(cx, CARD_MIN_W))
+                .max_h_full()
+                .overflow_y_scroll()
+                .child(card),
+        )
         .into_any_element()
 }
 

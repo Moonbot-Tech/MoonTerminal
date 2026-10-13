@@ -103,7 +103,8 @@ impl Render for SettingsView {
         // effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
         // its parent hands it. It takes `flex_1 + min_h_0` down to its list, matching every other
         // `MoonVirtualList` call site in this app. Station cores is bounded too: its core table
-        // fills the page's remaining height and scrolls itself. Every other tab scrolls here.
+        // fills the page's remaining height and scrolls itself, and so does Telegram on core's core
+        // list. Every other tab scrolls here.
         let bounded = bounded_body(self.active);
         let body_inner = if bounded {
             div()
@@ -279,10 +280,11 @@ impl SettingsView {
     }
 }
 
-/// Whether `tab` gets a bounded, non-scrolling body: Connections owns a virtualized list, and
-/// Station cores' core table fills the page height and scrolls itself.
+/// Whether `tab` gets a bounded, non-scrolling body: Connections owns a virtualized list,
+/// Station cores' core table and Telegram on core's core list fill the page height and scroll
+/// themselves.
 pub(super) fn bounded_body(tab: Tab) -> bool {
-    matches!(tab, Tab::Cores | Tab::StCores)
+    matches!(tab, Tab::Cores | Tab::StCores | Tab::TgCore)
 }
 
 /// Build the window header with native minimize, maximize, and close controls.

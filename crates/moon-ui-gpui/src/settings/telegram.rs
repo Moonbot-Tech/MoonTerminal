@@ -426,11 +426,15 @@ impl SettingsView {
 
     /// The Telegram-on-the-core page: the core's reader, its login and its proxy.
     pub(super) fn tg_core_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
-        let body = self.page_column(
-            width,
-            vec![self.core_telegram_section(page_column_w(width, cx), cx)],
-            cx,
-        );
+        // The body is bounded (`render::bounded_body`): the list beside the card fills its height.
+        let column_w = page_column_w(width, cx);
+        let body = v_flex()
+            .w(px(column_w))
+            .flex_1()
+            .min_h(px(0.0))
+            .debug_selector(|| "tgcore-column".into())
+            .child(self.core_telegram_section(column_w, cx))
+            .into_any_element();
         self.page_parts(Tab::TgCore, body, Vec::new(), cx)
     }
 

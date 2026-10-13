@@ -1,6 +1,6 @@
 use super::{
     ALL_TAGS, TgTag, card, card_header, card_row, core_list, core_row, disconnected, error_banner,
-    note_box, split, tag_text, tg_tag,
+    note_box, short_tag_text, split, split_side, tag_text, tg_tag,
 };
 use crate::design;
 use gpui::{AnyElement, App, InteractiveElement, IntoElement, ParentElement, Styled, div, px};
@@ -295,5 +295,113 @@ fn every_tag_sits_inside_its_row(cx: &mut gpui::TestAppContext) {
             );
             assert!(f32::from(tag.size.width) > 0.0, "{code}: tag {i} collapsed");
         }
+    }
+}
+
+/// A typical 30-character synthetic core name.
+const NAME_30: &str = "CORE_A synthetic subacc No 031";
+
+/// The page body as `render` bounds it for this tab: a fixed-height window holding the page
+/// column, the list of 63 cores beside a short card.
+struct BoundedProbe {
+    width: f32,
+}
+
+impl gpui::Render for BoundedProbe {
+    fn render(&mut self, _: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        let p = MoonPalette::active(cx);
+        let rows = (0..63u64)
+            .map(|i| {
+                let tag = ALL_TAGS[i as usize % ALL_TAGS.len()];
+                core_row(i, NAME_30.to_string(), p.green, tag, i == 0, cx).into_any_element()
+            })
+            .collect();
+        let body = card(
+            vec![note_box(
+                "tgcore-pick",
+                t!("telegram_core.core_pick_none").to_string(),
+                cx,
+            )],
+            cx,
+        );
+        v_flex().size_full().child(
+            v_flex()
+                .w(px(self.width))
+                .flex_1()
+                .min_h(px(0.0))
+                .child(split(core_list(rows, cx), body, self.width, cx)),
+        )
+    }
+}
+
+/// Beside the card the list fills the body's height and grows with the window, and a
+/// 30-character name keeps at least 24 characters beside the longest short tag — every language.
+#[gpui::test]
+fn the_core_list_fills_the_body_and_keeps_names_readable(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let leak = crate::settings::layout_probe::leak;
+    for language in moon_core::config::Language::ALL {
+        let code = language.code();
+        let _locale = crate::test_locale::force(code);
+        let mut heights = Vec::new();
+        for height in [600.0, 900.0] {
+            let width = 1200.0;
+            let window = cx.open_window(gpui::size(px(width), px(height)), |_, _| BoundedProbe {
+                width,
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            assert!(
+                visual.update(|_, cx| split_side(width, cx)),
+                "{code}: stacked"
+            );
+            let list = visual
+                .debug_bounds("tgcore-list-scroll")
+                .expect("list drawn");
+            assert!(
+                f32::from(list.size.height) + 1.0 >= height,
+                "{code}: the list stops short of the body ({} < {height})",
+                f32::from(list.size.height)
+            );
+            assert!(
+                f32::from(list.bottom()) <= height + 0.5,
+                "{code}: list overflows"
+            );
+            heights.push(f32::from(list.size.height));
+            let widths: Vec<f32> = visual.update(|_, cx| {
+                ALL_TAGS
+                    .iter()
+                    .map(|t| design::ui_body_text_width(cx, &short_tag_text(*t), 400.0))
+                    .collect()
+            });
+            let longest = (0..widths.len())
+                .max_by(|a, b| widths[*a].total_cmp(&widths[*b]))
+                .expect("tags");
+            let name = visual
+                .debug_bounds(leak(format!("tgcore-name-{longest}")))
+                .expect("name drawn");
+            let tag = visual
+                .debug_bounds(leak(format!("tgcore-tag-{longest}")))
+                .expect("tag drawn");
+            let need =
+                visual.update(|_, cx| design::mono_body_text_width(cx, &NAME_30[..24], 400.0));
+            assert!(
+                f32::from(name.size.width) + 0.5 >= need,
+                "{code}: name cut under 24 characters ({} < {need})",
+                f32::from(name.size.width)
+            );
+            assert!(
+                name.right() <= tag.left() + px(0.5),
+                "{code}: name under its tag"
+            );
+        }
+        assert!(
+            heights[1] - heights[0] >= 290.0,
+            "{code}: the list did not grow with the window: {heights:?}"
+        );
     }
 }
