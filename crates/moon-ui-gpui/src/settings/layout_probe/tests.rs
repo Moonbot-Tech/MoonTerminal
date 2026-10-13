@@ -320,6 +320,75 @@ fn hint_rows_fit_the_body(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// Catches the unfolded long help landing in the narrow label column again, two or three words a
+/// line down half a screen (Cores > chart link): in a hint row and in a column row the help opens
+/// under the control, inside the control column, right of the label on a wide window, uncut and
+/// within the prose cap, in every language and at every window size.
+#[gpui::test]
+fn unfolded_help_opens_under_the_control(cx: &mut gpui::TestAppContext) {
+    use crate::settings::common::{PROSE_MAX_W, column_row};
+    use crate::settings::general::probe_host::{host, stub, window_text};
+    use crate::settings::layout_probe::{SIZES, WIDE, sweep_sizes};
+    let more = || rust_i18n::t!("telegram.auto.hint").to_string();
+    let make = || {
+        host(move |_, cx| {
+            let noop: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(|_, _| {});
+            let rows = div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(hint_row(
+                    "probe-help",
+                    rust_i18n::t!("settings.page.security.title").to_string(),
+                    Some(rust_i18n::t!("settings.page.security.desc").to_string()),
+                    Some(more()),
+                    stub("probe-help-ctl", 120.0, 24.0),
+                    true,
+                    noop.clone(),
+                    cx,
+                ))
+                .child(column_row(
+                    "probe-col",
+                    rust_i18n::t!("settings.page.general.title").to_string(),
+                    Some(rust_i18n::t!("settings.page.general.desc").to_string()),
+                    Some(more()),
+                    stub("probe-col-ctl", 120.0, 24.0),
+                    true,
+                    noop,
+                    150.0,
+                    cx,
+                ));
+            window_text(rows.into_any_element(), cx)
+        })
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    let every_size = move |_| ProbeSpec {
+        container: "probe-body",
+        inside: vec!["probe-help-more-text".into(), "probe-col-more-text".into()],
+        wraps: vec![
+            ("probe-help-more-text".into(), more()),
+            ("probe-col-more-text".into(), more()),
+        ],
+        within: vec![pair("probe-help-more-text", "probe-help-control")],
+        under: vec![
+            pair("probe-help-ctl", "probe-help-more-text"),
+            pair("probe-col-ctl", "probe-col-more-text"),
+        ],
+        right_of: vec![pair("probe-col-label", "probe-col-more-text")],
+        max_width: vec![
+            ("probe-help-more-text".into(), PROSE_MAX_W),
+            ("probe-col-more-text".into(), PROSE_MAX_W),
+        ],
+        ..Default::default()
+    };
+    sweep_sizes(cx, &SIZES, make(), every_size);
+    sweep_sizes(cx, &[WIDE], make(), move |_| ProbeSpec {
+        container: "probe-body",
+        right_of: vec![pair("probe-help-label", "probe-help-more-text")],
+        ..Default::default()
+    });
+}
+
 /// Catches the page title collapsing to an ellipsis beside its save-mode chip (a truncating text
 /// inside a nested flex row shrinks to nothing): every page's header shows its full title, chip
 /// and two actions alongside, in every language at the default and the minimum window.

@@ -194,9 +194,175 @@ fn group_header(g: &GroupBlock, parts: &ListParts<'_>, act: &CoreAct, cx: &App) 
         .into_any_element()
 }
 
-/// One core in the list.
+/// Slot the status dot sits in, unscaled: the live dot is 10 px wide.
+const DOT_SLOT: f32 = 10.0;
+/// Widest the group, chart-link and address columns grow to fit their values, unscaled; a longer
+/// value truncates with its full text in a tooltip.
+const GROUP_COL_MAX: f32 = 110.0;
+const LINK_COL_MAX: f32 = 90.0;
+const ADDR_COL_MAX: f32 = 170.0;
+/// Size of the column captions above the list, unscaled.
+const HEAD_TEXT: f32 = 11.0;
+
+/// What an empty group or chart link shows.
+const EMPTY_VALUE: &str = "—";
+
+/// Widths of the list's fixed columns, logical pixels: each sized from its widest value, capped,
+/// and never narrower than its caption.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ListCols {
+    pub(crate) group: f32,
+    pub(crate) link: f32,
+    pub(crate) addr: f32,
+}
+
+/// A value as its cell shows it: an empty one as a dash.
+fn shown(value: &str) -> &str {
+    if value.trim().is_empty() {
+        EMPTY_VALUE
+    } else {
+        value
+    }
+}
+
+/// Width of a cell value, logical pixels (mono, body size).
+fn value_w(cx: &App, text: &str) -> f32 {
+    design::mono_body_text_width(cx, text, 400.0)
+}
+
+/// Width of a column caption, logical pixels.
+fn head_w(cx: &App, text: &str) -> f32 {
+    design::ui_text_width_zoomed(cx, text, HEAD_TEXT, 400.0, false)
+}
+
+/// The list's column widths over every row of `model`.
+pub(crate) fn list_cols(model: &CoresModel, cx: &App) -> ListCols {
+    let rows = || {
+        model
+            .groups
+            .iter()
+            .flat_map(|g| g.exchanges.iter())
+            .flat_map(|e| e.rows.iter())
+    };
+    let col = |caption: String, cap: f32, value: &dyn Fn(&CoreListRow) -> &str| {
+        let widest = rows()
+            .map(|r| value_w(cx, shown(value(r))))
+            .fold(value_w(cx, EMPTY_VALUE), f32::max);
+        // A pixel of slack: the measure is a glyph-advance sum, the layout rounds.
+        widest
+            .min(design::ui_value(cx, cap))
+            .max(head_w(cx, &caption))
+            + 1.0
+    };
+    ListCols {
+        group: col(t!("conn.list.col_group").to_string(), GROUP_COL_MAX, &|r| {
+            &r.group
+        }),
+        link: col(t!("conn.list.col_link").to_string(), LINK_COL_MAX, &|r| {
+            &r.link
+        }),
+        addr: col(t!("conn.list.col_addr").to_string(), ADDR_COL_MAX, &|r| {
+            &r.addr
+        }),
+    }
+}
+
+/// A fixed-width value cell: mono, a muted dash when empty, truncated with its full text in a
+/// tooltip when it does not fit.
+fn value_cell(
+    id: (&'static str, u64),
+    value: &str,
+    width: f32,
+    muted: bool,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let text = shown(value).to_string();
+    let empty = value.trim().is_empty();
+    let clipped = !empty && value_w(cx, &text) > width;
+    let (name, key) = id;
+    div()
+        .id(id)
+        .debug_selector(move || format!("{name}-{key}"))
+        .flex_none()
+        .w(px(width))
+        .min_w_0()
+        .truncate()
+        .font_family(design::mono())
+        .text_color(rgba_from(
+            if empty {
+                p.text_soft
+            } else if muted {
+                p.text_muted
+            } else {
+                p.text
+            },
+            1.0,
+        ))
+        .when(clipped, |el| {
+            let full = text.clone();
+            el.tooltip(move |_, cx| {
+                cx.new(|_| moon_ui::MoonTooltipView::new(full.clone()))
+                    .into()
+            })
+        })
+        .child(text)
+        .into_any_element()
+}
+
+/// The captions above the list's columns.
+fn list_head(cols: ListCols, cx: &App) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let caption = |sel: &'static str, key: &str| {
+        div()
+            .debug_selector(move || sel.into())
+            .whitespace_nowrap()
+            .font_family(design::ui_font())
+            .child(t!(key).to_string())
+    };
+    h_flex()
+        .debug_selector(|| "cores-head".into())
+        .w_full()
+        .gap(design::ui_px(cx, 8.0))
+        .items_center()
+        .px(design::ui_px(cx, 10.0))
+        .py(design::ui_px(cx, 4.0))
+        .text_size(design::ui_px(cx, HEAD_TEXT))
+        .text_color(rgba_from(p.text_soft, 1.0))
+        .border_b_1()
+        .border_color(rgba_from(p.border, 1.0))
+        .child(div().flex_none().w(design::ui_px(cx, DOT_SLOT)))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .child(caption("cores-head-name", "conn.list.col_name")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(cols.group))
+                .child(caption("cores-head-group", "conn.list.col_group")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(cols.link))
+                .child(caption("cores-head-link", "conn.list.col_link")),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(px(cols.addr))
+                .child(caption("cores-head-addr", "conn.list.col_addr")),
+        )
+        .into_any_element()
+}
+
+/// One core in the list: dot, name (with the feeds tag), group, chart link, address.
 fn core_item(
     row: &CoreListRow,
+    cols: ListCols,
     selected: bool,
     parts: &ListParts<'_>,
     act: &CoreAct,
@@ -231,31 +397,50 @@ fn core_item(
         })
         .when(!row.active, |el| el.opacity(0.6))
         .on_click(on(act, CoreAction::Select(row.row_key)))
-        .child((parts.dot)(row, cx))
+        .child(
+            h_flex()
+                .flex_none()
+                .w(design::ui_px(cx, DOT_SLOT))
+                .justify_center()
+                .child((parts.dot)(row, cx)),
+        )
+        // The name gives way first: it truncates, and the feeds tag stays whole at the end of
+        // its column. Both sit in the row itself, an intermediate flex around a truncating text
+        // collapses it to "…".
         .child(
             div()
+                .debug_selector({
+                    let key = row.row_key;
+                    move || format!("cores-name-{key}")
+                })
                 .flex_1()
                 .min_w_0()
                 .truncate()
                 .font_family(design::mono())
                 .child(row.name.clone()),
         )
-        .child(
-            div()
-                .debug_selector({
-                    let key = row.row_key;
-                    move || format!("cores-addr-{key}")
-                })
-                // Shown whole while it fits; a very long address truncates at half the row so
-                // the name and the feed badge always keep their room.
-                .flex_none()
-                .max_w(relative(0.5))
-                .truncate()
-                .font_family(design::mono())
-                .text_color(rgba_from(p.text_muted, 1.0))
-                .child(row.addr.clone()),
-        )
         .children(tag)
+        .child(value_cell(
+            ("cores-cell-group", row.row_key),
+            &row.group,
+            cols.group,
+            false,
+            cx,
+        ))
+        .child(value_cell(
+            ("cores-cell-link", row.row_key),
+            &row.link,
+            cols.link,
+            false,
+            cx,
+        ))
+        .child(value_cell(
+            ("cores-addr", row.row_key),
+            &row.addr,
+            cols.addr,
+            true,
+            cx,
+        ))
         .into_any_element()
 }
 
@@ -283,6 +468,8 @@ pub(crate) fn cores_list(
         .border_color(rgba_from(p.border, 1.0))
         .rounded(design::r_container(cx))
         .overflow_hidden();
+    let cols = list_cols(model, cx);
+    list = list.child(list_head(cols, cx));
     for g in &model.groups {
         list = list.child(group_header(g, parts, act, cx));
         for (ex_index, ex) in g.exchanges.iter().enumerate() {
@@ -313,6 +500,7 @@ pub(crate) fn cores_list(
             for row in &ex.rows {
                 list = list.child(core_item(
                     row,
+                    cols,
                     model.selected == Some(row.row_key),
                     parts,
                     act,
@@ -742,22 +930,6 @@ pub(crate) fn core_card(
                     cx,
                 ),
             ))
-            .child(row(
-                "core-card-bundle",
-                t!("conn.card.bundle").to_string(),
-                Some(t!("conn.card.bundle_hint").to_string()),
-                Some(t!("conn.tip.bundle").to_string()),
-                div()
-                    .w_full()
-                    .min_w(field_w)
-                    .child(
-                        MoonInput::new("core-card-bundle-input")
-                            .state(inputs.bundle)
-                            .mono(true)
-                            .small(),
-                    )
-                    .into_any_element(),
-            ))
     });
 
     let footer = h_flex()
@@ -854,6 +1026,22 @@ pub(crate) fn core_card(
             dropdown("core-card-group-pick", card.group.clone(), group_items, cx),
         ))
         .child(row(
+            "core-card-bundle",
+            t!("conn.card.bundle").to_string(),
+            Some(t!("conn.card.bundle_hint").to_string()),
+            Some(t!("conn.tip.bundle").to_string()),
+            div()
+                .w_full()
+                .min_w(field_w)
+                .child(
+                    MoonInput::new("core-card-bundle-input")
+                        .state(inputs.bundle)
+                        .mono(true)
+                        .small(),
+                )
+                .into_any_element(),
+        ))
+        .child(row(
             "core-card-color",
             t!("conn.card.color").to_string(),
             Some(t!("conn.card.color_hint").to_string()),
@@ -935,10 +1123,14 @@ pub(crate) fn cores_empty(act: &CoreAct, add: AnyElement, cx: &App) -> AnyElemen
 
 /// Height the list keeps in a narrow window, where the card sits under it, unscaled.
 const NARROW_LIST_H: f32 = 240.0;
-/// Share of the body the list takes beside the card, clamped to [`LIST_W_MIN`]..[`LIST_W_MAX`].
+/// Share of the body the list takes beside the card, clamped to [`LIST_W_FIT`]..[`LIST_W_MAX`].
 const LIST_SHARE: f32 = 0.45;
-/// Narrowest list beside the card, unscaled: a core name and its status still read.
-const LIST_W_MIN: f32 = 200.0;
+/// Width the list asks for beside the card, unscaled: the mockup's list, where a name, group,
+/// chart link and address all read.
+const LIST_W_FIT: f32 = 560.0;
+/// Narrowest list beside the card, unscaled: the fixed columns at their caps (437 px with dot,
+/// gaps and padding) and a few letters of the name.
+const LIST_W_MIN: f32 = 480.0;
 /// Widest list beside the card, unscaled.
 const LIST_W_MAX: f32 = 640.0;
 /// Gap between the list and the card, unscaled.
@@ -965,8 +1157,9 @@ pub(crate) fn card_min_w(cx: &App) -> f32 {
     design::ui_value(cx, 2.0 * 14.0 + CARD_LABEL_W + 16.0 + FIELD_W + 6.0) + 2.0 + paste
 }
 
-/// Side by side only when the list at its share and the card at its minimum both fit
-/// `content_w`; a window below the navigation breakpoint always stacks.
+/// Side by side when the card at its minimum fits beside the list: the list takes its share of
+/// `content_w`, at least [`LIST_W_FIT`], and gives way down to [`LIST_W_MIN`] before the page
+/// stacks; a window below the navigation breakpoint always stacks.
 ///
 /// Args:
 ///     narrow: The window is below the navigation breakpoint.
@@ -977,8 +1170,10 @@ pub(crate) fn cores_layout(narrow: bool, content_w: f32, card_min: f32, zoom: f3
     if narrow {
         return CoresLayout::Stacked;
     }
-    let list_w = (content_w * LIST_SHARE).clamp(LIST_W_MIN * zoom, LIST_W_MAX * zoom);
-    if content_w - list_w - SPLIT_GAP * zoom >= card_min {
+    let wanted = (content_w * LIST_SHARE).clamp(LIST_W_FIT * zoom, LIST_W_MAX * zoom);
+    let room = content_w - SPLIT_GAP * zoom - card_min;
+    let list_w = wanted.min(room);
+    if list_w >= LIST_W_MIN * zoom {
         CoresLayout::Side { list_w }
     } else {
         CoresLayout::Stacked

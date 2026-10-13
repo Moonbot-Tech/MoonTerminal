@@ -102,8 +102,9 @@ impl Render for SettingsView {
         // owns a virtualized core list, and nesting it inside this scrollbar would give it an
         // effectively infinite height to lay out against, since `MoonVirtualList` fills whatever
         // its parent hands it. It takes `flex_1 + min_h_0` down to its list, matching every other
-        // `MoonVirtualList` call site in this app. Every other tab scrolls here.
-        let bounded = matches!(self.active, Tab::Cores);
+        // `MoonVirtualList` call site in this app. Station cores is bounded too: its core table
+        // fills the page's remaining height and scrolls itself. Every other tab scrolls here.
+        let bounded = bounded_body(self.active);
         let body_inner = if bounded {
             div()
                 .id("settings-body")
@@ -276,6 +277,12 @@ impl SettingsView {
             state.set_selected_value(&active);
         });
     }
+}
+
+/// Whether `tab` gets a bounded, non-scrolling body: Connections owns a virtualized list, and
+/// Station cores' core table fills the page height and scrolls itself.
+pub(super) fn bounded_body(tab: Tab) -> bool {
+    matches!(tab, Tab::Cores | Tab::StCores)
 }
 
 /// Build the window header with native minimize, maximize, and close controls.

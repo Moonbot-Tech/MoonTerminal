@@ -224,6 +224,10 @@ pub(crate) struct CoreListRow {
     pub(crate) name: String,
     /// The address in effect: the typed override, else the key's endpoint.
     pub(crate) addr: String,
+    /// The core's window group (`ServerConfig::group`); empty shows a dash.
+    pub(crate) group: String,
+    /// The core's chart link (`ServerConfig::chart_bundle`); empty shows a dash.
+    pub(crate) link: String,
     /// How many of the nine data kinds the core sends (eight filters plus `log_delivery`).
     pub(crate) feeds_on: u8,
     pub(crate) active: bool,

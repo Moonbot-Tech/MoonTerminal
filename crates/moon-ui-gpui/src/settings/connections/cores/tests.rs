@@ -171,13 +171,27 @@ fn row(key: u64, name: &str, addr: &str, feeds_on: u8, dot: CoreDot) -> CoreList
         core_id: key as _,
         name: name.to_string(),
         addr: addr.to_string(),
+        group: String::new(),
+        link: String::new(),
         feeds_on,
         active: dot != CoreDot::Off,
         dot,
     }
 }
 
-/// Three groups, seven cores, one with a key the core rejected.
+/// `row` in a group with a chart link.
+fn linked(r: CoreListRow, group: &str, link: &str) -> CoreListRow {
+    CoreListRow {
+        group: group.to_string(),
+        link: link.to_string(),
+        ..r
+    }
+}
+
+/// A 30-character core name, the longest the list is built for.
+const LONG_NAME: &str = "CORE_A ~ F-BN / SUB 07 / EXTRA";
+
+/// Three groups, eight cores, one with a key the core rejected, one with a 30-character name.
 fn model() -> CoresModel {
     let ex = |caption: &str, rows| ExBlock {
         caption: caption.to_string(),
@@ -193,7 +207,11 @@ fn model() -> CoresModel {
                     ex(
                         "Binance Futures",
                         vec![
-                            row(0, "ALPHA ~ F-BN / SUB 07", "10.0.4.17:3100", 9, CoreDot::Ok),
+                            linked(
+                                row(0, "ALPHA ~ F-BN / SUB 07", "10.0.4.17:3100", 9, CoreDot::Ok),
+                                "default",
+                                "a-chart-link-name-too-long-for-its-column",
+                            ),
                             row(1, "ALPHA ~ F-BN / SUB 08", "10.0.4.18:3100", 9, CoreDot::Ok),
                             row(
                                 2,
@@ -223,8 +241,17 @@ fn model() -> CoresModel {
                 exchanges: vec![ex(
                     "Binance Futures",
                     vec![
-                        row(4, "LYRA ~ F-BN / SUB 30", "10.0.6.30:3100", 9, CoreDot::Ok),
+                        linked(
+                            row(4, "LYRA ~ F-BN / SUB 30", "10.0.6.30:3100", 9, CoreDot::Ok),
+                            "Scalp",
+                            "BTC-main",
+                        ),
                         row(5, "LYRA ~ F-BN / SUB 31", "10.0.6.31:3100", 8, CoreDot::Off),
+                        linked(
+                            row(7, LONG_NAME, "203.0.113.7:3100", 9, CoreDot::Ok),
+                            "Scalp",
+                            "ETH",
+                        ),
                     ],
                 )],
             },
@@ -500,6 +527,117 @@ fn card_captions_sit_under_their_field_on_one_line(cx: &mut gpui::TestAppContext
                     "the group hint wraps although it fits {box_w} px: {} tall ({at})",
                     f32::from(hint.size.height)
                 );
+            }
+        }
+    }
+}
+
+/// Catches the list's columns colliding: a long core name pushing the group, chart-link and
+/// address cells aside, a cell spilling over its neighbour or out of the list, or a column caption
+/// clipped — in every language, at every swept size and at a default and a wide window.
+///
+/// Breaks on: the name cell losing `min_w_0`/`flex_1` (the 30-character name then shoves the
+/// columns right), a caption wider than its measured column, or the list too narrow for the
+/// fixed columns beside the card.
+#[gpui::test]
+fn the_core_list_columns_fit_without_overlap(cx: &mut gpui::TestAppContext) {
+    use crate::settings::layout_probe::{SIZES, body_box, leak};
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for size in SIZES.into_iter().chain([(1280.0, 800.0), (1600.0, 900.0)]) {
+            let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
+                let (width, _) = body_box(size, cx);
+                let fields = inputs(window, cx);
+                Host {
+                    scroll: ScrollHandle::new(),
+                    width,
+                    build: Rc::new(move |window, cx| body(window, cx, &fields)),
+                }
+            });
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let at = format!("{} at {}x{}", language.code(), size.0, size.1);
+            let get = |visual: &mut gpui::VisualTestContext, sel: String| {
+                visual
+                    .debug_bounds(leak(sel.clone()))
+                    .unwrap_or_else(|| panic!("{sel} was not laid out ({at})"))
+            };
+            let list = get(&mut visual, "cores-list".into());
+            for key in [0_u64, 4, 7] {
+                let cells = [
+                    get(&mut visual, format!("cores-name-{key}")),
+                    get(&mut visual, format!("cores-cell-group-{key}")),
+                    get(&mut visual, format!("cores-cell-link-{key}")),
+                    get(&mut visual, format!("cores-addr-{key}")),
+                ];
+                for pair in cells.windows(2) {
+                    assert!(
+                        pair[0].right() <= pair[1].origin.x,
+                        "row {key}: a cell overlaps the next one ({at})"
+                    );
+                }
+                for cell in &cells {
+                    assert!(
+                        cell.origin.x >= list.origin.x && cell.right() <= list.right(),
+                        "row {key}: a cell leaves the list ({at})"
+                    );
+                    assert!(
+                        f32::from(cell.size.width) > 0.0,
+                        "row {key}: a cell collapsed ({at})"
+                    );
+                }
+            }
+            let long = get(&mut visual, "cores-name-7".into());
+            let short = get(&mut visual, "cores-name-4".into());
+            assert!(
+                (long.right() - short.right()).abs() < px(0.5),
+                "the 30-character name pushes the columns ({at})"
+            );
+            let group = get(&mut visual, "cores-cell-group-7".into());
+            let head = get(&mut visual, "cores-head-group".into());
+            assert!(
+                (head.origin.x - group.origin.x).abs() < px(0.5),
+                "the group caption is not over its column ({at})"
+            );
+            for (sel, key, col) in [
+                ("cores-head-name", "conn.list.col_name", None),
+                (
+                    "cores-head-group",
+                    "conn.list.col_group",
+                    Some("cores-cell-group-7"),
+                ),
+                (
+                    "cores-head-link",
+                    "conn.list.col_link",
+                    Some("cores-cell-link-7"),
+                ),
+                (
+                    "cores-head-addr",
+                    "conn.list.col_addr",
+                    Some("cores-addr-7"),
+                ),
+            ] {
+                let caption = get(&mut visual, sel.into());
+                let text = rust_i18n::t!(key).to_string();
+                let need = visual.update(|_, cx| {
+                    crate::design::ui_text_width_zoomed(cx, &text, super::HEAD_TEXT, 400.0, false)
+                });
+                assert!(
+                    f32::from(caption.size.width) + 0.5 >= need,
+                    "caption {sel} is cut ({at})"
+                );
+                if let Some(col) = col {
+                    let cell = get(&mut visual, col.into());
+                    assert!(
+                        caption.right() <= cell.right() + px(0.5),
+                        "caption {sel} is wider than its column ({at})"
+                    );
+                }
             }
         }
     }

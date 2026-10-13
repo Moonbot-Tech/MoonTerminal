@@ -79,8 +79,6 @@ pub(in crate::settings) struct ServerBotEd {
     access_seen: Option<Access>,
     /// Rows retained between renders, invalidated by comparison inputs.
     pub(super) cores_cache: super::station_cores::CoreCache,
-    /// The full core list below the summary is open.
-    pub(super) cores_all_open: bool,
     /// Which rows the full core list shows.
     pub(super) cores_filter: super::station_cores::CoresFilter,
     /// The full core list's name/address search.
@@ -157,7 +155,6 @@ pub(in crate::settings) fn build<T: 'static>(
         chats: ChatEd::new(window, cx),
         access_seen: None,
         cores_cache: Default::default(),
-        cores_all_open: false,
         cores_filter: Default::default(),
         cores_query,
         cores_scroll: ScrollHandle::new(),
@@ -903,7 +900,16 @@ impl SettingsView {
             .child(self.server_bot_hint("telegram.server.intro", cx));
         let section = match self.telegram.server.known.clone() {
             Some(target) => self.server_bot_known(section, &target, cx),
-            None => self.server_bot_new(section, cx),
+            // The intro's detail sits behind "more" here too; the install review still lists
+            // every change before anything runs.
+            None => self.server_bot_new(
+                section.child(self.more_note(
+                    "server-intro-more",
+                    vec![(String::new(), t!("telegram.server.intro_more").to_string())],
+                    cx,
+                )),
+                cx,
+            ),
         };
         section.when(show_progress, |s| {
             s.child(self.server_bot_progress(true, cx))
@@ -1178,8 +1184,9 @@ impl SettingsView {
             .map(|s| self.server_bot_install_review(s, cx))
     }
 
-    /// Group a known station's everyday and maintenance actions into wrapping button rows.
-    /// Destructive actions and their unchanged confirmations live in the separated access block.
+    /// Lay a known station's everyday and maintenance actions out on one wrapping button row,
+    /// a divider between the two groups; the intro's detail and what the actions do sit behind
+    /// "more". Destructive actions and their unchanged confirmations live in the separated access block.
     fn server_bot_known(
         &self,
         section: MoonGroupBox,
@@ -1229,12 +1236,17 @@ impl SettingsView {
                 update
                     .on_click(on(|_, target, _| Ok(Job::Update { target })))
                     .render()
-            });
-        let maintenance = h_flex()
-            .w_full()
-            .min_w(px(0.0))
-            .flex_wrap()
-            .gap(design::ui_px(cx, 8.0))
+            })
+            // Everyday actions, then the rarer setup ones past a thin divider, on one line.
+            .child(
+                div()
+                    .debug_selector(|| "server-actions-divider".into())
+                    .flex_none()
+                    .w(px(1.0))
+                    .h(design::ui_px(cx, 20.0))
+                    .mx(design::ui_px(cx, 4.0))
+                    .bg(rgba_from(p.border, 1.0)),
+            )
             .child(
                 button("server-resetup", t!("telegram.server.resetup").to_string())
                     .on_click(on(|this, target, cx| {
@@ -1263,6 +1275,7 @@ impl SettingsView {
         let more = self.more_note(
             "server-actions-more",
             vec![
+                (String::new(), t!("telegram.server.intro_more").to_string()),
                 (
                     t!("telegram.server.update").to_string(),
                     t!("telegram.server.update_hint").to_string(),
@@ -1276,7 +1289,6 @@ impl SettingsView {
         );
         self.server_bot_old_admin(section, cx)
             .child(actions)
-            .child(maintenance)
             .child(more)
     }
 
@@ -1308,22 +1320,23 @@ impl SettingsView {
         .into_any_element()
     }
 
-    /// The station's cores (the Station cores page).
+    /// The station's cores (the Station cores page). A known station's cores card is the page
+    /// itself, under the page header that already names it, so it gets no titled box around it.
     pub(in crate::settings) fn station_cores_section(
         &self,
         width: f32,
         cx: &Context<Self>,
     ) -> AnyElement {
+        if let Some(target) = self.telegram.server.known.clone()
+            && let Some(block) = self.station_cores_block(&target, width, cx)
+        {
+            return block;
+        }
         self.station_page_box(
             width,
             "station-cores-page",
             "settings.page.st_cores.title",
-            |target| {
-                self.station_cores_block(target, width, cx)
-                    .into_iter()
-                    .map(IntoElement::into_any_element)
-                    .collect()
-            },
+            |_| Vec::new(),
             cx,
         )
     }

@@ -104,6 +104,14 @@ pub(super) struct ProbeSpec {
     /// `(selector, slack)`: the element's right edge lies within `slack` unscaled pixels of the
     /// container's right edge — it spans the content, not a narrow column.
     pub(super) reaches_right: Vec<(String, f32)>,
+    /// `(left, right)`: `right` starts at or after `left`'s right edge — side by side.
+    pub(super) right_of: Vec<(String, String)>,
+    /// `(upper, lower)`: `lower` starts at or below `upper`'s bottom edge (0.5 px tolerance).
+    pub(super) under: Vec<(String, String)>,
+    /// `(inner, outer)`: `inner` lies horizontally within `outer` (0.5 px tolerance).
+    pub(super) within: Vec<(String, String)>,
+    /// Groups of elements that must share their top edge (1 px tolerance): one line of fields.
+    pub(super) same_top: Vec<Vec<String>>,
 }
 
 /// The wide window the full-width checks run at: a maximised Settings window on a wide screen.
@@ -310,6 +318,42 @@ pub(super) fn check(
                 "{sel} ends {short} px short of {} ({slack} allowed)",
                 spec.container
             ));
+        }
+    }
+    for (left, right) in &spec.right_of {
+        let lb = bounds(visual, left)?;
+        let rb = bounds(visual, right)?;
+        if rb.origin.x + tol < lb.right() {
+            return Err(format!(
+                "{right} does not start right of {left} ({lb:?} vs {rb:?})"
+            ));
+        }
+    }
+    for (upper, lower) in &spec.under {
+        let ub = bounds(visual, upper)?;
+        let lb = bounds(visual, lower)?;
+        if lb.origin.y + tol < ub.bottom_left().y {
+            return Err(format!("{lower} does not start under {upper}"));
+        }
+    }
+    for (inner, outer) in &spec.within {
+        let ib = bounds(visual, inner)?;
+        let ob = bounds(visual, outer)?;
+        if ib.origin.x + tol < ob.origin.x || ib.right() > ob.right() + tol {
+            return Err(format!("{inner} leaves the column of {outer}"));
+        }
+    }
+    for group in &spec.same_top {
+        let boxes = group
+            .iter()
+            .map(|sel| bounds(visual, sel).map(|b| (sel, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (sel, b) in &boxes {
+            let (first, fb) = &boxes[0];
+            let dy = (f32::from(b.origin.y) - f32::from(fb.origin.y)).abs();
+            if dy > 1.0 {
+                return Err(format!("{sel} is {dy} px off the line of {first}"));
+            }
         }
     }
     if let (Some(last), Some(scroll)) = (&spec.last, scroll) {

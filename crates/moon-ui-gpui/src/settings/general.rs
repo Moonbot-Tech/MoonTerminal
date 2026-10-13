@@ -356,7 +356,8 @@ impl SettingsView {
     ///
     /// Args:
     ///     key: Stable id; also the open-state key.
-    ///     items: `(button caption, what it does)` in the buttons' order.
+    ///     items: `(button caption, what it does)` in the buttons' order; an empty caption
+    ///         gives a paragraph of its own.
     ///     cx: Settings context for the open state.
     pub(super) fn more_note(
         &self,
@@ -367,10 +368,18 @@ impl SettingsView {
         let (open, toggle) = self.more_toggle(key, cx);
         let text = items
             .into_iter()
-            .map(|(caption, what)| format!("{caption} — {what}"))
+            .map(|(caption, what)| {
+                if caption.is_empty() {
+                    what
+                } else {
+                    format!("{caption} — {what}")
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n\n");
-        super::common::hint_row(
+        // The whole row is the label column: no label pushes the help off to the right.
+        super::common::hint_row_in(
+            super::common::LabelCol::Full,
             key,
             String::new(),
             None,

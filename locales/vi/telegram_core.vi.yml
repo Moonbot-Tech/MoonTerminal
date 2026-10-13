@@ -2,14 +2,22 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.section: "Telegram trên core"
-
-
-telegram_core.core_pick: "Core"
-
 telegram_core.core_pick_none: "Chọn core"
-
-telegram_core.details: "Cài đặt core"
+telegram_core.tag.logged_in: "đã đăng nhập"
+telegram_core.tag.not_logged_in: "chưa đăng nhập"
+telegram_core.tag.proxy_error: "lỗi proxy"
+telegram_core.tag.reader_off: "trình đọc tắt"
+telegram_core.tag.no_core: "mất kết nối lõi"
+telegram_core.tag.unsupported: "không đăng nhập từ xa"
+telegram_core.list_core: "Lõi"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "Đăng nhập"
+telegram_core.row_account: "Tài khoản"
+telegram_core.account_phone: "Tài khoản %{phone} · đã đăng nhập"
+telegram_core.account_none: "Chưa kết nối tài khoản"
+telegram_core.account_reader_off: "Trình đọc tắt — tài khoản không bị động đến"
+telegram_core.disconnected_hint: "Trạng thái Telegram do chính lõi gửi. Khi kết nối trở lại, đăng nhập và proxy sẽ hiện ở đây."
+telegram_core.reconnect: "Kết nối lại"
 
 telegram_core.enable: "Bật trình đọc"
 
@@ -37,7 +45,6 @@ telegram_core.disconnected: "Core chưa kết nối."
 
 telegram_core.no_snapshot: "Không có ảnh trạng thái."
 
-
 telegram_core.proxy_kind_none: "Không proxy"
 
 telegram_core.proxy_kind_socks5: "SOCKS5"
@@ -54,7 +61,6 @@ telegram_core.proxy_password: "Mật khẩu"
 
 telegram_core.proxy_secret: "Bí mật"
 
-
 telegram_core.proxy_secret_hint: "Core không trả lại mật khẩu hoặc bí mật đã lưu, nên hãy gõ lại. Để trống sẽ xóa nó, chứ không giữ giá trị cũ."
 
 telegram_core.proxy_actual: "Proxy đang dùng"
@@ -63,13 +69,11 @@ telegram_core.proxy_actual_unknown: "chưa biết"
 
 telegram_core.proxy_error: "Lỗi proxy"
 
-
 telegram_core.phone: "Điện thoại"
 
 telegram_core.phone_hint: "Định dạng quốc tế, ví dụ +15551234567."
 
 telegram_core.phone_send: "Gửi số"
-
 
 telegram_core.login_phone: "Dùng số điện thoại"
 

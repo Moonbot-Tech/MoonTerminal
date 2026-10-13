@@ -136,8 +136,9 @@ pub(super) fn floored_checkbox(
 }
 
 /// Longest line of explanatory prose inside a full-width card, unscaled and font-scaled: about
-/// 90 characters at the body size, so a caption on a wide window still reads as a paragraph.
-pub(super) const PROSE_MAX_W: f32 = 500.0;
+/// 120 characters at the body size. Prose uses a wide window's width up to there; a longer line
+/// is hard to follow back to its start.
+pub(super) const PROSE_MAX_W: f32 = 840.0;
 
 /// Cap `el` at [`PROSE_MAX_W`]: prose keeps its readable line length however wide its card is.
 /// The cap goes on the text element, never on the card around it.
@@ -150,6 +151,76 @@ pub(super) const PROSE_MAX_W: f32 = 500.0;
 ///     The element with its maximum width set.
 pub(super) fn cap_prose<E: Styled>(el: E, cx: &App) -> E {
     el.max_w(design::font_w_px(cx, PROSE_MAX_W))
+}
+
+/// Width the controls of an [`aside_row`] start from, unscaled and font-scaled.
+pub(super) const ASIDE_CONTROLS_W: f32 = 500.0;
+/// The narrowest an [`aside_row`]'s explanation sits beside the controls, unscaled and
+/// font-scaled; on a narrower row it drops under them.
+pub(super) const ASIDE_TEXT_MIN_W: f32 = 340.0;
+
+/// A setting row of controls with its explanation beside them: the controls on the left in a
+/// column [`ASIDE_CONTROLS_W`] wide, or `controls_min` when that is wider (shrinking only on a
+/// body narrower than that), the muted explanation top-aligned on the right up to [`PROSE_MAX_W`]. A row
+/// too narrow for both puts the explanation under the controls. A hairline separates it from
+/// the next row unless it is the last.
+///
+/// Args:
+///     id: Selector stem: the controls are `{id}-controls`, the explanation `{id}-aside`.
+///     controls: The setting's controls, stacked with a gap.
+///     aside: The explanation, or `None` for controls alone.
+///     controls_min: The controls' width in layout pixels when their content must stay on one
+///         line (a row of fields); `0.0` for none.
+///     last: Whether the row is the last of its group (no hairline).
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The row.
+pub(super) fn aside_row(
+    id: &str,
+    controls: Vec<AnyElement>,
+    aside: Option<String>,
+    controls_min: f32,
+    last: bool,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let controls_sel = format!("{id}-controls");
+    let aside_sel = format!("{id}-aside");
+    h_flex()
+        .w_full()
+        .min_w_0()
+        .flex_wrap()
+        .items_start()
+        .gap_x(design::ui_px(cx, 40.0))
+        .gap_y(design::ui_px(cx, 6.0))
+        .py(design::ui_px(cx, 8.0))
+        .when(!last, |row| {
+            row.border_b_1().border_color(rgba_from(p.border, 1.0))
+        })
+        .child(
+            v_flex()
+                .debug_selector(move || controls_sel.clone())
+                .flex_shrink_1()
+                .flex_basis(px(design::font_w(cx, ASIDE_CONTROLS_W).max(controls_min)))
+                .max_w_full()
+                .gap(design::ui_px(cx, 8.0))
+                .children(controls),
+        )
+        .children(aside.map(|text| {
+            cap_prose(
+                div()
+                    .debug_selector(move || aside_sel.clone())
+                    .flex_grow(1.0)
+                    .flex_basis(design::font_w_px(cx, ASIDE_TEXT_MIN_W))
+                    .min_w_0()
+                    .font_family(design::ui_font())
+                    .text_color(rgba_from(p.text_muted, 1.0))
+                    .child(text),
+                cx,
+            )
+        }))
+        .into_any_element()
 }
 
 /// A checkbox with its explanation as a capped muted caption under its label. MoonUI's own
@@ -518,6 +589,8 @@ pub(super) type Action = std::rc::Rc<dyn Fn(&mut Window, &mut App)>;
 ///
 /// The long help is a disclosure rather than a tooltip: a tooltip cannot be read while the
 /// control is being used and is invisible on touch, while this stays open until it is folded.
+/// The toggle sits under the label; the help it opens goes under the control, across the
+/// control column.
 ///
 /// Args:
 ///     id: Stable element id; the disclosure derives its own from it.
@@ -624,6 +697,10 @@ pub(super) fn column_row(
     )
 }
 
+/// Grow factor of a [`row_layout`] label column beside a control column holding unfolded help
+/// (which grows by 1): the label takes the free room up to its cap before the help gets any.
+const LABEL_FIRST: f32 = 1000.0;
+
 /// Shared body of [`hint_row_in`] (`label_w` `Err`: a label column from 150 up to its
 /// [`LabelCol`], the control at its own width right after it) and [`column_row`] (`Ok`: a fixed
 /// label column and the control filling the rest).
@@ -678,6 +755,23 @@ fn row_layout(
             .text_color(muted)
     };
     let field_hint = hint.clone().filter(|_| label_w.is_ok()).map(caption);
+    // The long help opens under the field, across the control column: the label column is too
+    // narrow for a paragraph. A row whose label column is the whole row keeps it there.
+    let help_in_label = label_w == Err(LabelCol::Full);
+    let more_text = more.filter(|_| open).map(|more| {
+        cap_prose(
+            prose(format!("{id}-more-text"), more, true, cx)
+                .text_size(design::t_caption(cx))
+                .text_color(muted),
+            cx,
+        )
+    });
+    let help_in_control = !help_in_label && more_text.is_some();
+    let (label_help, field_help) = if help_in_label {
+        (more_text, None)
+    } else {
+        (None, more_text)
+    };
     let text = v_flex()
         .map(|el| match label_w {
             Ok(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
@@ -687,6 +781,7 @@ fn row_layout(
             // holds: a control that does not fit beside it wraps under the label.
             Err(LabelCol::Fit(cap)) => el
                 .flex_1()
+                .when(help_in_control, |el| el.flex_grow(LABEL_FIRST))
                 .min_w(design::ui_px(cx, HINT_LABEL_MIN_W))
                 .max_w(design::ui_px(cx, cap)),
             Err(LabelCol::Full) => el.flex_1().min_w(design::ui_px(cx, HINT_LABEL_MIN_W)),
@@ -698,11 +793,7 @@ fn row_layout(
         .child(prose(format!("{id}-label"), label, false, cx))
         .children(hint.filter(|_| label_w_fixed.is_none()).map(caption))
         .children(toggle)
-        .children(more.filter(|_| open).map(|more| {
-            prose(format!("{id}-more-text"), more, true, cx)
-                .text_size(design::t_caption(cx))
-                .text_color(muted)
-        }));
+        .children(label_help);
     h_flex()
         .id(SharedString::from(id))
         .w_full()
@@ -720,17 +811,36 @@ fn row_layout(
                         .min_w_0()
                         .gap(design::ui_px(cx, 2.0))
                         .child(control)
-                        .children(field_hint),
+                        .children(field_hint)
+                        .children(field_help),
                 ),
             // Below the label column's floor the control wraps under the label instead of
             // painting past the card.
-            None => el.flex_wrap().gap_y(design::ui_px(cx, 4.0)).child(
-                div()
-                    .debug_selector(move || format!("{id}-control"))
-                    .flex_none()
-                    .max_w_full()
-                    .child(control),
-            ),
+            None => el
+                .flex_wrap()
+                .gap_y(design::ui_px(cx, 4.0))
+                .child(match field_help {
+                    None => div()
+                        .debug_selector(move || format!("{id}-control"))
+                        .flex_none()
+                        .max_w_full()
+                        .child(control),
+                    // The column takes the rest of the row for the help under the control. From
+                    // a zero basis it is held only by its content's narrowest width (the control's
+                    // own), so it still wraps under the label exactly when the control does, and
+                    // the help's length never pushes it there. The label column grows far faster
+                    // (`LABEL_FIRST`): free room goes to the label up to its cap first, so the
+                    // label keeps the width it has with the help shut.
+                    Some(help) => v_flex()
+                        .debug_selector(move || format!("{id}-control"))
+                        .flex_basis(px(0.0))
+                        .flex_grow(1.0)
+                        .max_w_full()
+                        .items_start()
+                        .gap(design::ui_px(cx, 2.0))
+                        .child(control)
+                        .child(help.w_full()),
+                }),
         })
         .into_any_element()
 }

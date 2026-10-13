@@ -284,7 +284,9 @@ pub(super) fn card_prose_el(width: f32, text: String, cx: &App) -> AnyElement {
 }
 
 /// The Station cores page column: the cores card and, under it, the groups line in a card of its
-/// own, both across the whole content width like every other Station page.
+/// own, both across the whole content width like every other Station page. The page body does
+/// not scroll (`render`): the column fills its height, the cores card takes what the groups card
+/// leaves, and the core table inside it is what scrolls.
 ///
 /// Args:
 ///     width: The page body's width.
@@ -300,6 +302,7 @@ fn st_cores_column(
     let groups = groups.map(|row| {
         div()
             .debug_selector(|| "station-groups".into())
+            .flex_none()
             .child(
                 MoonGroupBox::new("station-groups")
                     .padding(14.0)
@@ -308,12 +311,15 @@ fn st_cores_column(
             )
             .into_any_element()
     });
-    SettingsView::column_of(
-        width,
-        None,
-        std::iter::once(cores).chain(groups).collect(),
-        cx,
-    )
+    v_flex()
+        .w(px(page_column_w(width, cx)))
+        .flex_1()
+        .min_h(px(0.0))
+        .gap(design::ui_px(cx, CARD_GAP))
+        .debug_selector(|| "station-cores-column".into())
+        .child(cores)
+        .children(groups)
+        .into_any_element()
 }
 
 impl SettingsView {
@@ -422,7 +428,7 @@ impl SettingsView {
     pub(super) fn tg_core_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let body = self.page_column(
             width,
-            vec![self.core_telegram_section(cx).into_any_element()],
+            vec![self.core_telegram_section(page_column_w(width, cx), cx)],
             cx,
         );
         self.page_parts(Tab::TgCore, body, Vec::new(), cx)

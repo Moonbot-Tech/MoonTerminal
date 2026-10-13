@@ -2,14 +2,22 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.section: "Telegram en el núcleo"
-
-
-telegram_core.core_pick: "Núcleo"
-
 telegram_core.core_pick_none: "Selecciona un núcleo"
-
-telegram_core.details: "Ajustes del núcleo"
+telegram_core.tag.logged_in: "sesión iniciada"
+telegram_core.tag.not_logged_in: "sin sesión"
+telegram_core.tag.proxy_error: "error de proxy"
+telegram_core.tag.reader_off: "lector apagado"
+telegram_core.tag.no_core: "sin conexión con el núcleo"
+telegram_core.tag.unsupported: "sin inicio remoto"
+telegram_core.list_core: "Núcleo"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "Inicio de sesión"
+telegram_core.row_account: "Cuenta"
+telegram_core.account_phone: "Cuenta %{phone} · sesión iniciada"
+telegram_core.account_none: "Ninguna cuenta conectada"
+telegram_core.account_reader_off: "Lector apagado: la cuenta no se toca"
+telegram_core.disconnected_hint: "El estado de Telegram lo envía el propio núcleo. En cuanto vuelva la conexión, aquí aparecerán el inicio de sesión y el proxy."
+telegram_core.reconnect: "Reconectar"
 
 telegram_core.enable: "Activar lector"
 
@@ -37,7 +45,6 @@ telegram_core.disconnected: "El núcleo no está conectado."
 
 telegram_core.no_snapshot: "No hay instantánea de estado."
 
-
 telegram_core.proxy_kind_none: "Sin proxy"
 
 telegram_core.proxy_kind_socks5: "SOCKS5"
@@ -54,7 +61,6 @@ telegram_core.proxy_password: "Contraseña"
 
 telegram_core.proxy_secret: "Secreto"
 
-
 telegram_core.proxy_secret_hint: "El núcleo nunca devuelve la contraseña o el secreto guardados: hay que introducirlos de nuevo. Dejarlo vacío los borra, no conserva el valor anterior."
 
 telegram_core.proxy_actual: "Proxy activo"
@@ -63,13 +69,11 @@ telegram_core.proxy_actual_unknown: "aún desconocido"
 
 telegram_core.proxy_error: "Error de proxy"
 
-
 telegram_core.phone: "Teléfono"
 
 telegram_core.phone_hint: "Formato internacional, por ejemplo +34600111222."
 
 telegram_core.phone_send: "Enviar número"
-
 
 telegram_core.login_phone: "Usar un número de teléfono"
 

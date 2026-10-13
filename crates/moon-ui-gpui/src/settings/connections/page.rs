@@ -464,6 +464,8 @@ impl SettingsView {
                     core_id: s.id,
                     name: s.name.clone(),
                     addr,
+                    group: s.group.clone(),
+                    link: s.chart_bundle.clone(),
                     feeds_on: feed_count(&s.feed),
                     active: s.active,
                     dot: CoreDot::of(s.active, key_readable, status.get(&s.id)),
