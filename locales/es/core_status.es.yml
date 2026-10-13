@@ -78,6 +78,8 @@ core_status.same.cpus: "CPU lógicas"
 core_status.same.api_key: "Clave API"
 core_status.same.api_quota: "Cuota API"
 core_status.same.version: "MoonBot"
+core_status.same.no_expiry: "sin caducidad"
+core_status.same.not_set: "no definida"
 # Warnings-list columns.
 core_status.col.time: "Hora"
 core_status.col.dur: "Duración"

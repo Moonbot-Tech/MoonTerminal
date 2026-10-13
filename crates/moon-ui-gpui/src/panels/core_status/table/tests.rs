@@ -510,6 +510,9 @@ fn flat_columns_and_same_line_stay_inside_every_locale(cx: &mut gpui::TestAppCon
     );
 }
 
+/// Width a vertical scrollbar may take off the right edge of the dock slot.
+const SCROLLBAR_SLACK: f32 = 16.0;
+
 /// Core count of the dock-shaped fixture: enough rows that the list must scroll in a 420 px dock.
 const DOCK_CORES: u64 = 44;
 
@@ -521,6 +524,11 @@ fn dock_fixture() -> (Vec<CoreStatusRow>, Vec<FlatLine>) {
             let mut row = sample_row(ConnStatus::Ready);
             row.id = id;
             row.name = format!("CORE-{id:02}");
+            // The first core of each exchange is dropped, so a red dot and an inline reason are
+            // on screen whichever exchange heads the list.
+            if id <= 2 {
+                row.status = ConnStatus::Disconnected;
+            }
             row
         })
         .collect();
@@ -656,6 +664,60 @@ fn flat_rows_have_height_inside_the_dock_slot(cx: &mut gpui::TestAppContext) {
             assert!(
                 layout_fixture::height_of(banner) > 4.0 && layout_fixture::inside(banner, slot),
                 "heading has no height or left the slot at {at}: {banner:?} / {slot:?}"
+            );
+            // The band is the banner's own fill, so the banner must span the row, not stop
+            // where the columns end. A vertical scrollbar may take the slot's last pixels.
+            assert!(
+                layout_fixture::width_of(banner) + SCROLLBAR_SLACK
+                    >= layout_fixture::width_of(slot),
+                "heading band stops short of the row at {at}: {banner:?} / {slot:?}"
+            );
+            // The status is an 8 px dot, not a filled square, and it stays inside the slot.
+            let dot = visual
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-status-dot-{first_core}"
+                )))
+                .unwrap_or_else(|| panic!("status dot at {at}"));
+            assert!(
+                (layout_fixture::width_of(dot) - 8.0).abs() <= 0.5
+                    && (layout_fixture::height_of(dot) - 8.0).abs() <= 0.5
+                    && layout_fixture::inside(dot, slot),
+                "status dot is not an 8 px disc inside the slot at {at}: {dot:?}"
+            );
+            // The dropped core's reason follows its name, whole.
+            let dropped = rows
+                .iter()
+                .find(|row| row.id == first_core)
+                .expect("dropped core");
+            let reason_text = super::problem_reason(dropped, None)
+                .expect("a dropped core has a reason")
+                .0;
+            let reason = visual
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-core-reason-{first_core}"
+                )))
+                .unwrap_or_else(|| panic!("reason text at {at}"));
+            let reason_w =
+                visual.update(|_, app| design::ui_caption_text_width(app, &reason_text, 400.0));
+            // Whole wherever the dock leaves the name column room; at 720 px it may ellipsize.
+            assert!(
+                (width < 1_000.0 || layout_fixture::width_of(reason) + 0.5 >= reason_w)
+                    && layout_fixture::inside(reason, slot),
+                "reason text clipped at {at}: measured {reason_w}, box {reason:?}"
+            );
+            // The name cell clips its overflow, so the reason must end inside that cell.
+            let name_cell = visual
+                .debug_bounds(layout_fixture::leak_selector(format!(
+                    "cs-core-cell-{first_core}"
+                )))
+                .unwrap_or_else(|| panic!("name cell at {at}"));
+            assert!(
+                layout_fixture::inside(reason, name_cell),
+                "reason text crosses the name cell edge at {at}: {reason:?} / {name_cell:?}"
+            );
+            assert!(
+                f32::from(reason.origin.x) > f32::from(dot.right()),
+                "reason must sit after the dot and the name at {at}: {reason:?} / {dot:?}"
             );
             let summary = ordering::section_aggregate_text(&section.aggregate);
             for (suffix, text, weight) in [

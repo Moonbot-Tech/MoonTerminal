@@ -11,7 +11,7 @@ use moon_core::session::CoreId;
 use moon_core::session::core_order::OrderedCores;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
-    MoonPalette, MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, h_flex,
+    MoonPalette, MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, MoonTone, h_flex,
 };
 use rust_i18n::t;
 
@@ -75,14 +75,7 @@ impl CoreStatusView {
                 crate::controls::CORE_COMBO_TRIGGER_W,
                 crate::controls::PINNED_SCOPE_TRIGGER_MAX_W,
             ));
-            crate::panels::pinned_scope_host(
-                "core-status-core-tip",
-                "core-status-core",
-                label,
-                width,
-                p,
-                cx,
-            )
+            pinned_scope_flat(label, width, p, cx)
         } else {
             let view = cx.entity();
             let exchange_view = view.clone();
@@ -262,6 +255,49 @@ impl CoreStatusView {
             cx,
         )
     }
+}
+
+/// The pinned Auto-mode scope as a flat label: a filled box with no border and no dot glyph,
+/// so it never reads as a member of the view switch beside it.
+///
+/// Core Status only. The other panels keep the shared [`crate::panels::pinned_scope_host`] chip.
+/// It is not clickable, exactly like that chip, and carries the same tooltip.
+///
+/// Args:
+///     label: The pinned scope's name, such as the workspace overview.
+///     width: Rendered width, already scaled by the caller.
+///     p: Active palette.
+///     cx: Application context used for font-scaled geometry.
+///
+/// Returns:
+///     The tooltip-hosting flat label.
+fn pinned_scope_flat(label: String, width: Pixels, p: MoonPalette, cx: &App) -> AnyElement {
+    div()
+        .id("core-status-core-tip")
+        .flex_none()
+        .tooltip(crate::panels::common::text_tooltip(
+            t!("workspace.scope.pinned_hint", scope = label.clone()).to_string(),
+        ))
+        .child(
+            h_flex()
+                .id("core-status-core")
+                .debug_selector(|| "cs-scope-flat".into())
+                .flex_none()
+                .w(width)
+                .h(design::action_control_h_px(cx))
+                .items_center()
+                .px(design::ui_px(cx, design::PINNED_SCOPE_PAD_X))
+                .rounded(design::r_button(cx))
+                .bg(rgb(p.panel_head))
+                .font_family(design::mono())
+                .text_size(design::ui_px(
+                    cx,
+                    design::CONTROL_TIER.control_metrics().font_size,
+                ))
+                .text_color(rgb(design::chrome_label_color(p)))
+                .child(div().min_w_0().truncate().child(label)),
+        )
+        .into_any_element()
 }
 
 /// Space between the scope control and its separating rule, in design pixels.
@@ -479,6 +515,7 @@ fn mode_items(
                 cx,
                 mode_label(item, matches!(label, ModeLabel::Short)),
                 count,
+                mode_count_tone(item),
                 item == mode,
                 min_w,
                 max_w,
@@ -583,34 +620,49 @@ pub(super) fn columns_menu_el<T: Fn(String, &mut App) + Clone + 'static>(
     menu
 }
 
-/// One segment cell. A count is joined into the only string the cell can carry.
+/// One segment cell. A count is drawn as a pill after the name.
 ///
 /// Args:
 ///     cx: View context used to fit the cell.
 ///     label: Translated view name.
 ///     count: Cores or servers to show. `None` draws the name alone, including a zero the
 ///         caller chose to omit.
+///     tone: Pill tone for a non-zero count. A zero count stays neutral.
 ///     selected: Whether this view is the one on screen.
 ///     min_w: Minimum fitted width in design pixels. The control scales it.
 ///     max_w: Maximum fitted width in design pixels.
 ///
 /// Returns:
-///     A fitted segment. The count uses the same face as the name: the cell has one string.
+///     A fitted segment whose width reserves the pill.
 fn counted_segment(
     cx: &App,
     label: String,
     count: Option<usize>,
+    tone: MoonTone,
     selected: bool,
     min_w: f32,
     max_w: f32,
 ) -> MoonSegmentItem {
-    let text = match count {
-        Some(n) => format!("{label} · {n}"),
-        None => label,
-    };
-    MoonSegmentItem::new("", text)
-        .fit_width(cx, min_w, max_w.max(min_w))
+    let mut item = MoonSegmentItem::new("", label);
+    if let Some(n) = count {
+        // `count` goes before `fit_width`, so the fitted width reserves the pill.
+        item = item
+            .count(n.to_string())
+            .count_tone(if n == 0 { MoonTone::Default } else { tone });
+    }
+    item.fit_width(cx, min_w, max_w.max(min_w))
         .selected(selected)
+}
+
+/// Pill tone of a view's count: Problems red, Updates amber, the rest neutral.
+fn mode_count_tone(mode: CoreStatusMode) -> MoonTone {
+    match mode {
+        CoreStatusMode::Problems => MoonTone::Danger,
+        CoreStatusMode::Updates => MoonTone::Warning,
+        CoreStatusMode::Flat | CoreStatusMode::Servers | CoreStatusMode::Warnings => {
+            MoonTone::Default
+        }
+    }
 }
 
 /// Translated Flat column heading for the menu.

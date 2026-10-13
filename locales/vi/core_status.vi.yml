@@ -79,6 +79,8 @@ core_status.same.cpus: "CPU logic"
 core_status.same.api_key: "Khóa API"
 core_status.same.api_quota: "Hạn mức API"
 core_status.same.version: "MoonBot"
+core_status.same.no_expiry: "không thời hạn"
+core_status.same.not_set: "chưa đặt"
 # Warnings-list columns.
 core_status.col.time: "Giờ"
 core_status.col.dur: "Thời lượng"

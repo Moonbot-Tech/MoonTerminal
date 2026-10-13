@@ -30,8 +30,7 @@ use gpui::prelude::FluentBuilder;
 use moon_core::feed::{Diagnosis, FailureClass, diagnose};
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase};
 use moon_ui::{
-    MoonBadge, MoonBadgeVariant, MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn,
-    MoonProgress, MoonTone, v_flex,
+    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonProgress, v_flex,
 };
 
 /// Canonical Flat column order before data-only API columns are filtered.
@@ -341,7 +340,8 @@ pub(super) fn respect_content_floors(
 /// wide enough for a mini bar plus the percent.
 fn default_column_width(key: &str) -> f32 {
     match key {
-        "status" => 36.0,
+        // The 12+8 px cell padding plus the 8 px dot.
+        "status" => 28.0,
         "core" => 180.0,
         "server" => 110.0,
         "version" => 128.0,
@@ -389,17 +389,15 @@ fn columns(keys: &[&str]) -> Vec<MoonDataTableColumn> {
                 default_column_width("core"),
             )
             .sortable(true),
-            // A dot, not a sentence. The full word stays on the header tooltip because 36 px
-            // cannot show it. `no_grow` keeps the extra dock width for the name and the metrics.
-            "status" => MoonDataTableColumn::new(
-                "status",
-                t!("core_status.col.status").to_string(),
-                default_column_width("status"),
-            )
-            .center()
-            .no_grow()
-            .sortable(true)
-            .tooltip(t!("core_status.col.status").to_string()),
+            // A dot right before the name, under an empty heading: the word would set the column
+            // width. It stays on the header tooltip. `no_grow` keeps the extra dock width for the
+            // name and the metrics.
+            "status" => {
+                MoonDataTableColumn::new("status", String::new(), default_column_width("status"))
+                    .no_grow()
+                    .sortable(true)
+                    .tooltip(t!("core_status.col.status").to_string())
+            }
             // Left-aligned. The letter tag keeps a reserved slot, so a named build does not
             // shift the digits. Wide enough for that slot plus the update glyph and the hover
             // button. It follows `status` because it completes the identity block — what this
@@ -843,93 +841,70 @@ fn section_row(
         hover.push_str(&t!("core_status.section_sort_hint"));
     }
 
-    MoonDataRow::new((0..column_count).map(|_index| {
-        // Inset NEGATIVELY by the cell's own padding, which is what makes the band read as one
-        // stripe: a cell pads its content by 12 px left and 8 px right and clips its overflow, so a
-        // band bounded by that content box would leave 20 px unpainted at every column boundary and
-        // the heading would look like separated segments. Pulling the edges back out covers the
-        // padding, and the cell's `overflow_hidden` trims whatever overshoots -- so this lands
-        // correctly whether the absolute box resolves against the content box or the padding box.
-        //
-        // The band stays PER CELL for the SAME reason it always did, and for no reason involving
-        // scroll: a cell clips its own overflow, so painting the stripe inside each one is what
-        // covers the 20 px of padding at every column boundary. (An earlier version of this comment
-        // claimed the band had to stay per cell because a banner-wide stripe would sit still during
-        // horizontal scroll. That was WRONG and three independent reviews said so: the banner and
-        // the cells are children of the same natively-scrolled content subtree in
-        // `MoonDataTable`, so they move together. Collapsing the band into the banner is therefore
-        // an option, not a hazard — it is simply not this change.)
-        MoonDataCell::element(
-            div().relative().size_full().child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(-CELL_PAD_LEFT))
-                    .right(px(-CELL_PAD_RIGHT))
-                    .bg(rgb(p.panel_head))
-                    .border_b_1()
-                    .border_color(rgb(p.border_soft)),
-            ),
-        )
-    }))
-    // The heading's own content spans the WHOLE row instead of living in one cell. It used to sit
-    // in whichever column the user had dragged leftmost, where "BitGet Futures" was cut to
-    // "BitGet Futu..." by a ~110 px column while the rest of the row sat empty -- a caption is the
-    // one thing on this line that has to be readable. `MoonDataRow::banner` is MoonUI's escape from
-    // the per-cell clipping that caused it, so the caption is bounded by the ROW now, and the count
-    // follows the caption on the same flex line rather than needing a cell of its own.
-    .banner(
-        h_flex()
-            .id(SharedString::from(format!("cs-exchange-{key}")))
-            .debug_selector(move || banner_selector)
-            .size_full()
-            .items_center()
-            .pl(px(CELL_PAD_LEFT))
-            .pr(px(CELL_PAD_RIGHT))
-            .gap(design::ui_px(cx, 6.0))
-            .text_size(design::t_caption(cx))
-            .text_color(rgb(p.text_muted))
-            .child(
-                h_flex()
-                    .min_w_0()
-                    .items_center()
-                    .gap(design::ui_px(cx, 6.0))
-                    .when_some(logo, |row, logo| {
-                        row.child(
-                            img(logo)
-                                .flex_none()
-                                .w(design::ui_px(cx, 13.0))
-                                .h(design::ui_px(cx, 13.0))
-                                .rounded(design::ui_px(cx, 2.0)),
-                        )
-                    })
-                    .child(
-                        h_flex()
-                            .min_w_0()
-                            .items_center()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(rgb(p.text))
-                                    .debug_selector(move || label_selector)
-                                    .child(section.label.clone()),
+    // The cells stay empty. The band is the banner's own background: the banner spans the whole
+    // row, while cells end where the last column ends, so a band painted per cell stopped short of
+    // the table's right edge whenever the columns did not fill the dock.
+    MoonDataRow::new((0..column_count).map(|_index| MoonDataCell::text("")))
+        // The heading's own content spans the WHOLE row instead of living in one cell. It used to sit
+        // in whichever column the user had dragged leftmost, where "BitGet Futures" was cut to
+        // "BitGet Futu..." by a ~110 px column while the rest of the row sat empty -- a caption is the
+        // one thing on this line that has to be readable. `MoonDataRow::banner` is MoonUI's escape from
+        // the per-cell clipping that caused it, so the caption is bounded by the ROW now, and the count
+        // follows the caption on the same flex line rather than needing a cell of its own.
+        .banner(
+            h_flex()
+                .id(SharedString::from(format!("cs-exchange-{key}")))
+                .debug_selector(move || banner_selector)
+                .size_full()
+                .bg(rgb(p.panel_head))
+                .border_b_1()
+                .border_color(rgb(p.border_soft))
+                .items_center()
+                .pl(px(CELL_PAD_LEFT))
+                .pr(px(CELL_PAD_RIGHT))
+                .gap(design::ui_px(cx, 6.0))
+                .text_size(design::t_caption(cx))
+                .text_color(rgb(p.text_muted))
+                .child(
+                    h_flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap(design::ui_px(cx, 6.0))
+                        .when_some(logo, |row, logo| {
+                            row.child(
+                                img(logo)
+                                    .flex_none()
+                                    .w(design::ui_px(cx, 13.0))
+                                    .h(design::ui_px(cx, 13.0))
+                                    .rounded(design::ui_px(cx, 2.0)),
                             )
-                            .child(
-                                section_aggregate_line(
-                                    &summary,
-                                    section.aggregate.not_connected,
-                                    p,
-                                    cx,
+                        })
+                        .child(
+                            h_flex()
+                                .min_w_0()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(rgb(p.text))
+                                        .debug_selector(move || label_selector)
+                                        .child(section.label.clone()),
                                 )
-                                .debug_selector(move || aggregate_selector),
-                            ),
-                    ),
-            )
-            .tooltip(crate::panels::common::text_tooltip(hover)),
-    )
+                                .child(
+                                    section_aggregate_line(
+                                        &summary,
+                                        section.aggregate.not_connected,
+                                        p,
+                                        cx,
+                                    )
+                                    .debug_selector(move || aggregate_selector),
+                                ),
+                        ),
+                )
+                .tooltip(crate::panels::common::text_tooltip(hover)),
+        )
 }
 
 /// The section caption beside the exchange name.
@@ -1202,12 +1177,8 @@ fn status_dot_cell(
     } else {
         level_paint
     };
-    let tone = match level {
-        LoadLevel::Normal => MoonTone::Positive,
-        LoadLevel::Notice => MoonTone::Notice,
-        LoadLevel::Warning => MoonTone::Warning,
-        LoadLevel::Critical => MoonTone::Danger,
-    };
+    let selector = format!("cs-status-dot-{}", r.id);
+    // A plain 8 px disc: the badge's dot variant laid out as a ~20 px filled square here.
     MoonDataCell::element(
         div()
             .id(SharedString::from(format!("cs-status-{}", r.id)))
@@ -1215,18 +1186,20 @@ fn status_dot_cell(
             .size_full()
             .flex()
             .items_center()
-            .justify_center()
             .when(offline, |cell| cell.child(offline_band(p)))
             .child(
-                MoonBadge::new("")
-                    .dot()
-                    .variant(MoonBadgeVariant::Solid)
-                    .tone(tone)
-                    .bg_color(color)
-                    .bg_alpha(1.0),
+                div()
+                    .debug_selector(move || selector)
+                    .flex_none()
+                    .size(px(STATUS_DOT))
+                    .rounded_full()
+                    .bg(rgb(color)),
             ),
     )
 }
+
+/// Status dot diameter, in logical pixels.
+const STATUS_DOT: f32 = 8.0;
 
 /// Name cell: the core name, and for a core that is not healthy the short reason beside it.
 ///
@@ -1242,8 +1215,10 @@ fn name_cell(
 ) -> MoonDataCell {
     let reason = problem_reason(r, diag);
     let tip = name_hover(r, diag, column_keys);
+    let cell_selector = format!("cs-core-cell-{}", r.id);
     let mut cell = div()
         .id(SharedString::from(format!("cs-core-{}", r.id)))
+        .debug_selector(move || cell_selector)
         .relative()
         .size_full()
         .min_w_0()
@@ -1254,13 +1229,20 @@ fn name_cell(
         .child(
             div()
                 .min_w_0()
+                // Shrink weight is shrink times width, so a large factor makes the name give way
+                // before the reason starts to ellipsize.
+                .flex_shrink(NAME_SHRINK)
                 .truncate()
                 .font_family(design::mono())
                 .child(r.name.clone()),
         );
     if let Some((text, level)) = reason {
+        let selector = format!("cs-core-reason-{}", r.id);
+        // The name gives way first, since the reason is what the row is tinted for. Only a
+        // cell narrower than the reason itself ellipsizes it; the hover keeps the full fault.
         cell = cell.child(
             div()
+                .debug_selector(move || selector)
                 .min_w_0()
                 .truncate()
                 .font_family(design::ui_font())
@@ -1274,6 +1256,9 @@ fn name_cell(
     }
     MoonDataCell::element(cell)
 }
+
+/// Shrink factor of the core name against its problem reason in the name cell.
+const NAME_SHRINK: f32 = 1000.0;
 
 /// Short reason drawn beside the name, or `None` when the core is healthy.
 ///

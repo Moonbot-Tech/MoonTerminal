@@ -79,6 +79,8 @@ core_status.same.cpus: "Mantıksal CPU"
 core_status.same.api_key: "API anahtarı"
 core_status.same.api_quota: "API kotası"
 core_status.same.version: "MoonBot"
+core_status.same.no_expiry: "süresiz"
+core_status.same.not_set: "ayarlanmamış"
 # Warnings-list columns.
 core_status.col.time: "Saat"
 core_status.col.dur: "Süre"

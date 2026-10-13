@@ -262,7 +262,7 @@ fn command_row(
         .child({
             let button = MoonButton::new("core-status-update-behind")
                 .label(t!("core_status.updates.behind_n", n = behind_n).to_string())
-                .primary()
+                .variant(MoonButtonVariant::Solid)
                 .disabled(behind_empty)
                 .on_click(move |_, window, app| {
                     let Some(view) = behind_view.upgrade() else {

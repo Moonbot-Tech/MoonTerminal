@@ -365,6 +365,8 @@ fn card_filter_matches_name_core_and_unmasked_ip() {
 /// and it cannot be hidden by cores the search excluded.
 #[test]
 fn projection_uniform_follows_the_search() {
+    // Uniform facts translate; the first lookup must not run on the 2 MiB test stack.
+    crate::test_locale::warm();
     let mut alpha_a = sample(1, "alpha-1", ConnStatus::Ready);
     let mut alpha_b = sample(2, "alpha-2", ConnStatus::Ready);
     let mut beta = sample(3, "beta", ConnStatus::Ready);

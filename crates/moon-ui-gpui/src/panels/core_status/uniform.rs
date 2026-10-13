@@ -8,6 +8,8 @@ use super::model::{ApiKeyState, CoreStatusRow};
 use super::presentation::{
     LoadLevel, api_expiry_text, api_quota_text, build_key, status_level, update_badge, version_text,
 };
+use rust_i18n::t;
+
 use super::time_offset::{
     TzOffsetCell, tz_offset_cell, tz_offset_cell_text, tz_offset_facts, tz_offset_tooltip,
 };
@@ -72,8 +74,12 @@ fn uniform_one(key: &'static str, rows: &[CoreStatusRow]) -> Option<UniformFact>
             Some(fact)
         }
         "cpus" => agree(rows, known_cpus, key, |count| count.to_string()),
-        "api_key" => agree(rows, known_api, key, api_expiry_text),
-        "api_quota" => agree(rows, known_quota, key, |quota| api_quota_text(Some(quota))),
+        "api_key" => agree(rows, known_api, key, |state| match state {
+            ApiKeyState::Perpetual => t!("core_status.same.no_expiry").to_string(),
+            state => api_expiry_text(state),
+        }),
+        "api_quota" => agree(rows, known_quota, key, |quota| api_quota_text(Some(quota)))
+            .or_else(|| no_quota(rows, key)),
         "version" => {
             // The badge is the in-flight mark and the failed-attempt retry. Hiding the
             // column removes the only control that can retry that attempt.
@@ -115,6 +121,24 @@ where
     (count >= 2).then(|| UniformFact {
         key,
         text: text(first),
+        tip: None,
+    })
+}
+
+/// "Not set" when at least two cores have answered and none of them publishes a quota.
+///
+/// The quota column already leaves the table while no row has a number. Stating it on the line
+/// says the limit is absent rather than leaving the reader to wonder where the column went. A
+/// core counts as answered once it reported its build: before that a missing quota is only
+/// "not heard yet".
+fn no_quota(rows: &[CoreStatusRow], key: &'static str) -> Option<UniformFact> {
+    let mut reporting = rows
+        .iter()
+        .filter(|row| reports(row) && row.server_version.is_some());
+    let none = reporting.clone().all(|row| row.api_quota.is_none());
+    (none && reporting.nth(1).is_some()).then(|| UniformFact {
+        key,
+        text: t!("core_status.same.not_set").to_string(),
         tip: None,
     })
 }

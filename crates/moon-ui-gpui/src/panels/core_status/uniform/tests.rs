@@ -10,6 +10,9 @@ use crate::backend::core_warn::LatencySeverity;
 use crate::panels::core_status::model::{ApiKeyState, CoreStatusRow};
 
 fn row(name: &str, status: ConnStatus) -> CoreStatusRow {
+    // The facts translate "no expiry" and "not set"; the first lookup must not run on the
+    // 2 MiB test stack.
+    crate::test_locale::warm();
     CoreStatusRow {
         id: 1,
         name: name.to_string(),
@@ -213,10 +216,12 @@ fn a_failed_update_keeps_version_visible() {
     assert_eq!(keys, vec!["tz_off", "cpus", "api_key", "api_quota"]);
 }
 
-/// Unknown is not a third API-key value. Two perpetual keys agree on the infinity glyph; a
-/// dated key beside them brings the column back.
+/// Unknown is not a third API-key value. Two perpetual keys agree, and the line says "no
+/// expiry" rather than the bare infinity glyph; a dated key beside them brings the column back.
 #[test]
 fn api_key_ignores_unknown_and_compares_the_classified_state() {
+    // The expected text is translated; hold one locale for the whole test.
+    let _locale = crate::test_locale::force("en");
     let mut a = row("CORE-A1", ConnStatus::Ready);
     let mut b = row("CORE-A2", ConnStatus::Ready);
     let unknown = row("CORE-A3", ConnStatus::Ready);
@@ -225,9 +230,49 @@ fn api_key_ignores_unknown_and_compares_the_classified_state() {
     let facts = uniform_columns(&[a.clone(), b, unknown]);
     assert_eq!(facts.len(), 1);
     assert_eq!(facts[0].key, "api_key");
-    assert_eq!(facts[0].text, "\u{221e}");
+    assert_eq!(
+        facts[0].text,
+        rust_i18n::t!("core_status.same.no_expiry").to_string()
+    );
 
     let mut dated = row("CORE-A2", ConnStatus::Ready);
     dated.api_key = ApiKeyState::Days(1);
     assert!(uniform_columns(&[a, dated]).is_empty());
+}
+
+/// Answered cores that publish no quota put "not set" on the line, so the vanished quota column
+/// is explained. Cores that have not answered yet say nothing about a quota.
+#[test]
+fn an_absent_quota_on_answered_cores_reads_not_set() {
+    // The expected text is translated; hold one locale for the whole test.
+    let _locale = crate::test_locale::force("en");
+    let mut a = reporting("CORE-A1");
+    let mut b = reporting("CORE-A2");
+    a.api_quota = None;
+    b.api_quota = None;
+    let facts = uniform_columns(&[a.clone(), b.clone()]);
+    let quota = facts
+        .iter()
+        .find(|fact| fact.key == "api_quota")
+        .expect("quota fact");
+    assert_eq!(
+        quota.text,
+        rust_i18n::t!("core_status.same.not_set").to_string()
+    );
+
+    let silent = row("CORE-A2", ConnStatus::Ready);
+    assert!(
+        uniform_columns(&[a.clone(), silent])
+            .iter()
+            .all(|fact| fact.key != "api_quota"),
+        "one answered core is not a consensus"
+    );
+    let mut quoted = reporting("CORE-A3");
+    quoted.api_quota = Some(10);
+    assert!(
+        uniform_columns(&[a, b, quoted])
+            .iter()
+            .all(|fact| fact.key != "api_quota"),
+        "a core with a quota keeps the column"
+    );
 }

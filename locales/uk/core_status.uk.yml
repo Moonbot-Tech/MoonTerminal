@@ -78,6 +78,8 @@ core_status.same.cpus: "Логічних CPU"
 core_status.same.api_key: "Ключ API"
 core_status.same.api_quota: "Квота API"
 core_status.same.version: "MoonBot"
+core_status.same.no_expiry: "без терміну"
+core_status.same.not_set: "не задано"
 # Warnings-list columns.
 core_status.col.time: "Час"
 core_status.col.dur: "Тривалість"

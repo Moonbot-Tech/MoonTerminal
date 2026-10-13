@@ -73,7 +73,7 @@ fn core_status_section_row_derives_its_cell_count_from_declared_columns() {
         "the section-row argument and table descriptors must derive from the shared visible keys"
     );
     assert!(
-        section.contains("MoonDataRow::new((0..column_count).map(|_index| {"),
+        section.contains("MoonDataRow::new((0..column_count).map(|_index|"),
         "the heading row must emit exactly one cell for every declared column"
     );
 }

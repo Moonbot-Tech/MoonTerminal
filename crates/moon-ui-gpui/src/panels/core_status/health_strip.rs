@@ -5,11 +5,8 @@
 
 use std::rc::Rc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::*;
-use moon_ui::{
-    MoonButton, MoonButtonSegment, MoonButtonSize, MoonButtonVariant, MoonPalette, h_flex,
-};
+use moon_ui::{MoonPalette, MoonTag, MoonTagRadius, MoonTagVariant, MoonTone, h_flex};
 use rust_i18n::t;
 
 use super::health::{self, HealthFilter, Tone};
@@ -74,7 +71,6 @@ pub(super) fn health_strip(
         t!(online_key.as_str(), n = verdict.online),
         t!(servers_key.as_str(), n = verdict.servers),
     );
-    let quiet = p.text_soft;
     let offline = on_filter.clone();
     let ping = on_filter.clone();
     let version = on_filter.clone();
@@ -100,9 +96,7 @@ pub(super) fn health_strip(
             "core-status-health-offline",
             f_off.label,
             f_off.count,
-            p.red,
-            MoonButtonVariant::OutlineRed,
-            quiet,
+            MoonTone::Danger,
             active == Some(HealthFilter::Offline),
             move |_, _, app| offline(HealthFilter::Offline, app),
         ))
@@ -111,9 +105,7 @@ pub(super) fn health_strip(
             "core-status-health-ping",
             f_ping.label,
             f_ping.count,
-            p.amber,
-            MoonButtonVariant::OutlineAmber,
-            quiet,
+            MoonTone::Warning,
             active == Some(HealthFilter::Ping),
             move |_, _, app| ping(HealthFilter::Ping, app),
         ))
@@ -122,9 +114,7 @@ pub(super) fn health_strip(
             "core-status-health-version",
             f_ver.label,
             f_ver.count,
-            p.amber,
-            MoonButtonVariant::OutlineAmber,
-            quiet,
+            MoonTone::Warning,
             active == Some(HealthFilter::Version),
             move |_, _, app| version(HealthFilter::Version, app),
         ))
@@ -133,9 +123,7 @@ pub(super) fn health_strip(
             "core-status-health-api",
             f_api.label,
             f_api.count,
-            p.amber,
-            MoonButtonVariant::OutlineAmber,
-            quiet,
+            MoonTone::Warning,
             active == Some(HealthFilter::ApiExpiry),
             move |_, _, app| api(HealthFilter::ApiExpiry, app),
         ))
@@ -144,9 +132,7 @@ pub(super) fn health_strip(
             "core-status-health-alarms",
             f_alarms.label,
             f_alarms.count,
-            p.amber,
-            MoonButtonVariant::OutlineAmber,
-            quiet,
+            MoonTone::Warning,
             false,
             move |_, _, app| on_alarms(app),
         ));
@@ -278,63 +264,43 @@ pub(super) fn chips_tooltip(facts: &[ChipFact]) -> String {
         .join("\n")
 }
 
-/// One chip: a label plus a count that is never the part that gets cut off.
+/// One chip: the tinted severity tag, a label plus a count that is never the part that gets cut.
 ///
 /// Args:
-///     cx: Application context used to size the button.
+///     cx: Application context used for the palette.
 ///     id: Element id, unique in the strip. Also the layout selector.
-///     label: Translated chip name, drawn in the face the chip row sets (the interface font).
-///     count: Members of the chip. Zero selects the muted variant; the count is mono.
-///     hot_color: Count colour when the chip has members.
-///     hot_variant: Severity-tinted outline when the chip has members.
-///     quiet_color: Label colour, and the count colour when the chip is empty.
-///     selected: Whether this chip is the active filter.
+///     label: Translated chip name, drawn in the interface font.
+///     count: Members of the chip. Zero draws a neutral, dimmed chip; the count is mono.
+///     tone: Severity of a non-zero count: wash, border and count colour.
+///     selected: Whether this chip is the active filter. The tag draws the accent ring.
 ///     on_click: Click handler. An empty chip still fires it.
 ///
 /// Returns:
-///     The button, content-sized, so a layout test can see the chip box. The count is its own
-///     segment, so the label ellipsizes before the number.
+///     The tag, content-sized, so a layout test can see the chip box.
 #[allow(clippy::too_many_arguments)]
 fn health_chip(
     cx: &App,
     id: &'static str,
     label: String,
     count: usize,
-    hot_color: u32,
-    hot_variant: MoonButtonVariant,
-    quiet_color: u32,
+    tone: MoonTone,
     selected: bool,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
-    let dim = count == 0;
-    let p = MoonPalette::active(cx);
     let selector = id;
-    let count_text = count.to_string();
     let measure_label = label.clone();
-    let measure_count = count_text.clone();
+    let measure_count = count.to_string();
     let inner_id = format!("{id}-inner");
     let label_id = format!("{id}-label");
     let count_id = format!("{id}-count");
-    // The button cannot carry a debug id on its label and count. A zero-opacity copy behind it
-    // gives the layout test those two boxes without changing the control the user clicks.
+    // The tag's own face: 11 px on a 14 px line, scaled by the theme.
+    let face = moon_ui::MoonTheme::active_tokens(cx).text(11.0, 14.0);
+    // The tag cannot carry a debug id on its count. A zero-opacity copy behind it gives the
+    // layout test the label and count boxes without changing the control the user clicks.
     div()
         .debug_selector(move || selector.into())
         .relative()
         .flex_none()
-        .when(dim, |chip| chip.opacity(0.65))
-        .when(selected, |chip| {
-            chip.child(
-                div()
-                    .absolute()
-                    .top(px(-2.0))
-                    .left(px(-2.0))
-                    .right(px(-2.0))
-                    .bottom(px(-2.0))
-                    .border_2()
-                    .border_color(rgb(p.accent))
-                    .rounded(px(6.0)),
-            )
-        })
         .child(
             h_flex()
                 .absolute()
@@ -342,6 +308,7 @@ fn health_chip(
                 .h_full()
                 .overflow_hidden()
                 .opacity(0.0)
+                .text_size(px(face.font_size))
                 .debug_selector(move || inner_id)
                 .child(
                     div()
@@ -363,23 +330,14 @@ fn health_chip(
                 ),
         )
         .child(
-            MoonButton::new(id)
-                .text_segment(label, quiet_color, 400.0)
-                .segment(
-                    MoonButtonSegment::new(count_text)
-                        .color(if dim { quiet_color } else { hot_color })
-                        .weight(600.0)
-                        .mono(true),
-                )
-                .size(MoonButtonSize::density(cx))
-                .variant(if dim {
-                    MoonButtonVariant::Panel
-                } else {
-                    hot_variant
-                })
+            MoonTag::new()
+                .variant(MoonTagVariant::Tinted)
+                .radius(MoonTagRadius::Small)
+                .mono(false)
+                .severity_count(count, tone)
                 .selected(selected)
-                .on_click(on_click)
-                .render(),
+                .on_click(id, on_click)
+                .child(label),
         )
 }
 
