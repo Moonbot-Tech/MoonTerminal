@@ -367,3 +367,27 @@ fn settings_save_does_not_create_a_backup() {
     }
     assert!(save.contains("candidate.save();"));
 }
+
+/// Calling the station prefetch from a render, a tick or a page brings back per-frame station
+/// polling; the startup read belongs to boot, right after ownership recovery, and nowhere else.
+#[test]
+fn station_prefetch_runs_once_from_boot_only() {
+    let boot = code_only(&read_src("startup/boot.rs"));
+    let recover = boot.find("b.station_recover(cx)").unwrap();
+    let prefetch = boot.find("b.station_prefetch(cx)").unwrap();
+    assert!(recover < prefetch);
+    let mut files = Vec::new();
+    rust_sources(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    let callers: Vec<_> = files
+        .iter()
+        .filter(|f| {
+            fs::read_to_string(f)
+                .unwrap()
+                .contains(".station_prefetch(")
+        })
+        .collect();
+    assert_eq!(callers.len(), 1, "station_prefetch callers: {callers:?}");
+}

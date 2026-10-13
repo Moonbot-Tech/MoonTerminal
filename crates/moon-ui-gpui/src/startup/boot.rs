@@ -385,6 +385,9 @@ pub(super) fn boot(cfg: AppConfig, input: BootInput, cx: &mut App) {
         strategy_edit_note_cursor: HashMap::new(),
     });
     backend.update(cx, |b, cx| b.station_recover(cx));
+    // One off-thread read of the station, so its Settings pages open filled. After recovery: an
+    // outstanding hand-over's read already runs and this one then stands down.
+    backend.update(cx, |b, cx| b.station_prefetch(cx));
     backend.update(cx, |b, _| b.refresh_header_ticker_default(true));
     // The user's sounds folder, read off-thread and swapped in whole; the embedded set answers
     // until it lands. Here rather than earlier because the data-directory override (a fixture

@@ -426,3 +426,112 @@ fn the_zone_is_pushed_to_a_station_that_takes_it() {
     assert!(!super::zone_push_due(Some(&old), "Europe/Moscow"));
     assert!(!super::zone_push_due(None, "Europe/Moscow"));
 }
+
+/// A synthetic station's answer to a bot read: a running bot with two paired chats, their
+/// notification rows, the bot's menu and layout settings, one listed core and a tape window.
+fn synthetic_station_answer() -> job::Done {
+    let access = Access {
+        authorized_chat_ids: vec![42, 73],
+        owner_chat_id: Some(42),
+        bot: Some(Default::default()),
+        notify: Some(
+            [(42, Default::default()), (73, Default::default())]
+                .into_iter()
+                .collect(),
+        ),
+        ..Access::default()
+    };
+    let bot = moon_remote::station::bot::BotState {
+        has_token: true,
+        stopped: false,
+        no_api: false,
+        bot: None,
+        pairing_until: None,
+        access: Some(access),
+        tape: Some(moon_core::station_api::TapeWindow {
+            margin_s: 30,
+            long_position_min: 60,
+        }),
+        station: Some(Box::new(moon_core::station_api::Status {
+            station_version: "synthetic".into(),
+            core_uid_high_water: Some(1),
+            cores_total: 1,
+            cores_ready: 1,
+            cores: Some(vec![moon_core::station_api::ListedCore {
+                uid: 1,
+                name: "Synthetic core".into(),
+                address: None,
+                key_fp: None,
+                endpoint_override: None,
+            }]),
+            bot: None,
+            tape: None,
+            host: None,
+            tape_catchup: None,
+            last_update: None,
+            auto_update: None,
+        })),
+    };
+    job::Done::Ok {
+        transferred: false,
+        bot: Some(bot),
+        bot_off: false,
+    }
+}
+
+/// Dropping the startup read (or gating it on an opened page) brings back Settings opening on
+/// «state not received yet» / «0 chats» / «reading station cores»; repeating it per tick polls
+/// the station; firing it without a station sends SSH work nowhere.
+#[test]
+fn startup_prefetch_fills_station_pages_once_and_never_without_a_station() {
+    let station = Target {
+        host: "synthetic".into(),
+        port: 22,
+    };
+    let mut sent = Vec::new();
+    let mut jobs = StationJobs::default();
+    for _ in 0..3 {
+        if let Some((read, kind)) = jobs.prefetch_read(Some(station.clone())) {
+            sent.push((read, kind));
+        }
+    }
+    assert_eq!(sent.len(), 1, "the startup read is attempted exactly once");
+    let (read, kind) = sent.pop().unwrap();
+    assert!(kind == super::Kind::Quiet);
+    assert!(matches!(read, job::Job::BotState { target } if target.addr() == station.addr()));
+
+    // The fake station answers; nothing in Settings was opened.
+    jobs.apply_quiet(synthetic_station_answer());
+    let bot = jobs.bot.as_ref().expect("bot status populated");
+    assert!(bot.has_token);
+    let access = bot.access.as_ref().expect("chats populated");
+    assert_eq!(access.authorized_chat_ids, vec![42, 73]);
+    assert_eq!(access.notify.as_ref().map(|n| n.len()), Some(2));
+    assert!(access.bot.is_some(), "menu and message layout populated");
+    assert!(bot.tape.is_some(), "tape window populated");
+    assert_eq!(
+        jobs.cores_seen.as_ref().map(|c| c.as_ref().map(Vec::len)),
+        Some(Some(1))
+    );
+    assert!(jobs.bot_error.is_none());
+
+    let mut unconfigured = StationJobs::default();
+    assert!(unconfigured.prefetch_read(None).is_none());
+    assert!(
+        unconfigured.prefetch_read(Some(station)).is_none(),
+        "latched after the first try"
+    );
+}
+
+/// A failed startup read records its reason for the page, and never touches the user's outcome.
+#[test]
+fn a_failed_startup_read_stays_quiet() {
+    let mut jobs = StationJobs::default();
+    jobs.apply_quiet(job::Done::Failed {
+        reason: "synthetic timeout".into(),
+        station_may_poll: false,
+    });
+    assert_eq!(jobs.bot_error.as_deref(), Some("synthetic timeout"));
+    assert!(jobs.outcome.is_none());
+    assert!(jobs.lines.is_empty());
+}
