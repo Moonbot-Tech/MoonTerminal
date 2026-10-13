@@ -909,7 +909,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(SIDE_TRIGGER_W)
-            .menu_width_scaled(120.0)
+            .fit_menu_width(120.0, 560.0)
             .items(items);
         self.summary_chip(dropdown, self.chips_set()[1], SIDE_TRIGGER_W)
     }
@@ -956,7 +956,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(KIND_TRIGGER_W)
-            .menu_width_scaled(138.0)
+            .fit_menu_width(138.0, 560.0)
             .items(items);
         self.summary_chip(dropdown, self.chips_set()[2], KIND_TRIGGER_W)
     }

@@ -337,7 +337,7 @@ pub(super) fn sound_picker_el(
                         .trigger_variant(MoonButtonVariant::Soft)
                         .trigger_size(MoonButtonSize::density(cx))
                         .trigger_width(design::font_w(cx, 150.0))
-                        .menu_width_scaled(170.0)
+                        .fit_menu_width(170.0, 560.0)
                         .items(items),
                 )
                 .child(

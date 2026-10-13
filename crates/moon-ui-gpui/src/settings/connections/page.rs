@@ -212,7 +212,7 @@ impl SettingsView {
             CoreAction::AddCore(name),
         ));
         let at = window.mouse_position();
-        window.open_moon_context_menu(cx, "cores-group-menu", at, items, 220.0);
+        window.open_fitted_moon_context_menu(cx, "cores-group-menu", at, items, 220.0, 560.0);
     }
 
     /// Move the selected core to `name` in the draft and in its group field.

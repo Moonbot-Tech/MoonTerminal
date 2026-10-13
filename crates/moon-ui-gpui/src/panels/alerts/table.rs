@@ -318,7 +318,7 @@ fn strategy_cell(row: &FigRow, ctx: &RowCtx) -> AnyElement {
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonSize::Sm.into())
         .trigger_width_scaled(150.0)
-        .menu_width_scaled(220.0)
+        .fit_menu_width(220.0, 560.0)
         .items(items)
         .into_any_element()
 }

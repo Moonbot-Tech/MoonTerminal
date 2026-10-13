@@ -335,6 +335,8 @@ fn op_dialog_body(
                 );
             }
             let field_w = tree_op_field_width(tree_op_dialog_width(window, cx));
+            // Fitted bounds use design units; preserve the old rendered field width as the floor.
+            let menu_min_w = field_w / design::ui_value(cx, 1.0);
             let mut body = v_flex()
                 .w_full()
                 .min_w_0()
@@ -352,7 +354,7 @@ fn op_dialog_body(
                             .trigger_variant(MoonButtonVariant::Soft)
                             .trigger_size(MoonButtonSize::density(cx))
                             .trigger_width(field_w)
-                            .menu_width(field_w)
+                            .fit_menu_width(menu_min_w, 560.0)
                             .menu_max_height_ui(240.0)
                             .items(kind_items),
                     ),

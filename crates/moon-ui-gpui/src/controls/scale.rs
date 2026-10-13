@@ -128,7 +128,7 @@ fn scale_dropdown(
                 .trigger_width_scaled(58.0)
                 .trigger_variant(MoonButtonVariant::Neutral)
                 .trigger_size(trigger_size)
-                .menu_width_scaled(116.0)
+                .fit_menu_width(116.0, 560.0)
                 .segment(
                     MoonButtonSegment::new("🔍")
                         .color(p.text_muted)

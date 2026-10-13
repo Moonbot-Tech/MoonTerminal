@@ -583,7 +583,7 @@ impl ScreenerView {
             .trigger_icon(design::COLUMN_SELECTOR_ICON)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_width(design::glyph_btn_w(cx))
-            .menu_width_scaled(170.0)
+            .fit_menu_width(170.0, 560.0)
             .close_on_select(false);
         // The All item enables every column or, when already checked, leaves only the first.
         let all_on = COLS.iter().all(|c| self.visible_cols.contains(c.0));

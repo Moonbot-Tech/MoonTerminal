@@ -502,7 +502,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(116.0)
-            .menu_width_scaled(150.0);
+            .fit_menu_width(150.0, 560.0);
         let all_view = view.clone();
         menu = menu.item(
             MoonMenuItem::with_key("type-all", t!("report.filter.all").to_string())
@@ -544,7 +544,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(96.0)
-            .menu_width_scaled(130.0);
+            .fit_menu_width(130.0, 560.0);
         for f in [
             StratListFilter::All,
             StratListFilter::Black,
@@ -587,7 +587,7 @@ impl AnalyticsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(30.0)
-            .menu_width_scaled(160.0)
+            .fit_menu_width(160.0, 560.0)
             .close_on_select(false);
         let all_view = view.clone();
         menu = menu.item(

@@ -113,7 +113,7 @@ pub(super) fn def_alert_strategy_row(
                     // Fits the chosen name between a readable floor and the popup's own
                     // width, so a long strategy name is not clipped to a fixed trigger.
                     .fit_trigger_width(120.0, 240.0)
-                    .menu_width_scaled(240.0)
+                    .fit_menu_width(240.0, 560.0)
                     .menu_max_height_ui(220.0)
                     .items(items),
             )
@@ -306,7 +306,7 @@ pub(super) fn sound_cell(
                 .trigger_variant(MoonButtonVariant::Soft)
                 .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(94.0)
-                .menu_width_scaled(128.0)
+                .fit_menu_width(128.0, 560.0)
                 .items(items),
         )
         .child(sound_preview_button(

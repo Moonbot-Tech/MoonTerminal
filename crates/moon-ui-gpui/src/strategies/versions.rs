@@ -970,12 +970,13 @@ impl StrategiesView {
                                 });
                             });
                             let _ = this;
-                            window.open_moon_context_menu(
+                            window.open_fitted_moon_context_menu(
                                 cx,
                                 "strat-version-menu",
                                 pos,
                                 vec![item],
                                 200.0,
+                                560.0,
                             );
                         }),
                     )

@@ -48,8 +48,8 @@ const HOOK_COL_W: f32 = 130.0;
 /// Wide enough for the longest binding it can print, `CTRL-ALT-1`: a column that truncates the
 /// thing it exists to state is worse than one row narrower elsewhere.
 const HOTKEY_COL_W: f32 = 78.0;
-/// Dropped-down menu width for both pickers, wide enough for a name the trigger truncates.
-const MENU_W: f32 = 260.0;
+/// Minimum width for both pickers; longer names grow the fitted menu above this floor.
+const MENU_MIN_W: f32 = 260.0;
 /// Menu height cap, so ten strategies do not push the popup past the window.
 const MENU_MAX_H: f32 = 220.0;
 
@@ -438,7 +438,7 @@ fn strategy_picker(
         .trigger_caret(true)
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_width_scaled(STRATEGY_COL_W)
-        .menu_width_scaled(MENU_W)
+        .fit_menu_width(MENU_MIN_W, 560.0)
         .menu_max_height_ui(MENU_MAX_H)
         .items(items)
         .into_any_element()
@@ -515,7 +515,7 @@ fn hook_picker(
             MoonButtonVariant::Amber
         })
         .trigger_width_scaled(HOOK_COL_W)
-        .menu_width_scaled(MENU_W)
+        .fit_menu_width(MENU_MIN_W, 560.0)
         .menu_max_height_ui(MENU_MAX_H)
         .disabled(sid.is_none())
         .items(items)

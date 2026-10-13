@@ -686,14 +686,16 @@ fn new_strategy_dialog_controls_stay_inside_the_scaled_card() {
 
     assert!(
         create.contains(".trigger_width(field_w)")
-            && create.contains(".menu_width(field_w)")
+            && create.contains(".fit_menu_width(menu_min_w, 560.0)")
+            && create.contains("field_w / design::ui_value(cx, 1.0)")
             && create.contains("tree_op_field_width("),
-        "kind dropdown must use rendered trigger/menu widths from tree_op_field_width"
+        "kind dropdown must retain the rendered field width as its trigger and fitted menu floor"
     );
     assert!(
         !create.contains("trigger_width_scaled(320.0)")
-            && !create.contains("menu_width_scaled(320.0)"),
-        "kind dropdown must not pin a font-scaled 320 px trigger/menu"
+            && !create.contains("menu_width_scaled(320.0)")
+            && !create.contains(".menu_width(field_w)"),
+        "kind dropdown must not pin a scaled trigger or fixed-width menu"
     );
     assert!(
         !create.contains("overflow_hidden"),

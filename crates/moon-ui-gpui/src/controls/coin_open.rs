@@ -15,9 +15,6 @@ use moon_ui::{MoonContextMenuWindowExt as _, MoonWindowExt as _};
 use crate::Backend;
 use crate::controls::coin_search;
 
-/// How wide the cores picker is, in pixels — the same width the news feed's picker uses.
-const PICKER_WIDTH: f32 = 240.0;
-
 /// One core, its name, and every market its catalog offered for the ticker.
 ///
 /// Gathered before anything is chosen, because the identity rule picks among a core's markets
@@ -210,7 +207,7 @@ pub(crate) fn open(
                         })
                 })
                 .collect();
-            window.open_moon_context_menu(app, "coin-open-cores", pos, items, PICKER_WIDTH);
+            window.open_fitted_moon_context_menu(app, "coin-open-cores", pos, items, 240.0, 560.0);
         }
     }
 }

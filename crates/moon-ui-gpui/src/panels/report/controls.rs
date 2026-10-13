@@ -410,7 +410,7 @@ impl Render for ReportScopeControl {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::density(cx))
                     .fit_trigger_width(SCOPE_TRIGGER_MIN_W, SCOPE_TRIGGER_MAX_W)
-                    .menu_width_scaled(210.0)
+                    .fit_menu_width(210.0, 560.0)
                     .close_on_select(false)
                     .open(self.menu_open)
                     .on_open_change(move |open, _, app| {
@@ -1178,7 +1178,7 @@ impl ReportPanel {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width(design::glyph_btn_w(cx))
-                    .menu_width_scaled(200.0)
+                    .fit_menu_width(200.0, 560.0)
                     .items(items),
             )
     }
@@ -1237,7 +1237,7 @@ impl ReportPanel {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width(design::glyph_btn_w(cx))
-                    .menu_width_scaled(230.0)
+                    .fit_menu_width(230.0, 560.0)
                     .menu_max_height_ui(420.0)
                     .close_on_select(false)
                     .items(items),

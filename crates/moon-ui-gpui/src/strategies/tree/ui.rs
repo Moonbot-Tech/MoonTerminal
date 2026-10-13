@@ -1280,7 +1280,7 @@ impl StrategiesView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(96.0, 110.0)
-            .menu_width_scaled(180.0)
+            .fit_menu_width(180.0, 560.0)
             .items(items)
             .into_any_element()
     }
