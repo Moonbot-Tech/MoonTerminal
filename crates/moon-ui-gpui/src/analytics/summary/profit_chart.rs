@@ -416,8 +416,12 @@ fn header_el(m: &ProfitChartModel, acts: &ChartActs, p: MoonPalette, cx: &App) -
 fn legend_el(m: &ProfitChartModel, p: MoonPalette, cx: &App) -> Div {
     let total = m.cum.last().copied().unwrap_or(0.0);
     // An entry never grows past the card: its name shrinks to an ellipsis with the full name in a
-    // tooltip, while the swatch and the value keep their whole width.
+    // tooltip, while the swatch and the value keep their whole width. The name carries its
+    // measured width as its basis: a truncating text sized by content inside this nested row is
+    // measured at zero and every name collapses to "…", so it only shrinks when the entry alone
+    // is wider than the card.
     let item = |i: usize, swatch: Div, text: String, value: Option<(String, u32)>| {
+        let name_w = design::mono_caption_text_width(cx, &text, 400.0).ceil();
         h_flex()
             .debug_selector(move || format!("sum-chart-legend-{i}"))
             .flex_none()
@@ -430,6 +434,8 @@ fn legend_el(m: &ProfitChartModel, p: MoonPalette, cx: &App) -> Div {
                 div()
                     .id(("an-sum-legend-name", i))
                     .debug_selector(move || format!("sum-chart-legend-name-{i}"))
+                    .w(px(name_w))
+                    .flex_shrink(1.0)
                     .min_w_0()
                     .truncate()
                     .text_color(moon(p.text_soft))

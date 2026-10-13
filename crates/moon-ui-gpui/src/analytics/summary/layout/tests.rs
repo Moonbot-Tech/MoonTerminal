@@ -1317,6 +1317,78 @@ fn risk_keeps_dd_of_profit_without_a_comparison(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// Five long core names at a 1300 px card show whole in the legend, beside the total and the
+/// drawdown labels: no name is shortened, no two entries overlap, and the legend wraps rather
+/// than squeezing, in every language. A truncating name sized by its content collapses to "…".
+#[gpui::test]
+fn profit_legend_keeps_five_long_names_whole(cx: &mut gpui::TestAppContext) {
+    use super::super::profit_chart::{ChartActs, ProfitChartModel, profit_chart_el};
+    use super::super::state::{CoreLines, SummaryUi};
+    let mut d = (*chart_summary()).clone();
+    for (i, c) in d.core_days.iter_mut().enumerate() {
+        c.name = format!("XALPHA$2{i} ~ F-XX / SHOT_FUT LONG VOLUMES (SUB_0{i})");
+    }
+    let data = std::sync::Arc::new(d);
+    let picked: BTreeSet<u64> = data.core_days[..5].iter().map(|c| c.uid).collect();
+    probe_widths(
+        cx,
+        &[1300.0],
+        usdt,
+        |_| {
+            let (data, picked) = (data.clone(), picked.clone());
+            Rc::new(move |p, cx| {
+                let derived = super::super::derived::derive_for_test(data.clone(), p);
+                let ui = SummaryUi {
+                    lines: CoreLines::Selected,
+                    picked: picked.clone(),
+                    ..Default::default()
+                };
+                let m = ProfitChartModel::new(&derived, &ui, chrono_tz::UTC, None, p);
+                let acts = ChartActs {
+                    on_lines: Rc::new(|_, _, _| {}),
+                    on_area: Rc::new(|_, _, _| {}),
+                    on_bucket: Rc::new(|_, _, _| {}),
+                    on_popup: Rc::new(|_, _, _, _| {}),
+                };
+                profit_chart_el(&m, None, &acts, p, cx)
+            })
+        },
+        |visual, at, _| {
+            let card = bounds(visual, "sum-chart-card", at);
+            let total = super::super::fmt_signed(data.days.iter().map(|d| d.profit).sum());
+            let mut texts = vec![t!("analytics.sum.chart.total", v = total).to_string()];
+            texts.extend(data.core_days[..5].iter().map(|c| c.name.clone()));
+            texts.push(t!("analytics.sum.chart.drawdown").to_string());
+            assert!(
+                !texts[0].trim().is_empty() && !texts[6].trim().is_empty(),
+                "{at}"
+            );
+            let items: Vec<_> = (0..texts.len())
+                .map(|i| bounds(visual, &format!("sum-chart-legend-{i}"), at))
+                .collect();
+            for (i, text) in texts.iter().enumerate() {
+                let name = bounds(visual, &format!("sum-chart-legend-name-{i}"), at);
+                let need = visual.update(|_, cx| design::mono_caption_text_width(cx, text, 400.0));
+                assert!(fits(name, need), "legend name {i} shortened ({at})");
+                assert!(inside(items[i], card), "legend entry {i} escaped ({at})");
+                for (j, other) in items.iter().enumerate().skip(i + 1) {
+                    assert!(no_overlap(items[i], *other), "legend {i} over {j} ({at})");
+                }
+            }
+            let rows = items
+                .iter()
+                .map(|b| b.origin.y)
+                .fold(Vec::new(), |mut v, y| {
+                    if !v.iter().any(|r: &Pixels| (*r - y).abs() < px(1.0)) {
+                        v.push(y);
+                    }
+                    v
+                });
+            assert!(rows.len() > 1, "legend did not wrap ({at})");
+        },
+    );
+}
+
 /// A legend entry whose core name is wider than the card stays inside the card: the name
 /// shortens beside its swatch while the value keeps its whole text, at every width. An entry
 /// that cannot shrink pushes the value, or the whole entry, past the card's right edge.

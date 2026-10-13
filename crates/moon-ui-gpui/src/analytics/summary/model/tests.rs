@@ -240,6 +240,19 @@ fn insights_keep_their_order_and_omit_missing_facts() {
     assert!(tags(&Summary::default()).is_empty());
 }
 
+/// The quality line shows the profit factor at the KPI tile's fixed two decimals: "1.30",
+/// never the compact "1.3".
+#[test]
+fn quality_insight_keeps_two_decimals_of_profit_factor() {
+    let _locale = crate::test_locale::force("en");
+    usdt();
+    let mut d = rich();
+    d.cur.pf = 1.3;
+    let all = insights(&d, chrono_tz::UTC);
+    let quality = all.iter().find(|i| i.tag == InsightTag::Quality).unwrap();
+    assert_eq!(quality.what, "Profit factor 1.30");
+}
+
 /// Hourly and weekly grids have no "day" insight and no day counts in the quality line (J8).
 #[test]
 fn hourly_and_weekly_grids_skip_day_facts() {

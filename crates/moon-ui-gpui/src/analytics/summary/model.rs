@@ -532,7 +532,11 @@ pub(in crate::analytics) fn insights(d: &Summary, zone: chrono_tz::Tz) -> Vec<In
         });
         out.push(Insight {
             tag: InsightTag::Quality,
-            what: t!("analytics.sum.ins.what.pf", v = fmt::compact(cur.pf, 2)).to_string(),
+            what: t!(
+                "analytics.sum.ins.what.pf",
+                v = super::kpi::ratio_text(cur.pf)
+            )
+            .to_string(),
             value: verdict.to_string(),
             value_tone: tone,
             why,
