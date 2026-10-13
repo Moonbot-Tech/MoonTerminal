@@ -2,7 +2,8 @@
 //! passes (`ChartRule`, LinKvo 04.10).
 //!
 //! The trade read of [`super::tick`] decides which trades are due ([`super::trades::decide_charts`])
-//! once their dollar value is known, and hands them here in memory. One drawing job at a time then
+//! once their dollar value is known — or at once, in the trade's own currency, when a
+//! per-currency row of the rule judges it — and hands them here in memory. One drawing job at a time then
 //! asks the tape recorder for each trade's prints — at least ten seconds before the entry and
 //! three after the exit ([`window`]) — waits while the recorder has not seen the stream pass that
 //! end (or is busy,
@@ -29,7 +30,7 @@ use moon_core::feed::ArchivedLineKind;
 use moon_core::market::tape_recorder::{self, TapeMiss, TradeId, TradeTape};
 use moon_core::telegram::runtime::{NotifyStore, chart_spool_dir, push_photo};
 
-use crate::deal_chart::{DealChart, render};
+use crate::deal_chart::{DealChart, Money, render};
 use crate::notify::render::trade_card;
 use crate::notify::tick::lock_store;
 use crate::notify::trades::ClosedTrade;
@@ -231,8 +232,11 @@ fn draw_all(
                 trade.coin
             );
         }
-        let day_usd = day.of(core, trade.close_utc);
-        let Some(file) = draw_one(&trade, &tape, &lines, day_usd, zone, spool) else {
+        let Some(figures) = Figures::of(&trade) else {
+            continue;
+        };
+        let day_result = day.of(core, trade.close_utc, figures.money);
+        let Some(file) = draw_one(&trade, &tape, &lines, &figures, day_result, zone, spool) else {
             continue;
         };
         outcome.drawn.push(Drawn {
@@ -313,17 +317,48 @@ impl Lines {
     }
 }
 
+/// The money a picture writes: the trade's dollar value when it has one, else its own amount —
+/// the case of a trade a per-currency threshold row let through without any valuation.
+struct Figures {
+    /// The currency every amount below is in.
+    money: Money,
+    /// The trade's result.
+    profit: f64,
+    /// What the position cost, when the row proves it.
+    spent: Option<f64>,
+}
+
+impl Figures {
+    /// `None` for a trade with neither a dollar value nor its own profit: nothing to caption.
+    fn of(trade: &ClosedTrade) -> Option<Self> {
+        if let Some(profit) = trade.rule_profit_usd() {
+            return Some(Self {
+                money: Money::Usdt,
+                profit,
+                spent: trade.rule_volume_usd(),
+            });
+        }
+        Some(Self {
+            money: Money::Quote(trade.quote?),
+            profit: trade.profit_native?,
+            spent: trade.volume_native,
+        })
+    }
+}
+
 /// Draw one trade and write its PNG; the file's name, or `None` when nothing was drawn or written.
 fn draw_one(
     trade: &ClosedTrade,
     tape: &TradeTape,
     lines: &Lines,
-    day_usd: Option<f64>,
+    figures: &Figures,
+    day_result: Option<f64>,
     zone: Tz,
     spool: &Path,
 ) -> Option<String> {
-    let profit = trade.rule_profit_usd()?;
-    let caption = crate::deal_chart::caption(profit, trade.profit_pct, &trade.strategy);
+    let money = figures.money;
+    let profit = figures.profit;
+    let caption = crate::deal_chart::caption(profit, trade.profit_pct, &trade.strategy, money);
     let chart = DealChart {
         market: &tape.market,
         base: &trade.coin,
@@ -334,9 +369,10 @@ fn draw_one(
         entry_line: &lines.entry,
         exit_line: &lines.exit,
         caption: &caption,
-        won: crate::deal_chart::won(profit),
-        spent_usd: trade.rule_volume_usd(),
-        day_usd,
+        won: crate::deal_chart::won(profit, money),
+        money,
+        spent: figures.spent,
+        day: day_result,
         ticks: &tape.ticks,
         window: window(tape.open_ms, tape.close_ms, run_up_ms()),
         zone,
@@ -391,7 +427,7 @@ fn window(open_ms: i64, close_ms: i64, max_lead_ms: i64) -> (i64, i64) {
     )
 }
 
-/// Each core's dollar result on the day a trade closed, up to that trade: the replica is read
+/// Each core's result on the day a trade closed, up to that trade: the replica is read
 /// once per job, from the earliest midnight a picture asks for, and only when one is drawn. A read
 /// that failed is not tried again in the same job.
 struct DaySums {
@@ -412,11 +448,11 @@ impl DaySums {
         }
     }
 
-    /// `core`'s day as of a trade closed at `close_utc`: the sum of its trades' dollar profit
+    /// `core`'s day as of a trade closed at `close_utc`: the sum of its trades' profit in `money`
     /// closed from that day's midnight in the zone up to `close_utc`. `None` when one of them has
-    /// no dollar value yet or the report cannot be read — a sum missing a trade would be a wrong
-    /// number on the picture.
-    fn of(&mut self, core: u64, close_utc: i64) -> Option<f64> {
+    /// no amount in `money` yet or the report cannot be read — a sum missing a trade would be a
+    /// wrong number on the picture.
+    fn of(&mut self, core: u64, close_utc: i64, money: Money) -> Option<f64> {
         let midnight = midnight_utc(self.zone, close_utc)?;
         if self.failed {
             return None;
@@ -432,7 +468,7 @@ impl DaySums {
             }
         }
         let (_, trades) = self.read.as_ref()?;
-        day_sum(trades, core, midnight, close_utc)
+        day_sum(trades, core, midnight, close_utc, money)
     }
 }
 
@@ -444,13 +480,23 @@ fn midnight_utc(zone: Tz, at_utc: i64) -> Option<i64> {
     moon_core::util::display_time::day_start(day, zone)
 }
 
-/// The dollar profit of `core`'s trades closed in `[from_utc, to_utc]`, or `None` when one of
-/// them is unvalued.
-fn day_sum(trades: &[ClosedTrade], core: u64, from_utc: i64, to_utc: i64) -> Option<f64> {
+/// The profit in `money` of `core`'s trades closed in `[from_utc, to_utc]`, or `None` when one of
+/// them has no amount in it: unvalued for dollars, or in another currency (or none) for a
+/// currency of its own — two currencies do not add up.
+fn day_sum(
+    trades: &[ClosedTrade],
+    core: u64,
+    from_utc: i64,
+    to_utc: i64,
+    money: Money,
+) -> Option<f64> {
     trades
         .iter()
         .filter(|t| t.core == core && (from_utc..=to_utc).contains(&t.close_utc))
-        .map(ClosedTrade::rule_profit_usd)
+        .map(|t| match money {
+            Money::Usdt => t.rule_profit_usd(),
+            Money::Quote(quote) => t.profit_native.filter(|_| t.quote == Some(quote)),
+        })
         .sum()
 }
 

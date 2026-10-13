@@ -69,12 +69,54 @@ const EXIT_SHORT: Rgb = rgb(0xFF_B3_47);
 /// Text on a chip of a light colour.
 const CHIP_INK: Rgb = rgb(0x16_18_1B);
 
-/// The result line above the plot: the dollar result, its percent and the strategy, written as
-/// the rest of the picture writes money (a result that rounds to zero is flat).
-pub(crate) fn caption(profit_usd: f64, pct: Option<f64>, strategy: &str) -> String {
+/// The currency a picture writes its money in: dollars once the trade has a dollar value, else
+/// the trade's own currency (a trade a per-currency threshold row judged, LinKvo 13.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Money {
+    /// The trade's dollar value, written as USDT with the picture's dollar rounding.
+    Usdt,
+    /// The trade's own currency, at that currency's display precision.
+    Quote(moon_core::db::QuoteCurrency),
+}
+
+impl Money {
+    /// An amount with its sign; a value that rounds to zero is written flat, without a sign.
+    pub(crate) fn signed(self, v: f64) -> String {
+        match self {
+            Self::Usdt => format::signed_money(v),
+            Self::Quote(quote) => {
+                let (text, sign) = moon_core::util::fmt::signed_amount(v, quote.display_decimals());
+                match sign {
+                    moon_core::util::fmt::DeltaSign::Zero => text.trim_start_matches('+').into(),
+                    _ => text,
+                }
+            }
+        }
+    }
+
+    /// An amount without a sign, as a position size is.
+    fn plain(self, v: f64) -> String {
+        match self {
+            Self::Usdt => format::money(v),
+            Self::Quote(quote) => moon_core::util::fmt::compact(v, quote.display_decimals()),
+        }
+    }
+
+    /// The ticker written after an amount.
+    fn ticker(self) -> &'static str {
+        match self {
+            Self::Usdt => "USDT",
+            Self::Quote(quote) => quote.ticker(),
+        }
+    }
+}
+
+/// The result line above the plot: the result in `money`, its percent and the strategy, written
+/// as the rest of the picture writes money (a result that rounds to zero is flat).
+pub(crate) fn caption(profit: f64, pct: Option<f64>, strategy: &str, money: Money) -> String {
     // A gain is written bare, as on the reference picture; a loss keeps its minus.
-    let money = format::signed_money(profit_usd);
-    let mut caption = format!("{} USDT", money.trim_start_matches('+'));
+    let amount = money.signed(profit);
+    let mut caption = format!("{} {}", amount.trim_start_matches('+'), money.ticker());
     if let Some(pct) = pct.filter(|p| p.is_finite()) {
         caption.push_str(&format!(" ({}%)", format::signed_percent(pct)));
     }
@@ -86,8 +128,8 @@ pub(crate) fn caption(profit_usd: f64, pct: Option<f64>, strategy: &str) -> Stri
 }
 
 /// Whether a result is drawn in the colour of a gain: it does not print with a minus.
-pub(crate) fn won(profit_usd: f64) -> bool {
-    !format::signed_money(profit_usd).starts_with('-')
+pub(crate) fn won(profit: f64, money: Money) -> bool {
+    !money.signed(profit).starts_with('-')
 }
 
 /// What the picture is about. Prices are the market's own; moments are Unix milliseconds.
@@ -107,8 +149,12 @@ pub(crate) struct DealChart<'a> {
     /// The result line: profit, percent, strategy.
     pub caption: &'a str,
     pub won: bool,
-    pub spent_usd: Option<f64>,
-    pub day_usd: Option<f64>,
+    /// The currency [`Self::spent`] and [`Self::day`] are in, as the caption is.
+    pub money: Money,
+    /// What the position cost.
+    pub spent: Option<f64>,
+    /// The core's result on the trade's day, up to this trade.
+    pub day: Option<f64>,
     /// The prints, ascending; the ones outside [`Self::window`] are left out.
     pub ticks: &'a [Tick],
     /// The stretch of time the picture shows.
@@ -589,11 +635,19 @@ fn summary(
         let change = (f64::from(b.price) / f64::from(a.price) - 1.0) * 100.0;
         parts.push(format!("WINDOW {}%", format::signed_percent(change)));
     }
-    if let Some(spent) = chart.spent_usd.filter(|v| *v > 0.0) {
-        parts.push(format!("POS {} USDT", format::money(spent)));
+    if let Some(spent) = chart.spent.filter(|v| *v > 0.0) {
+        parts.push(format!(
+            "POS {} {}",
+            chart.money.plain(spent),
+            chart.money.ticker()
+        ));
     }
-    if let Some(day) = chart.day_usd {
-        parts.push(format!("DAY {} USDT", format::signed_money(day)));
+    if let Some(day) = chart.day {
+        parts.push(format!(
+            "DAY {} {}",
+            chart.money.signed(day),
+            chart.money.ticker()
+        ));
     }
     if peak > 0.0 {
         parts.push(format!("VOL max {} {}", format::volume(peak), chart.base));

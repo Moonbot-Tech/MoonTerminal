@@ -1,7 +1,8 @@
 //! The notifications of one chat, picked in the Notifications column of the bot box beside the
 //! menu tree — what the Mini App's Settings tab edits: closed-trade cards (cores, volume and result
 //! thresholds) and core down/back notices — and what only the bot's chat and this column edit:
-//! the cards' dollar follow-up, the automatic reports and the cores' own events.
+//! the cards' dollar follow-up, their per-currency thresholds (`chat_notify_quotes`), the
+//! automatic reports and the cores' own events.
 //!
 //! The terminal's bot saves them at once into its notifications file; the station's sends them in
 //! a change of their own, carrying only this chat's row — not the zone, not a draft of the chats.
@@ -31,6 +32,9 @@ use crate::settings::common::cap_prose;
 
 use super::SettingsView;
 use super::access::ChatsOf;
+use super::chat_notify_quotes::{
+    QuoteList, QuoteRowEd, QuoteTexts, quote_texts, refill_rows, rows_from, stored_texts,
+};
 use super::server_bot::known_server;
 use crate::backend::station::job::Job;
 use crate::design;
@@ -67,6 +71,13 @@ pub(in crate::settings) struct NotifyEd {
     /// The deal chart rule's thresholds (`chat_notify_charts`).
     pub(super) chart_profit: Entity<MoonInputState>,
     pub(super) chart_loss: Entity<MoonInputState>,
+    /// The trade rule's per-currency rows (`chat_notify_quotes`).
+    pub(super) trade_quotes: Vec<QuoteRowEd>,
+    /// The deal chart rule's per-currency rows.
+    pub(super) chart_quotes: Vec<QuoteRowEd>,
+    /// What the per-currency rows were filled with — trades, then charts — to tell the user's
+    /// edits from the stored row.
+    loaded_quotes: (QuoteTexts, QuoteTexts),
     /// A save sent to the station for this chat at this revision, awaiting its answer.
     sending: Option<(i64, u64)>,
     /// How the last save of this chat came out.
@@ -90,6 +101,9 @@ impl NotifyEd {
             after_minutes: input(),
             chart_profit: input(),
             chart_loss: input(),
+            trade_quotes: Vec::new(),
+            chart_quotes: Vec::new(),
+            loaded_quotes: Default::default(),
             sending: None,
             status: None,
         }
@@ -113,12 +127,26 @@ impl NotifyEd {
             .map(|field| field.read(cx).value().to_string())
     }
 
+    /// The per-currency rows as typed now: trades, then charts.
+    fn quotes(&self, cx: &App) -> (QuoteTexts, QuoteTexts) {
+        (
+            quote_texts(&self.trade_quotes, cx),
+            quote_texts(&self.chart_quotes, cx),
+        )
+    }
+
     /// Whether the editor holds edits the stored row does not.
     fn edited(&self, cx: &App) -> bool {
         self.loaded
             .as_ref()
             .is_some_and(|(_, row)| row.settings != self.draft)
             || self.fields(cx) != self.loaded_fields
+            || self.quotes(cx) != self.loaded_quotes
+    }
+
+    /// Forget how the last save came out: the editor holds a new edit.
+    pub(super) fn clear_status(&mut self) {
+        self.status = None;
     }
 }
 
@@ -141,7 +169,7 @@ fn auto_label(kind: AutoReport) -> String {
 }
 
 /// A threshold typed into a field: empty is none; a comma reads as the decimal point.
-fn parse_amount(text: &str) -> Result<Option<f64>, ()> {
+pub(super) fn parse_amount(text: &str) -> Result<Option<f64>, ()> {
     let text = text.trim().replace(',', ".");
     if text.is_empty() {
         return Ok(None);
@@ -213,28 +241,44 @@ enum Commit {
 ///     chat: The chat being committed.
 ///     draft: Switches and cores as edited.
 ///     fields: The number fields as typed.
+///     quotes: The per-currency rows as typed, trades then charts.
 ///     station_busy: A station job runs and would drop this one.
 fn commit_plan(
     loaded: Option<&(i64, ChatNotifyRow)>,
     chat: i64,
     draft: &NotifySettings,
     fields: [&str; FIELDS],
+    quotes: &(QuoteTexts, QuoteTexts),
     station_busy: bool,
 ) -> Commit {
     let Some((_, row)) = loaded.filter(|(c, _)| *c == chat) else {
         return Commit::Nothing;
     };
-    let settings = match settings_from(draft, fields) {
+    let settings = match settings_with_quotes(draft, fields, quotes) {
         Ok(settings) => settings,
         Err(key) => return Commit::Refuse(key),
     };
-    if settings == row.settings {
+    if settings == row.settings || settings == as_edited(&row.settings) {
         return Commit::Nothing;
     }
     if station_busy {
         return Commit::Refuse("telegram.mini_error_busy_station");
     }
     Commit::Save(settings, row.revision)
+}
+
+/// `stored` as an untouched editor would write it back: the per-currency rows rebuilt from their
+/// fields put a stored lowercase ticker in canonical case and a row of unknown currency last. An
+/// editor holding exactly that has nothing to save — without this, a stored list in another shape
+/// would be written again, and its revision bumped, on every Blur.
+fn as_edited(stored: &NotifySettings) -> NotifySettings {
+    let fields = fields_of(stored);
+    let quotes = (
+        stored_texts(QuoteList::Trades, stored),
+        stored_texts(QuoteList::Charts, stored),
+    );
+    settings_with_quotes(stored, fields.each_ref().map(String::as_str), &quotes)
+        .unwrap_or_else(|_| stored.clone())
 }
 
 /// Whether the chat picker may leave the chat after its edits were committed: not while they
@@ -244,12 +288,40 @@ fn may_switch(refused: bool, sending: bool) -> bool {
     !refused && !sending
 }
 
+/// [`settings_from`] with the per-currency rows as typed (trades, then charts) in place of the
+/// stored lists. A stored row naming a currency this build does not know has no row in the editor
+/// and is kept as stored, after the typed ones: the editor cannot show it, so it must not delete it.
+fn settings_with_quotes(
+    draft: &NotifySettings,
+    fields: [&str; FIELDS],
+    (trades, charts): &(QuoteTexts, QuoteTexts),
+) -> Result<NotifySettings, &'static str> {
+    let mut settings = settings_from(draft, fields)?;
+    let unknown = |rows: &[moon_core::telegram::notify::QuoteThresholds]| {
+        rows.iter()
+            .filter(|row| row.currency().is_none())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    settings.trades.by_quote = rows_from(QuoteList::Trades, trades)?;
+    settings
+        .trades
+        .by_quote
+        .extend(unknown(&draft.trades.by_quote));
+    settings.charts.by_quote = rows_from(QuoteList::Charts, charts)?;
+    settings
+        .charts
+        .by_quote
+        .extend(unknown(&draft.charts.by_quote));
+    Ok(settings)
+}
+
 impl SettingsView {
     pub(super) fn notify_ed(&self, side: ChatsOf) -> &NotifyEd {
         &self.chat_ed(side).notify
     }
 
-    fn notify_ed_mut(&mut self, side: ChatsOf) -> &mut NotifyEd {
+    pub(super) fn notify_ed_mut(&mut self, side: ChatsOf) -> &mut NotifyEd {
         &mut self.chat_ed_mut(side).notify
     }
 
@@ -365,7 +437,21 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         let values = fields_of(&row.settings);
+        let quotes = (
+            stored_texts(QuoteList::Trades, &row.settings),
+            stored_texts(QuoteList::Charts, &row.settings),
+        );
         let ed = self.notify_ed_mut(side);
+        let old = (
+            std::mem::take(&mut ed.trade_quotes),
+            std::mem::take(&mut ed.chart_quotes),
+        );
+        let trade_quotes = refill_rows(side, old.0, &quotes.0, window, cx);
+        let chart_quotes = refill_rows(side, old.1, &quotes.1, window, cx);
+        let ed = self.notify_ed_mut(side);
+        ed.trade_quotes = trade_quotes;
+        ed.chart_quotes = chart_quotes;
+        ed.loaded_quotes = quotes;
         ed.unavailable = None;
         ed.stale = false;
         ed.draft = row.settings.clone();
@@ -439,6 +525,14 @@ impl SettingsView {
         }
     }
 
+    /// Apply the edits of the chat `side`'s editor was filled for, if any: what a per-currency row
+    /// does on add, remove, leave or Enter (`chat_notify_quotes`).
+    pub(super) fn notify_commit_open(&mut self, side: ChatsOf, cx: &mut Context<Self>) {
+        if let Some(chat) = self.notify_ed(side).loaded.as_ref().map(|(chat, _)| *chat) {
+            self.notify_save(side, chat, cx);
+        }
+    }
+
     /// Commit the open chat's edits before the picker shows `picked`; stay on the open chat when
     /// they were refused or are still being sent.
     fn notify_pick(&mut self, side: ChatsOf, picked: i64, cx: &mut Context<Self>) {
@@ -471,12 +565,14 @@ impl SettingsView {
             return;
         }
         let fields = ed.fields(cx);
+        let quotes = ed.quotes(cx);
         let busy = side == ChatsOf::Station && self.backend.read(cx).station.busy();
         let plan = commit_plan(
             ed.loaded.as_ref(),
             chat,
             &ed.draft,
             fields.each_ref().map(String::as_str),
+            &quotes,
             busy,
         );
         let (settings, revision) = match plan {
@@ -814,6 +910,7 @@ impl SettingsView {
                         t!("telegram.mini_settings_loss_at_least").to_string(),
                     )),
             )
+            .child(self.quote_block(side, chat, QuoteList::Trades, cx))
             .child(switch(
                 "usd-followup",
                 t!("telegram.notify_editor.usd_followup").to_string(),

@@ -1602,3 +1602,24 @@ fn a_mini_app_save_keeps_the_stored_auto_reports() {
     keep_stored_bot_fields(&file, 6, &mut fresh);
     assert!(!fresh.reports.any(), "a chat with no row has none");
 }
+
+/// The page sends the dollar thresholds only: its save must not wipe the chat's per-currency
+/// rows, which only the terminal edits.
+#[test]
+fn a_mini_app_save_keeps_the_per_currency_thresholds() {
+    use moon_core::telegram::notify::{ChatNotify, QuoteThresholds};
+    let row = QuoteThresholds {
+        quote: "RUB".to_string(),
+        profit_at_least: Some(100.0),
+        ..QuoteThresholds::default()
+    };
+    let mut file = NotifyFile::default();
+    let mut stored = ChatNotify::default();
+    stored.settings.trades.by_quote = vec![row.clone()];
+    file.chats.insert(5, stored);
+    let mut from_page = NotifySettings::default();
+    from_page.trades.profit_at_least_usd = Some(3.0);
+    keep_stored_bot_fields(&file, 5, &mut from_page);
+    assert_eq!(from_page.trades.by_quote, vec![row]);
+    assert_eq!(from_page.trades.profit_at_least_usd, Some(3.0));
+}

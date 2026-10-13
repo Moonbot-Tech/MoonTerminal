@@ -10,6 +10,8 @@ use std::path::Path;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
+use crate::db::QuoteCurrency;
+
 /// Which cores a trade notification applies to.
 ///
 /// `All` is every core the chat is allowed to see. Decisions use that grant,
@@ -45,12 +47,26 @@ pub struct TradeRule {
     /// save keeps the stored value.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub usd_followup: bool,
+    /// Thresholds in a trade's own currency, at most one row per currency. A trade in a listed
+    /// currency is judged by its row in its own money instead of by the dollar fields above, and
+    /// does not wait for a dollar valuation. Not written while empty, so a document from before
+    /// the list stays as it was; the Mini App does not know it, and its save keeps the stored one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub by_quote: Vec<QuoteThresholds>,
+}
+
+impl TradeRule {
+    /// The row that judges a trade in `quote`, if the rule lists that currency.
+    pub fn thresholds_for(&self, quote: Option<QuoteCurrency>) -> Option<&QuoteThresholds> {
+        find_quote(&self.by_quote, quote)
+    }
 }
 
 /// Deal chart rule: a picture of a closed trade's tape, sent on its own, whatever the card rule
 /// says (LinKvo 04.10: cards may be off while pictures are on). Off by default. The thresholds are
 /// the card's, in dollars, and the picture waits for the trade's dollar value before it is
-/// judged: a trade whose value never comes gets no picture.
+/// judged: a trade whose value never comes gets no picture — unless its currency has a row of its
+/// own in [`Self::by_quote`], which judges it in that currency at once.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct ChartRule {
@@ -61,6 +77,11 @@ pub struct ChartRule {
     /// Send when the loss is at least this many USD (a positive magnitude). `None` applies no loss
     /// floor.
     pub loss_at_least_usd: Option<f64>,
+    /// Profit and loss thresholds in a trade's own currency, as [`TradeRule::by_quote`]; a chart
+    /// row carries no volume floor ([`NotifySettings::validate`] refuses one). Not written while
+    /// empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub by_quote: Vec<QuoteThresholds>,
 }
 
 impl ChartRule {
@@ -68,6 +89,49 @@ impl ChartRule {
     pub fn is_off(&self) -> bool {
         *self == Self::default()
     }
+
+    /// The row that judges a trade in `quote`, if the rule lists that currency.
+    pub fn thresholds_for(&self, quote: Option<QuoteCurrency>) -> Option<&QuoteThresholds> {
+        find_quote(&self.by_quote, quote)
+    }
+}
+
+/// One currency's thresholds, in that currency's own money (LinKvo 13.10: a core trading in RUB
+/// has no dollar valuation anywhere, so dollar thresholds could never judge its trades).
+///
+/// A row with no threshold set is a valid row: every trade in that currency passes, at once.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[serde(default)]
+pub struct QuoteThresholds {
+    /// The currency's ticker as [`QuoteCurrency::ticker`] spells it. Text rather than the typed
+    /// currency so a document naming a currency this build does not know still loads — one
+    /// unparsable row must not cost the chat every other setting. Such a row matches no trade,
+    /// and every save keeps it as stored: a newer build that wrote it still finds it, and a save
+    /// from a surface that cannot show it (the Mini App, this build's editor) is not refused.
+    pub quote: String,
+    /// Minimum entry volume in this currency. `None` applies no volume floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_volume: Option<f64>,
+    /// Send when profit is at least this much of this currency. `None` applies no profit floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profit_at_least: Option<f64>,
+    /// Send when the loss is at least this much of this currency (a positive magnitude). `None`
+    /// applies no loss floor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loss_at_least: Option<f64>,
+}
+
+impl QuoteThresholds {
+    /// The currency this row names, or `None` for a ticker this build does not know.
+    pub fn currency(&self) -> Option<QuoteCurrency> {
+        QuoteCurrency::from_ticker(&self.quote)
+    }
+}
+
+/// The row of `rows` naming `quote`. A trade of unknown currency has no row.
+fn find_quote(rows: &[QuoteThresholds], quote: Option<QuoteCurrency>) -> Option<&QuoteThresholds> {
+    let quote = quote?;
+    rows.iter().find(|row| row.currency() == Some(quote))
 }
 
 /// Minutes the core must stay disconnected before a down notice. Default delay is 5.
@@ -249,6 +313,14 @@ impl NotifySettings {
             self.charts.profit_at_least_usd,
         )?;
         reject_threshold("charts.loss_at_least_usd", self.charts.loss_at_least_usd)?;
+        reject_quote_rows("by_quote", &self.trades.by_quote)?;
+        reject_quote_rows("charts.by_quote", &self.charts.by_quote)?;
+        if let Some(row) = self.charts.by_quote.iter().find(|r| r.min_volume.is_some()) {
+            return Err(NotifyError::Threshold {
+                field: "charts.by_quote.min_volume",
+                value: row.min_volume.unwrap_or(f64::NAN),
+            });
+        }
         if !(1..=1440).contains(&self.down.after_minutes) {
             return Err(NotifyError::AfterMinutes {
                 value: self.down.after_minutes,
@@ -263,8 +335,9 @@ impl NotifySettings {
 pub enum NotifyError {
     /// A volume, profit, or loss threshold is NaN, infinite, or negative.
     Threshold {
-        /// `min_volume_usd`, `profit_at_least_usd`, `loss_at_least_usd`, or one of the chart
-        /// rule's two, prefixed `charts.`.
+        /// `min_volume_usd`, `profit_at_least_usd`, `loss_at_least_usd`, one of the chart
+        /// rule's two, prefixed `charts.`, or a `by_quote` row's (`by_quote.profit_at_least`,
+        /// and `charts.by_quote.min_volume` for a volume floor a chart row may not carry).
         field: &'static str,
         /// The rejected number, which may be NaN.
         value: f64,
@@ -276,6 +349,13 @@ pub enum NotifyError {
     },
     /// [`CoreScope::Only`] listed no cores.
     EmptyCores,
+    /// Two rows of a `by_quote` list name the same currency: which one judges would be a guess.
+    DuplicateQuote {
+        /// `by_quote` or `charts.by_quote`.
+        list: &'static str,
+        /// The later of the two rows.
+        index: usize,
+    },
 }
 
 impl std::fmt::Display for NotifyError {
@@ -293,6 +373,10 @@ impl std::fmt::Display for NotifyError {
             NotifyError::EmptyCores => formatter.write_str(
                 "trade notifications need at least one core when the scope is an explicit list",
             ),
+            NotifyError::DuplicateQuote { list, index } => write!(
+                formatter,
+                "{list}[{index}] names a currency an earlier row already has"
+            ),
         }
     }
 }
@@ -309,6 +393,22 @@ fn reject_threshold(field: &'static str, value: Option<f64>) -> Result<(), Notif
     } else {
         Err(NotifyError::Threshold { field, value })
     }
+}
+
+/// Reject a `by_quote` list with a currency listed twice — compared by its ticker, ignoring case,
+/// so two rows of a currency this build does not know collide too — or a threshold
+/// [`reject_threshold`] refuses. A row of unknown currency is valid ([`QuoteThresholds::quote`]).
+fn reject_quote_rows(list: &'static str, rows: &[QuoteThresholds]) -> Result<(), NotifyError> {
+    let mut seen = BTreeSet::new();
+    for (index, row) in rows.iter().enumerate() {
+        if !seen.insert(row.quote.trim().to_ascii_uppercase()) {
+            return Err(NotifyError::DuplicateQuote { list, index });
+        }
+        reject_threshold("by_quote.min_volume", row.min_volume)?;
+        reject_threshold("by_quote.profit_at_least", row.profit_at_least)?;
+        reject_threshold("by_quote.loss_at_least", row.loss_at_least)?;
+    }
+    Ok(())
 }
 
 /// What a queued automatic report needs beyond its HTML: it goes as a rich message with the

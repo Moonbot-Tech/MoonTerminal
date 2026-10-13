@@ -397,3 +397,99 @@ fn judged(rule: &TradeRule, row: &ClosedTrade, now: i64) -> (bool, bool) {
         .is_some_and(|rows| rows.contains_key(&row.rec_id));
     (got.len() == 1, marked)
 }
+
+/// A RUB close with its own amounts and no valuation — none exists for RUB.
+fn rub_trade(rec_id: i64, close_utc: i64, profit: f64, volume: f64) -> ClosedTrade {
+    let mut row = trade(1, rec_id, close_utc);
+    row.quote = moon_core::db::QuoteCurrency::from_ticker("RUB");
+    row.profit_usd = None;
+    row.volume_usd = None;
+    row.profit_native = Some(profit);
+    row.volume_native = Some(volume);
+    row
+}
+
+/// A rule with a RUB row: the dollar thresholds stay set and must not touch a RUB trade.
+fn rub_rule(row: moon_core::telegram::notify::QuoteThresholds) -> TradeRule {
+    let mut rule = on_rule();
+    rule.min_volume_usd = Some(1_000_000.0);
+    rule.profit_at_least_usd = Some(1_000_000.0);
+    rule.by_quote = vec![moon_core::telegram::notify::QuoteThresholds {
+        quote: "RUB".to_string(),
+        ..row
+    }];
+    rule
+}
+
+/// LinKvo 13.10: a RUB trade has no dollar value anywhere, so a dollar threshold held it five
+/// minutes and sent it "unchecked". With a RUB row it is judged in rubles at once — its own
+/// profit, its own volume, the row's floors — and never marked unchecked.
+#[test]
+fn a_currency_row_judges_the_trade_in_its_own_money_at_once() {
+    use moon_core::telegram::notify::QuoteThresholds;
+    let now = 1_700_000_000;
+    let rule = rub_rule(QuoteThresholds {
+        min_volume: Some(1_000.0),
+        profit_at_least: Some(100.0),
+        loss_at_least: Some(50.0),
+        ..QuoteThresholds::default()
+    });
+    let rows = [
+        rub_trade(1, now - 10, 150.0, 5_000.0),
+        rub_trade(2, now - 9, 27.45, 5_000.0),
+        rub_trade(3, now - 8, -60.0, 5_000.0),
+        rub_trade(4, now - 7, 150.0, 500.0),
+    ];
+    let mut ledger = enabled(now - 1_000);
+    let got = decide(&rule, &mut ledger, &[1], &rows, now);
+    assert_eq!(ids(&got), vec![1, 3]);
+    assert!(got.iter().all(|card| !card.unchecked));
+    assert!(ledger.held.is_empty(), "nothing waits for a valuation");
+    assert_eq!(ledger.seen[&1].len(), 4, "every judged trade is marked");
+}
+
+/// A row with no threshold lets every trade in its currency through at once — the way to hear
+/// about a currency nothing values without filtering it.
+#[test]
+fn an_empty_currency_row_sends_every_trade_in_it() {
+    let now = 1_700_000_000;
+    let rule = rub_rule(moon_core::telegram::notify::QuoteThresholds::default());
+    assert_eq!(
+        judged(&rule, &rub_trade(1, now - 10, -0.5, 10.0), now),
+        (true, true)
+    );
+}
+
+/// A row's threshold on an amount the trade does not carry fails it at once: no valuation can
+/// bring a ruble amount later, so holding it would only send it unchecked five minutes on.
+#[test]
+fn a_currency_row_fails_a_missing_amount_at_once() {
+    use moon_core::telegram::notify::QuoteThresholds;
+    let now = 1_700_000_000;
+    let rule = rub_rule(QuoteThresholds {
+        min_volume: Some(1_000.0),
+        ..QuoteThresholds::default()
+    });
+    let mut row = rub_trade(1, now - 10, 150.0, 5_000.0);
+    row.volume_native = None;
+    assert_eq!(judged(&rule, &row, now), (false, true));
+}
+
+/// A row for one currency leaves a trade in another to the dollar thresholds, waiting included.
+#[test]
+fn a_currency_row_leaves_other_currencies_to_the_dollars() {
+    let now = 1_700_000_000;
+    let rule = rub_rule(moon_core::telegram::notify::QuoteThresholds::default());
+    // Unvalued in both figures: a known dollar volume would fail the rule's floor at once.
+    let mut row = btc_trade(1, now - 10);
+    row.profit_usd = None;
+    row.volume_usd = None;
+    let mut ledger = enabled(now - 1_000);
+    assert!(decide(&rule, &mut ledger, &[1], std::slice::from_ref(&row), now).is_empty());
+    assert!(
+        ledger
+            .held
+            .get(&1)
+            .is_some_and(|rows| rows.contains_key(&1))
+    );
+}

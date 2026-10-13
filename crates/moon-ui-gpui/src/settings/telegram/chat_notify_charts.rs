@@ -11,6 +11,7 @@ use rust_i18n::t;
 
 use super::SettingsView;
 use super::access::ChatsOf;
+use super::chat_notify_quotes::QuoteList;
 use crate::design;
 
 impl SettingsView {
@@ -69,6 +70,7 @@ impl SettingsView {
                         t!("telegram.mini_settings_loss_at_least").to_string(),
                     )),
             )
+            .child(self.quote_block(side, chat, QuoteList::Charts, cx))
             .child(crate::settings::common::cap_prose(
                 div().text_color(muted).child(
                     t!(

@@ -42,8 +42,9 @@ fn chart<'a>(market: &'a str, ticks: &'a [Tick], lines: &'a [(i64, f64)]) -> Dea
         exit_line: &[],
         caption: "+2.17 USDT (+1.08%)  Auto Price Down",
         won: true,
-        spent_usd: Some(200.0),
-        day_usd: Some(15.39),
+        money: Money::Usdt,
+        spent: Some(200.0),
+        day: Some(15.39),
         ticks,
         window: (ENTRY_MS - 11_667, ENTRY_MS + 38_000),
         zone: chrono_tz::Europe::Moscow,
@@ -158,14 +159,36 @@ fn numbers_read_as_written() {
 
 #[test]
 fn the_caption_and_its_colour_follow_one_rounding() {
+    let usdt = Money::Usdt;
     assert_eq!(
-        caption(2.17, Some(1.08), "Auto Price Down"),
+        caption(2.17, Some(1.08), "Auto Price Down", usdt),
         "2.17 USDT (+1.08%)  Auto Price Down"
     );
-    assert_eq!(caption(-0.004, Some(-0.001), ""), "0.00 USDT (0.00%)");
-    assert_eq!(caption(-150.4, None, "Manual"), "-150 USDT  Manual");
-    assert!(won(-0.004));
-    assert!(!won(-0.006));
+    assert_eq!(caption(-0.004, Some(-0.001), "", usdt), "0.00 USDT (0.00%)");
+    assert_eq!(caption(-150.4, None, "Manual", usdt), "-150 USDT  Manual");
+    assert!(won(-0.004, usdt));
+    assert!(!won(-0.006, usdt));
+}
+
+/// A picture of a trade nothing values is captioned in the trade's own currency, at that
+/// currency's precision: writing its rubles as USDT, or a BTC result at the dollar's two places,
+/// would print a wrong number.
+#[test]
+fn an_unvalued_trade_is_captioned_in_its_own_currency() {
+    use moon_core::db::QuoteCurrency;
+    let rub = Money::Quote(QuoteCurrency::from_ticker("RUB").unwrap());
+    assert_eq!(
+        caption(27.45, Some(0.55), "strike", rub),
+        "27.45 RUB (+0.55%)  strike"
+    );
+    assert_eq!(caption(-1200.0, None, "", rub), "-1200 RUB");
+    assert!(!won(-0.006, rub));
+    let btc = Money::Quote(QuoteCurrency::btc());
+    assert_eq!(caption(0.00012, None, "", btc), "0.00012 BTC");
+    assert!(
+        won(-0.000_000_001, btc),
+        "a result that rounds to zero is not a loss"
+    );
 }
 
 /// A pump of many times its low keeps the axis above zero, and the range names what was drawn.

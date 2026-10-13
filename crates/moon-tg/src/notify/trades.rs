@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use moon_core::db::QuoteCurrency;
 use moon_core::telegram::notify::{
-    ChartLedger, ChartRule, CoreScope, NotifyLedger, TradeRule, prune_closes,
+    ChartLedger, ChartRule, CoreScope, NotifyLedger, QuoteThresholds, TradeRule, prune_closes,
 };
 
 /// How long an announced close stays in the ledger, in seconds.
@@ -173,6 +173,7 @@ pub(crate) fn decide(
         min_volume_usd: rule.min_volume_usd,
         profit_at_least_usd: rule.profit_at_least_usd,
         loss_at_least_usd: rule.loss_at_least_usd,
+        by_quote: &rule.by_quote,
         needs_usd: false,
     };
     let book = Book {
@@ -186,7 +187,9 @@ pub(crate) fn decide(
 /// The deal chart rule's [`decide`]: the trades whose picture is due, with their dollar value.
 ///
 /// The picture waits for the dollar value whatever the thresholds are — its caption is in dollars
-/// (LinKvo 04.10) — and a trade still unvalued after [`HOLD_SECS`] gets none.
+/// (LinKvo 04.10) — and a trade still unvalued after [`HOLD_SECS`] gets none. A trade whose
+/// currency has a row in [`ChartRule::by_quote`] waits for nothing: it is judged in its own money,
+/// and its picture is captioned in it while no dollar value exists.
 pub(crate) fn decide_charts(
     rule: &ChartRule,
     ledger: &mut ChartLedger,
@@ -200,6 +203,7 @@ pub(crate) fn decide_charts(
         min_volume_usd: None,
         profit_at_least_usd: rule.profit_at_least_usd,
         loss_at_least_usd: rule.loss_at_least_usd,
+        by_quote: &rule.by_quote,
         needs_usd: true,
     };
     let book = Book {
@@ -221,7 +225,10 @@ struct Gate<'a> {
     min_volume_usd: Option<f64>,
     profit_at_least_usd: Option<f64>,
     loss_at_least_usd: Option<f64>,
-    /// The trade's dollar profit is needed even with no profit threshold set.
+    /// Per-currency rows that judge a trade in its own money instead of the dollar fields.
+    by_quote: &'a [QuoteThresholds],
+    /// The trade's dollar profit is needed even with no profit threshold set — or, for a trade a
+    /// [`Self::by_quote`] row judges, its own profit.
     needs_usd: bool,
 }
 
@@ -336,7 +343,16 @@ fn core_selected(rule: &Gate<'_>, visible: &[u64], core: u64) -> bool {
 ///
 /// A rule that needs the dollar profit itself waits for it like for a threshold, and fails a row
 /// that carries no profit at all.
+///
+/// A trade whose currency has a row in `rule.by_quote` goes to [`quote_verdict`] instead.
 fn verdict(rule: &Gate<'_>, trade: &ClosedTrade) -> Verdict {
+    if let Some(row) = rule
+        .by_quote
+        .iter()
+        .find(|row| trade.quote.is_some() && row.currency() == trade.quote)
+    {
+        return quote_verdict(rule, row, trade);
+    }
     let volume = volume_passes(
         rule.min_volume_usd,
         trade.rule_volume_usd(),
@@ -357,6 +373,25 @@ fn verdict(rule: &Gate<'_>, trade: &ClosedTrade) -> Verdict {
         (Some(false), _, _) | (_, Some(false), _) | (_, _, Some(false)) => Verdict::Fail,
         (Some(true), Some(true), Some(true)) => Verdict::Pass,
         _ => Verdict::Unknown,
+    }
+}
+
+/// A trade judged by its currency's row: its own volume and profit against the row's thresholds.
+/// Nothing is waited for — the amounts are the row's own, no valuation can bring them later — so a
+/// threshold the row sets on an amount the trade does not carry fails it, and a rule that needs
+/// the result fails a trade without its own profit.
+fn quote_verdict(rule: &Gate<'_>, row: &QuoteThresholds, trade: &ClosedTrade) -> Verdict {
+    let volume = volume_passes(row.min_volume, trade.volume_native, false);
+    let profit = profit_passes(
+        row.profit_at_least,
+        row.loss_at_least,
+        trade.profit_native,
+        false,
+    );
+    let result = !rule.needs_usd || trade.profit_native.is_some();
+    match (volume, profit) {
+        (Some(true), Some(true)) if result => Verdict::Pass,
+        _ => Verdict::Fail,
     }
 }
 
