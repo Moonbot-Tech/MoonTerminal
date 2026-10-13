@@ -17,6 +17,7 @@ fn telegram_sources() -> Vec<(&'static str, String)> {
     for rel in [
         "settings/telegram/core_section.rs",
         "settings/telegram/core_section/login_steps.rs",
+        "settings/telegram/core_section/master.rs",
         "settings/telegram/qr.rs",
     ] {
         assert!(

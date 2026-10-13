@@ -6,24 +6,24 @@
 //! notifications.
 
 use gpui::*;
-use moon_ui::{MoonCheckbox, MoonInput, MoonInputState, MoonPalette, h_flex, rgba_from, v_flex};
+use moon_ui::MoonCheckbox;
 use rust_i18n::t;
 
 use super::SettingsView;
 use super::access::ChatsOf;
-use super::chat_notify_quotes::QuoteList;
-use crate::design;
+use super::chat_notify::amounts_line;
+use super::chat_notify_quotes::{QuoteList, quote_hint, quote_row_w};
 
 impl SettingsView {
-    /// `chat`'s deal chart rule on `side`, as the editor holds it.
-    pub(super) fn chart_notify_block(
+    /// `chat`'s deal chart rule on `side`, as the editor holds it: the controls, their
+    /// explanation (the per-currency hint appended) and the controls' one-line width — the
+    /// thresholds line or a currency's line, whichever is wider — for the rule's `aside_row`.
+    pub(super) fn chart_notify_parts(
         &self,
         side: ChatsOf,
         chat: i64,
         cx: &Context<Self>,
-    ) -> AnyElement {
-        let p = MoonPalette::active(cx);
-        let muted = rgba_from(p.text_muted, 1.0);
+    ) -> (Vec<AnyElement>, String, f32) {
         let id = |what: &str| -> SharedString {
             match side {
                 ChatsOf::Terminal => format!("tgn-chart-{what}-{chat}").into(),
@@ -31,56 +31,42 @@ impl SettingsView {
             }
         };
         let ed = self.notify_ed(side);
-        let field = |state: &Entity<MoonInputState>, what: &str, label: String| {
-            h_flex()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
-                .child(div().text_color(muted).child(label))
-                .child(
-                    div().w(design::ui_px(cx, 90.0)).child(
-                        MoonInput::new(id(what))
-                            .state(state)
-                            .size(design::INPUT_SIZE),
-                    ),
-                )
-        };
-        v_flex()
-            .gap(design::ui_px(cx, 8.0))
-            .child(
-                MoonCheckbox::new(id("on"))
-                    .checked(ed.draft.charts.on)
-                    .label(t!("telegram.notify_editor.charts").to_string())
-                    .on_change(cx.listener(move |this, v: &bool, _, cx| {
-                        let v = *v;
-                        this.notify_edit(side, cx, |s| s.charts.on = v);
-                    })),
-            )
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(field(
-                        &ed.chart_profit,
-                        "profit",
-                        t!("telegram.mini_settings_profit_at_least").to_string(),
-                    ))
-                    .child(field(
-                        &ed.chart_loss,
-                        "loss",
-                        t!("telegram.mini_settings_loss_at_least").to_string(),
-                    )),
-            )
-            .child(self.quote_block(side, chat, QuoteList::Charts, cx))
-            .child(crate::settings::common::cap_prose(
-                div().text_color(muted).child(
-                    t!(
-                        "telegram.notify_editor.charts_hint",
-                        minutes = moon_tg::TRADE_HOLD_MINUTES
-                    )
-                    .to_string(),
+        let (amounts, amounts_w) = amounts_line(
+            vec![
+                (
+                    &ed.chart_profit,
+                    "profit",
+                    t!("telegram.mini_settings_profit_at_least").to_string(),
                 ),
-                cx,
-            ))
-            .into_any_element()
+                (
+                    &ed.chart_loss,
+                    "loss",
+                    t!("telegram.mini_settings_loss_at_least").to_string(),
+                ),
+            ],
+            id,
+            cx,
+        );
+        let switch = MoonCheckbox::new(id("on"))
+            .checked(ed.draft.charts.on)
+            .label(t!("telegram.notify_editor.charts").to_string())
+            .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                let v = *v;
+                this.notify_edit(side, cx, |s| s.charts.on = v);
+            }))
+            .into_any_element();
+        let hint = format!(
+            "{}
+
+{}",
+            t!(
+                "telegram.notify_editor.charts_hint",
+                minutes = moon_tg::TRADE_HOLD_MINUTES
+            ),
+            quote_hint()
+        );
+        let quotes = self.quote_block(side, chat, QuoteList::Charts, cx);
+        let min_w = amounts_w.max(quote_row_w(QuoteList::Charts, cx));
+        (vec![switch, amounts, quotes], hint, min_w)
     }
 }

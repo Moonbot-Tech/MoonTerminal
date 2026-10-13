@@ -1,40 +1,51 @@
 //! Confirmation and layout invariants from the approved station cores mockup.
 use super::{
-    ActionSurface, CoreCache, CoresFilter, CoresSummary, TABLE_MAX_H, action_id, compact_name_cell,
-    compact_row, core_address_cell, core_name_cell, cores_summary, differ_card, diverging,
-    filter_rows, list_controls_el, removable, removal_check, result_els, retained_arm, show_all_el,
-    state_label, summary_el, table_el, table_fits, table_layout,
+    CoreCache, CoresFilter, CoresSummary, TABLE_MIN_H, action_id, card, compact_name_cell,
+    compact_row, core_address_cell, cores_summary, diverging, filter_rows, group_label,
+    list_controls_el, removable, removal_check, result_els, retained_arm, state_label, summary_el,
+    table_el, table_fits, table_layout,
 };
-use crate::backend::station::cores_sync::{self, LocalCore, Row, RowState};
+use crate::backend::station::cores_sync::{self, Counts, LocalCore, Row, RowState};
 use crate::design;
 use gpui::{
     AnyElement, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, ScrollHandle, Styled, TextOverflow, WhiteSpace, Window, div, px,
 };
-use moon_core::config::Language;
+use moon_core::config::{CoreGroup, Language};
 use moon_core::station_api::ListedCore;
-use moon_ui::{MoonButton, MoonGroupBox, MoonInputState, MoonTone, h_flex};
+use moon_ui::{MoonButton, MoonInputState, MoonTone, h_flex};
 use rust_i18n::t;
 use std::rc::Rc;
 
-/// A differing card keeps the whole name wrapped; the full list truncates it with a tooltip.
+/// The table truncates a long name to its column and keeps the whole name on hover.
 #[test]
-fn core_names_wrap_with_unlimited_height() {
-    let mut cell = core_name_cell(0, "Demo Fund ~ F-BN / SUBACCOUNT (SUB 7)".into());
-    let style = cell.style();
-    assert_eq!(style.text.white_space, Some(WhiteSpace::Normal));
-    assert_eq!(style.text.text_overflow, None);
-    assert_eq!(style.text.line_clamp, None);
-    assert_eq!(style.size.height, None);
-    assert_eq!(style.max_size.height, None);
-    let mut compact = compact_name_cell(0, "Demo Fund ~ F-BN / SUBACCOUNT (SUB 7)");
+fn core_names_truncate_in_their_column() {
+    let mut compact = compact_name_cell(0, &row(RowState::Same, 0));
     let style = compact.style();
     assert_eq!(style.text.white_space, Some(WhiteSpace::Nowrap));
     assert!(matches!(
         style.text.text_overflow,
         Some(TextOverflow::Truncate(_))
     ));
-    assert_eq!(style.flex_shrink, Some(1.0));
+}
+
+/// A core in two saved groups lists both; a station-only core or one in no group shows a dash.
+#[test]
+fn group_label_names_every_group_holding_the_core() {
+    let groups = vec![
+        CoreGroup {
+            name: "main".into(),
+            cores: vec![1, 2],
+        },
+        CoreGroup {
+            name: "scalp".into(),
+            cores: vec![2],
+        },
+    ];
+    assert_eq!(group_label(&groups, Some(1)), "main");
+    assert_eq!(group_label(&groups, Some(2)), "main, scalp");
+    assert_eq!(group_label(&groups, Some(3)), "\u{2014}");
+    assert_eq!(group_label(&groups, None), "\u{2014}");
 }
 
 /// A synthetic comparison row.
@@ -218,10 +229,10 @@ fn actionable_states_follow_mockup_invariants() {
 /// A longer translated action must raise the table breakpoint instead of overflowing.
 #[test]
 fn layout_switches_at_the_measured_content_boundary() {
-    assert!(table_fits(600.0, 200.0, 100.0, 100.0, 150.0, 50.0));
-    assert!(!table_fits(599.0, 200.0, 100.0, 100.0, 150.0, 50.0));
-    assert!(!table_fits(600.0, 300.0, 100.0, 100.0, 150.0, 50.0));
-    assert!(table_fits(700.0, 300.0, 100.0, 100.0, 150.0, 50.0));
+    assert!(table_fits(600.0, &[200.0, 100.0, 100.0, 150.0], 50.0));
+    assert!(!table_fits(599.0, &[200.0, 100.0, 100.0, 150.0], 50.0));
+    assert!(!table_fits(600.0, &[300.0, 100.0, 100.0, 150.0], 50.0));
+    assert!(table_fits(700.0, &[300.0, 100.0, 100.0, 150.0], 50.0));
 }
 
 /// Stale cached rows would keep a removed core actionable or hide a saved local rename.
@@ -273,7 +284,7 @@ fn cache_invalidates_when_only_retirement_floor_changes() {
     assert_eq!(cache.rows[0].station_uid, Some(13));
 }
 
-/// The production row actions' visual shape, with the station-only core's removal armed.
+/// The production row actions' visual shape: the widest button each differing state draws.
 fn probe_actions(row: &Row, index: usize) -> AnyElement {
     let button = |id: String, key: &str| {
         MoonButton::new(gpui::SharedString::from(id))
@@ -291,65 +302,111 @@ fn probe_actions(row: &Row, index: usize) -> AnyElement {
         RowState::KeyDiffers => {
             actions.child(button(format!("key-{index}"), "telegram.server.cores_key").render())
         }
-        RowState::OnlyOnStation => actions
-            .child(
-                button(
-                    format!("rm-{index}"),
-                    "telegram.server.cores_remove_confirm",
-                )
+        RowState::OnlyOnStation => actions.child(
+            button(format!("rm-{index}"), "telegram.server.cores_remove")
                 .danger()
                 .render(),
-            )
-            .child(button(format!("cancel-{index}"), "dialogs.cancel").render()),
+        ),
         RowState::Same => actions,
     };
     actions.into_any_element()
 }
 
-/// The cores block's production pieces, backend-free, with the full list open.
-struct CoresProbe {
+/// Synthetic group labels: every third core in a group, the rest in none.
+fn groups_of(rows: &[Row]) -> Vec<String> {
+    let groups = vec![CoreGroup {
+        name: "group-a".into(),
+        cores: (1..=60).filter(|uid| uid % 3 == 0).collect(),
+    }];
+    rows.iter()
+        .map(|row| group_label(&groups, row.terminal_uid))
+        .collect()
+}
+
+/// The Station cores page, backend-free: a bounded body as `render` gives the page, the page
+/// column, the cores card with its verdict, controls and table, and the groups card under it.
+struct PageProbe {
     rows: Vec<Row>,
+    filter: CoresFilter,
     width: f32,
     query: Entity<MoonInputState>,
     scroll: ScrollHandle,
 }
 
-impl Render for CoresProbe {
-    /// Stack the summary, differing cards, caret, list controls and full list as the block does.
+impl Render for PageProbe {
+    /// Lay the page out as `station_cores_block` and `st_cores_column` do.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let summary = cores_summary(&self.rows);
-        let layout = table_layout(&self.rows, self.width - design::ui_value(cx, 24.0), cx);
-        let mut section = MoonGroupBox::new("probe-cores")
-            .padding(12.0)
-            .gap(10.0)
-            .child(summary_el(summary, cx));
-        for (index, row) in self.rows.iter().enumerate() {
-            if row.state != RowState::Same {
-                section = section.child(differ_card(index, row, probe_actions(row, index), cx));
-            }
-        }
-        let shown = filter_rows(&self.rows, "", CoresFilter::All)
+        let counts = Counts::from_rows(&self.rows);
+        let groups = groups_of(&self.rows);
+        let layout = table_layout(
+            &self.rows,
+            &groups,
+            self.width - design::ui_value(cx, 26.0),
+            cx,
+        );
+        let shown = filter_rows(&self.rows, "", self.filter)
             .into_iter()
-            .map(|(index, row)| compact_row(index, row, probe_actions(row, index), layout, cx))
+            .map(|(index, row)| {
+                compact_row(
+                    index,
+                    row,
+                    &groups[index],
+                    probe_actions(row, index),
+                    layout,
+                    cx,
+                )
+            })
             .collect();
-        section = section
-            .child(show_all_el(true, summary.total, Rc::new(|_, _| {}), cx))
+        let cores = card("probe-cores", cx)
+            .flex_1()
+            .min_h(px(0.0))
+            .child(summary_el(summary, &counts, cx))
             .child(list_controls_el(
                 &self.query,
-                CoresFilter::All,
+                self.filter,
                 summary,
                 Rc::new(|_, _, _| {}),
                 cx,
             ))
-            .child(table_el(layout, shown, &self.scroll, cx));
-        for el in result_els(None, cx) {
-            section = section.child(el);
-        }
-        div()
-            .w(px(self.width))
-            .debug_selector(|| "probe-col".into())
-            .child(section)
+            .child(table_el(
+                layout,
+                shown,
+                "telegram.server.cores_no_differ",
+                &self.scroll,
+                cx,
+            ))
+            .children(result_els(None, cx));
+        let column = super::super::st_cores_column(
+            self.width + design::ui_value(cx, 2.0 * crate::settings::render::BODY_PAD),
+            cores.into_any_element(),
+            Some(
+                div()
+                    .debug_selector(|| "probe-groups".into())
+                    .child(t!("telegram.server.groups_same", names = "group-a").to_string())
+                    .into_any_element(),
+            ),
+            cx,
+        );
+        div().size_full().flex().flex_col().child(
+            div()
+                .debug_selector(|| "probe-col".into())
+                .flex_1()
+                .min_h(px(0.0))
+                .flex()
+                .flex_col()
+                .child(column),
+        )
     }
+}
+
+/// Catches Station cores falling back to the scrolling page body, where the table could never
+/// take the remaining height.
+#[test]
+fn station_cores_gets_a_bounded_body() {
+    use crate::settings::Tab;
+    assert!(crate::settings::render::bounded_body(Tab::StCores));
+    assert!(!crate::settings::render::bounded_body(Tab::StTape));
 }
 
 /// `debug_bounds` takes a `'static` selector; the probe's selectors are built per run.
@@ -357,110 +414,183 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Every action stays inside the panel, no address is clipped and the full list is capped, in
-/// every language, at a wide and a narrow column and both zooms, the removal armed.
+/// Lay out the page probe at `width` x `height` and zoom, drawn until the scroll settles.
+fn open_page(
+    cx: &mut gpui::TestAppContext,
+    rows: Vec<Row>,
+    filter: CoresFilter,
+    (width, height, zoom): (f32, f32, f32),
+) -> (gpui::VisualTestContext, ScrollHandle) {
+    let scroll = ScrollHandle::new();
+    let handle = scroll.clone();
+    let window = cx.open_window(gpui::size(px(width), px(height)), |window, cx| PageProbe {
+        rows,
+        filter,
+        width,
+        query: cx.new(|cx| MoonInputState::new(window, cx)),
+        scroll: handle,
+    });
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| window.set_content_zoom(zoom, cx));
+    for _ in 0..3 {
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+    }
+    (visual, scroll)
+}
+
+/// The table takes the page's remaining height and grows with the window, its sixty rows
+/// scroll inside it, the footnote and the groups card stay on screen under it, and at a wide
+/// column the cells of a row sit side by side without overlapping or clipping an address — in
+/// every language, at both zooms, and at a narrow column where a row folds onto two lines.
 #[gpui::test]
-fn the_cores_block_fits_every_language_width_and_zoom(cx: &mut gpui::TestAppContext) {
+fn the_table_fills_the_page_and_scrolls_in_every_language(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
     for language in Language::ALL {
         let _locale = crate::test_locale::force(language.code());
         for zoom in [1.0, 1.25] {
-            for column in [860.0, 420.0] {
+            for column in [1100.0, 420.0] {
                 let width = column * zoom;
-                let window =
-                    cx.open_window(gpui::size(px(width), px(4000.0)), |window, cx| CoresProbe {
-                        rows: rows(),
-                        width,
-                        query: cx.new(|cx| MoonInputState::new(window, cx)),
-                        scroll: ScrollHandle::new(),
-                    });
-                let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
-                visual.update(|window, cx| window.set_content_zoom(zoom, cx));
-                for _ in 0..3 {
-                    visual.update(|window, cx| {
-                        let _ = window.draw(cx);
-                    });
-                }
                 let at = format!("{} zoom {zoom} column {column}", language.code());
-                let col = visual.debug_bounds("probe-col").expect("column laid out");
-                let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
-                    assert!(
-                        b.origin.x + px(0.5) >= col.origin.x && b.right() <= col.right() + px(0.5),
-                        "{what} escaped the panel ({at})"
-                    );
-                };
-                for sel in [
-                    "station-cores-summary",
-                    "station-cores-show-all",
-                    "station-cores-chips",
-                    "station-cores-table",
-                ] {
-                    inside(visual.debug_bounds(sel).expect(sel), sel);
-                }
-                for (index, row) in rows().iter().enumerate().take(8) {
-                    let address = row.address.clone().unwrap_or_default();
-                    let need =
-                        visual.update(|_, cx| design::mono_body_text_width(cx, &address, 400.0));
-                    let mut sels = vec![
-                        format!("station-core-addr-{index}"),
-                        format!("station-core-act-{index}"),
-                    ];
-                    if row.state != RowState::Same {
-                        sels.extend([
-                            format!("station-core-card-{index}"),
-                            format!("station-core-card-addr-{index}"),
-                            format!("station-core-card-act-{index}"),
-                        ]);
+                let mut heights = Vec::new();
+                for height in [640.0, 940.0] {
+                    let (mut visual, scroll) =
+                        open_page(cx, rows(), CoresFilter::All, (width, height * zoom, zoom));
+                    let at = format!("{at} height {height}");
+                    let col = visual
+                        .debug_bounds("station-cores-column")
+                        .expect("column laid out");
+                    let inside = |b: gpui::Bounds<gpui::Pixels>, what: &str| {
+                        assert!(
+                            b.origin.x + px(0.5) >= col.origin.x
+                                && b.right() <= col.right() + px(0.5),
+                            "{what} escaped the page ({at})"
+                        );
+                    };
+                    for sel in [
+                        "station-cores-summary",
+                        "station-cores-counts",
+                        "station-cores-chips",
+                        "station-cores-table-area",
+                    ] {
+                        inside(visual.debug_bounds(sel).expect(sel), sel);
                     }
-                    for sel in sels {
-                        let b = visual
-                            .debug_bounds(leak(sel.clone()))
-                            .unwrap_or_else(|| panic!("{sel} not laid out ({at})"));
-                        inside(b, &sel);
-                        if sel.contains("addr") {
-                            assert!(
-                                f32::from(b.size.width) + 0.5 >= need,
-                                "{sel} narrower than {address} ({at})"
-                            );
+                    let area = visual
+                        .debug_bounds("station-cores-table-area")
+                        .expect("table laid out");
+                    heights.push(f32::from(area.size.height));
+                    let min_h = visual.update(|_, cx| design::ui_value(cx, TABLE_MIN_H));
+                    assert!(
+                        f32::from(area.size.height) + 0.5 >= min_h,
+                        "the table shrank under its floor ({at})"
+                    );
+                    assert!(
+                        f32::from(scroll.max_offset().y) > 0.0,
+                        "sixty rows did not scroll inside the table ({at})"
+                    );
+                    // The footnote and the groups card stay on the page, under the table.
+                    let hint = visual
+                        .debug_bounds("station-cores-sync-hint")
+                        .expect("sync note laid out");
+                    let groups = visual
+                        .debug_bounds("probe-groups")
+                        .expect("groups card laid out");
+                    inside(hint, "sync note");
+                    assert!(hint.origin.y + px(0.5) >= area.bottom(), "{at}");
+                    assert!(
+                        f32::from(groups.bottom()) <= height * zoom + 0.5,
+                        "the groups card fell off the page ({at})"
+                    );
+                    let wide = visual.update(|_, cx| {
+                        table_layout(&rows(), &groups_of(&rows()), width - 26.0 * zoom, cx).wide
+                    });
+                    if column > 1000.0 {
+                        assert!(wide, "a wide page folded the table ({at})");
+                        assert!(visual.debug_bounds("station-cores-head").is_some(), "{at}");
+                    }
+                    for (index, row) in rows().iter().enumerate().take(6) {
+                        let address = row.address.clone().unwrap_or_default();
+                        let need = visual
+                            .update(|_, cx| design::mono_body_text_width(cx, &address, 400.0));
+                        let cell = |kind: &str| {
+                            let sel = format!("station-core-{kind}-{index}");
+                            visual
+                                .debug_bounds(leak(sel.clone()))
+                                .unwrap_or_else(|| panic!("{sel} not laid out ({at})"))
+                        };
+                        let [name, addr, group, act] = ["name", "addr", "group", "act"].map(cell);
+                        for (b, what) in [(name, "name"), (addr, "addr"), (group, "group")] {
+                            inside(b, what);
+                        }
+                        if row.state != RowState::Same {
+                            inside(act, "action");
+                        }
+                        assert!(
+                            f32::from(addr.size.width) + 0.5 >= need,
+                            "address {index} narrower than {address} ({at})"
+                        );
+                        if wide {
+                            assert!(name.right() <= addr.origin.x + px(0.5), "{at}");
+                            assert!(addr.right() <= group.origin.x + px(0.5), "{at}");
+                            if row.state != RowState::Same {
+                                assert!(group.right() <= act.origin.x + px(0.5), "{at}");
+                            }
                         }
                     }
                 }
-                let table = visual
-                    .debug_bounds("station-cores-table")
-                    .expect("table laid out");
-                let cap = visual.update(|_, cx| design::ui_value(cx, TABLE_MAX_H));
                 assert!(
-                    f32::from(table.size.height) <= cap + 0.5,
-                    "the full list grew past its cap ({at})"
-                );
-                let hint = visual
-                    .debug_bounds("station-cores-sync-hint")
-                    .expect("sync note laid out");
-                inside(hint, "sync note");
-                let gap = 10.0 * zoom + 1.0;
-                // The send button lives in the page's bar, never in the block.
-                assert!(
-                    visual.debug_bounds("station-cores-send-all").is_none(),
-                    "a push button with nothing to push ({at})"
-                );
-                assert!(
-                    f32::from(hint.origin.y) - f32::from(table.bottom()) <= gap,
-                    "a gap opened above the sync note ({at})"
+                    heights[1] - heights[0] >= 290.0,
+                    "the table did not grow with the window: {heights:?} ({at})"
                 );
             }
         }
     }
 }
 
-/// A differing core draws its actions open and again in the full list, and rows without a station
-/// uid would all be keyed 0: shared ids make GPUI route a click to the wrong button.
+/// "Расходятся 0": an empty filter result is a line inside a table that keeps the page's
+/// height, never a collapsed table — in every language.
+#[gpui::test]
+fn an_empty_filter_lays_out_inside_the_table(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let same: Vec<Row> = (4..20).map(|index| row(RowState::Same, index)).collect();
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for width in [1100.0, 420.0] {
+            let (mut visual, _) =
+                open_page(cx, same.clone(), CoresFilter::Differ, (width, 700.0, 1.0));
+            let at = format!("{} column {width}", language.code());
+            let area = visual
+                .debug_bounds("station-cores-table-area")
+                .expect("table laid out");
+            let empty = visual
+                .debug_bounds("station-cores-empty")
+                .unwrap_or_else(|| panic!("empty line not laid out ({at})"));
+            assert!(f32::from(empty.size.height) > 0.0, "{at}");
+            assert!(
+                empty.origin.x + px(0.5) >= area.origin.x
+                    && empty.right() <= area.right() + px(0.5)
+                    && empty.bottom() <= area.bottom() + px(0.5),
+                "the empty line escaped the table ({at})"
+            );
+            assert!(
+                f32::from(area.size.height) + 0.5
+                    >= visual.update(|_, cx| design::ui_value(cx, TABLE_MIN_H)),
+                "the table collapsed around the empty line ({at})"
+            );
+        }
+    }
+}
+
+/// Rows without a station uid would all be keyed 0: shared ids make GPUI route a click to the
+/// wrong button.
 #[test]
-fn core_action_ids_are_unique_per_row_and_surface() {
+fn core_action_ids_are_unique_per_row() {
     let ids = [
-        action_id("send", ActionSurface::Card, 0),
-        action_id("send", ActionSurface::Row, 0),
-        action_id("send", ActionSurface::Card, 1),
-        action_id("remove", ActionSurface::Card, 0),
+        action_id("send", 0),
+        action_id("send", 1),
+        action_id("remove", 0),
+        action_id("remove", 1),
     ];
     for (i, a) in ids.iter().enumerate() {
         for b in &ids[i + 1..] {
@@ -562,6 +692,30 @@ fn the_station_cores_card_is_never_blank(cx: &mut gpui::TestAppContext) {
             visual.debug_bounds("station-cores-read").is_some(),
             retry_drawn,
             "{note:?}"
+        );
+    }
+}
+
+/// At a 1900 px window the Ядро column shows a 40-character name whole, in every language.
+#[gpui::test]
+fn a_long_core_name_fits_its_column_on_a_wide_page(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let name = "CORE_A synthetic subaccount number 31 xx";
+    assert_eq!(name.chars().count(), 40);
+    let mut cores = rows();
+    cores[4].name = name.to_string();
+    for language in Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let (mut visual, _) = open_page(cx, cores.clone(), CoresFilter::All, (1900.0, 900.0, 1.0));
+        let cell = visual
+            .debug_bounds("station-core-name-4")
+            .expect("name cell laid out");
+        let need = visual.update(|_, cx| design::mono_body_text_width(cx, name, 400.0));
+        assert!(
+            f32::from(cell.size.width) + 0.5 >= need,
+            "a 40-character name truncated: {} < {need} ({})",
+            f32::from(cell.size.width),
+            language.code()
         );
     }
 }

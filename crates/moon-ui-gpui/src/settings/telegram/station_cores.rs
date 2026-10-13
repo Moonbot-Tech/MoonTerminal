@@ -2,12 +2,13 @@
 
 use std::rc::Rc;
 
+use gpui::prelude::FluentBuilder;
 use gpui::*;
+use moon_core::config::CoreGroup;
 use moon_remote::ssh::Target;
 use moon_ui::{
-    MoonButton, MoonDisclosure, MoonDisclosureDirection, MoonGroupBox, MoonInput, MoonInputEvent,
-    MoonInputState, MoonPalette, MoonSegmentItem, MoonSegmentedControl, MoonTag, MoonTone, h_flex,
-    rgba_from, v_flex,
+    MoonButton, MoonInput, MoonInputEvent, MoonInputState, MoonPalette, MoonSegmentItem,
+    MoonSegmentedControl, MoonTag, MoonTone, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
@@ -21,15 +22,41 @@ use crate::backend::station::{
 use crate::design;
 use crate::panels::common::text_tooltip_value;
 
-/// Keep the full identity visible at any width, with natural multiline height and hover text.
-fn core_name_cell(index: usize, name: String) -> Stateful<Div> {
+/// The page's one card: the station cores card is the page, so it carries no title of its own.
+/// A `MoonGroupBox` cannot take `flex_1`, and the card must grow to the page height for its
+/// table to; this draws the same frame on a plain `div`.
+fn card(id: &'static str, cx: &App) -> Stateful<Div> {
+    let p = MoonPalette::active(cx);
     div()
-        .id(("station-core-name", index))
+        .id(id)
         .w_full()
         .min_w_0()
-        .whitespace_normal()
-        .tooltip(text_tooltip_value(name.clone()))
-        .child(name)
+        .flex()
+        .flex_col()
+        .rounded(design::ui_px(cx, 5.0))
+        .border(design::ui_px(cx, 1.0))
+        .border_color(rgba_from(p.border, 1.0))
+        .bg(rgba_from(p.shell_high, 1.0))
+        .p(design::ui_px(cx, 12.0))
+        .gap(design::ui_px(cx, 10.0))
+}
+
+/// The names of the saved groups holding the terminal core `uid`, or a dash.
+fn group_label(groups: &[CoreGroup], uid: Option<u64>) -> String {
+    let names: Vec<&str> = uid
+        .map(|uid| {
+            groups
+                .iter()
+                .filter(|group| group.cores.contains(&uid))
+                .map(|group| group.name.as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.is_empty() {
+        "\u{2014}".into()
+    } else {
+        names.join(", ")
+    }
 }
 
 /// Reserve the address's intrinsic width so the name yields space instead of hiding the port.
@@ -59,20 +86,9 @@ impl RowState {
     }
 }
 
-/// Where a core's actions are drawn: a differing core shows them both open and in the full list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ActionSurface {
-    Card,
-    Row,
-}
-
-/// A row action's element id, unique per row and surface even for rows without a station uid.
-fn action_id(verb: &str, surface: ActionSurface, index: usize) -> SharedString {
-    let surface = match surface {
-        ActionSurface::Card => "card",
-        ActionSurface::Row => "row",
-    };
-    SharedString::from(format!("station-core-{verb}-{surface}-{index}"))
+/// A row action's element id, unique per row even for rows without a station uid.
+fn action_id(verb: &str, index: usize) -> SharedString {
+    SharedString::from(format!("station-core-{verb}-row-{index}"))
 }
 
 /// How many rows differ between the terminal and the station: the page's count and its bar's.
@@ -149,9 +165,9 @@ impl CoreCache {
     }
 }
 
-/// Choose a table only when its measured controls and readable text columns all fit.
-fn table_fits(width: f32, action: f32, state: f32, name: f32, address: f32, gaps: f32) -> bool {
-    width >= action + state + name + address + gaps
+/// Choose a table only when its measured columns, the widest action and the gaps all fit.
+fn table_fits(width: f32, columns: &[f32], gaps: f32) -> bool {
+    width >= columns.iter().sum::<f32>() + gaps
 }
 
 /// Which rows the full core list shows.
@@ -193,7 +209,7 @@ fn filter_rows<'a>(rows: &'a [Row], query: &str, filter: CoresFilter) -> Vec<(us
         .collect()
 }
 
-/// One plain sentence on why a differing core is listed.
+/// One plain sentence on why a differing core is listed: its state's hover text.
 fn reason_key(state: RowState) -> Option<&'static str> {
     match state {
         RowState::Same => None,
@@ -214,38 +230,44 @@ pub(super) fn watch_query<T: 'static>(query: &Entity<MoonInputState>, cx: &mut C
     .detach();
 }
 
-/// Measured columns of the full list and whether a row fits on one line.
+/// Measured columns of the core table and whether a row fits on one line.
+///
+/// Ядро, Адрес and Группа take their content's width (the name capped at [`NAME_MAX_W`], and
+/// yielding down to [`NAME_MIN_W`] to what the other columns leave);
+/// Состояние takes the rest and holds the state word and the row's action.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TableLayout {
     pub(super) wide: bool,
+    pub(super) name: f32,
     pub(super) address: f32,
-    pub(super) state: f32,
-    pub(super) action: f32,
+    pub(super) group: f32,
 }
 
-/// Measure the widest action (the armed removal pair included), state word and address.
-pub(super) fn table_layout(rows: &[Row], width: f32, cx: &App) -> TableLayout {
+/// Measure the name, address and group columns from the rows and their headers, and decide
+/// whether the widest state word and action still fit beside them.
+///
+/// Args:
+///     rows: The comparison rows, all of them, so a filter never moves the columns.
+///     groups: Each row's group label, in row order.
+///     width: Width of the card's content box.
+///     cx: Application context for scale, zoom and locale.
+pub(super) fn table_layout(rows: &[Row], groups: &[String], width: f32, cx: &App) -> TableLayout {
     let metrics = design::CONTROL_TIER.control_metrics();
     let text_width = |key: &str| {
         design::ui_text_width_zoomed(cx, t!(key).as_ref(), metrics.font_size, 400.0, false)
     };
+    let header = |key: &str| design::ui_body_text_width(cx, t!(key).as_ref(), 400.0);
+    let mono = |text: &str| design::mono_body_text_width(cx, text, 400.0);
     let button_padding = 2.0 * design::ui_value(cx, metrics.pad_x + 1.0);
-    let cancel = text_width("dialogs.cancel") + button_padding;
     let action = [
         "telegram.server.cores_add",
         "telegram.server.cores_name",
         "telegram.server.cores_key",
+        "telegram.server.cores_remove",
     ]
     .into_iter()
     .map(|key| text_width(key) + button_padding)
-    .chain(std::iter::once(
-        text_width("telegram.server.cores_remove_confirm")
-            + button_padding
-            + cancel
-            + design::ui_value(cx, 6.0),
-    ))
-    .fold(0.0_f32, f32::max)
-    .ceil();
+    .fold(0.0_f32, f32::max);
     let state = design::ui_value(cx, STATE_DOT + 6.0)
         + [
             RowState::Same,
@@ -256,46 +278,58 @@ pub(super) fn table_layout(rows: &[Row], width: f32, cx: &App) -> TableLayout {
         ]
         .into_iter()
         .map(|state| text_width(state_label(state).0))
-        .fold(
-            design::ui_body_text_width(cx, t!("telegram.server.cores_col_state").as_ref(), 400.0),
-            f32::max,
-        );
-    let state = state.ceil();
+        .fold(header("telegram.server.cores_col_state"), f32::max);
+    let widest = rows
+        .iter()
+        .map(|row| mono(&row.name))
+        .fold(header("telegram.server.cores_col_core"), f32::max);
     let address = rows
         .iter()
-        .map(|row| {
-            design::mono_body_text_width(cx, row.address.as_deref().unwrap_or("\u{2014}"), 400.0)
-        })
-        .fold(
-            design::ui_body_text_width(cx, t!("telegram.server.cores_col_address").as_ref(), 400.0),
-            f32::max,
-        )
+        .map(|row| mono(row.address.as_deref().unwrap_or("\u{2014}")))
+        .fold(header("telegram.server.cores_col_address"), f32::max)
         .ceil();
-    let wide = table_fits(
-        width - design::ui_value(cx, 2.0 * TABLE_PAD_X + 2.0),
-        action,
-        state,
-        design::ui_value(cx, 100.0),
-        address,
-        design::ui_value(cx, 24.0),
-    );
+    let group = groups
+        .iter()
+        .map(|label| design::ui_body_text_width(cx, label, 400.0))
+        .fold(header("telegram.server.cores_col_group"), f32::max)
+        .min(design::ui_value(cx, GROUP_MAX_W))
+        .ceil();
+    let inner = width - design::ui_value(cx, 2.0 * TABLE_PAD_X + 2.0);
+    let gaps = design::ui_value(cx, 4.0 * COL_GAP);
+    // The name takes what the other columns leave, up to its cap and down to its floor.
+    let spare = inner - gaps - address - group - state - action;
+    let name = widest
+        .min(design::ui_value(cx, NAME_MAX_W))
+        .min(spare.max(design::ui_value(cx, NAME_MIN_W)))
+        .floor();
+    let wide = table_fits(inner, &[name, address, group, state, action], gaps);
     TableLayout {
         wide,
+        name,
         address,
-        state,
-        action,
+        group,
     }
 }
 
-/// Diameter of a full-list state dot, unscaled.
+/// Diameter of a state dot, unscaled.
 const STATE_DOT: f32 = 7.0;
-/// Horizontal padding of a full-list row, unscaled.
-const TABLE_PAD_X: f32 = 10.0;
-/// Tallest the full list grows before it scrolls, unscaled.
-pub(super) const TABLE_MAX_H: f32 = 340.0;
+/// Horizontal padding of a table row, unscaled.
+const TABLE_PAD_X: f32 = 12.0;
+/// Gap between table columns, unscaled.
+const COL_GAP: f32 = 12.0;
+/// Widest the name column grows before a long name truncates, unscaled.
+const NAME_MAX_W: f32 = 480.0;
+/// Narrowest the name column yields to on a page too narrow for its cap, unscaled.
+const NAME_MIN_W: f32 = 260.0;
+/// Widest the group column grows before its names truncate, unscaled.
+const GROUP_MAX_W: f32 = 180.0;
+/// Shortest the table gets in a low window before the page clips, unscaled: a header and a few
+/// rows stay readable.
+pub(super) const TABLE_MIN_H: f32 = 120.0;
 
-/// Green "all N match" or amber "K differ" beside its one plain sentence.
-pub(super) fn summary_el(summary: CoresSummary, cx: &App) -> AnyElement {
+/// The card's first line: green "all N match" or amber "K differ", one plain sentence, and the
+/// counts on both sides at the right.
+pub(super) fn summary_el(summary: CoresSummary, counts: &Counts, cx: &App) -> AnyElement {
     let (tone, tag, sentence) = if summary.differ == 0 {
         (
             MoonTone::Positive,
@@ -312,14 +346,7 @@ pub(super) fn summary_el(summary: CoresSummary, cx: &App) -> AnyElement {
                 &plural_key("telegram.server.cores_differ_tag", summary.differ as u64),
                 k = summary.differ
             ),
-            t!(
-                &plural_key(
-                    "telegram.server.cores_differ_hint",
-                    (summary.total - summary.differ) as u64
-                ),
-                x = summary.total - summary.differ,
-                n = summary.total
-            ),
+            t!("telegram.server.cores_differ_lead"),
         )
     };
     h_flex()
@@ -327,7 +354,7 @@ pub(super) fn summary_el(summary: CoresSummary, cx: &App) -> AnyElement {
         .min_w_0()
         .flex_wrap()
         .items_center()
-        .gap(design::ui_px(cx, 8.0))
+        .gap(design::ui_px(cx, 10.0))
         .debug_selector(|| "station-cores-summary".into())
         .child(
             div().flex_none().child(
@@ -345,86 +372,34 @@ pub(super) fn summary_el(summary: CoresSummary, cx: &App) -> AnyElement {
                 .font_family(design::ui_font())
                 .child(sentence.to_string()),
         )
+        .child(counts_el(counts, cx))
         .into_any_element()
 }
 
-/// A differing core, open: full wrapping name, address, state, reason and its own actions.
-pub(super) fn differ_card(index: usize, row: &Row, actions: AnyElement, cx: &App) -> AnyElement {
-    let palette = MoonPalette::active(cx);
-    let muted = rgba_from(palette.text_muted, 1.0);
+/// "на станции N · здесь M", muted and monospaced.
+fn counts_el(counts: &Counts, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .whitespace_nowrap()
+        .font_family(design::mono())
+        .text_color(rgba_from(MoonPalette::active(cx).text_muted, 1.0))
+        .debug_selector(|| "station-cores-counts".into())
+        .child(
+            t!(
+                "telegram.server.cores_count",
+                station = counts.on_station,
+                here = counts.here
+            )
+            .to_string(),
+        )
+}
+
+/// The state: a tone dot and one word, the reason a differing core is listed on hover.
+fn state_word(index: usize, row: &Row, cx: &App) -> Stateful<Div> {
     let (key, tone) = state_label(row.state);
-    let mut name = v_flex()
-        .w_full()
-        .min_w_0()
-        .child(core_name_cell(index, row.name.clone()).font_family(design::ui_font()));
-    if row.state == RowState::NameDiffers {
-        name = name.child(
-            div()
-                .text_color(muted)
-                .font_family(design::mono())
-                .w_full()
-                .min_w_0()
-                .whitespace_normal()
-                .child(
-                    t!(
-                        "telegram.server.cores_was",
-                        name = row.station_name.as_deref().unwrap_or_default()
-                    )
-                    .to_string(),
-                ),
-        );
-    }
-    let reason = reason_key(row.state).map(|key| t!(key).to_string());
-    h_flex()
-        .w_full()
-        .min_w_0()
-        .flex_wrap()
-        .items_center()
-        .gap_x(design::ui_px(cx, 12.0))
-        .gap_y(design::ui_px(cx, 6.0))
-        .px(design::ui_px(cx, 10.0))
-        .py(design::ui_px(cx, 7.0))
-        .rounded(design::ui_px(cx, 5.0))
-        .bg(rgba_from(tone.color(palette), 0.10))
-        .debug_selector(move || format!("station-core-card-{index}"))
-        .child(name)
-        .child(
-            core_address_cell(row.address.clone())
-                .text_color(muted)
-                .debug_selector(move || format!("station-core-card-addr-{index}")),
-        )
-        .child(
-            div().flex_none().child(
-                MoonTag::new().tone(tone).mono(false).child(
-                    div()
-                        .font_family(design::ui_font())
-                        .child(t!(key).to_string()),
-                ),
-            ),
-        )
-        .children(reason.map(|reason| {
-            div()
-                .flex_1()
-                .flex_basis(design::ui_px(cx, 220.0))
-                .min_w_0()
-                .font_family(design::ui_font())
-                .child(reason)
-        }))
-        .child(
-            div()
-                .flex_none()
-                .ml_auto()
-                .debug_selector(move || format!("station-core-card-act-{index}"))
-                .child(actions),
-        )
-        .into_any_element()
-}
-
-/// The compact list's state: a tone dot and one word.
-fn state_word(state: RowState, cx: &App) -> Div {
-    let (key, tone) = state_label(state);
     let color = rgba_from(tone.color(MoonPalette::active(cx)), 1.0);
-    h_flex()
+    let word = h_flex()
+        .id(("station-core-state", index))
         .flex_none()
         .items_center()
         .gap(design::ui_px(cx, 6.0))
@@ -442,25 +417,39 @@ fn state_word(state: RowState, cx: &App) -> Div {
                 .whitespace_nowrap()
                 .font_family(design::ui_font())
                 .child(t!(key).to_string()),
-        )
+        );
+    match reason_key(row.state) {
+        Some(reason) => word.tooltip(text_tooltip_value(t!(reason).to_string())),
+        None => word,
+    }
 }
 
-/// A truncating core name with the full name on hover; the row that owns the width holds it.
-fn compact_name_cell(index: usize, name: &str) -> Stateful<Div> {
+/// A truncating monospaced core name with the full name on hover — and the station's name too
+/// when the two differ.
+fn compact_name_cell(index: usize, row: &Row) -> Stateful<Div> {
+    let hover = match (&row.station_name, row.state) {
+        (Some(was), RowState::NameDiffers) => format!(
+            "{}\n{}",
+            row.name,
+            t!("telegram.server.cores_was", name = was)
+        ),
+        _ => row.name.clone(),
+    };
     div()
         .id(("station-core-row-name", index))
-        .flex_1()
         .min_w_0()
         .truncate()
-        .font_family(design::ui_font())
-        .tooltip(text_tooltip_value(name.to_owned()))
-        .child(name.to_owned())
+        .font_family(design::mono())
+        .tooltip(text_tooltip_value(hover))
+        .child(row.name.clone())
 }
 
-/// One full-list row: a single line when the table fits, else name+state over address+action.
+/// One table row: one line in the columns when the table fits, else name+state over
+/// address, group and action.
 pub(super) fn compact_row(
     index: usize,
     row: &Row,
+    group: &str,
     actions: AnyElement,
     layout: TableLayout,
     cx: &App,
@@ -470,6 +459,13 @@ pub(super) fn compact_row(
     let address = core_address_cell(row.address.clone())
         .text_color(muted)
         .debug_selector(move || format!("station-core-addr-{index}"));
+    let group = div()
+        .min_w_0()
+        .truncate()
+        .font_family(design::ui_font())
+        .when(group == "\u{2014}", |el| el.text_color(muted))
+        .debug_selector(move || format!("station-core-group-{index}"))
+        .child(group.to_owned());
     let actions = div()
         .flex_none()
         .debug_selector(move || format!("station-core-act-{index}"))
@@ -478,21 +474,36 @@ pub(super) fn compact_row(
         .w_full()
         .min_w_0()
         .px(design::ui_px(cx, TABLE_PAD_X))
-        .py(design::ui_px(cx, 4.0))
-        .border_t_1()
-        .border_color(rgba_from(palette.border, 1.0));
+        .py(design::ui_px(cx, 3.0))
+        .border_b_1()
+        .border_color(rgba_from(palette.border, 1.0))
+        .debug_selector(move || format!("station-core-row-{index}"));
     if layout.wide {
         shell
             .child(
                 h_flex()
                     .w_full()
                     .min_w_0()
+                    .min_h(design::ui_px(cx, 21.0))
                     .items_center()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(compact_name_cell(index, &row.name))
+                    .gap(design::ui_px(cx, COL_GAP))
+                    .child(
+                        compact_name_cell(index, row)
+                            .flex_none()
+                            .w(px(layout.name))
+                            .debug_selector(move || format!("station-core-name-{index}")),
+                    )
                     .child(address.w(px(layout.address)))
-                    .child(state_word(row.state, cx).w(px(layout.state)))
-                    .child(actions.w(px(layout.action))),
+                    .child(group.flex_none().w(px(layout.group)))
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .items_center()
+                            .gap(design::ui_px(cx, 10.0))
+                            .child(state_word(index, row, cx))
+                            .child(actions),
+                    ),
             )
             .into_any_element()
     } else {
@@ -508,8 +519,12 @@ pub(super) fn compact_row(
                             .min_w_0()
                             .items_center()
                             .gap(design::ui_px(cx, 8.0))
-                            .child(compact_name_cell(index, &row.name))
-                            .child(state_word(row.state, cx)),
+                            .child(
+                                compact_name_cell(index, row)
+                                    .flex_1()
+                                    .debug_selector(move || format!("station-core-name-{index}")),
+                            )
+                            .child(state_word(index, row, cx)),
                     )
                     .child(
                         h_flex()
@@ -517,59 +532,14 @@ pub(super) fn compact_row(
                             .min_w_0()
                             .flex_wrap()
                             .items_center()
-                            .justify_between()
                             .gap(design::ui_px(cx, 8.0))
                             .child(address)
+                            .child(group.flex_1())
                             .child(actions),
                     ),
             )
             .into_any_element()
     }
-}
-
-/// The caret line that opens the full list.
-pub(super) fn show_all_el(
-    open: bool,
-    total: usize,
-    on_toggle: Rc<dyn Fn(&mut Window, &mut App)>,
-    cx: &App,
-) -> AnyElement {
-    let palette = MoonPalette::active(cx);
-    let caret_toggle = on_toggle.clone();
-    h_flex()
-        .id("station-cores-show-all")
-        .flex_none()
-        .items_center()
-        .gap(design::ui_px(cx, 6.0))
-        .cursor_pointer()
-        .text_color(rgba_from(palette.text_muted, 1.0))
-        .debug_selector(|| "station-cores-show-all".into())
-        .on_click(move |_, window, app| on_toggle(window, app))
-        .child(
-            MoonDisclosure::button("station-cores-show-all-caret", open)
-                .direction(MoonDisclosureDirection::RightDown)
-                .size(design::DISCLOSURE_GLYPH)
-                .box_size(design::DISCLOSURE_BOX)
-                .hover_color(palette.text)
-                .on_toggle(move |_, window, app| {
-                    caret_toggle(window, app);
-                    app.stop_propagation();
-                }),
-        )
-        .child(
-            div()
-                .flex_none()
-                .whitespace_nowrap()
-                .font_family(design::ui_font())
-                .child(
-                    t!(
-                        &plural_key("telegram.server.cores_show_all", total as u64),
-                        n = total
-                    )
-                    .to_string(),
-                ),
-        )
-        .into_any_element()
 }
 
 /// The block's tail: the last result only when there is one, then the sync note.
@@ -663,11 +633,19 @@ pub(super) fn list_controls_el(
         )
         .into_any_element()
 }
-
-/// The full list: a column header when one line fits, rows in a bounded scroll of their own.
+/// The core table: it takes the card's remaining height, its header stays put and its rows
+/// scroll inside it. An empty filter result is a line inside the table, never a collapsed table.
+///
+/// Args:
+///     layout: The measured columns.
+///     rows: The rows the filter and search left.
+///     empty_key: Locale key of the line shown when `rows` is empty.
+///     scroll: The rows' scroll position.
+///     cx: Application context for theme and scale.
 pub(super) fn table_el(
     layout: TableLayout,
     rows: Vec<AnyElement>,
+    empty_key: &str,
     scroll: &ScrollHandle,
     cx: &App,
 ) -> AnyElement {
@@ -675,18 +653,22 @@ pub(super) fn table_el(
     let muted = rgba_from(palette.text_muted, 1.0);
     let head = layout.wide.then(|| {
         h_flex()
+            .flex_none()
             .w_full()
             .min_w_0()
-            .gap(design::ui_px(cx, 8.0))
+            .gap(design::ui_px(cx, COL_GAP))
             .px(design::ui_px(cx, TABLE_PAD_X))
-            .py(design::ui_px(cx, 5.0))
+            .py(design::ui_px(cx, 6.0))
             .bg(rgba_from(palette.head_row, 1.0))
+            .border_b_1()
+            .border_color(rgba_from(palette.border, 1.0))
             .text_color(muted)
             .font_family(design::ui_font())
+            .debug_selector(|| "station-cores-head".into())
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
+                    .w(px(layout.name))
+                    .flex_none()
                     .truncate()
                     .child(t!("telegram.server.cores_col_core").to_string()),
             )
@@ -698,21 +680,30 @@ pub(super) fn table_el(
             )
             .child(
                 div()
-                    .w(px(layout.state))
+                    .w(px(layout.group))
                     .flex_none()
+                    .truncate()
+                    .child(t!("telegram.server.cores_col_group").to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
                     .child(t!("telegram.server.cores_col_state").to_string()),
             )
-            .child(div().w(px(layout.action)).flex_none())
     });
     let body = if rows.is_empty() {
         div()
             .w_full()
-            .p(design::ui_px(cx, 14.0))
+            .p(design::ui_px(cx, 28.0))
             .text_color(muted)
             .font_family(design::ui_font())
             .flex()
             .justify_center()
-            .child(t!("telegram.server.cores_nothing_found").to_string())
+            .text_center()
+            .debug_selector(|| "station-cores-empty".into())
+            .child(t!(empty_key).to_string())
             .into_any_element()
     } else {
         v_flex()
@@ -722,19 +713,23 @@ pub(super) fn table_el(
             .into_any_element()
     };
     v_flex()
+        .flex_1()
+        .min_h(design::ui_px(cx, TABLE_MIN_H))
         .w_full()
         .min_w_0()
         .border_1()
         .border_color(rgba_from(palette.border, 1.0))
-        .rounded(design::ui_px(cx, 5.0))
+        .rounded(design::ui_px(cx, 4.0))
         .overflow_hidden()
+        .debug_selector(|| "station-cores-table-area".into())
         .children(head)
         .child(
             div()
                 .id("station-cores-table")
+                .flex_1()
+                .min_h(px(0.0))
                 .w_full()
                 .min_w_0()
-                .max_h(design::ui_px(cx, TABLE_MAX_H))
                 .overflow_y_scroll()
                 .track_scroll(scroll)
                 .debug_selector(|| "station-cores-table".into())
@@ -830,8 +825,8 @@ pub(super) fn cores_note_el(
     .into_any_element()
 }
 
-/// A row, its index in the comparison and the surface its actions are drawn on.
-struct RowAt<'a>(usize, &'a Row, ActionSurface);
+/// A row and its index in the comparison.
+struct RowAt<'a>(usize, &'a Row);
 
 impl SettingsView {
     /// How many cores differ between the terminal and the station, for the Station cores
@@ -910,7 +905,9 @@ impl SettingsView {
         );
     }
 
-    /// Lead with the verdict and the differing cores; the full list stays folded behind a caret.
+    /// The page's one card: the verdict line, search and filter, then the table, always open,
+    /// taking the page's remaining height; the station-only note, the last result and the sync
+    /// note under it. Unread, unsupported and empty listings get a short card of their own.
     pub(super) fn station_cores_block(
         &self,
         target: &Target,
@@ -930,29 +927,16 @@ impl SettingsView {
                 });
             });
             return Some(
-                MoonGroupBox::new("station-cores")
-                    .child(crate::settings::common::group_title(
-                        t!("telegram.server.cores_title").to_string(),
-                        cx,
-                    ))
-                    .padding(12.0)
-                    .gap(10.0)
+                card("station-cores", cx)
                     .child(cores_note_el(note, retry, cx))
                     .into_any_element(),
             );
         };
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
-        let section = MoonGroupBox::new("station-cores")
-            .child(crate::settings::common::group_title(
-                t!("telegram.server.cores_title").to_string(),
-                cx,
-            ))
-            .padding(12.0)
-            .gap(10.0);
         if seen.is_none() {
             return Some(
-                section
+                card("station-cores", cx)
                     .child(
                         div()
                             .text_color(muted)
@@ -964,6 +948,20 @@ impl SettingsView {
         let ed = &self.telegram.server;
         let rows = &ed.cores_cache.rows;
         let counts = Counts::from_rows(rows);
+        if rows.is_empty() {
+            return Some(
+                card("station-cores", cx)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .justify_end()
+                            .child(counts_el(&counts, cx)),
+                    )
+                    .child(cores_note_el(CoresNote::Empty, Rc::new(|_, _| {}), cx))
+                    .children(result_els(backend.station.cores_result.clone(), cx))
+                    .into_any_element(),
+            );
+        }
         let summary = cores_summary(rows);
         let busy = backend.station.busy();
         let eligible: Vec<_> = ed
@@ -972,113 +970,68 @@ impl SettingsView {
             .iter()
             .map(|core| core.uid)
             .collect();
-        let mut section = MoonGroupBox::new("station-cores")
-            .padding(12.0)
-            .gap(10.0)
-            .child(
-                h_flex()
-                    .w_full()
-                    .min_w_0()
-                    .flex_wrap()
-                    .justify_between()
-                    .gap(design::ui_px(cx, 8.0))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("telegram.server.cores_title").to_string()),
-                    )
-                    .child(
-                        div().font_family(design::mono()).text_color(muted).child(
-                            t!(
-                                "telegram.server.cores_count",
-                                station = counts.on_station,
-                                here = counts.here
-                            )
-                            .to_string(),
-                        ),
-                    ),
-            );
-        if rows.is_empty() {
-            section = section.child(cores_note_el(CoresNote::Empty, Rc::new(|_, _| {}), cx));
+        let groups: Vec<String> = rows
+            .iter()
+            .map(|row| group_label(&backend.config.core_groups, row.terminal_uid))
+            .collect();
+        // The card's content box: the page column less the card's padding and border.
+        let content_w = super::page_column_w(width, cx) - design::ui_value(cx, 2.0 * 12.0 + 2.0);
+        let layout = table_layout(rows, &groups, content_w, cx);
+        let query = ed.cores_query.read(cx).value().to_string();
+        let shown: Vec<AnyElement> = filter_rows(rows, &query, ed.cores_filter)
+            .into_iter()
+            .map(|(index, row)| {
+                let actions = self.station_core_actions(
+                    RowAt(index, row),
+                    counts.on_station,
+                    target,
+                    &eligible,
+                    busy,
+                    cx,
+                );
+                compact_row(index, row, &groups[index], actions, layout, cx)
+            })
+            .collect();
+        let empty_key = if ed.cores_filter == CoresFilter::Differ && query.trim().is_empty() {
+            "telegram.server.cores_no_differ"
         } else {
-            section = section.child(summary_el(summary, cx));
-            for (index, row) in rows.iter().enumerate() {
-                if row.state.differs() {
-                    let actions = self.station_core_actions(
-                        RowAt(index, row, ActionSurface::Card),
-                        counts.on_station,
-                        target,
-                        &eligible,
-                        busy,
-                        cx,
-                    );
-                    section = section.child(differ_card(index, row, actions, cx));
-                }
-            }
-            let view = cx.entity();
-            section = section.child(show_all_el(
-                ed.cores_all_open,
-                summary.total,
-                Rc::new(move |_, app| {
+            "telegram.server.cores_nothing_found"
+        };
+        let view = cx.entity();
+        let section = card("station-cores", cx)
+            .flex_1()
+            .min_h(px(0.0))
+            .child(summary_el(summary, &counts, cx))
+            .child(list_controls_el(
+                &ed.cores_query,
+                ed.cores_filter,
+                summary,
+                Rc::new(move |filter, _, app| {
                     view.update(app, |this, cx| {
-                        this.telegram.server.cores_all_open ^= true;
+                        this.telegram.server.cores_filter = filter;
                         cx.notify();
                     })
                 }),
                 cx,
-            ));
-            if ed.cores_all_open {
-                let view = cx.entity();
-                let layout = table_layout(rows, width - design::ui_value(cx, 24.0), cx);
-                let query = ed.cores_query.read(cx).value().to_string();
-                let shown = filter_rows(rows, &query, ed.cores_filter)
-                    .into_iter()
-                    .map(|(index, row)| {
-                        let actions = self.station_core_actions(
-                            RowAt(index, row, ActionSurface::Row),
-                            counts.on_station,
-                            target,
-                            &eligible,
-                            busy,
-                            cx,
-                        );
-                        compact_row(index, row, actions, layout, cx)
-                    })
-                    .collect();
-                section = section
-                    .child(list_controls_el(
-                        &ed.cores_query,
-                        ed.cores_filter,
-                        summary,
-                        Rc::new(move |filter, _, app| {
-                            view.update(app, |this, cx| {
-                                this.telegram.server.cores_filter = filter;
-                                cx.notify();
-                            })
-                        }),
-                        cx,
-                    ))
-                    .child(table_el(layout, shown, &ed.cores_scroll, cx));
-            }
-        }
-        // The send button lives in the page's bar; the station-only note stays with the list.
-        if counts.pushable != 0 && counts.only_station != 0 {
-            section = section.child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.cores_send_all_hint").to_string()),
-            );
-        }
-        for el in result_els(backend.station.cores_result.clone(), cx) {
-            section = section.child(el);
-        }
+            ))
+            .child(table_el(layout, shown, empty_key, &ed.cores_scroll, cx))
+            // The send button lives in the page's bar; the station-only note stays with the list.
+            .when(counts.pushable != 0 && counts.only_station != 0, |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_color(muted)
+                        .child(t!("telegram.server.cores_send_all_hint").to_string()),
+                )
+            })
+            .children(result_els(backend.station.cores_result.clone(), cx));
         Some(section.into_any_element())
     }
 
     /// Bind row actions to station identities; removal needs an explicit second click.
     fn station_core_actions(
         &self,
-        RowAt(index, row, surface): RowAt,
+        RowAt(index, row): RowAt,
         station_count: usize,
         target: &Target,
         eligible: &[u64],
@@ -1102,7 +1055,7 @@ impl SettingsView {
         if let Some((key, started)) = action {
             let target = target.clone();
             actions = actions.child(
-                MoonButton::new(action_id("send", surface, index))
+                MoonButton::new(action_id("send", index))
                     .size(design::CONTROL_TIER)
                     .label(t!(key).to_string())
                     .disabled(busy || changes.is_empty())
@@ -1124,7 +1077,7 @@ impl SettingsView {
             let name = row.name.clone();
             let address = row.address.clone();
             actions = actions.child(
-                MoonButton::new(action_id("remove", surface, index))
+                MoonButton::new(action_id("remove", index))
                     .danger()
                     .size(design::CONTROL_TIER)
                     .label(t!("telegram.server.cores_remove").to_string())

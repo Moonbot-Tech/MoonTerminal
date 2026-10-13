@@ -2,14 +2,28 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.section: "Telegram no núcleo"
-
-
-telegram_core.core_pick: "Núcleo"
-
 telegram_core.core_pick_none: "Selecione um núcleo"
-
-telegram_core.details: "Configurações do núcleo"
+telegram_core.tag.logged_in: "conectado"
+telegram_core.tag.not_logged_in: "não conectado"
+telegram_core.tag.proxy_error: "erro de proxy"
+telegram_core.tag.reader_off: "leitor desligado"
+telegram_core.tag.no_core: "sem conexão com o núcleo"
+telegram_core.tag.unsupported: "sem login remoto"
+telegram_core.tag_short.logged_in: "conectado"
+telegram_core.tag_short.not_logged_in: "desconectado"
+telegram_core.tag_short.proxy_error: "erro proxy"
+telegram_core.tag_short.reader_off: "leitor off"
+telegram_core.tag_short.no_core: "sem link"
+telegram_core.tag_short.unsupported: "sem login"
+telegram_core.list_core: "Núcleo"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "Login"
+telegram_core.row_account: "Conta"
+telegram_core.account_phone: "Conta %{phone} · conectada"
+telegram_core.account_none: "Nenhuma conta conectada"
+telegram_core.account_reader_off: "Leitor desligado — a conta não é tocada"
+telegram_core.disconnected_hint: "O estado do Telegram vem do próprio núcleo. Assim que a conexão voltar, o login e o proxy aparecerão aqui."
+telegram_core.reconnect: "Reconectar"
 
 telegram_core.enable: "Ativar leitor"
 
@@ -37,7 +51,6 @@ telegram_core.disconnected: "O núcleo não está conectado."
 
 telegram_core.no_snapshot: "Sem snapshot de estado."
 
-
 telegram_core.proxy_kind_none: "Sem proxy"
 
 telegram_core.proxy_kind_socks5: "SOCKS5"
@@ -54,7 +67,6 @@ telegram_core.proxy_password: "Senha"
 
 telegram_core.proxy_secret: "Segredo"
 
-
 telegram_core.proxy_secret_hint: "O núcleo nunca devolve uma senha ou segredo salvos, então digite de novo. Deixar vazio apaga, em vez de manter o valor antigo."
 
 telegram_core.proxy_actual: "Proxy ativo"
@@ -63,13 +75,11 @@ telegram_core.proxy_actual_unknown: "ainda desconhecido"
 
 telegram_core.proxy_error: "Erro de proxy"
 
-
 telegram_core.phone: "Telefone"
 
 telegram_core.phone_hint: "Formato internacional, por exemplo +5511912345678."
 
 telegram_core.phone_send: "Enviar número"
-
 
 telegram_core.login_phone: "Usar um número de telefone"
 

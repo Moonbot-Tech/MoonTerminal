@@ -28,16 +28,80 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
-use crate::settings::common::cap_prose;
+use crate::settings::common;
 
 use super::SettingsView;
 use super::access::ChatsOf;
 use super::chat_notify_quotes::{
-    QuoteList, QuoteRowEd, QuoteTexts, quote_texts, refill_rows, rows_from, stored_texts,
+    QuoteList, QuoteRowEd, QuoteTexts, quote_hint, quote_row_w, quote_texts, refill_rows,
+    rows_from, stored_texts,
 };
 use super::server_bot::known_server;
 use crate::backend::station::job::Job;
 use crate::design;
+
+/// Width of a threshold's amount box, unscaled.
+const AMOUNT_W: f32 = 72.0;
+/// Gap between a threshold's caption and its box, unscaled.
+const AMOUNT_LABEL_GAP: f32 = 6.0;
+/// Gap between two thresholds of one line, unscaled.
+const AMOUNT_GAP: f32 = 12.0;
+
+/// One threshold field: its input state, its id suffix and its caption.
+pub(super) type Amount<'a> = (&'a Entity<MoonInputState>, &'a str, String);
+
+/// A line of threshold fields, caption before each box, and the width it needs to stay on one
+/// line: the controls column of its [`common::aside_row`] never gets narrower than that.
+///
+/// Args:
+///     amounts: The fields, in order.
+///     id: Builds an element id from a field's suffix.
+///     cx: Application context for theme, measure and scale.
+///
+/// Returns:
+///     The line and its one-line width in layout pixels.
+pub(super) fn amounts_line(
+    amounts: Vec<Amount<'_>>,
+    id: impl Fn(&str) -> SharedString,
+    cx: &App,
+) -> (AnyElement, f32) {
+    let muted = rgba_from(MoonPalette::active(cx).text_muted, 1.0);
+    let n = amounts.len() as f32;
+    // A pixel of slack per caption: the estimate rounds glyph advances.
+    let captions: f32 = amounts
+        .iter()
+        .map(|(_, _, label)| design::ui_body_text_width(cx, label, 400.0) + 2.0)
+        .sum();
+    let need = captions
+        + n * design::ui_value(cx, AMOUNT_W + AMOUNT_LABEL_GAP)
+        + (n - 1.0).max(0.0) * design::ui_value(cx, AMOUNT_GAP);
+    let line = h_flex()
+        .flex_wrap()
+        .items_center()
+        .gap(design::ui_px(cx, AMOUNT_GAP))
+        .children(amounts.into_iter().map(|(state, what, label)| {
+            let field = format!("{}-field", id(what));
+            h_flex()
+                .debug_selector(move || field.clone())
+                .flex_none()
+                .gap(design::ui_px(cx, AMOUNT_LABEL_GAP))
+                .items_center()
+                .child(
+                    div()
+                        .font_family(design::ui_font())
+                        .text_color(muted)
+                        .child(label),
+                )
+                .child(
+                    div().w(design::ui_px(cx, AMOUNT_W)).child(
+                        MoonInput::new(id(what))
+                            .state(state)
+                            .size(design::INPUT_SIZE),
+                    ),
+                )
+        }));
+    (line.into_any_element(), need)
+}
 
 /// Why the picked chat has no notifications to edit.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -759,19 +823,6 @@ impl SettingsView {
             return block.into_any_element();
         }
         let draft = &ed.draft;
-        let field = |state: &Entity<MoonInputState>, what: &str, label: String| {
-            h_flex()
-                .gap(design::ui_px(cx, 8.0))
-                .items_center()
-                .child(div().text_color(muted).child(label))
-                .child(
-                    div().w(design::ui_px(cx, 90.0)).child(
-                        MoonInput::new(id(what))
-                            .state(state)
-                            .size(design::INPUT_SIZE),
-                    ),
-                )
-        };
         let switch = |what: &str, label: String, on: bool, set: fn(&mut NotifySettings, bool)| {
             MoonCheckbox::new(id(what))
                 .checked(on)
@@ -826,6 +877,39 @@ impl SettingsView {
         let open_basis = self
             .chats(side, cx)
             .is_some_and(|t| t.bot.period_basis == ReportBasis::Open);
+        let mut auto_hint = t!("telegram.auto.hint").to_string();
+        if open_basis && draft.reports.any() {
+            auto_hint.push_str("\n\n");
+            auto_hint.push_str(&t!("telegram.auto.open_basis"));
+        }
+        let (trade_amounts, trade_amounts_w) = amounts_line(
+            vec![
+                (
+                    &ed.min_volume,
+                    "min-volume",
+                    t!("telegram.mini_settings_min_volume").to_string(),
+                ),
+                (
+                    &ed.profit,
+                    "profit",
+                    t!("telegram.mini_settings_profit_at_least").to_string(),
+                ),
+                (
+                    &ed.loss,
+                    "loss",
+                    t!("telegram.mini_settings_loss_at_least").to_string(),
+                ),
+            ],
+            id,
+            cx,
+        );
+        // One controls column for the whole card: every row's explanation starts at the same x.
+        let charts = (side == ChatsOf::Station).then(|| self.chart_notify_parts(side, chat, cx));
+        let controls_w = charts
+            .as_ref()
+            .map_or(0.0, |(_, _, w)| *w)
+            .max(trade_amounts_w)
+            .max(quote_row_w(QuoteList::Trades, cx));
         block
             .when(ed.stale, |block| {
                 block.child(
@@ -867,150 +951,172 @@ impl SettingsView {
                 p,
                 cx,
             ))
-            .child(switch(
-                "trades",
-                t!("telegram.mini_settings_trades").to_string(),
-                draft.trades.on,
-                |s, v| s.trades.on = v,
+            .child(common::aside_row(
+                &id("row-trades"),
+                vec![
+                    h_flex()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 20.0))
+                        .child(switch(
+                            "trades",
+                            t!("telegram.mini_settings_trades").to_string(),
+                            draft.trades.on,
+                            |s, v| s.trades.on = v,
+                        ))
+                        .child(
+                            MoonCheckbox::new(id("all-cores"))
+                                .checked(all)
+                                .label(t!("telegram.mini_settings_all_cores").to_string())
+                                .on_change(cx.listener(move |this, v: &bool, _, cx| {
+                                    let v = *v;
+                                    let ids = all_ids.clone();
+                                    this.notify_edit(side, cx, |s| {
+                                        s.trades.cores = if v {
+                                            CoreScope::All
+                                        } else {
+                                            CoreScope::Only(ids)
+                                        };
+                                    });
+                                })),
+                        )
+                        .into_any_element(),
+                ]
+                .into_iter()
+                .chain((!all).then(|| core_list.into_any_element()))
+                .chain(std::iter::once(trade_amounts))
+                .chain(std::iter::once(self.quote_block(
+                    side,
+                    chat,
+                    QuoteList::Trades,
+                    cx,
+                )))
+                .collect(),
+                Some(format!(
+                    "{}
+
+{}",
+                    t!("telegram.mini_settings_trades_hint"),
+                    quote_hint()
+                )),
+                controls_w,
+                false,
+                cx,
             ))
-            .child(
-                MoonCheckbox::new(id("all-cores"))
-                    .checked(all)
-                    .label(t!("telegram.mini_settings_all_cores").to_string())
-                    .on_change(cx.listener(move |this, v: &bool, _, cx| {
-                        let v = *v;
-                        let ids = all_ids.clone();
-                        this.notify_edit(side, cx, |s| {
-                            s.trades.cores = if v {
-                                CoreScope::All
-                            } else {
-                                CoreScope::Only(ids)
-                            };
-                        });
-                    })),
-            )
-            .when(!all, |block| block.child(core_list))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(field(
-                        &ed.min_volume,
-                        "min-volume",
-                        t!("telegram.mini_settings_min_volume").to_string(),
-                    ))
-                    .child(field(
-                        &ed.profit,
-                        "profit",
-                        t!("telegram.mini_settings_profit_at_least").to_string(),
-                    ))
-                    .child(field(
-                        &ed.loss,
-                        "loss",
-                        t!("telegram.mini_settings_loss_at_least").to_string(),
-                    )),
-            )
-            .child(self.quote_block(side, chat, QuoteList::Trades, cx))
-            .child(switch(
-                "usd-followup",
-                t!("telegram.notify_editor.usd_followup").to_string(),
-                draft.trades.usd_followup,
-                |s, v| s.trades.usd_followup = v,
-            ))
-            .child(cap_prose(
-                div().text_color(muted).child(
+            .child(common::aside_row(
+                &id("row-usd"),
+                vec![
+                    switch(
+                        "usd-followup",
+                        t!("telegram.notify_editor.usd_followup").to_string(),
+                        draft.trades.usd_followup,
+                        |s, v| s.trades.usd_followup = v,
+                    )
+                    .into_any_element(),
+                ],
+                Some(
                     t!(
                         "telegram.notify_editor.trades_hint",
                         minutes = moon_tg::TRADE_HOLD_MINUTES
                     )
                     .to_string(),
                 ),
+                controls_w,
+                side != ChatsOf::Station,
                 cx,
             ))
-            .when(side == ChatsOf::Station, |block| {
-                block.child(self.chart_notify_block(side, chat, cx))
+            .when_some(charts, |block, (controls, hint, _)| {
+                block.child(common::aside_row(
+                    &id("row-charts"),
+                    controls,
+                    Some(hint),
+                    controls_w,
+                    true,
+                    cx,
+                ))
             })
             .child(super::super::common::section(
                 &t!("telegram.notify.sec.core"),
                 p,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(switch(
-                        "opened",
-                        t!("telegram.notify_editor.opened").to_string(),
-                        draft.events.opened,
-                        |s, v| s.events.opened = v,
-                    ))
-                    .child(switch(
-                        "detects",
-                        t!("telegram.notify_editor.detects").to_string(),
-                        draft.events.detects,
-                        |s, v| s.events.detects = v,
-                    )),
-            )
-            .child(cap_prose(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.notify_editor.events_hint").to_string()),
+            .child(common::aside_row(
+                &id("row-events"),
+                vec![
+                    h_flex()
+                        .flex_wrap()
+                        .gap(design::ui_px(cx, 20.0))
+                        .child(switch(
+                            "opened",
+                            t!("telegram.notify_editor.opened").to_string(),
+                            draft.events.opened,
+                            |s, v| s.events.opened = v,
+                        ))
+                        .child(switch(
+                            "detects",
+                            t!("telegram.notify_editor.detects").to_string(),
+                            draft.events.detects,
+                            |s, v| s.events.detects = v,
+                        ))
+                        .into_any_element(),
+                ],
+                Some(t!("telegram.notify_editor.events_hint").to_string()),
+                controls_w,
+                false,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .child(switch(
-                        "down",
-                        t!("telegram.mini_settings_down").to_string(),
-                        draft.down.on,
-                        |s, v| s.down.on = v,
-                    ))
-                    .child(
-                        h_flex()
-                            .gap(design::ui_px(cx, 8.0))
-                            .items_center()
-                            .child(
-                                div()
-                                    .text_color(muted)
-                                    .child(t!("telegram.mini_settings_after_minutes").to_string()),
-                            )
-                            .child(super::super::common::num_input(
-                                "tg-notify-after",
-                                &ed.after_minutes,
-                                1.0..=1440.0,
-                                1.0,
-                                None,
-                            )),
-                    ),
-            )
+            .child(common::aside_row(
+                &id("row-down"),
+                vec![
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(design::ui_px(cx, 14.0))
+                        .child(switch(
+                            "down",
+                            t!("telegram.mini_settings_down").to_string(),
+                            draft.down.on,
+                            |s, v| s.down.on = v,
+                        ))
+                        .child(
+                            h_flex()
+                                .gap(design::ui_px(cx, 8.0))
+                                .items_center()
+                                .child(
+                                    div().text_color(muted).child(
+                                        t!("telegram.mini_settings_after_minutes").to_string(),
+                                    ),
+                                )
+                                .child(super::super::common::num_input(
+                                    "tg-notify-after",
+                                    &ed.after_minutes,
+                                    1.0..=1440.0,
+                                    1.0,
+                                    None,
+                                )),
+                        )
+                        .into_any_element(),
+                ],
+                None,
+                controls_w,
+                true,
+                cx,
+            ))
             .child(super::super::common::section(
                 &t!("telegram.notify.sec.auto"),
                 p,
                 cx,
             ))
-            .child(
-                h_flex()
-                    .flex_wrap()
-                    .gap(design::ui_px(cx, 16.0))
-                    .children(AutoReport::ALL.map(auto)),
-            )
-            .child(cap_prose(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.auto.hint").to_string()),
+            .child(common::aside_row(
+                &id("row-auto"),
+                AutoReport::ALL
+                    .map(|kind| auto(kind).into_any_element())
+                    .into_iter()
+                    .collect(),
+                Some(auto_hint),
+                controls_w,
+                true,
                 cx,
             ))
-            .when(open_basis && draft.reports.any(), |block| {
-                block.child(cap_prose(
-                    div()
-                        .text_color(muted)
-                        .child(t!("telegram.auto.open_basis").to_string()),
-                    cx,
-                ))
-            })
             .into_any_element()
     }
 

@@ -2,14 +2,28 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.section: "Telegram на ядрі"
-
-
-telegram_core.core_pick: "Ядро"
-
 telegram_core.core_pick_none: "Виберіть ядро"
-
-telegram_core.details: "Параметри ядра"
+telegram_core.tag.logged_in: "увійшов"
+telegram_core.tag.not_logged_in: "не увійшов"
+telegram_core.tag.proxy_error: "помилка проксі"
+telegram_core.tag.reader_off: "рідер вимкнено"
+telegram_core.tag.no_core: "немає зв'язку з ядром"
+telegram_core.tag.unsupported: "немає віддаленого входу"
+telegram_core.tag_short.logged_in: "увійшов"
+telegram_core.tag_short.not_logged_in: "не увійшов"
+telegram_core.tag_short.proxy_error: "помилка проксі"
+telegram_core.tag_short.reader_off: "рідер вимк."
+telegram_core.tag_short.no_core: "немає зв'язку"
+telegram_core.tag_short.unsupported: "немає входу"
+telegram_core.list_core: "Ядро"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "Вхід"
+telegram_core.row_account: "Акаунт"
+telegram_core.account_phone: "Акаунт %{phone} · увійшов"
+telegram_core.account_none: "Акаунт не підключено"
+telegram_core.account_reader_off: "Рідер вимкнено — акаунт не чіпаємо"
+telegram_core.disconnected_hint: "Стан Telegram надходить від самого ядра. Щойно зв'язок повернеться, тут з'являться вхід і проксі."
+telegram_core.reconnect: "Перепідключити"
 
 telegram_core.enable: "Увімкнути рідер"
 
@@ -37,7 +51,6 @@ telegram_core.disconnected: "Ядро не підключено."
 
 telegram_core.no_snapshot: "Немає знімка стану."
 
-
 telegram_core.proxy_kind_none: "Без проксі"
 
 telegram_core.proxy_kind_socks5: "SOCKS5"
@@ -54,7 +67,6 @@ telegram_core.proxy_password: "Пароль"
 
 telegram_core.proxy_secret: "Секрет"
 
-
 telegram_core.proxy_secret_hint: "Ядро ніколи не повертає збережений пароль або секрет, тож введіть його знову. Порожнє значення стирає його, а не лишає старе."
 
 telegram_core.proxy_actual: "Активний проксі"
@@ -63,13 +75,11 @@ telegram_core.proxy_actual_unknown: "ще не відомо"
 
 telegram_core.proxy_error: "Помилка проксі"
 
-
 telegram_core.phone: "Телефон"
 
 telegram_core.phone_hint: "Міжнародний формат, наприклад +15551234567."
 
 telegram_core.phone_send: "Надіслати номер"
-
 
 telegram_core.login_phone: "Увійти за номером телефону"
 

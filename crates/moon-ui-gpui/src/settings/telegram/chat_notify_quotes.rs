@@ -259,7 +259,8 @@ impl SettingsView {
         cx.notify();
     }
 
-    /// The rows of `list` for `chat` on `side`, then the picker adding a currency, then the hint.
+    /// The rows of `list` for `chat` on `side`, then the picker adding a currency. Its hint is
+    /// [`quote_hint`], for the rule's explanation.
     pub(super) fn quote_block(
         &self,
         side: ChatsOf,
@@ -268,8 +269,6 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let p = MoonPalette::active(cx);
-        let muted = rgba_from(p.text_muted, 1.0);
-        let text = rgba_from(p.text, 1.0);
         let prefix = match side {
             ChatsOf::Terminal => "tgn",
             ChatsOf::Station => "tgns",
@@ -281,41 +280,32 @@ impl SettingsView {
         let row_el = |row: &QuoteRowEd| {
             let quote = row.quote;
             let ticker = quote.ticker();
-            h_flex()
-                .flex_wrap()
-                .gap(design::ui_px(cx, 16.0))
-                .items_center()
-                .child(
-                    div()
-                        .min_w(design::ui_px(cx, 48.0))
-                        .text_color(text)
-                        .child(ticker),
-                )
-                .children(list.labels().iter().zip(&row.fields).enumerate().map(
-                    |(n, (key, state))| {
-                        h_flex()
-                            .gap(design::ui_px(cx, 8.0))
-                            .items_center()
-                            .child(div().text_color(muted).child(t!(*key).to_string()))
-                            .child(
-                                div().w(design::ui_px(cx, 90.0)).child(
-                                    MoonInput::new(id(&format!("{ticker}-{n}")))
-                                        .state(state)
-                                        .size(design::INPUT_SIZE),
-                                ),
-                            )
-                    },
-                ))
-                .child(
-                    MoonButton::new(id(&format!("{ticker}-remove")))
-                        .ghost()
-                        .padding_x(12.0)
-                        .label(t!("telegram.notify_editor.quote_remove").to_string())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.quote_remove(side, list, quote, cx);
-                        }))
-                        .render(),
-                )
+            let fields = list
+                .labels()
+                .iter()
+                .zip(&row.fields)
+                .enumerate()
+                .map(|(n, (key, state))| {
+                    (
+                        t!(*key).to_string(),
+                        MoonInput::new(id(&format!("{ticker}-{n}")))
+                            .state(state)
+                            .size(design::INPUT_SIZE)
+                            .into_any_element(),
+                    )
+                })
+                .collect();
+            let remove = MoonButton::new(id(&format!("{ticker}-remove")))
+                .ghost()
+                .padding_x(REMOVE_PAD_X)
+                .width(remove_w(cx))
+                .label(t!("telegram.notify_editor.quote_remove").to_string())
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.quote_remove(side, list, quote, cx);
+                }))
+                .render()
+                .into_any_element();
+            quote_row_line(ticker, fields, remove, cx)
         };
         let weak = cx.entity().downgrade();
         let addable: Vec<MoonMenuItem> = QuoteCurrency::all()
@@ -351,14 +341,93 @@ impl SettingsView {
                         .items(addable),
                 ),
             )
-            .child(crate::settings::common::cap_prose(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.notify_editor.quote_hint").to_string()),
-                cx,
-            ))
             .into_any_element()
     }
+}
+
+/// Width of a currency's ticker cell, unscaled.
+const TICKER_W: f32 = 48.0;
+/// Width of a per-currency amount box, unscaled.
+const FIELD_W: f32 = 90.0;
+/// Gap between the cells of a currency's row, unscaled.
+const ROW_GAP: f32 = 16.0;
+/// Gap between a field's caption and its box, unscaled.
+const LABEL_GAP: f32 = 8.0;
+/// Horizontal padding of a row's remove button, unscaled.
+const REMOVE_PAD_X: f32 = 12.0;
+
+/// What a list's per-currency thresholds mean, for the explanation beside its rule: it is not
+/// drawn under the picker, where it would widen the controls column.
+pub(super) fn quote_hint() -> String {
+    t!("telegram.notify_editor.quote_hint").to_string()
+}
+
+/// One currency's line: its ticker, each field after its caption, then its remove button.
+///
+/// Args:
+///     ticker: The currency's ticker.
+///     fields: Each field's caption and its input.
+///     remove: The remove button.
+///     cx: Application context for theme and scale.
+pub(super) fn quote_row_line(
+    ticker: &str,
+    fields: Vec<(String, AnyElement)>,
+    remove: AnyElement,
+    cx: &App,
+) -> Div {
+    let p = MoonPalette::active(cx);
+    let muted = rgba_from(p.text_muted, 1.0);
+    h_flex()
+        .flex_wrap()
+        .gap(design::ui_px(cx, ROW_GAP))
+        .items_center()
+        .font_family(design::ui_font())
+        .child(
+            div()
+                .min_w(design::ui_px(cx, TICKER_W))
+                .text_color(rgba_from(p.text, 1.0))
+                .child(ticker.to_string()),
+        )
+        .children(fields.into_iter().map(|(label, input)| {
+            h_flex()
+                .flex_none()
+                .gap(design::ui_px(cx, LABEL_GAP))
+                .items_center()
+                .child(div().text_color(muted).child(label))
+                .child(div().w(design::ui_px(cx, FIELD_W)).child(input))
+        }))
+        .child(remove)
+}
+
+/// The remove button's width: its mono caption at the control size, padding and border. Set on
+/// the button, so [`quote_row_w`] adds what is drawn.
+pub(super) fn remove_w(cx: &App) -> f32 {
+    let metrics = design::CONTROL_TIER.control_metrics();
+    (design::ui_text_width_zoomed(
+        cx,
+        t!("telegram.notify_editor.quote_remove").as_ref(),
+        metrics.font_size,
+        400.0,
+        true,
+    ) + design::ui_value(cx, 2.0 * (REMOVE_PAD_X + 1.0))
+        + 2.0)
+        .ceil()
+}
+
+/// The width a currency's line of `list` needs to stay on one line: the controls column of its
+/// rule's `aside_row` never gets narrower than that, so adding a currency never moves the
+/// explanation.
+pub(super) fn quote_row_w(list: QuoteList, cx: &App) -> f32 {
+    let text = |key: &str| design::ui_body_text_width(cx, t!(key).as_ref(), 400.0) + 2.0;
+    let fields: f32 = list
+        .labels()
+        .iter()
+        .map(|key| text(key) + design::ui_value(cx, LABEL_GAP + FIELD_W))
+        .sum();
+    let n = list.labels().len() as f32;
+    let remove = remove_w(cx);
+    (design::ui_value(cx, TICKER_W) + fields + remove + (n + 1.0) * design::ui_value(cx, ROW_GAP))
+        .ceil()
 }
 
 #[cfg(test)]

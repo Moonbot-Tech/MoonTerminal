@@ -2,14 +2,28 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-telegram_core.section: "Çekirdekteki Telegram"
-
-
-telegram_core.core_pick: "Çekirdek"
-
 telegram_core.core_pick_none: "Bir çekirdek seçin"
-
-telegram_core.details: "Çekirdek ayarları"
+telegram_core.tag.logged_in: "giriş yapıldı"
+telegram_core.tag.not_logged_in: "giriş yapılmadı"
+telegram_core.tag.proxy_error: "proxy hatası"
+telegram_core.tag.reader_off: "okuyucu kapalı"
+telegram_core.tag.no_core: "çekirdeğe bağlantı yok"
+telegram_core.tag.unsupported: "uzaktan giriş yok"
+telegram_core.tag_short.logged_in: "giriş var"
+telegram_core.tag_short.not_logged_in: "giriş yok"
+telegram_core.tag_short.proxy_error: "proxy hatası"
+telegram_core.tag_short.reader_off: "okuyucu kapalı"
+telegram_core.tag_short.no_core: "bağlantı yok"
+telegram_core.tag_short.unsupported: "giriş desteklenmez"
+telegram_core.list_core: "Çekirdek"
+telegram_core.list_telegram: "Telegram"
+telegram_core.row_login: "Giriş"
+telegram_core.row_account: "Hesap"
+telegram_core.account_phone: "Hesap %{phone} · giriş yapıldı"
+telegram_core.account_none: "Bağlı hesap yok"
+telegram_core.account_reader_off: "Okuyucu kapalı — hesaba dokunulmaz"
+telegram_core.disconnected_hint: "Telegram durumu çekirdeğin kendisinden gelir. Bağlantı geri gelir gelmez giriş ve proxy burada görünür."
+telegram_core.reconnect: "Yeniden bağlan"
 
 telegram_core.enable: "Okuyucuyu aç"
 
@@ -37,7 +51,6 @@ telegram_core.disconnected: "Çekirdek bağlı değil."
 
 telegram_core.no_snapshot: "Durum anlık görüntüsü yok."
 
-
 telegram_core.proxy_kind_none: "Proxy yok"
 
 telegram_core.proxy_kind_socks5: "SOCKS5"
@@ -54,7 +67,6 @@ telegram_core.proxy_password: "Parola"
 
 telegram_core.proxy_secret: "Gizli anahtar"
 
-
 telegram_core.proxy_secret_hint: "Çekirdek kayıtlı parolayı veya gizli anahtarı geri vermez, yeniden yazın. Boş bırakmak eskisini tutmaz, siler."
 
 telegram_core.proxy_actual: "Etkin proxy"
@@ -63,13 +75,11 @@ telegram_core.proxy_actual_unknown: "henüz bilinmiyor"
 
 telegram_core.proxy_error: "Proxy hatası"
 
-
 telegram_core.phone: "Telefon"
 
 telegram_core.phone_hint: "Uluslararası biçim, örneğin +905551234567."
 
 telegram_core.phone_send: "Numarayı gönder"
-
 
 telegram_core.login_phone: "Bunun yerine telefon numarası kullan"
 

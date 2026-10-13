@@ -394,6 +394,121 @@ fn card_prose_keeps_its_line_length_when_wide(cx: &mut gpui::TestAppContext) {
     );
 }
 
+/// Catches the Notifications page stacking every explanation under its controls on a wide window
+/// (half the card empty) or clipping it on a narrow one: a row of the three thresholds and a row
+/// of two switches keep their explanation right of the controls at a wide window and under them
+/// at the default one, the thresholds on one line, the text uncut and inside the card, in every
+/// language.
+#[gpui::test]
+fn notification_rows_put_the_explanation_beside_the_controls(cx: &mut gpui::TestAppContext) {
+    use crate::settings::common::{PROSE_MAX_W, aside_row};
+    use crate::settings::general::probe_host::{host, window_text};
+    use crate::settings::layout_probe::{ProbeSpec, SIZES, WIDE, sweep_sizes};
+    use gpui::{AppContext, IntoElement, ParentElement, SharedString, Styled};
+    let amounts_hint =
+        || rust_i18n::t!("telegram.notify_editor.trades_hint", minutes = 5).to_string();
+    let events_hint = || rust_i18n::t!("telegram.notify_editor.events_hint").to_string();
+    let make = || {
+        host(move |window, cx| {
+            let states: Vec<_> = (0..3)
+                .map(|_| cx.new(|cx| moon_ui::MoonInputState::new(window, cx)))
+                .collect();
+            let (line, line_w) = super::chat_notify::amounts_line(
+                vec![
+                    (
+                        &states[0],
+                        "min-volume",
+                        rust_i18n::t!("telegram.mini_settings_min_volume").to_string(),
+                    ),
+                    (
+                        &states[1],
+                        "profit",
+                        rust_i18n::t!("telegram.mini_settings_profit_at_least").to_string(),
+                    ),
+                    (
+                        &states[2],
+                        "loss",
+                        rust_i18n::t!("telegram.mini_settings_loss_at_least").to_string(),
+                    ),
+                ],
+                |what| SharedString::from(format!("probe-amount-{what}")),
+                cx,
+            );
+            let switches = gpui::div()
+                .flex()
+                .gap_4()
+                .child(rust_i18n::t!("telegram.notify_editor.opened").to_string())
+                .child(rust_i18n::t!("telegram.notify_editor.detects").to_string())
+                .into_any_element();
+            let card = moon_ui::MoonGroupBox::new("probe-notify-card")
+                .child(aside_row(
+                    "probe-amounts",
+                    vec![line],
+                    Some(amounts_hint()),
+                    line_w,
+                    false,
+                    cx,
+                ))
+                .child(aside_row(
+                    "probe-events",
+                    vec![switches],
+                    Some(events_hint()),
+                    0.0,
+                    true,
+                    cx,
+                ));
+            window_text(card.into_any_element(), cx)
+        })
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    let fields = || {
+        ["min-volume", "profit", "loss"]
+            .map(|what| format!("probe-amount-{what}-field"))
+            .to_vec()
+    };
+    let common = move |right: Option<bool>| {
+        let rows = ["probe-amounts", "probe-events"];
+        let mut spec = ProbeSpec {
+            container: "probe-body",
+            inside: rows
+                .iter()
+                .flat_map(|row| [format!("{row}-controls"), format!("{row}-aside")])
+                .chain(fields())
+                .collect(),
+            wraps: vec![
+                ("probe-amounts-aside".into(), amounts_hint()),
+                ("probe-events-aside".into(), events_hint()),
+            ],
+            max_width: rows
+                .iter()
+                .map(|row| (format!("{row}-aside"), PROSE_MAX_W))
+                .collect(),
+            ..Default::default()
+        };
+        let placed = rows
+            .iter()
+            .map(|row| pair(&format!("{row}-controls"), &format!("{row}-aside")))
+            .collect();
+        match right {
+            Some(true) => {
+                spec.right_of = placed;
+                spec.same_top = vec![fields()];
+            }
+            Some(false) => spec.under = placed,
+            // Beside or under by the language's text width: only fit and clipping are checked.
+            None => {}
+        }
+        spec
+    };
+    // The wide window: the explanation beside, the thresholds on one line.
+    sweep_sizes(cx, &[WIDE], make(), move |_| common(Some(true)));
+    sweep_sizes(cx, &[SIZES[4], SIZES[3]], make(), move |_| common(None));
+    // The default and the minimum window: too narrow for both, the explanation drops under.
+    sweep_sizes(cx, &[SIZES[0], SIZES[1]], make(), move |_| {
+        common(Some(false))
+    });
+}
+
 /// Two synthetic chats for the chats-card width check: a short label and a long one.
 const TWO_CHATS: [(i64, &str); 2] = [
     (200001, "Synthetic owner"),
@@ -502,5 +617,186 @@ fn the_chats_table_label_takes_its_explicit_width(cx: &mut gpui::TestAppContext)
                 );
             }
         }
+    }
+}
+
+/// Catches the Notifications card's explanations starting at different x (a row's controls
+/// widened by the per-currency block) and the empty gap under that block: at a wide window the
+/// thresholds row, a per-currency row with its picker and the switches row share one controls
+/// column, the currency's line fits in it, its hint sits in the explanation, and no controls
+/// column is taller than what it holds — in every language.
+#[gpui::test]
+fn notification_rows_share_one_controls_column(cx: &mut gpui::TestAppContext) {
+    use super::chat_notify_quotes::{QuoteList, quote_hint, quote_row_line, quote_row_w, remove_w};
+    use crate::design;
+    use crate::settings::common::aside_row;
+    use crate::settings::layout_probe::leak;
+    use gpui::{AppContext, InteractiveElement, IntoElement, ParentElement, SharedString, Styled};
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let code = language.code();
+        let _locale = crate::test_locale::force(code);
+        let width = 1700.0;
+        let window = cx.open_window(gpui::size(gpui::px(1900.0), gpui::px(1200.0)), |_, _| {
+            Host {
+                width,
+                scroll: gpui::ScrollHandle::new(),
+                build: std::rc::Rc::new(move |window, cx| {
+                    let mut state =
+                        |cx: &mut gpui::App| cx.new(|cx| moon_ui::MoonInputState::new(window, cx));
+                    let states: Vec<_> = (0..6).map(|_| state(cx)).collect();
+                    let t = |key: &str| rust_i18n::t!(key).to_string();
+                    let (line, line_w) = super::chat_notify::amounts_line(
+                        vec![
+                            (
+                                &states[0],
+                                "min-volume",
+                                t("telegram.mini_settings_min_volume"),
+                            ),
+                            (
+                                &states[1],
+                                "profit",
+                                t("telegram.mini_settings_profit_at_least"),
+                            ),
+                            (
+                                &states[2],
+                                "loss",
+                                t("telegram.mini_settings_loss_at_least"),
+                            ),
+                        ],
+                        |what| SharedString::from(format!("probe-amount-{what}")),
+                        cx,
+                    );
+                    let fields = [
+                        "telegram.quote_volume",
+                        "telegram.quote_profit",
+                        "telegram.quote_loss",
+                    ]
+                    .iter()
+                    .zip(&states[3..])
+                    .enumerate()
+                    .map(|(n, (key, state))| {
+                        (
+                            t(key),
+                            moon_ui::MoonInput::new(SharedString::from(format!("probe-q-{n}")))
+                                .state(state)
+                                .size(design::INPUT_SIZE)
+                                .into_any_element(),
+                        )
+                    })
+                    .collect();
+                    let remove = moon_ui::MoonButton::new("probe-q-remove")
+                        .ghost()
+                        .padding_x(12.0)
+                        .width(remove_w(cx))
+                        .label(t("telegram.notify_editor.quote_remove"))
+                        .render()
+                        .into_any_element();
+                    let quote = gpui::div()
+                        .debug_selector(|| "probe-quote-line".into())
+                        .child(quote_row_line("RUB", fields, remove, cx))
+                        .into_any_element();
+                    let add = gpui::div()
+                        .debug_selector(|| "probe-quote-add".into())
+                        .child(t("telegram.notify_editor.quote_add"))
+                        .into_any_element();
+                    let controls_w = line_w.max(quote_row_w(QuoteList::Trades, cx));
+                    let switches = gpui::div()
+                        .flex()
+                        .gap_4()
+                        .child(t("telegram.notify_editor.opened"))
+                        .child(t("telegram.notify_editor.detects"))
+                        .into_any_element();
+                    let card = moon_ui::MoonGroupBox::new("probe-notify-card")
+                        .child(aside_row(
+                            "probe-trades",
+                            vec![line, quote, add],
+                            Some(format!(
+                                "{}\n\n{}",
+                                t("telegram.mini_settings_trades_hint"),
+                                quote_hint()
+                            )),
+                            controls_w,
+                            false,
+                            cx,
+                        ))
+                        .child(aside_row(
+                            "probe-usd",
+                            vec![
+                                gpui::div()
+                                    .child(t("telegram.notify_editor.usd_followup"))
+                                    .into_any_element(),
+                            ],
+                            Some(
+                                rust_i18n::t!("telegram.notify_editor.trades_hint", minutes = 5)
+                                    .to_string(),
+                            ),
+                            controls_w,
+                            false,
+                            cx,
+                        ))
+                        .child(aside_row(
+                            "probe-events",
+                            vec![switches],
+                            Some(t("telegram.notify_editor.events_hint")),
+                            controls_w,
+                            true,
+                            cx,
+                        ));
+                    crate::settings::general::probe_host::window_text(card.into_any_element(), cx)
+                }),
+            }
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        for _ in 0..3 {
+            visual.update(|window, cx| {
+                let _ = window.draw(cx);
+            });
+        }
+        let mut at = |sel: &str| {
+            visual
+                .debug_bounds(leak(sel.to_string()))
+                .unwrap_or_else(|| panic!("{code}: {sel} not laid out"))
+        };
+        let rows = ["probe-trades", "probe-usd", "probe-events"];
+        let asides: Vec<_> = rows.iter().map(|r| at(&format!("{r}-aside"))).collect();
+        let controls: Vec<_> = rows.iter().map(|r| at(&format!("{r}-controls"))).collect();
+        for (row, (aside, ctl)) in rows.iter().zip(asides.iter().zip(&controls)) {
+            assert!(
+                (f32::from(aside.origin.x) - f32::from(asides[0].origin.x)).abs() <= 0.5,
+                "{code}: {row}'s explanation starts at {:?}, not {:?}",
+                aside.origin.x,
+                asides[0].origin.x
+            );
+            assert!(
+                ctl.right() <= aside.origin.x,
+                "{code}: {row} controls under its text"
+            );
+        }
+        let line = at("probe-quote-line");
+        let add = at("probe-quote-add");
+        let amounts = at("probe-amount-loss-field");
+        assert!(
+            line.right() <= controls[0].right() + gpui::px(0.5),
+            "{code}: the currency's line spills out of the controls column"
+        );
+        assert!(
+            amounts.right() <= controls[0].right() + gpui::px(0.5),
+            "{code}: the thresholds spill out of the controls column"
+        );
+        // Nothing under the picker: the controls column ends at it (its padding aside).
+        assert!(
+            f32::from(controls[0].bottom()) <= f32::from(add.bottom()) + 1.0,
+            "{code}: an empty gap under the per-currency picker ({:?} > {:?})",
+            controls[0].bottom(),
+            add.bottom()
+        );
+        // The currency's line stays on one line: under two field heights, a wrap is more.
+        let one_line = 2.0 * f32::from(at("probe-amount-min-volume-field").size.height);
+        assert!(
+            f32::from(line.size.height) <= one_line,
+            "{code}: the currency's line wrapped ({:?})",
+            line.size.height
+        );
     }
 }
