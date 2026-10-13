@@ -870,9 +870,9 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
                        const device GpuSeg* segs [[buffer(1)]]) {
     // extend: 0 = as given, 1 = to the right edge at the SAME price (an order line), 2 = ray.
     // A ray keeps its DIRECTION, so its far end is pushed along a->b past the plot and left to the
-    // clip — solving against an edge would divide by a direction component that is zero for a
-    // vertical ray. Two details matter: the direction is taken from the UNSNAPPED points, because a
-    // one-pixel round over a long reach visibly tilts the line, and the far end is not snapped at
+    // clip. Parallel axes are skipped when finding the plot exit. The direction is taken from
+    // the UNSNAPPED points, because a one-pixel round over a long reach visibly tilts the line.
+    // The far end is not snapped at
     // all for the same reason. Only the start keeps the snap that stops a thin line from flickering.
     GpuSeg s = segs[iid];
     bool ray = s.m.z >= 1.5;
@@ -885,9 +885,19 @@ vertex SOut seg_vertex(uint vid [[vertex_id]], uint iid [[instance_id]],
     float2 b = float2(b_raw.x, round(b_raw.y));
     if (ray) {
         float2 d = b_raw - a_raw;
-        // Origin-to-plot distance plus the diagonal bounds every visible point, even after a long pan.
-        float reach = length(a - cv.bounds.xy) + length(cv.bounds.zw) + length(d) + 1.0;
-        b = a + normalize(d + float2(1e-6, 0.0)) * reach;
+        float2 unit = normalize(d + float2(1e-6, 0.0));
+        // The aim gives direction only: a day of pixels must not lengthen the quad at narrow zooms.
+        // Expand by half the stroke so a thick ray grazing an edge keeps its visible span.
+        // Use the first forward exit, even for origins far outside the plot, plus one pixel.
+        float half_width = max(s.m.x, 1.0) * 0.5;
+        float2 lo = cv.bounds.xy - half_width;
+        float2 hi = cv.bounds.xy + cv.bounds.zw + half_width;
+        float2 edge = float2(unit.x > 0.0 ? hi.x : lo.x, unit.y > 0.0 ? hi.y : lo.y);
+        float2 exit = float2(1e30, 1e30);
+        if (unit.x != 0.0) exit.x = (edge.x - a.x) / unit.x;
+        if (unit.y != 0.0) exit.y = (edge.y - a.y) / unit.y;
+        float reach = max(min(exit.x, exit.y), 0.0) + 1.0;
+        b = a + unit * reach;
     }
     // m.w = SEG_CLAMP_PLOT pins the segment to the plot once its price leaves the visible band, so
     // an exit line a few percent away stays visible and grabbable at any zoom instead of being

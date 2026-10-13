@@ -688,26 +688,72 @@ fn every_backend_extends_a_ray_along_its_direction() {
     }
 }
 
-/// Evaluate the shader's sum of lengths so a reach regression fails on geometry, not emission.
-/// Unknown expressions fail closed: a shader rewrite must update this small numeric adapter.
-fn shader_ray_reach(src: &str, a: [f32; 2], d: [f32; 2], bounds: [f32; 4]) -> f32 {
-    let expression = src
-        .split_once(" reach = ")
+/// Evaluate the shaders' plot-exit calculation, checking its source before numeric replay.
+/// Unknown expressions fail closed so a shader rewrite cannot silently use a stale CPU mirror.
+fn shader_ray_reach(src: &str, a: [f32; 2], d: [f32; 2], bounds: [f32; 4], thickness: f32) -> f32 {
+    let src = braced_body(src, "seg_vertex(").replace("cv_bounds", "cv.bounds");
+    let compact: String = src
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '{' && *c != '}')
+        .collect();
+    assert!(
+        compact.contains("unit=normalize(d+float2(1e-6,0.0));")
+            || compact.contains("unit=normalize(d+vec2<f32>(1e-6,0.0));")
+    );
+    assert!(compact.contains("half_width=max(s.m.x,1.0)*0.5;"));
+    assert!(
+        compact.contains("lo=cv.bounds.xy-half_width;")
+            || compact.contains("lo=cv.bounds.xy-vec2<f32>(half_width);")
+    );
+    assert!(
+        compact.contains("hi=cv.bounds.xy+cv.bounds.zw+half_width;")
+            || compact.contains("hi=cv.bounds.xy+cv.bounds.zw+vec2<f32>(half_width);")
+    );
+    assert!(
+        compact.contains("edge=float2(unit.x>0.0?hi.x:lo.x,unit.y>0.0?hi.y:lo.y);")
+            || compact.contains("edge=select(lo,hi,unit>vec2<f32>(0.0));")
+    );
+    assert!(
+        compact.contains("exit=float2(1e30,1e30);")
+            || compact.contains("exit=vec2<f32>(1e30,1e30);")
+    );
+    for axis in ["x", "y"] {
+        assert!(compact.contains(&format!(
+            "if(unit.{axis}!=0.0)exit.{axis}=(edge.{axis}-a.{axis})/unit.{axis};"
+        )));
+    }
+    assert!(
+        compact.contains("b=a+unit*reach;")
+            || compact.contains("b=select(b_snapped,a+unit*reach,ray);")
+    );
+    let expression = compact
+        .split_once("reach=")
         .expect("ray reach assignment")
         .1
         .split_once(';')
         .expect("ray reach terminator")
-        .0
-        .replace("cv_bounds", "cv.bounds");
-    expression
-        .split('+')
-        .map(|term| match term.trim() {
-            "length(a - cv.bounds.xy)" => (a[0] - bounds[0]).hypot(a[1] - bounds[1]),
-            "length(cv.bounds.zw)" => bounds[2].hypot(bounds[3]),
-            "length(d)" => d[0].hypot(d[1]),
-            scalar => scalar.parse::<f32>().expect("supported ray reach term"),
-        })
-        .sum()
+        .0;
+    let margin = expression
+        .strip_prefix("max(min(exit.x,exit.y),0.0)+")
+        .expect("supported plot-exit reach")
+        .parse::<f32>()
+        .expect("numeric ray margin");
+    let length = (d[0] + 1e-6).hypot(d[1]);
+    let unit = [(d[0] + 1e-6) / length, d[1] / length];
+    let mut exit = [1e30_f32; 2];
+    let half_width = thickness.max(1.0) * 0.5;
+    for axis in 0..2 {
+        if unit[axis] != 0.0 {
+            let edge = bounds[axis]
+                + if unit[axis] > 0.0 {
+                    bounds[axis + 2] + half_width
+                } else {
+                    -half_width
+                };
+            exit[axis] = (edge - a[axis]) / unit[axis];
+        }
+    }
+    exit[0].min(exit[1]).max(0.0) + margin
 }
 
 /// Two days left of a one-hour viewport used to end the ray at x=-13678, wholly offscreen.
@@ -721,7 +767,7 @@ fn every_backend_ray_reaches_the_viewport_from_a_distant_origin() {
         "chartdx/shaders/native_seg.wgsl",
     ] {
         let src = code_only(&read_src(path));
-        assert!(src.contains("a + normalize(d + "));
+        assert!(src.contains("a + unit * reach"));
         assert!(src.contains("* reach"));
         for offset in [[0.0_f32, 0.0], [120.0, 80.0]] {
             let bounds = [offset[0], offset[1], 600.0, 400.0];
@@ -735,7 +781,7 @@ fn every_backend_ray_reaches_the_viewport_from_a_distant_origin() {
                 ([250.0, 200.0], [14_400.0, 0.0], [600.0, 200.0]),
             ] {
                 let a = [origin[0] + offset[0], origin[1] + offset[1]];
-                let reach = shader_ray_reach(&src, a, d, bounds);
+                let reach = shader_ray_reach(&src, a, d, bounds, 1.0);
                 let needed = (exit[0] - origin[0]).hypot(exit[1] - origin[1]);
                 assert!(
                     reach > needed,
@@ -749,11 +795,87 @@ fn every_backend_ray_reaches_the_viewport_from_a_distant_origin() {
                 ];
                 if d[1] == 0.0 && d[0] > 0.0 {
                     assert!(b[0] > offset[0] + 600.0, "{path}: ray misses right edge");
+                    assert!(b[0] <= offset[0] + 602.0, "{path}: oversized ray endpoint");
                     assert_eq!(b[1], a[1]);
                     assert_eq!(a[0].min(b[0]), a[0], "{path}: ray extends left of origin");
                 }
             }
         }
+    }
+}
+
+/// Reintroducing the one-day aim length makes narrow-zoom quads many screens long and flicker.
+/// Check the default and fifteen-minute windows during a pan, with inside and distant origins.
+#[test]
+fn every_backend_horizontal_ray_ends_just_past_the_plot_at_each_zoom() {
+    for path in [
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_seg.wgsl",
+    ] {
+        let src = code_only(&read_src(path));
+        for window_ms in [900_000.0_f32, moon_chart::view::initial_window_ms(None)] {
+            for width in [180.0_f32, 600.0, 1920.0] {
+                let bounds = [120.0, 80.0, width, 400.0];
+                let scale = width / window_ms;
+                let d = [86_400_000.0 * scale, 0.0];
+                for origin_ms in [window_ms * 0.25, -2.0 * 86_400_000.0] {
+                    for scroll_px in [-30.0_f32, -0.5, 0.0, 0.5, 30.0] {
+                        let a = [bounds[0] + origin_ms * scale + scroll_px, 280.0];
+                        let b = [a[0] + shader_ray_reach(&src, a, d, bounds, 1.0), a[1]];
+                        let right = bounds[0] + width;
+                        assert!(b[0] > right && b[0] <= right + 2.0, "{path}: {b:?}");
+                        assert!(a[0].max(bounds[0]) < right && b[0] > right);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Clipping a regular Ray's off-screen endpoint must retain every visible point on its slope.
+/// An incorrect exit edge or a changed direction would truncate or tilt these independently
+/// specified spans, including vertical, leftward and outside-origin rays.
+#[test]
+fn every_backend_regular_ray_keeps_its_visible_span() {
+    let bounds = [120.0_f32, 80.0, 600.0, 400.0];
+    for path in [
+        "chartdx/shaders/order_lines.hlsl",
+        "chartdx/shaders/chart_native.metal",
+        "chartdx/shaders/native_seg.wgsl",
+    ] {
+        let src = code_only(&read_src(path));
+        for (a, d, first, last) in [
+            ([220.0, 180.0], [2.0, 1.0], [220.0, 180.0], [720.0, 430.0]),
+            ([-280.0, -120.0], [2.0, 1.0], [120.0, 80.0], [720.0, 380.0]),
+            ([820.0, 180.0], [-2.0, 1.0], [720.0, 230.0], [220.0, 480.0]),
+            ([420.0, -120.0], [0.0, 1.0], [420.0, 80.0], [420.0, 480.0]),
+            ([420.0, 680.0], [0.0, -1.0], [420.0, 480.0], [420.0, 80.0]),
+        ] {
+            let reach = shader_ray_reach(&src, a, d, bounds, 1.0);
+            let length = (d[0] + 1e-6).hypot(d[1]);
+            let unit = [(d[0] + 1e-6) / length, d[1] / length];
+            let b = [a[0] + unit[0] * reach, a[1] + unit[1] * reach];
+            for point in [first, last] {
+                let relative = [point[0] - a[0], point[1] - a[1]];
+                let along = relative[0] * unit[0] + relative[1] * unit[1];
+                let across = relative[0] * unit[1] - relative[1] * unit[0];
+                assert!(along >= -0.01 && along < reach, "{path}: lost {point:?}");
+                assert!(across.abs() < 0.01, "{path}: changed slope at {point:?}");
+            }
+            assert!(
+                (b[0] - last[0]).hypot(b[1] - last[1]) <= 3.0,
+                "{path}: {b:?}"
+            );
+        }
+        // The centre line is above the plot; its four-pixel stroke still covers the top row.
+        // Clipping against the unexpanded centre-line bounds would stop it before the right edge.
+        let a = [100.0, 79.5];
+        let reach = shader_ray_reach(&src, a, [600.0, -0.5], bounds, 4.0);
+        assert!(
+            reach > 620.0 && reach < 624.0,
+            "{path}: lost a grazing thick ray"
+        );
     }
 }
 
