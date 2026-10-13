@@ -96,7 +96,7 @@ impl StrategiesView {
     /// Modified clicks and core-root clicks retain their existing selection semantics.
     ///
     /// Returns:
-    ///     Whether anything about the folder selection actually changed.
+    ///     Whether folder selection changed or a plain folder click retired strategy selection.
     pub(super) fn apply_folder_click(
         &mut self,
         node: (CoreId, String),

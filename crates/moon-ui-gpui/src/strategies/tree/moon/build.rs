@@ -187,7 +187,7 @@ pub(super) fn build_core_root(
     // none: on an account whose folders were prepared before its strategies, that is everything
     // there is to show. Asked of the folders that would actually be DRAWN — a core whose every
     // folder is occupied by strategies the filter removed has nothing to show and stays hidden.
-    let empty_folders = empty_folder_paths(view, cd, core, searching);
+    let empty_folders = empty_folder_paths(view, cd, core, filter);
     // Without row filters, even a completely empty core must remain available as a destination
     // for creating or copying its first strategy or folder.
     if filter.narrows() && !any_matched && empty_folders.is_empty() {
@@ -288,20 +288,16 @@ pub(super) fn build_core_root(
 ///     view: Window holding the local marks.
 ///     cd: The core's live data, including the tree it reports.
 ///     core: Core being built.
-///     searching: Whether a text query is narrowing the tree.
+///     filter: Prepared query used to retain matching folders and their descendants.
 ///
 /// Returns:
-///     Segment paths of the folders to draw as empty; always empty while searching, since an empty
-///     folder matches no query and cannot contain a match.
+///     Segment paths of empty folders to draw, including matching subtrees while searching.
 pub(super) fn empty_folder_paths(
     view: &StrategiesView,
     cd: &moon_core::session::store::CoreData,
     core: CoreId,
-    searching: bool,
+    filter: &PreparedFilter,
 ) -> Vec<Vec<String>> {
-    if searching {
-        return Vec::new();
-    }
     let marks = view.ui_folder_paths(core);
     let reported: Vec<Vec<String>> = match cd.folders.supported {
         false => Vec::new(),
@@ -321,10 +317,20 @@ pub(super) fn empty_folder_paths(
         return Vec::new();
     }
 
+    retained_empty_folder_paths(marks.into_iter().chain(reported), &cd.strategies, filter)
+}
+
+/// Retain unoccupied folders, applying the same subtree-name search as live rows.
+/// Paths come from the core or UI marks; ancestors of retained descendants are built by `ensure_folder`.
+pub(super) fn retained_empty_folder_paths(
+    paths: impl Iterator<Item = Vec<String>>,
+    rows: &[StrategyRow],
+    filter: &PreparedFilter,
+) -> Vec<Vec<String>> {
     // Every folder the strategies occupy, folded as the core folds them when deciding whether two
     // spellings are one folder.
     let mut occupied: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for row in &cd.strategies {
+    for row in rows {
         let mut key = String::new();
         for segment in strategy_path::path_segments(&row.folder_path) {
             if !key.is_empty() {
@@ -335,10 +341,11 @@ pub(super) fn empty_folder_paths(
         }
     }
 
-    let mut empty: Vec<Vec<String>> = marks
-        .into_iter()
-        .chain(reported)
+    let mut empty: Vec<Vec<String>> = paths
         .filter(|parts| !parts.is_empty() && !occupied.contains(&parts.join("/").to_lowercase()))
+        .filter(|parts| {
+            !filter.searching() || filter.folder_path_matches(&strategy_path::join_path(parts))
+        })
         .collect();
     // One order over both sources: the core lists its folders in an order the protocol calls
     // meaningless, and the local marks come out of a set, so without this two frames drawing

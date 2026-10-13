@@ -8,6 +8,59 @@ use moon_core::feed::StrategyRow;
 
 use super::StrategyFilter;
 
+/// Reverting folder matching would hide a matching ancestor's differently named strategies.
+/// Splitting on every slash would also invent folders inside a valid spaced-slash name.
+#[test]
+fn folder_name_queries_keep_the_whole_subtree() {
+    for (query, path, expected) in [
+        ("FAST wave", "Root/Fast Wave/Child", true),
+        ("fast missing", "Root/Fast Wave", false),
+        ("slow, WAVE", "Root/Fast Wave", true),
+        ("wave !fast", "Root/Fast Wave", false),
+        ("wave !slow", "Root/Fast Wave/Slow Child", true),
+        ("alpha beta", "Alpha/Beta", false),
+        ("alpha beta", "Alpha / Beta/Child", true),
+    ] {
+        let f = filter(query, None, None, false).prepare();
+        let mut strategy = row("Unrelated", 0, false, false);
+        strategy.folder_path = path.into();
+        assert_eq!(f.matches(&strategy), expected, "query={query}, path={path}");
+    }
+}
+
+/// Expanding folders for exclusion-only queries would revive excluded strategies in innocent folders.
+#[test]
+fn strategy_names_and_exclusion_only_queries_keep_their_semantics() {
+    for (query, name, path, expected) in [
+        ("needle", "Needle Strategy", "Other", true),
+        ("needle", "Other", "Other", false),
+        ("!test", "Test Strategy", "Production", false),
+        ("!test", "Live Strategy", "Test", true),
+        ("needle !test", "Test Strategy", "Needle/Child", true),
+    ] {
+        let f = filter(query, None, None, false).prepare();
+        let mut strategy = row(name, 0, false, false);
+        strategy.folder_path = path.into();
+        assert_eq!(f.matches(&strategy), expected, "query={query}, name={name}");
+    }
+}
+
+/// A matching folder changes only search, so other tree filters must still narrow its rows.
+#[test]
+fn folder_matches_preserve_other_filter_dimensions() {
+    let f = filter("Needle", Some(2), Some(false), true).prepare();
+    for (kind, short, checked, expected) in [
+        (2, false, true, true),
+        (3, false, true, false),
+        (2, true, true, false),
+        (2, false, false, false),
+    ] {
+        let mut strategy = row("Other", kind, short, checked);
+        strategy.folder_path = "Needle/Child".into();
+        assert_eq!(f.matches(&strategy), expected);
+    }
+}
+
 /// Empty cores survive the default and exchange-only views, but row filters require a match.
 #[test]
 fn empty_core_visibility_depends_on_row_filters_only() {

@@ -9,6 +9,118 @@ use super::{
     drop_dest, heading_chrome, id_exchange, tree_row_indent,
 };
 
+/// Hiding empty folders during search would lose both a matching empty folder and an empty child
+/// of a matching populated folder; omitting `ensure_folder` would lose their ancestor headings.
+#[test]
+fn search_keeps_matching_empty_and_nested_folder_subtrees() {
+    use crate::strategies::filter::StrategyFilter;
+    use crate::strategies::logic::{build_node, ensure_folder};
+    let rows = [
+        ordering_row(1, "Root/Needle/Child"),
+        ordering_row(2, "Other"),
+    ];
+    let filter = StrategyFilter {
+        search: "needle".into(),
+        ..Default::default()
+    }
+    .prepare();
+    let paths = [
+        "Empty Needle",
+        "Root/Needle/Empty",
+        "Other Empty",
+        "Root/Needle",
+    ];
+    let empty = super::build::retained_empty_folder_paths(
+        paths
+            .into_iter()
+            .map(moon_core::feed::strategy_path::split_path),
+        &rows,
+        &filter,
+    );
+    assert_eq!(
+        empty,
+        vec![
+            vec!["Empty Needle".to_string()],
+            vec!["Root".into(), "Needle".into(), "Empty".into()]
+        ]
+    );
+    let mut node = build_node(rows.iter().filter(|r| filter.matches(r)));
+    for path in &empty {
+        ensure_folder(&mut node, path);
+    }
+    let root_names: Vec<_> = node.children().map(|(name, _)| name).collect();
+    assert_eq!(root_names, ["Root", "Empty Needle"]);
+    let root = node.children().find(|(name, _)| *name == "Root").unwrap().1;
+    let needle = root
+        .children()
+        .find(|(name, _)| *name == "Needle")
+        .unwrap()
+        .1;
+    assert_eq!(
+        needle.children().map(|(name, _)| name).collect::<Vec<_>>(),
+        ["Child", "Empty"]
+    );
+    let child = needle
+        .children()
+        .find(|(name, _)| *name == "Child")
+        .unwrap()
+        .1;
+    assert_eq!(
+        child.strategies.iter().map(|r| r.id).collect::<Vec<_>>(),
+        [1]
+    );
+}
+
+/// A folder-only core must remain searchable without a strategy providing its parent chain.
+#[test]
+fn an_empty_core_keeps_folder_query_matches() {
+    use crate::strategies::filter::StrategyFilter;
+    use moon_core::feed::strategy_path::split_path;
+    for (query, expected) in [
+        ("fast wave", true),
+        ("slow, WAVE", true),
+        ("wave !fast", false),
+        ("wave !slow", true),
+        ("fast missing", false),
+    ] {
+        let filter = StrategyFilter {
+            search: query.into(),
+            ..Default::default()
+        }
+        .prepare();
+        let empty = super::build::retained_empty_folder_paths(
+            [split_path("Root/Fast Wave/Empty")].into_iter(),
+            &[],
+            &filter,
+        );
+        assert_eq!(!empty.is_empty(), expected, "query={query}");
+    }
+}
+
+/// Expanding an exclusion-only folder query would reveal empty folders and revive excluded rows.
+#[test]
+fn an_exclusion_only_query_keeps_empty_folders_hidden() {
+    use crate::strategies::filter::StrategyFilter;
+    use moon_core::feed::strategy_path::split_path;
+    let filter = StrategyFilter {
+        search: "!test".into(),
+        ..Default::default()
+    }
+    .prepare();
+    let empty = super::build::retained_empty_folder_paths(
+        [split_path("Production"), split_path("Test")].into_iter(),
+        &[],
+        &filter,
+    );
+    assert!(empty.is_empty());
+    let mut excluded = ordering_row(1, "Production");
+    excluded.name = "Test Strategy".into();
+    let mut retained = ordering_row(2, "Test");
+    retained.name = "Live Strategy".into();
+    assert!(!filter.matches(&excluded));
+    assert!(filter.matches(&retained));
+}
+
 /// Minimal row fixture for sibling ordering, with a folder path independent of its id.
 fn ordering_row(id: u64, path: &str) -> moon_core::feed::StrategyRow {
     moon_core::feed::StrategyRow {

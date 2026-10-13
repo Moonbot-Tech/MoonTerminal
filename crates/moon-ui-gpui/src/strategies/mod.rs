@@ -196,8 +196,8 @@ pub struct StrategiesView {
     /// Click-selected folders and core roots, for highlighting and every set action: copy, cut,
     /// delete, move-to-folder, and paste-into-each. An empty path identifies a core root.
     ///
-    /// A strategy selection empties this set; a folder selection deliberately does NOT clear the
-    /// strategy selection, which is the asymmetry `resolve_paste_target` reads as its precedence.
+    /// A strategy selection empties this set; a plain non-root folder click retires strategy
+    /// selection. Modified and core-root clicks preserve it, with folders taking paste precedence.
     folder_sel: HashSet<(CoreId, String)>,
     /// The folder node last clicked or keyed to: the Shift anchor for `folder_sel`, and the
     /// keyboard cursor while it is `Some`.

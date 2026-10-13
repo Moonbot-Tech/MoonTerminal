@@ -6,7 +6,7 @@ strat.empty_folder_reorder: "Thư mục trống không có chiến lược, nên
 
 strat.window_title: "MoonTerminal — Chiến lược"
 strat.search: "tìm"
-strat.search_tip: "Lọc cây theo tên chiến lược."
+strat.search_tip: "Lọc cây theo tên chiến lược hoặc thư mục."
 strat.all_kinds: "mọi loại"
 # Direction filter (LONG / SHORT). The trigger must name the axis, unlike a bare "all".
 strat.all_dirs: "mọi chiều"

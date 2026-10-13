@@ -6,7 +6,7 @@ strat.empty_folder_reorder: "Boş klasörde strateji yoktur, çekirdek onun yeri
 
 strat.window_title: "MoonTerminal — Stratejiler"
 strat.search: "ara"
-strat.search_tip: "Ağacı strateji adına göre süzer."
+strat.search_tip: "Ağacı strateji veya klasör adına göre süzer."
 strat.all_kinds: "tüm türler"
 # Direction filter (LONG / SHORT). The trigger must name the axis, unlike a bare "all".
 strat.all_dirs: "tüm yönler"
