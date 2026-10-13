@@ -457,38 +457,69 @@ fn number_fields_keep_room_for_their_digits(cx: &mut gpui::TestAppContext) {
     }
 }
 
-/// Catches a word sweep that never fires: a shared row whose label column is narrower than its
-/// one word must fail every probe run, and the same row with room must pass. Every page sweep
-/// relies on this check to find labels squeezed one glyph per line.
+/// Catches a word sweep that never fires: a recorded label boxed narrower than its one word must
+/// fail the probe run, and the same label with room must pass. Every page sweep relies on this
+/// check to find labels squeezed one glyph per line.
 #[gpui::test]
 fn the_probe_fails_a_label_narrower_than_its_word(cx: &mut gpui::TestAppContext) {
     cx.update(moon_ui::init);
     let _locale = crate::test_locale::force("en");
-    let row = |label_w: f32| {
-        host(move |_, cx, _| {
-            crate::settings::common::column_row(
-                "probe-squeezed",
-                "Loudness".into(),
-                None,
-                None,
-                div().w(px(40.0)).into_any_element(),
-                false,
-                Rc::new(|_, _| {}),
-                label_w,
-                cx,
-            )
+    let label = |w: f32| {
+        host(move |_, _, _| {
+            super::record_floor("probe-squeezed-label".into(), "Loudness", false, 0.0);
+            div()
+                .debug_selector(|| "probe-squeezed-label".into())
+                .w(px(w))
+                .child("Loudness")
+                .into_any_element()
         })
     };
     let spec = ProbeSpec {
         container: "probe-body",
         ..Default::default()
     };
-    let squeezed = probe_once(cx, (860.0, 620.0), &row(12.0), &spec);
+    let squeezed = probe_once(cx, (860.0, 620.0), &label(12.0), &spec);
     assert!(
         squeezed
             .as_ref()
             .is_err_and(|e| e.contains("probe-squeezed-label")),
         "{squeezed:?}"
     );
-    assert_eq!(probe_once(cx, (860.0, 620.0), &row(200.0), &spec), Ok(()));
+    assert_eq!(probe_once(cx, (860.0, 620.0), &label(200.0), &spec), Ok(()));
+}
+
+/// Catches the shared row losing its word floor: a label column set narrower than the label's one
+/// word must still draw the label at least that word wide, never one glyph per line (the Badges
+/// and Sounds defects).
+#[gpui::test]
+fn a_squeezed_row_label_keeps_its_longest_word(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        let row = host(move |_, cx, _| {
+            crate::settings::common::column_row(
+                "probe-squeezed",
+                "Loudness".into(),
+                Some("a caption under the control".into()),
+                None,
+                div().w(px(40.0)).into_any_element(),
+                false,
+                Rc::new(|_, _| {}),
+                12.0,
+                cx,
+            )
+        });
+        let spec = ProbeSpec {
+            container: "probe-body",
+            ..Default::default()
+        };
+        for size in [(900.0, 700.0), (1504.0, 1190.0)] {
+            assert_eq!(
+                probe_once(cx, size, &row, &spec),
+                Ok(()),
+                "{}",
+                language.code()
+            );
+        }
+    }
 }

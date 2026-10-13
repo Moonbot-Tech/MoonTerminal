@@ -610,8 +610,8 @@ impl SettingsView {
                     row.child(
                         MoonButton::new("telegram-copy-url")
                             .label(t!("telegram.mini_copy_url").to_string())
-                            .ghost()
-                            .padding_x(12.0)
+                            .variant(moon_ui::MoonButtonVariant::Neutral)
+                            .size(design::CONTROL_TIER)
                             .tooltip(url.clone())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));

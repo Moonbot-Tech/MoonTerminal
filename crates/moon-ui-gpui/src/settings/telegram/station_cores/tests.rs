@@ -483,3 +483,85 @@ fn the_send_bar_counts_differences_and_skips_station_only_cores() {
             .all(|upsert| Some(upsert.station_uid) != station_only)
     );
 }
+
+/// Catches the unread listing falling back to «nothing to show»: a running read is Loading,
+/// a finished one without a listing is NotRead with the failure carried along.
+#[test]
+fn an_unread_listing_is_loading_while_a_job_runs() {
+    use super::CoresNote;
+    assert_eq!(CoresNote::unread(true, None), CoresNote::Loading);
+    assert_eq!(
+        CoresNote::unread(true, Some("x".into())),
+        CoresNote::Loading
+    );
+    assert_eq!(CoresNote::unread(false, None), CoresNote::NotRead(None));
+    assert_eq!(
+        CoresNote::unread(false, Some("timeout".into())),
+        CoresNote::NotRead(Some("timeout".into()))
+    );
+}
+
+/// Catches the Station cores card going blank again (the live defect: a heading over nothing
+/// while the station was online): the loading, the not-read and the empty notes each lay out a
+/// visible text that fits its words, inside the body, in every language at every probe size.
+#[gpui::test]
+fn the_station_cores_card_is_never_blank(cx: &mut gpui::TestAppContext) {
+    use super::{CoresNote, cores_note_el};
+    use crate::settings::layout_probe::{ProbeSpec, sweep};
+    use crate::settings::telegram::tests::Host;
+    for note in [
+        CoresNote::Loading,
+        CoresNote::NotRead(Some("synthetic read failure".into())),
+        CoresNote::Empty,
+    ] {
+        let retry_drawn = matches!(note, CoresNote::NotRead(_));
+        sweep(
+            cx,
+            {
+                let note = note.clone();
+                move |_, _, (width, _)| {
+                    let note = note.clone();
+                    Host {
+                        width,
+                        scroll: gpui::ScrollHandle::new(),
+                        build: std::rc::Rc::new(move |_, cx| {
+                            cores_note_el(note.clone(), std::rc::Rc::new(|_, _| {}), cx)
+                        }),
+                    }
+                }
+            },
+            move |_| ProbeSpec {
+                container: "probe-body",
+                inside: ["station-cores-note", "station-cores-note-text"]
+                    .map(String::from)
+                    .to_vec(),
+                ..Default::default()
+            },
+        );
+        // The probe only proves what is laid out fits; this proves something is laid out.
+        let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| Host {
+            width: 860.0,
+            scroll: gpui::ScrollHandle::new(),
+            build: std::rc::Rc::new({
+                let note = note.clone();
+                move |_, cx| cores_note_el(note.clone(), std::rc::Rc::new(|_, _| {}), cx)
+            }),
+        });
+        let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+        visual.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let text = visual
+            .debug_bounds("station-cores-note-text")
+            .expect("note text laid out");
+        assert!(
+            f32::from(text.size.height) > 0.0 && f32::from(text.size.width) > 0.0,
+            "{note:?}"
+        );
+        assert_eq!(
+            visual.debug_bounds("station-cores-read").is_some(),
+            retry_drawn,
+            "{note:?}"
+        );
+    }
+}

@@ -26,18 +26,36 @@ pub(super) const SIZES: [(f32, f32); 5] = [
 ];
 
 thread_local! {
-    /// Row labels drawn since the last [`probe_once`] cleared it: `(selector, text)`, recorded by
-    /// the shared row layout (`common.rs`), so every page that uses it is word-checked.
-    static LABELS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    /// Labels drawn since the last [`probe_once`] cleared it, recorded by the shared word floor
+    /// (`common::word_floored`), so every page that draws its labels through it is word-checked.
+    static LABELS: RefCell<Vec<FloorRecord>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Note a row label the shared row layout drew, for the word check of [`probe_once`].
+/// One label for the word check: its box, its text, whether it is a caption, and the width of
+/// the box before the label (a checkbox square), in layout pixels.
+struct FloorRecord {
+    selector: String,
+    text: String,
+    caption: bool,
+    lead: f32,
+}
+
+/// Note a label drawn through the shared word floor, for the word check of [`probe_once`].
 ///
 /// Args:
-///     selector: The label's `debug_selector`.
+///     selector: The label box's `debug_selector`.
 ///     text: The label.
-pub(super) fn record_label(selector: String, text: &str) {
-    LABELS.with(|labels| labels.borrow_mut().push((selector, text.to_string())));
+///     caption: Whether it is drawn at the caption size.
+///     lead: Layout pixels of the box before the label.
+pub(super) fn record_floor(selector: String, text: &str, caption: bool, lead: f32) {
+    LABELS.with(|labels| {
+        labels.borrow_mut().push(FloorRecord {
+            selector,
+            text: text.to_string(),
+            caption,
+            lead,
+        })
+    });
 }
 
 /// Height of the page picker that replaces the sidebar on a narrow window, unscaled.
@@ -298,16 +316,31 @@ pub(super) fn probe_once<V: Probed>(
 ///     `Err` naming the first squeezed label.
 fn check_words(visual: &mut VisualTestContext) -> Result<(), String> {
     let labels = LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()));
-    for (sel, text) in labels {
+    for FloorRecord {
+        selector: sel,
+        text,
+        caption,
+        lead,
+    } in labels
+    {
         // A label recorded but not laid out (a collapsed section) has nothing to squeeze.
         let Some(b) = visual.debug_bounds(leak(sel.clone())) else {
             continue;
         };
-        let need = visual.update(|_, cx| {
-            text.split_whitespace()
-                .map(|word| design::ui_body_text_width(cx, word, 400.0))
-                .fold(0.0_f32, f32::max)
-        });
+        // Measured here, not through `common::longest_word_w`, so the check does not trust the
+        // floor it checks.
+        let need = lead
+            + visual.update(|_, cx| {
+                text.split_whitespace()
+                    .map(|word| {
+                        if caption {
+                            design::ui_caption_text_width(cx, word, 400.0)
+                        } else {
+                            design::ui_body_text_width(cx, word, 400.0)
+                        }
+                    })
+                    .fold(0.0_f32, f32::max)
+            });
         if f32::from(b.size.width) + 0.5 < need {
             return Err(format!(
                 "{sel} is narrower than the longest word of {text:?} ({} < {need})",

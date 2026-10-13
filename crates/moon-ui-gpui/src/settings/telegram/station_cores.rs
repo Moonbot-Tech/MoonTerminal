@@ -743,6 +743,93 @@ pub(super) fn table_el(
         .into_any_element()
 }
 
+/// What the Station cores card says when it has no comparison rows to list.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum CoresNote {
+    /// The station's listing is being read.
+    Loading,
+    /// The read ended without a listing; the reason when the read failed.
+    NotRead(Option<String>),
+    /// The station answered with no cores and the terminal has none to send either.
+    Empty,
+}
+
+impl CoresNote {
+    /// The note for a station whose listing is unread.
+    ///
+    /// Args:
+    ///     running: Whether a station job (the page's own read included) is running.
+    ///     error: Why the last read failed, if it did.
+    ///
+    /// Returns:
+    ///     `Loading` while a job runs, else `NotRead` with the error.
+    pub(super) fn unread(running: bool, error: Option<String>) -> Self {
+        if running {
+            Self::Loading
+        } else {
+            Self::NotRead(error)
+        }
+    }
+}
+
+/// The card's body when it has no rows: never blank. A listing that is not read yet shows the
+/// read in progress, or what went wrong and a button to read again; an empty listing says so and
+/// where cores come from.
+///
+/// Args:
+///     note: Which state to show.
+///     retry: Reads the station again; drawn only for `NotRead`.
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The note, under the selector `station-cores-note`.
+pub(super) fn cores_note_el(
+    note: CoresNote,
+    retry: crate::settings::common::Action,
+    cx: &App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let muted = rgba_from(p.text_muted, 1.0);
+    let text = |key: &str| {
+        crate::settings::common::prose(
+            "station-cores-note-text".into(),
+            t!(key).to_string(),
+            false,
+            cx,
+        )
+        .text_color(muted)
+    };
+    let body = v_flex()
+        .debug_selector(|| "station-cores-note".into())
+        .w_full()
+        .min_w_0()
+        .items_start()
+        .gap(design::ui_px(cx, 8.0));
+    match note {
+        CoresNote::Loading => body.child(text("telegram.server.cores_loading")),
+        CoresNote::Empty => body.child(text("telegram.server.cores_empty")),
+        CoresNote::NotRead(error) => body
+            .child(text("telegram.server.cores_not_read"))
+            .children(error.map(|reason| {
+                div()
+                    .min_w_0()
+                    .text_size(design::t_caption(cx))
+                    .text_color(rgba_from(p.red_text, 1.0))
+                    .child(reason)
+            }))
+            .child(
+                div().debug_selector(|| "station-cores-read".into()).child(
+                    MoonButton::new("station-cores-read")
+                        .size(design::CONTROL_TIER)
+                        .label(t!("telegram.server.cores_read_again").to_string())
+                        .on_click(move |_, window, cx| retry(window, cx))
+                        .render(),
+                ),
+            ),
+    }
+    .into_any_element()
+}
+
 /// A row, its index in the comparison and the surface its actions are drawn on.
 struct RowAt<'a>(usize, &'a Row, ActionSurface);
 
@@ -831,7 +918,29 @@ impl SettingsView {
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let backend = self.backend.read(cx);
-        let seen = backend.station.cores_seen.as_ref()?;
+        let Some(seen) = backend.station.cores_seen.as_ref() else {
+            // Unread: the page asked for it on open. A blank card is never a state.
+            let note =
+                CoresNote::unread(backend.station.running, backend.station.bot_error.clone());
+            let view = cx.entity().downgrade();
+            let retry: crate::settings::common::Action = Rc::new(move |_, app| {
+                let _ = view.update(app, |this, cx| {
+                    this.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
+                    cx.notify();
+                });
+            });
+            return Some(
+                MoonGroupBox::new("station-cores")
+                    .child(crate::settings::common::group_title(
+                        t!("telegram.server.cores_title").to_string(),
+                        cx,
+                    ))
+                    .padding(12.0)
+                    .gap(10.0)
+                    .child(cores_note_el(note, retry, cx))
+                    .into_any_element(),
+            );
+        };
         let palette = MoonPalette::active(cx);
         let muted = rgba_from(palette.text_muted, 1.0);
         let section = MoonGroupBox::new("station-cores")
@@ -890,11 +999,7 @@ impl SettingsView {
                     ),
             );
         if rows.is_empty() {
-            section = section.child(
-                div()
-                    .text_color(muted)
-                    .child(t!("telegram.server.cores_empty").to_string()),
-            );
+            section = section.child(cores_note_el(CoresNote::Empty, Rc::new(|_, _| {}), cx));
         } else {
             section = section.child(summary_el(summary, cx));
             for (index, row) in rows.iter().enumerate() {

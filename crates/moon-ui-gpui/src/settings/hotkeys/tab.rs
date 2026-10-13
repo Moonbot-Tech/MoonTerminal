@@ -181,7 +181,7 @@ impl SettingsView {
                     )
             }))
             .child(page::table(rows, mouse, empty, cx))
-            .children(mouse.then(|| self.same_move_checkbox(&hotkeys)))
+            .children(mouse.then(|| self.same_move_checkbox(&hotkeys, cx)))
             .child(page::builtin(self.hotkeys_builtin_open, toggle_builtin, cx))
             .into_any_element();
 
@@ -469,10 +469,11 @@ impl SettingsView {
 
     /// The move-mirroring switch, under the Mouse category's table: it owns the four short move
     /// rows.
-    fn same_move_checkbox(&self, hotkeys: &HotkeysConfig) -> AnyElement {
+    fn same_move_checkbox(&self, hotkeys: &HotkeysConfig, cx: &App) -> AnyElement {
         let backend = self.backend.clone();
-        MoonCheckbox::new("same-hotkeys-for-move")
-            .label(t!("hotkeys.mouse.same_move").to_string())
+        let label = t!("hotkeys.mouse.same_move").to_string();
+        let checkbox = MoonCheckbox::new("same-hotkeys-for-move")
+            .label(label.clone())
             .checked(hotkeys.same_hotkeys_for_move)
             .on_change(move |value, _window, cx| {
                 backend.update(cx, |b, bcx| {
@@ -491,8 +492,8 @@ impl SettingsView {
                         }
                     }
                 });
-            })
-            .into_any_element()
+            });
+        crate::settings::common::floored_checkbox("same-hotkeys-for-move", &label, checkbox, cx)
     }
 
     /// The wheel-modifier editor of the label-scroll row.

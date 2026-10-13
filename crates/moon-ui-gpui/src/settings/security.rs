@@ -522,6 +522,12 @@ impl SettingsView {
                     .size(design::CONTROL_TIER)
                     // One slot means only this machine, so there is nothing to forget.
                     .disabled(used <= 1 || !editable)
+                    .when(!editable, |b| {
+                        b.tooltip(t!("security.not_editable").to_string())
+                    })
+                    .when(editable && used <= 1, |b| {
+                        b.tooltip(t!("security.machines.keep_only_off").to_string())
+                    })
                     .label(t!("security.machines.keep_only").to_string())
                     .on_click(
                         cx.listener(|this, _, window, cx| this.confirm_forget_machines(window, cx)),

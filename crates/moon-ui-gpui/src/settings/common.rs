@@ -41,6 +41,100 @@ pub(super) fn hsla_u8(h: Hsla) -> [u8; 3] {
     ]
 }
 
+/// Width of the widest word of `text` in the UI face, body or caption size, in layout pixels.
+///
+/// Args:
+///     text: The label.
+///     caption: Whether the label is drawn at the caption size.
+///     cx: Application context for the face, size and scale.
+///
+/// Returns:
+///     The widest word's width plus a pixel of rounding slack per side.
+pub(super) fn longest_word_w(text: &str, caption: bool, cx: &App) -> f32 {
+    let widest = text
+        .split_whitespace()
+        .map(|word| {
+            if caption {
+                design::ui_caption_text_width(cx, word, 400.0)
+            } else {
+                design::ui_body_text_width(cx, word, 400.0)
+            }
+        })
+        .fold(0.0_f32, f32::max);
+    widest + 2.0
+}
+
+/// A wrapping label that never gets narrower than its longest word.
+///
+/// A flex row squeezes a `min_w_0` text beside a sibling that will not shrink, down to one glyph
+/// per line at worst (the Badges disclosure, the Sounds volume label). Every Settings label goes
+/// through here or [`word_floored`], so the floor is set in one place and the layout probe checks
+/// every one of them.
+///
+/// Args:
+///     selector: The label's `debug_selector`.
+///     text: The label.
+///     caption: Whether the label is drawn at the caption size (the caller sets the size).
+///     cx: Application context for the measure.
+///
+/// Returns:
+///     The label's box; the caller adds colour and size.
+pub(super) fn prose(selector: String, text: String, caption: bool, cx: &App) -> Div {
+    word_floored(selector, &text, caption, 0.0, cx).child(text)
+}
+
+/// A box holding a labelled control (a checkbox) whose label must not be squeezed below its
+/// longest word: the floor is the word plus `lead`, the control's own part before the label.
+///
+/// Args:
+///     selector: The box's `debug_selector`.
+///     text: The label drawn inside the control.
+///     caption: Whether the label is drawn at the caption size.
+///     lead: Unscaled width before the label: the checkbox square and its gap.
+///     cx: Application context for the measure.
+///
+/// Returns:
+///     The box; the caller adds the control as its child.
+pub(super) fn word_floored(
+    selector: String,
+    text: &str,
+    caption: bool,
+    lead: f32,
+    cx: &App,
+) -> Div {
+    let lead = design::ui_value(cx, lead);
+    #[cfg(test)]
+    super::layout_probe::record_floor(selector.clone(), text, caption, lead);
+    let floor = longest_word_w(text, caption, cx) + lead;
+    div()
+        .debug_selector(move || selector.clone())
+        .min_w(px(floor))
+}
+
+/// Lead of a `MoonCheckbox` before its label, unscaled: the 16 px square and the 8 px gap.
+pub(super) const CHECKBOX_LEAD: f32 = 24.0;
+
+/// A `MoonCheckbox` whose label never breaks inside a word: see [`word_floored`].
+///
+/// Args:
+///     id: The checkbox id; the box's selector is `<id>-box`.
+///     label: The checkbox label.
+///     checkbox: The checkbox, its label already set to `label`.
+///     cx: Application context for the measure.
+///
+/// Returns:
+///     The checkbox in its floored box.
+pub(super) fn floored_checkbox(
+    id: &str,
+    label: &str,
+    checkbox: impl IntoElement,
+    cx: &App,
+) -> AnyElement {
+    word_floored(format!("{id}-box"), label, false, CHECKBOX_LEAD, cx)
+        .child(checkbox)
+        .into_any_element()
+}
+
 /// How many slider-heights of travel a settings track needs to read as a knob.
 ///
 /// Twelve 22 design-px heights is 264, sitting beside the General tab's widest labeled select
@@ -254,12 +348,9 @@ pub(super) fn color_row(
         .items_center()
         .child(div().flex_none().child(swatch_picker(st)))
         .child(
-            div()
-                .debug_selector(|| "color-row-label".into())
+            prose("color-row-label".into(), label.to_string(), false, cx)
                 .flex_1()
-                .min_w_0()
-                .text_color(rgba_from(p.text_soft, 1.0))
-                .child(label.to_string()),
+                .text_color(rgba_from(p.text_soft, 1.0)),
         )
 }
 
@@ -525,17 +616,12 @@ fn row_layout(
     // the hint goes under the control instead: the label column is too narrow for a sentence, and
     // there it would wrap to three or four lines.
     let caption = move |hint: String| {
-        div()
-            .debug_selector(move || format!("{id}-hint"))
-            .min_w_0()
+        prose(format!("{id}-hint"), hint, true, cx)
             .font_family(design::ui_font())
             .text_size(design::t_caption(cx))
             .text_color(muted)
-            .child(hint)
     };
     let field_hint = hint.clone().filter(|_| label_w.is_ok()).map(caption);
-    #[cfg(test)]
-    super::layout_probe::record_label(format!("{id}-label"), &label);
     let text = v_flex()
         .map(|el| match label_w {
             Ok(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
@@ -553,21 +639,13 @@ fn row_layout(
         // A row's label and hint are prose in the UI face, whatever face the page sets.
         .font_family(design::ui_font())
         .gap(design::ui_px(cx, 2.0))
-        .child(
-            div()
-                .debug_selector(move || format!("{id}-label"))
-                .min_w_0()
-                .child(label),
-        )
+        .child(prose(format!("{id}-label"), label, false, cx))
         .children(hint.filter(|_| label_w_fixed.is_none()).map(caption))
         .children(toggle)
         .children(more.filter(|_| open).map(|more| {
-            div()
-                .debug_selector(move || format!("{id}-more-text"))
-                .min_w_0()
+            prose(format!("{id}-more-text"), more, true, cx)
                 .text_size(design::t_caption(cx))
                 .text_color(muted)
-                .child(more)
         }));
     h_flex()
         .id(SharedString::from(id))

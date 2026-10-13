@@ -499,10 +499,14 @@ impl SettingsView {
             };
         let slider = |key: &str, st: &Entity<MoonSliderState>, f: &dyn Fn(f32) -> String| {
             color_line(
-                div()
-                    .text_color(rgba_from(p.text_soft, 1.0))
-                    .child(t!(key).to_string())
-                    .into_any_element(),
+                super::common::prose(
+                    format!("iface-slider-label-{key}"),
+                    t!(key).to_string(),
+                    false,
+                    cx,
+                )
+                .text_color(rgba_from(p.text_soft, 1.0))
+                .into_any_element(),
                 Some(slider_ctl(st, f, cx)),
                 cx,
             )
@@ -599,14 +603,19 @@ impl SettingsView {
                 self.appearance_ui.show_experimental,
             )
         };
-        let experimental = MoonCheckbox::new("iface-show-experimental")
-            .checked(show)
-            .label(t!("iface.theme.experimental").to_string())
-            .on_change(cx.listener(|this, checked: &bool, _, cx| {
-                this.appearance_ui.show_experimental = *checked;
-                cx.notify();
-            }))
-            .into_any_element();
+        let experimental_label = t!("iface.theme.experimental").to_string();
+        let experimental = super::common::floored_checkbox(
+            "iface-show-experimental",
+            &experimental_label,
+            MoonCheckbox::new("iface-show-experimental")
+                .checked(show)
+                .label(experimental_label.clone())
+                .on_change(cx.listener(|this, checked: &bool, _, cx| {
+                    this.appearance_ui.show_experimental = *checked;
+                    cx.notify();
+                })),
+            cx,
+        );
         let dock_reset = MoonButton::new("iface-dock-reset")
             .variant(moon_ui::MoonButtonVariant::Neutral)
             .size(design::CONTROL_TIER)

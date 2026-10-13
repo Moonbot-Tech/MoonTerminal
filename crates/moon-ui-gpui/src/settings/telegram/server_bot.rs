@@ -722,7 +722,10 @@ impl SettingsView {
                             "server-bot-refresh",
                             t!("telegram.server.refresh").to_string(),
                         )
-                        .ghost()
+                        .variant(MoonButtonVariant::Neutral)
+                        .when(busy, |b| {
+                            b.tooltip(t!("telegram.server.wait_station").to_string())
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.backend.update(cx, |b, bcx| b.station_refresh_bot(bcx));
                         }))
@@ -802,8 +805,8 @@ impl SettingsView {
                 s.child(
                     MoonButton::new("server-copy-url")
                         .label(t!("telegram.mini_copy_url").to_string())
-                        .ghost()
-                        .padding_x(12.0)
+                        .variant(MoonButtonVariant::Neutral)
+                        .size(design::CONTROL_TIER)
                         .tooltip(url.clone())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
@@ -1240,6 +1243,9 @@ impl SettingsView {
                     t!("telegram.server.change_address").to_string(),
                 )
                 .disabled(self.backend.read(cx).station.running)
+                .when(self.backend.read(cx).station.running, |b| {
+                    b.tooltip(t!("telegram.server.wait_station").to_string())
+                })
                 .on_click(cx.listener(|this, _, window, cx| this.station_address_begin(window, cx)))
                 .render(),
             );
@@ -1413,6 +1419,9 @@ impl SettingsView {
             .variant(MoonButtonVariant::Neutral)
             .label(t!("telegram.server.change_address").to_string())
             .disabled(busy || self.backend.read(cx).station.running)
+            .when(busy || self.backend.read(cx).station.running, |b| {
+                b.tooltip(t!("telegram.server.wait_station").to_string())
+            })
             .on_click(cx.listener(|this, _, window, cx| this.station_address_begin(window, cx)))
             .render()
             .into_any_element();

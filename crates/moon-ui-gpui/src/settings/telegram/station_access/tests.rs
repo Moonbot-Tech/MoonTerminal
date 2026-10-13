@@ -1,6 +1,6 @@
 //! The danger zone's re-check at the moment of "Yes".
 
-use super::access_check;
+use super::{access_check, danger_off_reason};
 
 /// A Forget or Remove confirmed while a station job runs, or while a bot hand-over or return is
 /// pending, never starts; an idle station with nothing pending lets it run.
@@ -44,7 +44,7 @@ fn the_maintenance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                         cx,
                     ))
                     .child(danger_el(
-                        false,
+                        None,
                         Box::new(|_, _, _| {}),
                         Box::new(|_, _, _| {}),
                         cx,
@@ -67,5 +67,20 @@ fn the_maintenance_page_fits_the_body(cx: &mut gpui::TestAppContext) {
             last: Some("station-danger".into()),
             ..Default::default()
         },
+    );
+}
+
+/// Catches Forget and Remove going grey without saying why: a pending hand-over names its own
+/// refusal, a running read the wait, and an idle station leaves them on.
+#[test]
+fn the_danger_zone_names_why_it_is_off() {
+    assert_eq!(danger_off_reason(false, None), None);
+    assert_eq!(
+        danger_off_reason(true, None),
+        Some("telegram.server.wait_station")
+    );
+    assert_eq!(
+        danger_off_reason(true, Some("telegram.server.access_pending_handover")),
+        Some("telegram.server.access_pending_handover")
     );
 }

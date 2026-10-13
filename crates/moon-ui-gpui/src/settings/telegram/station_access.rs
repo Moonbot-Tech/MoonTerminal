@@ -53,9 +53,26 @@ pub(super) fn access_check(
 /// A danger action's handler; the zone only forwards the click.
 pub(super) type DangerClick = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
-/// The red-framed danger zone: Forget and Remove, both disabled while `busy`.
+/// Why the danger zone's buttons are off, or `None` while they are on: the hand-over or return
+/// that refuses them, else a running station job.
+///
+/// Args:
+///     running: Whether a station job (a quiet read included) is running.
+///     refusal: The locale key of a pending hand-over's refusal.
+///
+/// Returns:
+///     The locale key of the reason.
+pub(super) fn danger_off_reason(
+    running: bool,
+    refusal: Option<&'static str>,
+) -> Option<&'static str> {
+    refusal.or(running.then_some("telegram.server.wait_station"))
+}
+
+/// The red-framed danger zone: Forget and Remove, both disabled while `off` names a reason, which
+/// their tooltip shows.
 pub(super) fn danger_el(
-    busy: bool,
+    off: Option<&'static str>,
     on_forget: DangerClick,
     on_remove: DangerClick,
     cx: &App,
@@ -66,7 +83,8 @@ pub(super) fn danger_el(
         MoonButton::new(id)
             .label(t!(key).to_string())
             .size(design::CONTROL_TIER)
-            .disabled(busy)
+            .disabled(off.is_some())
+            .when_some(off, |b, why| b.tooltip(t!(why).to_string()))
             .danger()
     };
     v_flex()
@@ -331,7 +349,7 @@ impl SettingsView {
                 );
         }
         let danger = danger_el(
-            busy,
+            danger_off_reason(backend.station.running, refusal),
             Box::new(
                 cx.listener(|this, _, window, cx| this.station_access_confirm(false, window, cx)),
             ),

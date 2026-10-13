@@ -696,12 +696,20 @@ fn badges_body(
                 .box_size(design::DISCLOSURE_BOX)
                 .on_toggle(move |_, window, cx| on_caret(window, cx)),
         )
-        .child(div().child(t!("badges.expert.title").to_string()))
+        .child(super::common::prose(
+            "badges-expert-title".into(),
+            t!("badges.expert.title").to_string(),
+            false,
+            cx,
+        ))
         .child(
-            div()
-                .min_w_0()
-                .text_color(rgba_from(p.text_muted, 1.0))
-                .child(t!("badges.expert.hint").to_string()),
+            super::common::prose(
+                "badges-expert-hint".into(),
+                t!("badges.expert.hint").to_string(),
+                false,
+                cx,
+            )
+            .text_color(rgba_from(p.text_muted, 1.0)),
         );
     v_flex()
         .w_full()

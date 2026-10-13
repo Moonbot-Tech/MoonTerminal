@@ -24,7 +24,7 @@ use super::entries::CoreDot;
 use super::entries::{CoreListRow, CoresModel, GroupBlock};
 use super::table::{FEED_FLAGS, FEED_TOTAL};
 use crate::design;
-use crate::settings::common::{Action, column_row};
+use crate::settings::common::{Action, column_row, floored_checkbox};
 use moon_core::config::{TotalMode, TransportVersion, WorkspaceMembership};
 
 /// Something the user did on the Cores page.
@@ -594,15 +594,21 @@ pub(crate) fn core_card(
                     }),
             ),
         )
-        .child(
-            MoonCheckbox::new("core-card-station")
-                .label(t!("conn.card.for_station").to_string())
-                .checked(card.for_station)
-                .disabled(!card.has_override)
-                .on_change(move |v: &bool, window, cx| {
-                    station_act(CoreAction::ForStation(*v), window, cx)
-                }),
-        )
+        .child({
+            let label = t!("conn.card.for_station").to_string();
+            floored_checkbox(
+                "core-card-station",
+                &label,
+                MoonCheckbox::new("core-card-station")
+                    .label(label.clone())
+                    .checked(card.for_station)
+                    .disabled(!card.has_override)
+                    .on_change(move |v: &bool, window, cx| {
+                        station_act(CoreAction::ForStation(*v), window, cx)
+                    }),
+                cx,
+            )
+        })
         .into_any_element();
 
     let mut group_items = card
@@ -643,14 +649,18 @@ pub(crate) fn core_card(
                 None => t!("conn.tip.log_delivery").to_string(),
             };
             let act = act.clone();
-            col = col.child(
-                MoonCheckbox::new(SharedString::from(format!("core-card-feed-{index}")))
-                    .label(label)
+            let id = format!("core-card-feed-{index}");
+            col = col.child(floored_checkbox(
+                &id,
+                &label,
+                MoonCheckbox::new(SharedString::from(id.clone()))
+                    .label(label.clone())
                     .checked(on_now)
                     .on_change(move |v: &bool, window, cx| {
                         act(CoreAction::Feed(index, *v), window, cx)
                     }),
-            );
+                cx,
+            ));
         }
         col.child(
             div()

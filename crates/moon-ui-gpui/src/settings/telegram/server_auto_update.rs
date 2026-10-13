@@ -47,10 +47,11 @@ pub(super) fn auto_update_el(
         AutoUpdateView::OldStation => Some(t!("telegram.server.auto_update_old")),
         AutoUpdateView::Unread => Some(t!("telegram.server.auto_update_unknown")),
     };
+    let label = t!("telegram.server.auto_update").to_string();
     let switch = MoonCheckbox::new("server-auto-update")
         .checked(view == AutoUpdateView::Known(true))
         .disabled(busy || !matches!(view, AutoUpdateView::Known(_)))
-        .label(t!("telegram.server.auto_update").to_string())
+        .label(label.clone())
         .description(t!("telegram.server.auto_update_hint").to_string())
         .on_change(on_change);
     let mut block = v_flex()
@@ -58,7 +59,12 @@ pub(super) fn auto_update_el(
         .w_full()
         .min_w(px(0.0))
         .gap(design::ui_px(cx, 6.0))
-        .child(switch);
+        .child(crate::settings::common::floored_checkbox(
+            "server-auto-update",
+            &label,
+            switch,
+            cx,
+        ));
     if let Some(note) = note {
         block = block.child(
             div()
