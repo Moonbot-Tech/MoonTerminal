@@ -985,8 +985,8 @@ impl AnalyticsView {
         if self.tab != Tab::Summary {
             return dropdown;
         }
+        // Keeps the bordered Soft trigger: a borderless chip stops reading as a dropdown.
         dropdown
-            .trigger_variant(MoonButtonVariant::Ghost)
             .selected(set)
             .fit_trigger_width(CHIP_MIN_W.min(max_w), max_w)
     }
