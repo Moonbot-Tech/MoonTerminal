@@ -1,4 +1,4 @@
-//! Shared Settings-window UI helpers (`slider_row`, `section`, `color_row`, and `separator`) and
+//! Shared Settings-window UI helpers (`slider_field`, `section`, `color_row`, and `separator`) and
 //! draft binders (`draft_color`, `draft_slider`, and `draft_slider_on`), plus the page primitives
 //! (`hint_row`, `num_input`, `confirm`) and thin adapters over MoonUI widgets (`steps`,
 //! `usage_bar`, `select_card`).
@@ -61,6 +61,9 @@ pub(super) enum LabelCol {
     Fit(f32),
     /// The whole row: for a row with no control, whose caption would otherwise wrap mid-card.
     Full,
+    /// Exactly this width, unscaled, never squeezed: a short label that must stay on one line.
+    /// A control that does not fit beside it wraps under it instead of narrowing it.
+    Line(f32),
 }
 
 /// The label column one card's rows share: wide enough for its longest label on one line,
@@ -103,33 +106,32 @@ fn slider_track_max_w(scale_w: f32, slider_h: f32) -> f32 {
     scale_w.max(slider_h * SLIDER_TRACK_HEIGHTS)
 }
 
-/// Build a labeled slider row with a scale below the track and a fixed-width current value.
+/// The slider of a [`hint_row`]: track, endpoint scale and current value at a fixed width, for
+/// the control column beside the row's label.
 ///
 /// The caller supplies the slider range because pinned MoonUI keeps it private, plus one formatter
-/// so both endpoints and the current value use the field's unit and rounding contract. The track
-/// yields width to the value column at narrow window sizes, including when a colour picker shares
-/// its parent row. Its minimum reserves only the two endpoint captions and their gap; its maximum
-/// is [`slider_track_max_w`], so a wide window keeps the track, captions and value as one
-/// left-aligned group. The bound uses the slider's own height and the caption measure, not the
-/// live zoom value, so dragging the interface-scale slider does not move the control under the
-/// pointer.
+/// so both endpoints and the current value use the field's unit and rounding contract. A hint row
+/// lays its control out at the control's own width, so the field takes the track's full
+/// [`slider_track_max_w`] plus the value column; the value follows the track, left-aligned, rather
+/// than sitting at the far end of its column. On a body narrower than that the field shrinks to
+/// the row (`max_w_full`) and the track gives way first, never below the two endpoint captions.
+/// The bound uses the slider's own height and the caption measure, not the live zoom value, so
+/// dragging an interface-scale slider would not move the control under the pointer.
 ///
 /// Args:
-///     label: Localized caption displayed above the slider.
 ///     st: Slider state whose current value is displayed.
 ///     range: Inclusive endpoints displayed below the slider track.
 ///     format: Field-specific formatter shared by both endpoints and the current value.
 ///     cx: Application context used for palette and scaled geometry.
 ///
 /// Returns:
-///     The assembled label, slider, scale, and current-value row.
-pub(super) fn slider_row(
-    label: &str,
+///     The field.
+pub(super) fn slider_field(
     st: &Entity<MoonSliderState>,
     range: RangeInclusive<f32>,
     format: impl Fn(f32) -> String,
     cx: &App,
-) -> impl IntoElement {
+) -> AnyElement {
     let p = MoonPalette::active(cx);
     let val = st.read(cx).value().end();
     let val = if val == 0.0 { 0.0 } else { val };
@@ -144,49 +146,38 @@ pub(super) fn slider_row(
     let slider_h = design::ui_value(cx, 22.0);
     let value_w = design::font_w(cx, 76.0);
     let track_max = slider_track_max_w(scale_w, slider_h);
-    let row_max = track_max + caption_gap + value_w;
-    v_flex()
-        .w_full()
-        .min_w_0()
-        .max_w(px(row_max))
+    h_flex()
+        .w(px(track_max + caption_gap + value_w))
+        .max_w_full()
+        .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
+        .gap(px(caption_gap))
+        .items_center()
         .child(
-            div()
-                .text_color(rgba_from(p.text_soft, 1.0))
-                .child(label.to_string()),
-        )
-        .child(
-            h_flex()
-                .w_full()
-                .min_h(design::fit_h_px(cx, 28.0, 14.0, 7.0))
-                .gap(px(caption_gap))
-                .items_center()
+            v_flex()
+                .flex_1()
+                .min_w(px(scale_w))
+                .max_w(px(track_max))
+                .child(MoonSlider::new(st).height(slider_h))
                 .child(
-                    v_flex()
-                        .flex_1()
-                        .min_w(px(scale_w))
-                        .max_w(px(track_max))
-                        .child(MoonSlider::new(st).height(slider_h))
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .justify_between()
-                                .font_family(design::mono())
-                                .text_size(design::t_caption(cx))
-                                .text_color(rgba_from(p.text_muted, 1.0))
-                                .child(min)
-                                .child(max),
-                        ),
-                )
-                .child(
-                    div()
-                        .w(px(value_w))
-                        .flex_none()
+                    h_flex()
+                        .w_full()
+                        .justify_between()
                         .font_family(design::mono())
-                        .text_align(TextAlign::Right)
+                        .text_size(design::t_caption(cx))
                         .text_color(rgba_from(p.text_muted, 1.0))
-                        .child(val),
+                        .child(min)
+                        .child(max),
                 ),
         )
+        .child(
+            div()
+                .w(px(value_w))
+                .flex_none()
+                .font_family(design::mono())
+                .text_color(rgba_from(p.text_muted, 1.0))
+                .child(val),
+        )
+        .into_any_element()
 }
 
 /// Opens a folder in the platform file manager.
@@ -543,6 +534,8 @@ fn row_layout(
             .child(hint)
     };
     let field_hint = hint.clone().filter(|_| label_w.is_ok()).map(caption);
+    #[cfg(test)]
+    super::layout_probe::record_label(format!("{id}-label"), &label);
     let text = v_flex()
         .map(|el| match label_w {
             Ok(w) => el.flex_none().w(design::ui_px(cx, w)).min_w_0(),
@@ -555,6 +548,7 @@ fn row_layout(
                 .min_w(design::ui_px(cx, HINT_LABEL_MIN_W))
                 .max_w(design::ui_px(cx, cap)),
             Err(LabelCol::Full) => el.flex_1().min_w(design::ui_px(cx, HINT_LABEL_MIN_W)),
+            Err(LabelCol::Line(w)) => el.flex_none().w(design::ui_px(cx, w)).max_w_full(),
         })
         // A row's label and hint are prose in the UI face, whatever face the page sets.
         .font_family(design::ui_font())

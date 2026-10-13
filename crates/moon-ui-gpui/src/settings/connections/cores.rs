@@ -890,8 +890,11 @@ pub(crate) fn cores_empty(act: &CoreAct, add: AnyElement, cx: &App) -> AnyElemen
         .child(
             div()
                 .debug_selector(|| "cores-empty-body".into())
-                .w_full()
-                .max_w(design::ui_px(cx, 460.0))
+                // An explicit width the text is measured at: `w_full().max_w(..)` measured it at
+                // the whole column's width and then clamped it, so a wide window cut the wrapped
+                // lines off.
+                .w(design::ui_px(cx, 460.0))
+                .max_w_full()
                 .text_center()
                 .text_color(rgba_from(p.text_muted, 1.0))
                 .child(t!("conn.empty.body").to_string()),

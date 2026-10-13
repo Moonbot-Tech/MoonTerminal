@@ -9,19 +9,98 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    MoonButton, MoonIcon, MoonInput, MoonInputState, MoonPalette, MoonSelect, MoonSelectItem,
-    MoonSelectState, MoonSidebar, MoonSidebarGroup, MoonSidebarMenu, MoonSidebarMenuItem, MoonTag,
-    MoonTooltipView, h_flex, rgba_from, v_flex,
+    MoonButton, MoonIcon, MoonInput, MoonInputSize, MoonInputState, MoonPalette, MoonSelect,
+    MoonSelectItem, MoonSelectState, MoonSidebar, MoonSidebarGroup, MoonSidebarMenu,
+    MoonSidebarMenuItem, MoonTag, MoonTooltipView, h_flex, rgba_from, v_flex,
 };
 use rust_i18n::t;
 
 use super::{NavGroup, Tab, TabSet};
 use crate::design;
 
-/// Sidebar width in logical pixels at 100% zoom.
+/// The sidebar's narrowest width in logical pixels at 100% zoom; [`nav_w`] widens it for a
+/// language whose page names need more.
 pub(super) const NAV_W: f32 = 232.0;
-/// Window width below which the sidebar gives way to [`nav_picker`].
+/// MoonUI's sidebar menu item draws its label at `text_sm`: 0.875 rem.
+pub(super) const ITEM_TEXT_REMS: f32 = 0.875;
+/// What a MoonUI sidebar item draws beside its label, in rems: the sidebar's `px_3` on both
+/// sides, the item's `p_2` on both sides, its `size_4` icon and the `gap_x_2` after it, and the
+/// suffix's own `gap_x_2`.
+const ITEM_CHROME_REMS: f32 = 1.5 + 1.0 + 1.0 + 0.5 + 0.5;
+
+/// A MoonUI sidebar item's height in rems: its `text_sm` line (1.25) and its `p_2` above and below.
+pub(super) const ITEM_ROW_REMS: f32 = 1.25 + 1.0;
+
+/// The sidebar's width in layout pixels: [`NAV_W`], or wider when the active language's longest
+/// page name would otherwise truncate.
+///
+/// The need is the name at the body tier, the item's chrome and the widest suffix an item
+/// carries — the unsaved dot and a three-digit count — plus the sidebar's 1 px border.
+///
+/// Args:
+///     cx: Application context for the language, text measure and scale.
+///
+/// Returns:
+///     The width, already scaled.
+pub(super) fn nav_w(cx: &App) -> f32 {
+    let rem = f32::from(nav_rem(cx));
+    let widest = Tab::ALL
+        .into_iter()
+        .map(|tab| design::ui_body_text_width(cx, &tab.title(), 400.0))
+        .fold(0.0_f32, f32::max);
+    let suffix = 2.0 * design::ui_value(cx, 6.0)
+        + design::ui_text_width_zoomed(cx, "999", design::BODY_TEXT - 2.0, 400.0, true);
+    let need = widest + ITEM_CHROME_REMS * rem + suffix + 1.0;
+    need.ceil().max(design::ui_value(cx, NAV_W))
+}
+
+/// The rem size the sidebar draws at: the one that puts its item labels on the body text tier
+/// ([`design::t_body`]), the size the main window's lists use.
+///
+/// The sidebar's MoonUI parts size everything in rems — item text and height, icons, paddings,
+/// the group headings (`text_xs`, still smaller than the items) and the search field — so one
+/// rem keeps the whole column in proportion.
+pub(super) fn nav_rem(cx: &App) -> Pixels {
+    design::t_body(cx) / ITEM_TEXT_REMS
+}
+
+/// The search field's size: as tall as a sidebar item and at the body text tier.
+///
+/// MoonInput sizes itself in token pixels, so the sidebar's rem never reaches it. Its box comes
+/// from `Custom`'s base `height` (see [`design::dense_input_size`]), handed here as the base
+/// that scales to the item row.
+pub(super) fn nav_search_size(cx: &App) -> MoonInputSize {
+    let row = f32::from(nav_rem(cx)) * ITEM_ROW_REMS;
+    let height = row / design::ui_value(cx, 1.0);
+    MoonInputSize::Custom {
+        height,
+        radius: 4.0,
+        font_size: design::body_font_base(cx, 0.0),
+        line_height: height * 0.6,
+        pad_x: 7.0,
+        pad_y: 0.0,
+        gap: 6.0,
+    }
+}
+
+/// Window width below which the [`NAV_W`] sidebar gives way to [`nav_picker`].
 pub(super) const NAV_BREAKPOINT: f32 = 760.0;
+
+/// Whether a window `width` wide shows the page picker instead of the sidebar.
+///
+/// The breakpoint moves with the sidebar: what [`nav_w`] adds over [`NAV_W`] for a language with
+/// long page names is added to [`NAV_BREAKPOINT`], so the page body never gets narrower than it
+/// does beside the narrowest sidebar.
+///
+/// Args:
+///     width: Window width in logical pixels.
+///     cx: Application context for the language and scale.
+///
+/// Returns:
+///     `true` below the breakpoint.
+pub(super) fn nav_hidden(width: f32, cx: &App) -> bool {
+    width < NAV_BREAKPOINT + (nav_w(cx) - design::ui_value(cx, NAV_W))
+}
 
 /// Number drawn after a page name in the navigation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -126,7 +205,7 @@ pub(super) type OnPick = Rc<dyn Fn(Tab, &mut Window, &mut App)>;
 ///     cx: Application context for theme and scale.
 ///
 /// Returns:
-///     The sidebar, [`NAV_W`] wide at 100% zoom.
+///     The sidebar, [`nav_w`] wide.
 pub(super) fn nav_sidebar(
     model: &NavModel,
     active: Tab,
@@ -138,12 +217,12 @@ pub(super) fn nav_sidebar(
     let p = MoonPalette::active(cx);
     let search = MoonInput::new("settings-nav-search")
         .state(query)
-        .small()
+        .size(nav_search_size(cx))
         .cleanable(true)
         .prefix(
             svg()
                 .path("icons/search.svg")
-                .size(design::ui_px(cx, 14.0))
+                .size(design::t_body(cx))
                 .text_color(rgba_from(p.text_muted, 1.0)),
         );
     let header = v_flex()
@@ -172,14 +251,14 @@ pub(super) fn nav_sidebar(
         })
     });
     let footer = import_entry("settings-nav-import", true, on_import);
-    MoonSidebar::new("settings-nav")
+    let sidebar = MoonSidebar::new("settings-nav")
         .collapsible(false)
-        .w(design::ui_px(cx, NAV_W))
+        .w(px(nav_w(cx)))
         .h_full()
         .header(header)
         .children(groups)
-        .footer(footer)
-        .into_any_element()
+        .footer(footer);
+    design::rem_scope(nav_rem(cx), sidebar).into_any_element()
 }
 
 /// The one MoonBot import control, with its hint: the sidebar's footer link (`ghost`), or the

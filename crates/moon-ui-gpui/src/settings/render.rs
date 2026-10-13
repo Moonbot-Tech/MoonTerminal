@@ -12,7 +12,7 @@ use moon_ui::{
 use rust_i18n::t;
 
 use super::frame;
-use super::nav::{self, NAV_BREAKPOINT};
+use super::nav;
 use super::{SETTINGS_HEADER_H, SettingsView, Tab};
 use crate::design;
 
@@ -64,11 +64,11 @@ impl Render for SettingsView {
         // ── Active tab body ─────────────────────────────────────────────────
         // The body column is narrower than the window by the sidebar; pages that size their own
         // column from the width get the width they actually have.
-        let narrow = chrome_width < NAV_BREAKPOINT;
+        let narrow = nav::nav_hidden(chrome_width, cx);
         let body_width = if narrow {
             chrome_width
         } else {
-            (chrome_width - design::ui_value(cx, nav::NAV_W)).max(0.0)
+            (chrome_width - nav::nav_w(cx)).max(0.0)
         };
         let parts = match self.active {
             Tab::Cores => self.cores_page(narrow, body_width, cx),

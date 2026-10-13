@@ -277,7 +277,7 @@ fn settings_values_and_connections_repin_the_mono_family() {
     );
     let common = read_src("settings/common.rs");
     assert!(
-        code_only(braced_body(&common, "pub(super) fn slider_row("))
+        code_only(braced_body(&common, "pub(super) fn slider_field("))
             .contains(".font_family(design::mono())"),
         "slider endpoints and current numeric value must share a mono container after Settings becomes proportional"
     );

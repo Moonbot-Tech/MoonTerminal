@@ -6,17 +6,41 @@
 //! be built in a test as a whole `SettingsView` (it needs a `Backend`), so the probe lays out free
 //! builder functions inside a small host view.
 
+use std::cell::RefCell;
+
 use gpui::*;
 use moon_core::config::Language;
 
-use super::nav::{NAV_BREAKPOINT, NAV_W};
+use super::nav::{nav_hidden, nav_w};
 use super::render::BODY_PAD;
 use crate::design;
 
-/// Window sizes swept: the default window and the minimum Settings window.
-pub(super) const SIZES: [(f32, f32); 3] = [(860.0, 620.0), (760.0, 620.0), (620.0, 420.0)];
+/// Window sizes swept: the default window, the minimum Settings window, a ~900 px window and a
+/// wide one as tall as a full-height Settings window on a 1080p-class screen.
+pub(super) const SIZES: [(f32, f32); 5] = [
+    (860.0, 620.0),
+    (760.0, 620.0),
+    (620.0, 420.0),
+    (900.0, 700.0),
+    (1504.0, 1190.0),
+];
 
-/// Height of the page picker that replaces the sidebar below [`NAV_BREAKPOINT`], unscaled.
+thread_local! {
+    /// Row labels drawn since the last [`probe_once`] cleared it: `(selector, text)`, recorded by
+    /// the shared row layout (`common.rs`), so every page that uses it is word-checked.
+    static LABELS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Note a row label the shared row layout drew, for the word check of [`probe_once`].
+///
+/// Args:
+///     selector: The label's `debug_selector`.
+///     text: The label.
+pub(super) fn record_label(selector: String, text: &str) {
+    LABELS.with(|labels| labels.borrow_mut().push((selector, text.to_string())));
+}
+
+/// Height of the page picker that replaces the sidebar on a narrow window, unscaled.
 const PICKER_H: f32 = 44.0;
 /// Height of the window title bar, unscaled.
 const TITLE_H: f32 = super::SETTINGS_HEADER_H;
@@ -49,6 +73,11 @@ pub(super) struct ProbeSpec {
     pub(super) same_row_same_height: Vec<Vec<String>>,
     /// The last element of a scrolling page: it must lie within the scroll extent.
     pub(super) last: Option<String>,
+    /// Groups of elements that must be equally wide (0.5 px tolerance).
+    pub(super) same_width: Vec<Vec<String>>,
+    /// `(upper, lower, max_gap)`: `lower` starts at most `max_gap` unscaled pixels below
+    /// `upper`'s bottom — no hole between them. Overlap is `no_overlap`'s to catch.
+    pub(super) stacked: Vec<(String, String, f32)>,
 }
 
 /// A view a sweep can draw: it lays a page builder out and exposes its scroll handle.
@@ -70,8 +99,8 @@ pub(super) fn body_box(size: (f32, f32), cx: &App) -> (f32, f32) {
     let (w, h) = size;
     let pad = 2.0 * design::ui_value(cx, BODY_PAD);
     let title = design::ui_value(cx, TITLE_H);
-    if w >= NAV_BREAKPOINT {
-        ((w - design::ui_value(cx, NAV_W) - pad).max(0.0), h - title)
+    if !nav_hidden(w, cx) {
+        ((w - nav_w(cx) - pad).max(0.0), h - title)
     } else {
         (
             (w - pad).max(0.0),
@@ -149,7 +178,11 @@ pub(super) fn check(
         });
         let lines = (width / f32::from(b.size.width).max(1.0)).ceil().max(1.0);
         if f32::from(b.size.height) + 0.5 < lines * line {
-            return Err(format!("{sel} cuts {text:?} off vertically"));
+            return Err(format!(
+                "{sel} cuts {text:?} off vertically ({} x {} for {lines} lines)",
+                f32::from(b.size.width),
+                f32::from(b.size.height)
+            ));
         }
     }
     for group in &spec.no_overlap {
@@ -184,6 +217,30 @@ pub(super) fn check(
             }
         }
     }
+    for group in &spec.same_width {
+        let boxes = group
+            .iter()
+            .map(|sel| bounds(visual, sel).map(|b| (sel, b)))
+            .collect::<Result<Vec<_>, _>>()?;
+        for (a, ab) in &boxes {
+            let (b, bb) = &boxes[0];
+            let dw = (f32::from(ab.size.width) - f32::from(bb.size.width)).abs();
+            if dw > f32::from(tol) {
+                return Err(format!("{a} and {b} differ in width by {dw}"));
+            }
+        }
+    }
+    for (upper, lower, max_gap) in &spec.stacked {
+        let ub = bounds(visual, upper)?;
+        let lb = bounds(visual, lower)?;
+        let gap = f32::from(lb.origin.y) - f32::from(ub.bottom_left().y);
+        let max = visual.update(|_, cx| design::ui_value(cx, *max_gap));
+        if gap > max + f32::from(tol) {
+            return Err(format!(
+                "{lower} sits {gap} px under {upper} (at most {max} expected)"
+            ));
+        }
+    }
     if let (Some(last), Some(scroll)) = (&spec.last, scroll) {
         let tail = bounds(visual, last)?;
         let reachable = scroll.bounds().bottom_right().y + scroll.max_offset().y;
@@ -210,6 +267,7 @@ pub(super) fn probe_once<V: Probed>(
     make: &impl Fn(&mut Window, &mut Context<V>, (f32, f32)) -> V,
     spec: &ProbeSpec,
 ) -> Result<(), String> {
+    LABELS.with(|labels| labels.borrow_mut().clear());
     let window = cx.open_window(gpui::size(px(size.0), px(size.1)), |window, cx| {
         let body = body_box(size, cx);
         make(window, cx, body)
@@ -223,7 +281,38 @@ pub(super) fn probe_once<V: Probed>(
     let scroll = window
         .update(&mut visual, |view, _, _| view.scroll())
         .expect("probe window open");
-    check(&mut visual, scroll.as_ref(), spec)
+    check(&mut visual, scroll.as_ref(), spec)?;
+    check_words(&mut visual)
+}
+
+/// No row label drawn in this run is narrower than its longest word: a label column squeezed
+/// below that breaks a word across lines, one glyph per line at worst.
+///
+/// Args:
+///     visual: The drawn window.
+///
+/// Returns:
+///     `Err` naming the first squeezed label.
+fn check_words(visual: &mut VisualTestContext) -> Result<(), String> {
+    let labels = LABELS.with(|labels| std::mem::take(&mut *labels.borrow_mut()));
+    for (sel, text) in labels {
+        // A label recorded but not laid out (a collapsed section) has nothing to squeeze.
+        let Some(b) = visual.debug_bounds(leak(sel.clone())) else {
+            continue;
+        };
+        let need = visual.update(|_, cx| {
+            text.split_whitespace()
+                .map(|word| design::ui_body_text_width(cx, word, 400.0))
+                .fold(0.0_f32, f32::max)
+        });
+        if f32::from(b.size.width) + 0.5 < need {
+            return Err(format!(
+                "{sel} is narrower than the longest word of {text:?} ({} < {need})",
+                f32::from(b.size.width)
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Sweep a page builder over every language and both [`SIZES`]; panics on the first broken check.

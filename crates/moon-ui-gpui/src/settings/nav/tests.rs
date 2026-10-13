@@ -102,3 +102,112 @@ fn every_page_icon_is_a_shipped_asset() {
         );
     }
 }
+
+/// Text the sidebar's MoonUI items size as `text_sm` comes out at the body tier inside the
+/// sidebar's rem scope: as wide as the same word measured at [`crate::design::t_body`], the size
+/// the main window's lists draw with.
+///
+/// Breaks on: the sidebar losing its rem scope, or `nav_rem` aiming at the caption tier again —
+/// the labels shrink back below the rest of the app.
+#[gpui::test]
+fn sidebar_item_text_draws_at_the_body_tier(cx: &mut gpui::TestAppContext) {
+    use gpui::{InteractiveElement, IntoElement, ParentElement, Render, Styled, div};
+
+    struct Probe;
+    impl Render for Probe {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl IntoElement {
+            div().flex().items_start().child(crate::design::rem_scope(
+                super::nav_rem(cx),
+                div()
+                    .debug_selector(|| "nav-probe-label".into())
+                    .font_family(crate::design::ui_font())
+                    .text_sm()
+                    .child(WORD),
+            ))
+        }
+    }
+    const WORD: &str = "Notifications";
+
+    cx.update(moon_ui::init);
+    let window = cx.add_window(|_, _| Probe);
+    let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+    visual.update(|window, cx| {
+        let _ = window.draw(cx);
+    });
+    let drawn = visual
+        .debug_bounds("nav-probe-label")
+        .expect("probe label laid out");
+    let body = visual.update(|_, cx| crate::design::ui_body_text_width(cx, WORD, 400.0));
+    let drawn = f32::from(drawn.size.width);
+    assert!(
+        (drawn - body).abs() <= 1.0,
+        "sidebar text is {drawn} px wide, the body tier draws it {body} px wide"
+    );
+}
+
+/// No sidebar label truncates, in any language: the widest page name at the body tier plus the
+/// item's chrome and the widest suffix fits the sidebar.
+///
+/// The chrome is MoonUI's, in rems: the sidebar's `px_3` on both sides, the item's `p_2` on both
+/// sides, its `size_4` icon and the `gap_x_2` after it, then the suffix's own `gap_x_2`. The
+/// suffix is the unsaved dot and a three-digit count beside it.
+///
+/// Breaks on: a longer translation, or a larger sidebar text tier, without the width growing.
+#[gpui::test]
+fn no_sidebar_label_truncates(cx: &mut gpui::TestAppContext) {
+    use crate::design;
+    use moon_core::config::Language;
+
+    cx.update(moon_ui::init);
+    cx.update(|cx| {
+        let rem = f32::from(super::nav_rem(cx));
+        let suffix = 0.5 * rem
+            + design::ui_value(cx, 6.0) * 2.0
+            + design::ui_text_width_zoomed(cx, "999", design::BODY_TEXT - 2.0, 400.0, true);
+        let chrome = (1.5 + 1.0 + 1.0 + 0.5) * rem + 1.0;
+        for language in Language::ALL {
+            let _locale = crate::test_locale::force(language.code());
+            let width = super::nav_w(cx);
+            for tab in Tab::ALL {
+                let title = tab.title().to_string();
+                let need = design::ui_body_text_width(cx, &title, 400.0) + chrome + suffix;
+                assert!(
+                    need <= width,
+                    "{title:?} needs {need} px of a {width} px sidebar ({})",
+                    language.code()
+                );
+            }
+        }
+    });
+}
+
+/// The search field scales with the sidebar: its box is one item row tall and its text sits on
+/// the body tier, not MoonInput's fixed small size.
+#[gpui::test]
+fn sidebar_search_field_matches_the_item_row(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    cx.update(|cx| {
+        let row = f32::from(super::nav_rem(cx)) * super::ITEM_ROW_REMS;
+        let moon_ui::MoonInputSize::Custom {
+            height, font_size, ..
+        } = super::nav_search_size(cx)
+        else {
+            panic!("the search field uses a custom size");
+        };
+        let drawn = crate::design::ui_value(cx, height);
+        assert!(
+            (drawn - row).abs() <= 0.5,
+            "field {drawn} px, item row {row} px"
+        );
+        let text = crate::design::font_value(cx, font_size);
+        let body = f32::from(crate::design::t_body(cx));
+        assert!(
+            (text - body).abs() <= 0.5,
+            "field text {text} px, body {body} px"
+        );
+    });
+}

@@ -290,7 +290,7 @@ fn inputs(window: &mut Window, cx: &mut App) -> Inputs {
 fn body(window: &mut Window, cx: &mut App, fields: &Inputs) -> AnyElement {
     let size = window.viewport_size();
     let (width, height) = (f32::from(size.width), f32::from(size.height));
-    let narrow = width < crate::settings::nav::NAV_BREAKPOINT;
+    let narrow = crate::settings::nav::nav_hidden(width, cx);
     let content_w = crate::settings::layout_probe::body_box((width, height), cx).0;
     let layout = cores_layout(
         narrow,

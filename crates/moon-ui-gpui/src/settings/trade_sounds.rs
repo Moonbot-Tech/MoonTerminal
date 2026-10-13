@@ -10,8 +10,9 @@ use moon_ui::{
 };
 use rust_i18n::t;
 
+use super::SettingsView;
+use super::common::{LabelCol, hint_row_in, label_col, slider_field};
 use super::telegram::plural_key;
-use super::{SettingsView, slider_row};
 use crate::design;
 use crate::panels::common::SoundChoices;
 use crate::panels::{RadioMark, radio_items};
@@ -35,9 +36,9 @@ pub(super) struct SoundsTab {
     pub(super) show_all: bool,
     /// Sleep mode silences sounds: the volume block says so.
     pub(super) quiet: bool,
-    /// The volume slider row.
+    /// The volume row; see [`volume_row`].
     pub(super) volume: AnyElement,
-    /// The own-sounds folder block, pinned at the bottom.
+    /// The own-sounds folder block, right under the table.
     pub(super) folder: AnyElement,
 }
 
@@ -56,11 +57,42 @@ pub(super) fn sounds_wide(window_width: f32, cx: &App) -> bool {
     window_width - f32::from(design::ui_px(cx, 36.0)) >= sounds_table_w(cx)
 }
 
-/// The sounds tab: volume on top, the exchange table taking the height left and scrolling on its
-/// own, the folder block pinned at the bottom.
+/// The volume row: the label on one line in the shared label column of every Settings page, the
+/// slider and its value right beside it, or under it when the body is too narrow for both.
 ///
-/// The tab is BOUNDED, not scrolled whole (see `render.rs`): with a long exchange list the
-/// folder's buttons would otherwise leave the window before the table did.
+/// Args:
+///     st: The retained volume slider.
+///     cx: Application context for theme and scale.
+///
+/// Returns:
+///     The row (selector `trade-sounds-volume-row`, its label `trade-sounds-volume-row-label`).
+pub(super) fn volume_row(st: &Entity<MoonSliderState>, cx: &App) -> AnyElement {
+    let label = t!("trade_sounds.volume").to_string();
+    // The shared column width, held whole: in a language whose label is long, a narrow body
+    // drops the slider under the label rather than wrapping the label beside it.
+    let col = match label_col(std::slice::from_ref(&label), cx) {
+        LabelCol::Fit(w) => LabelCol::Line(w),
+        other => other,
+    };
+    hint_row_in(
+        col,
+        "trade-sounds-volume-row",
+        label,
+        None,
+        None,
+        slider_field(st, 0.0..=100.0, |value| format!("{value:.0}%"), cx),
+        false,
+        std::rc::Rc::new(|_, _| {}),
+        cx,
+    )
+}
+
+/// The sounds tab: volume on top, then the exchange table, and the folder block right under it,
+/// the table and the block one content width.
+///
+/// The tab is BOUNDED, not scrolled whole (see `render.rs`): the table takes its rows' height
+/// and, when the window is too short for all of them, shrinks and scrolls on its own, so the
+/// folder's buttons never leave the window before the table does.
 ///
 /// Args:
 ///     tab: What to draw.
@@ -87,6 +119,7 @@ pub(super) fn sounds_tab_el(
     let table_width = sounds_table_w(cx);
     let count = venues.len() as u64;
     let heading = h_flex()
+        .debug_selector(|| "trade-sounds-ex-heading".into())
         .w_full()
         .flex_wrap()
         .items_center()
@@ -128,6 +161,7 @@ pub(super) fn sounds_tab_el(
         );
     }
     let mut rows = v_flex()
+        .debug_selector(|| "trade-sounds-rows".into())
         .w_full()
         .border_1()
         .border_color(rgba_from(palette.border, 1.0))
@@ -198,21 +232,27 @@ pub(super) fn sounds_tab_el(
                 .child(row),
         );
     }
-    // The outer `flex_1 + min_h(0)` takes the remaining height; the inner `size_full` owns
-    // the scrollbar. Without both layers Scrollable breaks height layout (`import_preview.rs`
+    // The outer `flex_1 + min_h(0)` takes what the exchanges block holds: its rows' height, since
+    // a 0% basis in a column of indefinite height counts as the content, or less once the block
+    // shrinks on a short page; the inner `size_full` owns the scrollbar. Without both layers Scrollable breaks height layout (`import_preview.rs`
     // carries the same pair). Volume and the folder stay outside this scroller: the page is
     // bounded (`render.rs` treats Sounds like Cores), so a whole-page scroll is not available.
-    let table = div().flex_1().min_h(px(0.0)).w_full().child(
-        div()
-            .id("trade-sounds-table")
-            .size_full()
-            .child(v_flex().w_full().max_w(px(table_width)).child(rows))
-            .overflow_y_scrollbar(),
-    );
+    let table = div()
+        .debug_selector(|| "trade-sounds-table".into())
+        .flex_1()
+        .min_h(px(0.0))
+        .w_full()
+        .child(
+            div()
+                .id("trade-sounds-table")
+                .size_full()
+                .child(v_flex().w_full().max_w(px(table_width)).child(rows))
+                .overflow_y_scrollbar(),
+        );
     let exchanges = v_flex()
         .id("trade-sounds-ex")
         .debug_selector(|| "trade-sounds-ex".into())
-        .flex_1()
+        .flex_shrink(1.0)
         .min_h(px(0.0))
         .w_full()
         .max_w(px(table_width))
@@ -246,7 +286,13 @@ pub(super) fn sounds_tab_el(
         .gap(design::ui_px(cx, 12.0))
         .child(head)
         .child(exchanges)
-        .child(folder)
+        .child(
+            div()
+                .flex_none()
+                .w_full()
+                .max_w(px(table_width))
+                .child(folder),
+        )
         .into_any_element()
 }
 
@@ -377,14 +423,7 @@ impl SettingsView {
             wide,
             show_all,
             quiet,
-            volume: slider_row(
-                &t!("trade_sounds.volume"),
-                &self.trade_volume,
-                0.0..=100.0,
-                |value| format!("{value:.0}%"),
-                cx,
-            )
-            .into_any_element(),
+            volume: volume_row(&self.trade_volume, cx),
             folder: self.sound_folder_block(cx),
         };
         sounds_tab_el(

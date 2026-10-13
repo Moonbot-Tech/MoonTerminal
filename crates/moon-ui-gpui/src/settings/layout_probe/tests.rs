@@ -149,7 +149,7 @@ fn page_header_and_dirty_bar_fit_the_body(cx: &mut gpui::TestAppContext) {
     sweep(
         cx,
         host(move |window, cx, _| {
-            let narrow = f32::from(window.viewport_size().width) < super::NAV_BREAKPOINT;
+            let narrow = super::nav_hidden(f32::from(window.viewport_size().width), cx);
             let action = |id: &'static str| {
                 div()
                     .debug_selector(move || id.into())
@@ -328,7 +328,7 @@ fn every_page_header_shows_its_full_title(cx: &mut gpui::TestAppContext) {
     sweep(
         cx,
         host(move |window, cx, _| {
-            let narrow = f32::from(window.viewport_size().width) < super::NAV_BREAKPOINT;
+            let narrow = super::nav_hidden(f32::from(window.viewport_size().width), cx);
             let action = |id: &'static str| {
                 moon_ui::MoonButton::new(id)
                     .outline()
@@ -455,4 +455,40 @@ fn number_fields_keep_room_for_their_digits(cx: &mut gpui::TestAppContext) {
             }
         }
     }
+}
+
+/// Catches a word sweep that never fires: a shared row whose label column is narrower than its
+/// one word must fail every probe run, and the same row with room must pass. Every page sweep
+/// relies on this check to find labels squeezed one glyph per line.
+#[gpui::test]
+fn the_probe_fails_a_label_narrower_than_its_word(cx: &mut gpui::TestAppContext) {
+    cx.update(moon_ui::init);
+    let _locale = crate::test_locale::force("en");
+    let row = |label_w: f32| {
+        host(move |_, cx, _| {
+            crate::settings::common::column_row(
+                "probe-squeezed",
+                "Loudness".into(),
+                None,
+                None,
+                div().w(px(40.0)).into_any_element(),
+                false,
+                Rc::new(|_, _| {}),
+                label_w,
+                cx,
+            )
+        })
+    };
+    let spec = ProbeSpec {
+        container: "probe-body",
+        ..Default::default()
+    };
+    let squeezed = probe_once(cx, (860.0, 620.0), &row(12.0), &spec);
+    assert!(
+        squeezed
+            .as_ref()
+            .is_err_and(|e| e.contains("probe-squeezed-label")),
+        "{squeezed:?}"
+    );
+    assert_eq!(probe_once(cx, (860.0, 620.0), &row(200.0), &spec), Ok(()));
 }

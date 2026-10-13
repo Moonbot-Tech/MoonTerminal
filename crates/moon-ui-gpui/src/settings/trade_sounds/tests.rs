@@ -9,10 +9,11 @@ use gpui::{
 };
 use moon_core::feed::ExchangeId;
 
-use super::super::common::slider_row;
-use super::super::layout_probe::{ProbeSpec, Probed, sweep};
+use super::super::layout_probe::{ProbeSpec, Probed, TextFace, sweep};
 use super::super::sound_folder::{FolderView, folder_el};
-use super::{SoundRow, SoundsTab, listed_exchanges, sound_picker_el, sounds_tab_el, sounds_wide};
+use super::{
+    SoundRow, SoundsTab, listed_exchanges, sound_picker_el, sounds_tab_el, sounds_wide, volume_row,
+};
 use crate::media::sound::ScanStats;
 
 /// A probe host laying the page out BOUNDED, as `render.rs` places the Sounds page: the body
@@ -153,14 +154,7 @@ fn page(volume: &gpui::Entity<moon_ui::MoonSliderState>, width: f32, cx: &App) -
             wide,
             show_all: false,
             quiet: true,
-            volume: slider_row(
-                &rust_i18n::t!("trade_sounds.volume"),
-                volume,
-                0.0..=100.0,
-                |value| format!("{value:.0}%"),
-                cx,
-            )
-            .into_any_element(),
+            volume: volume_row(volume, cx),
             folder,
         },
         Box::new(|_, _, _| {}),
@@ -215,6 +209,55 @@ fn trade_sounds_page_fits_the_body(cx: &mut gpui::TestAppContext) {
                 "trade-sounds-ex".into(),
                 "trade-sounds-own".into(),
             ]],
+            ..ProbeSpec::default()
+        },
+    );
+}
+
+/// The Sounds page reads like every other Settings page: the volume label sits on one line in
+/// the shared label column, clear of its slider and of the exchanges heading below; the exchange
+/// table and the custom-sounds card are one width, and the card follows the table directly
+/// instead of being pinned to the window bottom. Every language, every swept size.
+///
+/// Breaks on: the label going back into a `min_w_0` column beside a fixed control (it squeezes
+/// to one glyph per line and paints over the slider caption and the heading), the folder losing
+/// the table's width cap, or the exchanges block growing (`flex_1`) and opening a hole above the
+/// card.
+#[gpui::test]
+fn sounds_volume_row_and_cards_line_up(cx: &mut gpui::TestAppContext) {
+    sweep(
+        cx,
+        |_, cx: &mut Context<Host>, (width, height)| {
+            let volume = cx.new(|_| {
+                moon_ui::MoonSliderState::new()
+                    .max(100.0)
+                    .min(0.0)
+                    .step(1.0)
+                    .default_value(100.0)
+            });
+            Host {
+                width,
+                height,
+                build: Rc::new(move |_, cx, width| page(&volume, width, cx)),
+            }
+        },
+        |_| ProbeSpec {
+            container: "probe-body",
+            fits: vec![(
+                "trade-sounds-volume-row-label".into(),
+                rust_i18n::t!("trade_sounds.volume").to_string(),
+                TextFace::Ui,
+            )],
+            inside: vec!["trade-sounds-volume-row-control".into()],
+            no_overlap: vec![vec![
+                "trade-sounds-volume-row-label".into(),
+                "trade-sounds-volume-row-control".into(),
+                "trade-sounds-ex-heading".into(),
+            ]],
+            same_width: vec![vec!["trade-sounds-table".into(), "trade-sounds-own".into()]],
+            // The page column's own gap (12) is all that may separate the rows' end from the card;
+            // on a page too short for both the table shrinks and the card rises over its rows.
+            stacked: vec![("trade-sounds-rows".into(), "trade-sounds-own".into(), 12.0)],
             ..ProbeSpec::default()
         },
     );

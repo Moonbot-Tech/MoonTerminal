@@ -53,7 +53,7 @@ use moon_core::market::MarketDataMode;
 use moon_core::session::CoreId;
 
 use badges::BadgesEd;
-use common::{color_row, draft_color, draft_slider, open_folder, slider_row};
+use common::{color_row, draft_color, draft_slider, open_folder};
 use connections::ConnRow;
 use interface::Iface;
 use lines::Lines;
