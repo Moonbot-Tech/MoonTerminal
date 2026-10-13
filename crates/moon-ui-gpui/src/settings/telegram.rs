@@ -24,6 +24,7 @@ mod access;
 mod bot_menu;
 mod chat_notify;
 mod chat_notify_charts;
+mod chat_notify_quotes;
 mod core_section;
 mod message_layout;
 mod qr;

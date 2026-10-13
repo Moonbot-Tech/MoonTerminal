@@ -1,4 +1,4 @@
-use super::{Commit, commit_plan, may_switch, parse_amount, settings_from};
+use super::{Commit, QuoteTexts, commit_plan, may_switch, parse_amount, settings_from};
 use moon_core::station_api::ChatNotifyRow;
 use moon_core::telegram::notify::{CoreScope, NotifySettings};
 
@@ -58,6 +58,9 @@ fn the_fields_complete_the_draft() {
 
 const F: [&str; 6] = ["50", "", "", "10", "", ""];
 
+/// No per-currency row typed.
+const NO_QUOTES: (QuoteTexts, QuoteTexts) = (Vec::new(), Vec::new());
+
 fn stored(revision: u64) -> (i64, ChatNotifyRow) {
     let settings = settings_from(&NotifySettings::default(), F).unwrap();
     (7, ChatNotifyRow { settings, revision })
@@ -69,7 +72,14 @@ fn stored(revision: u64) -> (i64, ChatNotifyRow) {
 fn a_change_saves_at_once_against_the_read_revision() {
     let row = stored(41);
     let fields = ["75", "", "", "10", "", ""];
-    match commit_plan(Some(&row), 7, &NotifySettings::default(), fields, false) {
+    match commit_plan(
+        Some(&row),
+        7,
+        &NotifySettings::default(),
+        fields,
+        &NO_QUOTES,
+        false,
+    ) {
         Commit::Save(settings, revision) => {
             assert_eq!(settings.trades.min_volume_usd, Some(75.0));
             assert_eq!(revision, 41);
@@ -84,14 +94,24 @@ fn an_unchanged_or_foreign_editor_sends_nothing() {
     let row = stored(3);
     let draft = NotifySettings::default();
     assert_eq!(
-        commit_plan(Some(&row), 7, &draft, F, false),
+        commit_plan(Some(&row), 7, &draft, F, &NO_QUOTES, false),
         Commit::Nothing
     );
     assert_eq!(
-        commit_plan(Some(&row), 8, &draft, ["1", "", "", "10", "", ""], false),
+        commit_plan(
+            Some(&row),
+            8,
+            &draft,
+            ["1", "", "", "10", "", ""],
+            &NO_QUOTES,
+            false
+        ),
         Commit::Nothing
     );
-    assert_eq!(commit_plan(None, 7, &draft, F, false), Commit::Nothing);
+    assert_eq!(
+        commit_plan(None, 7, &draft, F, &NO_QUOTES, false),
+        Commit::Nothing
+    );
 }
 
 /// A bad number or a busy station refuses visibly; the edits are not dropped silently.
@@ -100,13 +120,106 @@ fn a_bad_field_or_busy_station_refuses() {
     let row = stored(3);
     let draft = NotifySettings::default();
     assert!(matches!(
-        commit_plan(Some(&row), 7, &draft, ["abc", "", "", "10", "", ""], false),
+        commit_plan(
+            Some(&row),
+            7,
+            &draft,
+            ["abc", "", "", "10", "", ""],
+            &NO_QUOTES,
+            false
+        ),
         Commit::Refuse(_)
     ));
     assert_eq!(
-        commit_plan(Some(&row), 7, &draft, ["99", "", "", "10", "", ""], true),
+        commit_plan(
+            Some(&row),
+            7,
+            &draft,
+            ["99", "", "", "10", "", ""],
+            &NO_QUOTES,
+            true
+        ),
         Commit::Refuse("telegram.mini_error_busy_station")
     );
+}
+
+/// A currency row typed into the editor is part of what a commit saves: left out, the row's
+/// fields would autosave nothing, and a row added or removed would never reach the bot.
+#[test]
+fn a_typed_currency_row_is_saved() {
+    use moon_core::db::QuoteCurrency;
+    let row = stored(5);
+    let rub = QuoteCurrency::from_ticker("RUB").unwrap();
+    let quotes = (
+        vec![(rub, vec![String::new(), "100".to_string(), String::new()])],
+        Vec::new(),
+    );
+    match commit_plan(Some(&row), 7, &NotifySettings::default(), F, &quotes, false) {
+        Commit::Save(settings, revision) => {
+            assert_eq!(settings.trades.by_quote.len(), 1);
+            assert_eq!(settings.trades.by_quote[0].quote, "RUB");
+            assert_eq!(settings.trades.by_quote[0].profit_at_least, Some(100.0));
+            assert_eq!(revision, 5);
+        }
+        other => panic!("expected a save, got {other:?}"),
+    }
+    assert_eq!(
+        commit_plan(
+            Some(&row),
+            7,
+            &NotifySettings::default(),
+            F,
+            &NO_QUOTES,
+            false
+        ),
+        Commit::Nothing,
+        "no row typed and none stored: nothing to save"
+    );
+}
+
+/// An untouched editor over a stored list in another shape — a lowercase ticker, an unknown
+/// currency before a known one — has nothing to save: saving it would bump the revision on every
+/// Blur and turn a Mini App tab stale for nothing.
+#[test]
+fn an_untouched_editor_over_an_odd_stored_list_saves_nothing() {
+    use moon_core::db::QuoteCurrency;
+    use moon_core::telegram::notify::QuoteThresholds;
+    let mut settings = settings_from(&NotifySettings::default(), F).unwrap();
+    settings.trades.by_quote = vec![
+        QuoteThresholds {
+            quote: "KZT".to_string(),
+            ..QuoteThresholds::default()
+        },
+        QuoteThresholds {
+            quote: "rub".to_string(),
+            profit_at_least: Some(100.0),
+            ..QuoteThresholds::default()
+        },
+    ];
+    let row = (
+        7,
+        ChatNotifyRow {
+            settings: settings.clone(),
+            revision: 9,
+        },
+    );
+    let rub = QuoteCurrency::from_ticker("RUB").unwrap();
+    let typed = (
+        vec![(rub, vec![String::new(), "100".to_string(), String::new()])],
+        Vec::new(),
+    );
+    assert_eq!(
+        commit_plan(Some(&row), 7, &settings, F, &typed, false),
+        Commit::Nothing
+    );
+    let edited = (
+        vec![(rub, vec![String::new(), "150".to_string(), String::new()])],
+        Vec::new(),
+    );
+    assert!(matches!(
+        commit_plan(Some(&row), 7, &settings, F, &edited, false),
+        Commit::Save(_, 9)
+    ));
 }
 
 /// The picker leaves a chat only once its edits were taken.
@@ -115,4 +228,30 @@ fn the_picker_stays_on_a_refused_or_sending_chat() {
     assert!(may_switch(false, false));
     assert!(!may_switch(true, false));
     assert!(!may_switch(false, true));
+}
+
+/// A stored row of a currency this build does not know has no row in the editor; a save must
+/// keep it as stored, or the editor would silently delete what a newer build wrote. The typed
+/// rows replace the known ones.
+#[test]
+fn a_save_keeps_a_row_the_editor_cannot_show() {
+    use super::settings_with_quotes;
+    use moon_core::db::QuoteCurrency;
+    use moon_core::telegram::notify::QuoteThresholds;
+    let row = |quote: &str| QuoteThresholds {
+        quote: quote.to_string(),
+        ..QuoteThresholds::default()
+    };
+    let mut draft = NotifySettings::default();
+    draft.trades.by_quote = vec![row("RUB"), row("KZT")];
+    let rub = QuoteCurrency::from_ticker("RUB").unwrap();
+    let typed = (
+        vec![(rub, vec![String::new(), "100".to_string(), String::new()])],
+        Vec::new(),
+    );
+    let saved = settings_with_quotes(&draft, ["", "", "", "5", "", ""], &typed).unwrap();
+    let mut rub_row = row("RUB");
+    rub_row.profit_at_least = Some(100.0);
+    assert_eq!(saved.trades.by_quote, vec![rub_row, row("KZT")]);
+    assert!(saved.validate().is_ok());
 }

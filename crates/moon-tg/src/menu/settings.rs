@@ -385,6 +385,26 @@ fn mark(current: bool) -> &'static str {
     if current { "\u{1f518}" } else { "\u{26aa}" }
 }
 
+/// One per-currency row of the trade rule as the settings screen lists it: `RUB: profit from 100
+/// RUB, loss from 100 RUB`, or the bare ticker for a row with no threshold — every trade in it.
+/// A row naming a currency this build does not know judges nothing and is left out; its stored
+/// text is never echoed.
+fn quote_filter(row: &moon_core::telegram::notify::QuoteThresholds) -> Option<String> {
+    let ticker = row.currency()?.ticker();
+    let parts: Vec<String> = [
+        ("telegram.quote_volume", row.min_volume),
+        ("telegram.quote_profit", row.profit_at_least),
+        ("telegram.quote_loss", row.loss_at_least),
+    ]
+    .into_iter()
+    .filter_map(|(key, value)| Some(format!("{} {} {ticker}", t!(key), value?)))
+    .collect();
+    Some(match parts.is_empty() {
+        true => ticker.to_string(),
+        false => format!("{ticker}: {}", parts.join(", ")),
+    })
+}
+
 /// This chat's notifications: the switches, the down delay, the automatic reports.
 fn notify_screen(notify: &NotifySettings) -> Rendered {
     let trades = &notify.trades;
@@ -407,6 +427,7 @@ fn notify_screen(notify: &NotifySettings) -> Rendered {
             filters.push(format!("{} {value}$", t!(key)));
         }
     }
+    filters.extend(trades.by_quote.iter().filter_map(quote_filter));
     let trades_line = match filters.is_empty() {
         true => on_off(trades.on),
         false => format!("{} ({})", on_off(trades.on), filters.join(", ")),

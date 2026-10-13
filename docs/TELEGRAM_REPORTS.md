@@ -239,7 +239,13 @@ rich):
   (a hashtag only when that card-layout switch is on),
   and the third is the strategy in italics. The filters are in USD: the valuation's figure, or a USD stablecoin's own amount taken 1:1.
   A trade in another currency that a filter needs to judge waits up to five minutes for its
-  valuation; after that it is sent with a line saying its thresholds were not checked. With the
+  valuation; after that it is sent with a line saying its thresholds were not checked. A chat may
+  also set thresholds in a currency of its own — one row per currency, in the terminal's Settings
+  only (the Mini App does not show them, and its save leaves them as they are): a minimum volume,
+  a profit of at least, a loss of at least, all in that currency's money. A trade in a listed
+  currency is judged by its row at once, on its own amounts, and never waits for a valuation; a
+  row with no threshold sends every trade in that currency. This is how a core trading in a
+  currency nothing values, such as RUB, gets judged at all. With the
   dollar follow-up on (terminal Settings only), a card sent before its valuation gets the dollar
   value written into it once it arrives, within a day.
 - Core down and back. After a core stays disconnected for the chosen number of minutes, the
@@ -271,7 +277,10 @@ cards off and the pictures on. They are switched per chat in the terminal's Sett
 in the station's bot box (the Mini App does not show them, and its save leaves them as they are),
 with two thresholds of their own: a profit of at least some USD, a loss of at least some USD; with
 neither set every trade gets one. A picture waits for the trade's dollar value (a USD stablecoin
-taken 1:1, another currency up to five minutes for its valuation) and is not sent without it. It
+taken 1:1, another currency up to five minutes for its valuation) and is not sent without it —
+unless the trade's currency has a row of its own (profit and loss in that currency, as for the
+cards): such a trade is judged by the row at once, and while it has no dollar value its picture
+writes the result, the position size and the core's day in that currency. It
 shows the trade's own window — at least 10 seconds before the entry (a third of a longer trade, as
 far as the station's tape recorder keeps) and 3 seconds after the exit — with every print of the
 tape as a cross in the colour of its side, the volume, the entry and exit orders as the steps the

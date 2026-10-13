@@ -25,6 +25,7 @@ fn rule(profit: Option<f64>, loss: Option<f64>) -> ChartRule {
         on: true,
         profit_at_least_usd: profit,
         loss_at_least_usd: loss,
+        ..ChartRule::default()
     }
 }
 
@@ -136,10 +137,36 @@ fn the_day_counts_the_core_up_to_the_trade() {
         closed(5, 140, Some(7.0)),
         other,
     ];
-    assert_eq!(day_sum(&trades, 1, 100, 130), Some(1.5));
-    assert_eq!(day_sum(&trades, 2, 100, 200), Some(4.0));
+    assert_eq!(day_sum(&trades, 1, 100, 130, Money::Usdt), Some(1.5));
+    assert_eq!(day_sum(&trades, 2, 100, 200, Money::Usdt), Some(4.0));
     let unvalued = [closed(1, 120, Some(2.5)), closed(2, 125, None)];
-    assert_eq!(day_sum(&unvalued, 1, 100, 130), None);
+    assert_eq!(day_sum(&unvalued, 1, 100, 130, Money::Usdt), None);
+}
+
+/// A day in a currency of its own adds that currency's amounts and nothing else: a trade of the
+/// core in another currency, or without its own profit, makes the sum unknown rather than wrong.
+#[test]
+fn a_day_in_a_currency_adds_only_that_currency() {
+    use moon_core::db::QuoteCurrency;
+    let rub = QuoteCurrency::from_ticker("RUB").unwrap();
+    let native = |rec_id, close_utc, quote, profit| ClosedTrade {
+        close_utc,
+        quote: Some(quote),
+        profit_native: profit,
+        ..trade(rec_id, None)
+    };
+    let day = [
+        native(1, 110, rub, Some(100.0)),
+        native(2, 120, rub, Some(-30.0)),
+    ];
+    assert_eq!(day_sum(&day, 1, 100, 130, Money::Quote(rub)), Some(70.0));
+    let mixed = [
+        native(1, 110, rub, Some(100.0)),
+        native(2, 120, QuoteCurrency::usdt(), Some(5.0)),
+    ];
+    assert_eq!(day_sum(&mixed, 1, 100, 130, Money::Quote(rub)), None);
+    let missing = [native(1, 110, rub, Some(100.0)), native(2, 120, rub, None)];
+    assert_eq!(day_sum(&missing, 1, 100, 130, Money::Quote(rub)), None);
 }
 
 /// The day is the close's own day in the zone: a trade at 23:58 drawn after midnight still
@@ -188,4 +215,43 @@ fn the_lines_are_the_trades_own() {
     assert_eq!(lines.entry, vec![(1_000, 10.0), (2_000, 11.0)]);
     assert_eq!(lines.exit, vec![(1_000, 20.0), (2_000, 21.0)]);
     assert_eq!(lines.stop, Some(8.0));
+}
+
+/// A trade in a currency with a row of its own is due at once, unvalued, and judged in that
+/// currency: before the rows a RUB core never got a picture, its trades waiting for a valuation
+/// no source has. A result under the row's floor sends none, and a trade in a currency without a
+/// row still waits for its dollars.
+#[test]
+fn a_currency_row_sends_an_unvalued_picture_at_once() {
+    use moon_core::db::QuoteCurrency;
+    use moon_core::telegram::notify::QuoteThresholds;
+    let rub = QuoteCurrency::from_ticker("RUB").unwrap();
+    let mut by_rub = rule(Some(1.0), None);
+    by_rub.by_quote = vec![QuoteThresholds {
+        quote: "RUB".to_string(),
+        profit_at_least: Some(100.0),
+        ..QuoteThresholds::default()
+    }];
+    let rub_trade = |rec_id, profit| ClosedTrade {
+        quote: Some(rub),
+        profit_native: Some(profit),
+        ..trade(rec_id, None)
+    };
+    let eur = ClosedTrade {
+        quote: QuoteCurrency::from_ticker("EUR"),
+        profit_native: Some(500.0),
+        ..trade(3, None)
+    };
+    let mut ledger = enabled();
+    let rows = [rub_trade(1, 150.0), rub_trade(2, 27.45), eur];
+    let due = decide_charts(&by_rub, &mut ledger, &[1], &rows, NOW);
+    assert_eq!(ids(&due), vec![1]);
+    assert!(
+        ledger.seen[&1].contains_key(&2),
+        "a judged trade is not reconsidered"
+    );
+    assert!(
+        ledger.held[&1].contains_key(&3),
+        "a currency without a row waits for dollars"
+    );
 }

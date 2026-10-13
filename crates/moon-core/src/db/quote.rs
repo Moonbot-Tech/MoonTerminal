@@ -519,6 +519,17 @@ impl QuoteCurrency {
         }
     }
 
+    /// The known currency a ticker names, ignoring ASCII case.
+    ///
+    /// Args:
+    ///     ticker: A ticker as [`Self::ticker`] spells it, e.g. `RUB`.
+    ///
+    /// Returns:
+    ///     The currency, or `None` for a ticker this build does not know.
+    pub fn from_ticker(ticker: &str) -> Option<Self> {
+        Self::all().find(|quote| quote.ticker().eq_ignore_ascii_case(ticker.trim()))
+    }
+
     /// Stable display ticker for this quote currency.
     ///
     /// Returns:

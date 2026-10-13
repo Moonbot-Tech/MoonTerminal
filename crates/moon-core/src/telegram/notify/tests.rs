@@ -171,6 +171,12 @@ fn sample_file() -> NotifyFile {
                 profit_at_least_usd: Some(1.5),
                 loss_at_least_usd: None,
                 usd_followup: true,
+                by_quote: vec![QuoteThresholds {
+                    quote: "RUB".to_string(),
+                    min_volume: Some(5_000.0),
+                    profit_at_least: Some(100.0),
+                    loss_at_least: Some(50.0),
+                }],
             },
             down: DownRule {
                 on: true,
@@ -189,6 +195,11 @@ fn sample_file() -> NotifyFile {
                 on: true,
                 profit_at_least_usd: Some(100.0),
                 loss_at_least_usd: Some(12.0),
+                by_quote: vec![QuoteThresholds {
+                    quote: "EUR".to_string(),
+                    loss_at_least: Some(10.0),
+                    ..QuoteThresholds::default()
+                }],
             },
         },
         ledger: NotifyLedger {
@@ -303,9 +314,11 @@ fn save_and_load_round_trip_keeps_ledger_outbox_and_string_map_keys() {
         "next_id": 2
     }"#;
     let from_disk: NotifyFile = serde_json::from_str(hand).expect("hand-written file");
-    // The hand-written file predates deal charts: it is the sample without them.
+    // The hand-written file predates deal charts and per-currency rows: it is the sample without
+    // them, and loading it proves a file of that age still loads.
     let mut before_charts = original.clone();
     let chat = before_charts.chats.get_mut(&-10042).unwrap();
+    chat.settings.trades.by_quote.clear();
     chat.settings.charts = ChartRule::default();
     chat.ledger.charts = ChartLedger::default();
     before_charts.outbox.truncate(1);
@@ -561,4 +574,117 @@ fn settings_and_ledger_from_before_the_daily_summary_removal_still_load() {
         panic!("expected access.set");
     };
     assert!(access.notify.expect("notify rows")[&7].settings.down.on);
+}
+
+/// A RUB row of the given thresholds.
+fn rub_row(profit: Option<f64>) -> QuoteThresholds {
+    QuoteThresholds {
+        quote: "RUB".to_string(),
+        profit_at_least: profit,
+        ..QuoteThresholds::default()
+    }
+}
+
+/// Two rows for one currency leave which one judges to a guess, and a chart row's volume floor
+/// would be stored and never applied: each is refused on save. A negative row threshold is refused
+/// like a dollar one. A row naming a currency this build does not know is NOT refused: it may come
+/// from a newer build, and refusing it would block every save from a surface that cannot show it.
+#[test]
+fn validate_rejects_bad_currency_rows() {
+    let with = |trades: Vec<QuoteThresholds>, charts: Vec<QuoteThresholds>| NotifySettings {
+        trades: TradeRule {
+            by_quote: trades,
+            ..TradeRule::default()
+        },
+        charts: ChartRule {
+            by_quote: charts,
+            ..ChartRule::default()
+        },
+        ..NotifySettings::default()
+    };
+    assert!(
+        with(vec![rub_row(Some(100.0))], vec![rub_row(None)])
+            .validate()
+            .is_ok()
+    );
+    let unknown = QuoteThresholds {
+        quote: "XYZ".to_string(),
+        ..QuoteThresholds::default()
+    };
+    assert!(
+        with(vec![rub_row(None), unknown.clone()], vec![])
+            .validate()
+            .is_ok()
+    );
+    assert_eq!(
+        with(vec![unknown.clone(), unknown], vec![]).validate(),
+        Err(NotifyError::DuplicateQuote {
+            list: "by_quote",
+            index: 1
+        })
+    );
+    let lower = QuoteThresholds {
+        quote: "rub".to_string(),
+        ..QuoteThresholds::default()
+    };
+    assert_eq!(
+        with(vec![], vec![rub_row(None), lower]).validate(),
+        Err(NotifyError::DuplicateQuote {
+            list: "charts.by_quote",
+            index: 1
+        })
+    );
+    let chart_volume = QuoteThresholds {
+        min_volume: Some(10.0),
+        ..rub_row(None)
+    };
+    assert!(matches!(
+        with(vec![], vec![chart_volume]).validate(),
+        Err(NotifyError::Threshold {
+            field: "charts.by_quote.min_volume",
+            ..
+        })
+    ));
+    assert!(matches!(
+        with(vec![rub_row(Some(-1.0))], vec![]).validate(),
+        Err(NotifyError::Threshold {
+            field: "by_quote.profit_at_least",
+            ..
+        })
+    ));
+}
+
+/// A document from before the rows, or one whose rows are empty, writes no `by_quote` — the Mini
+/// App's document stays as it was — and a row round-trips with only the thresholds it sets. A
+/// row naming a currency this build does not know still loads, so one row cannot cost a chat its
+/// settings; it just matches no trade.
+#[test]
+fn currency_rows_are_written_only_when_present_and_load_whatever_they_name() {
+    let plain = serde_json::to_value(NotifySettings::new_chat()).unwrap();
+    assert!(plain["trades"].get("by_quote").is_none());
+    let mut settings = NotifySettings::new_chat();
+    settings.trades.by_quote = vec![rub_row(Some(100.0))];
+    let json = serde_json::to_value(&settings).unwrap();
+    assert_eq!(
+        json["trades"]["by_quote"],
+        serde_json::json!([{ "quote": "RUB", "profit_at_least": 100.0 }])
+    );
+    let back: NotifySettings = serde_json::from_value(json).unwrap();
+    assert_eq!(back, settings);
+    let future: NotifySettings =
+        serde_json::from_str(r#"{"trades":{"on":true,"by_quote":[{"quote":"KZT"}]}}"#).unwrap();
+    assert!(future.trades.on);
+    assert_eq!(QuoteCurrency::from_ticker("KZT"), None);
+    assert!(
+        future
+            .trades
+            .thresholds_for(Some(QuoteCurrency::usdt()))
+            .is_none()
+    );
+    let rub = QuoteCurrency::from_ticker("rub");
+    assert!(settings.trades.thresholds_for(rub).is_some());
+    assert!(
+        settings.trades.thresholds_for(None).is_none(),
+        "an unknown quote has no row"
+    );
 }
