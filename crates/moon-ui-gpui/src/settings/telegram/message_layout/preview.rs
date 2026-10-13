@@ -1,6 +1,5 @@
 //! Telegram dark-chat imitation drawn from the production renderer's typed spans and rows.
 use crate::design;
-use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use moon_tg::{PreviewLine, PreviewRowKind, PreviewTable, Span as PreviewSpan, Tone};
 use moon_ui::{MoonPalette, h_flex, rgba_from, v_flex};
@@ -20,9 +19,10 @@ pub(super) struct PreviewCache(Rc<RefCell<Option<Rc<PreviewContent>>>>);
 #[derive(IntoElement)]
 struct Phone {
     content: Rc<PreviewContent>,
+    card_w: f32,
 }
-/// Reuse the retained sample and fit the phone to its Settings column.
-pub(super) fn phone(content: PreviewContent, cache: PreviewCache) -> impl IntoElement {
+/// Reuse the retained sample and fit the phone to its Settings card `card_w` wide.
+pub(super) fn phone(content: PreviewContent, cache: PreviewCache, card_w: f32) -> impl IntoElement {
     let mut cached = cache.0.borrow_mut();
     let sample = if let Some(previous) = cached
         .as_ref()
@@ -34,24 +34,27 @@ pub(super) fn phone(content: PreviewContent, cache: PreviewCache) -> impl IntoEl
         *cached = Some(sample.clone());
         sample
     };
-    Phone { content: sample }
+    Phone {
+        content: sample,
+        card_w,
+    }
 }
 
 impl RenderOnce for Phone {
     /// Draw native text and table bands in the active theme's colours.
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let p = MoonPalette::active(cx);
-        let card = matches!(self.content.as_ref(), PreviewContent::Card(_));
+        let bubble = bubble_w(self.card_w, cx);
+        let text_w = (bubble - 2.0 * design::ui_value(cx, TEXT_INSET)).max(0.0);
         let body = match self.content.as_ref() {
             PreviewContent::Card(lines) => v_flex()
-                .w_full()
-                .min_w_0()
+                .w(px(text_w))
                 .gap(design::ui_px(cx, 2.0))
                 .children(
                     lines
                         .iter()
                         .enumerate()
-                        .map(|(i, line)| card_line(i, &line.spans, window, cx)),
+                        .map(|(i, line)| card_line(i, &line.spans, text_w, window, cx)),
                 )
                 .into_any_element(),
             PreviewContent::Report(table) => report_table(table, window, cx),
@@ -66,13 +69,12 @@ impl RenderOnce for Phone {
                     .child(t!("telegram.layout.preview").to_string()),
             )
             .child(
-                // A card sizes the bubble like Telegram does, from its longest line up to the
-                // message width; a report's fractional columns need the full message width.
+                // The width is computed, never content-sized: a shrink-wrapped bubble measured
+                // near zero in the real window and stacked its text a few glyphs per line.
                 v_flex()
                     .debug_selector(|| "tg-preview-bubble".into())
-                    .when(!card, |el| el.w_full())
-                    .max_w(design::ui_px(cx, BUBBLE_MAX_W))
-                    .min_w_0()
+                    .w(px(bubble))
+                    .flex_none()
                     .rounded(design::ui_px(cx, 14.0))
                     .p(design::ui_px(cx, 6.0))
                     .bg(rgba_from(p.shell_high, 1.0))
@@ -117,7 +119,7 @@ impl RenderOnce for Phone {
             )
             .child(
                 div()
-                    .max_w(design::ui_px(cx, BUBBLE_MAX_W))
+                    .w(px(bubble))
                     .text_color(rgba_from(p.text_muted, 1.0))
                     .child(t!("telegram.layout.preview_hint").to_string()),
             )
@@ -126,6 +128,25 @@ impl RenderOnce for Phone {
 
 /// Widest message bubble, unscaled: a Telegram message on a phone-sized chat.
 const BUBBLE_MAX_W: f32 = 420.0;
+
+/// Padding the Settings group box takes off each side of its card, unscaled: 1 px border and
+/// 14 px padding (`message_layout_box`).
+const CARD_INSET: f32 = 15.0;
+
+/// Padding between the bubble's edge and its text on each side, unscaled: the bubble's 6 px, the
+/// chat's 10 px and the message's 10 px.
+const TEXT_INSET: f32 = 26.0;
+
+/// The bubble's explicit width in a card `card_w` wide: `min(card - padding, 420)`, scaled.
+///
+/// Args:
+///     card_w: The Settings card's outer width.
+///     cx: Application context for scale.
+pub(super) fn bubble_w(card_w: f32, cx: &App) -> f32 {
+    (card_w - 2.0 * design::ui_value(cx, CARD_INSET))
+        .min(design::ui_value(cx, BUBBLE_MAX_W))
+        .max(0.0)
+}
 
 /// Gap between two words of a card line, unscaled: one space at the body size.
 const WORD_GAP: f32 = 4.0;
@@ -183,24 +204,49 @@ fn unbreakable_words(spans: &[PreviewSpan]) -> Vec<Vec<PreviewSpan>> {
 /// Args:
 ///     index: The line's position, for its `tg-preview-line-{index}` selector.
 ///     spans: The line's spans.
+///     line_w: The line's explicit width: the bubble's less its padding.
 ///     window: Window for the text style.
 ///     cx: Application context for theme and scale.
-fn card_line(index: usize, spans: &[PreviewSpan], window: &Window, cx: &App) -> AnyElement {
+fn card_line(
+    index: usize,
+    spans: &[PreviewSpan],
+    line_w: f32,
+    window: &Window,
+    cx: &App,
+) -> AnyElement {
     let p = MoonPalette::active(cx);
     h_flex()
         .debug_selector(move || format!("tg-preview-line-{index}"))
-        .max_w_full()
+        .w(px(line_w))
         .flex_wrap()
         .items_start()
         .gap_x(design::ui_px(cx, WORD_GAP))
         .children(unbreakable_words(spans).into_iter().map(|word| {
-            // A word wider than the bubble (a long link) still wraps rather than painting past it.
+            // Each word gets its measured width, never a content-sized one; a word wider than
+            // the line (a long link) is capped to it and wraps inside rather than painting past.
             div()
                 .flex_none()
-                .max_w_full()
+                .w(px(word_w(&word, cx).min(line_w)))
                 .child(text_runs(&word, window, &p))
         }))
         .into_any_element()
+}
+
+/// Measured width of a word's styled spans at the body size, with a pixel of slack so the
+/// rounding of glyph advances never wraps a word that fits.
+fn word_w(word: &[PreviewSpan], cx: &App) -> f32 {
+    let text: f32 = word
+        .iter()
+        .map(|span| {
+            let weight = if span.bold {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            };
+            design::ui_body_text_width(cx, &span.text, weight.0)
+        })
+        .sum();
+    text + 1.0
 }
 
 /// Convert explicit raw spans to GPUI runs; no string is treated as markup.

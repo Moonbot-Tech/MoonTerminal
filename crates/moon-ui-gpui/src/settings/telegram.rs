@@ -230,7 +230,7 @@ pub(super) fn card_grid_el(column_w: f32, cards: Vec<AnyElement>, cx: &App) -> A
     let gap = design::ui_value(cx, CARD_GAP);
     let cols =
         card_columns(column_w, design::font_w(cx, CARD_COLUMN_MIN_W), gap).min(cards.len().max(1));
-    let col_w = ((column_w - gap * (cols - 1) as f32) / cols as f32).max(0.0);
+    let col_w = card_grid_col_w(column_w, cards.len(), cx);
     let mut columns: Vec<Vec<AnyElement>> = (0..cols).map(|_| Vec::new()).collect();
     for (i, card) in cards.into_iter().enumerate() {
         columns[i % cols].push(card);
@@ -249,6 +249,18 @@ pub(super) fn card_grid_el(column_w: f32, cards: Vec<AnyElement>, cx: &App) -> A
                 .children(cards)
         }))
         .into_any_element()
+}
+
+/// Width of one card column in [`card_grid_el`] for `count` cards across `column_w`.
+///
+/// Args:
+///     column_w: The page column's width (see [`page_column_w`]).
+///     count: How many cards the grid holds.
+///     cx: Application context for scale.
+pub(in crate::settings) fn card_grid_col_w(column_w: f32, count: usize, cx: &App) -> f32 {
+    let gap = design::ui_value(cx, CARD_GAP);
+    let cols = card_columns(column_w, design::font_w(cx, CARD_COLUMN_MIN_W), gap).min(count.max(1));
+    ((column_w - gap * (cols - 1) as f32) / cols as f32).max(0.0)
 }
 
 /// Prose inside a card on a page `width` wide, its lines capped near 90 characters so a full-width
@@ -426,13 +438,15 @@ impl SettingsView {
     /// when two columns do not fit.
     pub(super) fn tg_messages_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let side = self.bot_side();
+        let column_w = page_column_w(width, cx);
+        let card_w = card_grid_col_w(column_w, 2, cx);
         let body = self.page_column(
             width,
             vec![card_grid_el(
-                page_column_w(width, cx),
+                column_w,
                 vec![
                     self.bot_menu_keys_box(side, cx),
-                    self.message_layout_box(side, cx),
+                    self.message_layout_box(side, card_w, cx),
                 ],
                 cx,
             )],
