@@ -14,6 +14,8 @@ use moon_core::feed::{ConnFault, ConnStatus, Diagnosis};
 use moon_core::session::{CoreStartupState, CoreStartupStatus};
 use rust_i18n::t;
 
+use super::presentation::LoadLevel;
+
 #[cfg(test)]
 mod tests;
 
@@ -68,6 +70,25 @@ pub(super) fn startup_cell(status: &ConnStatus, s: &CoreStartupStatus) -> Startu
         CoreStartupState::Failed | CoreStartupState::Disconnected | CoreStartupState::Unknown => {
             StartupCell::Absent
         }
+    }
+}
+
+/// Colour level for the startup cell.
+///
+/// A core that is still coming up is the panel's slow start: the By-IP tree already paints
+/// [`StartupCell::Progress`] in amber, and this maps that same state onto the shared warning
+/// level. A finished start stays normal whatever it took — the model has no elapsed threshold,
+/// and inventing one here would disagree with the other presentation.
+///
+/// Args:
+///     cell: The decision from [`startup_cell`].
+///
+/// Returns:
+///     `Warning` while startup is still in progress, otherwise `Normal`.
+pub(super) fn startup_level(cell: StartupCell) -> LoadLevel {
+    match cell {
+        StartupCell::Progress { .. } => LoadLevel::Warning,
+        StartupCell::Done { .. } | StartupCell::Absent => LoadLevel::Normal,
     }
 }
 

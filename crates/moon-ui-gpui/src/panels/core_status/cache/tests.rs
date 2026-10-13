@@ -1,12 +1,17 @@
 //! Synthetic equivalence and performance checks for flat-row snapshots.
 
-use super::{FlatViewCache, replace_snapshots, sort_flat_rows};
+use super::{
+    FlatViewCache, card_matches_query, project_rows, projection_uniform, replace_snapshots,
+    sort_flat_rows,
+};
 use crate::backend::core_warn::LatencySeverity;
+use crate::panels::core_status::health::HealthFilter;
 use crate::panels::core_status::model::{
     ApiKeyState, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers, ordered_flat_rows,
 };
 use crate::panels::core_status::ordering::{FlatLine, flat_lines, natural_cmp};
 use moon_core::feed::ConnStatus;
+use moon_core::feed::CoreEndpoint;
 use std::collections::HashMap;
 
 /// Omitting the publish generation bump keeps stale sorted rows after a telemetry rebuild.
@@ -17,7 +22,7 @@ fn publishing_snapshots_invalidates_flat_sort() {
     let mut cached_groups = std::rc::Rc::new(groups);
     let mut generation = 7;
     let mut flat = FlatViewCache::default();
-    let old = flat.get_or_build(generation, None, || {
+    let old = flat.get_or_build(generation, None, None, "", false, || {
         sort_flat_rows(&cached_rows, None, &cached_groups)
     });
     let (mut rows, groups) = fixture();
@@ -30,7 +35,7 @@ fn publishing_snapshots_invalidates_flat_sort() {
         groups,
     );
     assert_eq!(generation, 8);
-    let fresh = flat.get_or_build(generation, None, || {
+    let fresh = flat.get_or_build(generation, None, None, "", false, || {
         sort_flat_rows(&cached_rows, None, &cached_groups)
     });
     assert!(!std::rc::Rc::ptr_eq(&old, &fresh));
@@ -61,7 +66,6 @@ fn fixture() -> (Vec<CoreStatusRow>, Vec<ServerStatusGroup>) {
             mode_suggestion: None,
             endpoint: None,
             ping_warn: false,
-            exch_warn: false,
             ping_sev: LatencySeverity::Normal,
             exch_sev: LatencySeverity::Normal,
             api_key: ApiKeyState::Unknown,
@@ -134,7 +138,7 @@ fn flat_view_builds_once_per_generation_and_sort() {
     let builds = std::cell::Cell::new(0);
     let mut previous = None;
     for _ in 0..100 {
-        let sorted = cache.get_or_build(7, Some(&sort), || {
+        let sorted = cache.get_or_build(7, Some(&sort), None, "", false, || {
             builds.set(builds.get() + 1);
             sort_flat_rows(&rows, Some(&sort), &groups)
         });
@@ -145,7 +149,7 @@ fn flat_view_builds_once_per_generation_and_sort() {
     }
     assert_eq!(builds.get(), 1);
     for (generation, sort) in [(8, Some(&sort)), (8, Some(&reverse)), (8, None)] {
-        cache.get_or_build(generation, sort, || {
+        cache.get_or_build(generation, sort, None, "", false, || {
             builds.set(builds.get() + 1);
             sort_flat_rows(&rows, sort, &groups)
         });
@@ -184,7 +188,7 @@ fn flat_view_refreshes_venues_and_locale_with_fixed_sort_key() {
                 moon_core::venue::CoreVenue::identify(2, "", Some("Synthetic venue")),
             );
         }
-        let sorted = cache.get_or_build(7, Some(&sort), || {
+        let sorted = cache.get_or_build(7, Some(&sort), None, "", false, || {
             sort_flat_rows(&rows, Some(&sort), &groups)
         });
         if let Some(ref first) = first_rows {
@@ -236,7 +240,7 @@ fn bench_core_status_flat_view_200() {
     for _ in 0..iterations {
         let mut cache = FlatViewCache::default();
         for _ in 0..100 {
-            let sorted = cache.get_or_build(1, Some(&sort), || {
+            let sorted = cache.get_or_build(1, Some(&sort), None, "", false, || {
                 sort_flat_rows(&rows, Some(&sort), &groups)
             });
             std::hint::black_box(flat_lines(&sorted, &venues));
@@ -246,4 +250,210 @@ fn bench_core_status_flat_view_200() {
         "bench_core_status_flat_view_200 ns/100-renders={}",
         start.elapsed().as_nanos() / iterations
     );
+}
+
+/// One synthetic core. Callers set the field the assertion reads.
+fn sample(id: u64, name: &str, status: ConnStatus) -> CoreStatusRow {
+    CoreStatusRow {
+        id,
+        name: name.to_string(),
+        status,
+        sys: Default::default(),
+        startup: Default::default(),
+        time_offset: Default::default(),
+        fault: None,
+        mode_suggestion: None,
+        endpoint: None,
+        ping_warn: false,
+        ping_sev: LatencySeverity::Normal,
+        exch_sev: LatencySeverity::Normal,
+        api_key: ApiKeyState::Unknown,
+        api_warn: false,
+        api_notice: false,
+        api_quota: None,
+        api_quota_warn: false,
+        server_version: None,
+        server_version_suffix: None,
+        version_behind: None,
+        update: None,
+    }
+}
+
+/// A ping chip keeps the core that is over baseline and drops the quiet one.
+#[test]
+fn health_filter_keeps_only_the_matching_cores() {
+    let mut hot = sample(1, "CORE-A1", ConnStatus::Ready);
+    hot.ping_warn = true;
+    let quiet = sample(2, "CORE-A2", ConnStatus::Ready);
+    let rows = vec![hot, quiet];
+    let groups = aggregate_servers(&rows, None);
+    let kept = project_rows(
+        &rows,
+        &groups,
+        Some(HealthFilter::Ping),
+        "",
+        false,
+        None,
+        &["core"],
+    );
+    assert_eq!(kept.iter().map(|row| row.id).collect::<Vec<_>>(), vec![1]);
+}
+
+/// Search matches the core name, the server display name, and an unmasked address.
+#[test]
+fn search_matches_name_server_and_unmasked_address() {
+    let mut core = sample(1, "CORE-A1", ConnStatus::Ready);
+    core.endpoint = Some(CoreEndpoint {
+        address: "10.0.0.8".parse().unwrap(),
+        port: 1,
+    });
+    let rows = vec![core];
+    let mut groups = aggregate_servers(&rows, None);
+    groups[0].display_name = "Synthetic Host".to_string();
+    let columns = ["server", "core"];
+    for query in ["core-a1", "host", "10.0.0.8"] {
+        let matched = project_rows(&rows, &groups, None, query, false, None, &columns);
+        assert_eq!(matched.len(), 1, "{query}");
+    }
+}
+
+/// An address query matches nothing once the column is masked.
+#[test]
+fn ip_query_does_not_match_while_addresses_are_masked() {
+    let mut core = sample(1, "CORE-A1", ConnStatus::Ready);
+    core.endpoint = Some(CoreEndpoint {
+        address: "10.0.0.8".parse().unwrap(),
+        port: 1,
+    });
+    let rows = vec![core];
+    let mut groups = aggregate_servers(&rows, None);
+    groups[0].display_name = "Synthetic Host".to_string();
+    let matched = project_rows(
+        &rows,
+        &groups,
+        None,
+        "10.0.0.8",
+        true,
+        None,
+        &["server", "core"],
+    );
+    assert!(matched.is_empty());
+}
+
+/// A server card matches its name, a core name, and its address, and not the address while masked.
+/// An empty query keeps the card.
+#[test]
+fn card_filter_matches_name_core_and_unmasked_ip() {
+    let mut core = sample(1, "CORE-A1", ConnStatus::Ready);
+    core.endpoint = Some(CoreEndpoint {
+        address: "10.1.2.3".parse().unwrap(),
+        port: 9,
+    });
+    let rows = vec![core];
+    let mut groups = aggregate_servers(&rows, None);
+    groups[0].display_name = "Host Nine".to_string();
+    let card = &groups[0];
+    assert!(card_matches_query(card, "", false));
+    assert!(card_matches_query(card, "host", false));
+    assert!(card_matches_query(card, "core-a1", false));
+    assert!(card_matches_query(card, "10.1.2.3", false));
+    assert!(!card_matches_query(card, "10.1.2.3", true));
+    assert!(!card_matches_query(card, "other", false));
+}
+
+/// Version agreement follows the searched rows. A core the search hides cannot veto the column,
+/// and it cannot be hidden by cores the search excluded.
+#[test]
+fn projection_uniform_follows_the_search() {
+    let mut alpha_a = sample(1, "alpha-1", ConnStatus::Ready);
+    let mut alpha_b = sample(2, "alpha-2", ConnStatus::Ready);
+    let mut beta = sample(3, "beta", ConnStatus::Ready);
+    alpha_a.server_version = Some(771);
+    alpha_b.server_version = Some(771);
+    beta.server_version = Some(770);
+    let rows = vec![alpha_a, alpha_b, beta];
+    let groups = aggregate_servers(&rows, None);
+    let searched = projection_uniform(&rows, &groups, None, "alpha", false);
+    assert!(searched.iter().any(|fact| fact.key == "version"));
+    let all = projection_uniform(&rows, &groups, None, "", false);
+    assert!(all.iter().all(|fact| fact.key != "version"));
+}
+
+/// A saved API-key sort whose column is hidden stays on attention order.
+///
+/// Unknown sorts before Perpetual, so a visible column would put the Ready core first.
+/// Attention order puts the disconnected core first instead.
+#[test]
+fn hidden_api_key_sort_keeps_attention_order() {
+    let ready = sample(1, "CORE-A1", ConnStatus::Ready);
+    let mut down = sample(2, "CORE-A2", ConnStatus::Disconnected);
+    down.api_key = ApiKeyState::Perpetual;
+    let rows = vec![ready, down];
+    let groups = aggregate_servers(&rows, None);
+    let sort = ("api_key".to_string(), true);
+    let hidden = project_rows(
+        &rows,
+        &groups,
+        None,
+        "",
+        false,
+        Some(&sort),
+        &["core", "status"],
+    );
+    assert_eq!(hidden[0].id, 2);
+    let shown = project_rows(
+        &rows,
+        &groups,
+        None,
+        "",
+        false,
+        Some(&sort),
+        &["core", "api_key"],
+    );
+    assert_eq!(shown[0].id, 1);
+}
+
+/// A user-hidden name column does not apply a descending name sort.
+#[test]
+fn hidden_core_sort_keeps_attention_order() {
+    let ready = sample(1, "BBB", ConnStatus::Ready);
+    let down = sample(2, "AAA", ConnStatus::Disconnected);
+    let rows = vec![ready, down];
+    let groups = aggregate_servers(&rows, None);
+    let sort = ("core".to_string(), false);
+    let hidden = project_rows(&rows, &groups, None, "", false, Some(&sort), &["status"]);
+    assert_eq!(hidden[0].id, 2);
+    let shown = project_rows(&rows, &groups, None, "", false, Some(&sort), &["core"]);
+    assert_eq!(shown[0].id, 1);
+}
+
+/// Filter, query, and the address mask are part of the cache key.
+#[test]
+fn flat_cache_rebuilds_when_the_filter_query_or_mask_changes() {
+    let (rows, groups) = fixture();
+    let mut cache = FlatViewCache::default();
+    let builds = std::cell::Cell::new(0);
+    let first = cache.get_or_build(1, None, None, "", false, || {
+        builds.set(builds.get() + 1);
+        sort_flat_rows(&rows, None, &groups)
+    });
+    let again = cache.get_or_build(1, None, None, "", false, || {
+        builds.set(builds.get() + 1);
+        sort_flat_rows(&rows, None, &groups)
+    });
+    assert!(std::rc::Rc::ptr_eq(&first, &again));
+    assert_eq!(builds.get(), 1);
+    let _ = cache.get_or_build(1, None, Some(HealthFilter::Ping), "", false, || {
+        builds.set(builds.get() + 1);
+        Vec::new()
+    });
+    let _ = cache.get_or_build(1, None, Some(HealthFilter::Ping), "core", false, || {
+        builds.set(builds.get() + 1);
+        Vec::new()
+    });
+    let _ = cache.get_or_build(1, None, Some(HealthFilter::Ping), "core", true, || {
+        builds.set(builds.get() + 1);
+        Vec::new()
+    });
+    assert_eq!(builds.get(), 4);
 }

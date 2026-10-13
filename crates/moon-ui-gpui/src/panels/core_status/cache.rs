@@ -1,15 +1,18 @@
 //! Core Status render-cache pipeline: collect the scoped rows, aggregate them into per-server
-//! groups, tag the warning axes, sort, and reconcile the MoonTree. Split out of `mod.rs` as the
+//! groups, tag the warning axes, and sort. Split out of `mod.rs` as the
 //! data-shaping half of the panel, distinct from its rendering and its interaction handlers.
 
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::rc::Rc;
 
 use gpui::*;
 
+use super::health::{self, HealthFilter};
+use super::mode::WARN_LIST_LIMIT;
 use super::model::{self, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
-use super::ordering::{self, assign_server_names, compare_flat_rows, compare_groups, natural_cmp};
-use super::{CoreStatusView, server_view};
+use super::ordering::{self, assign_server_names, compare_flat_rows, natural_cmp};
+use super::{CoreStatusView, table, uniform};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
@@ -55,23 +58,59 @@ fn sort_flat_rows(
 }
 
 /// Sorted-row snapshot; venue lines deliberately remain outside this cache.
+///
+/// The key is the snapshot generation, the effective sort, the health chip, the normalized
+/// search, and whether addresses are masked. A search computed while addresses were visible
+/// must not be reused after the mask flips, because an IP query then matches nothing.
 #[derive(Default)]
 pub(super) struct FlatViewCache {
     generation: u64,
     sort: Option<(String, bool)>,
+    filter: Option<HealthFilter>,
+    query: String,
+    ip_masked: bool,
     rows: Option<Rc<Vec<CoreStatusRow>>>,
+    /// Uniform facts for the filtered projection. Keyed by generation, chip, search, and the
+    /// IP mask. Sort is not part of the key: agreement does not depend on row order.
+    uniform: Option<(
+        u64,
+        Option<HealthFilter>,
+        String,
+        bool,
+        Rc<Vec<uniform::UniformFact>>,
+    )>,
+    /// Widest figure per column plus cell padding. Keyed by the row generation and the locale.
+    floors: Option<(u64, String, Rc<HashMap<String, f32>>)>,
 }
 
 impl FlatViewCache {
-    /// Reuse sorted rows on a key hit; build once when generation or sort changes.
+    /// Reuse projected rows on a key hit; build once when any key part changes.
+    ///
+    /// Args:
+    ///     generation: Row-snapshot generation from the last cache rebuild.
+    ///     sort: Effective column sort. `None` is the attention order, including a saved sort
+    ///         whose column is not on screen.
+    ///     filter: Health chip narrowing the rows, or `None` for every row in scope.
+    ///     query: Already trimmed and lowercased search text. Empty matches every row.
+    ///     ip_masked: Whether endpoint addresses are hidden from search.
+    ///     build: Projection used only on a miss.
+    ///
+    /// Returns:
+    ///     The projected rows. The same `Rc` is returned for every hit.
     pub(super) fn get_or_build(
         &mut self,
         generation: u64,
         sort: Option<&(String, bool)>,
+        filter: Option<HealthFilter>,
+        query: &str,
+        ip_masked: bool,
         build: impl FnOnce() -> Vec<CoreStatusRow>,
     ) -> Rc<Vec<CoreStatusRow>> {
         if self.generation == generation
             && self.sort.as_ref() == sort
+            && self.filter == filter
+            && self.query == query
+            && self.ip_masked == ip_masked
             && let Some(rows) = &self.rows
         {
             return rows.clone();
@@ -79,9 +118,227 @@ impl FlatViewCache {
         let rows = Rc::new(build());
         self.generation = generation;
         self.sort = sort.cloned();
+        self.filter = filter;
+        self.query = query.to_string();
+        self.ip_masked = ip_masked;
         self.rows = Some(rows.clone());
         rows
     }
+
+    /// Reuse uniform facts for one filter and search. A miss builds them from that projection.
+    ///
+    /// Args:
+    ///     generation: Row-snapshot generation.
+    ///     filter: Health chip, or `None`.
+    ///     query: Normalized search text.
+    ///     ip_masked: Whether addresses are hidden.
+    ///     build: `uniform_columns` over the rows that filter and search keep.
+    ///
+    /// Returns:
+    ///     The facts. The same `Rc` is returned for every hit.
+    pub(super) fn cached_uniform(
+        &mut self,
+        generation: u64,
+        filter: Option<HealthFilter>,
+        query: &str,
+        ip_masked: bool,
+        build: impl FnOnce() -> Vec<uniform::UniformFact>,
+    ) -> Rc<Vec<uniform::UniformFact>> {
+        if let Some((cached_generation, cached_filter, cached_query, cached_mask, facts)) =
+            &self.uniform
+            && *cached_generation == generation
+            && *cached_filter == filter
+            && cached_query == query
+            && *cached_mask == ip_masked
+        {
+            return facts.clone();
+        }
+        let facts = Rc::new(build());
+        self.uniform = Some((
+            generation,
+            filter,
+            query.to_string(),
+            ip_masked,
+            facts.clone(),
+        ));
+        facts
+    }
+
+    /// Facts from the last [`Self::cached_uniform`] hit, or an empty list before the first one.
+    pub(super) fn uniform_facts(&self) -> Rc<Vec<uniform::UniformFact>> {
+        self.uniform
+            .as_ref()
+            .map(|(_, _, _, _, facts)| facts.clone())
+            .unwrap_or_else(|| Rc::new(Vec::new()))
+    }
+
+    /// Content floors for this generation and locale. `build` runs only on a miss.
+    ///
+    /// Args:
+    ///     generation: Row-snapshot generation.
+    ///     locale: Active language code. A language switch invalidates the measured strings.
+    ///     build: Measurement used only on a miss. It must not touch this cache.
+    ///
+    /// Returns:
+    ///     The floors. The same `Rc` is returned for every hit.
+    pub(super) fn cached_floors(
+        &mut self,
+        generation: u64,
+        locale: &str,
+        build: impl FnOnce() -> HashMap<String, f32>,
+    ) -> Rc<HashMap<String, f32>> {
+        if let Some((cached_generation, cached_locale, floors)) = &self.floors
+            && *cached_generation == generation
+            && cached_locale == locale
+        {
+            return floors.clone();
+        }
+        let floors = Rc::new(build());
+        self.floors = Some((generation, locale.to_string(), floors.clone()));
+        floors
+    }
+
+    /// Floors from the last [`Self::cached_floors`] hit, or an empty map before the first one.
+    pub(super) fn floors(&self) -> Rc<HashMap<String, f32>> {
+        self.floors
+            .as_ref()
+            .map(|(_, _, floors)| floors.clone())
+            .unwrap_or_else(|| Rc::new(HashMap::new()))
+    }
+}
+
+/// Narrow, search, and sort one flat snapshot.
+///
+/// Filter and search run before the sort, so a hidden sort column falls back to
+/// [`model::ordered_flat_rows`] on the rows that remain, not on the unfiltered scope.
+/// A sort key absent from `visible_columns` is that hidden column: the saved preference
+/// is left untouched and the attention order is what both drawing and selection see.
+///
+/// Args:
+///     rows: Scoped core snapshots, before the chip and the search.
+///     groups: Server groups whose display names the search and the server sort read.
+///     filter: Health chip, or `None` to keep every row.
+///     query: Search text already trimmed and lowercased. Empty matches all.
+///     ip_masked: When true, an endpoint address cannot satisfy `query`.
+///     sort: Saved column sort, or `None` for attention order.
+///     visible_columns: Column keys the table is showing. A sort key outside this list
+///         does not reorder the rows.
+///
+/// Returns:
+///     The rows to draw, in on-screen order.
+pub(super) fn project_rows(
+    rows: &[CoreStatusRow],
+    groups: &[ServerStatusGroup],
+    filter: Option<HealthFilter>,
+    query: &str,
+    ip_masked: bool,
+    sort: Option<&(String, bool)>,
+    visible_columns: &[&str],
+) -> Vec<CoreStatusRow> {
+    let matched = matching_rows(rows, groups, filter, query, ip_masked);
+    let sort = sort.filter(|(key, _)| visible_columns.contains(&key.as_str()));
+    sort_flat_rows(&matched, sort, groups)
+}
+
+/// Rows that survive the health chip and the search. Sort and uniform columns are not inputs:
+/// membership does not depend on either.
+pub(super) fn matching_rows(
+    rows: &[CoreStatusRow],
+    groups: &[ServerStatusGroup],
+    filter: Option<HealthFilter>,
+    query: &str,
+    ip_masked: bool,
+) -> Vec<CoreStatusRow> {
+    debug_assert_eq!(query, query.trim().to_lowercase());
+    let names: HashMap<ServerKey, &str> = groups
+        .iter()
+        .map(|group| (group.key, group.display_name.as_str()))
+        .collect();
+    rows.iter()
+        .filter(|row| filter.is_none_or(|chip| health::row_matches(row, chip)))
+        .filter(|row| query.is_empty() || row_matches_query(row, &names, query, ip_masked))
+        .cloned()
+        .collect()
+}
+
+/// Uniform facts for the rows [`matching_rows`] keeps.
+pub(super) fn projection_uniform(
+    rows: &[CoreStatusRow],
+    groups: &[ServerStatusGroup],
+    filter: Option<HealthFilter>,
+    query: &str,
+    ip_masked: bool,
+) -> Vec<uniform::UniformFact> {
+    uniform::uniform_columns(&matching_rows(rows, groups, filter, query, ip_masked))
+}
+
+/// Whether one core matches the toolbar search.
+///
+/// Args:
+///     row: Core snapshot being tested.
+///     names: Server display names keyed by [`ServerKey`].
+///     query: Trimmed, lowercased search text. Not empty.
+///     ip_masked: Whether the endpoint address is excluded.
+///
+/// Returns:
+///     Whether the core name, the server display name, or the unmasked address contains `query`.
+fn row_matches_query(
+    row: &CoreStatusRow,
+    names: &HashMap<ServerKey, &str>,
+    query: &str,
+    ip_masked: bool,
+) -> bool {
+    if row.name.to_lowercase().contains(query) {
+        return true;
+    }
+    let server = names.get(&ServerKey::for_row(row)).copied().unwrap_or("");
+    if server.to_lowercase().contains(query) {
+        return true;
+    }
+    if !ip_masked
+        && let Some(endpoint) = row.endpoint
+        && endpoint.address.to_string().to_lowercase().contains(query)
+    {
+        return true;
+    }
+    false
+}
+
+/// Whether one server card matches the toolbar search.
+///
+/// Empty text matches every card. A card matches its display name, any core name, or its
+/// address. A masked panel does not match the address.
+///
+/// Args:
+///     group: Server card being tested.
+///     query: Search text. Trimmed and lowercased here, so callers may pass either form.
+///     ip_masked: Whether the address is excluded.
+///
+/// Returns:
+///     Whether the card stays on screen.
+pub(super) fn card_matches_query(group: &ServerStatusGroup, query: &str, ip_masked: bool) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    if group.display_name.to_lowercase().contains(&query) {
+        return true;
+    }
+    if group
+        .cores
+        .iter()
+        .any(|core| core.name.to_lowercase().contains(&query))
+    {
+        return true;
+    }
+    if !ip_masked
+        && group
+            .address
+            .is_some_and(|address| address.to_string().to_lowercase().contains(&query))
+    {
+        return true;
+    }
+    false
 }
 
 /// Publish row and group snapshots under one new generation so flat sorting cannot reuse old rows.
@@ -173,7 +430,6 @@ impl CoreStatusView {
                 fault,
                 endpoint,
                 ping_warn: b.warn.core_ping_warn(id),
-                exch_warn: b.warn.core_exch_warn(id),
                 ping_sev: b.warn.core_ping_level(id),
                 exch_sev: b.warn.core_exch_level(id),
                 api_key,
@@ -212,7 +468,7 @@ impl CoreStatusView {
         // Recounted with the rest of the cache, not inside `title_suffix`: the dock asks that on a
         // per-frame path, and it must read a field rather than walk the fleet's findings.
         self.unseen_problems = self.count_unseen_problems(backend.read(cx));
-        let (mut groups, rows) = {
+        let (groups, rows, alarm_starts) = {
             let b = backend.read(cx);
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
             // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
@@ -237,22 +493,19 @@ impl CoreStatusView {
                     .iter()
                     .any(|core| b.warn.core_exch_warn(core.id));
             }
-            (groups, rows)
+            let scope = self.effective_scope(b);
+            let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
+            let server_addresses: HashSet<IpAddr> =
+                groups.iter().filter_map(|group| group.address).collect();
+            // Same list the Warnings view draws, capped once. The strip counts starts inside
+            // 24 hours; an episode that is still open but started earlier does not count.
+            let alarm_starts: Vec<i64> = b
+                .warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT)
+                .iter()
+                .map(|episode| episode.start_ms)
+                .collect();
+            (groups, rows, alarm_starts)
         };
-        // Warned servers ALWAYS lead (the attention pin), then the user's chosen column sort within
-        // each partition; the default `(Name, ascending)` reproduces the former fixed order.
-        let (field, ascending) = self.group_sort;
-        groups.sort_by(|a, b| {
-            let aw = a.has_warn();
-            let bw = b.has_warn();
-            let field_ord = compare_groups(a, b, field);
-            let field_ord = if ascending {
-                field_ord
-            } else {
-                field_ord.reverse()
-            };
-            bw.cmp(&aw).then(field_ord)
-        });
         self.has_warn = groups.iter().any(|group| group.has_warn());
         replace_snapshots(
             &mut self.cached_rows,
@@ -261,6 +514,7 @@ impl CoreStatusView {
             rows,
             groups,
         );
+        self.cached_alarm_starts = Rc::new(alarm_starts);
         // Prune the row selection against the rows that now EXIST. This is the one call that
         // keeps a bulk update honest: a preset change, a group switch or a core simply leaving
         // the scope removes a row from the screen, and a core the user can no longer see must
@@ -275,31 +529,6 @@ impl CoreStatusView {
         // gate above -- so recomputing the marker here keeps it exactly as fresh as the rows and
         // groups it is drawn beside.
         self.cached_scope_marker = self.scope_marker(backend.read(cx));
-        self.rebuild_tree(cx);
-    }
-
-    /// Replace the tree items, preserving which servers the user has expanded.
-    ///
-    /// The cache rebuilds on every telemetry tick, so the current expansion is read back and
-    /// re-applied; otherwise servers would collapse each tick. New servers stay collapsed.
-    ///
-    /// Args:
-    ///     cx: View context used to update the MoonTree state entity.
-    ///
-    /// Returns:
-    ///     Nothing; only tree items and their expansion change.
-    fn rebuild_tree(&mut self, cx: &mut Context<Self>) {
-        let expanded = self
-            .tree_state
-            .read(cx)
-            .expanded_ids()
-            .into_iter()
-            .collect::<HashSet<_>>();
-        let items = server_view::tree_items(&self.cached_groups);
-        self.tree_state.update(cx, |state, cx| {
-            state.set_items(items, cx);
-            state.set_expanded(expanded, cx);
-        });
     }
 
     /// Reuse the sorted snapshot and refresh exchange lines from current venues and locale.
@@ -309,27 +538,171 @@ impl CoreStatusView {
     /// here rather than at the call site is what keeps that borrow from ever reaching the closure.
     ///
     /// Args:
+    ///     hidden: Column ids the user has unchecked. Computed once per render and passed in.
     ///     cx: Application context used to read the session's venue map.
     ///
     /// Returns:
-    ///     The sorted rows, and the heading/member lines addressing them by index.
+    ///     The sorted rows, the heading/member lines addressing them by index, and the column
+    ///     keys those rows are drawn with.
     pub(super) fn flat_view(
         &self,
+        hidden: &HashSet<String>,
         cx: &App,
-    ) -> (Rc<Vec<CoreStatusRow>>, Rc<Vec<ordering::FlatLine>>) {
-        let rows = self.flat_cache.borrow_mut().get_or_build(
-            self.rows_generation,
-            self.flat_sort.as_ref(),
-            || {
-                sort_flat_rows(
+    ) -> (
+        Rc<Vec<CoreStatusRow>>,
+        Rc<Vec<ordering::FlatLine>>,
+        Vec<&'static str>,
+    ) {
+        // The build closures must not capture `self`: they run while `flat_cache` is borrowed.
+        // A hit check, then a build outside the borrow, then a store whose closure owns the value.
+        let generation = self.rows_generation;
+        let filter = self.health_filter;
+        let ip_masked = self.ip_masked;
+        let query = self.search_query.clone();
+        let locale = rust_i18n::locale().to_string();
+        let uniform = {
+            let hit = self.flat_cache.borrow().uniform.as_ref().is_some_and(
+                |(cached_generation, cached_filter, cached_query, cached_mask, _)| {
+                    *cached_generation == generation
+                        && *cached_filter == filter
+                        && cached_query == &query
+                        && *cached_mask == ip_masked
+                },
+            );
+            if hit {
+                self.flat_cache.borrow().uniform_facts()
+            } else {
+                let facts = projection_uniform(
                     &self.cached_rows,
-                    self.flat_sort.as_ref(),
                     &self.cached_groups,
+                    filter,
+                    &query,
+                    ip_masked,
+                );
+                self.flat_cache.borrow_mut().cached_uniform(
+                    generation,
+                    filter,
+                    &query,
+                    ip_masked,
+                    || facts,
                 )
-            },
+            }
+        };
+        let uniform_keys: Vec<&str> = uniform.iter().map(|fact| fact.key).collect();
+        let floors = {
+            let hit = self.flat_cache.borrow().floors.as_ref().is_some_and(
+                |(cached_generation, cached_locale, _)| {
+                    *cached_generation == generation && cached_locale == &locale
+                },
+            );
+            if hit {
+                self.flat_cache.borrow().floors()
+            } else {
+                let built = table::content_floors(&self.cached_rows, cx);
+                self.flat_cache
+                    .borrow_mut()
+                    .cached_floors(generation, &locale, || built)
+            }
+        };
+        // One list for the header and every row. The drag map is read inside this block so the
+        // borrow ends before the venue read below. Width 0 (not measured yet) keeps every key.
+        let visible = {
+            let dragged = &self.table_state.read(cx).column_widths;
+            table::projected_column_keys(
+                &self.cached_rows,
+                hidden,
+                &uniform_keys,
+                dragged,
+                self.flat_measured_w,
+                &floors,
+            )
+        };
+        let sort = self
+            .flat_sort
+            .as_ref()
+            .filter(|(key, _)| visible.iter().any(|column| *column == key))
+            .cloned();
+        debug_assert_eq!(
+            self.search_query,
+            normalize_query(&self.search_query),
+            "set_search stores the comparison form"
         );
-        let venues = self.backend.read(cx).session.core_venues();
-        let lines = ordering::flat_lines(&rows, venues);
-        (rows, Rc::new(lines))
+        let rows = {
+            let hit = {
+                let cache = self.flat_cache.borrow();
+                cache.generation == generation
+                    && cache.sort.as_ref() == sort.as_ref()
+                    && cache.filter == filter
+                    && cache.query == query
+                    && cache.ip_masked == ip_masked
+                    && cache.rows.is_some()
+            };
+            if hit {
+                self.flat_cache
+                    .borrow()
+                    .rows
+                    .clone()
+                    .expect("hit keeps the projected rows")
+            } else {
+                let projected = project_rows(
+                    &self.cached_rows,
+                    &self.cached_groups,
+                    filter,
+                    &query,
+                    ip_masked,
+                    sort.as_ref(),
+                    &visible,
+                );
+                self.flat_cache.borrow_mut().get_or_build(
+                    generation,
+                    sort.as_ref(),
+                    filter,
+                    &query,
+                    ip_masked,
+                    || projected,
+                )
+            }
+        };
+        let backend = self.backend.read(cx);
+        let venues = backend.session.core_venues();
+        let lines = Rc::new(ordering::flat_lines(&rows, venues));
+        (rows, lines, visible)
     }
+
+    /// Column keys the user has unchecked in the Columns menu.
+    ///
+    /// No stored entry means nothing is hidden: the table's own data rules still drop an API
+    /// column that no row reports. The stored list is the columns the user left checked, so a
+    /// column that later gains data stays visible until the user hides it.
+    ///
+    /// Args:
+    ///     cx: Application context used to read the layout.
+    ///
+    /// Returns:
+    ///     Canonical column ids the user has hidden. Empty when the layout has no entry.
+    pub(super) fn user_hidden_columns(&self, cx: &App) -> HashSet<String> {
+        let Some(shown) =
+            crate::persistence::table_persist::visible(self.backend.read(cx), &self.widths_id)
+        else {
+            return HashSet::new();
+        };
+        let shown: HashSet<&str> = shown.iter().map(String::as_str).collect();
+        table::order_keys()
+            .iter()
+            .copied()
+            .filter(|key| !shown.contains(key))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// Trim and lowercase a toolbar search before it joins the projection key.
+///
+/// Args:
+///     query: Raw field text.
+///
+/// Returns:
+///     The comparison form. Empty when the field is blank or only whitespace.
+pub(super) fn normalize_query(query: &str) -> String {
+    query.trim().to_lowercase()
 }

@@ -427,7 +427,7 @@ pub(super) fn problems_view(
         .child(crate::panels::common::data_table_host(
             SharedString::from(format!("{id}-host")),
             empty,
-            empty_text(scope),
+            empty_text(scope, rows.len()),
             p,
             cx,
             MoonDataTable::new(id, row_count, {
@@ -730,13 +730,19 @@ fn notice(
 ///
 /// Args:
 ///     scope: What the scope could and could not report.
+///     rows: Findings currently listed. A non-empty list is not the clean bill.
 ///
 /// Returns:
-///     The clean-bill text, or a neutral one deferring to the notice.
-fn empty_text(scope: &ProblemsScope) -> String {
-    match scope.cores > 0 && scope.silent.is_empty() {
-        true => t!("core_status.problems_empty").to_string(),
-        false => t!("core_status.problems_nothing_listed").to_string(),
+///     The clean-bill title and body, or a neutral line deferring to the notice.
+fn empty_text(scope: &ProblemsScope, rows: usize) -> String {
+    if rows == 0 && scope.cores > 0 && scope.silent.is_empty() {
+        format!(
+            "{} {}",
+            t!("core_status.empty.no_problems_title"),
+            t!("core_status.empty.no_problems_body", n = scope.cores)
+        )
+    } else {
+        t!("core_status.problems_nothing_listed").to_string()
     }
 }
 

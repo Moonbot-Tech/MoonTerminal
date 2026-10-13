@@ -1,12 +1,5 @@
-//! Regression tests for Core Status tree items and reported-build layout.
-
-use std::net::{IpAddr, Ipv4Addr};
-
-use moon_core::feed::{ConnStatus, CoreEndpoint, CoreTimeOffsetStatus};
-use moon_core::session::{CoreStartupStatus, CoreSysStatus};
-
-use super::tree_items;
-use crate::panels::core_status::model::{CoreStatusRow, aggregate_servers};
+//! Layout of the reported-build mark: the number must not shrink and an absent letter must
+//! keep the same footprint as a named one.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -20,14 +13,16 @@ use moon_ui::{
     MoonRect, MoonTableAlign, MoonTheme, h_flex, v_flex,
 };
 
-use super::version_mark;
+use super::{CELL_GAP_W, version_mark};
 use crate::design;
-use crate::panels::core_status::by_ip_widths::ByIpWidths;
 use crate::panels::core_status::presentation::build_parts;
 
-/// Render the production mark under the Flat cell's centred chrome or the By-IP slot's flex host.
+/// Historical By-IP version-column width the growing mark still has to fit.
+const SLOT_HOST_W: f32 = 128.0;
+
+/// Render the production mark under the Flat cell's centred chrome or a fixed host.
 struct BuildLayoutProbe {
-    /// Select the content-sized Flat mark rather than the growing By-IP mark.
+    /// Select the content-sized Flat mark rather than the growing host mark.
     end: bool,
     /// Flat table width and alignment, including the historical persisted-width reproduction.
     flat: Option<(f32, MoonTableAlign)>,
@@ -61,12 +56,12 @@ impl Render for BuildLayoutProbe {
         }
         let mut rows = v_flex();
         for index in 0..2 {
-            rows = rows.child(
-                div()
-                    .w(px(ByIpWidths::BASE.version))
-                    .flex_none()
-                    .child(build_probe_cell(index, self.end, self.bounds.clone(), cx)),
-            );
+            rows = rows.child(div().w(px(SLOT_HOST_W)).flex_none().child(build_probe_cell(
+                index,
+                self.end,
+                self.bounds.clone(),
+                cx,
+            )));
         }
         rows.into_any_element()
     }
@@ -103,7 +98,7 @@ fn build_probe_cell(
             .justify_center()
             .gap_1()
     } else {
-        h_flex().w_full().items_center().gap(px(super::CELL_GAP_W))
+        h_flex().w_full().items_center().gap(px(CELL_GAP_W))
     };
     cell.debug_selector(move || selector.into())
         .child(mark)
@@ -145,8 +140,6 @@ fn build_number_and_letter_fit_both_default_cells_without_shifting(cx: &mut gpui
             });
         }
         let cells = if end {
-            // The inner w_full element may have a content-sized flex box; containment is
-            // against the actual fixed-width table column, not that inner box.
             [visual
                 .debug_bounds("flat-column")
                 .expect("Flat column laid out"); 2]
@@ -195,64 +188,4 @@ fn build_number_and_letter_fit_both_default_cells_without_shifting(cx: &mut gpui
             "tagged and bare number x positions differ, end={end}",
         );
     }
-}
-
-/// Build one ready core snapshot at an address.
-fn row(id: u64, address: IpAddr, port: u16) -> CoreStatusRow {
-    CoreStatusRow {
-        fault: None,
-        mode_suggestion: None,
-        id,
-        name: format!("Core {id}"),
-        status: ConnStatus::Ready,
-        sys: CoreSysStatus::default(),
-        endpoint: Some(CoreEndpoint { address, port }),
-        ping_warn: false,
-        exch_warn: false,
-        ping_sev: crate::backend::core_warn::LatencySeverity::Normal,
-        exch_sev: crate::backend::core_warn::LatencySeverity::Normal,
-        api_key: crate::panels::core_status::model::ApiKeyState::Unknown,
-        api_warn: false,
-        api_notice: false,
-        api_quota: None,
-        api_quota_warn: false,
-        startup: CoreStartupStatus::default(),
-        time_offset: CoreTimeOffsetStatus::default(),
-        server_version: None,
-        server_version_suffix: None,
-        version_behind: None,
-        update: None,
-    }
-}
-
-/// `server_view.rs:tree_items` must give each server root a folder of its core children, so the
-/// row expands to per-core detail.
-#[test]
-fn server_root_folds_its_core_children() {
-    let address = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 17));
-    let groups = aggregate_servers(&[row(51, address, 3000)], None);
-
-    let items = tree_items(&groups);
-
-    assert_eq!(items.len(), 1);
-    assert!(items[0].is_folder());
-    assert_eq!(items[0].children.len(), 1);
-    assert_eq!(items[0].children[0].id.as_ref(), "core:51");
-}
-
-/// `server_view.rs:tree_items` must follow the aggregate's address order, keeping stable server and
-/// core ids so the virtual tree does not reshuffle.
-#[test]
-fn tree_items_follow_address_order() {
-    let low = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
-    let high = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 20));
-    let groups = aggregate_servers(&[row(82, high, 3000), row(81, low, 3000)], None);
-
-    let items = tree_items(&groups);
-
-    assert_eq!(items.len(), 2);
-    assert_eq!(items[0].id.to_string(), format!("server:{low}"));
-    assert_eq!(items[0].children[0].id.as_ref(), "core:81");
-    assert_eq!(items[1].id.to_string(), format!("server:{high}"));
-    assert_eq!(items[1].children[0].id.as_ref(), "core:82");
 }

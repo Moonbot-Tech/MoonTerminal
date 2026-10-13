@@ -8,19 +8,21 @@
 //! Like the Assets panel, it is scoped to a window group and can live in a dock
 //! tab or a detached window. [`crate::persistence::table_persist`] stores separate column
 //! widths, dragged column order, and a separate remembered mode choice for `:dock` and `:win`.
-//! The By IP tree has widths only: its columns are a fixed sequence, not a `MoonDataTable` order.
-//! This module owns data and lifecycle; [`server_view`], [`table`], [`problems`], [`warnings`]
-//! and [`updates_list`] own the five presentations.
+//! Servers is a card grid. Flat, Problems, Warnings and Updates are data tables.
+//! This module owns data and lifecycle; [`servers_view`], [`table`], [`problems`], [`warnings`]
+//! and [`updates_pane`] own the five presentations.
 
-mod by_ip_header;
-mod by_ip_widths;
 mod cache;
 mod chart;
+mod columns_fit;
 mod config_popup;
 mod core_bar;
-mod footer;
+mod health;
+mod health_strip;
 mod interactions;
 mod ip_cell;
+#[cfg(test)]
+mod layout_fixture;
 mod mode;
 mod model;
 mod ordering;
@@ -28,15 +30,19 @@ mod panel;
 mod presentation;
 mod problems;
 mod render;
+mod same_line;
 mod scope;
-mod server_view;
+mod servers_view;
 mod startup;
 mod table;
 #[cfg(test)]
 mod tests;
 mod time_offset;
+mod uniform;
 mod update_menu;
 mod updates_list;
+mod updates_pane;
+mod version_mark;
 mod warnings;
 
 pub(crate) use presentation::connection_status_text;
@@ -48,7 +54,7 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
-    DockArea, MoonDataTableState, MoonInputState, MoonPalette, MoonTreeState, h_flex, v_flex,
+    DockArea, MoonDataTableState, MoonInputEvent, MoonInputState, MoonPalette, h_flex, v_flex,
 };
 
 use crate::Backend;
@@ -93,17 +99,30 @@ pub struct CoreStatusView {
     chart_core: Option<CoreId>,
     cached_rows: Rc<Vec<CoreStatusRow>>,
     cached_groups: Rc<Vec<ServerStatusGroup>>,
+    /// Episode start times, Unix milliseconds, from the scoped warnings list.
+    ///
+    /// The health strip counts those inside 24 hours. An episode that is still open but started
+    /// earlier stays in the list and does not count. The list is capped at `WARN_LIST_LIMIT`.
+    /// Rebuilt only in [`Self::rebuild_cache`].
+    cached_alarm_starts: Rc<Vec<i64>>,
     /// Revision of the row/group snapshot, advanced only by cache rebuilds.
     rows_generation: u64,
     /// Sorted rows for the current revision and sort; headings are always rebuilt.
     flat_cache: std::cell::RefCell<cache::FlatViewCache>,
-    /// Whether the By-IP address column is hidden behind its mask.
+    /// Whether server addresses are hidden behind the toolbar mask.
     ///
     /// Panel-wide rather than per-server, and it starts FALSE: this view exists to show addresses,
-    /// so masking is a deliberate act before sharing a screen, not the resting state. One control
-    /// in the column header owns it, so a fleet of servers costs one click instead of one each.
+    /// so masking is a deliberate act before sharing a screen, not the resting state. The toolbar
+    /// IP button owns it, so a fleet of servers costs one click instead of one each.
     /// Transient — never persisted, so a fresh panel always comes up showing addresses.
     ip_masked: bool,
+    /// Health chip narrowing the Flat rows. Transient. A mode change clears it, including a
+    /// re-select of the mode that is already showing.
+    health_filter: Option<health::HealthFilter>,
+    /// Toolbar search field. Its change event writes [`Self::search_query`].
+    search_input: Entity<MoonInputState>,
+    /// Trimmed, lowercased toolbar search. Empty matches every core.
+    search_query: String,
     /// Server whose name is being renamed inline, if any.
     editing: Option<ServerKey>,
     /// Input state backing the inline rename field while [`Self::editing`] is set.
@@ -120,13 +139,9 @@ pub struct CoreStatusView {
     /// The Flat view's exchange headings gate on this: drawing before the prewarm lands would make
     /// the first frame block on an SVG decode.
     exchange_logos_ready: bool,
-    /// Active By IP column sort as `(field, ascending)`. Default `(Name, ascending)` reproduces the
-    /// former fixed order; warnings always pin to the top regardless of the field or direction.
-    group_sort: (ordering::GroupSortField, bool),
     /// Presentation the mode strip is on. Restored from and written back to `layout.toml` under
     /// [`mode_ctx_id`], so this panel reopens in the mode the user last selected.
     mode: CoreStatusMode,
-    tree_state: Entity<MoonTreeState>,
     table_state: Entity<MoonDataTableState>,
     /// Last order observed for each table on this panel, keyed by its context id.
     ///
@@ -157,31 +172,19 @@ pub struct CoreStatusView {
     /// set exists to provide. A signature is the honest early-out: it skips only frames where what
     /// is on screen has not moved.
     problems_mark_sig: u64,
-    /// Last measured width of the By IP list, in pixels; `0` until the first frame measures it.
+    /// Last measured width of the Flat table, in pixels. `0` until the first frame measures it.
     ///
-    /// The By IP view draws its own fixed columns (it is a tree, not a data table), so it needs the
-    /// rendered width to know when they no longer fit. [`server_view`] writes it from a measuring
-    /// canvas and only when it actually changes, so a repaint does not feed itself.
-    by_ip_width: f32,
+    /// `0` means "not measured yet". The column drop treats that as level 0, so the first frame
+    /// does not flash a stripped table. [`render`] writes it from a measuring canvas and only
+    /// when it moves by more than half a pixel.
+    flat_measured_w: f32,
+    /// Last measured Servers grid width. `0` means not measured yet, and cards keep the design minimum.
+    servers_measured_w: f32,
+    /// Last measured toolbar width. `0` means not measured yet, and the mode strip keeps full labels.
+    toolbar_measured_w: f32,
     /// Context-qualified column-width persistence ID (`core-status-table:dock` or `:win`).
     widths_id: String,
-    /// User-dragged column widths for the By IP tree, keyed by [`by_ip_widths::ByIpCol::key`].
-    ///
-    /// A `MoonDataTableState` used purely as a persistence-shaped BAG, never as a table: By IP is a
-    /// tree, not a `MoonDataTable`. Reusing the type is what lets [`crate::persistence::table_persist`]
-    /// store, restore and reset these widths with no storage code of its own — including the
-    /// toolbar's existing reset button, which takes exactly this entity.
-    by_ip_col_widths: Entity<MoonDataTableState>,
-    /// Context-qualified persistence ID for [`Self::by_ip_col_widths`].
-    by_ip_widths_id: String,
-    /// Pointer x and LOGICAL column width captured when a header divider drag started.
-    ///
-    /// The drag cannot be computed from the live cell origin: the `flex_1` spacer in the header
-    /// right-anchors every column after IP, so growing one moves its own left edge and the delta
-    /// compounds every frame. Anchoring once, at the grab, makes the arithmetic independent of
-    /// relayout. `None` whenever no drag is in flight.
-    by_ip_drag: Option<by_ip_header::ByIpDragAnchor>,
-    /// Scope marker for the footer and empty-state text, rebuilt alongside `cached_rows` /
+    /// Scope marker for the health strip and empty-state text, rebuilt alongside `cached_rows` /
     /// `cached_groups`.
     ///
     /// Unlike Assets, this panel has no group-less variant to fall back on — every instance is
@@ -233,16 +236,16 @@ impl CoreStatusView {
     ///     backend: Shared terminal backend.
     ///     group: Window group that defines the core scope.
     ///     detached: Whether widths and presentation mode use the detached-window persistence keys.
-    ///     _window: Host window reserved for panel construction symmetry.
+    ///     window: Host window used to build the toolbar search field.
     ///     cx: View context used for observers and child entities.
     ///
     /// Returns:
-    ///     A panel restored to its saved presentation, or By IP when no usable mode was stored.
+    ///     A panel restored to its saved presentation, or Flat when no usable mode was stored.
     fn new(
         backend: Entity<Backend>,
         group: String,
         detached: bool,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         // This fires on every backend notify (event-driven, ≤4 Hz — not a timer/poll), but the
@@ -302,15 +305,10 @@ impl CoreStatusView {
         .detach();
 
         let widths_id = crate::persistence::table_persist::ctx_id("core-status-table", detached);
-        let by_ip_sort_id =
-            crate::persistence::table_persist::ctx_id("core-status-by-ip", detached);
         let flat_sort = ordering::restore_flat_sort(crate::persistence::table_persist::saved_sort(
             backend.read(cx),
             &widths_id,
         ));
-        let group_sort = ordering::restore_group_sort(
-            crate::persistence::table_persist::saved_sort(backend.read(cx), &by_ip_sort_id),
-        );
         // Restore only: writing the resolved code back here would insert an entry for every context
         // on first launch and arm a layout flush merely by opening the panel.
         let mode = crate::persistence::table_persist::core_status_mode(
@@ -344,32 +342,6 @@ impl CoreStatusView {
                 this.order_seen.entry(id.clone()).or_default(),
                 cx,
             );
-        })
-        .detach();
-        // The By IP width bag. Its own `ctx_id` base, so a docked tab and a detached window keep
-        // separate By-IP widths exactly as they already keep separate flat-table widths, and neither
-        // can collide with `core-status-table`.
-        let by_ip_widths_id =
-            crate::persistence::table_persist::ctx_id("core-status-by-ip-widths", detached);
-        let saved_by_ip =
-            crate::persistence::table_persist::saved(backend.read(cx), &by_ip_widths_id);
-        let by_ip_col_widths = cx.new(|_| {
-            let mut s = MoonDataTableState::new();
-            s.column_widths = saved_by_ip;
-            s
-        });
-        cx.observe(&by_ip_col_widths, |this, state, cx| {
-            crate::persistence::table_persist::persist(
-                &this.backend,
-                &this.by_ip_widths_id,
-                &state,
-                cx,
-            );
-            // Unlike `table_state`, NOTHING else observes this bag: a `MoonDataTable` observes its
-            // own state, but the By IP header and rows read these widths during THIS view's render.
-            // Without the notify the toolbar reset appears to do nothing until some unrelated
-            // repaint happens to arrive.
-            cx.notify();
         })
         .detach();
         let warn_table_state = ordered_log_state(
@@ -418,7 +390,13 @@ impl CoreStatusView {
             crate::persistence::table_persist::ctx_id("core-status-updates", detached),
             updates_table_state.read(cx).column_order.clone(),
         );
-        let tree_state = cx.new(|cx| MoonTreeState::new(cx));
+        let search_input = cx.new(|cx| MoonInputState::new(window, cx));
+        cx.subscribe(&search_input, |this, state, event: &MoonInputEvent, cx| {
+            if matches!(event, MoonInputEvent::Change) {
+                this.set_search(state.read(cx).value().to_string(), cx);
+            }
+        })
+        .detach();
         let focus = cx.focus_handle();
 
         let mut this = Self {
@@ -439,15 +417,17 @@ impl CoreStatusView {
             rows_generation: 0,
             flat_cache: std::cell::RefCell::new(cache::FlatViewCache::default()),
             cached_groups: Rc::new(Vec::new()),
+            cached_alarm_starts: Rc::new(Vec::new()),
             ip_masked: false,
+            health_filter: None,
+            search_input,
+            search_query: String::new(),
             editing: None,
             edit_input: None,
             flat_sort,
             problems_sort,
             exchange_logos_ready: false,
-            group_sort,
             mode,
-            tree_state,
             table_state,
             order_seen,
             warn_table_state,
@@ -456,11 +436,10 @@ impl CoreStatusView {
             warn_cfg_open: false,
             unseen_problems: 0,
             problems_mark_sig: 0,
-            by_ip_width: 0.0,
+            flat_measured_w: 0.0,
+            servers_measured_w: 0.0,
+            toolbar_measured_w: 0.0,
             widths_id,
-            by_ip_col_widths,
-            by_ip_widths_id,
-            by_ip_drag: None,
             // Placeholder: no preset, nothing configured — reads as "nothing hidden" until the
             // `rebuild_cache` call below fills it in from the real membership boundary.
             cached_scope_marker: ScopeMarker::new(None, 0, 0),

@@ -1,31 +1,44 @@
-//! Core Status scope selector and presentation mode strip.
+//! Core Status scope selector and presentation toolbar.
 
 use std::collections::HashSet;
 
-use super::mode::{MODE_DIVIDER_INDEX, MODE_DIVIDER_WIDTH};
+use super::ip_cell::mask_affordance;
+use super::table;
 use super::{CoreStatusMode, CoreStatusView};
 use crate::design;
 use gpui::*;
 use moon_core::session::CoreId;
 use moon_core::session::core_order::OrderedCores;
-use moon_ui::{MoonPalette, MoonSegmentItem, MoonSegmentedControl, h_flex};
+use moon_ui::{
+    MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
+    MoonPalette, MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, h_flex,
+};
 use rust_i18n::t;
 
 impl CoreStatusView {
-    /// Render the effective core scope in the top bar.
+    /// Render the effective core scope and the view toolbar.
     ///
     /// Classic mode exposes the retained multi-selector and exchange batch toggles. Auto mode
     /// renders a non-interactive pinned scope chip naming the workspace label instead, without
-    /// changing retained Classic state.
+    /// changing retained Classic state. The rest of the bar is the segmented view switcher, the
+    /// search field, and the IP, column, and warnings controls. The row wraps when the dock is
+    /// narrow; it does not clip.
     ///
     /// Args:
     ///     cores: Group cores in canonical display order.
+    ///     hidden: Column ids unchecked in the Columns menu, read once for this frame.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
     /// Returns:
-    ///     The top-bar row containing an interactive Classic selector or non-interactive pinned
-    ///     scope chip.
-    pub(super) fn core_bar(&self, cores: &OrderedCores, cx: &Context<Self>) -> impl IntoElement {
+    ///     The toolbar row.
+    pub(super) fn core_bar(
+        &self,
+        cores: &OrderedCores,
+        hidden: &HashSet<String>,
+        version_behind: usize,
+        alarms_24h: usize,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let scope = self.effective_scope(self.backend.read(cx));
         let workspace_owned = scope.is_workspace_owned();
         let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
@@ -99,97 +112,528 @@ impl CoreStatusView {
             )
             .into_any_element()
         };
-        let weak_view = cx.entity().downgrade();
-        let mode_palette = MoonPalette::active(cx);
-        // The five modes are two different KINDS of surface: By-IP, Flat and Problems are live
-        // views of the fleet as it stands, while Warnings and Updates are history — records of what
-        // already happened. Problems sits on the LIVE side because it is present tense: it lists
-        // what the cores confirm right now, and a finding leaves it when a later list omits it.
-        // `MODE_DIVIDER_INDEX` is a dead cell that draws the boundary between them.
-        //
-        // One control rather than two, deliberately: the selection is one value, so two controls
-        // would each need to render "nothing selected" while the other holds it, and any drift
-        // between them shows the user two highlighted tabs. A replaced cell "preserves its
-        // resolved width and selected underline but exposes no segment click, scroll, hover,
-        // cursor, or tooltip behavior" (MoonUI `segment.rs::replace_item`), which is exactly a
-        // separator: it can never be selected and can never be clicked, so the index below it
-        // simply never arrives.
-        let modes = MoonSegmentedControl::new("core-status-mode")
-            .items([
-                MoonSegmentItem::new("", t!("core_status.mode.by_ip").to_string())
-                    .fit_width(cx, 54.0, 88.0)
-                    .selected(self.mode == CoreStatusMode::ByIp),
-                MoonSegmentItem::new("", t!("core_status.mode.flat").to_string())
-                    .fit_width(cx, 54.0, 88.0)
-                    .selected(self.mode == CoreStatusMode::Flat),
-                // The count rides in the LABEL because `MoonSegmentItem` carries no badge slot, and
-                // it has to be here as well as on the dock tab: the dock asks a hidden tab only, so
-                // a Core Status sitting in front on another mode would announce nothing at all.
-                MoonSegmentItem::new(
-                    "",
-                    match self.unseen_problems {
-                        0 => t!("core_status.mode.problems").to_string(),
-                        n => format!(
-                            "{} {}",
-                            t!("core_status.mode.problems"),
-                            crate::panels::common::count_text(
-                                n,
-                                crate::panels::common::COUNT_BADGE_MAX
-                            )
-                        ),
+        let bar = toolbar_row(
+            combo,
+            self.mode_switch(version_behind, alarms_24h, cx),
+            self.search_field(cx),
+            self.toolbar_tail(hidden, cx),
+            cx,
+        );
+        let weak = cx.entity().downgrade();
+        div()
+            .w_full()
+            .min_w(px(0.0))
+            .relative()
+            .child(
+                canvas(
+                    move |bounds, _, app| {
+                        let w = f32::from(bounds.size.width);
+                        let Some(view) = weak.upgrade() else {
+                            return;
+                        };
+                        if (view.read(app).toolbar_measured_w - w).abs() <= 0.5 {
+                            return;
+                        }
+                        let weak = view.downgrade();
+                        app.defer(move |app| {
+                            let Some(view) = weak.upgrade() else {
+                                return;
+                            };
+                            view.update(app, |this, cx| {
+                                if (this.toolbar_measured_w - w).abs() > 0.5 {
+                                    this.toolbar_measured_w = w;
+                                    cx.notify();
+                                }
+                            });
+                        });
                     },
+                    |_, _, _, _| {},
                 )
-                .fit_width(cx, 54.0, 104.0)
-                .selected(self.mode == CoreStatusMode::Problems),
-                // Narrow by explicit width, not `fit_width`: a separator sized like a label cell
-                // would open a 54-88px hole in the strip, which reads as a missing button rather
-                // than a boundary.
-                MoonSegmentItem::new("", String::new())
-                    .width(MODE_DIVIDER_WIDTH)
-                    .disabled(true),
-                MoonSegmentItem::new("", t!("core_status.mode.warnings").to_string())
-                    .fit_width(cx, 54.0, 88.0)
-                    .selected(self.mode == CoreStatusMode::Warnings),
-                MoonSegmentItem::new("", t!("core_status.mode.updates").to_string())
-                    .fit_width(cx, 54.0, 88.0)
-                    .selected(self.mode == CoreStatusMode::Updates),
-            ])
-            .replace_item(
-                MODE_DIVIDER_INDEX,
-                h_flex()
-                    .w_full()
-                    .h_full()
-                    .justify_center()
-                    .items_center()
-                    .child(design::chrome_divider(cx, mode_palette)),
+                .absolute()
+                .size_full(),
             )
-            .on_click(move |index, _, _, app| {
+            .child(bar)
+    }
+
+    /// Segmented view switcher with the counts the mockup puts on each view.
+    ///
+    /// Args:
+    ///     cx: View context used to read scope counts and wire the click.
+    ///
+    /// Returns:
+    ///     A filled joined strip. Alarms shows the 24-hour count. Updates shows its count at zero.
+    fn mode_switch(
+        &self,
+        lagging: usize,
+        alarms_24h: usize,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let problems = self.count_problem_cores(self.backend.read(cx));
+        let weak_view = cx.entity().downgrade();
+        mode_switch_control(
+            self.cached_rows.len(),
+            self.cached_groups.len(),
+            problems,
+            alarms_24h,
+            lagging,
+            self.mode,
+            self.toolbar_measured_w,
+            move |index, _, app| {
                 let Some(view) = weak_view.upgrade() else {
                     return;
                 };
                 let mode = match index {
-                    0 => CoreStatusMode::ByIp,
-                    1 => CoreStatusMode::Flat,
+                    0 => CoreStatusMode::Flat,
+                    1 => CoreStatusMode::Servers,
                     2 => CoreStatusMode::Problems,
-                    // 3 is the separator and never reports a click.
-                    4 => CoreStatusMode::Warnings,
+                    3 => CoreStatusMode::Warnings,
                     _ => CoreStatusMode::Updates,
                 };
                 view.update(app, |this, cx| this.set_mode(mode, cx));
-            });
-        // The core selector yields first in a narrow side dock, keeping both mode actions
-        // reachable without introducing a horizontal scroll host.
-        h_flex()
-            .w_full()
-            .min_w_0()
-            .overflow_hidden()
-            .flex_none()
-            .gap_2()
-            .items_center()
-            .px_2()
-            .py_1()
-            .child(div().flex_1().min_w_0().overflow_hidden().child(combo))
-            .child(modes)
-            .child(self.warn_gear(cx))
+            },
+            cx,
+        )
+    }
+
+    /// Toolbar search. [`toolbar_row`] clamps the slot between 140 and 240 density-scaled pixels.
+    ///
+    /// Args:
+    ///     cx: View context used for the density scale.
+    ///
+    /// Returns:
+    ///     The search field, without a width of its own.
+    fn search_field(&self, cx: &Context<Self>) -> impl IntoElement {
+        let enabled = matches!(self.mode, CoreStatusMode::Flat | CoreStatusMode::Servers);
+        let muted = design::moon(MoonPalette::active(cx).text_muted);
+        MoonInput::new("core-status-search")
+            .state(&self.search_input)
+            .placeholder(t!("core_status.search.placeholder").to_string())
+            .size(design::INPUT_SIZE)
+            .cleanable(true)
+            .disabled(!enabled)
+            .prefix(
+                moon_ui::MoonIcon::empty()
+                    .path("icons/search.svg")
+                    .text_color(muted)
+                    .w(px(14.0))
+                    .h(px(14.0)),
+            )
+    }
+
+    /// IP mask, column menu, and the warnings gear, packed to the trailing edge.
+    ///
+    /// Args:
+    ///     hidden: Column ids unchecked in the Columns menu, read once for this frame.
+    ///     cx: View context used to build the controls.
+    ///
+    /// Returns:
+    ///     The trailing group. [`toolbar_row`] places it on the trailing edge. The IP button
+    ///     id is not the Servers header's id.
+    fn toolbar_tail(&self, hidden: &HashSet<String>, cx: &Context<Self>) -> impl IntoElement {
+        let weak_view = cx.entity().downgrade();
+        toolbar_tail_el(
+            self.ip_masked,
+            self.columns_menu(hidden, cx),
+            self.warn_gear(cx),
+            move |_, _, app| {
+                let Some(view) = weak_view.upgrade() else {
+                    return;
+                };
+                view.update(app, |this, cx| this.toggle_ip_mask(cx));
+            },
+            cx,
+        )
+    }
+
+    /// Checkbox menu over every Flat column, persisted with that table's widths.
+    ///
+    /// Args:
+    ///     hidden: Column ids unchecked in the Columns menu.
+    ///     cx: View context used to wire each toggle.
+    ///
+    /// Returns:
+    ///     A dropdown that stays open while columns are checked. The last checked column
+    ///     cannot be cleared.
+    fn columns_menu(&self, hidden: &HashSet<String>, cx: &Context<Self>) -> impl IntoElement {
+        let view = cx.entity();
+        columns_menu_el(
+            hidden,
+            move |column, app| {
+                view.update(app, |this, cx| this.toggle_flat_column(&column, cx));
+            },
+            cx,
+        )
     }
 }
+
+/// Toolbar row. The four slots wrap onto a second line; nothing is clipped to stay on one.
+///
+/// Args:
+///     scope: Core-scope combo or pinned chip.
+///     modes: Segmented view switch.
+///     search: Search field. This function clamps its slot.
+///     tail: IP mask, column menu, and warnings gear.
+///     cx: Application context used for the density scale.
+///
+/// Returns:
+///     The wrapping row. The tail keeps the trailing edge of whichever line it lands on.
+pub(super) fn toolbar_row(
+    scope: impl IntoElement,
+    modes: impl IntoElement,
+    search: impl IntoElement,
+    tail: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    let p = MoonPalette::active(cx);
+    h_flex()
+        .id("core-status-toolbar")
+        .debug_selector(|| "cs-toolbar".into())
+        .w_full()
+        .min_w(px(0.0))
+        .flex_wrap()
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, 8.0))
+        .px(design::ui_px(cx, 12.0))
+        .py(design::ui_px(cx, 8.0))
+        .bg(rgb(p.panel_high))
+        .font_family(design::ui_font())
+        .child(
+            div()
+                .debug_selector(|| "cs-toolbar-scope".into())
+                .flex_none()
+                .child(scope),
+        )
+        .child(
+            div()
+                .debug_selector(|| "cs-toolbar-modes".into())
+                .flex_none()
+                .max_w_full()
+                .overflow_hidden()
+                .child(modes),
+        )
+        .child(
+            div()
+                .debug_selector(|| "cs-toolbar-search".into())
+                .flex_1()
+                .min_w(design::ui_px(cx, 140.0))
+                .max_w(design::ui_px(cx, 240.0))
+                .child(search),
+        )
+        .child(
+            div()
+                .debug_selector(|| "cs-toolbar-tail".into())
+                .ml_auto()
+                .flex_none()
+                .child(tail),
+        )
+}
+
+/// Segmented view switcher with the counts the mockup puts on each view.
+///
+/// Args:
+///     flat_n: Cores in the flat snapshot.
+///     server_n: Server cards.
+///     problem_n: Cores the Problems view would list.
+///     alarms: Alarms in the last 24 hours. Shown on the Alarms segment, including zero.
+///     lagging: Cores behind the fleet build. Shown on Updates, including zero.
+///     mode: The view on screen.
+///     available: Measured toolbar width in pixels. `0` has not been measured and keeps the
+///         full labels with counts, so the first frame does not flash the short forms.
+///     on_click: Segment index, in the same order as the items.
+///     cx: Application context used to fit each segment.
+///
+/// Returns:
+///     A filled joined strip. A narrow dock drops counts, then switches to the short labels,
+///     then lowers the segment maximum so all five stay inside.
+pub(super) fn mode_switch_control(
+    flat_n: usize,
+    server_n: usize,
+    problem_n: usize,
+    alarms: usize,
+    lagging: usize,
+    mode: CoreStatusMode,
+    available: f32,
+    on_click: impl Fn(usize, &ClickEvent, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let (items, tier) = fitted_mode_items(
+        flat_n, server_n, problem_n, alarms, lagging, mode, available, cx,
+    );
+    let tier_id = match tier {
+        ModeLabel::Full => "cs-mode-tier-full",
+        ModeLabel::Plain => "cs-mode-tier-plain",
+        ModeLabel::Short => "cs-mode-tier-short",
+    };
+    div()
+        .debug_selector(move || tier_id.into())
+        .flex_none()
+        .child(
+            MoonSegmentedControl::new("core-status-mode")
+                .selection(MoonSegmentSelection::Filled)
+                .items(items)
+                .on_click(move |index, event, _, app| on_click(index, event, app)),
+        )
+}
+
+/// How much of each mode name the strip is allowed to draw.
+#[derive(Clone, Copy)]
+enum ModeLabel {
+    /// Translated name plus the count.
+    Full,
+    /// Translated name, no count.
+    Plain,
+    /// Short name, no count.
+    Short,
+}
+
+/// The five modes in strip order.
+const MODE_ORDER: [CoreStatusMode; 5] = [
+    CoreStatusMode::Flat,
+    CoreStatusMode::Servers,
+    CoreStatusMode::Problems,
+    CoreStatusMode::Warnings,
+    CoreStatusMode::Updates,
+];
+
+/// Build the five segments, degrading until they fit `available`.
+///
+/// The minimum is the label plus the control's own padding. There is no 64 px floor.
+fn fitted_mode_items(
+    flat_n: usize,
+    server_n: usize,
+    problem_n: usize,
+    alarms: usize,
+    lagging: usize,
+    mode: CoreStatusMode,
+    available: f32,
+    cx: &App,
+) -> (Vec<MoonSegmentItem>, ModeLabel) {
+    // Toolbar padding is 12 design px on each side. `available` is the measured row.
+    let pad = f32::from(design::ui_px(cx, 12.0)) * 2.0;
+    let budget = if available <= 0.5 {
+        f32::MAX
+    } else {
+        (available - pad).max(0.0)
+    };
+    for label in [ModeLabel::Full, ModeLabel::Plain, ModeLabel::Short] {
+        let items = mode_items(
+            flat_n, server_n, problem_n, alarms, lagging, mode, label, 0.0, 168.0, cx,
+        );
+        if items_width(&items) <= budget + 0.5 {
+            return (items, label);
+        }
+    }
+    // 64 here is only the probe's design width, so a rendered pixel converts back to a
+    // design pixel. It is not a floor on the segments.
+    let probe = MoonSegmentItem::new("", "X").fit_width(cx, 64.0, 64.0);
+    let scaled = probe.resolved_width().max(1.0);
+    let design_max = ((budget / 5.0) / (scaled / 64.0)).max(1.0);
+    (
+        mode_items(
+            flat_n,
+            server_n,
+            problem_n,
+            alarms,
+            lagging,
+            mode,
+            ModeLabel::Short,
+            0.0,
+            design_max,
+            cx,
+        ),
+        ModeLabel::Short,
+    )
+}
+
+fn mode_items(
+    flat_n: usize,
+    server_n: usize,
+    problem_n: usize,
+    alarms: usize,
+    lagging: usize,
+    mode: CoreStatusMode,
+    label: ModeLabel,
+    min_w: f32,
+    max_w: f32,
+    cx: &App,
+) -> Vec<MoonSegmentItem> {
+    MODE_ORDER
+        .into_iter()
+        .map(|item| {
+            let count = match (label, item) {
+                (ModeLabel::Full, CoreStatusMode::Flat) => Some(flat_n),
+                (ModeLabel::Full, CoreStatusMode::Servers) => Some(server_n),
+                (ModeLabel::Full, CoreStatusMode::Problems) => Some(problem_n),
+                (ModeLabel::Full, CoreStatusMode::Warnings) => Some(alarms),
+                (ModeLabel::Full, CoreStatusMode::Updates) => Some(lagging),
+                _ => None,
+            };
+            counted_segment(
+                cx,
+                mode_label(item, matches!(label, ModeLabel::Short)),
+                count,
+                item == mode,
+                min_w,
+                max_w,
+            )
+        })
+        .collect()
+}
+
+fn items_width(items: &[MoonSegmentItem]) -> f32 {
+    items.iter().map(MoonSegmentItem::resolved_width).sum()
+}
+
+/// Translated mode name. `short` selects the narrow-dock key.
+fn mode_label(mode: CoreStatusMode, short: bool) -> String {
+    let key = match (mode, short) {
+        (CoreStatusMode::Flat, false) => "core_status.mode.flat",
+        (CoreStatusMode::Flat, true) => "core_status.mode.flat_short",
+        (CoreStatusMode::Servers, false) => "core_status.mode.servers",
+        (CoreStatusMode::Servers, true) => "core_status.mode.servers_short",
+        (CoreStatusMode::Problems, false) => "core_status.mode.problems",
+        (CoreStatusMode::Problems, true) => "core_status.mode.problems_short",
+        (CoreStatusMode::Warnings, false) => "core_status.mode.warnings",
+        (CoreStatusMode::Warnings, true) => "core_status.mode.warnings_short",
+        (CoreStatusMode::Updates, false) => "core_status.mode.updates",
+        (CoreStatusMode::Updates, true) => "core_status.mode.updates_short",
+    };
+    t!(key).to_string()
+}
+
+/// IP mask, column menu, and the warnings gear.
+///
+/// Args:
+///     ip_masked: Whether addresses are hidden. Chooses the eye icon.
+///     menu: Columns dropdown, already built.
+///     gear: Warnings control. The closed gear is a button; the popover is the caller's.
+///     on_ip: Toggles the mask.
+///     cx: Application context used for the density scale.
+///
+/// Returns:
+///     The trailing group. [`toolbar_row`] owns the trailing-edge margin.
+pub(super) fn toolbar_tail_el(
+    ip_masked: bool,
+    menu: impl IntoElement,
+    gear: impl IntoElement,
+    on_ip: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let (icon, tooltip) = mask_affordance(ip_masked);
+    h_flex()
+        .flex_none()
+        .items_center()
+        .gap(design::ui_px(cx, 4.0))
+        .child(
+            MoonButton::new("core-status-toolbar-ip")
+                .size(MoonButtonSize::density(cx))
+                .ghost()
+                .icon(icon)
+                .tooltip(t!(tooltip).to_string())
+                .on_click(on_ip),
+        )
+        .child(menu)
+        .child(gear)
+}
+
+/// Checkbox menu over every Flat column, persisted with that table's widths.
+///
+/// Args:
+///     hidden: Column ids unchecked in the Columns menu.
+///     on_toggle: Column id the operator clicked. A disabled last column does not fire.
+///     cx: Application context used to size the trigger.
+///
+/// Returns:
+///     A dropdown that stays open while columns are checked. The last checked column
+///     cannot be cleared.
+pub(super) fn columns_menu_el<T: Fn(String, &mut App) + Clone + 'static>(
+    hidden: &HashSet<String>,
+    on_toggle: T,
+    cx: &App,
+) -> impl IntoElement + use<T> {
+    let keys = table::order_keys();
+    let visible_count = keys.iter().filter(|key| !hidden.contains(**key)).count();
+    let mut menu = MoonDropdown::new("core-status-columns")
+        .label(t!("core_status.columns.menu").to_string())
+        .trigger_variant(MoonButtonVariant::Ghost)
+        .trigger_size(MoonButtonSize::density(cx))
+        .trigger_caret(true)
+        .fit_trigger_width(72.0, 140.0)
+        .fit_menu_width(140.0, 240.0)
+        .close_on_select(false);
+    for key in keys {
+        let shown = !hidden.contains(*key);
+        let last = shown && visible_count == 1;
+        let on_toggle = on_toggle.clone();
+        let column = (*key).to_string();
+        menu = menu.item(
+            MoonMenuItem::with_key(*key, column_label(key))
+                .checked(shown)
+                .disabled(last)
+                .on_click(move |_, _, app| on_toggle(column.clone(), app)),
+        );
+    }
+    menu
+}
+
+/// One segment cell. A count is joined into the only string the cell can carry.
+///
+/// Args:
+///     cx: View context used to fit the cell.
+///     label: Translated view name.
+///     count: Cores or servers to show. `None` draws the name alone, including a zero the
+///         caller chose to omit.
+///     selected: Whether this view is the one on screen.
+///     min_w: Minimum fitted width in design pixels. The control scales it.
+///     max_w: Maximum fitted width in design pixels.
+///
+/// Returns:
+///     A fitted segment. The count uses the same face as the name: the cell has one string.
+fn counted_segment(
+    cx: &App,
+    label: String,
+    count: Option<usize>,
+    selected: bool,
+    min_w: f32,
+    max_w: f32,
+) -> MoonSegmentItem {
+    let text = match count {
+        Some(n) => format!("{label} · {n}"),
+        None => label,
+    };
+    MoonSegmentItem::new("", text)
+        .fit_width(cx, min_w, max_w.max(min_w))
+        .selected(selected)
+}
+
+/// Translated Flat column heading for the menu.
+///
+/// Args:
+///     key: Canonical column id.
+///
+/// Returns:
+///     The column's existing heading. An unknown id is returned unchanged.
+fn column_label(key: &str) -> String {
+    match key {
+        "server" => t!("core_status.col.server").to_string(),
+        "core" => t!("core_status.col.core").to_string(),
+        "status" => t!("core_status.col.status").to_string(),
+        "version" => t!("core_status.col.version").to_string(),
+        "cpu_proc" => t!("core_status.col.cpu_proc").to_string(),
+        "cpu_sys" => t!("core_status.col.cpu_sys").to_string(),
+        "mem_used" => t!("core_status.col.mem_used").to_string(),
+        "free_phys" => t!("core_status.col.free_phys").to_string(),
+        "ping" => t!("core_status.col.ping").to_string(),
+        "ping_exch" => t!("core_status.col.ping_exch").to_string(),
+        "cpus" => t!("core_status.col.cpus").to_string(),
+        "api_key" => t!("core_status.col.api_key").to_string(),
+        "api_quota" => t!("core_status.col.api_quota").to_string(),
+        "startup" => t!("core_status.col.startup").to_string(),
+        "tz_off" => t!("core_status.col.tz_off").to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests;

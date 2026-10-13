@@ -1287,17 +1287,20 @@ fn toolbar_launcher_labels_are_measured_and_all_or_none() {
     assert!(button.contains("btn.tooltip(label)"));
 }
 
-/// `core_status/table.rs:core_status_row`, `server_view.rs:server_row` and `core_row` must keep
-/// each protocol-v4 field bound to its correctly scoped UI metric. Swapping process/system CPU or
-/// process/free memory compiles but gives the operator a believable number with the wrong scope.
+/// `core_status/table.rs:core_status_row` and `servers_view.rs:server_card` must keep each
+/// protocol-v4 field bound to its correctly scoped UI metric. The By-IP process row is gone
+/// with the tree; a card shows the machine CPU and free RAM the server header used to show.
+/// Swapping process/system CPU or process/free memory compiles but gives the operator a
+/// believable number with the wrong scope.
 #[test]
 fn core_status_table_binds_scoped_telemetry_columns() {
     let text = read_src("panels/core_status/table.rs");
     let flat_row = braced_body(&text, "fn core_status_row(");
+    let cell_text = braced_body(&text, "pub(super) fn cell_text_for(");
     let version_cell = braced_body(&text, "fn version_hover_cell(");
-    let server = read_src("panels/core_status/server_view.rs");
-    let server_row = braced_body(&server, "fn server_row(");
-    let process_row = braced_body(&server, "fn core_row(");
+    let servers = read_src("panels/core_status/servers_view.rs");
+    let server_card = braced_body(&servers, "fn server_card(");
+    let mark_src = read_src("panels/core_status/version_mark.rs");
 
     for key in [
         "core_status.col.server",
@@ -1323,82 +1326,69 @@ fn core_status_table_binds_scoped_telemetry_columns() {
              KernelHealth has no source for it; `cpu_avg` mislabels machine CPU as an average)"
         );
     }
-    for binding in [
-        "percent(sys.process_cpu_percent)",
-        "percent(sys.system_cpu_percent)",
-        "memory_u16(sys.used_memory_mb)",
-        "memory_u16(sys.free_physical_memory_mb)",
-        "count(sys.logical_cpu_count)",
+    let cell_text = code_only(cell_text);
+    for (key, formatter) in [
+        ("cpu_proc", "percent(sys.process_cpu_percent)"),
+        ("cpu_sys", "percent(sys.system_cpu_percent)"),
+        ("mem_used", "memory_u16(sys.used_memory_mb)"),
+        ("free_phys", "memory_u16(sys.free_physical_memory_mb)"),
+        ("cpus", "count(sys.logical_cpu_count)"),
     ] {
         assert!(
-            code_only(flat_row).contains(binding),
-            "the Flat Core Status row lost the scoped telemetry binding `{binding}`"
+            cell_text.contains(&format!("\"{key}\" => {formatter}")),
+            "cell_text_for lost the scoped telemetry arm `{key}` -> `{formatter}`"
         );
     }
+    let flat_row = code_only(flat_row);
+    for key in ["cpu_proc", "cpu_sys", "mem_used", "free_phys", "cpus"] {
+        assert!(
+            flat_row.contains(&format!("cell_text_for(r, \"{key}\")")),
+            "the Flat row must draw `{key}` through cell_text_for"
+        );
+    }
+    assert!(
+        !flat_row.contains("scoped_text("),
+        "scoped_text must not sit between the row and cell_text_for"
+    );
     for binding in [
         "cpu_load(group.system_cpu_percent, group.logical_cpu_count)",
         "memory_free(group.process_memory_mb, group.free_physical_memory_mb)",
+        "group_build_parts(&group.version)",
     ] {
         assert!(
-            code_only(server_row).contains(binding),
-            "the By IP server row lost the scoped telemetry binding `{binding}`"
+            code_only(server_card).contains(binding),
+            "the server card lost the scoped telemetry binding `{binding}`"
         );
     }
-    for binding in [
-        "percent(core.sys.process_cpu_percent)",
-        "memory_u16(core.sys.used_memory_mb)",
-    ] {
-        assert!(
-            code_only(process_row).contains(binding),
-            "the By IP process row lost the scoped telemetry binding `{binding}`"
-        );
-    }
-    for (body, binding, row) in [
-        (
-            version_cell,
-            "build_parts(r.server_version, r.server_version_suffix.as_deref())",
-            "Flat",
-        ),
-        (
-            server_row,
-            "group_build_parts(&group.version)",
-            "By IP server",
-        ),
-        (
-            process_row,
-            "build_parts(core.server_version, core.server_version_suffix.as_deref())",
-            "By IP core",
-        ),
-    ] {
-        assert!(
-            code_only(body).contains(binding),
-            "the {row} row lost the Core Status build binding `{binding}`"
-        );
-    }
-    let mark = code_only(braced_body(&server, "fn version_mark("));
+    assert!(
+        code_only(version_cell)
+            .contains("build_parts(r.server_version, r.server_version_suffix.as_deref())"),
+        "the Flat row lost the Core Status build binding"
+    );
+    let mark = code_only(braced_body(&mark_src, "fn version_mark("));
     assert!(
         mark.contains("MoonBadge::new(")
             && mark.contains(".font_family(design::mono())")
+            && mark.contains(".when(!shown,")
             && mark.contains(".invisible()"),
         "the build letter must stay a mono number plus a reserved MoonBadge slot"
     );
     assert!(
         code_only(version_cell).contains("version_mark("),
-        "the Flat build cell must paint the same number-and-tag mark as By IP"
+        "the Flat build cell must paint the same number-and-tag mark"
     );
 }
 
-/// `core_status/server_view.rs:grouped_server_view` must not capture a strong
-/// `CoreStatusView` entity in MoonTree's retained renderer; replacing the weak
-/// owner with `let tree_owner = cx.entity();` leaks the panel and its observers.
+/// `core_status/servers_view.rs:servers_view` must not capture a strong
+/// `CoreStatusView` entity in a card callback; replacing the weak owner with
+/// `let tree_owner = cx.entity();` leaks the panel and its observers.
 #[test]
 fn core_status_tree_renderer_holds_a_weak_owner() {
-    let text = read_src("panels/core_status/server_view.rs");
+    let text = read_src("panels/core_status/servers_view.rs");
 
     assert!(
-        text.contains("let weak_view = cx.entity().downgrade();")
-            && text.contains("weak_view.upgrade()"),
-        "Core Status tree callbacks must downgrade and conditionally upgrade their view owner"
+        text.contains("let weak_view = cx.entity().downgrade();") && text.contains(".upgrade()"),
+        "Core Status card callbacks must downgrade and conditionally upgrade their view owner"
     );
     assert!(
         !text.contains("let tree_owner = cx.entity();"),

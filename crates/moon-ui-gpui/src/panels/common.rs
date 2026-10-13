@@ -131,21 +131,9 @@ pub(crate) fn tag_badge(text: impl Into<SharedString>, color: u32) -> MoonBadge 
 
 /// Highest count a tab badge prints before it becomes `99+`.
 ///
-/// Named once because two surfaces show the same number — the dock badge and the Core Status mode
-/// strip — and a count clamped on one while it overflows the other is how a tab gets stretched by
-/// a fleet-sized figure.
+/// Named once so every dock badge clamps at the same figure. A count clamped on one tab and left
+/// raw on another is how a tab gets stretched by a fleet-sized figure.
 pub(crate) const COUNT_BADGE_MAX: usize = 99;
-
-/// A count as a tab badge prints it, clamped to `<max>+`.
-///
-/// Exposed beside [`count_badge`] for surfaces that need the TEXT rather than the pill — a segmented
-/// control carries no badge slot, so its label has to say the same thing in the same shape.
-pub(crate) fn count_text(n: usize, max: usize) -> String {
-    match n > max {
-        true => format!("{max}+"),
-        false => n.to_string(),
-    }
-}
 
 /// The house count badge for a dock tab, tinted by one palette token.
 ///

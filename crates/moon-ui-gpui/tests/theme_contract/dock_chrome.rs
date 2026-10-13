@@ -62,16 +62,15 @@ fn footer_row_keeps_its_height_floor() {
 /// Mutation: a panel keeps (or a new panel grows) its own hand-rolled
 /// `h_flex()....px_2().py_1()` footer container instead of `common::footer_row` /
 /// `common::footer_caption`. Consequence: the one-footer rule silently stops being one rule, one
-/// site at a time. The six footers are `report/render.rs`, `assets/table.rs`,
-/// `orders/render.rs`, `core_status/mod.rs`, `news/mod.rs`, and `assets/balances.rs`'s caption
-/// path.
+/// site at a time. The five footers are `report/render.rs`, `assets/table.rs`,
+/// `orders/render.rs`, `news/mod.rs`, and `assets/balances.rs`'s caption path.
+/// Core Status dropped its footer; its scope marker lives on the health strip.
 #[test]
 fn every_footer_adopts_the_shared_footer_helpers() {
-    let sites: [(&str, &str); 6] = [
+    let sites: [(&str, &str); 5] = [
         ("panels/report/render.rs", "footer_row("),
         ("panels/assets/table.rs", "footer_row("),
         ("panels/orders/render.rs", "footer_row("),
-        ("panels/core_status/footer.rs", "footer_row("),
         ("panels/news/mod.rs", "footer_row("),
         ("panels/assets/balances.rs", "footer_caption("),
     ];

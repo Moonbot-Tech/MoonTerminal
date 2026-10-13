@@ -4,17 +4,34 @@
 //! column is non-sortable: order comes from the merge itself, never from the table. Modeled
 //! directly on `warnings.rs`, the sibling read-only log surface.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::rc::Rc;
 
 use moon_core::feed::{UpdateTarget, named_build_label};
+use moon_core::session::CoreId;
 use moon_core::session::core_update::{CoreUpdateOutcome, CoreUpdatePhase, CoreUpdateRecord};
-use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
+use moon_ui::{
+    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonProgress, MoonSize,
+    MoonSteps,
+};
 
 use super::model::CoreStatusRow;
-use super::presentation::update_tooltip;
+use super::presentation::{BuildParts, build_key, build_parts, update_tooltip};
 use super::*;
+use crate::controls::core_update::{self, OfferCounts};
+
+/// Declared width of the outcome column. Five horizontal Xs steps need 5 * 120 and wrap below that.
+const OUTCOME_COLUMN_W: f32 = 220.0;
+/// Standard-density table row (`tokens.table_row_h`). The outcome cell has to fit inside it.
+const STANDARD_ROW_H: f32 = 25.0;
+/// MoonSteps horizontal floor: one step's `min_w` before the row wraps (`STEP_MIN_WIDTH`).
+const STEP_MIN_W: f32 = 120.0;
+/// Xs marker height: control height 20 minus 4. One unwrapped row is this tall.
+const STEP_ROW_H: f32 = 16.0;
+/// Vertical gap MoonSteps inserts between wrapped rows.
+const STEP_GAP_Y: f32 = 6.0;
+const STEP_COUNT: f32 = 5.0;
 
 /// Updates column ids in source order. A dragged order is stored under these ids.
 pub(super) const ORDER_KEYS: &[&str] = &[
@@ -44,28 +61,41 @@ fn columns() -> Vec<MoonDataTableColumn> {
 ///         core selection. Drawn first.
 ///     history: Closed history records, already scoped, capped and ordered newest first. Drawn
 ///         after every in-flight row.
+///     phases: Current update phase per scoped core. A history retry is offered only when this
+///         phase is `Done(Failed)` for that core.
 ///     server_names: Server display name per lane/endpoint IP -- never the raw address.
 ///     state: Persisted table interaction state.
 ///     zone: User-selected display time zone.
 ///     now_ms: Injected clock, used to compute a live in-flight duration.
+///     backend: Shared terminal state a failed history row's retry button commands.
 ///     cx: Panel context.
 ///
 /// Returns:
 ///     A full-size data-table host, or the localized empty state.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn updates_table(
     id: &'static str,
     live_rows: Rc<Vec<CoreStatusRow>>,
     history: Rc<Vec<CoreUpdateRecord>>,
+    phases: Rc<HashMap<CoreId, CoreUpdatePhase>>,
     server_names: Rc<HashMap<IpAddr, String>>,
     state: &Entity<MoonDataTableState>,
     zone: chrono_tz::Tz,
     now_ms: i64,
+    backend: &Entity<Backend>,
     cx: &Context<CoreStatusView>,
 ) -> impl IntoElement {
     let live_count = live_rows.len();
     let row_count = live_count + history.len();
     let empty = row_count == 0;
     let p = MoonPalette::active(cx);
+    let backend = backend.clone();
+    // History is newest-first. The first row for a core is the only one that may offer a retry.
+    let mut seen_cores = HashSet::new();
+    let newest: Vec<bool> = history
+        .iter()
+        .map(|record| seen_cores.insert(record.core))
+        .collect();
 
     crate::panels::common::data_table_host(
         SharedString::from(format!("{id}-host")),
@@ -73,11 +103,21 @@ pub(super) fn updates_table(
         t!("core_update.list_empty").to_string(),
         p,
         cx,
-        MoonDataTable::new(id, row_count, move |ix, _window, _app| {
+        MoonDataTable::new(id, row_count, move |ix, _window, app| {
             if ix < live_count {
                 live_row(ix, &live_rows[ix], &server_names, zone, now_ms)
             } else {
-                history_row(ix, &history[ix - live_count], &server_names, zone)
+                let hist_ix = ix - live_count;
+                history_row(
+                    ix,
+                    &history[hist_ix],
+                    &server_names,
+                    zone,
+                    newest[hist_ix],
+                    phases.get(&history[hist_ix].core),
+                    &backend,
+                    app,
+                )
             }
         })
         .columns(columns())
@@ -104,9 +144,8 @@ fn live_row(
         .unwrap_or_else(|| "—".to_string());
     let core = row.name.clone();
     let Some(phase) = row.update.as_ref() else {
-        return cells(ix, "—", core, server, "—", "—", "—", "—");
+        return cells(ix, "—", core, server, "—", "—", "—", "—", None);
     };
-    let outcome = update_tooltip(phase, None);
     match phase {
         CoreUpdatePhase::Sent {
             target,
@@ -128,24 +167,149 @@ fn live_row(
             from_suffix,
             sent_at_ms,
             ..
-        } => cells(
+        } => steps_row(
             ix,
             time_text(*sent_at_ms, zone),
             core,
             server,
             live_from_to(*from, from_suffix.as_deref()),
             target_text(target),
-            outcome,
+            phase,
             crate::panels::common::warn_duration_text(*sent_at_ms, Some(now_ms)),
         ),
         // `Queued` carries only a lane address and a stall flag -- no timestamp, target or
-        // baseline build -- so every column but the outcome word stays a dash until the queue
+        // baseline build -- so every column but the phase steps stays a dash until the queue
         // actually sends something. See the `CoreUpdatePhase` shape in
         // `crates/moon-core/src/session/core_update.rs`.
         CoreUpdatePhase::Queued { .. } | CoreUpdatePhase::Done(_) => {
-            cells(ix, "—", core, server, "—", "—", outcome, "—")
+            steps_row(ix, "—", core, server, "—", "—", phase, "—")
         }
     }
+}
+
+/// Zero-based MoonSteps index. `Done` sits past the last label so every step reads finished.
+fn phase_index(phase: &CoreUpdatePhase) -> usize {
+    match phase {
+        CoreUpdatePhase::Queued { .. } => 0,
+        CoreUpdatePhase::Sent { .. } => 1,
+        CoreUpdatePhase::Waiting { .. } => 2,
+        CoreUpdatePhase::Verifying { .. } => 3,
+        CoreUpdatePhase::Done(_) => 5,
+    }
+}
+
+/// Whether horizontal Xs steps fit in one table row at this column width.
+///
+/// Five steps at the MoonSteps floor of 120 wrap inside the 220 outcome column, and the
+/// wrapped stack is taller than the 25px standard row. A column wide enough for one row of
+/// steps (600 at zoom 1) fits.
+///
+/// Args:
+///     column_w: Outcome column width, design px.
+///     row_h: Row height the cell must stay inside, design px.
+///
+/// Returns:
+///     Whether the horizontal steps stay inside the row.
+pub(super) fn outcome_steps_fit(column_w: f32, row_h: f32) -> bool {
+    if column_w < STEP_MIN_W || row_h <= 0.0 {
+        return false;
+    }
+    let per_row = (column_w / STEP_MIN_W).floor().max(1.0);
+    let rows = (STEP_COUNT / per_row).ceil();
+    let height = rows * STEP_ROW_H + (rows - 1.0).max(0.0) * STEP_GAP_Y;
+    height <= row_h
+}
+
+/// MoonProgress value for one phase: index / 4, so Verifying is 75 and Done clamps at 100.
+///
+/// Args:
+///     phase: The attempt's current phase.
+///
+/// Returns:
+///     A percentage in `0..=125`. [`MoonProgress`] clamps the Done index (5) to 100.
+pub(super) fn outcome_progress_value(phase: &CoreUpdatePhase) -> f32 {
+    (phase_index(phase) as f32 / 4.0) * 100.0
+}
+
+/// Horizontal compact steps. The production column does not use these: they wrap at 220.
+fn phase_steps(ix: usize, phase: &CoreUpdatePhase) -> MoonSteps {
+    MoonSteps::new(SharedString::from(format!("cs-update-steps-{ix}")))
+        .steps([
+            t!("core_update.phase.queued").to_string(),
+            t!("core_update.phase.sent").to_string(),
+            t!("core_update.phase.waiting").to_string(),
+            t!("core_update.phase.verifying").to_string(),
+            t!("core_update.phase.succeeded").to_string(),
+        ])
+        .current(phase_index(phase))
+        .vertical(false)
+        .size(MoonSize::Xs)
+}
+
+/// Outcome cell that fits the standard row: horizontal steps when the column is wide enough,
+/// otherwise the phase sentence and a progress bar at [`outcome_progress_value`].
+fn outcome_cell(ix: usize, phase: &CoreUpdatePhase) -> AnyElement {
+    let tip = update_tooltip(phase, None);
+    let host = div()
+        .id(SharedString::from(format!("cs-update-outcome-{ix}")))
+        .debug_selector({
+            let selector = format!("cs-update-outcome-{ix}");
+            move || selector
+        })
+        .size_full()
+        .min_w_0()
+        .overflow_hidden()
+        .tooltip(crate::panels::common::text_tooltip(tip));
+    if outcome_steps_fit(OUTCOME_COLUMN_W, STANDARD_ROW_H) {
+        return host.child(phase_steps(ix, phase)).into_any_element();
+    }
+    let label = update_tooltip(phase, None);
+    host.flex()
+        .items_center()
+        .gap_1()
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .overflow_hidden()
+                .truncate()
+                .child(label),
+        )
+        .child(
+            div().w(px(72.0)).flex_none().child(
+                MoonProgress::new(SharedString::from(format!("cs-update-progress-{ix}")))
+                    .value(outcome_progress_value(phase)),
+            ),
+        )
+        .into_any_element()
+}
+
+/// A live row whose outcome cell is the phase steps, with the existing phase sentence as hover.
+fn steps_row(
+    ix: usize,
+    time: impl Into<SharedString>,
+    core: impl Into<SharedString>,
+    server: impl Into<SharedString>,
+    from_to: impl Into<SharedString>,
+    target: impl Into<SharedString>,
+    phase: &CoreUpdatePhase,
+    duration: impl Into<SharedString>,
+) -> MoonDataRow {
+    let from_to: SharedString = from_to.into();
+    MoonDataRow::new([
+        MoonDataCell::text(time),
+        MoonDataCell::text(core),
+        MoonDataCell::text(server),
+        MoonDataCell::element(
+            div()
+                .id(SharedString::from(format!("cs-update-from-to-{ix}")))
+                .child(from_to.clone())
+                .tooltip(crate::panels::common::text_tooltip_value(from_to)),
+        ),
+        MoonDataCell::text(target),
+        MoonDataCell::element(outcome_cell(ix, phase)),
+        MoonDataCell::text(duration),
+    ])
 }
 
 /// Build one row for a closed history record.
@@ -154,6 +318,10 @@ fn history_row(
     record: &CoreUpdateRecord,
     server_names: &HashMap<IpAddr, String>,
     zone: chrono_tz::Tz,
+    is_newest: bool,
+    phase: Option<&CoreUpdatePhase>,
+    backend: &Entity<Backend>,
+    app: &App,
 ) -> MoonDataRow {
     let server = server_names
         .get(&record.lane_addr)
@@ -195,7 +363,63 @@ fn history_row(
         target_text(&record.target),
         outcome,
         duration,
+        if offer_history_retry(record, is_newest, phase) {
+            failed_retry(ix, record, backend, app)
+        } else {
+            None
+        },
     )
+}
+
+/// Whether a closed history row may draw the same retry the Flat version cell draws.
+///
+/// The button is offered only for a failed record that is that core's newest history entry
+/// while the core's current phase is still `Done(Failed)`. An older failure, or a core that
+/// has since succeeded, must not send an update the operator is not looking at.
+///
+/// Args:
+///     record: The closed history row.
+///     is_newest_for_core: Whether `record` is the first history entry for its core. History
+///         is newest-first, so that is the latest attempt.
+///     current_phase: The core's phase on the status row, or `None` when the core is gone.
+///
+/// Returns:
+///     Whether the history row may show the retry button.
+pub(super) fn offer_history_retry(
+    record: &CoreUpdateRecord,
+    is_newest_for_core: bool,
+    current_phase: Option<&CoreUpdatePhase>,
+) -> bool {
+    is_newest_for_core
+        && matches!(record.outcome, CoreUpdateOutcome::Failed(_))
+        && matches!(
+            current_phase,
+            Some(CoreUpdatePhase::Done(CoreUpdateOutcome::Failed(_)))
+        )
+}
+
+/// The same retry the Flat version cell draws, for one failed history row.
+fn failed_retry(
+    ix: usize,
+    record: &CoreUpdateRecord,
+    backend: &Entity<Backend>,
+    app: &App,
+) -> Option<(SharedString, AnyElement)> {
+    if !matches!(record.outcome, CoreUpdateOutcome::Failed(_)) {
+        return None;
+    }
+    let group = SharedString::from(format!("cs-update-retry-hover-{ix}"));
+    let button = core_update::update_button(
+        SharedString::from(format!("cs-update-retry-{}", record.core)),
+        group.clone(),
+        Rc::from([record.core]),
+        OfferCounts::default(),
+        Some(record.core),
+        backend,
+        MoonPalette::active(app),
+        app,
+    )?;
+    Some((group, button))
 }
 
 /// Assemble the final row from resolved column text, in the fixed column order.
@@ -220,9 +444,22 @@ fn cells(
     target: impl Into<SharedString>,
     outcome: impl Into<SharedString>,
     duration: impl Into<SharedString>,
+    retry: Option<(SharedString, AnyElement)>,
 ) -> MoonDataRow {
     let outcome: SharedString = outcome.into();
     let from_to: SharedString = from_to.into();
+    let mut outcome_host = div()
+        .id(SharedString::from(format!("cs-update-outcome-{ix}")))
+        .flex()
+        .items_center()
+        .min_w_0()
+        .gap_1()
+        .overflow_hidden()
+        .child(div().min_w_0().flex_1().truncate().child(outcome.clone()))
+        .tooltip(crate::panels::common::text_tooltip(outcome));
+    if let Some((group, button)) = retry {
+        outcome_host = outcome_host.group(group).child(button);
+    }
     MoonDataRow::new([
         MoonDataCell::text(time),
         MoonDataCell::text(core),
@@ -234,12 +471,7 @@ fn cells(
                 .tooltip(crate::panels::common::text_tooltip_value(from_to)),
         ),
         MoonDataCell::text(target),
-        MoonDataCell::element(
-            div()
-                .id(SharedString::from(format!("cs-update-outcome-{ix}")))
-                .child(outcome.clone())
-                .tooltip(crate::panels::common::text_tooltip(outcome)),
-        ),
+        MoonDataCell::element(outcome_host),
         MoonDataCell::text(duration),
     ])
 }
@@ -348,6 +580,78 @@ fn time_text(ms: i64, zone: chrono_tz::Tz) -> String {
     }
     let s = moon_core::util::display_time::format_minute(ms / 1000, zone);
     if s.is_empty() { "—".to_string() } else { s }
+}
+
+/// One slice of the version bar: a reported build, or the trailing "no build" bucket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct VersionShare {
+    /// Number and letter, the same split the build column paints. The unknown bucket is the
+    /// dash [`build_parts`] returns for a missing number.
+    pub(super) parts: BuildParts,
+    /// Cores in this slice.
+    pub(super) cores: usize,
+    /// This slice's number equals the newest build in play: the highest number anyone in
+    /// this scope reported, or any row's fleet-behind target, whichever is higher. A scope
+    /// whose local max is still behind that target flags nobody. The unknown bucket is
+    /// never newest. A letter does not rank: two letters on that number are both newest.
+    pub(super) newest: bool,
+}
+
+/// Group visible cores by the build they reported.
+///
+/// The group key is the number plus the trimmed letter from [`build_key`], so a blank suffix
+/// and a missing suffix share a slice and surrounding spaces do not split a letter. Higher
+/// numbers come first. The same number orders the bare build before letters, then letters
+/// lexicographically. Cores with no number form one bucket after every reported build.
+///
+/// Args:
+///     rows: Visible core snapshots. A retained build on a non-Ready core still counts: this
+///         groups what was reported, and the store is what clears a build.
+///
+/// Returns:
+///     Newest builds first, unknown bucket last when any core reported nothing. Empty when
+///     `rows` is empty.
+pub(super) fn version_distribution(rows: &[CoreStatusRow]) -> Vec<VersionShare> {
+    let mut groups: Vec<(u32, Option<String>, usize)> = Vec::new();
+    let mut unknown = 0usize;
+    for row in rows {
+        let Some(version) = row.server_version else {
+            unknown += 1;
+            continue;
+        };
+        let (number, tag) = build_key(version, row.server_version_suffix.as_deref());
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| group.0 == number && group.1 == tag)
+        {
+            group.2 += 1;
+        } else {
+            groups.push((number, tag, 1));
+        }
+    }
+    let local_max = groups.iter().map(|group| group.0).max();
+    let behind_target = rows.iter().filter_map(|row| row.version_behind).max();
+    let newest = match (local_max, behind_target) {
+        (Some(local), Some(target)) => Some(local.max(target)),
+        (local, target) => local.or(target),
+    };
+    groups.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut shares: Vec<VersionShare> = groups
+        .into_iter()
+        .map(|(version, tag, cores)| VersionShare {
+            parts: build_parts(Some(version), tag.as_deref()),
+            cores,
+            newest: Some(version) == newest,
+        })
+        .collect();
+    if unknown > 0 {
+        shares.push(VersionShare {
+            parts: build_parts(None, None),
+            cores: unknown,
+            newest: false,
+        });
+    }
+    shares
 }
 
 #[cfg(test)]

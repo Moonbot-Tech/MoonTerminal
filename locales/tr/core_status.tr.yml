@@ -2,26 +2,88 @@
 # rust-i18n `_version: 1` format: one language per file, flat dotted keys. Interpolation: %{var}.
 _version: 1
 
-# --- Top bar and footer ---
+# --- Top bar ---
 core_status.all_cores: "Tüm çekirdekler"
 core_status.cores_n: "Çekirdek: %{n}"
+# Short reason beside a problem core's name. `%{dur}` is the existing elapsed figure.
+core_status.row.reason_for: "%{reason} · %{dur}"
+# Exchange heading: count, median core ping, and how many are not Ready.
+# Turkish does not inflect the noun, so one/few/many share the same wording.
+core_status.section.aggregate_one: "%{n} çekirdek · ortanca ping %{ping} ms · %{k} bağlı değil"
+core_status.section.aggregate_few: "%{n} çekirdek · ortanca ping %{ping} ms · %{k} bağlı değil"
+core_status.section.aggregate_many: "%{n} çekirdek · ortanca ping %{ping} ms · %{k} bağlı değil"
+core_status.section.aggregate_ok_one: "%{n} çekirdek · ortanca ping %{ping} ms · hepsi bağlı"
+core_status.section.aggregate_ok_few: "%{n} çekirdek · ortanca ping %{ping} ms · hepsi bağlı"
+core_status.section.aggregate_ok_many: "%{n} çekirdek · ortanca ping %{ping} ms · hepsi bağlı"
+core_status.section.aggregate_nomed_one: "%{n} çekirdek · %{k} bağlı değil"
+core_status.section.aggregate_nomed_few: "%{n} çekirdek · %{k} bağlı değil"
+core_status.section.aggregate_nomed_many: "%{n} çekirdek · %{k} bağlı değil"
+core_status.section.aggregate_ok_nomed_one: "%{n} çekirdek · hepsi bağlı"
+core_status.section.aggregate_ok_nomed_few: "%{n} çekirdek · hepsi bağlı"
+core_status.section.aggregate_ok_nomed_many: "%{n} çekirdek · hepsi bağlı"
 # Hover on a Flat-view exchange heading while a column sort is on. MoonUI draws one unqualified
 # sort arrow for the whole table, so this is where the section-scoped meaning is spelled out.
 core_status.section_sort_hint: "Her borsanın içinde sıralı"
-core_status.cores: "Çekirdekler"
 core_status.empty: "Çekirdek verisi yok"
-core_status.mode.by_ip: "IP'ye göre"
-core_status.mode.flat: "Düz"
+core_status.mode.flat: "Çekirdekler"
+core_status.mode.servers: "Sunucular"
 core_status.mode.problems: "Sorunlar"
-core_status.mode.warnings: "Uyarılar"
+core_status.mode.warnings: "Alarmlar"
 core_status.mode.updates: "Güncellemeler"
-core_status.warn_empty: "Kayıtlı uyarı yok"
+core_status.mode.flat_short: "Çek."
+core_status.mode.servers_short: "Sun."
+core_status.mode.problems_short: "Sor."
+core_status.mode.warnings_short: "Alrm."
+core_status.mode.updates_short: "Gün."
+core_status.updates.behind_n: "Geride kalanları güncelle (%{n})"
+core_status.updates.legend_newest_one: "%{build} — %{n} çekirdek (en yeni)"
+core_status.updates.legend_newest_few: "%{build} — %{n} çekirdek (en yeni)"
+core_status.updates.legend_newest_many: "%{build} — %{n} çekirdek (en yeni)"
+core_status.updates.legend_build_one: "%{build} — %{n} çekirdek"
+core_status.updates.legend_build_few: "%{build} — %{n} çekirdek"
+core_status.updates.legend_build_many: "%{build} — %{n} çekirdek"
+core_status.updates.up_to_date_title: "Tüm çekirdekler en yeni derlemede"
+core_status.updates.up_to_date_body: "%{build}, çekirdekleriniz arasındaki en yeni derleme."
+core_status.updates.hint: "Güncelleme bir seferde bir sunucuda yürür; çekirdek yaklaşık 20 sn yeniden başlar."
+core_status.warn.where: "Nerede"
+core_status.empty.no_cores_title: "Henüz çekirdek yok"
+core_status.empty.no_cores_body: "Ayarlar → Çekirdekler bölümüne bir çekirdek ekleyin; bağlantısı, yükü ve sürümü burada görünür."
+core_status.empty.open_settings: "Ayarları aç"
+core_status.empty.no_problems_title: "Sorun yok"
+core_status.empty.no_problems_body: "%{n} çekirdeğin tümü çevrimiçi, ping normal, sürümler güncel."
+core_status.empty.no_alarms_title: "Son 24 saatte uyarı olmadı"
+core_status.empty.no_alarms_body: "CPU, ping, bellek ve API anahtarı eşikleri modların yanındaki dişliyle ayarlanır."
+core_status.servers.cpu: "CPU"
+core_status.servers.ram_free: "Boş RAM"
+core_status.search.placeholder: "Çekirdek, sunucu veya IP"
+core_status.columns.menu: "Sütunlar"
+core_status.health.verdict_bad: "Dikkat gerekiyor: %{n} / %{total}"
+core_status.health.verdict_ok_single: "Çekirdek bağlı"
+core_status.health.verdict_ok_one: "%{total} çekirdek bağlı"
+core_status.health.verdict_ok_few: "%{total} çekirdeğin tümü bağlı"
+core_status.health.verdict_ok_many: "%{total} çekirdeğin tümü bağlı"
+core_status.health.sub_online_one: "%{n} bağlı"
+core_status.health.sub_online_few: "%{n} bağlı"
+core_status.health.sub_online_many: "%{n} bağlı"
+core_status.health.sub_servers_one: "%{n} sunucu"
+core_status.health.sub_servers_few: "%{n} sunucu"
+core_status.health.sub_servers_many: "%{n} sunucu"
+core_status.health.chip_offline: "Çevrimdışı ve arızalar"
+core_status.health.chip_ping: "Çekirdek pingi normalin üzerinde ×%{k}"
+core_status.health.chip_version: "Sürüm geride"
+core_status.health.chip_api: "API anahtarının süresi doluyor"
+core_status.health.chip_alarms: "24 saatteki alarmlar"
+core_status.same.title: "Hepsi aynı:"
+core_status.same.tz_off: "UTC"
+core_status.same.cpus: "Mantıksal CPU"
+core_status.same.api_key: "API anahtarı"
+core_status.same.api_quota: "API kotası"
+core_status.same.version: "MoonBot"
 # Warnings-list columns.
 core_status.col.time: "Saat"
 core_status.col.dur: "Süre"
 core_status.col.type: "Tür"
 core_status.col.peak: "Zirve"
-core_status.footer: "Sunucu: %{servers}  Çekirdek: %{cores}  Çevrimiçi: %{online}"
 
 # --- Server tree ---
 core_status.server_n: "Sunucu %{n}"
@@ -56,12 +118,6 @@ core_status.col.version: "MoonBot"
 # server what the latest MoonBot is. Both numbers arrive as typed builds and are dotted by
 # `util::fmt::core_build` at the call site.
 core_status.version_behind: "Eski MoonBot derlemesi: %{have}. Çekirdekleriniz arasındaki en yeni: %{newest}"
-# The same fact on a COLLAPSED server row. It fires ONLY where the group is `Uniform` -- every core
-# on the server agreed on one build -- so it CAN name the "have", and that number is the one already
-# printed on the row. A `Mixed` group is never marked at all (its ellipsis states no build, so it
-# has none to be behind with), which is why this string must not tell the user to expand anything:
-# expanding a Uniform group reveals N cores all reporting the number they can already see.
-core_status.version_behind_group: "Bu sunucudaki tüm çekirdekler %{have} derlemesinde; daha yeni bir derleme var: %{newest}"
 core_status.col.api_key: "API (g)"
 # Hover for the infinity glyph this column prints for a key with no expiry date. The glyph itself
 # lives in `presentation.rs` (locales/README.md keeps glyphs out of translated values), so this is
@@ -80,18 +136,6 @@ core_status.col_tip.api_key: "Borsa API anahtarının bitmesine kalan gün"
 # second venue starts publishing a quota.
 core_status.col.api_quota: "API limiti"
 
-# --- By IP column header (the fixed caption row above the server tree) ---
-# CPU column: percentage plus the machine's logical-core count in parentheses.
-core_status.hdr.cpu: "CPU (çekirdek)"
-# Memory column: free share and the reconstructed total RAM.
-core_status.hdr.mem: "Boş bellek"
-# IP column heading (the abbreviation is identical across locales).
-core_status.hdr.ip: "IP"
-# Hover on a By-IP column divider. It has to name the double-click gestures: nothing else in the
-# panel advertises them, and the Shift variant is the only reset a detached window offers.
-core_status.col_resize: "Boyutlandırmak için sürükleyin. Çift tık bu sütunu sıfırlar, Shift+çift tık tümünü sıfırlar"
-# API-key column heading in the By-IP tree; carries the unit its cells omit.
-core_status.hdr.api_key: "API (g)"
 # The same axis named as a KIND in the Warnings episode list, where no unit belongs.
 core_status.axis_api: "API"
 # Unit for a request count in the Warnings peak column.
@@ -290,8 +334,6 @@ core_status.fault.f.core: "Çekirdek"
 core_status.col.problem_category: "Kategori"
 core_status.col.problem_kind: "Tür"
 core_status.col.problem_title: "Sorun"
-# Shown only when EVERY core in scope delivered a list and all of them were empty.
-core_status.problems_empty: "Çekirdekler sorun bildirmiyor"
 # Shown when at least one core has never delivered a list — it is older than the extension, or its
 # list has not arrived yet. Deliberately NOT phrased as a clean bill: an absent list is not proof
 # that a core is healthy.

@@ -94,6 +94,31 @@ impl CoreStatusView {
             .count()
     }
 
+    /// Count distinct cores in the effective scope that currently confirm a finding.
+    ///
+    /// This is the Problems segment count. It is not the unseen badge and not the capped list:
+    /// a core counts once when its findings are supported and the list is not empty, which is
+    /// when [`problems::extend_supported`] would append at least one finding.
+    ///
+    /// Args:
+    ///     b: Backend snapshot holding the store.
+    ///
+    /// Returns:
+    ///     How many cores in scope have a supported, non-empty findings list.
+    pub(super) fn count_problem_cores(&self, b: &Backend) -> usize {
+        self.effective_scope(b)
+            .ids()
+            .iter()
+            .copied()
+            .filter(|core| {
+                let Some(data) = b.session.store().core(*core) else {
+                    return false;
+                };
+                data.problems.supported && !data.problems.items.is_empty()
+            })
+            .count()
+    }
+
     /// Record the findings on screen as looked at.
     ///
     /// Driven by the ROWS being drawn rather than by the store, so the list cap cannot consume a
@@ -169,7 +194,7 @@ impl CoreStatusView {
         }
     }
 
-    /// Build this panel's scope marker for the footer and empty-state text.
+    /// Build this panel's scope marker for the health strip and empty-state text.
     ///
     /// Args:
     ///     b: Backend snapshot containing workspace authority and live group membership.

@@ -37,13 +37,13 @@ fn core_status_flat_cells_apply_the_shared_level_colour() {
     let table = read_src("panels/core_status/table.rs");
     let row = code_only(braced_body(&table, "fn core_status_row("));
     let classified_arms = [
-        "\"status\" => MoonDataCell::element(status_cell(r, diag.as_ref()))\n            .text_color(level_color(status_level(&r.status), p)),",
-        "\"cpu_proc\" => MoonDataCell::text(percent(sys.process_cpu_percent))\n            .text_color(level_color(cpu_level(sys.process_cpu_percent), p)),",
-        "\"cpu_sys\" => MoonDataCell::text(percent(sys.system_cpu_percent))\n            .text_color(level_color(cpu_level(sys.system_cpu_percent), p)),",
-        "\"free_phys\" => MoonDataCell::text(memory_u16(sys.free_physical_memory_mb))\n            .text_color(level_color(free_mem_level(sys.free_physical_memory_mb), p)),",
-        "\"ping\" => MoonDataCell::text(ping(sys.round_trip_ms))\n            .text_color(level_color(lat_level(r.ping_sev), p)),",
-        "\"ping_exch\" => MoonDataCell::text(ping(sys.order_api_latency_ms.map(u32::from)))\n            .text_color(level_color(lat_level(r.exch_sev), p)),",
-        "\"api_quota\" => MoonDataCell::text(api_quota_text(r.api_quota)).text_color(level_color(\n            api_quota_level(r.api_quota, r.api_quota_warn),\n            p,\n        )),",
+        "\"status\" => status_dot_cell(r, level_color(status_level(&r.status), p), offline, p),",
+        "\"cpu_proc\" => cpu_bar_cell(r, \"proc\", sys.process_cpu_percent, cell_text_for(r, \"cpu_proc\"), level_color(cpu_level(sys.process_cpu_percent), p), offline, p, app),",
+        "\"cpu_sys\" => cpu_bar_cell(r, \"sys\", sys.system_cpu_percent, cell_text_for(r, \"cpu_sys\"), level_color(cpu_level(sys.system_cpu_percent), p), offline, p, app),",
+        "\"free_phys\" => metric_cell(cell_text_for(r, \"free_phys\"), level_color(free_mem_level(sys.free_physical_memory_mb), p), offline, p, SharedString::from(format!(\"cs-free-{}\", r.id)), MetricAlign::End),",
+        "\"ping\" => metric_cell(cell_text_for(r, \"ping\"), level_color(ping_cell_level(r.ping_warn, r.ping_sev), p), offline, p, SharedString::from(format!(\"cs-ping-{}\", r.id)), MetricAlign::End),",
+        "\"ping_exch\" => metric_cell(cell_text_for(r, \"ping_exch\"), level_color(lat_level(r.exch_sev), p), offline, p, SharedString::from(format!(\"cs-exch-{}\", r.id)), MetricAlign::End),",
+        "\"api_quota\" => metric_cell(cell_text_for(r, \"api_quota\"), level_color(api_quota_level(r.api_quota, r.api_quota_warn), p), offline, p, SharedString::from(format!(\"cs-quota-{}\", r.id)), MetricAlign::Center),",
     ];
 
     for arm in classified_arms {
@@ -108,53 +108,89 @@ fn core_status_flat_visibility_contract_has_one_shared_visible_key_projection() 
     );
 }
 
-/// `mod.rs:CoreStatusView::render` must use attention order when a saved API sort targets a hidden
-/// column while leaving that saved preference untouched. Applying the absent sort makes rows appear
-/// to move for no visible header; deleting it discards the user's choice when data returns.
+/// A saved sort whose column is hidden falls back inside the one projection, and render does
+/// not write that preference. Applying the absent sort makes rows appear to move for no visible
+/// header; deleting it discards the user's choice when the column comes back.
 ///
-/// Mutation: force the saved-sort branch after an API column is hidden. The render helper would
-/// apply invisible ordering instead of the independent default attention order without writing a
-/// replacement preference.
+/// Mutation: sort by the hidden key inside `project_rows`, or assign `self.flat_sort` from
+/// `render`. The rows would follow a column that is not on screen, or the saved choice would
+/// be gone when the column returns.
 #[test]
 fn core_status_hidden_api_sort_contract_falls_back_without_erasing_preference() {
+    let cache = read_src("panels/core_status/cache.rs");
+    let project = code_only(braced_body(&cache, "pub(super) fn project_rows("));
+    let sort_rows = code_only(braced_body(&cache, "fn sort_flat_rows("));
+    let flat = code_only(braced_body(&cache, "pub(super) fn flat_view("));
+    assert!(
+        project.contains(".filter(|(key, _)| visible_columns.contains(&key.as_str()))")
+            && sort_rows.contains("model::ordered_flat_rows(rows)")
+            && flat.contains("project_rows("),
+        "a hidden sort column falls back to attention order inside the projection"
+    );
+
     let panel = read_src("panels/core_status/render.rs");
     let render = code_only(braced_body(&panel, "fn render("));
-
-    assert!(
-        render.contains(".is_none_or(|(key, _)| column_keys.contains(&key.as_str()))")
-            && render.contains("let (flat_rows, flat_lines) = if saved_sort_visible {")
-            && render.contains("let flat_rows = model::ordered_flat_rows(&rows);"),
-        "an absent saved API sort must select the default attention order"
-    );
     assert!(
         !render.contains("self.flat_sort =")
             && !render.contains("table_persist::set_sort(")
-            && !render.contains("self.set_flat_sort("),
+            && !render.contains("self.set_flat_sort(")
+            && !render.contains("if saved_sort_visible"),
         "rendering an invisible sort must not rewrite the persisted preference"
     );
 }
 
-/// `server_view.rs:grouped_server_view` and `table.rs:core_status_table` must accept the
-/// caller-owned backend rather than synchronously reading `CoreStatusView` while its render is
-/// updating. Restoring either entity read panics when Core Status opens and terminates the process.
+/// Servers, Flat, the health strip, the mode bar, and the Updates pane must not synchronously
+/// read `CoreStatusView` while its render is updating. Restoring that entity read panics when
+/// Core Status opens and terminates the process. The Flat table still takes the caller-owned
+/// backend. The card grid does not: its caller hands the groups in.
 #[test]
 fn core_status_render_helpers_never_read_their_own_view_entity() {
-    let server_view = read_src("panels/core_status/server_view.rs");
-    let grouped = code_only(braced_body(
-        &server_view,
-        "pub(super) fn grouped_server_view(",
-    ));
+    let servers = read_src("panels/core_status/servers_view.rs");
+    let servers_view = code_only(braced_body(&servers, "pub(super) fn servers_view("));
     let table = read_src("panels/core_status/table.rs");
     let flat = code_only(braced_body(&table, "pub(super) fn core_status_table("));
+    let strip_src = read_src("panels/core_status/health_strip.rs");
+    let strip = code_only(braced_body(&strip_src, "pub(super) fn health_strip("));
+    let bar_src = read_src("panels/core_status/core_bar.rs");
+    let bar = code_only(braced_body(&bar_src, "pub(super) fn core_bar("));
+    let updates_src = read_src("panels/core_status/updates_pane.rs");
+    let updates = code_only(braced_body(&updates_src, "pub(super) fn updates_pane("));
 
     assert!(
-        grouped.contains("backend: &Entity<Backend>") && !grouped.contains("cx.entity().read(cx)"),
-        "the By-IP render helper must use its handed-in backend without reading CoreStatusView"
+        !servers_view.contains("cx.entity().read(cx)"),
+        "the Servers render helper must not read CoreStatusView"
     );
     assert!(
         flat.contains("backend: &Entity<Backend>")
             && !flat.contains("view.read(cx)")
             && !flat.contains("cx.entity().read(cx)"),
         "the Flat render helper must use its handed-in backend without synchronously reading its view"
+    );
+    for (name, body) in [
+        ("health_strip", strip.as_str()),
+        ("core_bar", bar.as_str()),
+        ("updates_pane", updates.as_str()),
+    ] {
+        assert!(
+            !body.contains("cx.entity().read(cx)"),
+            "{name} must not read CoreStatusView while it renders"
+        );
+    }
+}
+
+/// `updates_pane` must choose its blocks through `updates_blocks` and must not compute a
+/// caught-up boolean beside that call. A local `caught_up` flag drifts from the block enum and
+/// paints the empty state on a pane that still has history.
+#[test]
+fn updates_pane_delegates_caught_up_to_updates_blocks() {
+    let updates_src = read_src("panels/core_status/updates_pane.rs");
+    let updates = code_only(braced_body(&updates_src, "pub(super) fn updates_pane("));
+    assert!(
+        updates.contains("updates_blocks("),
+        "updates_pane must call updates_blocks"
+    );
+    assert!(
+        !updates.contains("let caught_up") && !updates.contains("caught_up:"),
+        "updates_pane must not compute a caught_up boolean outside updates_blocks"
     );
 }

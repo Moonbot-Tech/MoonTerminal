@@ -79,18 +79,14 @@ impl Panel for CoreStatusView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Vec<AnyElement>> {
-        // ONE button, pointed at whatever grid the panel is currently showing: a user sees one set
-        // of columns and expects one reset. By IP has its own width bag because it is a tree, not
-        // the flat table.
+        // ONE button, pointed at whatever grid the panel is currently showing. Servers is a card
+        // grid with nothing to reset, so the button is absent there.
         //
         // The DETACHED window does not come through here. `panels/registry.rs` resolves
         // `table_state()` ONCE at window construction into `DetachedContent.widths_reset`, so its
-        // header button keeps resetting the flat table whatever the mode; there, By-IP reset is
-        // reachable by double-clicking a divider (Shift+double-click for all of them). Fixing that
-        // means giving `widths_reset` a closure instead of an entity, which is a change to two
-        // files outside this panel.
+        // header button keeps resetting the flat table whatever the mode.
         let state = match self.mode {
-            CoreStatusMode::ByIp => &self.by_ip_col_widths,
+            CoreStatusMode::Servers => return None,
             CoreStatusMode::Flat => &self.table_state,
             // Warnings is its OWN table with its own widths (`warnings_table` is handed
             // `warn_table_state`), so it must not be folded in with Flat: doing that resets the
