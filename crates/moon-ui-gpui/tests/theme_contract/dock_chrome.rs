@@ -208,10 +208,7 @@ fn every_data_table_applies_the_chrome_header_style() {
             "panels/core_status/updates_list.rs",
             "pub(super) fn updates_table(",
         ),
-        (
-            "panels/core_status/warnings.rs",
-            "pub(super) fn warnings_table(",
-        ),
+        ("panels/core_status/warnings.rs", "fn alarms_table("),
         ("panels/orders/table.rs", "pub(super) fn orders_table("),
         ("panels/report/render.rs", "pub(super) fn table_el("),
         ("screener/view.rs", "fn table(&self, cx: &Context<Self>)"),

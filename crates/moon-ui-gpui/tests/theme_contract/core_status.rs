@@ -193,3 +193,58 @@ fn updates_pane_delegates_caught_up_to_updates_blocks() {
         "updates_pane must not compute a caught_up boolean outside updates_blocks"
     );
 }
+
+/// `panels/core_status/**` must keep pointer hover out of view state. GPUI already repaints the
+/// whole panel on every `.hover()` row transition and scroll tick; a hover tracked in a
+/// `CoreStatusView` field through `on_hover` / `on_mouse_move` and `cx.notify()` adds a full
+/// panel rebuild per mouse move on top. Mutation: add a `hovered_row` field written from a row's
+/// `on_hover` listener; the Alarms and Flat lists stutter again under a moving mouse.
+#[test]
+fn core_status_keeps_hover_out_of_view_state() {
+    let panel = code_only(&read_module("panels/core_status"));
+    for forbidden in [".on_hover(", ".on_mouse_move("] {
+        assert!(
+            !panel.contains(forbidden),
+            "Core Status must style hover with `.hover()`, not track it through `{forbidden}`"
+        );
+    }
+    let view_src = read_src("panels/core_status/mod.rs");
+    let view = code_only(braced_body(&view_src, "pub struct CoreStatusView"));
+    assert!(
+        !view.to_lowercase().contains("hover"),
+        "CoreStatusView must not hold a hover field"
+    );
+}
+
+/// `render.rs` must draw the Alarms list from the cache `rebuild_cache` fills, never query it.
+/// Every row hover transition and scroll tick re-runs `render`, so a
+/// `warn_episodes_recent_for_scope` call there is a SQLite query of up to 500 rows per mouse
+/// move. Mutation: move the query back into the Warnings arm; scrolling the Alarms view stutters.
+#[test]
+fn core_status_render_never_queries_the_alarms_store() {
+    let render = code_only(&read_src("panels/core_status/render.rs"));
+    assert!(
+        !render.contains("warn_episodes_recent_for_scope"),
+        "the Warnings arm must read the cached alarms list, not query the store per repaint"
+    );
+    let cache = code_only(&read_src("panels/core_status/cache.rs"));
+    assert!(
+        cache.contains("warn_episodes_recent_for_scope") && cache.contains("AlarmsList::new("),
+        "rebuild_cache must own the one alarms query and build the cached list from it"
+    );
+}
+
+/// The Alarms table must carry the always-visible vertical bar. `MoonDataTable`'s own bar is
+/// opaque only while the pointer is on its track, which on a 500-row log reads as no scrollbar.
+/// Mutation: drop `.track_scroll(scroll)` or switch the overlay to `Hover`; the bar disappears or
+/// stops following the rows.
+#[test]
+fn core_status_alarms_table_has_an_always_visible_vertical_bar() {
+    let warnings = read_src("panels/core_status/warnings.rs");
+    let table = code_only(braced_body(&warnings, "fn alarms_table("));
+    assert!(table.contains(".track_scroll(scroll)") && table.contains("vertical_bar("));
+    let bar = code_only(braced_body(&warnings, "fn vertical_bar("));
+    assert!(
+        bar.contains("MoonScrollAxis::Vertical") && bar.contains("MoonScrollbarVisibility::Always")
+    );
+}

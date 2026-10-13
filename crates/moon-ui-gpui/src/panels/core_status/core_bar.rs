@@ -7,8 +7,6 @@ use super::table;
 use super::{CoreStatusMode, CoreStatusView};
 use crate::design;
 use gpui::*;
-use moon_core::session::CoreId;
-use moon_core::session::core_order::OrderedCores;
 use moon_ui::{
     MoonButton, MoonButtonSize, MoonButtonVariant, MoonDropdown, MoonInput, MoonMenuItem,
     MoonPalette, MoonSegmentItem, MoonSegmentSelection, MoonSegmentedControl, MoonTone, h_flex,
@@ -25,7 +23,7 @@ impl CoreStatusView {
     /// narrow; it does not clip.
     ///
     /// Args:
-    ///     cores: Group cores in canonical display order.
+    ///     scope: Memoized toolbar scope: picker cores, effective selection and pinned label.
     ///     hidden: Column ids unchecked in the Columns menu, read once for this frame.
     ///     cx: View context used to read exchanges and wire selection callbacks.
     ///
@@ -33,42 +31,21 @@ impl CoreStatusView {
     ///     The toolbar row.
     pub(super) fn core_bar(
         &self,
-        cores: &OrderedCores,
+        scope: &super::frame_cache::ScopeModel,
         hidden: &HashSet<String>,
         segments: &super::health::SegmentCounts,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let scope = self.effective_scope(self.backend.read(cx));
-        let workspace_owned = scope.is_workspace_owned();
-        let effective_selection: HashSet<CoreId> = scope.ids().iter().copied().collect();
-        let pinned_label = match scope.label() {
-            crate::workspace::EffectiveScopeLabel::Overview => {
-                Some(t!("workspace.overview").to_string())
-            }
-            crate::workspace::EffectiveScopeLabel::Core(core) => cores
-                .iter()
-                .find(|(id, _)| *id == core)
-                .map(|(_, name)| name.clone()),
-            crate::workspace::EffectiveScopeLabel::All
-            | crate::workspace::EffectiveScopeLabel::Selection(_) => None,
-        };
+        let cores = &scope.cores;
+        let workspace_owned = scope.workspace_owned;
         let selection = if workspace_owned {
-            &effective_selection
+            &scope.effective_selection
         } else {
             &self.sel_cores
         };
         let combo: AnyElement = if workspace_owned {
             let p = MoonPalette::active(cx);
-            let label = pinned_label.unwrap_or_else(|| {
-                crate::controls::core_selection_summary(
-                    cores,
-                    selection,
-                    crate::controls::CoreAllRowMode::ImplicitOrComplete,
-                    t!("core_status.all_cores").as_ref(),
-                    &|n| t!("core_status.cores_n", n = n).to_string(),
-                )
-                .label
-            });
+            let label = scope.owned_label.clone().unwrap_or_default();
             let width = px(crate::controls::pinned_scope_width(
                 cx,
                 &label,

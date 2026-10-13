@@ -9,8 +9,12 @@ use std::net::IpAddr;
 use std::rc::Rc;
 
 use moon_core::session::CoreId;
-use moon_ui::{MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn};
+use moon_ui::{
+    MoonDataCell, MoonDataRow, MoonDataTable, MoonDataTableColumn, MoonScrollAxis,
+    MoonScrollbarVisibility, MoonVirtualListScrollHandle, moon_scrollbar_overlay_with_palette,
+};
 
+use super::model::ServerStatusGroup;
 use super::*;
 use crate::backend::core_warn::{WarnAxis, WarnEpisode};
 
@@ -39,43 +43,94 @@ fn columns() -> Vec<MoonDataTableColumn> {
     ]
 }
 
+/// Alarms list inputs, resolved once per panel cache rebuild rather than on every repaint.
+///
+/// The panel repaints on every row hover transition and every scroll tick (GPUI notifies the
+/// view that built a `.hover()` row), so nothing here may be derived in `render`: the episodes
+/// come from a SQLite query, and the name maps scan every server.
+#[derive(Default)]
+pub(super) struct AlarmsList {
+    /// Episodes in display order (open first, then newest), capped at `WARN_LIST_LIMIT`.
+    pub(super) episodes: Rc<Vec<WarnEpisode>>,
+    /// Server display name per endpoint IP seen in [`Self::episodes`].
+    pub(super) server_names: Rc<HashMap<IpAddr, String>>,
+    /// Core display name per configured core id.
+    pub(super) core_names: Rc<HashMap<CoreId, String>>,
+}
+
+impl AlarmsList {
+    /// Resolve display names for a freshly queried episode list.
+    ///
+    /// Args:
+    ///     episodes: Episodes in display order.
+    ///     groups: Current server groups; a connected group's name wins.
+    ///     saved_names: Saved custom server names keyed by IP text, the fallback.
+    ///     core_names: Display name per configured core id.
+    ///
+    /// Returns:
+    ///     The list with every server IP resolved to a display name, never the raw IP.
+    pub(super) fn new(
+        episodes: Vec<WarnEpisode>,
+        groups: &[ServerStatusGroup],
+        saved_names: &HashMap<String, String>,
+        core_names: HashMap<CoreId, String>,
+    ) -> Self {
+        let server_names: HashMap<IpAddr, String> = episodes
+            .iter()
+            .filter_map(|episode| episode.server_ip)
+            .map(|ip| {
+                let name = groups
+                    .iter()
+                    .find(|group| group.address == Some(ip))
+                    .map(|group| group.display_name.clone())
+                    .or_else(|| saved_names.get(&ip.to_string()).cloned())
+                    .unwrap_or_else(|| "—".to_string());
+                (ip, name)
+            })
+            .collect();
+        Self {
+            episodes: Rc::new(episodes),
+            server_names: Rc::new(server_names),
+            core_names: Rc::new(core_names),
+        }
+    }
+}
+
 /// Render the warning-episode list table.
 ///
 /// Args:
 ///     id: Stable table element identity.
-///     episodes: Episodes in display order (open first, then newest).
-///     server_names: Server display name per endpoint IP.
-///     core_names: Core display name per core id.
+///     list: Cached episodes and their resolved names.
 ///     state: Persisted table interaction state.
+///     scroll: Row scroll handle shared with the always-visible vertical scrollbar.
 ///     zone: User-selected display time zone.
 ///     now_ms: Injected clock for an episode that is still open.
-///     cx: Panel context.
+///     window: Host window; the scrollbar keeps its drag state there.
+///     cx: Application context.
 ///
 /// Returns:
 ///     The alarms table, or the title-and-body empty state when there are no episodes.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn warnings_table(
     id: &'static str,
-    episodes: Rc<Vec<WarnEpisode>>,
-    server_names: Rc<HashMap<IpAddr, String>>,
-    core_names: Rc<HashMap<CoreId, String>>,
+    list: &AlarmsList,
     state: &Entity<MoonDataTableState>,
+    scroll: &MoonVirtualListScrollHandle,
     zone: chrono_tz::Tz,
     now_ms: i64,
-    cx: &Context<CoreStatusView>,
+    window: &mut Window,
+    cx: &mut App,
 ) -> AnyElement {
-    if episodes.is_empty() {
+    if list.episodes.is_empty() {
         return alarms_empty(cx).into_any_element();
     }
-    let row_count = episodes.len();
-    let p = MoonPalette::active(cx);
-
-    crate::panels::common::data_table_host(
-        SharedString::from(format!("{id}-host")),
-        false,
-        String::new(),
-        p,
-        cx,
-        MoonDataTable::new(id, row_count, move |ix, _window, app| {
+    let episodes = list.episodes.clone();
+    let server_names = list.server_names.clone();
+    let core_names = list.core_names.clone();
+    alarms_table(
+        id,
+        episodes.len(),
+        move |ix, _window, app| {
             warn_row(
                 &episodes[ix],
                 &server_names,
@@ -85,12 +140,117 @@ pub(super) fn warnings_table(
                 MoonPalette::active(app),
                 app,
             )
-        })
-        .columns(columns())
-        .state(state)
-        .style(design::table_style(p)),
+        },
+        state,
+        scroll,
+        window,
+        cx,
     )
-    .into_any_element()
+}
+
+/// Host the alarms rows in a virtualized table with an always-visible vertical scrollbar.
+///
+/// `MoonDataTable`'s own vertical bar is opaque only while the pointer is on its track, which on
+/// a 500-row log reads as no scrollbar at all. The overlay drawn here is the `Always` bar other
+/// long lists in the app use, tracking the same row scroll handle.
+///
+/// Args:
+///     id: Stable table element identity.
+///     row_count: Number of rows; only the visible ones are built.
+///     render_row: Builds one row by index.
+///     state: Persisted table interaction state.
+///     scroll: Row scroll handle the table and the bar share.
+///     window: Host window.
+///     cx: Application context.
+///
+/// Returns:
+///     The hosted table.
+fn alarms_table(
+    id: &'static str,
+    row_count: usize,
+    render_row: impl Fn(usize, &mut Window, &mut App) -> MoonDataRow + 'static,
+    state: &Entity<MoonDataTableState>,
+    scroll: &MoonVirtualListScrollHandle,
+    window: &mut Window,
+    cx: &mut App,
+) -> AnyElement {
+    let p = MoonPalette::active(cx);
+    let bar = vertical_bar(id, scroll, window, cx);
+    div()
+        .relative()
+        .flex_1()
+        .w_full()
+        .min_h(px(0.0))
+        .flex()
+        .flex_col()
+        .child(crate::panels::common::data_table_host(
+            SharedString::from(format!("{id}-host")),
+            false,
+            String::new(),
+            p,
+            cx,
+            MoonDataTable::new(id, row_count, render_row)
+                .columns(columns())
+                .state(state)
+                .track_scroll(scroll)
+                .style(design::table_style(p)),
+        ))
+        .children(bar)
+        .into_any_element()
+}
+
+/// Always-visible vertical scrollbar over the table body, below its header.
+///
+/// The overlay reads geometry the list writes during its own prepaint, so the first frame has
+/// none; one extra frame is requested ONCE so the bar does not wait for the next repaint, and
+/// a list that legitimately has no height cannot pin the window at 60 Hz.
+///
+/// Args:
+///     id: Table id the bar's own ids derive from.
+///     scroll: Row scroll handle the table tracks.
+///     window: Host window holding the bar's drag state.
+///     cx: Application context.
+///
+/// Returns:
+///     The positioned bar layer; it paints a track and thumb only while the rows overflow.
+fn vertical_bar(
+    id: &'static str,
+    scroll: &MoonVirtualListScrollHandle,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<AnyElement> {
+    let p = MoonPalette::active(cx);
+    let base = scroll.0.borrow().base_handle.clone();
+    let primed = window.use_keyed_state(
+        ElementId::from(SharedString::from(format!("{id}:vbar-primed"))),
+        cx,
+        |_, _| false,
+    );
+    if base.bounds().size.height == px(0.0) && !*primed.read(cx) {
+        primed.update(cx, |primed, _| *primed = true);
+        window.request_animation_frame();
+    }
+    let head_h = design::table_head_h(cx);
+    moon_scrollbar_overlay_with_palette(
+        format!("{id}:vbar"),
+        &base,
+        MoonScrollAxis::Vertical,
+        MoonScrollbarVisibility::Always,
+        p,
+        window,
+        cx,
+    )
+    .map(|bar| {
+        div()
+            .id(SharedString::from(format!("{id}:vbar-box")))
+            .absolute()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .top(px(head_h))
+            .child(bar)
+            .into_any_element()
+    })
 }
 
 /// Title and body shown when the last 24 hours recorded nothing.

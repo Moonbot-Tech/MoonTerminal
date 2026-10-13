@@ -12,7 +12,7 @@ use super::health::{self, HealthFilter};
 use super::mode::WARN_LIST_LIMIT;
 use super::model::{self, CoreStatusRow, ServerKey, ServerStatusGroup, aggregate_servers};
 use super::ordering::{self, assign_server_names, compare_flat_rows, natural_cmp};
-use super::{CoreStatusView, table, uniform};
+use super::{CoreStatusView, table, uniform, warnings};
 use crate::Backend;
 use moon_core::feed::ConnStatus;
 use moon_core::session::{CoreId, CoreStartupStatus, CoreSysStatus};
@@ -70,6 +70,10 @@ pub(super) struct FlatViewCache {
     query: String,
     ip_masked: bool,
     rows: Option<Rc<Vec<CoreStatusRow>>>,
+    /// Exchange heading and member lines over `rows`, built on the first render after `rows`
+    /// changes and dropped with them. Venues ride the same snapshot: the session's venue map
+    /// moves only with a backend notify, which also rebuilds the snapshot.
+    lines: Option<Rc<Vec<ordering::FlatLine>>>,
     /// Uniform facts for the filtered projection. Keyed by generation, chip, search, and the
     /// IP mask. Sort is not part of the key: agreement does not depend on row order.
     uniform: Option<(
@@ -122,6 +126,7 @@ impl FlatViewCache {
         self.query = query.to_string();
         self.ip_masked = ip_masked;
         self.rows = Some(rows.clone());
+        self.lines = None;
         rows
     }
 
@@ -468,7 +473,7 @@ impl CoreStatusView {
         // Recounted with the rest of the cache, not inside `title_suffix`: the dock asks that on a
         // per-frame path, and it must read a field rather than walk the fleet's findings.
         self.unseen_problems = self.count_unseen_problems(backend.read(cx));
-        let (groups, rows, alarm_starts) = {
+        let (groups, rows, alarm_starts, alarms) = {
             let b = backend.read(cx);
             // From the STORE, not the (possibly scoped) collected rows: a panel scoped to a subset
             // of the fleet must not compute a lower maximum and silently flag nothing, and two Core
@@ -497,15 +502,28 @@ impl CoreStatusView {
             let core_ids: HashSet<CoreId> = scope.ids().iter().copied().collect();
             let server_addresses: HashSet<IpAddr> =
                 groups.iter().filter_map(|group| group.address).collect();
-            // Same list the Warnings view draws, capped once. The strip counts starts inside
-            // 24 hours; an episode that is still open but started earlier does not count.
-            let alarm_starts: Vec<i64> = b
-                .warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT)
+            // The one query for the list the Warnings view draws, capped once. The strip counts
+            // starts inside 24 hours; an episode that is still open but started earlier does not
+            // count. Resolved here rather than in `render`, which runs on every row hover
+            // transition and scroll tick.
+            let episodes =
+                b.warn_episodes_recent_for_scope(&core_ids, &server_addresses, WARN_LIST_LIMIT);
+            let alarm_starts: Vec<i64> = episodes.iter().map(|episode| episode.start_ms).collect();
+            let core_names: HashMap<CoreId, String> = b
+                .config
+                .servers
                 .iter()
-                .map(|episode| episode.start_ms)
+                .map(|server| (server.id, server.name.clone()))
                 .collect();
-            (groups, rows, alarm_starts)
+            let alarms = warnings::AlarmsList::new(
+                episodes,
+                &groups,
+                &b.layout.core_server_names,
+                core_names,
+            );
+            (groups, rows, alarm_starts, alarms)
         };
+        self.alarms = alarms;
         self.has_warn = groups.iter().any(|group| group.has_warn());
         replace_snapshots(
             &mut self.cached_rows,
@@ -606,16 +624,35 @@ impl CoreStatusView {
         };
         // One list for the header and every row. The drag map is read inside this block so the
         // borrow ends before the venue read below. Width 0 (not measured yet) keeps every key.
-        let visible = {
-            let dragged = &self.table_state.read(cx).column_widths;
-            table::projected_column_keys(
-                &self.cached_rows,
-                hidden,
-                &uniform_keys,
-                dragged,
-                self.flat_measured_w,
-                &floors,
-            )
+        // Keyed on every input but the rows, which the generation stands for. The dragged widths
+        // and the measured width move during a column drag; the rest only with the snapshot.
+        let columns_key = super::frame_cache::ColumnsKey {
+            generation,
+            hidden: hidden.clone(),
+            uniform: uniform.iter().map(|fact| fact.key).collect(),
+            dragged: self.table_state.read(cx).column_widths.clone(),
+            measured_w_bits: self.flat_measured_w.to_bits(),
+            locale,
+        };
+        let cached_columns = self.frame.borrow_mut().columns.cached(&columns_key);
+        let visible: Vec<&'static str> = match cached_columns {
+            Some(columns) => columns.as_ref().clone(),
+            None => {
+                let built = table::projected_column_keys(
+                    &self.cached_rows,
+                    hidden,
+                    &uniform_keys,
+                    &columns_key.dragged,
+                    self.flat_measured_w,
+                    &floors,
+                );
+                self.frame
+                    .borrow_mut()
+                    .columns
+                    .store(columns_key, built)
+                    .as_ref()
+                    .clone()
+            }
         };
         let sort = self
             .flat_sort
@@ -663,9 +700,16 @@ impl CoreStatusView {
                 )
             }
         };
-        let backend = self.backend.read(cx);
-        let venues = backend.session.core_venues();
-        let lines = Rc::new(ordering::flat_lines(&rows, venues));
+        let cached_lines = self.flat_cache.borrow().lines.clone();
+        let lines = match cached_lines {
+            Some(lines) => lines,
+            None => {
+                let venues = self.backend.read(cx).session.core_venues();
+                let lines = Rc::new(ordering::flat_lines(&rows, venues));
+                self.flat_cache.borrow_mut().lines = Some(lines.clone());
+                lines
+            }
+        };
         (rows, lines, visible)
     }
 

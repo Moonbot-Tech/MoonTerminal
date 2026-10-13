@@ -11,7 +11,7 @@ use super::presentation::{LoadLevel, status_level};
 
 /// Whole day, in milliseconds. The alarm window is open on the left: a start exactly this far
 /// before `now` is already outside it.
-const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+pub(super) const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// One health-strip chip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
