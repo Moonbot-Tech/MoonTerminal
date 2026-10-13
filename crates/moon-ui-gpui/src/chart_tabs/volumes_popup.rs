@@ -407,7 +407,7 @@ fn render_volumes_popup<T: VolumesPopupHost>(
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(WINDOW_DD_W)
-            .menu_width_scaled(WINDOW_DD_W + 24.0)
+            .fit_menu_width(WINDOW_DD_W + 24.0, 560.0)
             .items(items);
         h_flex()
             .w_full()

@@ -18,9 +18,6 @@ use crate::Backend;
 use crate::panels::registry;
 use moon_core::config::TabBadgeSettings;
 
-/// Width of the tab menu, wide enough for the longest localized label without wrapping.
-const MENU_WIDTH: f32 = 240.0;
-
 /// Open the right-click menu for `panel` at `position`, or do nothing when it has no menu.
 pub(crate) fn open(
     panel: &str,
@@ -33,14 +30,29 @@ pub(crate) fn open(
     if items.is_empty() {
         return;
     }
-    window.open_moon_context_menu(
+    open_items(panel, position, items, window, cx);
+}
+
+/// Fit the tab's localized switches while retaining the previous minimum width.
+fn open_items(
+    panel: &str,
+    position: Point<Pixels>,
+    items: Vec<MoonMenuItem>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_fitted_moon_context_menu(
         cx,
         SharedString::from(format!("tab-menu-{panel}")),
         position,
         items,
-        MENU_WIDTH,
+        240.0,
+        560.0,
     );
 }
+
+#[cfg(test)]
+pub(crate) mod tests;
 
 /// The switches `panel` offers, or nothing when its tab carries no counters.
 fn items(panel: &str, backend: &Entity<Backend>, cx: &App) -> Vec<MoonMenuItem> {

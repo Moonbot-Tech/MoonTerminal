@@ -18,6 +18,7 @@ mod click_series;
 mod figures;
 mod filter_headers;
 mod geom;
+mod in_use;
 mod market_actions;
 mod news;
 mod refs;
@@ -213,6 +214,8 @@ pub struct ChartPanel {
     /// AddToChart or Custom panel. Custom panes are normally pinned after population. Time-based
     /// expiry must not depend on backend data observations.
     ttl_timer_armed: bool,
+    /// Whether the reader is using this chart, which holds back its automatic closes.
+    use_track: in_use::UseTrack,
     order_drag: Option<OrderDrag>,
     pending_order_drag: Option<PendingOrderDrag>,
     /// A left press in the book zone that has not yet become a chart pan or an order click.

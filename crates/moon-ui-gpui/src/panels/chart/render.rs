@@ -2,6 +2,8 @@
 //! pointer/hover events, and GPUI overlays for the empty-slot logo, FireTest probe, control-zone
 //! marker, and chart controls.
 
+use std::time::Instant;
+
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use moon_ui::{
@@ -364,6 +366,18 @@ impl Render for ChartPanel {
                     this
                 }
             })
+            // Clicks and keys mark the chart as in use, which holds back its automatic closes.
+            // A timestamp only, never a repaint.
+            .capture_any_mouse_down(cx.listener(
+                |this: &mut ChartPanel, _: &MouseDownEvent, _, _| {
+                    this.use_track.note_input(Instant::now());
+                },
+            ))
+            .capture_key_down(
+                cx.listener(|this: &mut ChartPanel, _: &KeyDownEvent, _, _| {
+                    this.use_track.note_input(Instant::now());
+                }),
+            )
             .on_scroll_wheel(cx.listener(render_input::scroll_wheel))
             .on_mouse_down(
                 MouseButton::Left,

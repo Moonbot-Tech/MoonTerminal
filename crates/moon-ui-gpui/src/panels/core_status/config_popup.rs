@@ -680,7 +680,7 @@ impl CoreStatusView {
                     .trigger_variant(MoonButtonVariant::Soft)
                     .trigger_size(MoonButtonSize::density(cx))
                     .trigger_width_scaled(94.0)
-                    .menu_width_scaled(128.0)
+                    .fit_menu_width(128.0, 560.0)
                     .items(items),
             )
             // The square preview, shared with the core-settings alert pickers so the two sound

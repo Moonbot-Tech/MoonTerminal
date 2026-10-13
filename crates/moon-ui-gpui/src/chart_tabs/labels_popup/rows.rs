@@ -134,7 +134,7 @@ fn row_line<T: LabelsPopupHost>(
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(ZONE_W)
-        .menu_width_scaled(168.0)
+        .fit_menu_width(168.0, 560.0)
         .items(zone_items(entity, cfg, ix));
     // Where in the band the module sits. Three visible states rather than one cycling button: the
     // current edge has to be readable at a glance, and a cycler answers "what is it now" only from
@@ -188,7 +188,7 @@ fn row_line<T: LabelsPopupHost>(
             })
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(GAP_W)
-            .menu_width_scaled(70.0)
+            .fit_menu_width(70.0, 560.0)
             .items(items)
     };
     let remove = {
@@ -298,7 +298,7 @@ pub(super) fn add_row_dropdown<T: LabelsPopupHost>(
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(NAME_W + FIELD_W)
-        .menu_width_scaled(190.0)
+        .fit_menu_width(190.0, 560.0)
         .disabled(cfg.first_free_row().is_none())
         .items(items)
 }

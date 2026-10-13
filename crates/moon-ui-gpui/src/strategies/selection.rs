@@ -8,6 +8,26 @@ use moon_core::feed::strategy_path;
 /// Mirrors Analytics' `MASK_DEBOUNCE` (300 ms), the other strategy-name query typed live.
 const SEARCH_PRUNE_DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// Retire strategy selection for a plain non-root folder click, preserving modified gestures.
+/// Returns whether any strategy selection or anchor was cleared.
+pub(super) fn retire_strategy_for_folder(
+    path: &str,
+    shift: bool,
+    command: bool,
+    selected: &mut Option<Key>,
+    anchor: &mut Option<Key>,
+    sel: &mut HashSet<Key>,
+) -> bool {
+    if path.is_empty() || shift || command {
+        return false;
+    }
+    let changed = selected.is_some() || anchor.is_some() || !sel.is_empty();
+    *selected = None;
+    *anchor = None;
+    sel.clear();
+    changed
+}
+
 impl StrategiesView {
     /// Apply a strategy click with selection modifiers.
     /// Shift selects the `order` range from the anchor, Ctrl/Cmd toggles one key, and an
@@ -72,12 +92,11 @@ impl StrategiesView {
     /// The same three gestures `apply_click` gives strategies — Shift ranges over the drawn node
     /// order, Ctrl toggles one node, a plain click replaces — over the folder set instead.
     ///
-    /// It deliberately does NOT touch `selected`/`sel`/`anchor`. A strategy selection retires the
-    /// folder selection, but not the reverse: `resolve_paste_target` reads that asymmetry as its
-    /// precedence, and `a_selected_folder_outranks_a_stale_strategy` pins it.
+    /// A plain non-root folder click retires strategy selection so arrows act on that folder.
+    /// Modified clicks and core-root clicks retain their existing selection semantics.
     ///
     /// Returns:
-    ///     Whether anything about the folder selection actually changed.
+    ///     Whether folder selection changed or a plain folder click retired strategy selection.
     pub(super) fn apply_folder_click(
         &mut self,
         node: (CoreId, String),
@@ -87,6 +106,14 @@ impl StrategiesView {
     ) -> bool {
         let before_sel = self.folder_sel.clone();
         let before_anchor = self.folder_anchor.clone();
+        let strategy_changed = retire_strategy_for_folder(
+            &node.1,
+            shift,
+            command,
+            &mut self.selected,
+            &mut self.anchor,
+            &mut self.sel,
+        );
         if shift {
             match self.folder_anchor.clone() {
                 Some(anchor) => {
@@ -115,7 +142,7 @@ impl StrategiesView {
             self.folder_sel.insert(node.clone());
         }
         self.folder_anchor = Some(node);
-        before_sel != self.folder_sel || before_anchor != self.folder_anchor
+        strategy_changed || before_sel != self.folder_sel || before_anchor != self.folder_anchor
     }
 
     /// Make `key` the primary selection, replacing whatever was selected.
@@ -587,3 +614,6 @@ impl StrategiesView {
 
     // ── Panel 1: strategy tree ───────────────────────────────────────────────
 }
+
+#[cfg(test)]
+mod tests;

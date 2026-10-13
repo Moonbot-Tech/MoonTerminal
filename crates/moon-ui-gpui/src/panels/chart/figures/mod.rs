@@ -11,6 +11,9 @@
 mod draft;
 mod erase;
 
+#[cfg(test)]
+mod tests;
+
 use gpui::{Context, Pixels, Point, Window};
 use rust_i18n::t;
 
@@ -27,6 +30,16 @@ use super::geom::PaneMap;
 use crate::chartdx::FigureVisual;
 
 pub(super) use self::draft::FigDraft;
+
+/// Open the figure actions through Root, fitting the active locale above the old width floor.
+fn open_figure_menu(
+    items: Vec<MoonMenuItem>,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    window.open_fitted_moon_context_menu(cx, "chart-fig-menu", position, items, 200.0, 560.0);
+}
 
 /// Figure-line hit-test threshold in pixels before scaling by pixels-per-point, matching order lines.
 const HIT_PX: f32 = 6.0;
@@ -963,7 +976,7 @@ impl ChartPanel {
                 });
             },
         ));
-        window.open_moon_context_menu(cx, "chart-fig-menu", menu_pos, items, 200.0);
+        open_figure_menu(items, menu_pos, window, cx);
         cx.notify();
         true
     }

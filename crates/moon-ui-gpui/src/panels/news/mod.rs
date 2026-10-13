@@ -1036,7 +1036,14 @@ impl NewsView {
                         )
                     })
                     .collect();
-                window.open_moon_context_menu(cx, "news-coin-cores", pos, items, 240.0);
+                window.open_fitted_moon_context_menu(
+                    cx,
+                    "news-coin-cores",
+                    pos,
+                    items,
+                    240.0,
+                    560.0,
+                );
             }
         }
     }

@@ -438,6 +438,7 @@ pub(super) fn choice_live(
         .trigger_caret(true)
         .trigger_variant(design::mixed_trigger_variant(mixed))
         .trigger_size(MoonButtonSize::density(cx))
+        .fit_menu_width(160.0, 560.0)
         .items(items)
         .disabled(!enabled)
 }
@@ -714,7 +715,7 @@ pub(super) fn sound_cell(
                 .trigger_variant(design::mixed_trigger_variant(mixed))
                 .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(94.0)
-                .menu_width_scaled(128.0)
+                .fit_menu_width(128.0, 560.0)
                 .items(items),
         )
         .child(crate::panels::common::sound_preview_button(

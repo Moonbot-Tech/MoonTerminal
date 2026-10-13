@@ -369,7 +369,7 @@ impl SettingsView {
             } else {
                 MoonButtonVariant::Blue
             })
-            .menu_width_scaled(228.0)
+            .fit_menu_width(228.0, 560.0)
             .disabled(disabled)
             .items(items)
     }
@@ -422,7 +422,7 @@ impl SettingsView {
         } else {
             MoonButtonVariant::Blue
         })
-        .menu_width_scaled(228.0)
+        .fit_menu_width(228.0, 560.0)
         .disabled(disabled)
         .items(items)
         .into_any_element()
@@ -521,7 +521,7 @@ impl SettingsView {
             } else {
                 MoonButtonVariant::Blue
             })
-            .menu_width_scaled(228.0)
+            .fit_menu_width(228.0, 560.0)
             .items(items)
     }
 
@@ -550,7 +550,7 @@ impl SettingsView {
             } else {
                 MoonButtonVariant::Blue
             })
-            .menu_width_scaled(228.0)
+            .fit_menu_width(228.0, 560.0)
             .items(items)
     }
 

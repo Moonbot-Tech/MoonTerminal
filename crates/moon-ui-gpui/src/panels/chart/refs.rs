@@ -3,7 +3,7 @@
 //! after population. Split from `chart.rs`.
 
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::*;
 
@@ -11,7 +11,7 @@ use moon_chart::paint::now_unix_ms;
 use moon_core::config::ChartLabelField;
 use moon_core::session::CoreId;
 
-use super::ChartPanel;
+use super::{ChartPanel, in_use};
 
 impl ChartPanel {
     pub(super) fn retain_market_ref(&mut self, core: CoreId, market: &str, cx: &mut App) {
@@ -149,18 +149,24 @@ impl ChartPanel {
         }
     }
 
-    fn next_ttl_delay(&self, now_ms: f64) -> Option<Duration> {
-        self.chart
-            .next_ttl_deadline_ms()
-            .map(|deadline| Duration::from_millis((deadline - now_ms).max(1.0).ceil() as u64))
+    /// The `KeepInChart` timer's next step: a deadline that passed while the reader is using this
+    /// chart waits for the chart to go idle instead of closing it.
+    fn ttl_step(&self) -> Option<in_use::TtlStep> {
+        in_use::ttl_step(
+            self.chart.next_ttl_deadline_ms(),
+            now_unix_ms(),
+            self.use_track.hold_for(Instant::now()),
+        )
     }
 
     pub(super) fn arm_ttl_timer(&mut self, cx: &mut Context<Self>) {
         if self.ttl_timer_armed {
             return;
         }
-        let Some(delay) = self.next_ttl_delay(now_unix_ms()) else {
-            return;
+        let delay = match self.ttl_step() {
+            None => return,
+            Some(in_use::TtlStep::Wait(delay)) => delay,
+            Some(in_use::TtlStep::Prune) => Duration::from_millis(1),
         };
         self.ttl_timer_armed = true;
         cx.spawn(async move |this, cx| {
@@ -169,7 +175,11 @@ impl ChartPanel {
             let _ = cx.update(|cx| {
                 this.update(cx, |this, cx| {
                     this.ttl_timer_armed = false;
-                    let removed = this.chart.prune_ttl(now_unix_ms());
+                    let removed = if this.ttl_step() == Some(in_use::TtlStep::Prune) {
+                        this.chart.prune_ttl(now_unix_ms())
+                    } else {
+                        Vec::new()
+                    };
                     if !removed.is_empty() {
                         this.view_dirty = true;
                         for (core, market) in removed {

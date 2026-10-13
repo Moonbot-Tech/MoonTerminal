@@ -626,7 +626,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .menu_width_scaled(96.0)
+            .fit_menu_width(96.0, 560.0)
             .items(tr_items);
         let edges = self.tuner.edges;
         let ed_view = cx.entity();
@@ -654,7 +654,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .menu_width_scaled(64.0)
+            .fit_menu_width(64.0, 560.0)
             .items(ed_items);
         let gap = design::ui_px(cx, 6.0);
         let section_gap = design::ui_px(cx, 8.0);

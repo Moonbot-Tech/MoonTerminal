@@ -115,6 +115,17 @@ pub(in crate::chart_tabs) fn admit(
         .map_or(Admission::Drop, |(ix, _)| Admission::Evict(ix))
 }
 
+/// A detect-feed chart's eviction rank: its staleness, or `None` while the reader is using it.
+///
+/// A chart in use holds its place like a pinned one, so a full tab whose every chart is in use or
+/// pinned skips the new coin and keeps what is on screen.
+pub(in crate::chart_tabs) fn detect_eviction_rank(
+    stalest_ms: Option<f64>,
+    in_use: bool,
+) -> Option<f64> {
+    stalest_ms.filter(|_| !in_use)
+}
+
 impl AddChartStack {
     /// Open a DETECT's chart, honoring this tab's cap.
     ///

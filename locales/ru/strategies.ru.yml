@@ -6,7 +6,7 @@ strat.empty_folder_reorder: "У пустой папки нет стратеги�
 
 strat.window_title: "MoonTerminal — Стратегии"
 strat.search: "поиск"
-strat.search_tip: "Фильтр дерева по названию стратегии."
+strat.search_tip: "Фильтр дерева по названию стратегии или папки."
 strat.all_kinds: "все типы"
 # Direction filter (LONG / SHORT). The trigger must name the axis, unlike a bare "all".
 strat.all_dirs: "все стороны"

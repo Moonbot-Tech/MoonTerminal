@@ -11,7 +11,7 @@
 //! evaluates it once per core against the session's venue map, and every row-level predicate here
 //! stays a pure function of the row.
 
-use moon_core::feed::StrategyRow;
+use moon_core::feed::{StrategyRow, strategy_path};
 use moon_core::venue::CoreVenue;
 
 use moon_core::session::core_order::{ExchangeSection, section_of};
@@ -20,7 +20,7 @@ use moon_core::strategy_query::StrategyQuery;
 /// Editable strategy-filter state retained by the Strategies window.
 #[derive(Default)]
 pub struct StrategyFilter {
-    /// Raw strategy-name query in the shared [`StrategyQuery`] syntax (comma = OR, space = AND,
+    /// Raw strategy-or-folder-name query in the shared [`StrategyQuery`] syntax (comma = OR, space = AND,
     /// `!word` = exclude, Unicode caseless).
     pub search: String,
     /// Strategy-kind ordinal, or `None` for every kind.
@@ -135,6 +135,16 @@ impl PreparedFilter {
         self.query.as_ref().is_none_or(|q| q.matches(name))
     }
 
+    /// Whether a positive query matches any folder in this path, retaining its whole subtree.
+    /// Each folder name is evaluated independently through the shared query grammar. Exclusion-only
+    /// searches never expand a subtree, so excluded strategy names keep their existing semantics.
+    pub fn folder_path_matches(&self, path: &str) -> bool {
+        self.query.as_ref().is_some_and(|query| {
+            query.has_positive()
+                && strategy_path::path_segments(path).any(|name| query.matches(name))
+        })
+    }
+
     /// Apply the kind and direction filters used by active/total counters.
     /// Search text and active-only visibility are excluded so core and folder counts reflect kind
     /// and side without changing when rows are hidden.
@@ -149,7 +159,7 @@ impl PreparedFilter {
             && self.dir.is_none_or(|s| row.is_short == s)
     }
 
-    /// Return row visibility after applying name, kind, direction, and active-only filters.
+    /// Return row visibility after applying strategy-or-folder name, kind, direction, and active-only filters.
     /// The name is folded only when a search is active; full Unicode case folding supports the
     /// Cyrillic strategy names common in this product.
     ///
@@ -159,7 +169,9 @@ impl PreparedFilter {
     /// Returns:
     ///     `true` when the row should be rendered in the current tree.
     pub fn matches(&self, row: &StrategyRow) -> bool {
-        self.counts(row) && self.name_matches(&row.name) && (!self.active_only || row.checked)
+        self.counts(row)
+            && (self.name_matches(&row.name) || self.folder_path_matches(&row.folder_path))
+            && (!self.active_only || row.checked)
     }
 }
 

@@ -1,7 +1,9 @@
 //! Regression coverage for the detect cap: who gets in, and who gives way when nobody can.
 
 // NOT `use super::*`: the parent imports `gpui::*`, whose `test` macro shadows `#[test]`.
-use super::{Admission, admit, resolved_max_charts, resolved_max_charts_evict};
+use super::{
+    Admission, admit, detect_eviction_rank, resolved_max_charts, resolved_max_charts_evict,
+};
 
 /// A live slot that may be evicted, carrying how stale it is, as `admit_detect` collects it.
 fn ttl(ix: usize, stale_ms: f64) -> (usize, Option<f64>) {
@@ -145,4 +147,32 @@ fn over_the_cap_still_resolves() {
     let over = [ttl(0, 300.0), ttl(1, 100.0), ttl(2, 200.0)];
     assert_eq!(admit(Some(2), true, &over), Admission::Evict(1));
     assert_eq!(admit(Some(2), false, &over), Admission::Drop);
+}
+
+/// A detect slot ranked the way `eviction_rank_ms` ranks it, with the reader's use applied.
+fn detect(ix: usize, stale_ms: f64, in_use: bool) -> (usize, Option<f64>) {
+    (ix, detect_eviction_rank(Some(stale_ms), in_use))
+}
+
+#[test]
+fn replacement_skips_the_chart_in_use_and_takes_the_stalest_idle_one() {
+    let full = [
+        detect(0, 100.0, true),
+        detect(1, 300.0, false),
+        detect(2, 200.0, false),
+    ];
+    assert_eq!(admit(Some(3), true, &full), Admission::Evict(2));
+}
+
+#[test]
+fn every_chart_in_use_or_pinned_skips_the_new_coin() {
+    let full = [detect(0, 100.0, true), held(1), detect(2, 200.0, true)];
+    assert_eq!(admit(Some(3), true, &full), Admission::Drop);
+}
+
+#[test]
+fn an_idle_detect_chart_keeps_its_staleness() {
+    assert_eq!(detect_eviction_rank(Some(42.0), false), Some(42.0));
+    assert_eq!(detect_eviction_rank(Some(42.0), true), None);
+    assert_eq!(detect_eviction_rank(None, false), None);
 }

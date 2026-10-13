@@ -259,7 +259,7 @@ fn slot_cell(
         .trigger_variant(MoonButtonVariant::Soft)
         .trigger_size(MoonButtonSize::density(cx))
         .trigger_width_scaled(76.0)
-        .menu_width_scaled(130.0)
+        .fit_menu_width(130.0, 560.0)
         .items(items);
 
     // Keep buttons adjacent to the field with no spacers, packing the cell to the left.

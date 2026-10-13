@@ -17,6 +17,47 @@ const MENU_MIN_WIDTH: f32 = 190.0;
 /// it across the pane.
 const MENU_MAX_WIDTH: f32 = 460.0;
 
+/// Pure reorder-menu model shared by folder and strategy rows.
+struct ReorderEntry {
+    step: ops::MoveStep,
+    key: &'static str,
+    label: String,
+    right_label: String,
+    enabled: bool,
+}
+
+/// Keep both directions visible, explaining why an empty folder cannot store an order.
+fn reorder_entries(up: bool, down: bool, empty_folder: bool) -> [ReorderEntry; 2] {
+    [
+        (
+            ops::MoveStep::Up,
+            "move-up",
+            "strat.menu_move_up",
+            "strat.move_up_chord",
+            up,
+        ),
+        (
+            ops::MoveStep::Down,
+            "move-down",
+            "strat.menu_move_down",
+            "strat.move_down_chord",
+            down,
+        ),
+    ]
+    .map(|(step, key, label, chord, enabled)| ReorderEntry {
+        step,
+        key,
+        label: t!(label).to_string(),
+        right_label: t!(if empty_folder {
+            "strat.empty_folder_reorder"
+        } else {
+            chord
+        })
+        .to_string(),
+        enabled: enabled && !empty_folder,
+    })
+}
+
 /// The "Paste here" row, shared by every branch that can receive a paste.
 ///
 /// ALWAYS listed, never hidden: a menu that silently drops an entry when the clipboard is empty
@@ -102,6 +143,25 @@ fn move_to_folder_item(
 }
 
 impl StrategiesView {
+    /// Build reorder actions from the same availability and command path as the footer.
+    fn reorder_menu_items(&self, cx: &Context<Self>, empty_folder: bool) -> Vec<MoonMenuItem> {
+        let backend = self.backend.read(cx);
+        let (up, down) =
+            self.move_availability(backend.session.store(), backend.session.core_venues());
+        reorder_entries(up, down, empty_folder)
+            .into_iter()
+            .map(|entry| {
+                let view = cx.entity();
+                MoonMenuItem::with_key(entry.key, entry.label)
+                    .right_label(entry.right_label)
+                    .disabled(!entry.enabled)
+                    .on_click(move |_, window, app| {
+                        window.close_context_menu(app);
+                        view.update(app, |this, cx| this.move_selection(entry.step, cx));
+                    })
+            })
+            .collect()
+    }
     /// Open the menu with paste availability resolved from the current text and destination schema.
     pub(super) fn open_menu(
         &mut self,
@@ -127,6 +187,7 @@ impl StrategiesView {
         cx.notify();
     }
 
+    /// Resolve the clicked row's menu using the current selection and core snapshot.
     fn context_menu_items(
         &self,
         menu: &ContextMenu,
@@ -139,6 +200,14 @@ impl StrategiesView {
         let mut items: Vec<MoonMenuItem> = Vec::new();
         match &menu.target {
             MenuTarget::Folder(path) => {
+                let empty_folder = self
+                    .backend
+                    .read(cx)
+                    .session
+                    .store()
+                    .core(core)
+                    .is_none_or(|data| !ops::has_row_under(&data.strategies, path));
+                items.extend(self.reorder_menu_items(cx, empty_folder));
                 let pp = path.clone();
                 items.push(
                     MoonMenuItem::with_key("rename-folder", t!("strat.menu_rename").to_string())
@@ -235,39 +304,7 @@ impl StrategiesView {
                 // Acts on the SELECTION, which already contains this row: opening the menu on an
                 // unselected strategy focuses it first (`strategy_row`). So right-clicking one row
                 // moves that row, and right-clicking inside a multi-selection moves the block.
-                let (can_up, can_down) = {
-                    let backend = self.backend.read(cx);
-                    let store = backend.session.store();
-                    self.move_availability(store, backend.session.core_venues())
-                };
-                for (step, enabled) in
-                    [(ops::MoveStep::Up, can_up), (ops::MoveStep::Down, can_down)]
-                {
-                    let (key, label, chord) = match step {
-                        ops::MoveStep::Up => (
-                            "move-up",
-                            t!("strat.menu_move_up"),
-                            t!("strat.move_up_chord"),
-                        ),
-                        ops::MoveStep::Down => (
-                            "move-down",
-                            t!("strat.menu_move_down"),
-                            t!("strat.move_down_chord"),
-                        ),
-                    };
-                    items.push(
-                        MoonMenuItem::with_key(key, label.to_string())
-                            .right_label(chord.to_string())
-                            .disabled(!enabled)
-                            .on_click({
-                                let view = view.clone();
-                                move |_, window, app| {
-                                    window.close_context_menu(app);
-                                    view.update(app, |this, cx| this.move_selection(step, cx));
-                                }
-                            }),
-                    );
-                }
+                items.extend(self.reorder_menu_items(cx, false));
                 let keys = selected_keys(self);
                 let selected_count = keys.len();
                 // A move rewrites folder_path within ONE core; a selection spanning several has no
@@ -533,3 +570,6 @@ impl StrategiesView {
         items
     }
 }
+
+#[cfg(test)]
+mod tests;

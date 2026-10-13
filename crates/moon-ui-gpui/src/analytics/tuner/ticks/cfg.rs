@@ -305,7 +305,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .menu_width_scaled(96.0)
+            .fit_menu_width(96.0, 560.0)
             .items(tr_items);
         let method = model_cfg::current().entry_method;
         let me_view = cx.entity();
@@ -328,7 +328,7 @@ impl AnalyticsView {
             .trigger_caret(true)
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
-            .menu_width_scaled(140.0)
+            .fit_menu_width(140.0, 560.0)
             .items(me_items);
         let risk_rows = self.ticks_risk_rows(p, window, cx);
         let box_of = |id: &'static str, state: &Entity<MoonInputState>, w: f32| {

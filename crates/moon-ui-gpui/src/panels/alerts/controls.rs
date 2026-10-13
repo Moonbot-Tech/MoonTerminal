@@ -220,7 +220,7 @@ impl AlertsPanel {
             // Report's rule for the same kind of field: 102 is the floor, and it grows only for a
             // label that would otherwise be ellipsised.
             .fit_trigger_width(102.0, 170.0)
-            .menu_width_scaled(200.0)
+            .fit_menu_width(200.0, 560.0)
             .items(items)
     }
 
@@ -239,7 +239,7 @@ impl AlertsPanel {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::glyph_btn_w(cx))
-            .menu_width_scaled(180.0)
+            .fit_menu_width(180.0, 560.0)
             .close_on_select(false);
         let all_on = cur.columns == ALL_COLUMNS_MASK;
         let all_view = view.clone();
@@ -479,7 +479,7 @@ impl AlertsPanel {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width_scaled(120.0)
-            .menu_width_scaled(150.0)
+            .fit_menu_width(150.0, 560.0)
             .items(items)
     }
 }

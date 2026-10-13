@@ -89,8 +89,9 @@ impl ChartStackEntry {
 
     /// How stale this slot is, or `None` when it may not be evicted at all.
     ///
-    /// Two kinds of chart withhold it: a PINNED one, and one the reader opened by hand — the cap
-    /// must not take by the back door what the reader put there on purpose.
+    /// Three kinds of chart withhold it: a PINNED one, one the reader opened by hand — the cap
+    /// must not take by the back door what the reader put there on purpose — and a detect chart
+    /// the reader is using right now (see `ChartPanel::in_use`).
     ///
     /// Deliberately NOT the TTL deadline. A strategy's `KeepInChart = 0` means "keep this chart
     /// forever", so such a pane has no deadline at all; reading the deadline here would put every
@@ -98,7 +99,13 @@ impl ChartStackEntry {
     /// showing new coins once it filled. Staleness exists either way.
     pub(super) fn eviction_rank_ms(&self, cx: &App) -> Option<f64> {
         match self.owner {
-            SlotOwner::DetectFeed => self.panel.read(cx).stalest_detect_ms(),
+            SlotOwner::DetectFeed => {
+                let panel = self.panel.read(cx);
+                super::add_stack::detect_cap::detect_eviction_rank(
+                    panel.stalest_detect_ms(),
+                    panel.in_use(),
+                )
+            }
             SlotOwner::Reader => None,
         }
     }

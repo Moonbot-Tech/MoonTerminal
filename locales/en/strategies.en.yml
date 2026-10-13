@@ -6,7 +6,7 @@ strat.empty_folder_reorder: "An empty folder has no strategies, so the core cann
 
 strat.window_title: "MoonTerminal — Strategies"
 strat.search: "search"
-strat.search_tip: "Filter the tree by strategy name."
+strat.search_tip: "Filter the tree by strategy or folder name."
 strat.all_kinds: "all types"
 # Direction filter (LONG / SHORT). The trigger must name the axis, unlike a bare "all".
 strat.all_dirs: "all sides"

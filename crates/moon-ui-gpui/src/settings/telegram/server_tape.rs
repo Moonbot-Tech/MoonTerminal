@@ -932,7 +932,7 @@ impl SettingsView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .trigger_width(design::font_w(cx, 120.0))
-            .menu_width_scaled(140.0)
+            .fit_menu_width(140.0, 560.0)
             .disabled(!enabled)
             .items(items)
             .into_any_element()

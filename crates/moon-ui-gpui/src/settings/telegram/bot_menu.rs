@@ -362,7 +362,7 @@ impl SettingsView {
                         .trigger_variant(MoonButtonVariant::Neutral)
                         .trigger_size(MoonButtonSize::density(cx))
                         .trigger_width_scaled(140.0)
-                        .menu_width_scaled(160.0)
+                        .fit_menu_width(160.0, 560.0)
                         .items(items),
                 )
         };

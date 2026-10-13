@@ -188,7 +188,7 @@ fn dropdown_row(
                 .trigger_variant(MoonButtonVariant::Soft)
                 .trigger_size(MoonButtonSize::density(cx))
                 .trigger_width_scaled(84.0)
-                .menu_width_scaled(104.0)
+                .fit_menu_width(104.0, 560.0)
                 .items(items),
         )
 }

@@ -494,8 +494,6 @@ fn workspace_mode_selector(
     /// than the other. The trigger shows only the bare name to keep the header short; the rows
     /// below spell out «… режим» / «… mode» because a menu has the room to say what it selects.
     const MODE_TRIGGER_W: f32 = 84.0;
-    /// Design-unit popup width: both rows plus their check column, at the trigger's own scale.
-    const MODE_MENU_W: f32 = 150.0;
 
     let mode = backend.read(cx).workspace_mode(group);
     let auto = mode == WorkspaceMode::AutoTrading;
@@ -583,7 +581,7 @@ fn workspace_mode_selector(
                 .trigger(pill)
                 .content(
                     MoonPopupMenu::new("header-workspace-mode-menu")
-                        .width_scaled(MODE_MENU_W)
+                        .fit_width(150.0, 560.0)
                         .size(MoonSize::Xs)
                         .mono(true)
                         .items(items)

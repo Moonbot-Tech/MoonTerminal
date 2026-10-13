@@ -927,9 +927,9 @@ impl StrategiesView {
 
     /// The row the keyboard is currently on.
     ///
-    /// The folder cursor OUTRANKS the strategy selection, the precedence `resolve_paste_target`
-    /// already applies: a folder selection does not clear the strategy one, so without a fixed
-    /// order the two could each claim the cursor.
+    /// The folder cursor outranks strategy selection, matching `resolve_paste_target`.
+    /// Modified folder clicks and core-root clicks can retain both selections, so the fixed
+    /// precedence keeps them from each claiming the cursor.
     ///
     /// Returns:
     ///     The selected visible node, or `None` when neither retained selection is drawn.
@@ -1280,7 +1280,7 @@ impl StrategiesView {
             .trigger_variant(MoonButtonVariant::Soft)
             .trigger_size(MoonButtonSize::density(cx))
             .fit_trigger_width(96.0, 110.0)
-            .menu_width_scaled(180.0)
+            .fit_menu_width(180.0, 560.0)
             .items(items)
             .into_any_element()
     }
