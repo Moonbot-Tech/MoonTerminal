@@ -392,14 +392,16 @@ impl SettingsView {
     pub(super) fn tg_bot_page(&self, width: f32, cx: &Context<Self>) -> PageParts {
         let side = self.bot_side();
         let column_w = page_column_w(width, cx);
+        // Both hosts lay three cards whenever the chats card shows: bot, chats and Mini App.
+        let card_w = card_grid_col_w(column_w, 3, cx);
         let children = match side {
             access::ChatsOf::Terminal => vec![
                 self.bot_host_line(side, cx),
-                card_grid_el(column_w, self.terminal_bot_sections(cx), cx),
+                card_grid_el(column_w, self.terminal_bot_sections(card_w, cx), cx),
             ],
             access::ChatsOf::Station => {
                 let mut cards = vec![self.server_bot_block(cx).into_any_element()];
-                cards.extend(self.server_bot_sections(cx));
+                cards.extend(self.server_bot_sections(card_w, cx));
                 vec![
                     self.bot_host_line(side, cx),
                     card_grid_el(column_w, cards, cx),
@@ -509,7 +511,8 @@ impl SettingsView {
 
     /// The terminal's bot: token and where it runs, its chats, the Mini App. Edits go to the
     /// draft and persist with Save; live service status and pairing come from the running bot.
-    fn terminal_bot_sections(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+    /// `card_w` is one card's width on the page, which the chats table sizes its cells from.
+    fn terminal_bot_sections(&self, card_w: f32, cx: &Context<Self>) -> Vec<AnyElement> {
         let p = MoonPalette::active(cx);
         let cfg = self.backend.read(cx);
         let draft = cfg.preview.as_ref().unwrap_or(&cfg.config);
@@ -680,7 +683,7 @@ impl SettingsView {
             .child(mini_row);
         vec![
             bot.into_any_element(),
-            self.telegram_chat_access(access::ChatsOf::Terminal, pairing, cx)
+            self.telegram_chat_access(access::ChatsOf::Terminal, pairing, card_w, cx)
                 .into_any_element(),
             mini.into_any_element(),
         ]

@@ -745,8 +745,13 @@ impl SettingsView {
     }
 
     /// Render host-named Chats and Mini App sections so they identify the station's bot.
-    /// Sections appear once the station has reported its bot and access state.
-    pub(in crate::settings) fn server_bot_sections(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+    /// Sections appear once the station has reported its bot and access state. `card_w` is one
+    /// card's width on the page, which the chats table sizes its cells from.
+    pub(in crate::settings) fn server_bot_sections(
+        &self,
+        card_w: f32,
+        cx: &Context<Self>,
+    ) -> Vec<AnyElement> {
         let b = self.backend.read(cx);
         let Some(state) = b.station.bot.as_ref().filter(|s| s.access.is_some()) else {
             return Vec::new();
@@ -819,7 +824,7 @@ impl SettingsView {
             });
 
         vec![
-            self.telegram_chat_access(ChatsOf::Station, pairing, cx)
+            self.telegram_chat_access(ChatsOf::Station, pairing, card_w, cx)
                 .into_any_element(),
             mini.into_any_element(),
         ]

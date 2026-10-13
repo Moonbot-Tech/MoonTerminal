@@ -27,6 +27,7 @@ mod log;
 mod mini_app;
 mod naming;
 mod report;
+mod settings_collapse;
 mod settings_preview;
 mod shared_config;
 mod shell;

@@ -122,6 +122,7 @@ fn the_bot_page_table_fits_the_body(cx: &mut gpui::TestAppContext) {
                             title.to_string(),
                             (summary, red),
                             toggle,
+                            width,
                             cx,
                         ));
                     }
@@ -391,4 +392,115 @@ fn card_prose_keeps_its_line_length_when_wide(cx: &mut gpui::TestAppContext) {
             ..Default::default()
         },
     );
+}
+
+/// Two synthetic chats for the chats-card width check: a short label and a long one.
+const TWO_CHATS: [(i64, &str); 2] = [
+    (200001, "Synthetic owner"),
+    (
+        200002,
+        "Synthetic viewer group with a much longer label 208",
+    ),
+];
+
+/// Catches the chats table's label cell going back to content sizing: a `min_w_0` label beside the
+/// `flex_none` id stacked one glyph per line in the real window while this harness laid it out
+/// fine, so the harness cannot show that collapse and this asserts the explicit-width contract
+/// instead. In a two- or three-column page, in every language, each label cell is exactly
+/// `chat_row_widths` wide, at least as wide as its text when the card has room, and one line tall.
+#[gpui::test]
+fn the_chats_table_label_takes_its_explicit_width(cx: &mut gpui::TestAppContext) {
+    use crate::design;
+    use gpui::{IntoElement, ParentElement};
+    cx.update(moon_ui::init);
+    for language in moon_core::config::Language::ALL {
+        let _locale = crate::test_locale::force(language.code());
+        for content_w in [1700.0_f32, 900.0, 520.0] {
+            let window = cx.open_window(
+                gpui::size(gpui::px(content_w + 200.0), gpui::px(1200.0)),
+                |_, _| Host {
+                    width: content_w,
+                    scroll: gpui::ScrollHandle::new(),
+                    build: std::rc::Rc::new(move |_, cx| {
+                        let card_w = super::card_grid_col_w(content_w, 3, cx);
+                        let mut table = super::access::chat_table(ChatsOf::Terminal, true, cx);
+                        for (chat, title) in TWO_CHATS {
+                            let toggle = moon_ui::MoonButton::new(("probe-edit", chat as u64))
+                                .ghost()
+                                .label(rust_i18n::t!("telegram.chats.configure").to_string())
+                                .render()
+                                .into_any_element();
+                            table = table.child(super::access::chat_row(
+                                chat,
+                                title.to_string(),
+                                (
+                                    rust_i18n::t!("telegram.access_owner_summary").to_string(),
+                                    false,
+                                ),
+                                toggle,
+                                card_w,
+                                cx,
+                            ));
+                        }
+                        let chats = moon_ui::MoonGroupBox::new("probe-chats")
+                            .padding(14.0)
+                            .child(table)
+                            .into_any_element();
+                        super::card_grid_el(
+                            content_w,
+                            vec![
+                                synthetic_card("bot", 2, cx),
+                                chats,
+                                synthetic_card("mini", 2, cx),
+                            ],
+                            cx,
+                        )
+                    }),
+                },
+            );
+            let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
+            for _ in 0..3 {
+                visual.update(|window, cx| {
+                    let _ = window.draw(cx);
+                });
+            }
+            let code = language.code();
+            for (chat, title) in TWO_CHATS {
+                let (widths, text_w) = visual.update(|_, cx| {
+                    let card_w = super::card_grid_col_w(content_w, 3, cx);
+                    let summary = rust_i18n::t!("telegram.access_owner_summary").to_string();
+                    (
+                        super::access::chat_row_widths(card_w, chat, title, &summary, cx),
+                        design::ui_body_text_width(cx, title, 400.0),
+                    )
+                });
+                let cell = drawn(&mut visual, &format!("tg-chat-title-{chat}"))
+                    .expect("label cell laid out");
+                let width = f32::from(cell.size.width);
+                // The `#id` beside it is one line: the label must be no taller.
+                let line_h = f32::from(
+                    drawn(&mut visual, &format!("tg-chat-id-{chat}"))
+                        .expect("id cell laid out")
+                        .size
+                        .height,
+                );
+                assert!(
+                    (width - widths.title).abs() < 0.5,
+                    "[FAIL] {code} at {content_w}: label {chat} is {width}, not {}",
+                    widths.title
+                );
+                if widths.title > text_w {
+                    assert!(
+                        width >= text_w,
+                        "[FAIL] {code} at {content_w}: label {chat} {width} < its text {text_w}"
+                    );
+                }
+                assert!(
+                    f32::from(cell.size.height) < 1.5 * line_h,
+                    "[FAIL] {code} at {content_w}: label {chat} wraps ({} tall)",
+                    f32::from(cell.size.height)
+                );
+            }
+        }
+    }
 }

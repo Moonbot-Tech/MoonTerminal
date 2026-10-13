@@ -449,10 +449,13 @@ pub(super) fn cleanup_el(
         )
         // MIXED NODE: the count combines a localized label with figures in one
         // text node — stays mono, like the tab's other readouts.
-        // It shrinks and wraps beside the button rather than painting past the card.
+        // It wraps beside the button rather than painting past the card; the basis is a floor
+        // so it drops under the button instead of collapsing to one glyph per line.
         .child(
             div()
                 .debug_selector(|| "trades-cleanup-estimate".into())
+                .flex_1()
+                .flex_basis(design::ui_px(cx, 200.0))
                 .min_w_0()
                 .text_color(muted)
                 .font_family(design::mono())

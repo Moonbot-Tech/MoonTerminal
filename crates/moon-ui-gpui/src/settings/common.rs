@@ -405,6 +405,7 @@ pub(super) fn color_row(
         .child(
             prose("color-row-label".into(), label.to_string(), false, cx)
                 .flex_1()
+                .min_w(design::ui_px(cx, 120.0))
                 .text_color(rgba_from(p.text_soft, 1.0)),
         )
 }

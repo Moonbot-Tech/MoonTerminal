@@ -297,10 +297,12 @@ impl SettingsView {
     /// Args:
     ///     side: Whose chats.
     ///     pairing: The pairing bar ([`Self::chat_pairing`]), shown even when there are no chats.
+    ///     card_w: The chats card's outer width on the page, for the table's cell widths.
     pub(in crate::settings) fn telegram_chat_access(
         &self,
         side: ChatsOf,
         pairing: AnyElement,
+        card_w: f32,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let palette = MoonPalette::active(cx);
@@ -357,6 +359,7 @@ impl SettingsView {
                 chat_title(telegram, chat),
                 (summary, sees_nothing),
                 toggle,
+                card_w,
                 cx,
             );
             if active {
@@ -810,15 +813,21 @@ pub(super) fn chat_table(side: ChatsOf, has_chats: bool, cx: &App) -> gpui::Stat
 }
 
 /// One chat's table row: title and id, what it may see (red when nothing), and its toggle.
+///
+/// `card_w` is the chats card's outer width on the page: the label and the access words take
+/// widths computed from it and from their measured text, never from flex content sizing, which
+/// collapsed the label to one glyph per line in the real window.
 pub(super) fn chat_row(
     chat: i64,
     title: String,
     (summary, sees_nothing): (String, bool),
     toggle: AnyElement,
+    card_w: f32,
     cx: &App,
 ) -> gpui::Div {
     let palette = MoonPalette::active(cx);
     let muted = rgba_from(palette.text_muted, 1.0);
+    let widths = chat_row_widths(card_w, chat, &title, &summary, cx);
     v_flex()
         .w_full()
         .min_w_0()
@@ -835,18 +844,22 @@ pub(super) fn chat_row(
                 .items_center()
                 .child(
                     h_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .gap(design::ui_px(cx, 6.0))
+                        .flex_none()
+                        .gap(design::ui_px(cx, TITLE_ID_GAP))
                         .items_center()
                         .child(
                             div()
-                                .min_w_0()
+                                .debug_selector(move || format!("tg-chat-title-{chat}"))
+                                .w(px(widths.title))
+                                .flex_none()
+                                .truncate()
                                 .text_color(rgba_from(palette.text, 1.0))
                                 .child(title),
                         )
                         .child(
                             div()
+                                .debug_selector(move || format!("tg-chat-id-{chat}"))
+                                .w(px(widths.id))
                                 .flex_none()
                                 .font_family(design::mono())
                                 .text_color(muted)
@@ -856,7 +869,7 @@ pub(super) fn chat_row(
                 .child(
                     div()
                         .flex_1()
-                        .min_w_0()
+                        .min_w(px(widths.role))
                         .debug_selector(move || format!("tg-chat-role-{chat}"))
                         .text_color(if sees_nothing {
                             rgba_from(palette.red_text, 1.0)
@@ -872,4 +885,47 @@ pub(super) fn chat_row(
                         .child(toggle),
                 ),
         )
+}
+
+/// Inset of a chat row's content from the chats card's outer edge on each side, unscaled: the
+/// group box's 1 px border and 14 px padding, the table's 1 px border and the row's 10 px padding.
+const ROW_INSET: f32 = 26.0;
+
+/// Gap between a chat's label and its id, unscaled.
+const TITLE_ID_GAP: f32 = 6.0;
+
+/// Explicit widths of one chat row's cells, in pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct ChatRowWidths {
+    /// The chat label: its measured text, capped to the row less the id; it truncates past that.
+    pub(super) title: f32,
+    /// The `#id`: its measured mono text.
+    pub(super) id: f32,
+    /// The access words' floor: their measured text, capped to the row, so they wrap onto a line
+    /// of their own instead of shrinking beside the label.
+    pub(super) role: f32,
+}
+
+/// The widths one chat row's cells take in a chats card `card_w` wide.
+///
+/// Args:
+///     card_w: The chats card's outer width.
+///     chat: The chat id, drawn as `#id`.
+///     title: The chat label.
+///     summary: The access words.
+///     cx: Application context for scale and the text system.
+pub(super) fn chat_row_widths(
+    card_w: f32,
+    chat: i64,
+    title: &str,
+    summary: &str,
+    cx: &App,
+) -> ChatRowWidths {
+    let row = (card_w - 2.0 * design::ui_value(cx, ROW_INSET)).max(0.0);
+    // One spare pixel: a width equal to the measured text can round onto a second line.
+    let id = design::mono_body_text_width(cx, &format!("#{chat}"), 400.0).ceil() + 1.0;
+    let room = (row - id - design::ui_value(cx, TITLE_ID_GAP)).max(0.0);
+    let title = (design::ui_body_text_width(cx, title, 400.0).ceil() + 1.0).min(room);
+    let role = (design::ui_body_text_width(cx, summary, 400.0).ceil() + 1.0).min(row);
+    ChatRowWidths { title, id, role }
 }

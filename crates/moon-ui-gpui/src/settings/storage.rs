@@ -1100,8 +1100,12 @@ fn usage_panel(parts: &[UsagePart], path: String, refresh: AnyElement, cx: &App)
                                 .child(moon_tg::size_text(total)),
                         ),
                 )
+                // The basis is a floor: a narrow card wraps the path onto its own line rather
+                // than collapsing it to one glyph per line beside the total and the button.
                 .child(
                     div()
+                        .flex_1()
+                        .flex_basis(design::ui_px(cx, 200.0))
                         .min_w_0()
                         .font_family(design::mono())
                         .text_size(design::t_caption(cx))
