@@ -12,11 +12,12 @@ use rust_i18n::t;
 use super::SettingsView;
 use super::access::ChatsOf;
 use super::chat_notify::amounts_line;
-use super::chat_notify_quotes::QuoteList;
+use super::chat_notify_quotes::{QuoteList, quote_hint, quote_row_w};
 
 impl SettingsView {
     /// `chat`'s deal chart rule on `side`, as the editor holds it: the controls, their
-    /// explanation and the controls' one-line width, for the rule's `aside_row`.
+    /// explanation (the per-currency hint appended) and the controls' one-line width — the
+    /// thresholds line or a currency's line, whichever is wider — for the rule's `aside_row`.
     pub(super) fn chart_notify_parts(
         &self,
         side: ChatsOf,
@@ -54,12 +55,18 @@ impl SettingsView {
                 this.notify_edit(side, cx, |s| s.charts.on = v);
             }))
             .into_any_element();
-        let hint = t!(
-            "telegram.notify_editor.charts_hint",
-            minutes = moon_tg::TRADE_HOLD_MINUTES
-        )
-        .to_string();
+        let hint = format!(
+            "{}
+
+{}",
+            t!(
+                "telegram.notify_editor.charts_hint",
+                minutes = moon_tg::TRADE_HOLD_MINUTES
+            ),
+            quote_hint()
+        );
         let quotes = self.quote_block(side, chat, QuoteList::Charts, cx);
-        (vec![switch, amounts, quotes], hint, amounts_w)
+        let min_w = amounts_w.max(quote_row_w(QuoteList::Charts, cx));
+        (vec![switch, amounts, quotes], hint, min_w)
     }
 }

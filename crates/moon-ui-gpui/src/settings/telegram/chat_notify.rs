@@ -33,7 +33,8 @@ use crate::settings::common;
 use super::SettingsView;
 use super::access::ChatsOf;
 use super::chat_notify_quotes::{
-    QuoteList, QuoteRowEd, QuoteTexts, quote_texts, refill_rows, rows_from, stored_texts,
+    QuoteList, QuoteRowEd, QuoteTexts, quote_hint, quote_row_w, quote_texts, refill_rows,
+    rows_from, stored_texts,
 };
 use super::server_bot::known_server;
 use crate::backend::station::job::Job;
@@ -902,6 +903,13 @@ impl SettingsView {
             id,
             cx,
         );
+        // One controls column for the whole card: every row's explanation starts at the same x.
+        let charts = (side == ChatsOf::Station).then(|| self.chart_notify_parts(side, chat, cx));
+        let controls_w = charts
+            .as_ref()
+            .map_or(0.0, |(_, _, w)| *w)
+            .max(trade_amounts_w)
+            .max(quote_row_w(QuoteList::Trades, cx));
         block
             .when(ed.stale, |block| {
                 block.child(
@@ -983,8 +991,14 @@ impl SettingsView {
                     cx,
                 )))
                 .collect(),
-                Some(t!("telegram.mini_settings_trades_hint").to_string()),
-                trade_amounts_w,
+                Some(format!(
+                    "{}
+
+{}",
+                    t!("telegram.mini_settings_trades_hint"),
+                    quote_hint()
+                )),
+                controls_w,
                 false,
                 cx,
             ))
@@ -1006,17 +1020,16 @@ impl SettingsView {
                     )
                     .to_string(),
                 ),
-                0.0,
+                controls_w,
                 side != ChatsOf::Station,
                 cx,
             ))
-            .when(side == ChatsOf::Station, |block| {
-                let (controls, hint, min_w) = self.chart_notify_parts(side, chat, cx);
+            .when_some(charts, |block, (controls, hint, _)| {
                 block.child(common::aside_row(
                     &id("row-charts"),
                     controls,
                     Some(hint),
-                    min_w,
+                    controls_w,
                     true,
                     cx,
                 ))
@@ -1047,7 +1060,7 @@ impl SettingsView {
                         .into_any_element(),
                 ],
                 Some(t!("telegram.notify_editor.events_hint").to_string()),
-                0.0,
+                controls_w,
                 false,
                 cx,
             ))
@@ -1084,7 +1097,7 @@ impl SettingsView {
                         .into_any_element(),
                 ],
                 None,
-                0.0,
+                controls_w,
                 true,
                 cx,
             ))
@@ -1100,7 +1113,7 @@ impl SettingsView {
                     .into_iter()
                     .collect(),
                 Some(auto_hint),
-                0.0,
+                controls_w,
                 true,
                 cx,
             ))
